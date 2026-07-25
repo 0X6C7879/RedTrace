@@ -1,0 +1,14 @@
+.vscode/
+.DS_Store
+__pycache__/
+.playwright-cli/
+.venv/
+venv/
+env/
+.workbuddy/
+.codegraph/
+datas/
+workspaces/
+dispatch.yaml
+server.log
+dispatcher.log

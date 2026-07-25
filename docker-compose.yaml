@@ -1,0 +1,41 @@
+services:
+  redtrace-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: redtrace-app
+    container_name: redtrace-server
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./datas/redtrace/:/root/.local/share/redtrace/
+      - ./skills:/redtrace/skills
+      - ./mcp:/redtrace/mcp
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/projects', timeout=5)"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 3s
+    restart: unless-stopped
+    command: ["uv", "run", "redtrace", "serve", "--host", "0.0.0.0", "--no-access-log"]
+  redtrace-dispatcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: redtrace-app
+    container_name: redtrace-dispatcher
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./dispatch.yaml:/redtrace/dispatch.yaml
+      - ./skills:/redtrace/skills
+      - ./mcp:/redtrace/mcp
+    depends_on:
+      redtrace-server:
+        condition: service_healthy
+    restart: unless-stopped
+    command: ["uv", "run", "redtrace", "dispatch", "--config", "dispatch.yaml"]
