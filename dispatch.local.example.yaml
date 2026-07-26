@@ -21,7 +21,7 @@ runtime:
   worker_healthcheck: disabled  # no base_url to probe; startup instead checks the CLIs are on PATH
   max_workers: 3              # all workers share this host — size to the machine
   max_running_projects: 2
-  max_project_workers: 2
+  max_project_workers: 3
   interval: 3
   healthcheck_timeout: 15
   prompt_group: "default"

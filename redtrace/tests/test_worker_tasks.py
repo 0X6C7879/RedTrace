@@ -176,6 +176,43 @@ def test_bootstrap_success_concludes_fact_then_completes_project(monkeypatch) ->
     assert lease.started and lease.stopped
 
 
+def test_bootstrap_partial_fact_concludes_without_completing_project(monkeypatch) -> None:
+    config = make_config()
+    intent = make_intent()
+    project = make_project(intents=[intent])
+    client = FakeClient(project)
+    containers = FakeContainerManager()
+    driver = FakeDriver()
+    lease = FakeLease()
+
+    monkeypatch.setattr(bootstrap, "get_driver", lambda *_a, **_k: driver)
+    monkeypatch.setattr(bootstrap.HeartbeatLease, "for_intent", _lease_factory(lease))
+    monkeypatch.setattr(
+        bootstrap,
+        "run_worker_process",
+        lambda *_args, **_kwargs: ProcessResult(
+            0,
+            '{"accepted":true,"data":{"fact":{"description":"initial confirmed fact"}}}',
+            "",
+        ),
+    )
+
+    outcome = bootstrap.run_bootstrap_task(
+        config,
+        client,
+        containers,
+        project,
+        intent,
+        config.workers[0],
+        TaskCancellation(),
+    )
+
+    assert outcome == "success"
+    assert client.concluded == [("proj_001", "i001", "test-worker", "initial confirmed fact")]
+    assert client.completed == []
+    assert lease.started and lease.stopped
+
+
 def test_reason_complete_treats_inactive_project_as_success(monkeypatch) -> None:
     config = make_config()
     project = make_project()

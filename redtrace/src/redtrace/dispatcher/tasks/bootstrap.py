@@ -186,6 +186,17 @@ def run_bootstrap_task(
                 )
                 best_effort_release(client, project.project.id, intent.id, worker.name)
                 return "rejected"
+            if kind == "fact":
+                return write_conclude_result(
+                    client,
+                    project.project.id,
+                    intent.id,
+                    worker.name,
+                    data["fact_description"],
+                    source="bootstrap",
+                    phase_ms=execute_ms,
+                    total_ms=int((time.perf_counter() - task_started) * 1000),
+                )
             return _write_bootstrap_complete_result(
                 client,
                 project.project.id,

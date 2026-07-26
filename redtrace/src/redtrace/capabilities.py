@@ -22,6 +22,12 @@ BLACKBOARD_CLI_PATH = ".redtrace/bin/redtrace-blackboard"
 RESOURCE_CLI_PATH = ".redtrace/bin/redtrace-resource"
 SKILL_CLI_PATH = ".redtrace/bin/redtrace-skill"
 CONTEXT_CLI_PATH = ".redtrace/bin/redtrace-context"
+WORKSPACE_CLI_PATHS = {
+    BLACKBOARD_CLI_PATH,
+    RESOURCE_CLI_PATH,
+    SKILL_CLI_PATH,
+    CONTEXT_CLI_PATH,
+}
 PLUGIN_CATALOG_PATH = ".redtrace/plugins.json"
 CLAUDE_MCP_PATH = ".redtrace/mcp/claude.json"
 PI_MCP_PATH = ".pi/mcp.json"
@@ -669,6 +675,10 @@ def codex_mcp_overrides(records: Iterable[McpRecord]) -> list[str]:
     return overrides
 
 
+def _workspace_cli_bytes(path: str) -> bytes:
+    return Path(__file__).with_name(path).read_bytes().replace(b"\r\n", b"\n")
+
+
 def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
     from redtrace.plugin_registry import PluginRegistry
 
@@ -716,10 +726,10 @@ def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
         )
         + "\n"
     ).encode()
-    files[BLACKBOARD_CLI_PATH] = Path(__file__).with_name("blackboard_cli.py").read_bytes()
-    files[RESOURCE_CLI_PATH] = Path(__file__).with_name("resource_cli.py").read_bytes()
-    files[SKILL_CLI_PATH] = Path(__file__).with_name("skill_cli.py").read_bytes()
-    context_cli = Path(__file__).with_name("context_cli.py").read_bytes()
+    files[BLACKBOARD_CLI_PATH] = _workspace_cli_bytes("blackboard_cli.py")
+    files[RESOURCE_CLI_PATH] = _workspace_cli_bytes("resource_cli.py")
+    files[SKILL_CLI_PATH] = _workspace_cli_bytes("skill_cli.py")
+    context_cli = _workspace_cli_bytes("context_cli.py")
     files[CONTEXT_CLI_PATH] = context_cli
     digest_builder = hashlib.sha256()
     for relative, content in sorted(files.items()):
@@ -760,7 +770,10 @@ def runtime_workspace_patch(
     """Refresh RedTrace runtime infrastructure without thawing task capabilities."""
 
     runtime_contents = {
-        CONTEXT_CLI_PATH: Path(__file__).with_name("context_cli.py").read_bytes(),
+        BLACKBOARD_CLI_PATH: _workspace_cli_bytes("blackboard_cli.py"),
+        RESOURCE_CLI_PATH: _workspace_cli_bytes("resource_cli.py"),
+        SKILL_CLI_PATH: _workspace_cli_bytes("skill_cli.py"),
+        CONTEXT_CLI_PATH: _workspace_cli_bytes("context_cli.py"),
         PI_PROVIDER_EXTENSION_PATH: PI_PROVIDER_EXTENSION.encode(),
     }
     runtime_digests = {
@@ -821,7 +834,7 @@ def materialize_local_workspace(store: CapabilityStore, workspace: Path) -> str:
             target = workspace / Path(relative)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
-            if relative == CONTEXT_CLI_PATH:
+            if relative in WORKSPACE_CLI_PATHS:
                 target.chmod(0o755)
         return previous["digest"]
     digest, files = workspace_payload(store)
@@ -837,12 +850,7 @@ def materialize_local_workspace(store: CapabilityStore, workspace: Path) -> str:
         target = workspace / Path(relative)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
-        if relative in {
-            BLACKBOARD_CLI_PATH,
-            RESOURCE_CLI_PATH,
-            SKILL_CLI_PATH,
-            CONTEXT_CLI_PATH,
-        }:
+        if relative in WORKSPACE_CLI_PATHS:
             target.chmod(0o755)
     return digest
 

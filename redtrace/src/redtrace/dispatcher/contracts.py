@@ -41,9 +41,9 @@ def _looks_like_reason_data(payload: dict[str, Any]) -> bool:
 
 
 def _looks_like_bootstrap_execute_data(payload: dict[str, Any]) -> bool:
-    if not isinstance(payload, dict) or set(payload) != {"fact", "complete"}:
+    if not isinstance(payload, dict) or set(payload) not in ({"fact"}, {"fact", "complete"}):
         return False
-    return _is_dict(payload.get("fact")) and _is_dict(payload.get("complete"))
+    return _is_dict(payload.get("fact")) and ("complete" not in payload or _is_dict(payload.get("complete")))
 
 
 def _looks_like_bootstrap_conclude_data(payload: dict[str, Any]) -> bool:
@@ -122,7 +122,7 @@ def validate_bootstrap_execute_payload(payload: dict[str, Any]) -> tuple[str, di
     result = {"fact_description": fact_description.strip()}
     complete = data.get("complete")
     if complete is None:
-        raise ValueError("complete is required")
+        return "fact", result
     if not isinstance(complete, dict):
         raise ValueError("complete must be an object")
     complete_description = complete.get("description")
