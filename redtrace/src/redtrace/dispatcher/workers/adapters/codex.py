@@ -39,7 +39,7 @@ class CodexDriver(RegexSessionDriver):
 
     def build_execute(self, worker: WorkerConfig, prompt: str, session: str | None) -> DriverResult:
         capability_args = codex_mcp_overrides(CapabilityStore().list_mcp())
-        if self.local:
+        if self.local and not worker.api_configured():
             return DriverResult(
                 argv=[
                     "codex",
@@ -80,7 +80,7 @@ class CodexDriver(RegexSessionDriver):
 
     def build_conclude(self, worker: WorkerConfig, prompt: str, session: str) -> list[str]:
         capability_args = codex_mcp_overrides(CapabilityStore().list_mcp())
-        if self.local:
+        if self.local and not worker.api_configured():
             return [
                 "codex",
                 "exec",

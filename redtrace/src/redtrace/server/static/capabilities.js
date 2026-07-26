@@ -105,7 +105,11 @@ window.skillsPage = function skillsPage() {
           : `/capabilities/skills/${encodeURIComponent(this.draft.name)}`;
         const body = this.isNew
           ? { name: this.draft.name, content: this.draft.content, enabled: this.draft.enabled }
-          : { content: this.draft.content, enabled: this.draft.enabled };
+          : {
+              content: this.draft.content,
+              enabled: this.draft.enabled,
+              expected_revision: this.draft.revision,
+            };
         const saved = await capabilityRequest(this.isNew ? 'POST' : 'PUT', path, body);
         this.isNew = false;
         this.selectedName = saved.name;
@@ -287,6 +291,203 @@ window.mcpPage = function mcpPage() {
         this.selectedName = '';
         this.draft = null;
         this.deleteArmed = false;
+        await this.refreshList();
+      } catch (error) {
+        this.setMessage(error.message, 'error');
+      }
+    },
+
+    setMessage(message, type = 'info') {
+      this.message = message;
+      this.messageType = type;
+    },
+  };
+};
+
+window.pluginsPage = function pluginsPage() {
+  return {
+    status: null,
+    items: [],
+    agents: ['Claude', 'Codex', 'Pi'],
+    query: '',
+    selectedId: '',
+    draft: null,
+    isNew: false,
+    loading: false,
+    saving: false,
+    deleteArmed: false,
+    deleteTimer: null,
+    message: '',
+    messageType: 'info',
+
+    get enabledCount() {
+      return this.items.filter((item) => item.enabled).length;
+    },
+
+    get filteredItems() {
+      const needle = this.query.trim().toLowerCase();
+      if (!needle) return this.items;
+      return this.items.filter((item) =>
+        `${item.id} ${item.name} ${item.kind || ''} ${item.description || ''} ${item.path || ''}`
+          .toLowerCase()
+          .includes(needle)
+      );
+    },
+
+    async init() {
+      await this.load();
+    },
+
+    async load() {
+      this.loading = true;
+      this.setMessage('');
+      try {
+        const [status, items] = await Promise.all([
+          capabilityRequest('GET', '/capabilities'),
+          capabilityRequest('GET', '/capabilities/plugins'),
+        ]);
+        this.status = status;
+        this.agents = status.agents.map((agent) => displayAgent(agent.id));
+        this.items = items;
+        if (this.selectedId && items.some((item) => item.id === this.selectedId)) {
+          await this.select(this.selectedId);
+        } else if (!this.isNew) {
+          this.selectedId = '';
+          this.draft = null;
+        }
+      } catch (error) {
+        this.setMessage(error.message, 'error');
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async select(id) {
+      this.isNew = false;
+      this.deleteArmed = false;
+      this.selectedId = id;
+      this.setMessage('');
+      try {
+        const plugin = await capabilityRequest(
+          'GET',
+          `/capabilities/plugins/${encodeURIComponent(id)}`
+        );
+        this.draft = {
+          id: plugin.id,
+          enabled: plugin.enabled,
+          ready: plugin.ready,
+          agents: plugin.agents || [],
+          raw: JSON.stringify(plugin.config, null, 2),
+        };
+      } catch (error) {
+        this.setMessage(error.message, 'error');
+      }
+    },
+
+    createNew() {
+      this.isNew = true;
+      this.selectedId = '';
+      this.deleteArmed = false;
+      this.setMessage('');
+      this.draft = {
+        id: '',
+        enabled: true,
+        ready: false,
+        agents: ['claude', 'codex', 'pi'],
+        raw: JSON.stringify({
+          name: 'Plugin name',
+          description: 'Describe when Workers should use this plugin.',
+          kind: 'external',
+          version: '1.0.0',
+          path: 'plugins/plugin-name',
+          entrypoint: 'plugin.json',
+          enabled: true,
+          agents: ['claude', 'codex', 'pi'],
+        }, null, 2),
+      };
+    },
+
+    async save() {
+      if (!this.draft || this.saving) return;
+      this.saving = true;
+      this.setMessage('');
+      try {
+        const config = JSON.parse(this.draft.raw);
+        if (!config || Array.isArray(config) || typeof config !== 'object') {
+          throw new Error('插件 JSON 的根值必须是对象。');
+        }
+        config.enabled = this.draft.enabled;
+        config.agents = Array.isArray(config.agents) && config.agents.length
+          ? config.agents
+          : ['claude', 'codex', 'pi'];
+        const path = this.isNew
+          ? '/capabilities/plugins'
+          : `/capabilities/plugins/${encodeURIComponent(this.draft.id)}`;
+        const body = this.isNew ? { id: this.draft.id, config } : { config };
+        const saved = await capabilityRequest(this.isNew ? 'POST' : 'PUT', path, body);
+        this.isNew = false;
+        this.selectedId = saved.id;
+        this.draft = {
+          id: saved.id,
+          enabled: saved.enabled,
+          ready: saved.ready,
+          agents: saved.agents || [],
+          raw: JSON.stringify(saved.config, null, 2),
+        };
+        this.setMessage('已保存，Claude、Codex、Pi 将在下一个任务快照中使用。', 'success');
+        await this.refreshList();
+      } catch (error) {
+        this.setMessage(
+          error instanceof SyntaxError ? `JSON 语法错误：${error.message}` : error.message,
+          'error'
+        );
+      } finally {
+        this.saving = false;
+      }
+    },
+
+    async toggleEnabled() {
+      if (!this.draft || this.isNew || this.saving) return;
+      this.saving = true;
+      this.setMessage('');
+      try {
+        const saved = await capabilityRequest(
+          'PATCH',
+          `/capabilities/plugins/${encodeURIComponent(this.draft.id)}/enabled`,
+          { enabled: !this.draft.enabled }
+        );
+        this.draft.enabled = saved.enabled;
+        this.draft.raw = JSON.stringify(saved.config, null, 2);
+        this.setMessage(saved.enabled ? '插件已启用。' : '插件已停用。', 'success');
+        await this.refreshList();
+      } catch (error) {
+        this.setMessage(error.message, 'error');
+      } finally {
+        this.saving = false;
+      }
+    },
+
+    async refreshList() {
+      this.items = await capabilityRequest('GET', '/capabilities/plugins');
+    },
+
+    armDelete() {
+      this.deleteArmed = true;
+      clearTimeout(this.deleteTimer);
+      this.deleteTimer = setTimeout(() => { this.deleteArmed = false; }, 4000);
+    },
+
+    async remove() {
+      if (!this.draft || this.isNew) return;
+      try {
+        await capabilityRequest(
+          'DELETE',
+          `/capabilities/plugins/${encodeURIComponent(this.draft.id)}`
+        );
+        this.selectedId = '';
+        this.draft = null;
+        this.deleteArmed = false;
+        this.setMessage('已从全局插件清单移除；插件源目录未删除。', 'success');
         await this.refreshList();
       } catch (error) {
         this.setMessage(error.message, 'error');

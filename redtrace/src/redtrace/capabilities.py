@@ -8,17 +8,94 @@ import re
 import shutil
 import tarfile
 import tempfile
+import time
 from collections.abc import Iterable
+from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 MANIFEST_PATH = ".redtrace/capabilities.json"
 BLACKBOARD_CLI_PATH = ".redtrace/bin/redtrace-blackboard"
+RESOURCE_CLI_PATH = ".redtrace/bin/redtrace-resource"
+SKILL_CLI_PATH = ".redtrace/bin/redtrace-skill"
+CONTEXT_CLI_PATH = ".redtrace/bin/redtrace-context"
+PLUGIN_CATALOG_PATH = ".redtrace/plugins.json"
 CLAUDE_MCP_PATH = ".redtrace/mcp/claude.json"
 PI_MCP_PATH = ".pi/mcp.json"
 PI_MCP_EXTENSION = "npm:pi-mcp-extension@1.5.0"
+PI_PROVIDER_EXTENSION_PATH = ".redtrace/pi/redtrace-provider.js"
+DEFAULT_MAX_SKILLS = 24
+DEFAULT_MAX_SKILL_CHARS = 65_536
+DEFAULT_HISTORY_LIMIT = 12
+
+PI_PROVIDER_EXTENSION = """\
+export default function (pi) {
+  const names = ["PI_BASE_URL", "PI_API_KEY", "PI_MODEL", "PI_PROVIDER_API"];
+  const values = Object.fromEntries(
+    names.map((name) => [name, (process.env[name] || "").trim()])
+  );
+  const present = names.filter((name) => values[name]);
+  if (present.length === 0) return;
+  const missing = names.filter((name) => !values[name]);
+  if (missing.length) {
+    throw new Error(`incomplete RedTrace Pi API configuration; missing: ${missing.join(", ")}`);
+  }
+  const configuredContext = Number.parseInt(
+    process.env.PI_MODEL_CONTEXT_WINDOW || "",
+    10
+  );
+  const contextWindow =
+    Number.isFinite(configuredContext) && configuredContext > 0
+      ? configuredContext
+      : 128000;
+  const model = {
+    id: values.PI_MODEL,
+    name: values.PI_MODEL,
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow,
+    maxTokens: Math.min(32768, contextWindow),
+  };
+  if (values.PI_PROVIDER_API.startsWith("openai-")) {
+    model.compat = { supportsDeveloperRole: false };
+  }
+  pi.registerProvider("redtrace", {
+    name: "RedTrace",
+    baseUrl: values.PI_BASE_URL,
+    apiKey: "$PI_API_KEY",
+    api: values.PI_PROVIDER_API,
+    models: [model],
+  });
+}
+"""
+AUDIT_LIMIT_BYTES = 1_048_576
+
+
+class SkillConflictError(RuntimeError):
+    """Raised when an optimistic Skill update uses a stale revision."""
+
+
+def _positive_env(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _content_revision(content: str, enabled: bool = True) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"enabled=1\n" if enabled else b"enabled=0\n")
+    digest.update(content.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def resolve_capabilities_root(explicit: str | Path | None = None) -> Path:
@@ -29,11 +106,11 @@ def resolve_capabilities_root(explicit: str | Path | None = None) -> Path:
         return Path(configured).expanduser().resolve()
 
     cwd = Path.cwd().resolve()
-    if (cwd / "skills").is_dir() or (cwd / "mcp").is_dir():
+    if any((cwd / name).is_dir() for name in ("skills", "mcp", "plugins")):
         return cwd
 
     source_root = Path(__file__).resolve().parents[3]
-    if (source_root / "skills").is_dir() or (source_root / "mcp").is_dir():
+    if any((source_root / name).is_dir() for name in ("skills", "mcp", "plugins")):
         return source_root
     if (cwd / "redtrace" / "pyproject.toml").is_file() or (cwd / "pyproject.toml").is_file():
         return cwd
@@ -80,6 +157,9 @@ class SkillRecord:
     enabled: bool
     content: str
     files: tuple[str, ...]
+    version: int
+    revision: str
+    updated_at: str | None
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -87,6 +167,9 @@ class SkillRecord:
             "description": self.description,
             "enabled": self.enabled,
             "files": list(self.files),
+            "version": self.version,
+            "revision": self.revision,
+            "updatedAt": self.updated_at,
         }
 
 
@@ -115,10 +198,17 @@ class CapabilityStore:
         self.root = resolve_capabilities_root(root)
         self.skills_dir = self.root / "skills"
         self.mcp_dir = self.root / "mcp"
+        self.plugins_dir = self.root / "plugins"
+        self.skill_meta_dir = self.skills_dir / ".redtrace"
+        self.max_skills = _positive_env("REDTRACE_MAX_SKILLS", DEFAULT_MAX_SKILLS)
+        self.max_skill_chars = _positive_env("REDTRACE_MAX_SKILL_CHARS", DEFAULT_MAX_SKILL_CHARS)
+        self.history_limit = _positive_env("REDTRACE_SKILL_HISTORY_LIMIT", DEFAULT_HISTORY_LIMIT)
 
     def ensure(self) -> None:
         self.skills_dir.mkdir(parents=True, exist_ok=True)
         self.mcp_dir.mkdir(parents=True, exist_ok=True)
+        self.plugins_dir.mkdir(parents=True, exist_ok=True)
+        self.skill_meta_dir.mkdir(parents=True, exist_ok=True)
 
     def list_skills(self) -> list[SkillRecord]:
         self.ensure()
@@ -132,17 +222,23 @@ class CapabilityStore:
             content = entrypoint.read_text(encoding="utf-8")
             metadata = _frontmatter(content)
             state_path = directory / ".redtrace.json"
-            enabled = True
+            state: dict[str, Any] = {}
             if state_path.is_file():
                 try:
-                    enabled = bool(json.loads(state_path.read_text(encoding="utf-8")).get("enabled", True))
+                    loaded = json.loads(state_path.read_text(encoding="utf-8"))
+                    state = loaded if isinstance(loaded, dict) else {}
                 except (json.JSONDecodeError, OSError):
-                    enabled = True
+                    state = {}
             files = tuple(
                 str(path.relative_to(directory)).replace("\\", "/")
                 for path in sorted(directory.rglob("*"))
                 if path.is_file() and path.name != ".redtrace.json"
             )
+            enabled = bool(state.get("enabled", True))
+            try:
+                version = max(1, int(state.get("version", 1)))
+            except (TypeError, ValueError):
+                version = 1
             records.append(
                 SkillRecord(
                     name=directory.name,
@@ -150,6 +246,9 @@ class CapabilityStore:
                     enabled=enabled,
                     content=content,
                     files=files,
+                    version=version,
+                    revision=str(state.get("revision") or _content_revision(content, enabled)),
+                    updated_at=str(state["updatedAt"]) if state.get("updatedAt") else None,
                 )
             )
         return records
@@ -161,26 +260,244 @@ class CapabilityStore:
                 return record
         raise FileNotFoundError(name)
 
-    def write_skill(self, name: str, content: str, *, enabled: bool = True) -> SkillRecord:
+    def write_skill(
+        self,
+        name: str,
+        content: str,
+        *,
+        enabled: bool = True,
+        expected_revision: str | None = None,
+        actor: str = "api",
+        reason: str = "manual update",
+        action: str = "update",
+    ) -> SkillRecord:
         name = validate_capability_name(name)
         if not content.strip():
             raise ValueError("SKILL.md content must not be empty")
-        directory = self.skills_dir / name
-        _atomic_write(directory / "SKILL.md", content.rstrip() + "\n")
-        _atomic_write(directory / ".redtrace.json", json.dumps({"enabled": enabled}, separators=(",", ":")) + "\n")
+        content = content.rstrip() + "\n"
+        if len(content) > self.max_skill_chars:
+            raise ValueError(f"SKILL.md exceeds {self.max_skill_chars} characters")
+        with self._skill_lock():
+            existing = self._get_skill_direct(name)
+            if existing is None and len(self.list_skills()) >= self.max_skills:
+                raise ValueError(f"skill count limit reached ({self.max_skills})")
+            if expected_revision is not None:
+                current_revision = existing.revision if existing else None
+                if current_revision != expected_revision:
+                    raise SkillConflictError(
+                        f"skill revision conflict for {name}: expected {expected_revision}, current {current_revision}"
+                    )
+            if existing and existing.content == content and existing.enabled == enabled:
+                return existing
+
+            version = existing.version + 1 if existing else 1
+            revision = _content_revision(content, enabled)
+            updated_at = _utc_now()
+            directory = self.skills_dir / name
+            if existing:
+                self._record_history(existing, actor=actor, reason=reason)
+            _atomic_write(directory / "SKILL.md", content)
+            _atomic_write(
+                directory / ".redtrace.json",
+                json.dumps(
+                    {
+                        "enabled": enabled,
+                        "version": version,
+                        "revision": revision,
+                        "updatedAt": updated_at,
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+            )
+            record = self._get_skill_direct(name)
+            assert record is not None
+            self._record_history(record, actor=actor, reason=reason)
+            self._append_skill_audit(
+                {
+                    "action": "create" if existing is None else action,
+                    "actor": actor,
+                    "skill": name,
+                    "version": version,
+                    "revision": revision,
+                    "previousRevision": existing.revision if existing else None,
+                    "reason": reason[:500],
+                    "at": updated_at,
+                }
+            )
+            self._prune_history(name)
         return self.get_skill(name)
 
     def set_skill_enabled(self, name: str, enabled: bool) -> SkillRecord:
         record = self.get_skill(name)
-        _atomic_write(
-            self.skills_dir / record.name / ".redtrace.json",
-            json.dumps({"enabled": enabled}, separators=(",", ":")) + "\n",
+        return self.write_skill(
+            record.name,
+            record.content,
+            enabled=enabled,
+            expected_revision=record.revision,
+            actor="api",
+            reason=f"set enabled={enabled}",
+            action="toggle",
         )
-        return self.get_skill(name)
 
-    def delete_skill(self, name: str) -> None:
-        record = self.get_skill(name)
-        shutil.rmtree(self.skills_dir / record.name)
+    def delete_skill(
+        self,
+        name: str,
+        *,
+        actor: str = "api",
+        reason: str = "manual delete",
+        action: str = "delete",
+    ) -> None:
+        name = validate_capability_name(name)
+        with self._skill_lock():
+            record = self._get_skill_direct(name)
+            if record is None:
+                raise FileNotFoundError(name)
+            self._record_history(record, actor=actor, reason=reason)
+            shutil.rmtree(self.skills_dir / record.name)
+            self._append_skill_audit(
+                {
+                    "action": action,
+                    "actor": actor,
+                    "skill": name,
+                    "version": record.version,
+                    "revision": record.revision,
+                    "reason": reason[:500],
+                    "at": _utc_now(),
+                }
+            )
+
+    def list_skill_versions(self, name: str) -> list[dict[str, Any]]:
+        name = validate_capability_name(name)
+        history_dir = self.skill_meta_dir / "history" / name
+        if not history_dir.is_dir():
+            return []
+        versions: list[dict[str, Any]] = []
+        for path in sorted(history_dir.glob("v*.json"), reverse=True):
+            try:
+                item = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if isinstance(item, dict):
+                item.pop("content", None)
+                versions.append(item)
+        return versions
+
+    def rollback_skill(
+        self,
+        name: str,
+        version: int,
+        *,
+        expected_revision: str | None = None,
+        actor: str = "api",
+    ) -> SkillRecord:
+        name = validate_capability_name(name)
+        path = self.skill_meta_dir / "history" / name / f"v{version:06d}.json"
+        if not path.is_file():
+            raise FileNotFoundError(f"{name}@{version}")
+        snapshot = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("content"), str):
+            raise ValueError(f"invalid skill history snapshot: {name}@{version}")
+        return self.write_skill(
+            name,
+            snapshot["content"],
+            enabled=bool(snapshot.get("enabled", True)),
+            expected_revision=expected_revision,
+            actor=actor,
+            reason=f"rollback to version {version}",
+            action="rollback",
+        )
+
+    def read_skill_audit(self, limit: int = 100) -> list[dict[str, Any]]:
+        path = self.skill_meta_dir / "audit.jsonl"
+        if not path.is_file():
+            return []
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-max(1, min(limit, 500)) :]
+        events: list[dict[str, Any]] = []
+        for line in reversed(lines):
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                events.append(event)
+        return events
+
+    def record_skill_audit(self, event: dict[str, Any]) -> None:
+        with self._skill_lock():
+            payload = dict(event)
+            payload.setdefault("at", _utc_now())
+            self._append_skill_audit(payload)
+
+    def _get_skill_direct(self, name: str) -> SkillRecord | None:
+        for record in self.list_skills():
+            if record.name == name:
+                return record
+        return None
+
+    @contextmanager
+    def _skill_lock(self):
+        self.ensure()
+        lock_dir = self.skill_meta_dir / "locks" / "store.lock"
+        lock_dir.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + 2.0
+        while True:
+            try:
+                lock_dir.mkdir()
+                break
+            except FileExistsError:
+                try:
+                    stale = time.time() - lock_dir.stat().st_mtime > 30
+                except FileNotFoundError:
+                    continue
+                if stale:
+                    shutil.rmtree(lock_dir, ignore_errors=True)
+                    continue
+                if time.monotonic() >= deadline:
+                    raise SkillConflictError("timed out waiting for Skill store lock")
+                time.sleep(0.02)
+        try:
+            yield
+        finally:
+            shutil.rmtree(lock_dir, ignore_errors=True)
+
+    def _record_history(self, record: SkillRecord, *, actor: str, reason: str) -> None:
+        path = self.skill_meta_dir / "history" / record.name / f"v{record.version:06d}.json"
+        if path.is_file():
+            return
+        _atomic_write(
+            path,
+            json.dumps(
+                {
+                    "name": record.name,
+                    "version": record.version,
+                    "revision": record.revision,
+                    "enabled": record.enabled,
+                    "content": record.content,
+                    "actor": actor,
+                    "reason": reason[:500],
+                    "at": record.updated_at or _utc_now(),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            + "\n",
+        )
+
+    def _prune_history(self, name: str) -> None:
+        paths = sorted((self.skill_meta_dir / "history" / name).glob("v*.json"))
+        for path in paths[: -self.history_limit]:
+            path.unlink(missing_ok=True)
+
+    def _append_skill_audit(self, event: dict[str, Any]) -> None:
+        path = self.skill_meta_dir / "audit.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_file() and path.stat().st_size > AUDIT_LIMIT_BYTES:
+            tail = path.read_bytes()[-(AUDIT_LIMIT_BYTES // 2) :]
+            newline = tail.find(b"\n")
+            _atomic_write(path, tail[newline + 1 :].decode("utf-8", errors="ignore"))
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
 
     def list_mcp(self) -> list[McpRecord]:
         self.ensure()
@@ -239,6 +556,10 @@ class CapabilityStore:
                     continue
                 digest.update(str(path.relative_to(self.root)).replace("\\", "/").encode())
                 digest.update(path.read_bytes())
+        plugin_manifest = self.plugins_dir / "manifest.json"
+        if plugin_manifest.is_file():
+            digest.update(b"plugins/manifest.json")
+            digest.update(plugin_manifest.read_bytes())
         return digest.hexdigest()
 
 
@@ -349,14 +670,19 @@ def codex_mcp_overrides(records: Iterable[McpRecord]) -> list[str]:
 
 
 def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
+    from redtrace.plugin_registry import PluginRegistry
+
     skills = store.list_skills()
     mcp_records = store.list_mcp()
+    plugin_records = PluginRegistry(store.root).list_plugins()
     files: dict[str, bytes] = {}
     enabled_names: list[str] = []
+    skill_versions: dict[str, dict[str, Any]] = {}
     for skill in skills:
         if not skill.enabled:
             continue
         enabled_names.append(skill.name)
+        skill_versions[skill.name] = {"version": skill.version, "revision": skill.revision}
         source_dir = store.skills_dir / skill.name
         for source in sorted(source_dir.rglob("*")):
             if not source.is_file() or source.name == ".redtrace.json":
@@ -369,7 +695,32 @@ def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
 
     files[CLAUDE_MCP_PATH] = build_claude_mcp(mcp_records).encode()
     files[PI_MCP_PATH] = build_pi_mcp(mcp_records).encode()
+    pi_provider_extension = PI_PROVIDER_EXTENSION.encode()
+    files[PI_PROVIDER_EXTENSION_PATH] = pi_provider_extension
+    enabled_plugins = [
+        plugin.summary(store.root)
+        for plugin in plugin_records
+        if plugin.enabled
+    ]
+    files[PLUGIN_CATALOG_PATH] = (
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "source": str(store.plugins_dir),
+                "agents": ["claude", "codex", "pi"],
+                "plugins": enabled_plugins,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
     files[BLACKBOARD_CLI_PATH] = Path(__file__).with_name("blackboard_cli.py").read_bytes()
+    files[RESOURCE_CLI_PATH] = Path(__file__).with_name("resource_cli.py").read_bytes()
+    files[SKILL_CLI_PATH] = Path(__file__).with_name("skill_cli.py").read_bytes()
+    context_cli = Path(__file__).with_name("context_cli.py").read_bytes()
+    files[CONTEXT_CLI_PATH] = context_cli
     digest_builder = hashlib.sha256()
     for relative, content in sorted(files.items()):
         digest_builder.update(relative.encode())
@@ -377,10 +728,69 @@ def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
     manifest = {
         "digest": digest_builder.hexdigest(),
         "skills": enabled_names,
-        "managedFiles": [BLACKBOARD_CLI_PATH, CLAUDE_MCP_PATH, PI_MCP_PATH],
+        "skillVersions": skill_versions,
+        "plugins": [plugin.id for plugin in plugin_records if plugin.enabled],
+        "snapshotFrozen": True,
+        "runtimeFiles": {
+            CONTEXT_CLI_PATH: hashlib.sha256(context_cli).hexdigest(),
+            PI_PROVIDER_EXTENSION_PATH: hashlib.sha256(
+                pi_provider_extension
+            ).hexdigest(),
+        },
+        "managedFiles": [
+            BLACKBOARD_CLI_PATH,
+            RESOURCE_CLI_PATH,
+            SKILL_CLI_PATH,
+            CONTEXT_CLI_PATH,
+            PLUGIN_CATALOG_PATH,
+            CLAUDE_MCP_PATH,
+            PI_MCP_PATH,
+            PI_PROVIDER_EXTENSION_PATH,
+        ],
     }
     files[MANIFEST_PATH] = (json.dumps(manifest, separators=(",", ":")) + "\n").encode()
     return manifest["digest"], files
+
+
+def runtime_workspace_patch(
+    manifest: dict[str, Any],
+    *,
+    force: bool = False,
+) -> dict[str, bytes]:
+    """Refresh RedTrace runtime infrastructure without thawing task capabilities."""
+
+    runtime_contents = {
+        CONTEXT_CLI_PATH: Path(__file__).with_name("context_cli.py").read_bytes(),
+        PI_PROVIDER_EXTENSION_PATH: PI_PROVIDER_EXTENSION.encode(),
+    }
+    runtime_digests = {
+        relative: hashlib.sha256(content).hexdigest()
+        for relative, content in runtime_contents.items()
+    }
+    runtime_files = manifest.get("runtimeFiles")
+    current = runtime_files if isinstance(runtime_files, dict) else {}
+    if not force and all(
+        current.get(relative) == digest
+        for relative, digest in runtime_digests.items()
+    ):
+        return {}
+    updated = dict(manifest)
+    updated["runtimeFiles"] = {**current, **runtime_digests}
+    managed = [
+        value
+        for value in updated.get("managedFiles", [])
+        if isinstance(value, str)
+    ]
+    for relative in runtime_contents:
+        if relative not in managed:
+            managed.append(relative)
+    updated["managedFiles"] = managed
+    return {
+        **runtime_contents,
+        MANIFEST_PATH: (
+            json.dumps(updated, separators=(",", ":")) + "\n"
+        ).encode(),
+    }
 
 
 def _read_manifest(workspace: Path) -> dict[str, Any]:
@@ -395,8 +805,26 @@ def _read_manifest(workspace: Path) -> dict[str, Any]:
 
 
 def materialize_local_workspace(store: CapabilityStore, workspace: Path) -> str:
-    digest, files = workspace_payload(store)
     previous = _read_manifest(workspace)
+    if previous.get("snapshotFrozen") is True and isinstance(previous.get("digest"), str):
+        patch = runtime_workspace_patch(
+            previous,
+            force=any(
+                not (workspace / relative).is_file()
+                for relative in (
+                    CONTEXT_CLI_PATH,
+                    PI_PROVIDER_EXTENSION_PATH,
+                )
+            ),
+        )
+        for relative, content in patch.items():
+            target = workspace / Path(relative)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            if relative == CONTEXT_CLI_PATH:
+                target.chmod(0o755)
+        return previous["digest"]
+    digest, files = workspace_payload(store)
     if previous.get("digest") == digest:
         return digest
 
@@ -409,7 +837,12 @@ def materialize_local_workspace(store: CapabilityStore, workspace: Path) -> str:
         target = workspace / Path(relative)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
-        if relative == BLACKBOARD_CLI_PATH:
+        if relative in {
+            BLACKBOARD_CLI_PATH,
+            RESOURCE_CLI_PATH,
+            SKILL_CLI_PATH,
+            CONTEXT_CLI_PATH,
+        }:
             target.chmod(0o755)
     return digest
 
@@ -434,7 +867,17 @@ def workspace_tar(files: dict[str, bytes]) -> bytes:
         for relative, content in files.items():
             info = tarfile.TarInfo(relative)
             info.size = len(content)
-            info.mode = 0o755 if relative == BLACKBOARD_CLI_PATH else 0o644
+            if relative in {
+                BLACKBOARD_CLI_PATH,
+                RESOURCE_CLI_PATH,
+                SKILL_CLI_PATH,
+                CONTEXT_CLI_PATH,
+            }:
+                info.mode = 0o755
+            elif relative.startswith((".agents/skills/", ".claude/skills/")):
+                info.mode = 0o444
+            else:
+                info.mode = 0o644
             info.uid = 1000
             info.gid = 1000
             archive.addfile(info, io.BytesIO(content))

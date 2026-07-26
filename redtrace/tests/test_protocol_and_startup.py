@@ -7,6 +7,7 @@ from redtrace.dispatcher.runtime.startup_healthcheck import (
     StartupHealthcheckResult,
     format_failure_summary,
 )
+from redtrace.dispatcher.scheduler.loop import _local_cli_probe_command
 
 
 def test_client_request_failure_returns_status_zero() -> None:
@@ -21,6 +22,31 @@ def test_client_request_failure_returns_status_zero() -> None:
 
     assert result.status_code == 0
     assert result.text == "offline"
+
+
+def test_windows_cli_probe_runs_cmd_shims_through_comspec(monkeypatch) -> None:
+    monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
+
+    command = _local_cli_probe_command(
+        r"C:\Users\user\AppData\Roaming\npm\claude.CMD",
+        platform="nt",
+    )
+
+    assert command[:4] == [
+        r"C:\Windows\System32\cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+    ]
+    assert "claude.CMD" in command[4]
+    assert "--help" in command[4]
+
+
+def test_non_windows_cli_probe_executes_resolved_path_directly() -> None:
+    assert _local_cli_probe_command("/usr/local/bin/codex", platform="posix") == [
+        "/usr/local/bin/codex",
+        "--help",
+    ]
 
 
 def test_startup_healthcheck_failure_summary_includes_worker_details() -> None:

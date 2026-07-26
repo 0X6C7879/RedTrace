@@ -11,6 +11,11 @@ from collections.abc import Callable
 from docker.errors import APIError, DockerException
 from docker.models.containers import Container
 
+from redtrace.dispatcher.runtime.stream_buffer import (
+    BoundedLineEmitter,
+    BoundedTextBuffer,
+)
+
 LOG = logging.getLogger(__name__)
 EXEC_KILL_JOIN_TIMEOUT_SECONDS = 5.0
 OutputHandler = Callable[[str, str], None]
@@ -24,6 +29,10 @@ class ProcessResult:
     timed_out: bool = False
     cancelled: bool = False
     cancel_reason: str | None = None
+    stdout_bytes: int = 0
+    stderr_bytes: int = 0
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
 
 
 @runtime_checkable
@@ -44,15 +53,21 @@ class ExecProcess(Protocol):
 
 
 class ManagedProcess:
-    def __init__(self, container: Container, command: list[str], env: dict[str, str]):
+    def __init__(
+        self,
+        container: Container,
+        command: list[str],
+        env: dict[str, str],
+        max_output_chars: int = 8 * 1024 * 1024,
+    ):
         self.command = command
         self.env = env
         self._container = container
         self._api = container.client.api
         self._exec_id: str | None = None
         self._reader: threading.Thread | None = None
-        self._stdout: list[str] = []
-        self._stderr: list[str] = []
+        self._stdout = BoundedTextBuffer(max_output_chars)
+        self._stderr = BoundedTextBuffer(max_output_chars)
         self._returncode: int | None = None
         self._timed_out = False
         self._cancel_reason: str | None = None
@@ -89,15 +104,19 @@ class ManagedProcess:
                 self._returncode = 137
             self._done.set()
         self._done.wait(timeout=0)
-        if self._read_error and not self._stderr:
+        if self._read_error and self._stderr.total_chars == 0:
             self._stderr.append(self._read_error)
         return ProcessResult(
             returncode=self._returncode if self._returncode is not None else 1,
-            stdout="".join(self._stdout),
-            stderr="".join(self._stderr),
+            stdout=self._stdout.text(),
+            stderr=self._stderr.text(),
             timed_out=self._timed_out,
             cancelled=self._cancel_reason is not None,
             cancel_reason=self._cancel_reason,
+            stdout_bytes=self._stdout.total_bytes,
+            stderr_bytes=self._stderr.total_bytes,
+            stdout_truncated=self._stdout.truncated,
+            stderr_truncated=self._stderr.truncated,
         )
 
     def kill(self) -> None:
@@ -124,7 +143,16 @@ class ManagedProcess:
     def _read_stream(self) -> None:
         assert self._exec_id is not None
         stream: Any | None = None
-        tails = {"stdout": "", "stderr": ""}
+        emitters = (
+            {
+                channel: BoundedLineEmitter(
+                    lambda line, channel=channel: self._notify_output(channel, line)
+                )
+                for channel in ("stdout", "stderr")
+            }
+            if self._on_output is not None
+            else {}
+        )
         try:
             stream = self._api.exec_start(
                 self._exec_id,
@@ -137,28 +165,20 @@ class ManagedProcess:
                 stdout, stderr = self._split_chunk(chunk)
                 if stdout:
                     self._stdout.append(stdout)
-                    tails["stdout"] = self._emit_lines("stdout", tails["stdout"] + stdout)
+                    if "stdout" in emitters:
+                        emitters["stdout"].feed(stdout)
                 if stderr:
                     self._stderr.append(stderr)
-                    tails["stderr"] = self._emit_lines("stderr", tails["stderr"] + stderr)
+                    if "stderr" in emitters:
+                        emitters["stderr"].feed(stderr)
         except DockerException as exc:
             self._read_error = str(exc)
         finally:
-            for channel, tail in tails.items():
-                if tail:
-                    self._notify_output(channel, tail)
+            for emitter in emitters.values():
+                emitter.flush()
             self._close_stream(stream)
             self._returncode = self._resolve_exit_code()
             self._done.set()
-
-    def _emit_lines(self, channel: str, value: str) -> str:
-        lines = value.splitlines(keepends=True)
-        tail = ""
-        if lines and not lines[-1].endswith(("\n", "\r")):
-            tail = lines.pop()
-        for line in lines:
-            self._notify_output(channel, line)
-        return tail
 
     def _notify_output(self, channel: str, value: str) -> None:
         callback = self._on_output

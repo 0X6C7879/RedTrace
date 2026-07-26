@@ -27,7 +27,7 @@ def run_startup_healthchecks(
     *,
     show_commands: bool = False,
 ) -> list[StartupHealthcheckResult]:
-    workers = list(config.workers)
+    workers = [worker for worker in config.workers if worker.enabled]
     parallelism = max(1, min(len(workers), config.runtime.max_workers, 8))
     LOG.info("[*] Startup healthcheck: workers=%s parallelism=%s", len(workers), parallelism)
     with ThreadPoolExecutor(max_workers=parallelism) as executor:

@@ -9,6 +9,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from redtrace.config_secrets import resolve_config_secrets
+
 
 TaskType = Literal["reason", "explore", "bootstrap"]
 WorkerType = Literal["claudecode", "codex", "pi", "mock"]
@@ -162,6 +164,44 @@ class LocalConfig(BaseModel):
     completed_action: LocalCompletedAction = "keep"
 
 
+class ContextHarnessConfig(BaseModel):
+    """Low-overhead, post-RTK Artifact capture visible to every Worker type."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    artifact_root: str = ".redtrace/artifacts/context"
+    inline_bytes: int = Field(default=32 * 1024, ge=1024)
+    visible_bytes: int = Field(default=8 * 1024, ge=512)
+    query_bytes: int = Field(default=64 * 1024, ge=1024)
+    parse_bytes: int = Field(default=16 * 1024 * 1024, ge=64 * 1024)
+    worker_output_chars: int = Field(default=8 * 1024 * 1024, ge=64 * 1024)
+
+    @field_validator("artifact_root")
+    @classmethod
+    def validate_artifact_root(cls, value: str) -> str:
+        path = Path(value)
+        if path.is_absolute() or ".." in path.parts or not path.parts:
+            raise ValueError("artifact_root must be a safe workspace-relative path")
+        return path.as_posix()
+
+    def environment(self) -> dict[str, str]:
+        return {
+            "REDTRACE_CONTEXT_HARNESS_ENABLED": "1" if self.enabled else "0",
+            "REDTRACE_CONTEXT_ARTIFACT_ROOT": self.artifact_root,
+            "REDTRACE_CONTEXT_INLINE_BYTES": str(self.inline_bytes),
+            "REDTRACE_CONTEXT_VISIBLE_BYTES": str(self.visible_bytes),
+            "REDTRACE_CONTEXT_QUERY_BYTES": str(self.query_bytes),
+            "REDTRACE_CONTEXT_PARSE_BYTES": str(self.parse_bytes),
+            # Keep Python, PowerShell and common CLI subprocesses on a single
+            # UTF-8 contract even when the dispatcher itself runs on Windows.
+            "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+        }
+
+
 class RuntimeConfig(BaseModel):
     max_workers: int = Field(gt=0)
     max_running_projects: int = Field(gt=0)
@@ -178,6 +218,7 @@ class WorkerConfig(BaseModel):
 
     name: str
     type: WorkerType
+    enabled: bool = True
     task_types: list[TaskType]
     max_running: int = Field(gt=0)
     priority: int = Field(ge=0)
@@ -203,6 +244,20 @@ class WorkerConfig(BaseModel):
             resolve_mock_behavior(self.name, self.env)
         return self
 
+    def api_configured(self) -> bool:
+        """Whether RedTrace has a complete per-process API override for this Worker."""
+
+        required = WORKER_ENV_KEYS[self.type]
+        return bool(required) and all(self.env.get(key, "").strip() for key in required)
+
+    def has_api_config(self) -> bool:
+        """Whether any part of a RedTrace API override is present."""
+
+        return any(
+            self.env.get(key, "").strip()
+            for key in WORKER_ENV_KEYS[self.type]
+        )
+
 
 class DispatchConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -210,6 +265,9 @@ class DispatchConfig(BaseModel):
     server: str
     runtime: RuntimeConfig
     tasks: TasksConfig
+    context_harness: ContextHarnessConfig = Field(
+        default_factory=ContextHarnessConfig
+    )
     container: ContainerConfig | None = None
     local: LocalConfig | None = None
     common_env: dict[str, str] = Field(default_factory=dict)
@@ -250,8 +308,6 @@ class DispatchConfig(BaseModel):
         names = [worker.name for worker in self.workers]
         if len(set(names)) != len(names):
             raise ValueError("worker names must be unique")
-        if not self.workers:
-            raise ValueError("workers must not be empty")
         if self.runtime.max_project_workers > self.runtime.max_workers:
             raise ValueError("max_project_workers cannot exceed max_workers")
         return self
@@ -261,19 +317,33 @@ class DispatchConfig(BaseModel):
         if self.runtime.execution == "container":
             if self.container is None:
                 raise ValueError("container config is required when runtime.execution is container")
-            for worker in self.workers:
-                required = WORKER_ENV_KEYS[worker.type]
-                missing = [key for key in required if not worker.env.get(key)]
-                if missing:
-                    raise ValueError(f"worker {worker.name} missing env keys: {', '.join(missing)}")
-        else:  # local: workers reuse the host CLI config, so no LLM env keys are required
+        else:
             if self.local is None:
                 self.local = LocalConfig()
+        for worker in self.workers:
+            if not worker.enabled:
+                continue
+            required = WORKER_ENV_KEYS[worker.type]
+            missing = [key for key in required if not worker.env.get(key, "").strip()]
+            if self.runtime.execution == "container" and missing:
+                raise ValueError(
+                    f"worker {worker.name} missing env keys: {', '.join(missing)}"
+                )
+            if (
+                self.runtime.execution == "local"
+                and worker.has_api_config()
+                and missing
+            ):
+                raise ValueError(
+                    f"worker {worker.name} must configure all API override env keys "
+                    f"together; missing: {', '.join(missing)}"
+                )
         return self
 
     @classmethod
     def load(cls, path: Path) -> "DispatchConfig":
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data = resolve_config_secrets(path, data)
         config = cls.model_validate(data)
         validate_prompt_resources(config.runtime.prompt_group)
         return config

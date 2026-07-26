@@ -32,6 +32,38 @@ def _create_project(client: TestClient) -> str:
     return response.json()["project"]["id"]
 
 
+def test_delete_project_cascades_without_blackboard_trigger_failure(client: TestClient) -> None:
+    project_id = _create_project(client)
+    intent = client.post(
+        f"/projects/{project_id}/intents",
+        json={
+            "from": ["origin"],
+            "description": "investigate",
+            "creator": "reasoner",
+            "worker": None,
+        },
+    )
+    assert intent.status_code == 201
+
+    response = client.delete(f"/projects/{project_id}")
+
+    assert response.status_code == 204
+    assert client.get(f"/projects/{project_id}").status_code == 404
+    with db.get_conn() as conn:
+        for table in (
+            "facts",
+            "intents",
+            "hints",
+            "scoped_counters",
+            "blackboard_events",
+        ):
+            count = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()[0]
+            assert count == 0
+
+
 def test_audit_events_are_task_scoped_and_workspace_is_browsable(
     client: TestClient,
     tmp_path: Path,

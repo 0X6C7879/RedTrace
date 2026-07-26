@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 import requests
 
 from redtrace.dispatcher.config import DispatchConfig, LocalConfig, WorkerConfig
+from redtrace.dispatcher.config_reload import DispatchConfigReloader
 from redtrace.dispatcher.models import ReasonCheckpoint, RunningTask
 from redtrace.dispatcher.protocol.client import CairnClient
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
@@ -27,6 +29,13 @@ from redtrace.server.models import Intent, ProjectDetail, ProjectSummary
 LOG = logging.getLogger(__name__)
 UNHEALTHY_RETRY_AFTER_SECONDS = 5
 REJECTED_RETRY_AFTER_SECONDS = 5
+
+
+def _local_cli_probe_command(path: str, *, platform: str = os.name) -> list[str]:
+    if platform == "nt" and Path(path).suffix.lower() in {".bat", ".cmd"}:
+        comspec = os.environ.get("COMSPEC", "cmd.exe")
+        return [comspec, "/d", "/s", "/c", subprocess.list2cmdline([path, "--help"])]
+    return [path, "--help"]
 BOOTSTRAP_INTENT_DESCRIPTION = "bootstrap"
 BOOTSTRAP_INTENT_CREATOR = "dispatcher.bootstrap"
 
@@ -43,13 +52,20 @@ class WorkerSelection:
 class DispatcherLoop:
     def __init__(self, config_path: Path):
         self.config_path = config_path
-        self.config = DispatchConfig.load(config_path)
+        self._config_reloader = DispatchConfigReloader(config_path)
+        self.config = self._config_reloader.config
         self.client = CairnClient(self.config.server)
         if self.config.runtime.execution == "local":
-            self.container_manager = LocalBackend(self.config.local or LocalConfig())
+            self.container_manager = LocalBackend(
+                self.config.local or LocalConfig(),
+                self.config.context_harness,
+            )
         else:
             assert self.config.container is not None
-            self.container_manager = ContainerManager(self.config.container)
+            self.container_manager = ContainerManager(
+                self.config.container,
+                self.config.context_harness,
+            )
         self.executor = ThreadPoolExecutor(max_workers=self.config.runtime.max_workers)
         self.cleanup_executor = ThreadPoolExecutor(max_workers=max(1, min(8, self.config.runtime.max_workers)))
         self.futures: dict[Future[str], RunningTask] = {}
@@ -87,6 +103,7 @@ class DispatcherLoop:
                         self._settings_checked = True
                     self._reap_futures()
                     self._reap_cleanup_futures()
+                    self._refresh_worker_config()
                     summaries = self.client.list_projects()
                     self._initialize_reason_checkpoints(summaries)
                     self._refresh_runtime_projects(summaries)
@@ -131,7 +148,13 @@ class DispatcherLoop:
 
     def _run_local_binary_check(self) -> None:
         binaries: dict[str, list[str]] = {}
+        configured_workers: list[str] = []
+        native_workers: list[str] = []
         for worker in self.config.workers:
+            if not worker.enabled:
+                continue
+            target = configured_workers if worker.api_configured() else native_workers
+            target.append(worker.name)
             binary = get_driver(worker.type, "local").local_binary()
             if binary is None:
                 continue
@@ -162,15 +185,22 @@ class DispatcherLoop:
                 + "). Install them and make sure each runs directly from your shell, then retry."
             )
         if missing:
-            LOG.warning(
-                "[!] Missing CLIs, their workers cannot run: %s. Install them or drop those workers.",
-                ", ".join(sorted(missing)),
+            raise RuntimeError(
+                "local execution: enabled Worker CLIs are missing from PATH ("
+                + ", ".join(sorted(missing))
+                + "). Install them or disable their Workers, then retry."
             )
-        LOG.warning(
-            "[!] Local mode uses each CLI's own host config: make sure %s already logged in / "
-            "configured and usable directly (e.g. `claude -p ...` works) — RedTrace injects no API keys.",
-            ", ".join(sorted(available)),
-        )
+        if configured_workers:
+            LOG.info(
+                "[+] Local Worker API overrides active workers=%s; Endpoint, API Key and "
+                "Model ID are process-local while user CLI config remains available",
+                ", ".join(sorted(configured_workers)),
+            )
+        if native_workers:
+            LOG.info(
+                "[+] Local Workers using host CLI login/config workers=%s",
+                ", ".join(sorted(native_workers)),
+            )
 
     @staticmethod
     def _probe_local_cli(binary: str) -> tuple[str | None, bool]:
@@ -179,7 +209,7 @@ class DispatcherLoop:
             return None, False
         try:
             result = subprocess.run(
-                [binary, "--help"],
+                _local_cli_probe_command(path),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=15,
@@ -553,6 +583,8 @@ class DispatcherLoop:
         blocked_task_type: list[str] = []
         running_counts = self._worker_counts()
         for worker in self.config.workers:
+            if not worker.enabled:
+                continue
             if task_type not in worker.task_types:
                 blocked_task_type.append(worker.name)
                 continue
@@ -674,7 +706,10 @@ class DispatcherLoop:
             return False
         if self._get_bootstrap_intent(project) is not None:
             return True
-        return any("bootstrap" in worker.task_types for worker in self.config.workers)
+        return any(
+            worker.enabled and "bootstrap" in worker.task_types
+            for worker in self.config.workers
+        )
 
     def _create_bootstrap_intent(self, project_id: str) -> Intent | None:
         response = self.client.create_intent(
@@ -928,7 +963,47 @@ class DispatcherLoop:
                 interval,
             )
 
+    def _refresh_worker_config(self) -> None:
+        refreshed = self._config_reloader.refresh()
+        if refreshed is None:
+            return
+        if refreshed.error is not None:
+            self._log_changed(
+                "dispatch/config-reload",
+                logging.ERROR,
+                "%s",
+                refreshed.error,
+            )
+            return
+        assert refreshed.config is not None
+        self.config = refreshed.config
+        if self.config.runtime.execution == "local":
+            self._run_local_binary_check()
+        active_names = {
+            worker.name for worker in self.config.workers if worker.enabled
+        }
+        self.worker_unhealthy_until = {
+            name: until
+            for name, until in self.worker_unhealthy_until.items()
+            if name in active_names
+        }
+        self.worker_rejected_until = {
+            key: until
+            for key, until in self.worker_rejected_until.items()
+            if key[2] in active_names
+        }
+        self._clear_log_state("dispatch/config-reload")
+        LOG.info(
+            "worker config hot-reloaded workers=%s enabled=%s running_tasks_unchanged=%s",
+            len(self.config.workers),
+            len(active_names),
+            len(self.futures),
+        )
+
     def _run_startup_healthchecks(self, *, show_commands: bool) -> None:
+        if not any(worker.enabled for worker in self.config.workers):
+            LOG.warning("startup healthcheck skipped because no workers are enabled")
+            return
         results = run_startup_healthchecks(self.config, show_commands=show_commands)
         if any(result.ok for result in results):
             return

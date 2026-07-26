@@ -10,14 +10,20 @@ from fastapi.testclient import TestClient
 
 from redtrace.capabilities import (
     CLAUDE_MCP_PATH,
+    CONTEXT_CLI_PATH,
+    MANIFEST_PATH,
     PI_MCP_EXTENSION,
     PI_MCP_PATH,
+    PI_PROVIDER_EXTENSION_PATH,
+    PLUGIN_CATALOG_PATH,
+    SKILL_CLI_PATH,
     CapabilityStore,
     build_claude_mcp,
     build_pi_mcp,
     codex_mcp_overrides,
     materialize_local_workspace,
 )
+from redtrace.plugin_registry import PluginRegistry
 from redtrace.dispatcher.config import WorkerConfig
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.workers.adapters.claudecode import ClaudeCodeDriver
@@ -68,6 +74,21 @@ def test_store_and_materializer_share_native_agent_resources(tmp_path: Path) -> 
             },
         },
     )
+    plugin_dir = tmp_path / "plugins" / "browser"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "manifest.json").write_text("{}\n", encoding="utf-8")
+    PluginRegistry(tmp_path).write_plugin(
+        "browser",
+        {
+            "name": "Browser traffic",
+            "description": "Browser ingress",
+            "kind": "chromium-devtools",
+            "path": "plugins/browser",
+            "entrypoint": "manifest.json",
+            "enabled": True,
+            "agents": ["claude", "codex", "pi"],
+        },
+    )
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -75,6 +96,7 @@ def test_store_and_materializer_share_native_agent_resources(tmp_path: Path) -> 
 
     assert (workspace / ".agents" / "skills" / "recon" / "SKILL.md").read_text(encoding="utf-8") == SKILL
     assert (workspace / ".claude" / "skills" / "recon" / "scripts" / "run.sh").is_file()
+    assert (workspace / SKILL_CLI_PATH).is_file()
     assert not (workspace / ".agents" / "skills" / "disabled").exists()
 
     claude = json.loads((workspace / CLAUDE_MCP_PATH).read_text(encoding="utf-8"))
@@ -83,6 +105,15 @@ def test_store_and_materializer_share_native_agent_resources(tmp_path: Path) -> 
 
     pi = json.loads((workspace / PI_MCP_PATH).read_text(encoding="utf-8"))
     assert pi["mcpServers"]["context7"]["lifecycle"] == "eager"
+    provider_extension = (
+        workspace / PI_PROVIDER_EXTENSION_PATH
+    ).read_text(encoding="utf-8")
+    assert 'pi.registerProvider("redtrace"' in provider_extension
+    assert "supportsDeveloperRole: false" in provider_extension
+    assert "PI_CODING_AGENT_DIR" not in provider_extension
+    plugins = json.loads((workspace / PLUGIN_CATALOG_PATH).read_text(encoding="utf-8"))
+    assert [plugin["id"] for plugin in plugins["plugins"]] == ["browser"]
+    assert plugins["plugins"][0]["agents"] == ["claude", "codex", "pi"]
 
     overrides = codex_mcp_overrides(store.list_mcp())
     assert "mcp_servers.context7.command=\"npx\"" in overrides
@@ -90,8 +121,14 @@ def test_store_and_materializer_share_native_agent_resources(tmp_path: Path) -> 
 
     store.set_skill_enabled("recon", False)
     materialize_local_workspace(store, workspace)
-    assert not (workspace / ".agents" / "skills" / "recon").exists()
-    assert not (workspace / ".claude" / "skills" / "recon").exists()
+    assert (workspace / ".agents" / "skills" / "recon").exists()
+    assert (workspace / ".claude" / "skills" / "recon").exists()
+
+    next_workspace = tmp_path / "next-workspace"
+    next_workspace.mkdir()
+    materialize_local_workspace(store, next_workspace)
+    assert not (next_workspace / ".agents" / "skills" / "recon").exists()
+    assert not (next_workspace / ".claude" / "skills" / "recon").exists()
 
 
 def test_mcp_agent_specific_formats_preserve_native_fields(tmp_path: Path) -> None:
@@ -129,11 +166,14 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
         assert index.status_code == 200
         assert 'x-data="skillsPage()"' in index.text
         assert 'x-data="mcpPage()"' in index.text
+        assert 'x-data="pluginsPage()"' in index.text
+        assert "先选择一个 RedTrace 项目" not in index.text[index.text.index("x-data=\"pluginsPage()\"") :]
         assert client.get("/static/capabilities.js").status_code == 200
 
         status = client.get("/capabilities")
         assert status.status_code == 200
         assert status.json()["root"] == str(tmp_path)
+        assert status.json()["pluginsDir"] == str(tmp_path / "plugins")
 
         created = client.post(
             "/capabilities/skills",
@@ -167,8 +207,38 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
         )
         assert invalid.status_code == 400
 
+        plugin_dir = tmp_path / "plugins" / "browser"
+        plugin_dir.mkdir(parents=True)
+        (plugin_dir / "manifest.json").write_text("{}\n", encoding="utf-8")
+        plugin = client.post(
+            "/capabilities/plugins",
+            json={
+                "id": "browser",
+                "config": {
+                    "name": "Browser traffic",
+                    "kind": "chromium-devtools",
+                    "path": "plugins/browser",
+                    "entrypoint": "manifest.json",
+                    "enabled": True,
+                    "agents": ["claude", "codex", "pi"],
+                },
+            },
+        )
+        assert plugin.status_code == 201
+        assert plugin.json()["ready"] is True
+        assert plugin.json()["agents"] == ["claude", "codex", "pi"]
+
+        disabled = client.patch(
+            "/capabilities/plugins/browser/enabled",
+            json={"enabled": False},
+        )
+        assert disabled.status_code == 200
+        assert disabled.json()["enabled"] is False
+
         assert client.delete("/capabilities/skills/recon").status_code == 204
         assert client.delete("/capabilities/mcp/filesystem").status_code == 204
+        assert client.delete("/capabilities/plugins/browser").status_code == 204
+        assert plugin_dir.is_dir()
 
 
 def test_drivers_keep_native_features_and_add_shared_mcp(monkeypatch, tmp_path: Path) -> None:
@@ -179,7 +249,8 @@ def test_drivers_keep_native_features_and_add_shared_mcp(monkeypatch, tmp_path: 
     )
 
     claude = ClaudeCodeDriver().build_execute(_worker("claudecode"), "PROMPT", "session").argv
-    assert ["--mcp-config", CLAUDE_MCP_PATH] == claude[4:6]
+    mcp_index = claude.index("--mcp-config")
+    assert ["--mcp-config", CLAUDE_MCP_PATH] == claude[mcp_index : mcp_index + 2]
 
     codex = CodexDriver(local=True).build_execute(_worker("codex"), "PROMPT", None).argv
     assert "mcp_servers.filesystem.command=\"mcp-filesystem\"" in codex
@@ -226,8 +297,55 @@ def test_container_sync_uploads_once_and_refreshes_managed_skills(tmp_path: Path
 
     store.set_skill_enabled("recon", False)
     manager._sync_capabilities("worker")
+    assert len(container.archives) == 1
 
+    manager._sync_capabilities("next-worker")
     assert len(container.archives) == 2
-    remove = next(command for command in container.commands if command[:3] == ["rm", "-rf", "--"])
-    assert "/home/kali/workspace/.agents/skills/recon" in remove
-    assert "/home/kali/workspace/.claude/skills/recon" in remove
+    with tarfile.open(fileobj=io.BytesIO(container.archives[1]), mode="r:") as archive:
+        names = set(archive.getnames())
+    assert ".agents/skills/recon/SKILL.md" not in names
+    assert ".claude/skills/recon/SKILL.md" not in names
+
+
+def test_container_reuses_frozen_snapshot_after_dispatcher_restart(tmp_path: Path) -> None:
+    store = CapabilityStore(tmp_path)
+    store.write_skill("recon", SKILL)
+
+    class FrozenContainer:
+        def __init__(self) -> None:
+            self.archives: list[bytes] = []
+
+        def exec_run(self, _command):
+            manifest = {"digest": "frozen-digest", "snapshotFrozen": True}
+            return SimpleNamespace(exit_code=0, output=json.dumps(manifest).encode())
+
+        def put_archive(self, _path: str, archive: bytes) -> bool:
+            self.archives.append(archive)
+            return True
+
+    container = FrozenContainer()
+    manager = ContainerManager.__new__(ContainerManager)
+    manager._capabilities = store
+    manager._capability_digests = {}
+    manager._require_container = lambda _name: container
+
+    manager._sync_capabilities("worker")
+
+    assert manager._capability_digests["worker"] == "frozen-digest"
+    assert len(container.archives) == 1
+    with tarfile.open(fileobj=io.BytesIO(container.archives[0]), mode="r:") as archive:
+        names = set(archive.getnames())
+        manifest = json.loads(
+            archive.extractfile(MANIFEST_PATH).read().decode("utf-8")
+        )
+        assert names == {
+            ".redtrace",
+            ".redtrace/bin",
+            ".redtrace/pi",
+            CONTEXT_CLI_PATH,
+            MANIFEST_PATH,
+            PI_PROVIDER_EXTENSION_PATH,
+        }
+    assert manifest["digest"] == "frozen-digest"
+    assert manifest["snapshotFrozen"] is True
+    assert CONTEXT_CLI_PATH in manifest["runtimeFiles"]

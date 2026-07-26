@@ -40,6 +40,19 @@ tasks:
     # Time budget for conclude fallback used to summarize confirmed findings from the same session.
     conclude_timeout: 90
 
+context_harness:
+  # Shared post-RTK layer for Claude Code, Codex, and Pi. Set false for raw execution.
+  enabled: true
+  # Complete security/HTTP/Web output is stored inside the task workspace.
+  artifact_root: ".redtrace/artifacts/context"
+  # Small plain text remains transparent; structured Web/security data is summarized.
+  inline_bytes: 32768
+  visible_bytes: 8192
+  query_bytes: 65536
+  parse_bytes: 16777216
+  # Bounded prefix+tail retained from each outer Worker stdout/stderr stream.
+  worker_output_chars: 8388608
+
 container:
   # Base worker container. The dispatcher execs agent commands inside one container per project.
   image: "ghcr.io/oritera/redtrace-worker-container:latest"

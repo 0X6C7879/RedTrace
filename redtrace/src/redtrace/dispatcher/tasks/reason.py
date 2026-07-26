@@ -116,7 +116,12 @@ def run_reason_task(
             },
         )
         if worker.type != "mock":
-            prompt = add_blackboard_guidance(prompt, project.blackboard_revision)
+            prompt = add_blackboard_guidance(
+                prompt,
+                project.blackboard_revision,
+                context_harness_enabled=config.context_harness.enabled,
+                local_execution=config.runtime.execution == "local",
+            )
 
         session = driver.prepare_session()
         command = driver.build_execute(worker, prompt, session)

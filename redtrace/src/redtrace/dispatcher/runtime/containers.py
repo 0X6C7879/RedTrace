@@ -16,10 +16,11 @@ from redtrace.capabilities import (
     MANIFEST_PATH,
     NAME_PATTERN,
     CapabilityStore,
+    runtime_workspace_patch,
     workspace_payload,
     workspace_tar,
 )
-from redtrace.dispatcher.config import ContainerConfig
+from redtrace.dispatcher.config import ContainerConfig, ContextHarnessConfig
 from redtrace.dispatcher.runtime.process import ManagedProcess
 
 LOG = logging.getLogger(__name__)
@@ -29,8 +30,13 @@ class ContainerManager:
     _PREFIX = "redtrace-dispatch-"
     _WORKSPACE = "/home/kali/workspace"
 
-    def __init__(self, config: ContainerConfig):
+    def __init__(
+        self,
+        config: ContainerConfig,
+        context_harness: ContextHarnessConfig | None = None,
+    ):
         self._config = config
+        self._context_harness = context_harness or ContextHarnessConfig()
         self._client = docker.from_env()
         self._ensure_running_locks: dict[str, threading.Lock] = {}
         self._ensure_running_locks_guard = threading.Lock()
@@ -88,8 +94,7 @@ class ContainerManager:
         return name
 
     def _sync_capabilities(self, name: str) -> None:
-        digest, files = workspace_payload(self._capabilities)
-        if self._capability_digests.get(name) == digest:
+        if name in self._capability_digests:
             return
 
         container = self._require_container(name)
@@ -100,7 +105,23 @@ class ContainerManager:
                 previous = json.loads(result.output.decode("utf-8"))
         except (DockerException, UnicodeDecodeError, json.JSONDecodeError):
             previous = {}
+        if previous.get("snapshotFrozen") is True and isinstance(previous.get("digest"), str):
+            patch = runtime_workspace_patch(previous)
+            if patch:
+                try:
+                    ok = container.put_archive(self._WORKSPACE, workspace_tar(patch))
+                except DockerException as exc:
+                    raise RuntimeError(
+                        f"failed to sync runtime context harness into {name}: {exc}"
+                    ) from exc
+                if not ok:
+                    raise RuntimeError(
+                        f"failed to sync runtime context harness into {name}"
+                    )
+            self._capability_digests[name] = previous["digest"]
+            return
 
+        digest, files = workspace_payload(self._capabilities)
         current_manifest = json.loads(files[MANIFEST_PATH].decode("utf-8"))
         managed_names = {
             skill
@@ -240,8 +261,12 @@ class ContainerManager:
         kill_after_seconds: int = 5,
     ) -> ManagedProcess:
         container = self._require_container(container_name)
+        context_harness = getattr(self, "_context_harness", None)
+        if context_harness is None:
+            context_harness = ContextHarnessConfig()
         env = {
             **env,
+            **context_harness.environment(),
             "PATH": f"{self._WORKSPACE}/.redtrace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         }
         argv: list[str] = []
@@ -255,9 +280,14 @@ class ContainerManager:
                 ]
             )
         argv.extend(command)
-        return ManagedProcess(container, argv, env)
+        return ManagedProcess(
+            container,
+            argv,
+            env,
+            max_output_chars=context_harness.worker_output_chars,
+        )
 
-    def write_text_file(self, container_name: str, path: str, content: str) -> None:
+    def write_text_file(self, container_name: str, path: str, content: str) -> str:
         archive_path, archive = self._text_file_archive(path, content)
         container = self._require_container(container_name)
         try:
@@ -266,6 +296,7 @@ class ContainerManager:
             raise RuntimeError(f"failed to write container file {path}: {exc}") from exc
         if not ok:
             raise RuntimeError(f"failed to write container file {path}")
+        return path
 
     def _start_existing(self, name: str) -> None:
         LOG.debug("starting container=%s", name)

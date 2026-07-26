@@ -124,13 +124,6 @@ BEGIN
     );
 END;
 
-CREATE TRIGGER IF NOT EXISTS trg_blackboard_fact_removed
-AFTER DELETE ON facts
-BEGIN
-    INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
-    VALUES (OLD.project_id, 'fact', OLD.id, 'removed', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
-END;
-
 CREATE TRIGGER IF NOT EXISTS trg_blackboard_intent_added
 AFTER INSERT ON intents
 BEGIN
@@ -138,25 +131,11 @@ BEGIN
     VALUES (NEW.project_id, 'intent', NEW.id, 'added', NEW.created_at);
 END;
 
-CREATE TRIGGER IF NOT EXISTS trg_blackboard_intent_removed
-AFTER DELETE ON intents
-BEGIN
-    INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
-    VALUES (OLD.project_id, 'intent', OLD.id, 'removed', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
-END;
-
 CREATE TRIGGER IF NOT EXISTS trg_blackboard_hint_added
 AFTER INSERT ON hints
 BEGIN
     INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
     VALUES (NEW.project_id, 'hint', NEW.id, 'added', NEW.created_at);
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_blackboard_hint_removed
-AFTER DELETE ON hints
-BEGIN
-    INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
-    VALUES (OLD.project_id, 'hint', OLD.id, 'removed', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
 END;
 
 CREATE TABLE IF NOT EXISTS audit_runs (
@@ -202,6 +181,129 @@ ON audit_events(project_id, id);
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_run
 ON audit_events(run_id, run_sequence);
+
+CREATE TABLE IF NOT EXISTS shared_resources (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'available',
+    target TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    secret_json TEXT NOT NULL DEFAULT '{}',
+    created_by_type TEXT NOT NULL DEFAULT 'human',
+    created_by TEXT NOT NULL,
+    worker TEXT,
+    intent_id TEXT,
+    fact_id TEXT,
+    parent_resource_id TEXT REFERENCES shared_resources(id) ON DELETE SET NULL,
+    source_task_id TEXT,
+    locked_by_type TEXT,
+    locked_by TEXT,
+    locked_at TEXT,
+    worker_paused INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_seen_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_shared_resources_project
+ON shared_resources(project_id, kind, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_shared_resources_parent
+ON shared_resources(parent_resource_id);
+
+CREATE TABLE IF NOT EXISTS operation_tasks (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    resource_id TEXT NOT NULL REFERENCES shared_resources(id) ON DELETE CASCADE,
+    intent_id TEXT,
+    fact_id TEXT,
+    action TEXT NOT NULL,
+    actor_type TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    risk TEXT NOT NULL DEFAULT 'low',
+    status TEXT NOT NULL DEFAULT 'queued',
+    input_json TEXT NOT NULL DEFAULT '{}',
+    output_summary TEXT NOT NULL DEFAULT '',
+    result_ref TEXT,
+    requires_approval INTEGER NOT NULL DEFAULT 0,
+    approved_by TEXT,
+    approved_at TEXT,
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_operation_tasks_project
+ON operation_tasks(project_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_operation_tasks_resource
+ON operation_tasks(resource_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_operation_tasks_status
+ON operation_tasks(status, created_at);
+
+CREATE TABLE IF NOT EXISTS operation_results (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL UNIQUE REFERENCES operation_tasks(id) ON DELETE CASCADE,
+    content_type TEXT NOT NULL DEFAULT 'text/plain',
+    content TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS resource_audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    resource_id TEXT,
+    task_id TEXT,
+    actor_type TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_resource_audit_project
+ON resource_audit_events(project_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_resource_audit_resource
+ON resource_audit_events(resource_id, id);
+"""
+
+BLACKBOARD_DELETE_TRIGGERS = """\
+DROP TRIGGER IF EXISTS trg_blackboard_fact_removed;
+CREATE TRIGGER trg_blackboard_fact_removed
+AFTER DELETE ON facts
+WHEN EXISTS (SELECT 1 FROM projects WHERE id = OLD.project_id)
+BEGIN
+    INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
+    VALUES (OLD.project_id, 'fact', OLD.id, 'removed', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
+END;
+
+DROP TRIGGER IF EXISTS trg_blackboard_intent_removed;
+CREATE TRIGGER trg_blackboard_intent_removed
+AFTER DELETE ON intents
+WHEN EXISTS (SELECT 1 FROM projects WHERE id = OLD.project_id)
+BEGIN
+    INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
+    VALUES (OLD.project_id, 'intent', OLD.id, 'removed', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
+END;
+
+DROP TRIGGER IF EXISTS trg_blackboard_hint_removed;
+CREATE TRIGGER trg_blackboard_hint_removed
+AFTER DELETE ON hints
+WHEN EXISTS (SELECT 1 FROM projects WHERE id = OLD.project_id)
+BEGIN
+    INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
+    VALUES (OLD.project_id, 'hint', OLD.id, 'removed', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
+END;
 """
 
 
@@ -213,6 +315,7 @@ def configure(path: Path) -> None:
     _db_path.parent.mkdir(parents=True, exist_ok=True)
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        conn.executescript(BLACKBOARD_DELETE_TRIGGERS)
         _ensure_project_columns(conn)
         _backfill_blackboard_events(conn)
 

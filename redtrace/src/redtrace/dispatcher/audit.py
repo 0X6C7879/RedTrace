@@ -14,13 +14,25 @@ from typing import Any
 from redtrace.dispatcher.config import WorkerConfig
 from redtrace.dispatcher.protocol.client import CairnClient
 from redtrace.dispatcher.runtime.process import ProcessResult
+from redtrace.dispatcher.runtime.stream_buffer import TRUNCATED_STREAM_LINE
 
 
 LOG = logging.getLogger(__name__)
 MAX_INLINE_CONTENT = 32 * 1024
-CRITICAL_KINDS = {"error", "run.completed", "tool.completed", "command.completed"}
+CRITICAL_KINDS = {
+    "error",
+    "run.completed",
+    "tool.completed",
+    "command.completed",
+    "output.truncated",
+}
 SECRET_PATTERN = re.compile(
     r"(?i)(authorization|api[_-]?key|token|secret|password)(\s*[:=]\s*)([^\s,;]+)"
+)
+ANSI_PATTERN = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+MOJIBAKE_MARKERS = frozenset("ÃÂâ€™œž�ç¬åæèé")
+SHELL_TOOL_NAMES = frozenset(
+    {"bash", "sh", "shell", "powershell", "pwsh", "cmd", "command", "terminal", "exec"}
 )
 
 
@@ -43,7 +55,10 @@ class AuditPublisher:
         self._client = client
         self._sequence = 0
         self._queue: queue.Queue[dict[str, Any] | None] = queue.Queue(maxsize=2048)
-        self._assistant_text = ""
+        self._assistant_parts: list[str] = []
+        self._assistant_chars = 0
+        self._tool_calls: dict[str, dict[str, Any]] = {}
+        self._claude_tool_blocks: dict[int, dict[str, Any]] = {}
         self._run = {
             "id": self.run_id,
             "project_id": project_id,
@@ -66,21 +81,50 @@ class AuditPublisher:
         self.emit("user.message", role="user", content=prompt)
 
     def handle_output(self, channel: str, line: str) -> None:
+        if line == TRUNCATED_STREAM_LINE:
+            self.emit(
+                "output.truncated",
+                title=channel,
+                content="oversized single Worker output record omitted from live audit",
+            )
+            return
         if channel != "stdout":
             return
-        for event in normalize_event(self._run["provider"], line):
+        for event in normalize_event(
+            self._run["provider"],
+            line,
+            claude_tool_state=self._claude_tool_blocks,
+        ):
+            event = _enrich_tool_event(event, self._tool_calls)
             if event["kind"] == "assistant.delta":
-                self._assistant_text += str(event.get("content", ""))
+                content = str(event.get("content", ""))
+                self._assistant_parts.append(content)
+                self._assistant_chars += len(content)
+                if self._assistant_chars >= MAX_INLINE_CONTENT:
+                    self._persist_assistant_message()
             elif event["kind"] in {"tool.started", "command.started", "turn.completed"}:
                 self._persist_assistant_message()
+            if event["kind"] in {"tool.started", "command.started"}:
+                call_id = event.get("call_id")
+                if isinstance(call_id, str) and call_id:
+                    self._tool_calls[call_id] = event
+            elif event["kind"] in {"tool.completed", "command.completed"}:
+                call_id = event.get("call_id")
+                if isinstance(call_id, str) and call_id:
+                    self._tool_calls.pop(call_id, None)
             self._emit(event)
 
     def finish(self, result: ProcessResult) -> None:
         self._persist_assistant_message()
-        if result.stderr.strip():
+        stderr = _limit(result.stderr.strip())
+        # Codex writes tool-router diagnostics to stderr even when the overall
+        # turn succeeds. The corresponding command.completed events already
+        # carry the actionable exit code, so do not render a successful run as
+        # an error card.
+        if stderr and (result.returncode != 0 or self._run["provider"] != "codex"):
             self.emit(
                 "error" if result.returncode else "stderr",
-                content=_limit(result.stderr.strip()),
+                content=stderr,
             )
         self._run.update(
             {
@@ -151,16 +195,20 @@ class AuditPublisher:
             pass
 
     def _persist_assistant_message(self) -> None:
-        text = self._assistant_text.strip()
-        if not text:
+        text = "".join(self._assistant_parts)
+        if not text.strip():
+            self._assistant_parts.clear()
+            self._assistant_chars = 0
             return
-        self._assistant_text = ""
-        self.emit(
-            "assistant.message",
-            role="assistant",
-            content=_limit(text),
-            persist_only=True,
-        )
+        self._assistant_parts.clear()
+        self._assistant_chars = 0
+        for offset in range(0, len(text), MAX_INLINE_CONTENT):
+            self.emit(
+                "assistant.message",
+                role="assistant",
+                content=text[offset : offset + MAX_INLINE_CONTENT],
+                persist_only=True,
+            )
 
     def _run_loop(self) -> None:
         batch: list[dict[str, Any]] = []
@@ -197,7 +245,12 @@ class suppress_queue_full:
         return exc_type is queue.Full
 
 
-def normalize_event(provider: str, line: str) -> list[dict[str, Any]]:
+def normalize_event(
+    provider: str,
+    line: str,
+    *,
+    claude_tool_state: dict[int, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     try:
         payload = json.loads(line)
     except json.JSONDecodeError:
@@ -206,7 +259,7 @@ def normalize_event(provider: str, line: str) -> list[dict[str, Any]]:
         return []
     timestamp = utcnow()
     if provider == "claudecode":
-        return _normalize_claude(payload, timestamp)
+        return _normalize_claude(payload, timestamp, claude_tool_state)
     if provider == "codex":
         return _normalize_codex(payload, timestamp)
     if provider == "pi":
@@ -214,7 +267,11 @@ def normalize_event(provider: str, line: str) -> list[dict[str, Any]]:
     return []
 
 
-def _normalize_claude(payload: dict[str, Any], timestamp: str) -> list[dict[str, Any]]:
+def _normalize_claude(
+    payload: dict[str, Any],
+    timestamp: str,
+    tool_state: dict[int, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     kind = payload.get("type")
     if kind == "system" and payload.get("subtype") == "init":
         return [_event("session.started", timestamp, session_id=payload.get("session_id"))]
@@ -225,9 +282,22 @@ def _normalize_claude(payload: dict[str, Any], timestamp: str) -> list[dict[str,
             delta = event.get("delta") or {}
             if delta.get("type") == "text_delta":
                 return [_event("assistant.delta", timestamp, content=delta.get("text", ""))]
+            if delta.get("type") == "input_json_delta" and tool_state is not None:
+                index = event.get("index")
+                if isinstance(index, int) and index in tool_state:
+                    tool_state[index]["parts"].append(str(delta.get("partial_json", "")))
+                return []
         if event_type == "content_block_start":
             block = event.get("content_block") or {}
             if block.get("type") == "tool_use":
+                index = event.get("index")
+                if isinstance(index, int) and tool_state is not None:
+                    tool_state[index] = {
+                        "call_id": block.get("id"),
+                        "title": block.get("name"),
+                        "parts": [],
+                    }
+                    return []
                 return [
                     _event(
                         "tool.started",
@@ -237,6 +307,27 @@ def _normalize_claude(payload: dict[str, Any], timestamp: str) -> list[dict[str,
                         arguments=block.get("input"),
                     )
                 ]
+        if event_type == "content_block_stop" and tool_state is not None:
+            index = event.get("index")
+            state = tool_state.pop(index, None) if isinstance(index, int) else None
+            if state is None:
+                return []
+            arguments: Any = {}
+            raw_arguments = "".join(state["parts"]).strip()
+            if raw_arguments:
+                try:
+                    arguments = json.loads(raw_arguments)
+                except json.JSONDecodeError:
+                    arguments = {"raw": raw_arguments}
+            return [
+                _event(
+                    "tool.started",
+                    timestamp,
+                    title=state.get("title"),
+                    call_id=state.get("call_id"),
+                    arguments=arguments,
+                )
+            ]
     if kind == "user":
         message = payload.get("message") or {}
         results = []
@@ -292,7 +383,7 @@ def _normalize_codex(payload: dict[str, Any], timestamp: str) -> list[dict[str, 
                     "assistant.message",
                     timestamp,
                     role="assistant",
-                    content=item.get("text", ""),
+                    content=_clean_text(item.get("text", "")),
                     message_id=item.get("id"),
                 )
             ]
@@ -303,7 +394,7 @@ def _normalize_codex(payload: dict[str, Any], timestamp: str) -> list[dict[str, 
                     timestamp,
                     title="Shell",
                     call_id=item.get("id"),
-                    command=item.get("command"),
+                    command=_display_command(item.get("command")),
                     content=_limit(item.get("aggregated_output", "")),
                     exit_code=item.get("exit_code"),
                 )
@@ -373,16 +464,100 @@ def _event(kind: str, timestamp: str, **fields: Any) -> dict[str, Any]:
 
 def _content_text(value: Any) -> str:
     if isinstance(value, str):
-        return value
+        return _clean_text(value)
     if value is None:
         return ""
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return _clean_text(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
 
 
-def _limit(value: str, limit: int = MAX_INLINE_CONTENT) -> str:
+def _limit(value: Any, limit: int = MAX_INLINE_CONTENT) -> str:
+    value = _clean_text(value)
     if len(value) <= limit:
         return value
     return value[:limit] + "\n… output truncated for audit UI …"
+
+
+def _enrich_tool_event(
+    event: dict[str, Any],
+    active_tools: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    kind = event.get("kind")
+    call_id = event.get("call_id")
+    if kind in {"tool.started", "command.started"}:
+        command = _command_from_event(event)
+        if command:
+            event["command"] = _display_command(command)
+        if kind == "tool.started" and _is_shell_tool(event.get("title")) and event.get("command"):
+            event["kind"] = "command.started"
+            event["title"] = "Shell"
+        return event
+    if kind == "tool.completed" and isinstance(call_id, str):
+        started = active_tools.get(call_id)
+        if started and started.get("kind") == "command.started":
+            event["kind"] = "command.completed"
+            event["title"] = "Shell"
+            event["command"] = started.get("command", "")
+        elif started and not event.get("title"):
+            event["title"] = started.get("title")
+    return event
+
+
+def _command_from_event(event: dict[str, Any]) -> str:
+    command = event.get("command")
+    if isinstance(command, str) and command.strip():
+        return command
+    arguments = event.get("arguments")
+    if isinstance(arguments, dict):
+        for key in ("command", "cmd", "script", "input"):
+            value = arguments.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    if isinstance(arguments, str) and arguments.strip():
+        return arguments
+    return ""
+
+
+def _is_shell_tool(title: Any) -> bool:
+    if not isinstance(title, str):
+        return False
+    normalized = title.strip().lower().replace("_", " ")
+    return normalized in SHELL_TOOL_NAMES or "shell" in normalized or "bash" in normalized
+
+
+def _display_command(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = _clean_text(value).strip()
+    match = re.match(
+        r"""(?is)^\s*["']?.*?[\\/](?:pwsh|powershell)(?:\.exe)?["']?\s+-command\s+(.+?)\s*$""",
+        text,
+    )
+    if not match:
+        return text
+    command = match.group(1).strip()
+    if len(command) >= 2 and command[0] == command[-1] and command[0] in {'"', "'"}:
+        command = command[1:-1]
+    return (
+        command.replace(r'\"', '"')
+        .replace(r"\'", "'")
+        .replace("\\\\", "\\")
+        .strip()
+    )
+
+
+def _clean_text(value: Any) -> str:
+    text = ANSI_PATTERN.sub("", str(value or ""))
+    if not any(marker in text for marker in MOJIBAKE_MARKERS):
+        return text
+    try:
+        repaired = text.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+    original_cjk = sum("\u4e00" <= char <= "\u9fff" for char in text)
+    repaired_cjk = sum("\u4e00" <= char <= "\u9fff" for char in repaired)
+    original_markers = sum(char in MOJIBAKE_MARKERS for char in text)
+    repaired_markers = sum(char in MOJIBAKE_MARKERS for char in repaired)
+    return repaired if repaired_cjk > original_cjk or repaired_markers < original_markers else text
 
 
 def _redact(value: Any) -> Any:

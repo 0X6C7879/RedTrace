@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import io
+import os
 import tarfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -10,8 +11,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from redtrace import blackboard_cli
-from redtrace.capabilities import BLACKBOARD_CLI_PATH, CapabilityStore, materialize_local_workspace, workspace_payload, workspace_tar
+from redtrace import blackboard_cli, resource_cli
+from redtrace.capabilities import BLACKBOARD_CLI_PATH, RESOURCE_CLI_PATH, CapabilityStore, materialize_local_workspace, workspace_payload, workspace_tar
 from redtrace.dispatcher.config import WorkerConfig
 from redtrace.dispatcher.prompting import add_blackboard_guidance
 from redtrace.dispatcher.runtime.process import ProcessResult
@@ -199,9 +200,12 @@ def test_worker_workspace_gets_the_same_executable_cli(tmp_path: Path) -> None:
     installed = workspace / BLACKBOARD_CLI_PATH
     source = Path(blackboard_cli.__file__)
     assert installed.read_bytes() == source.read_bytes()
+    resource_installed = workspace / RESOURCE_CLI_PATH
+    assert resource_installed.read_bytes() == Path(resource_cli.__file__).read_bytes()
     _, files = workspace_payload(CapabilityStore(tmp_path / "capabilities"))
     with tarfile.open(fileobj=io.BytesIO(workspace_tar(files)), mode="r:") as archive:
         assert archive.getmember(BLACKBOARD_CLI_PATH).mode == 0o755
+        assert archive.getmember(RESOURCE_CLI_PATH).mode == 0o755
 
 
 @pytest.mark.parametrize("worker_type", ["claudecode", "codex", "pi"])
@@ -277,3 +281,17 @@ def test_prompt_guidance_is_optional_and_forbids_polling() -> None:
     assert "do not poll it" in prompt
     assert "fixed frequency" in prompt
     assert "may call" in prompt
+
+
+def test_prompt_guidance_describes_windows_local_shell() -> None:
+    prompt = add_blackboard_guidance(
+        "Do the task.",
+        23,
+        local_execution=True,
+    )
+    if os.name == "nt":
+        assert "Windows local execution" in prompt
+        assert "never pass PowerShell syntax directly to Bash" in prompt
+        assert "rtk proxy powershell" in prompt
+    else:
+        assert "Windows local execution" not in prompt

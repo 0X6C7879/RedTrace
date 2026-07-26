@@ -3,12 +3,17 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import shutil
 import subprocess
 import threading
 from contextlib import suppress
 from collections.abc import Callable
 
 from redtrace.dispatcher.runtime.process import ProcessResult
+from redtrace.dispatcher.runtime.stream_buffer import (
+    BoundedLineEmitter,
+    BoundedTextBuffer,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -33,6 +38,7 @@ class LocalProcess:
         env: dict[str, str],
         timeout_seconds: int | None = None,
         term_grace_seconds: int = 5,
+        max_output_chars: int = 8 * 1024 * 1024,
     ):
         self.command = command
         self.env = env
@@ -40,8 +46,8 @@ class LocalProcess:
         self._timeout_seconds = timeout_seconds
         self._term_grace = max(1.0, float(term_grace_seconds))
         self._process: subprocess.Popen[str] | None = None
-        self._stdout_chunks: list[str] = []
-        self._stderr_chunks: list[str] = []
+        self._stdout = BoundedTextBuffer(max_output_chars)
+        self._stderr = BoundedTextBuffer(max_output_chars)
         self._stdout_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
         self._timed_out = False
@@ -53,29 +59,78 @@ class LocalProcess:
         self._on_output = handler
 
     def start(self) -> None:
-        self._process = subprocess.Popen(
-            self.command,
-            cwd=self._cwd,
-            env=self.env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            start_new_session=True,
-        )
+        command = self._platform_command()
+        popen_options: dict[str, object] = {}
+        if os.name == "nt":
+            popen_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_options["start_new_session"] = True
+        try:
+            self._process = subprocess.Popen(
+                command,
+                cwd=self._cwd,
+                env=self.env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                **popen_options,
+            )
+        except FileNotFoundError as exc:
+            executable = self.command[0] if self.command else "<empty>"
+            raise RuntimeError(
+                f"local Worker executable was not found: {executable}"
+            ) from exc
+        except OSError as exc:
+            executable = self.command[0] if self.command else "<empty>"
+            raise RuntimeError(
+                f"failed to start local Worker executable {executable}: {exc}"
+            ) from exc
         self._stdout_thread = threading.Thread(
             target=self._drain,
-            args=("stdout", self._process.stdout, self._stdout_chunks),
+            args=("stdout", self._process.stdout, self._stdout),
             daemon=True,
         )
         self._stderr_thread = threading.Thread(
             target=self._drain,
-            args=("stderr", self._process.stderr, self._stderr_chunks),
+            args=("stderr", self._process.stderr, self._stderr),
             daemon=True,
         )
         self._stdout_thread.start()
         self._stderr_thread.start()
+
+    def _platform_command(self) -> list[str]:
+        if os.name != "nt" or not self.command:
+            return self.command
+        executable = shutil.which(
+            self.command[0],
+            path=self.env.get("PATH"),
+        )
+        if executable is None:
+            return self.command
+        if os.path.splitext(executable)[1].lower() not in {".bat", ".cmd"}:
+            return [executable, *self.command[1:]]
+        powershell_shim = os.path.splitext(executable)[0] + ".ps1"
+        if os.path.isfile(powershell_shim):
+            powershell = (
+                shutil.which("pwsh.exe", path=self.env.get("PATH"))
+                or shutil.which("powershell.exe", path=self.env.get("PATH"))
+                or "powershell.exe"
+            )
+            return [
+                powershell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                powershell_shim,
+                *self.command[1:],
+            ]
+        comspec = self.env.get("COMSPEC") or os.environ.get("COMSPEC", "cmd.exe")
+        invocation = subprocess.list2cmdline([executable, *self.command[1:]])
+        return [comspec, "/d", "/s", "/c", invocation]
 
     def communicate(self, timeout: float | None) -> ProcessResult:
         assert self._process is not None
@@ -96,11 +151,15 @@ class LocalProcess:
             returncode = 137 if self._timed_out else 1
         return ProcessResult(
             returncode=returncode,
-            stdout="".join(self._stdout_chunks),
-            stderr="".join(self._stderr_chunks),
+            stdout=self._stdout.text(),
+            stderr=self._stderr.text(),
             timed_out=self._timed_out,
             cancelled=self._cancel_reason is not None,
             cancel_reason=self._cancel_reason,
+            stdout_bytes=self._stdout.total_bytes,
+            stderr_bytes=self._stderr.total_bytes,
+            stdout_truncated=self._stdout.truncated,
+            stderr_truncated=self._stderr.truncated,
         )
 
     def kill(self) -> None:
@@ -122,28 +181,65 @@ class LocalProcess:
                 return
             except subprocess.TimeoutExpired:
                 pass
-            self._signal_group(process, signal.SIGKILL)
+            self._signal_group(process, getattr(signal, "SIGKILL", 9))
 
     @staticmethod
     def _signal_group(process: subprocess.Popen[str], sig: int) -> None:
+        if os.name == "nt":
+            command = ["taskkill", "/PID", str(process.pid), "/T"]
+            force_kill = sig == getattr(signal, "SIGKILL", 9)
+            if force_kill:
+                command.append("/F")
+            try:
+                subprocess.run(
+                    command,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                with suppress(OSError, ValueError):
+                    process.kill() if force_kill else process.terminate()
+            return
         try:
             os.killpg(os.getpgid(process.pid), sig)
-        except (ProcessLookupError, PermissionError):
-            with suppress(ProcessLookupError, PermissionError, ValueError):
+        except (AttributeError, ProcessLookupError, PermissionError):
+            with suppress(OSError, ValueError):
                 process.send_signal(sig)
 
-    def _drain(self, channel: str, pipe, sink: list[str]) -> None:
+    def _drain(
+        self,
+        channel: str,
+        pipe,
+        sink: BoundedTextBuffer,
+    ) -> None:
+        callback = self._on_output
+        emitter = (
+            BoundedLineEmitter(lambda line: self._notify_output(callback, channel, line))
+            if callback is not None
+            else None
+        )
         try:
-            for line in iter(pipe.readline, ""):
-                sink.append(line)
-                callback = self._on_output
-                if callback is not None:
-                    try:
-                        callback(channel, line)
-                    except Exception:
-                        LOG.debug("worker output callback failed", exc_info=True)
+            while chunk := pipe.readline(64 * 1024):
+                sink.append(chunk)
+                if emitter is not None:
+                    emitter.feed(chunk)
         except (ValueError, OSError):
             pass
         finally:
+            if emitter is not None:
+                emitter.flush()
             with suppress(Exception):
                 pipe.close()
+
+    @staticmethod
+    def _notify_output(
+        callback: OutputHandler,
+        channel: str,
+        line: str,
+    ) -> None:
+        try:
+            callback(channel, line)
+        except Exception:
+            LOG.debug("worker output callback failed", exc_info=True)

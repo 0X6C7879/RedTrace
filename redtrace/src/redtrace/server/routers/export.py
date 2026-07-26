@@ -35,6 +35,28 @@ def _load_project_data(conn, project_id: str):
         "SELECT * FROM intents WHERE project_id = ? ORDER BY created_at",
         (project_id,),
     ).fetchall()
+    resources = conn.execute(
+        """
+        SELECT id, kind, name, status, target, summary, worker, intent_id, fact_id,
+               parent_resource_id, source_task_id, locked_by_type, locked_by,
+               worker_paused, created_at, updated_at, last_seen_at
+        FROM shared_resources
+        WHERE project_id = ?
+        ORDER BY created_at
+        """,
+        (project_id,),
+    ).fetchall()
+    operation_tasks = conn.execute(
+        """
+        SELECT id, resource_id, intent_id, fact_id, action, actor_type, actor,
+               risk, status, output_summary, result_ref, requires_approval,
+               approved_by, created_at, started_at, completed_at
+        FROM operation_tasks
+        WHERE project_id = ?
+        ORDER BY created_at
+        """,
+        (project_id,),
+    ).fetchall()
 
     sources_by_intent = {}
     for i in intents:
@@ -44,11 +66,11 @@ def _load_project_data(conn, project_id: str):
         ).fetchall()
         sources_by_intent[i["id"]] = [r["fact_id"] for r in rows]
 
-    return proj, facts, hints, intents, sources_by_intent
+    return proj, facts, hints, intents, sources_by_intent, resources, operation_tasks
 
 
 def _export_yaml(conn, project_id: str) -> str:
-    proj, facts, hints, intents, sources_by_intent = _load_project_data(conn, project_id)
+    proj, facts, hints, intents, sources_by_intent, resources, operation_tasks = _load_project_data(conn, project_id)
 
     origin_desc = ""
     goal_desc = ""
@@ -95,11 +117,60 @@ def _export_yaml(conn, project_id: str) -> str:
     if intent_list:
         data["intents"] = intent_list
 
+    if resources:
+        data["shared_resources"] = [
+            {
+                "id": resource["id"],
+                "kind": resource["kind"],
+                "name": resource["name"],
+                "status": resource["status"],
+                "target": resource["target"],
+                "summary": resource["summary"],
+                "worker": resource["worker"],
+                "intent": resource["intent_id"],
+                "fact": resource["fact_id"],
+                "parent": resource["parent_resource_id"],
+                "source_task": resource["source_task_id"],
+                "locked_by": (
+                    f"{resource['locked_by_type']}:{resource['locked_by']}"
+                    if resource["locked_by"]
+                    else None
+                ),
+                "worker_paused": bool(resource["worker_paused"]),
+                "created_at": format_export_timestamp(resource["created_at"]),
+                "updated_at": format_export_timestamp(resource["updated_at"]),
+                "last_seen_at": format_export_timestamp(resource["last_seen_at"]),
+            }
+            for resource in resources
+        ]
+
+    if operation_tasks:
+        data["operation_tasks"] = [
+            {
+                "id": task["id"],
+                "resource": task["resource_id"],
+                "intent": task["intent_id"],
+                "fact": task["fact_id"],
+                "action": task["action"],
+                "actor": f"{task['actor_type']}:{task['actor']}",
+                "risk": task["risk"],
+                "status": task["status"],
+                "summary": task["output_summary"],
+                "result_ref": task["result_ref"],
+                "requires_approval": bool(task["requires_approval"]),
+                "approved_by": task["approved_by"],
+                "created_at": format_export_timestamp(task["created_at"]),
+                "started_at": format_export_timestamp(task["started_at"]),
+                "completed_at": format_export_timestamp(task["completed_at"]),
+            }
+            for task in operation_tasks
+        ]
+
     return yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 
 def _export_timeline(conn, project_id: str) -> str:
-    proj, facts, hints, intents, sources_by_intent = _load_project_data(conn, project_id)
+    proj, facts, hints, intents, sources_by_intent, resources, operation_tasks = _load_project_data(conn, project_id)
 
     facts_by_id = {f["id"]: f["description"] for f in facts}
 
@@ -144,6 +215,30 @@ def _export_timeline(conn, project_id: str) -> str:
             block = f"[{ts}] INTENT CONCLUDED {i['id']} by {actor}\n  from: {from_str}\n  produced: {i['to_fact_id']}\n  {fact_desc}"
 
         events.append((i["concluded_at"] or "", order, block))
+        order += 1
+
+    resource_names = {resource["id"]: resource["name"] for resource in resources}
+    audit_rows = conn.execute(
+        """
+        SELECT resource_id, task_id, actor_type, actor, action, status,
+               created_at
+        FROM resource_audit_events
+        WHERE project_id = ?
+        ORDER BY id
+        """,
+        (project_id,),
+    ).fetchall()
+    for event in audit_rows:
+        ts = format_export_timestamp(event["created_at"]) or ""
+        resource_label = resource_names.get(event["resource_id"], event["resource_id"] or "-")
+        task_label = f"\n  task: {event['task_id']}" if event["task_id"] else ""
+        block = (
+            f"[{ts}] RESOURCE {event['action']} {event['status']} "
+            f"by {event['actor_type']}:{event['actor']}\n"
+            f"  resource: {resource_label} ({event['resource_id'] or '-'})"
+            f"{task_label}"
+        )
+        events.append((event["created_at"] or "", order, block))
         order += 1
 
     events.sort(key=lambda e: (e[0], e[1]))

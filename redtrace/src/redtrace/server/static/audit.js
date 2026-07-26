@@ -157,8 +157,22 @@ function auditPage() {
       if (event.kind === 'run.started' || event.kind === 'session.started' || event.kind === 'turn.started') {
         return false;
       }
+      if (['command.started', 'tool.started'].includes(event.kind) && this.hasCompletion(event)) {
+        return false;
+      }
       if (this.selectedProvider !== 'all' && event.provider !== this.selectedProvider) return false;
       return this.selectedWorker === 'all' || event.worker === this.selectedWorker;
+    },
+
+    hasCompletion(event) {
+      if (!event?.run_id || !event?.call_id) return false;
+      const completedKind = event.kind === 'command.started' ? 'command.completed' : 'tool.completed';
+      return this.events.some(candidate =>
+        candidate !== event
+        && candidate.run_id === event.run_id
+        && candidate.call_id === event.call_id
+        && candidate.kind === completedKind
+      );
     },
 
     providerLabel(provider) {
@@ -174,6 +188,7 @@ function auditPage() {
     },
 
     eventAction(event) {
+      if (this.isShellTool(event)) return '执行';
       const labels = {
         'user.message': '用户',
         'assistant.message': '助手',
@@ -186,7 +201,7 @@ function auditPage() {
         'turn.completed': '回合结束',
         'run.completed': '运行结束',
         error: '错误',
-        stderr: 'stderr',
+        stderr: '标准错误',
       };
       return labels[event.kind] || event.kind;
     },
@@ -196,16 +211,88 @@ function auditPage() {
     },
 
     isTool(event) {
-      return ['tool.started', 'tool.completed', 'file.changed'].includes(event.kind);
+      return ['tool.started', 'tool.completed', 'file.changed'].includes(event.kind)
+        && !this.isShellTool(event);
     },
 
     isCommand(event) {
-      return ['command.started', 'command.completed'].includes(event.kind);
+      return ['command.started', 'command.completed'].includes(event.kind) || this.isShellTool(event);
+    },
+
+    isShellTool(event) {
+      if (!event || !['tool.started', 'tool.completed'].includes(event.kind)) return false;
+      const title = String(event.title || '').trim().toLowerCase().replaceAll('_', ' ');
+      return ['bash', 'sh', 'shell', 'powershell', 'pwsh', 'cmd', 'command', 'terminal', 'exec'].includes(title)
+        || title.includes('shell')
+        || title.includes('bash');
+    },
+
+    eventCommand(event) {
+      if (event?.command) return this.displayCommand(event.command);
+      const argumentsValue = event?.arguments;
+      if (argumentsValue && typeof argumentsValue === 'object') {
+        for (const key of ['command', 'cmd', 'script', 'input']) {
+          if (typeof argumentsValue[key] === 'string' && argumentsValue[key].trim()) {
+            return this.displayCommand(argumentsValue[key]);
+          }
+        }
+      }
+      if (typeof argumentsValue === 'string' && argumentsValue.trim()) {
+        return this.displayCommand(argumentsValue);
+      }
+      if (event?.call_id) {
+        const started = this.events.find(candidate =>
+          candidate.run_id === event.run_id
+          && candidate.call_id === event.call_id
+          && ['command.started', 'tool.started'].includes(candidate.kind)
+        );
+        if (started && started !== event) return this.eventCommand(started);
+      }
+      return 'shell command';
+    },
+
+    displayCommand(value) {
+      let text = this.repairMojibake(value).trim();
+      const match = text.match(/^\s*["']?.*?[\\/]+(?:pwsh|powershell)(?:\.exe)?["']?\s+-command\s+(.+?)\s*$/is);
+      if (!match) return text;
+      let command = match[1].trim();
+      if (command.length >= 2 && command[0] === command.at(-1) && ['"', "'"].includes(command[0])) {
+        command = command.slice(1, -1);
+      }
+      return command
+        .replace(/\\"/g, '"')
+        .replace(/\\'/g, "'")
+        .replace(/\\\\/g, '\\')
+        .trim();
+    },
+
+    eventStatus(event) {
+      if (event?.error) return '失败';
+      if (event?.exit_code != null) return `退出码 ${event.exit_code}`;
+      return event?.kind?.endsWith('completed') ? '已完成' : '运行中';
+    },
+
+    displayText(value) {
+      return this.repairMojibake(value || '');
+    },
+
+    repairMojibake(value) {
+      const text = String(value || '');
+      if (!/[ÃÂâç¬åæèé]/.test(text) || [...text].some(char => char.charCodeAt(0) > 255)) {
+        return text;
+      }
+      try {
+        const bytes = Uint8Array.from([...text], char => char.charCodeAt(0));
+        const repaired = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        const cjk = value => (value.match(/[\u4e00-\u9fff]/g) || []).length;
+        return cjk(repaired) > cjk(text) ? repaired : text;
+      } catch (_) {
+        return text;
+      }
     },
 
     eventPayload(event) {
-      if (event.command) return event.command;
-      if (event.content) return event.content;
+      if (event.content) return this.displayText(event.content);
       if (event.arguments) {
         try { return JSON.stringify(event.arguments, null, 2); } catch {}
       }

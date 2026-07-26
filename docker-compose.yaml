@@ -9,8 +9,15 @@ services:
       - "8000:8000"
     volumes:
       - ./datas/redtrace/:/root/.local/share/redtrace/
+      - ./dispatch.yaml:/redtrace/dispatch.yaml
+      - ./.redtrace-secrets:/redtrace/.redtrace-secrets
       - ./skills:/redtrace/skills
       - ./mcp:/redtrace/mcp
+      - ./plugins:/redtrace/plugins:ro
+    environment:
+      REDTRACE_DISPATCH_CONFIG: /redtrace/dispatch.yaml
+      REDTRACE_CONFIG_SECRETS_DIR: /redtrace/.redtrace-secrets
+      REDTRACE_PLUGIN_TOKEN: "${REDTRACE_PLUGIN_TOKEN:-}"
     healthcheck:
       test:
         - "CMD"
@@ -32,8 +39,11 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./dispatch.yaml:/redtrace/dispatch.yaml
+      - ./.redtrace-secrets:/redtrace/.redtrace-secrets
       - ./skills:/redtrace/skills
       - ./mcp:/redtrace/mcp
+    environment:
+      REDTRACE_CONFIG_SECRETS_DIR: /redtrace/.redtrace-secrets
     depends_on:
       redtrace-server:
         condition: service_healthy

@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from redtrace.capabilities import (
+    PI_PROVIDER_EXTENSION_PATH,
+    CapabilityStore,
+    materialize_local_workspace,
+)
 from redtrace.dispatcher.config import DispatchConfig, LocalConfig, WorkerConfig
 from redtrace.dispatcher.runtime.local_backend import LocalBackend
 from redtrace.dispatcher.runtime.local_process import LocalProcess
@@ -21,6 +29,7 @@ from conftest import FakeClient, make_config, make_intent, make_project
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+PI_TEST_BINARY = shutil.which("pi.cmd" if os.name == "nt" else "pi")
 
 
 # --------------------------------------------------------------------------- LocalProcess
@@ -28,7 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def test_local_process_captures_stdout_and_exit_code() -> None:
     process = LocalProcess(
-        ["python3", "-c", "import sys; print('hello'); sys.exit(3)"],
+        [sys.executable, "-c", "import sys; print('hello'); sys.exit(3)"],
         cwd=os.getcwd(),
         env=dict(os.environ),
         timeout_seconds=10,
@@ -43,7 +52,7 @@ def test_local_process_captures_stdout_and_exit_code() -> None:
 
 def test_local_process_inherits_cwd(tmp_path: Path) -> None:
     process = LocalProcess(
-        ["python3", "-c", "import os; print(os.getcwd())"],
+        [sys.executable, "-c", "import os; print(os.getcwd())"],
         cwd=str(tmp_path),
         env=dict(os.environ),
         timeout_seconds=10,
@@ -54,9 +63,34 @@ def test_local_process_inherits_cwd(tmp_path: Path) -> None:
     assert Path(result.stdout.strip()).resolve() == tmp_path.resolve()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows npm shim behavior")
+def test_local_process_preserves_json_arguments_through_powershell_shim(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "fake.cmd").write_text("@echo off\r\n")
+    (tmp_path / "fake.ps1").write_text(
+        "param([string]$Value)\n[Console]::Write($Value)\n",
+        encoding="utf-8",
+    )
+    env = {**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}"}
+    payload = '{"accepted":true,"data":{"description":"ok"}}'
+    process = LocalProcess(
+        ["fake", payload],
+        cwd=str(tmp_path),
+        env=env,
+        timeout_seconds=10,
+    )
+
+    process.start()
+    result = process.communicate(timeout=20)
+
+    assert result.returncode == 0
+    assert result.stdout == payload
+
+
 def test_local_process_times_out_and_kills_within_grace() -> None:
     process = LocalProcess(
-        ["sh", "-c", "sleep 30"],
+        [sys.executable, "-c", "import time; time.sleep(30)"],
         cwd=os.getcwd(),
         env=dict(os.environ),
         timeout_seconds=1,
@@ -72,6 +106,8 @@ def test_local_process_times_out_and_kills_within_grace() -> None:
 
 
 def test_local_process_kill_terminates_child_process_group(tmp_path: Path) -> None:
+    if os.name == "nt":
+        pytest.skip("POSIX process-group assertion; Windows tree kill is covered by timeout tests")
     pid_file = tmp_path / "child.pid"
     script = f"sleep 30 & echo $! > {pid_file}; wait"
     process = LocalProcess(
@@ -99,7 +135,7 @@ def test_local_process_kill_terminates_child_process_group(tmp_path: Path) -> No
 
 def test_local_process_cancel_records_reason() -> None:
     process = LocalProcess(
-        ["sh", "-c", "sleep 30"],
+        [sys.executable, "-c", "import time; time.sleep(30)"],
         cwd=os.getcwd(),
         env=dict(os.environ),
         timeout_seconds=30,
@@ -123,6 +159,26 @@ def test_local_backend_creates_isolated_project_dir(tmp_path: Path) -> None:
     assert Path(handle) == tmp_path / "proj_001"
     assert Path(handle).is_dir()
     assert backend.container_name("proj_001") == str(tmp_path / "proj_001")
+
+
+def test_local_graph_snapshot_uses_workspace_native_path(tmp_path: Path) -> None:
+    backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path)))
+    handle = backend.ensure_running("proj_001")
+
+    reference = common.write_graph_snapshot_reference(
+        backend,
+        handle,
+        "facts:\n- id: f001\n",
+        phase="reason_execute",
+    )
+
+    snapshot = next(
+        (Path(handle) / ".redtrace" / "prompts").glob(
+            "reason_execute-*/graph.yaml"
+        )
+    )
+    assert snapshot.read_text(encoding="utf-8") == "facts:\n- id: f001\n"
+    assert str(snapshot) in reference
 
 
 def test_local_backend_merges_host_env_with_worker_env(tmp_path: Path, monkeypatch) -> None:
@@ -273,6 +329,17 @@ def test_container_execution_still_requires_worker_env() -> None:
         DispatchConfig.model_validate(payload)
 
 
+def test_local_execution_rejects_partial_worker_api_override() -> None:
+    payload = _local_payload()
+    payload["workers"][0]["env"] = {
+        "ANTHROPIC_BASE_URL": "https://api.example.test",
+        "ANTHROPIC_MODEL": "claude-test",
+    }
+
+    with pytest.raises(ValidationError, match="must configure all API override"):
+        DispatchConfig.model_validate(payload)
+
+
 def test_shipped_local_example_config_is_valid() -> None:
     config = DispatchConfig.load(REPO_ROOT / "dispatch.local.example.yaml")
 
@@ -334,11 +401,45 @@ def test_pi_local_driver_omits_models_json_and_provider() -> None:
     worker = _bare_worker("pi")
     argv = PiDriver(local=True).build_execute(worker, "PROMPT", None).argv
 
-    assert argv[0] == "/bin/sh"
-    assert "exec pi" in argv[2]
+    assert argv[0] == "pi"
     assert "--provider" not in argv
     assert "--model" not in argv
     assert argv[-2:] == ["-p", "PROMPT"]
+
+
+@pytest.mark.skipif(PI_TEST_BINARY is None, reason="pi CLI is not installed")
+def test_pi_runtime_extension_registers_worker_model_without_api_call(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    materialize_local_workspace(CapabilityStore(tmp_path / "capabilities"), workspace)
+    env = {
+        **os.environ,
+        "PI_CODING_AGENT_DIR": str(tmp_path / "global-pi-config"),
+        "PI_BASE_URL": "https://api.example.test/v1",
+        "PI_API_KEY": "pi-worker-secret",
+        "PI_MODEL": "redtrace-test-model",
+        "PI_PROVIDER_API": "openai-completions",
+    }
+
+    result = subprocess.run(
+        [
+            PI_TEST_BINARY,
+            "--extension",
+            PI_PROVIDER_EXTENSION_PATH,
+            "--list-models",
+            "redtrace-test-model",
+        ],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "redtrace-test-model" in result.stdout
 
 
 def test_get_driver_selects_local_or_container_variant() -> None:
@@ -382,8 +483,15 @@ def _local_config_for_worker(name: str, worker_type: str) -> DispatchConfig:
 def _install_fake_cli(tmp_path: Path, monkeypatch, name: str, body: str) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
-    script = bin_dir / name
-    script.write_text(f"#!/bin/sh\n{body}\n")
+    if os.name == "nt":
+        script = bin_dir / f"{name}.cmd"
+        cmd_body = body
+        if body.startswith("echo '") and body.endswith("'"):
+            cmd_body = f"echo {body[6:-1]}"
+        script.write_text(f"@echo off\r\n{cmd_body}\r\n")
+    else:
+        script = bin_dir / name
+        script.write_text(f"#!/bin/sh\n{body}\n")
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 

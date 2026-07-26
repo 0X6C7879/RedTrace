@@ -4,7 +4,7 @@ import json
 from pathlib import PurePosixPath
 from typing import Any
 
-from redtrace.capabilities import PI_MCP_EXTENSION
+from redtrace.capabilities import PI_MCP_EXTENSION, PI_PROVIDER_EXTENSION_PATH
 from redtrace.dispatcher.config import WorkerConfig
 from redtrace.dispatcher.workers.base import DriverResult, WorkerDriver
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
@@ -56,7 +56,7 @@ class PiDriver(WorkerDriver):
         return f"POST {env['PI_BASE_URL']} (api={env['PI_PROVIDER_API']}, model={env['PI_MODEL']})"
 
     def build_execute(self, worker: WorkerConfig, prompt: str, session: str | None) -> DriverResult:
-        if self.local:
+        if self.local and not worker.api_configured():
             return DriverResult(argv=self._local_argv(worker, prompt, session), session=session)
         env = worker.env
         argv = [
@@ -72,10 +72,10 @@ class PiDriver(WorkerDriver):
         if session:
             argv.extend(["--session", session])
         argv.extend(["-p", prompt])
-        return DriverResult(argv=self._wrap_with_models(worker, argv), session=session)
+        return DriverResult(argv=self._configured_argv(argv), session=session)
 
     def build_conclude(self, worker: WorkerConfig, prompt: str, session: str) -> list[str]:
-        if self.local:
+        if self.local and not worker.api_configured():
             return self._local_argv(worker, prompt, session)
         env = worker.env
         argv = [
@@ -92,13 +92,13 @@ class PiDriver(WorkerDriver):
             "-p",
             prompt,
         ]
-        return self._wrap_with_models(worker, argv)
+        return self._configured_argv(argv)
 
     def _local_argv(self, worker: WorkerConfig, prompt: str, session: str | None) -> list[str]:
-        # Native pi: no models.json injection and no --provider/--model overrides, so pi uses
-        # its own host configuration. A tiny sh wrapper just ensures the session dir exists.
+        # Native pi: no provider/model overrides, so the host login and global config win.
         session_dir = self._session_dir(worker)
-        pi_argv = [
+        argv = [
+            "pi",
             "--mode",
             "json",
             "--session-dir",
@@ -107,10 +107,9 @@ class PiDriver(WorkerDriver):
             PI_MCP_EXTENSION,
         ]
         if session:
-            pi_argv.extend(["--session", session])
-        pi_argv.extend(["-p", prompt])
-        script = 'sdir="$1"\nshift\nmkdir -p "$sdir"\nexec pi "$@"\n'
-        return ["/bin/sh", "-lc", script, "--", session_dir, *pi_argv]
+            argv.extend(["--session", session])
+        argv.extend(["-p", prompt])
+        return argv
 
     def extract_session(self, session: str | None, stdout: str, stderr: str) -> str | None:
         if session:
@@ -154,35 +153,25 @@ class PiDriver(WorkerDriver):
                 parts.append(text)
         return "\n".join(parts).strip() or stdout
 
-    def _wrap_with_models(self, worker: WorkerConfig, pi_argv: list[str]) -> list[str]:
-        script = (
-            'agent_dir="$1"\n'
-            'models_json="$2"\n'
-            "shift 2\n"
-            'mkdir -p "$agent_dir"\n'
-            'mkdir -p "$agent_dir/sessions"\n'
-            'printf "%s" "$models_json" > "$agent_dir/models.json"\n'
-            'exec env PI_CODING_AGENT_DIR="$agent_dir" pi "$@"\n'
-        )
-        argv = ["--extension", PI_MCP_EXTENSION]
+    @staticmethod
+    def _configured_argv(pi_argv: list[str]) -> list[str]:
         return [
-            "/bin/sh",
-            "-lc",
-            script,
-            "--",
-            self._agent_dir(worker),
-            self._models_json(worker),
-            *argv,
+            "pi",
+            "--extension",
+            PI_MCP_EXTENSION,
+            "--extension",
+            PI_PROVIDER_EXTENSION_PATH,
             *pi_argv,
         ]
 
     @staticmethod
-    def _agent_dir(worker: WorkerConfig) -> str:
-        return str(PurePosixPath("/tmp/redtrace-pi") / worker.name)
-
-    @staticmethod
     def _session_dir(worker: WorkerConfig) -> str:
-        return str(PurePosixPath(PiDriver._agent_dir(worker)) / "sessions")
+        return str(
+            PurePosixPath(".redtrace")
+            / "pi"
+            / "sessions"
+            / worker.name
+        )
 
     @staticmethod
     def _iter_events(stdout: str) -> list[dict[str, Any]]:
@@ -198,23 +187,3 @@ class PiDriver(WorkerDriver):
             if isinstance(payload, dict):
                 events.append(payload)
         return events
-
-    @staticmethod
-    def _models_json(worker: WorkerConfig) -> str:
-        env = worker.env
-        model: dict[str, Any] = {
-            "id": env["PI_MODEL"],
-            "name": env["PI_MODEL"],
-        }
-        context_window = env.get("PI_MODEL_CONTEXT_WINDOW")
-        if context_window:
-            model["contextWindow"] = int(context_window)
-
-        provider: dict[str, Any] = {
-            "baseUrl": env["PI_BASE_URL"],
-            "api": env["PI_PROVIDER_API"],
-            "apiKey": env["PI_API_KEY"],
-            "models": [model],
-        }
-        payload = {"providers": {"redtrace": provider}}
-        return json.dumps(payload, ensure_ascii=True, separators=(",", ":"))

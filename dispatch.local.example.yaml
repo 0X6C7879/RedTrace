@@ -1,6 +1,7 @@
-# Local execution example — workers run directly on the dispatcher host and reuse the
-# machine's already-configured claude / codex / pi CLIs. No API keys, base URLs or models
-# are configured here; each CLI uses its own host configuration and credentials.
+# Local execution example — workers directly invoke the host claude / codex / pi CLIs.
+# A complete per-Worker Endpoint + API Key + Model override takes precedence for only that
+# process. If all three are omitted, the CLI's existing login and global config are used.
+# HOME and each CLI's user config directory are preserved in both cases.
 #
 # Usage:
 #   cp dispatch.local.example.yaml dispatch.yaml
@@ -35,6 +36,15 @@ tasks:
     timeout: 600
     conclude_timeout: 120
 
+context_harness:
+  enabled: true
+  artifact_root: ".redtrace/artifacts/context"
+  inline_bytes: 32768
+  visible_bytes: 8192
+  query_bytes: 65536
+  parse_bytes: 16777216
+  worker_output_chars: 8388608
+
 # Optional. If omitted: workspace_root defaults to the dispatcher's current directory,
 # completed_action defaults to keep. Each project gets an isolated <workspace_root>/<project_id>/.
 local:
@@ -50,22 +60,39 @@ local:
 #   http_proxy: "http://127.0.0.1:7897"
 #   all_proxy: "http://127.0.0.1:7897"
 
-# No API keys needed — the host CLIs are used as-is. Per-worker `env:` overrides common_env.
+# Per-worker `env:` overrides common_env and the host environment. API configuration must
+# be either complete or entirely absent; partial overrides are rejected at startup.
 workers:
   - name: "local-claude"
     type: "claudecode"
+    enabled: true
     task_types: [bootstrap, reason, explore]
     max_running: 1
     priority: 0
+    # env:
+    #   ANTHROPIC_BASE_URL: "https://api.example.com"
+    #   ANTHROPIC_AUTH_TOKEN: "replace-me"
+    #   ANTHROPIC_MODEL: "claude-model-id"
 
   # - name: "local-codex"
   #   type: "codex"
+  #   enabled: true
   #   task_types: [explore]
   #   max_running: 1
   #   priority: 1
+  #   env:
+  #     CODEX_BASE_URL: "https://api.example.com/v1"
+  #     OPENAI_API_KEY: "replace-me"
+  #     CODEX_MODEL: "codex-model-id"
 
   # - name: "local-pi"
   #   type: "pi"
+  #   enabled: true
   #   task_types: [reason]
   #   max_running: 1
   #   priority: 2
+  #   env:
+  #     PI_BASE_URL: "https://api.example.com/v1"
+  #     PI_API_KEY: "replace-me"
+  #     PI_MODEL: "pi-model-id"
+  #     PI_PROVIDER_API: "openai-completions"

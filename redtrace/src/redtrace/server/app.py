@@ -6,8 +6,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from redtrace import __version__
+from redtrace.capabilities import CapabilityStore
 from redtrace.server import db
-from redtrace.server.routers import audit, blackboard, capabilities, export, hints, intents, projects, settings
+from redtrace.server.operations import resume_pending_tasks
+from redtrace.server.routers import audit, blackboard, capabilities, export, hints, intents, operations, plugins, projects, settings, workers
+from redtrace.skill_evolution import SkillEvolutionEngine, SkillEvolutionWorker
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -15,7 +18,14 @@ STATIC_DIR = Path(__file__).parent / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.configure(db.DEFAULT_DB)
-    yield
+    resume_pending_tasks()
+    skill_evolution = SkillEvolutionWorker(SkillEvolutionEngine(CapabilityStore()))
+    app.state.skill_evolution = skill_evolution
+    skill_evolution.start()
+    try:
+        yield
+    finally:
+        skill_evolution.stop()
 
 
 app = FastAPI(
@@ -33,6 +43,9 @@ app.include_router(export.router)
 app.include_router(audit.router)
 app.include_router(capabilities.router)
 app.include_router(blackboard.router)
+app.include_router(operations.router)
+app.include_router(workers.router)
+app.include_router(plugins.router)
 
 
 @app.get("/", include_in_schema=False)
