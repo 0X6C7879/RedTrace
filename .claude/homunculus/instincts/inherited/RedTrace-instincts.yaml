@@ -1,0 +1,298 @@
+# Instincts generated from https://github.com/0X6C7879/RedTrace
+# Generated: 2026-07-27T09:25:48.067Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: RedTrace-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/0X6C7879/RedTrace
+---
+
+# RedTrace Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: feat
+
+## Evidence
+
+- 1 commits analyzed
+- Detected conventional commit pattern
+- Examples: feat: add exploit-sqli skill
+
+---
+id: RedTrace-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/0X6C7879/RedTrace
+---
+
+# RedTrace Commit Length
+
+## Action
+
+Keep commit messages concise (~28 characters)
+
+## Evidence
+
+- Average commit message length: 28 chars
+- Based on 1 commits
+
+---
+id: RedTrace-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/0X6C7879/RedTrace
+---
+
+# RedTrace Naming Files
+
+## Action
+
+Use kebab-case naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: kebab-case
+
+---
+id: RedTrace-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/0X6C7879/RedTrace
+---
+
+# RedTrace Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: RedTrace-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/0X6C7879/RedTrace
+---
+
+# RedTrace Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: RedTrace-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/0X6C7879/RedTrace
+---
+
+# RedTrace Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: redtrace-instinct-file-naming
+trigger: "When creating a new source file"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: 0X6C7879/RedTrace
+---
+
+# Redtrace Instinct File Naming
+
+## Action
+
+Name the file using kebab-case (e.g., exploit-sqli.py)
+
+## Evidence
+
+- Pattern in files: exploit-sqli
+
+---
+id: redtrace-instinct-function-naming
+trigger: "When defining a new function"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: 0X6C7879/RedTrace
+---
+
+# Redtrace Instinct Function Naming
+
+## Action
+
+Use camelCase for the function name
+
+## Evidence
+
+- Pattern in code: function naming conventions
+
+---
+id: redtrace-instinct-class-naming
+trigger: "When defining a new class"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: 0X6C7879/RedTrace
+---
+
+# Redtrace Instinct Class Naming
+
+## Action
+
+Use PascalCase for the class name
+
+## Evidence
+
+- Pattern in code: class naming conventions
+
+---
+id: redtrace-instinct-constant-naming
+trigger: "When defining a constant"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: 0X6C7879/RedTrace
+---
+
+# Redtrace Instinct Constant Naming
+
+## Action
+
+Use SCREAMING_SNAKE_CASE for the constant name
+
+## Evidence
+
+- Pattern in code: constant naming conventions
+
+---
+id: redtrace-instinct-import-style
+trigger: "When importing modules within the project"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: 0X6C7879/RedTrace
+---
+
+# Redtrace Instinct Import Style
+
+## Action
+
+Use relative imports
+
+## Evidence
+
+- Pattern in code: import style is relative
+
+---
+id: redtrace-instinct-export-style
+trigger: "When exporting functions or classes from a module"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: 0X6C7879/RedTrace
+---
+
+# Redtrace Instinct Export Style
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern in code: export style is named
+
+---
+id: redtrace-instinct-commit-format
+trigger: "When writing a commit message"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: 0X6C7879/RedTrace
+---
+
+# Redtrace Instinct Commit Format
+
+## Action
+
+Use the conventional commit format with 'feat' prefix for features (e.g., 'feat: add exploit-sqli skill')
+
+## Evidence
+
+- Seen in commit: 'feat: add exploit-sqli skill'
+
+---
+id: redtrace-instinct-commit-length
+trigger: "When composing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: 0X6C7879/RedTrace
+---
+
+# Redtrace Instinct Commit Length
+
+## Action
+
+Keep the commit message concise, around 28 characters on average
+
+## Evidence
+
+- Pattern in commits: averageLength 28
+
+---
+id: redtrace-instinct-test-location
+trigger: "When adding or updating tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: 0X6C7879/RedTrace
+---
+
+# Redtrace Instinct Test Location
+
+## Action
+
+Place test files in a separate directory from source files
+
+## Evidence
+
+- Architecture pattern: testLocation is 'separate'
+
