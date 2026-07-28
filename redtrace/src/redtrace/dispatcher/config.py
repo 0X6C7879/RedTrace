@@ -19,6 +19,8 @@ WorkerHealthcheckMode = Literal["startup_and_task", "startup_only", "disabled"]
 ExecutionMode = Literal["container", "local"]
 LocalCompletedAction = Literal["keep", "remove"]
 
+DEFAULT_PI_MODEL_CONTEXT_WINDOW = 1_048_576
+
 WORKER_ENV_KEYS: dict[WorkerType, tuple[str, ...]] = {
     "claudecode": (
         "ANTHROPIC_MODEL",
@@ -171,11 +173,11 @@ class ContextHarnessConfig(BaseModel):
 
     enabled: bool = True
     artifact_root: str = ".redtrace/artifacts/context"
-    inline_bytes: int = Field(default=32 * 1024, ge=1024)
-    visible_bytes: int = Field(default=8 * 1024, ge=512)
-    query_bytes: int = Field(default=64 * 1024, ge=1024)
-    parse_bytes: int = Field(default=16 * 1024 * 1024, ge=64 * 1024)
-    worker_output_chars: int = Field(default=8 * 1024 * 1024, ge=64 * 1024)
+    inline_bytes: int = Field(default=256 * 1024, ge=1024)
+    visible_bytes: int = Field(default=128 * 1024, ge=512)
+    query_bytes: int = Field(default=1024 * 1024, ge=1024)
+    parse_bytes: int = Field(default=64 * 1024 * 1024, ge=64 * 1024)
+    worker_output_chars: int = Field(default=32 * 1024 * 1024, ge=64 * 1024)
 
     @field_validator("artifact_root")
     @classmethod
@@ -298,7 +300,13 @@ class DispatchConfig(BaseModel):
                 merged_workers.append(worker)
                 continue
             worker_copy = dict(worker)
-            worker_copy["env"] = {**common_env, **worker_env}
+            merged_env = {**common_env, **worker_env}
+            if worker.get("type") == "pi":
+                merged_env.setdefault(
+                    "PI_MODEL_CONTEXT_WINDOW",
+                    str(DEFAULT_PI_MODEL_CONTEXT_WINDOW),
+                )
+            worker_copy["env"] = merged_env
             merged_workers.append(worker_copy)
         merged["workers"] = merged_workers
         return merged

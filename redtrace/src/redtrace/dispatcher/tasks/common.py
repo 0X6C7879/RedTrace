@@ -13,7 +13,8 @@ from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
 from redtrace.dispatcher.runtime.process import ProcessResult
 
-PROCESS_COMMUNICATE_GRACE_SECONDS = 15
+PROCESS_COMMUNICATE_GRACE_SECONDS = 60
+PROCESS_TERMINATION_GRACE_SECONDS = 30
 LOG_PREVIEW_LIMIT = 1200
 GRAPH_SNAPSHOT_ROOT = "/tmp/redtrace-prompts"
 LOG = logging.getLogger(__name__)
@@ -115,6 +116,7 @@ def run_worker_process(
         process_env,
         argv,
         timeout_seconds=timeout_seconds,
+        kill_after_seconds=PROCESS_TERMINATION_GRACE_SECONDS,
     )
     publisher = None
     if client is not None and project_id is not None and worker.type != "mock":

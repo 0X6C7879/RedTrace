@@ -61,7 +61,7 @@ class LocalBackend:
         env: dict[str, str],
         command: list[str],
         timeout_seconds: int | None = None,
-        kill_after_seconds: int = 5,
+        kill_after_seconds: int = 30,
     ) -> LocalProcess:
         merged_env = {
             **os.environ,

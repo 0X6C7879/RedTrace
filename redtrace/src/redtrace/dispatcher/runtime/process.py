@@ -17,7 +17,7 @@ from redtrace.dispatcher.runtime.stream_buffer import (
 )
 
 LOG = logging.getLogger(__name__)
-EXEC_KILL_JOIN_TIMEOUT_SECONDS = 5.0
+EXEC_KILL_JOIN_TIMEOUT_SECONDS = 30.0
 OutputHandler = Callable[[str, str], None]
 
 
@@ -58,7 +58,7 @@ class ManagedProcess:
         container: Container,
         command: list[str],
         env: dict[str, str],
-        max_output_chars: int = 8 * 1024 * 1024,
+        max_output_chars: int = 32 * 1024 * 1024,
     ):
         self.command = command
         self.env = env

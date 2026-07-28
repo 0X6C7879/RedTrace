@@ -17,8 +17,8 @@ from redtrace.dispatcher.runtime.stream_buffer import (
 
 LOG = logging.getLogger(__name__)
 
-STREAM_JOIN_TIMEOUT_SECONDS = 5.0
-FORCE_KILL_REAP_TIMEOUT_SECONDS = 2.0
+STREAM_JOIN_TIMEOUT_SECONDS = 30.0
+FORCE_KILL_REAP_TIMEOUT_SECONDS = 10.0
 OutputHandler = Callable[[str, str], None]
 
 
@@ -37,8 +37,8 @@ class LocalProcess:
         cwd: str,
         env: dict[str, str],
         timeout_seconds: int | None = None,
-        term_grace_seconds: int = 5,
-        max_output_chars: int = 8 * 1024 * 1024,
+        term_grace_seconds: int = 30,
+        max_output_chars: int = 32 * 1024 * 1024,
     ):
         self.command = command
         self.env = env
@@ -195,7 +195,7 @@ class LocalProcess:
                     command,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    timeout=10,
+                    timeout=30,
                     check=False,
                 )
             except (OSError, subprocess.SubprocessError):

@@ -1,6 +1,7 @@
 # Local execution example — workers directly invoke the host claude / codex / pi CLIs.
-# A complete per-Worker Endpoint + API Key + Model override takes precedence for only that
-# process. If all three are omitted, the CLI's existing login and global config are used.
+# This file uses RedTrace's 1M-context long-task profile. A complete per-Worker
+# Endpoint + API Key + Model override takes precedence for only that process.
+# If all three are omitted, the CLI's existing login and global config are used.
 # HOME and each CLI's user config directory are preserved in both cases.
 #
 # Usage:
@@ -13,37 +14,42 @@
 #   where the CLIs are installed, logged in, and on PATH. The server may still run anywhere.
 # - Local mode runs the agents with your user's permissions and no sandbox. Only use it in
 #   environments you are authorized to operate in.
+# - Timeouts below are hard wall-clock limits for one Agent CLI phase, not inactivity timers.
 
 server: "http://127.0.0.1:8000"
 
 runtime:
-  execution: local            # run workers as host processes instead of per-project containers
-  worker_healthcheck: disabled  # no base_url to probe; startup instead checks the CLIs are on PATH
-  max_workers: 3              # all workers share this host — size to the machine
+  execution: local              # run workers as host processes instead of per-project containers
+  worker_healthcheck: disabled  # startup checks only verify that the native CLIs are on PATH
+  max_workers: 3                # all workers share this host — size to the machine
   max_running_projects: 2
   max_project_workers: 3
   interval: 3
-  healthcheck_timeout: 15
+  healthcheck_timeout: 60
   prompt_group: "default"
 
 tasks:
   bootstrap:
-    timeout: 120
-    conclude_timeout: 30
+    # Initial direct attempt may solve the complete target before graph decomposition.
+    timeout: 7200               # 2 hours
+    conclude_timeout: 1800      # 30 minutes to preserve confirmed progress
   reason:
-    timeout: 45
+    timeout: 1800               # 30 minutes for full-graph planning
+    max_intents: 3
   explore:
-    timeout: 600
-    conclude_timeout: 120
+    timeout: 14400              # 4 hours for long-running investigation/tool chains
+    conclude_timeout: 1800      # 30 minutes to recover a usable conclusion
 
 context_harness:
   enabled: true
   artifact_root: ".redtrace/artifacts/context"
-  inline_bytes: 32768
-  visible_bytes: 8192
-  query_bytes: 65536
-  parse_bytes: 16777216
-  worker_output_chars: 8388608
+  # 1M-context profile: retain useful medium outputs directly, while keeping very
+  # large scanner/browser output as queryable Artifacts instead of losing it.
+  inline_bytes: 262144          # 256 KiB; roughly 65K tokens at the harness estimator
+  visible_bytes: 131072         # up to 128 KiB of deterministic high-signal summary
+  query_bytes: 1048576          # up to 1 MiB per bounded Artifact query
+  parse_bytes: 67108864         # inspect/sample up to 64 MiB while raw files remain complete
+  worker_output_chars: 33554432 # retain a 32 Mi-character prefix+tail window per stream
 
 # Optional. If omitted: workspace_root defaults to the dispatcher's current directory,
 # completed_action defaults to keep. Each project gets an isolated <workspace_root>/<project_id>/.
@@ -77,7 +83,7 @@ workers:
   # - name: "local-codex"
   #   type: "codex"
   #   enabled: true
-  #   task_types: [explore]
+  #   task_types: [bootstrap, reason, explore]
   #   max_running: 1
   #   priority: 1
   #   env:
@@ -88,7 +94,7 @@ workers:
   # - name: "local-pi"
   #   type: "pi"
   #   enabled: true
-  #   task_types: [reason]
+  #   task_types: [bootstrap, reason, explore]
   #   max_running: 1
   #   priority: 2
   #   env:
@@ -96,3 +102,4 @@ workers:
   #     PI_API_KEY: "replace-me"
   #     PI_MODEL: "pi-model-id"
   #     PI_PROVIDER_API: "openai-completions"
+  #     PI_MODEL_CONTEXT_WINDOW: "1048576"  # required for a custom 1M-context Pi model
