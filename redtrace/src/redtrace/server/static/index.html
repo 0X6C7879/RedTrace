@@ -1334,10 +1334,18 @@
                     <pre class="max-h-56 overflow-auto border-t border-slate-100 bg-slate-50 px-3 py-2 text-[10px] leading-relaxed text-slate-600" x-text="eventPayload(event)"></pre>
                   </details>
                 </template>
+                <template x-if="isSkill(event)">
+                  <div class="audit-skill flex items-center gap-2 px-3 py-2 text-xs text-slate-600">
+                    <svg class="h-3.5 w-3.5 shrink-0 text-violet-500" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M12 3.5 14.3 8l4.7.7-3.4 3.3.8 4.7-4.4-2.3-4.4 2.3.8-4.7L5 8.7 9.7 8z"/></svg>
+                    <span class="text-slate-400">Skill</span>
+                    <span class="min-w-0 flex-1 truncate font-mono text-[11px] font-medium text-violet-700" x-text="event.skill_name || '未知技能'"></span>
+                    <span class="text-[10px]" :class="event.kind === 'skill.completed' ? 'text-emerald-500' : 'text-amber-500'" x-text="event.kind === 'skill.completed' ? '已加载' : '加载中'"></span>
+                  </div>
+                </template>
                 <template x-if="isCommand(event)">
                   <details class="audit-terminal overflow-hidden" :open="event.kind === 'command.started'">
                     <summary class="flex cursor-pointer list-none items-center gap-2 px-3 py-2 font-mono text-[11px]">
-                      <span class="text-emerald-400">$</span><span class="min-w-0 flex-1 truncate" x-text="eventCommand(event)"></span>
+                      <span class="text-emerald-400">$</span><span class="audit-command-text min-w-0 flex-1" x-text="eventCommand(event)"></span>
                       <span class="text-[10px] text-slate-500" x-text="eventStatus(event)"></span>
                     </summary>
                     <pre x-show="event.content" class="max-h-64 overflow-auto border-t border-white/10 px-3 py-2 text-[10px] leading-relaxed text-slate-300" x-text="displayText(event.content)"></pre>

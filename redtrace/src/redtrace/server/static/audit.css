@@ -87,10 +87,29 @@
   background: #fff;
   border-radius: 9px;
 }
+.audit-skill {
+  border: 1px solid #ede9fe;
+  background: #faf8ff;
+  border-radius: 9px;
+}
 .audit-terminal {
   background: #111827;
   color: #d1fae5;
   border-radius: 9px;
+}
+.audit-command-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.audit-terminal[open] > summary {
+  align-items: flex-start;
+}
+.audit-terminal[open] .audit-command-text {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .audit-file-row {
   transition: background-color 120ms ease, color 120ms ease;

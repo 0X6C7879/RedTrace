@@ -18,21 +18,23 @@ from redtrace.dispatcher.runtime.stream_buffer import TRUNCATED_STREAM_LINE
 
 
 LOG = logging.getLogger(__name__)
-MAX_INLINE_CONTENT = 32 * 1024
+ASSISTANT_MESSAGE_CHUNK = 32 * 1024
 CRITICAL_KINDS = {
     "error",
     "run.completed",
     "tool.completed",
     "command.completed",
+    "skill.completed",
     "output.truncated",
 }
-SECRET_PATTERN = re.compile(
-    r"(?i)(authorization|api[_-]?key|token|secret|password)(\s*[:=]\s*)([^\s,;]+)"
-)
 ANSI_PATTERN = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 MOJIBAKE_MARKERS = frozenset("ÃÂâ€™œž�ç¬åæèé")
 SHELL_TOOL_NAMES = frozenset(
     {"bash", "sh", "shell", "powershell", "pwsh", "cmd", "command", "terminal", "exec"}
+)
+SKILL_TOOL_NAMES = frozenset({"skill", "skills", "load skill", "use skill"})
+SKILL_PATH_PATTERN = re.compile(
+    r"""(?i)(?:^|[\\/])(?P<name>[^\\/"'\s]+)[\\/]SKILL\.md(?=$|[\s"'`;|&)])"""
 )
 
 
@@ -100,15 +102,24 @@ class AuditPublisher:
                 content = str(event.get("content", ""))
                 self._assistant_parts.append(content)
                 self._assistant_chars += len(content)
-                if self._assistant_chars >= MAX_INLINE_CONTENT:
+                if self._assistant_chars >= ASSISTANT_MESSAGE_CHUNK:
                     self._persist_assistant_message()
-            elif event["kind"] in {"tool.started", "command.started", "turn.completed"}:
+            elif event["kind"] in {
+                "tool.started",
+                "command.started",
+                "skill.started",
+                "turn.completed",
+            }:
                 self._persist_assistant_message()
-            if event["kind"] in {"tool.started", "command.started"}:
+            if event["kind"] in {"tool.started", "command.started", "skill.started"}:
                 call_id = event.get("call_id")
                 if isinstance(call_id, str) and call_id:
                     self._tool_calls[call_id] = event
-            elif event["kind"] in {"tool.completed", "command.completed"}:
+            elif event["kind"] in {
+                "tool.completed",
+                "command.completed",
+                "skill.completed",
+            }:
                 call_id = event.get("call_id")
                 if isinstance(call_id, str) and call_id:
                     self._tool_calls.pop(call_id, None)
@@ -116,7 +127,7 @@ class AuditPublisher:
 
     def finish(self, result: ProcessResult) -> None:
         self._persist_assistant_message()
-        stderr = _limit(result.stderr.strip())
+        stderr = _clean_text(result.stderr.strip())
         # Codex writes tool-router diagnostics to stderr even when the overall
         # turn succeeds. The corresponding command.completed events already
         # carry the actionable exit code, so do not render a successful run as
@@ -202,11 +213,11 @@ class AuditPublisher:
             return
         self._assistant_parts.clear()
         self._assistant_chars = 0
-        for offset in range(0, len(text), MAX_INLINE_CONTENT):
+        for offset in range(0, len(text), ASSISTANT_MESSAGE_CHUNK):
             self.emit(
                 "assistant.message",
                 role="assistant",
-                content=text[offset : offset + MAX_INLINE_CONTENT],
+                content=text[offset : offset + ASSISTANT_MESSAGE_CHUNK],
                 persist_only=True,
             )
 
@@ -338,7 +349,7 @@ def _normalize_claude(
                         "tool.completed",
                         timestamp,
                         call_id=block.get("tool_use_id"),
-                        content=_limit(_content_text(block.get("content"))),
+                        content=_content_text(block.get("content")),
                         error=bool(block.get("is_error")),
                     )
                 )
@@ -395,7 +406,7 @@ def _normalize_codex(payload: dict[str, Any], timestamp: str) -> list[dict[str, 
                     title="Shell",
                     call_id=item.get("id"),
                     command=_display_command(item.get("command")),
-                    content=_limit(item.get("aggregated_output", "")),
+                    content=_clean_text(item.get("aggregated_output", "")),
                     exit_code=item.get("exit_code"),
                 )
             ]
@@ -408,7 +419,7 @@ def _normalize_codex(payload: dict[str, Any], timestamp: str) -> list[dict[str, 
                     timestamp,
                     title=item.get("tool"),
                     call_id=item.get("id"),
-                    content=_limit(_content_text(item.get("result"))),
+                    content=_content_text(item.get("result")),
                     error=item.get("status") == "failed",
                 )
             ]
@@ -448,7 +459,7 @@ def _normalize_pi(payload: dict[str, Any], timestamp: str) -> list[dict[str, Any
                 "tool.completed",
                 timestamp,
                 title=payload.get("toolName"),
-                content=_limit(_content_text(payload.get("result"))),
+                content=_content_text(payload.get("result")),
                 error=payload.get("isError", False),
                 call_id=payload.get("toolCallId"),
             )
@@ -470,13 +481,6 @@ def _content_text(value: Any) -> str:
     return _clean_text(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
 
 
-def _limit(value: Any, limit: int = MAX_INLINE_CONTENT) -> str:
-    value = _clean_text(value)
-    if len(value) <= limit:
-        return value
-    return value[:limit] + "\n… output truncated for audit UI …"
-
-
 def _enrich_tool_event(
     event: dict[str, Any],
     active_tools: dict[str, dict[str, Any]],
@@ -484,6 +488,9 @@ def _enrich_tool_event(
     kind = event.get("kind")
     call_id = event.get("call_id")
     if kind in {"tool.started", "command.started"}:
+        skill_name = _skill_name_from_event(event)
+        if skill_name:
+            return _as_skill_event(event, "skill.started", skill_name)
         command = _command_from_event(event)
         if command:
             event["command"] = _display_command(command)
@@ -491,15 +498,71 @@ def _enrich_tool_event(
             event["kind"] = "command.started"
             event["title"] = "Shell"
         return event
-    if kind == "tool.completed" and isinstance(call_id, str):
-        started = active_tools.get(call_id)
-        if started and started.get("kind") == "command.started":
+    if kind in {"tool.completed", "command.completed"}:
+        started = active_tools.get(call_id) if isinstance(call_id, str) else None
+        if started and started.get("kind") == "skill.started":
+            return _as_skill_event(
+                event,
+                "skill.completed",
+                str(started.get("skill_name") or "未知技能"),
+            )
+        skill_name = _skill_name_from_event(event)
+        if skill_name:
+            return _as_skill_event(event, "skill.completed", skill_name)
+        if kind == "tool.completed" and started and started.get("kind") == "command.started":
             event["kind"] = "command.completed"
             event["title"] = "Shell"
             event["command"] = started.get("command", "")
-        elif started and not event.get("title"):
+        elif kind == "tool.completed" and started and not event.get("title"):
             event["title"] = started.get("title")
     return event
+
+
+def _as_skill_event(
+    event: dict[str, Any],
+    kind: str,
+    skill_name: str,
+) -> dict[str, Any]:
+    event["kind"] = kind
+    event["title"] = "Skill"
+    event["skill_name"] = skill_name
+    for key in ("arguments", "command", "content"):
+        event.pop(key, None)
+    return event
+
+
+def _skill_name_from_event(event: dict[str, Any]) -> str:
+    direct_name = event.get("skill_name") or event.get("skillName")
+    if isinstance(direct_name, str) and direct_name.strip():
+        return direct_name.strip()
+
+    title = str(event.get("title") or "").strip().lower().replace("_", " ")
+    arguments = event.get("arguments")
+    if title in SKILL_TOOL_NAMES:
+        if isinstance(arguments, dict):
+            for key in ("skill", "name", "skill_name", "skillName"):
+                value = arguments.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        elif isinstance(arguments, str) and arguments.strip():
+            return arguments.strip()
+        return "未知技能"
+
+    candidates: list[Any] = [event.get("command")]
+    if isinstance(arguments, dict):
+        candidates.extend(
+            arguments.get(key)
+            for key in ("path", "file", "file_path", "filePath", "command", "input", "raw")
+        )
+    elif isinstance(arguments, str):
+        candidates.append(arguments)
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        match = SKILL_PATH_PATTERN.search(candidate)
+        if match:
+            return match.group("name")
+    return ""
 
 
 def _command_from_event(event: dict[str, Any]) -> str:
@@ -561,15 +624,4 @@ def _clean_text(value: Any) -> str:
 
 
 def _redact(value: Any) -> Any:
-    if isinstance(value, str):
-        return SECRET_PATTERN.sub(r"\1\2[REDACTED]", value)
-    if isinstance(value, list):
-        return [_redact(item) for item in value]
-    if isinstance(value, dict):
-        return {
-            key: "[REDACTED]"
-            if re.search(r"(?i)(api[_-]?key|token|secret|password|authorization)", key)
-            else _redact(item)
-            for key, item in value.items()
-        }
     return value

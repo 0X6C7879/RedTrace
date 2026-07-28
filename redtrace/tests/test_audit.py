@@ -211,6 +211,265 @@ def test_pi_shell_tool_events_match_codex_command_shape(tmp_path: Path) -> None:
     assert completed["content"] == "中文"
 
 
+def test_claude_skill_event_keeps_only_the_skill_name(tmp_path: Path) -> None:
+    client = RecordingClient()
+    worker = WorkerConfig.model_validate(
+        {
+            "name": "claude-1",
+            "type": "claudecode",
+            "task_types": ["explore"],
+            "max_running": 1,
+            "priority": 0,
+            "env": {},
+        }
+    )
+    publisher = AuditPublisher(
+        client,
+        "proj_001",
+        "i001",
+        worker,
+        "explore_execute",
+        str(tmp_path),
+        "prompt",
+    )
+    for payload in (
+        {
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "skill-1",
+                    "name": "Skill",
+                },
+            },
+        },
+        {
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": '{"skill":"penetration-flow"}',
+                },
+            },
+        },
+        {
+            "type": "stream_event",
+            "event": {"type": "content_block_stop", "index": 0},
+        },
+        {
+            "type": "user",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "skill-1",
+                        "content": "secret skill instructions",
+                    }
+                ]
+            },
+        },
+    ):
+        publisher.handle_output("stdout", json.dumps(payload))
+    publisher.finish(ProcessResult(returncode=0, stdout="", stderr=""))
+    publisher.close()
+
+    skill_events = [
+        event
+        for _, batch in client.batches
+        for event in batch
+        if event["kind"].startswith("skill.")
+    ]
+    assert [event["kind"] for event in skill_events] == [
+        "skill.started",
+        "skill.completed",
+    ]
+    assert all(event["skill_name"] == "penetration-flow" for event in skill_events)
+    assert all("arguments" not in event for event in skill_events)
+    assert all("content" not in event for event in skill_events)
+
+
+def test_codex_skill_read_command_keeps_only_the_skill_name(tmp_path: Path) -> None:
+    client = RecordingClient()
+    worker = WorkerConfig.model_validate(
+        {
+            "name": "codex-1",
+            "type": "codex",
+            "task_types": ["explore"],
+            "max_running": 1,
+            "priority": 0,
+            "env": {},
+        }
+    )
+    publisher = AuditPublisher(
+        client,
+        "proj_001",
+        "i001",
+        worker,
+        "explore_execute",
+        str(tmp_path),
+        "prompt",
+    )
+    command = "rtk read /workspace/.codex/skills/penetration-flow/SKILL.md"
+    for payload in (
+        {
+            "type": "item.started",
+            "item": {
+                "id": "skill-1",
+                "type": "command_execution",
+                "command": command,
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "skill-1",
+                "type": "command_execution",
+                "command": command,
+                "aggregated_output": "secret skill instructions",
+                "exit_code": 0,
+            },
+        },
+    ):
+        publisher.handle_output("stdout", json.dumps(payload))
+    publisher.finish(ProcessResult(returncode=0, stdout="", stderr=""))
+    publisher.close()
+
+    skill_events = [
+        event
+        for _, batch in client.batches
+        for event in batch
+        if event["kind"].startswith("skill.")
+    ]
+    assert [event["kind"] for event in skill_events] == [
+        "skill.started",
+        "skill.completed",
+    ]
+    assert all(event["skill_name"] == "penetration-flow" for event in skill_events)
+    assert all("command" not in event for event in skill_events)
+    assert all("content" not in event for event in skill_events)
+
+
+def test_pi_skill_read_keeps_only_the_skill_name(tmp_path: Path) -> None:
+    client = RecordingClient()
+    worker = WorkerConfig.model_validate(
+        {
+            "name": "pi-1",
+            "type": "pi",
+            "task_types": ["explore"],
+            "max_running": 1,
+            "priority": 0,
+            "env": {},
+        }
+    )
+    publisher = AuditPublisher(
+        client,
+        "proj_001",
+        "i001",
+        worker,
+        "explore_execute",
+        str(tmp_path),
+        "prompt",
+    )
+    for payload in (
+        {
+            "type": "tool_execution_start",
+            "toolName": "read",
+            "toolCallId": "skill-1",
+            "args": {
+                "path": "/workspace/.agents/skills/penetration-flow/SKILL.md"
+            },
+        },
+        {
+            "type": "tool_execution_end",
+            "toolName": "read",
+            "toolCallId": "skill-1",
+            "result": "secret skill instructions",
+            "isError": False,
+        },
+    ):
+        publisher.handle_output("stdout", json.dumps(payload))
+    publisher.finish(ProcessResult(returncode=0, stdout="", stderr=""))
+    publisher.close()
+
+    skill_events = [
+        event
+        for _, batch in client.batches
+        for event in batch
+        if event["kind"].startswith("skill.")
+    ]
+    assert [event["kind"] for event in skill_events] == [
+        "skill.started",
+        "skill.completed",
+    ]
+    assert all(event["skill_name"] == "penetration-flow" for event in skill_events)
+    assert all("arguments" not in event for event in skill_events)
+    assert all("content" not in event for event in skill_events)
+
+
+def test_provider_tool_outputs_are_not_truncated_at_32_kib() -> None:
+    content = "完整输出" * (12 * 1024)
+    cases = [
+        (
+            "claudecode",
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tool-1",
+                            "content": content,
+                        }
+                    ]
+                },
+            },
+        ),
+        (
+            "codex",
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "tool-1",
+                    "type": "mcp_tool_call",
+                    "tool": "example",
+                    "result": content,
+                    "status": "completed",
+                },
+            },
+        ),
+        (
+            "pi",
+            {
+                "type": "tool_execution_end",
+                "toolName": "example",
+                "toolCallId": "tool-1",
+                "result": content,
+                "isError": False,
+            },
+        ),
+    ]
+
+    for provider, payload in cases:
+        events = normalize_event(provider, json.dumps(payload, ensure_ascii=False))
+        assert events[0]["content"] == content
+        assert "output truncated for audit UI" not in events[0]["content"]
+
+
+def test_static_audit_command_expands_without_ellipsis() -> None:
+    static_dir = Path(__file__).parents[1] / "src" / "redtrace" / "server" / "static"
+    index = (static_dir / "index.html").read_text(encoding="utf-8")
+    styles = (static_dir / "audit.css").read_text(encoding="utf-8")
+
+    assert "audit-command-text min-w-0 flex-1" in index
+    assert ".audit-command-text" in styles
+    assert ".audit-terminal[open] .audit-command-text" in styles
+    assert "white-space: pre-wrap" in styles
+
+
 def test_successful_codex_router_stderr_is_not_rendered_as_worker_error(
     tmp_path: Path,
 ) -> None:
@@ -247,7 +506,7 @@ def test_successful_codex_router_stderr_is_not_rendered_as_worker_error(
     assert not any(event["kind"] in {"stderr", "error"} for event in events)
 
 
-def test_audit_publisher_batches_redacted_run_events(tmp_path: Path) -> None:
+def test_audit_publisher_batches_unredacted_run_events(tmp_path: Path) -> None:
     client = RecordingClient()
     worker = WorkerConfig.model_validate(
         {
@@ -273,7 +532,14 @@ def test_audit_publisher_batches_redacted_run_events(tmp_path: Path) -> None:
         json.dumps(
             {
                 "type": "item.completed",
-                "item": {"id": "m1", "type": "agent_message", "text": "done"},
+                "item": {
+                    "id": "m1",
+                    "type": "mcp_tool_call",
+                    "tool": "example",
+                    "arguments": {"token": "abc123"},
+                    "result": "authorization: bearer-secret",
+                    "status": "completed",
+                },
             }
         ),
     )
@@ -281,10 +547,13 @@ def test_audit_publisher_batches_redacted_run_events(tmp_path: Path) -> None:
     publisher.close()
 
     events = [event for _, batch in client.batches for event in batch]
-    assert {"run.started", "user.message", "assistant.message", "run.completed"} <= {
+    serialized = json.dumps(events)
+    assert {"run.started", "user.message", "tool.completed", "run.completed"} <= {
         event["kind"] for event in events
     }
-    assert "do-not-log" not in json.dumps(events)
+    assert "do-not-log" in serialized
+    assert "bearer-secret" in serialized
+    assert "[REDACTED]" not in serialized
 
 
 def test_audit_publisher_flushes_large_assistant_text_in_bounded_chunks(

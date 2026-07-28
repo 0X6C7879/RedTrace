@@ -157,7 +157,7 @@ function auditPage() {
       if (event.kind === 'run.started' || event.kind === 'session.started' || event.kind === 'turn.started') {
         return false;
       }
-      if (['command.started', 'tool.started'].includes(event.kind) && this.hasCompletion(event)) {
+      if (['command.started', 'tool.started', 'skill.started'].includes(event.kind) && this.hasCompletion(event)) {
         return false;
       }
       if (this.selectedProvider !== 'all' && event.provider !== this.selectedProvider) return false;
@@ -166,7 +166,12 @@ function auditPage() {
 
     hasCompletion(event) {
       if (!event?.run_id || !event?.call_id) return false;
-      const completedKind = event.kind === 'command.started' ? 'command.completed' : 'tool.completed';
+      const completedKind = {
+        'command.started': 'command.completed',
+        'tool.started': 'tool.completed',
+        'skill.started': 'skill.completed',
+      }[event.kind];
+      if (!completedKind) return false;
       return this.events.some(candidate =>
         candidate !== event
         && candidate.run_id === event.run_id
@@ -197,6 +202,8 @@ function auditPage() {
         'tool.completed': event.title || '工具结果',
         'command.started': '执行',
         'command.completed': '执行',
+        'skill.started': '加载技能',
+        'skill.completed': '加载技能',
         'file.changed': '修改',
         'turn.completed': '回合结束',
         'run.completed': '运行结束',
@@ -217,6 +224,10 @@ function auditPage() {
 
     isCommand(event) {
       return ['command.started', 'command.completed'].includes(event.kind) || this.isShellTool(event);
+    },
+
+    isSkill(event) {
+      return ['skill.started', 'skill.completed'].includes(event.kind);
     },
 
     isShellTool(event) {
