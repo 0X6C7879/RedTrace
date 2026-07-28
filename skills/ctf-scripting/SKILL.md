@@ -34,24 +34,105 @@ Avoid `/ctf-scripting` when:
 - script triggers web endpoints or APIs -> `ctf-web` (primary), `ctf-scripting` for automation
 - script interacts with LLM/tool-use flows -> `ctf-ai-ml/llm-attacks.md`
 
-## Minimal Automation Template
+## Quick Commands (per script type)
+
+### Python (.py)
+
+```bash
+python -m py_compile file.py
+python - <<'PY'
+import ast, sys
+print(ast.dump(ast.parse(open('file.py').read())))
+PY
+grep -R "FLAG_KEYWORD" .
+```
+
+### Bash / Shell (.sh)
+
+```bash
+bash -n script.sh
+grep -R "FLAG_KEYWORD" .
+strings script.sh
+```
+
+### JavaScript / Node (.js / .node)
+
+```bash
+node --check file.js
+grep -R "FLAG_KEYWORD" .
+strings file.node
+```
+
+### Lua (.lua)
+
+```bash
+luac -p file.lua
+grep -R "FLAG_KEYWORD" .
+```
+
+### Ruby (.rb)
+
+```bash
+ruby -c file.rb
+grep -R "FLAG_KEYWORD" .
+```
+
+## Minimal Automation Templates
+
+### Local stdin/stdout script
 
 ```python
 from pwn import *
+p = process(['python', 'file.py'])
+p.sendline(b'input')
+print(p.recvline().decode())
+```
 
+### Remote TCP interaction
+
+```python
+from pwn import *
 r = remote('host', port)
-# adjust as needed for prompts
 r.recvuntil(b'> ')
 r.sendline(b'input')
 print(r.recvline().decode())
 ```
+
+### HTTP API interaction
+
+```python
+import requests
+r = requests.post('http://host/api', json={'input':'test'})
+print(r.text)
+```
+
+### Websocket interaction
+
+```python
+import websocket
+ws = websocket.create_connection('ws://host/ws')
+ws.send('hello')
+print(ws.recv())
+```
+
+## Jail Recognition Checklist (fast)
+
+- error reveals filter type (`name not allowed`, `unknown function`, `node not allowed`)
+- restricted charset only (e.g., `#$\`)
+- no string concat / no quotes / no import
+- eval context differs (double-quoted vs bare)
+- oracle functions available (length/compare/submit)
+- sandbox language different from host (Lua/JS/Python)
+- output truncated or timing differences (blind/side-channel)
+- file read blocked, but env/proc leaks possible
+- restricted shell (`rbash`, `rvim`) vs full shell
 
 ## Fast Triage Checklist
 
 1. Identify interpreter/runtime required
 2. Check network vs local execution
 3. Search for flag format strings quickly (`strings`, `grep -R`)
-4. Determine if the challenge is “solve by running” or “solve by understanding”
+4. Determine if the challenge is solve-by-running vs solve-by-understanding
 
 ## References
 
