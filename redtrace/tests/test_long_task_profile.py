@@ -4,6 +4,8 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+from redtrace.dispatcher.config import ContextHarnessConfig, DispatchConfig
+
 
 def _load_migrator() -> ModuleType:
     path = Path(__file__).resolve().parents[2] / "scripts" / "apply-long-task-profile.py"
@@ -12,6 +14,52 @@ def _load_migrator() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_runtime_context_defaults_are_1m_ready() -> None:
+    context = ContextHarnessConfig()
+
+    assert context.inline_bytes == 262144
+    assert context.visible_bytes == 131072
+    assert context.query_bytes == 1048576
+    assert context.parse_bytes == 67108864
+    assert context.worker_output_chars == 33554432
+
+
+def test_dispatch_config_defaults_custom_pi_to_1m_context() -> None:
+    config = DispatchConfig.model_validate(
+        {
+            "server": "http://127.0.0.1:8000",
+            "runtime": {
+                "execution": "local",
+                "worker_healthcheck": "disabled",
+                "max_workers": 1,
+                "max_running_projects": 1,
+                "max_project_workers": 1,
+                "interval": 3,
+                "healthcheck_timeout": 60,
+                "prompt_group": "default",
+            },
+            "tasks": {
+                "bootstrap": {"timeout": 7200, "conclude_timeout": 1800},
+                "reason": {"timeout": 1800},
+                "explore": {"timeout": 14400, "conclude_timeout": 1800},
+            },
+            "local": {},
+            "workers": [
+                {
+                    "name": "pi",
+                    "type": "pi",
+                    "task_types": ["bootstrap", "reason", "explore"],
+                    "max_running": 1,
+                    "priority": 0,
+                    "env": {},
+                }
+            ],
+        }
+    )
+
+    assert config.workers[0].env["PI_MODEL_CONTEXT_WINDOW"] == "1048576"
 
 
 def test_profile_raises_legacy_limits_and_configures_pi() -> None:
