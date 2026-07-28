@@ -15,8 +15,8 @@ runtime:
   max_running_projects: 3
   # Per-project worker cap. Prevents one project from monopolizing the whole dispatcher.
   max_project_workers: 4
-  # Timeout for each enabled worker healthcheck.
-  healthcheck_timeout: 20
+  # Slow gateways and cold model backends should not be rejected prematurely.
+  healthcheck_timeout: 60
   # "startup_and_task" checks at dispatcher startup and before every task.
   # "startup_only" checks only at startup. "disabled" skips automatic worker checks.
   worker_healthcheck: "startup_only"
@@ -24,34 +24,36 @@ runtime:
   prompt_group: "default"
 
 tasks:
+  # These are hard wall-clock limits for one Agent CLI phase, not inactivity timers.
   bootstrap:
-    # Main execution timeout for the initial direct solve attempt.
-    timeout: 300
-    # Time budget for conclude fallback after the main phase times out or returns unusable output.
-    conclude_timeout: 90
+    # The first high-capability Worker may attempt the complete target before decomposition.
+    timeout: 7200               # 2 hours
+    # Time budget for conclude fallback after timeout or unusable output.
+    conclude_timeout: 1800      # 30 minutes
   reason:
-    # Reason decides whether the goal is met and whether new intents should be proposed.
-    timeout: 300
+    # Full-graph planning over long histories and large evidence sets.
+    timeout: 1800               # 30 minutes
     # Hard cap on how many new intents one reason step may create.
-    max_intents: 2
+    max_intents: 3
   explore:
-    # Main execution timeout for exploring a claimed intent.
-    timeout: 300
-    # Time budget for conclude fallback used to summarize confirmed findings from the same session.
-    conclude_timeout: 90
+    # Long-running security investigation, compilation, scanning and browser/tool chains.
+    timeout: 14400              # 4 hours
+    # Time budget for preserving confirmed findings from the same session.
+    conclude_timeout: 1800      # 30 minutes
 
 context_harness:
   # Shared post-RTK layer for Claude Code, Codex, and Pi. Set false for raw execution.
   enabled: true
   # Complete security/HTTP/Web output is stored inside the task workspace.
   artifact_root: ".redtrace/artifacts/context"
-  # Small plain text remains transparent; structured Web/security data is summarized.
-  inline_bytes: 32768
-  visible_bytes: 8192
-  query_bytes: 65536
-  parse_bytes: 16777216
+  # 1M-context profile. Medium outputs stay visible; genuinely large output is retained
+  # as a complete Artifact with much larger summary, parse and bounded-query budgets.
+  inline_bytes: 262144          # 256 KiB; roughly 65K tokens at the harness estimator
+  visible_bytes: 131072         # up to 128 KiB of deterministic high-signal summary
+  query_bytes: 1048576          # up to 1 MiB per bounded Artifact query
+  parse_bytes: 67108864         # inspect/sample up to 64 MiB; raw files remain complete
   # Bounded prefix+tail retained from each outer Worker stdout/stderr stream.
-  worker_output_chars: 8388608
+  worker_output_chars: 33554432 # 32 Mi characters per stream
 
 container:
   # Base worker container. The dispatcher execs agent commands inside one container per project.
@@ -63,7 +65,6 @@ container:
   # cap_add:
   #   - "NET_RAW"
   #   - "NET_ADMIN"
-
 
 workers:
   # Worker priority is ascending: lower numbers are preferred first.
@@ -80,9 +81,9 @@ workers:
 
   # - name: "codex_qwen3.6-plus"
   #   type: "codex"
-  #   task_types: [bootstrap,reason,explore]
+  #   task_types: [bootstrap, reason, explore]
   #   max_running: 2
-  #   priority: 0
+  #   priority: 1
   #   env:
   #     CODEX_MODEL: "qwen3.6-plus"
   #     CODEX_BASE_URL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -90,12 +91,12 @@ workers:
 
   # - name: "pi_qwen3.6-plus"
   #   type: "pi"
-  #   task_types: [bootstrap,reason,explore]
+  #   task_types: [bootstrap, reason, explore]
   #   max_running: 2
-  #   priority: 0
+  #   priority: 2
   #   env:
   #     PI_MODEL: "qwen3.6-plus"
   #     PI_BASE_URL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
   #     PI_API_KEY: "sk-xxx"
   #     PI_PROVIDER_API: "openai-completions"
-  #     PI_MODEL_CONTEXT_WINDOW: "262144"
+  #     PI_MODEL_CONTEXT_WINDOW: "1048576"  # custom Pi provider must be told the 1M window
