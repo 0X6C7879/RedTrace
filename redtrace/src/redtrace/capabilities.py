@@ -56,7 +56,7 @@ export default function (pi) {
   const contextWindow =
     Number.isFinite(configuredContext) && configuredContext > 0
       ? configuredContext
-      : 128000;
+      : 1000000;
   const model = {
     id: values.PI_MODEL,
     name: values.PI_MODEL,
@@ -64,7 +64,7 @@ export default function (pi) {
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,
-    maxTokens: Math.min(32768, contextWindow),
+    maxTokens: Math.min(131072, contextWindow),
   };
   if (values.PI_PROVIDER_API.startsWith("openai-")) {
     model.compat = { supportsDeveloperRole: false };

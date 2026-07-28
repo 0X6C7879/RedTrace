@@ -189,7 +189,24 @@ Context Harness 输出固定的 JSON/JSONL 工件和摘要引用，支持跨任�
 - Docker（仅容器模式需要）
 - `uv`（推荐用于安装和运行 Python 项目）
 
-### Docker Compose（推荐）
+### Windows WSL + Kali root（默认）
+
+默认部署目标是 Windows WSL 中以 root 运行的 Kali。WSL 已作为外层隔离边界，
+因此 Claude Code、Codex 和 Pi 默认不再启用各自的沙盒或交互审批。Claude Code
+和 Codex 优先使用原生 WebFetch/WebSearch，失败或不可用时再使用共享
+`brave-search` Skill；Pi 直接使用该 Skill。
+
+```bash
+git clone https://github.com/0X6C7879/RedTrace.git
+cd RedTrace
+BRAVE_API_KEY="replace-me" bash deploy-local.sh
+```
+
+部署脚本会安装依赖、同步原生 CLI 配置并加密保存 Brave API Key。默认模型上下文
+按 1,000,000 tokens 配置，并在约 90% 时进行自动压缩；Bootstrap 和 Explore
+各有 30 分钟主阶段与 5 分钟收尾，Reason 为 5 分钟，健康检查为 60 秒。
+
+### Docker Compose
 
 ```bash
 cp dispatch.example.yaml dispatch.yaml
@@ -208,7 +225,8 @@ REDTRACE_DISPATCH_CONFIG="$PWD/dispatch.local.yaml" uv run --project redtrace re
 uv run --project redtrace redtrace dispatch --config dispatch.local.yaml
 ```
 
-Ubuntu/Kali 可使用一键脚本准备 CLI、RTK、项目依赖和安全相关 Skills：
+其他 Ubuntu/Kali 环境也可使用一键脚本准备 CLI、RTK、项目依赖和安全相关
+Skills；脚本会提示它不是默认的 WSL root 部署，但仍可继续：
 
 ```bash
 bash deploy-local.sh

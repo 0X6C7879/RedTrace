@@ -18,6 +18,21 @@ from redtrace.server.app import app
 from redtrace.server import operations
 
 
+def _php_runtime_available() -> bool:
+    binary = shutil.which("php")
+    if binary is None:
+        return False
+    return (
+        subprocess.run(
+            [binary, "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch) -> TestClient:
     monkeypatch.setattr(db, "_db_path", None)
@@ -144,7 +159,10 @@ def test_human_can_delete_webshell_resource(client: TestClient) -> None:
     )
 
 
-@pytest.mark.skipif(shutil.which("php") is None, reason="PHP is required for the eval-shell compatibility test")
+@pytest.mark.skipif(
+    not _php_runtime_available(),
+    reason="a working PHP runtime is required for the eval-shell compatibility test",
+)
 def test_simple_php_eval_webshell_can_be_tested_and_reused(
     client: TestClient,
     tmp_path: Path,

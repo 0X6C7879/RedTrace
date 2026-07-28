@@ -46,7 +46,12 @@ class ClaudeCodeDriver(SeedSessionDriver):
                 "Write",
                 "Glob",
                 "Grep",
+                "NotebookEdit",
+                "Agent",
                 "Task",
+                "Skill",
+                "WebFetch",
+                "WebSearch",
                 "mcp__*",
             ]
         return ["--dangerously-skip-permissions"]

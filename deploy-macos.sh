@@ -12,6 +12,16 @@ NPM_REGISTRY="${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}"
 PYPI_INDEX="${UV_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
 REDTRACE_HOST="${REDTRACE_HOST:-127.0.0.1}"
 REDTRACE_PORT="${REDTRACE_PORT:-8000}"
+case "$PROJECT_DIR" in
+  "$HOME/Downloads/"*|"$HOME/Desktop/"*|"$HOME/Documents/"*)
+    DEFAULT_USE_LAUNCHD=0
+    ;;
+  *)
+    DEFAULT_USE_LAUNCHD=1
+    ;;
+esac
+REDTRACE_USE_LAUNCHD="${REDTRACE_USE_LAUNCHD:-$DEFAULT_USE_LAUNCHD}"
+BRAVE_SKILL_DIR="$PROJECT_DIR/skills/brave-search"
 
 log() { printf '[RedTrace] %s\n' "$*"; }
 warn() { printf '[RedTrace] WARNING: %s\n' "$*" >&2; }
@@ -239,6 +249,18 @@ install_skill_python_dependencies() {
   done
 }
 
+ensure_brave_search_skill() {
+  [[ -f "$BRAVE_SKILL_DIR/SKILL.md" ]] || die "brave-search SKILL.md is missing"
+  [[ -f "$BRAVE_SKILL_DIR/package-lock.json" ]] || die "brave-search package-lock.json is missing"
+  if npm --prefix "$BRAVE_SKILL_DIR" ls --depth=0 >/dev/null 2>&1; then
+    log "brave-search Node dependencies are already installed"
+  else
+    log "installing brave-search Node dependencies"
+    npm ci --prefix "$BRAVE_SKILL_DIR" --registry="$NPM_REGISTRY"
+  fi
+  chmod +x "$BRAVE_SKILL_DIR/search.js" "$BRAVE_SKILL_DIR/content.js"
+}
+
 install_optional_language_tools() {
   local gem_name
   for gem_name in one_gadget zsteg; do
@@ -249,6 +271,7 @@ install_optional_language_tools() {
 
 prepare_local_config() {
   if [[ -f "$CONFIG_PATH" ]]; then
+    chmod 600 "$CONFIG_PATH"
     log "using existing local config: $CONFIG_PATH"
     return
   fi
@@ -259,7 +282,90 @@ prepare_local_config() {
     { print }
   ' "$CONFIG_PATH" >"$CONFIG_PATH.tmp.$$"
   mv -- "$CONFIG_PATH.tmp.$$" "$CONFIG_PATH"
+  chmod 600 "$CONFIG_PATH"
   log "created local config: $CONFIG_PATH"
+}
+
+configure_brave_search_secret() {
+  local api_key="${BRAVE_API_KEY:-}"
+  if [[ -z "$api_key" ]]; then
+    if uv run --project "$PROJECT_DIR/redtrace" python - "$CONFIG_PATH" <<'PY'
+import sys
+import yaml
+
+from redtrace.config_secrets import secret_id_from_reference
+from redtrace.worker_config import WorkerConfigService
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    raw = yaml.safe_load(handle) or {}
+value = (raw.get("common_env") or {}).get("BRAVE_API_KEY")
+if secret_id_from_reference(value):
+    raise SystemExit(0)
+if isinstance(value, str) and value:
+    WorkerConfigService(sys.argv[1]).set_common_env_secret("BRAVE_API_KEY", value)
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+    then
+      log "BRAVE_API_KEY is already configured for all local workers"
+      return
+    fi
+    warn "BRAVE_API_KEY is not configured; export it and rerun to enable brave-search"
+    return
+  fi
+
+  BRAVE_API_KEY="$api_key" uv run --project "$PROJECT_DIR/redtrace" python - "$CONFIG_PATH" <<'PY'
+import os
+import sys
+
+from redtrace.worker_config import WorkerConfigService
+
+WorkerConfigService(sys.argv[1]).set_common_env_secret(
+    "BRAVE_API_KEY",
+    os.environ["BRAVE_API_KEY"],
+)
+PY
+  unset BRAVE_API_KEY
+  log "stored BRAVE_API_KEY in the encrypted local Worker configuration"
+}
+
+test_brave_search_skill() {
+  [[ "${REDTRACE_SKIP_BRAVE_TEST:-0}" == "1" ]] && {
+    log "skipping brave-search API test (REDTRACE_SKIP_BRAVE_TEST=1)"
+    return
+  }
+
+  local api_key attempt
+  api_key="$(
+    uv run --project "$PROJECT_DIR/redtrace" python - "$CONFIG_PATH" <<'PY'
+import sys
+from pathlib import Path
+
+from redtrace.dispatcher.config import DispatchConfig
+
+print(
+    DispatchConfig.load(Path(sys.argv[1])).common_env.get("BRAVE_API_KEY", "")
+)
+PY
+  )"
+  if [[ -z "$api_key" ]]; then
+    warn "brave-search API test skipped because BRAVE_API_KEY is not configured"
+    return
+  fi
+
+  log "testing brave-search API"
+  for attempt in 1 2 3; do
+    if BRAVE_API_KEY="$api_key" node "$BRAVE_SKILL_DIR/search.js" \
+      "RedTrace collaborative agent framework" -n 1 >/dev/null; then
+      unset api_key
+      log "brave-search API test passed"
+      return
+    fi
+    warn "brave-search API test attempt $attempt failed"
+    ((attempt < 3)) && sleep 2
+  done
+  unset api_key
+  die "brave-search API test failed after 3 attempts"
 }
 
 pid_is_running() {
@@ -279,11 +385,148 @@ start_component() {
   fi
   rm -f -- "$pid_file"
   log "starting $name"
-  nohup "$@" >"$LOG_DIR/$name.log" 2>&1 &
-  pid=$!
-  printf '%s\n' "$pid" >"$pid_file"
+  uv run --project "$PROJECT_DIR/redtrace" python - \
+    "$PROJECT_DIR" "$pid_file" "$LOG_DIR/$name.log" "$@" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+working_directory, pid_path, log_path, *arguments = sys.argv[1:]
+first_child = os.fork()
+if first_child:
+    _, status = os.waitpid(first_child, 0)
+    raise SystemExit(os.waitstatus_to_exitcode(status))
+
+os.setsid()
+daemon_pid = os.fork()
+if daemon_pid:
+    path = Path(pid_path)
+    temporary = path.with_suffix(".pid.tmp")
+    temporary.write_text(f"{daemon_pid}\n", encoding="utf-8")
+    temporary.replace(path)
+    os._exit(0)
+
+os.chdir(working_directory)
+stdin = os.open(os.devnull, os.O_RDONLY)
+output = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+os.dup2(stdin, 0)
+os.dup2(output, 1)
+os.dup2(output, 2)
+os.close(stdin)
+os.close(output)
+os.execvpe(arguments[0], arguments, os.environ.copy())
+PY
+  pid="$(cat "$pid_file")"
   sleep 1
   kill -0 "$pid" 2>/dev/null || { tail -n 40 "$LOG_DIR/$name.log" >&2 || true; die "$name failed to start"; }
+}
+
+write_launch_agent() {
+  local label="$1" log_path="$2" plist_path="$3"
+  shift 3
+  uv run --project "$PROJECT_DIR/redtrace" python - \
+    "$plist_path" "$label" "$PROJECT_DIR" "$log_path" "$CONFIG_PATH" \
+    "${REDTRACE_CONFIG_SECRETS_DIR:-$PROJECT_DIR/.redtrace-secrets}" \
+    "$HOME" "$WORKER_PATH:$PATH" "$REDTRACE_LOCAL_PATH_PREPEND" "$@" <<'PY'
+import plistlib
+import sys
+from pathlib import Path
+
+(
+    plist_path,
+    label,
+    working_directory,
+    log_path,
+    config_path,
+    secrets_directory,
+    home_directory,
+    process_path,
+    worker_path,
+    *arguments,
+) = sys.argv[1:]
+payload = {
+    "Label": label,
+    "ProgramArguments": arguments,
+    "WorkingDirectory": working_directory,
+    "EnvironmentVariables": {
+        "PATH": process_path,
+        "HOME": home_directory,
+        "REDTRACE_DISPATCH_CONFIG": config_path,
+        "REDTRACE_CONFIG_SECRETS_DIR": secrets_directory,
+        "REDTRACE_LOCAL_PATH_PREPEND": worker_path,
+        "PYTHONUNBUFFERED": "1",
+    },
+    "RunAtLoad": True,
+    "KeepAlive": True,
+    "ProcessType": "Background",
+    "ThrottleInterval": 5,
+    "StandardOutPath": log_path,
+    "StandardErrorPath": log_path,
+}
+path = Path(plist_path)
+path.parent.mkdir(parents=True, exist_ok=True)
+temporary = path.with_suffix(".plist.tmp")
+with temporary.open("wb") as handle:
+    plistlib.dump(payload, handle, sort_keys=False)
+temporary.replace(path)
+path.chmod(0o600)
+PY
+}
+
+launchd_pid() {
+  local label="$1"
+  launchctl print "gui/$(id -u)/$label" 2>/dev/null \
+    | awk '/^[[:space:]]*pid = / { print $3; exit }'
+}
+
+stop_launch_agents() {
+  local uid_value
+  uid_value="$(id -u)"
+  launchctl bootout "gui/$uid_value/com.redtrace.dispatcher" >/dev/null 2>&1 || true
+  launchctl bootout "gui/$uid_value/com.redtrace.server" >/dev/null 2>&1 || true
+}
+
+start_launch_agents() {
+  local uid_value uv_path agent_dir server_label dispatcher_label
+  local server_plist dispatcher_plist server_pid dispatcher_pid
+  uid_value="$(id -u)"
+  uv_path="$(command -v uv)"
+  agent_dir="$HOME/Library/LaunchAgents"
+  server_label="com.redtrace.server"
+  dispatcher_label="com.redtrace.dispatcher"
+  server_plist="$agent_dir/$server_label.plist"
+  dispatcher_plist="$agent_dir/$dispatcher_label.plist"
+
+  write_launch_agent \
+    "$server_label" "$LOG_DIR/server.log" "$server_plist" \
+    "$uv_path" run --project "$PROJECT_DIR/redtrace" redtrace serve \
+    --host "$REDTRACE_HOST" --port "$REDTRACE_PORT"
+  write_launch_agent \
+    "$dispatcher_label" "$LOG_DIR/dispatcher.log" "$dispatcher_plist" \
+    "$uv_path" run --project "$PROJECT_DIR/redtrace" redtrace dispatch \
+    --config "$CONFIG_PATH"
+
+  stop_launch_agents
+  log "starting server with launchd"
+  launchctl bootstrap "gui/$uid_value" "$server_plist"
+
+  log "waiting for RedTrace server"
+  for _ in $(seq 1 40); do
+    curl -fsS "http://127.0.0.1:$REDTRACE_PORT/projects" >/dev/null 2>&1 && break
+    sleep 1
+  done
+  curl -fsS "http://127.0.0.1:$REDTRACE_PORT/projects" >/dev/null 2>&1 \
+    || { tail -n 40 "$LOG_DIR/server.log" >&2 || true; die "server health check timed out"; }
+
+  log "starting dispatcher with launchd"
+  launchctl bootstrap "gui/$uid_value" "$dispatcher_plist"
+  sleep 2
+  server_pid="$(launchd_pid "$server_label")"
+  dispatcher_pid="$(launchd_pid "$dispatcher_label")"
+  [[ "$server_pid" =~ ^[0-9]+$ ]] || die "launchd server has no running pid"
+  [[ "$dispatcher_pid" =~ ^[0-9]+$ ]] || die "launchd dispatcher has no running pid"
+  printf '%s\n' "$server_pid" >"$RUN_DIR/server.pid"
+  printf '%s\n' "$dispatcher_pid" >"$RUN_DIR/dispatcher.pid"
 }
 
 ensure_command_line_tools
@@ -326,9 +569,14 @@ ensure_npm_cli codex '@openai/codex@latest'
 ensure_npm_cli pi '@earendil-works/pi-coding-agent@latest' --ignore-scripts
 ensure_pi_mcp_extension
 ensure_rtk
-configure_native_build_env
-install_skill_python_dependencies
-install_optional_language_tools
+ensure_brave_search_skill
+if [[ "${REDTRACE_SKIP_OPTIONAL_TOOLS:-0}" != "1" ]]; then
+  configure_native_build_env
+  install_skill_python_dependencies
+  install_optional_language_tools
+else
+  log "skipping optional Python and Ruby security tools"
+fi
 
 log "syncing RedTrace Python environment"
 if ! UV_INDEX_URL="$PYPI_INDEX" uv sync --frozen --project "$PROJECT_DIR/redtrace"; then
@@ -336,6 +584,8 @@ if ! UV_INDEX_URL="$PYPI_INDEX" uv sync --frozen --project "$PROJECT_DIR/redtrac
   UV_INDEX_URL=https://pypi.org/simple uv sync --frozen --project "$PROJECT_DIR/redtrace"
 fi
 prepare_local_config
+configure_brave_search_secret
+test_brave_search_skill
 
 mkdir -p "$RUN_DIR" "$LOG_DIR" "$PROJECT_DIR/workspaces"
 GEM_BIN="$(ruby -e 'print Gem.user_dir')/bin"
@@ -343,22 +593,27 @@ WORKER_PATH="$TOOL_VENV/bin:$HOME/.local/bin:$HOME/go/bin:$GEM_BIN:$(brew --pref
 export REDTRACE_LOCAL_PATH_PREPEND="$WORKER_PATH"
 export REDTRACE_DISPATCH_CONFIG="$CONFIG_PATH"
 
-start_component server \
-  uv run --project "$PROJECT_DIR/redtrace" redtrace serve --host "$REDTRACE_HOST" --port "$REDTRACE_PORT"
+if [[ "$REDTRACE_USE_LAUNCHD" == "1" ]]; then
+  start_launch_agents
+else
+  stop_launch_agents
+  start_component server \
+    uv run --project "$PROJECT_DIR/redtrace" redtrace serve --host "$REDTRACE_HOST" --port "$REDTRACE_PORT"
 
-log "waiting for RedTrace server"
-server_ready=0
-for _ in $(seq 1 40); do
-  if curl -fsS "http://127.0.0.1:$REDTRACE_PORT/projects" >/dev/null 2>&1; then
-    server_ready=1
-    break
-  fi
-  sleep 1
-done
-((server_ready == 1)) || { tail -n 40 "$LOG_DIR/server.log" >&2 || true; die "server health check timed out"; }
+  log "waiting for RedTrace server"
+  server_ready=0
+  for _ in $(seq 1 40); do
+    if curl -fsS "http://127.0.0.1:$REDTRACE_PORT/projects" >/dev/null 2>&1; then
+      server_ready=1
+      break
+    fi
+    sleep 1
+  done
+  ((server_ready == 1)) || { tail -n 40 "$LOG_DIR/server.log" >&2 || true; die "server health check timed out"; }
 
-start_component dispatcher \
-  uv run --project "$PROJECT_DIR/redtrace" redtrace dispatch --config "$CONFIG_PATH"
+  start_component dispatcher \
+    uv run --project "$PROJECT_DIR/redtrace" redtrace dispatch --config "$CONFIG_PATH"
+fi
 
 UI_URL="http://127.0.0.1:$REDTRACE_PORT"
 cat <<SUMMARY
@@ -375,10 +630,19 @@ Optional controls:
   REDTRACE_SKIP_OPTIONAL_TOOLS=1  Skip the large security-tool set
   REDTRACE_INSTALL_CASKS=1        Install Wireshark and Android platform tools
   REDTRACE_SKIP_BREW_UPDATE=1     Skip brew update
+  REDTRACE_SKIP_BRAVE_TEST=1      Skip the brave-search API smoke test
+  REDTRACE_USE_LAUNCHD=0          Use detached processes instead of launchd
   REDTRACE_NO_OPEN=1              Do not open the browser automatically
 
 Stop with:
-  kill $(cat "$RUN_DIR/server.pid") $(cat "$RUN_DIR/dispatcher.pid")
+$(
+  if [[ "$REDTRACE_USE_LAUNCHD" == "1" ]]; then
+    printf '  launchctl bootout gui/%s/com.redtrace.dispatcher\n' "$(id -u)"
+    printf '  launchctl bootout gui/%s/com.redtrace.server\n' "$(id -u)"
+  else
+    printf '  kill %s %s\n' "$(cat "$RUN_DIR/server.pid")" "$(cat "$RUN_DIR/dispatcher.pid")"
+  fi
+)
 SUMMARY
 
 [[ "${REDTRACE_NO_OPEN:-0}" == "1" ]] || open "$UI_URL" >/dev/null 2>&1 || true

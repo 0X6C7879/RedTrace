@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from redtrace.capabilities import (
+    BLACKBOARD_CLI_PATH,
     CLAUDE_MCP_PATH,
     CONTEXT_CLI_PATH,
     MANIFEST_PATH,
@@ -16,6 +17,7 @@ from redtrace.capabilities import (
     PI_MCP_PATH,
     PI_PROVIDER_EXTENSION_PATH,
     PLUGIN_CATALOG_PATH,
+    RESOURCE_CLI_PATH,
     SKILL_CLI_PATH,
     CapabilityStore,
     build_claude_mcp,
@@ -257,6 +259,7 @@ def test_drivers_keep_native_features_and_add_shared_mcp(monkeypatch, tmp_path: 
 
     pi = PiDriver(local=True).build_execute(_worker("pi"), "PROMPT", None).argv
     assert PI_MCP_EXTENSION in pi
+    assert "--approve" in pi
     assert "--no-extensions" not in pi
     assert "--no-skills" not in pi
     assert "--tools" not in pi
@@ -342,9 +345,12 @@ def test_container_reuses_frozen_snapshot_after_dispatcher_restart(tmp_path: Pat
             ".redtrace",
             ".redtrace/bin",
             ".redtrace/pi",
+            BLACKBOARD_CLI_PATH,
             CONTEXT_CLI_PATH,
             MANIFEST_PATH,
             PI_PROVIDER_EXTENSION_PATH,
+            RESOURCE_CLI_PATH,
+            SKILL_CLI_PATH,
         }
     assert manifest["digest"] == "frozen-digest"
     assert manifest["snapshotFrozen"] is True

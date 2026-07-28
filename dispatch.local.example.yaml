@@ -1,4 +1,5 @@
-# Local execution example — workers directly invoke the host claude / codex / pi CLIs.
+# Default deployment: Windows WSL, Kali Linux, running as root. Workers directly invoke
+# the host claude / codex / pi CLIs without adding another agent sandbox.
 # A complete per-Worker Endpoint + API Key + Model override takes precedence for only that
 # process. If all three are omitted, the CLI's existing login and global config are used.
 # HOME and each CLI's user config directory are preserved in both cases.
@@ -23,27 +24,27 @@ runtime:
   max_running_projects: 2
   max_project_workers: 3
   interval: 3
-  healthcheck_timeout: 15
+  healthcheck_timeout: 60
   prompt_group: "default"
 
 tasks:
   bootstrap:
-    timeout: 120
-    conclude_timeout: 30
+    timeout: 1800
+    conclude_timeout: 300
   reason:
-    timeout: 45
+    timeout: 300
   explore:
-    timeout: 600
-    conclude_timeout: 120
+    timeout: 1800
+    conclude_timeout: 300
 
 context_harness:
   enabled: true
   artifact_root: ".redtrace/artifacts/context"
-  inline_bytes: 32768
-  visible_bytes: 8192
-  query_bytes: 65536
-  parse_bytes: 16777216
-  worker_output_chars: 8388608
+  inline_bytes: 262144
+  visible_bytes: 65536
+  query_bytes: 1048576
+  parse_bytes: 67108864
+  worker_output_chars: 33554432
 
 # Optional. If omitted: workspace_root defaults to the dispatcher's current directory,
 # completed_action defaults to keep. Each project gets an isolated <workspace_root>/<project_id>/.
@@ -56,6 +57,7 @@ local:
 # CLIs need at runtime, e.g. an outbound proxy. (Alternatively just `export` them in the
 # shell that starts the dispatcher — local workers inherit that environment.)
 # common_env:
+#   BRAVE_API_KEY: "replace-me"  # native Claude/Codex web search is preferred
 #   https_proxy: "http://127.0.0.1:7897"
 #   http_proxy: "http://127.0.0.1:7897"
 #   all_proxy: "http://127.0.0.1:7897"
@@ -96,3 +98,4 @@ workers:
   #     PI_API_KEY: "replace-me"
   #     PI_MODEL: "pi-model-id"
   #     PI_PROVIDER_API: "openai-completions"
+  #     PI_MODEL_CONTEXT_WINDOW: "1000000"

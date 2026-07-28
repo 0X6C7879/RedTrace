@@ -116,6 +116,7 @@ def test_pi_driver_builds_models_from_environment_without_key_in_argv() -> None:
     assert PI_PROVIDER_EXTENSION_PATH in result.argv
     assert "secret" not in result.argv
     assert PI_MCP_EXTENSION in result.argv
+    assert "--approve" in result.argv
     assert "--tools" not in result.argv
     assert "--no-skills" not in result.argv
     assert result.argv[-2:] == ["-p", "prompt"]
@@ -165,6 +166,9 @@ def test_local_pi_and_codex_use_complete_provider_config_without_exposing_key() 
 
     assert "--model" in codex_argv
     assert 'model_provider="redtrace"' in codex_argv
+    assert 'web_search="live"' in codex_argv
+    assert "model_context_window=1000000" in codex_argv
+    assert "model_auto_compact_token_limit=900000" in codex_argv
     assert "codex-secret" not in codex_argv
 
 
@@ -258,6 +262,36 @@ def test_claude_driver_uses_configured_model_and_native_fallback() -> None:
     assert "--json-schema" in native_argv
 
 
+def test_claude_driver_root_mode_is_noninteractive_and_allows_native_web(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "redtrace.dispatcher.workers.adapters.claudecode.os.geteuid",
+        lambda: 0,
+    )
+    argv = ClaudeCodeDriver().build_execute(
+        WorkerConfig.model_validate(
+            {
+                "name": "claude",
+                "type": "claudecode",
+                "task_types": ["explore"],
+                "max_running": 1,
+                "priority": 0,
+            }
+        ),
+        "prompt",
+        "session",
+    ).argv
+
+    assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
+    allowed_index = argv.index("--allowedTools")
+    allowed = argv[allowed_index + 1 : argv.index("--output-format")]
+    assert "WebFetch" in allowed
+    assert "WebSearch" in allowed
+    assert "Bash(*)" in allowed
+    assert "--dangerously-skip-permissions" not in argv
+
+
 def test_claude_driver_extracts_structured_stream_result() -> None:
     stdout = "\n".join(
         [
@@ -295,4 +329,7 @@ def test_codex_driver_execute_argv_passes_model_endpoint_and_prompt() -> None:
     assert "--model" in argv
     assert "gpt-test" in argv
     assert 'model_providers.redtrace.base_url="http://api/v1"' in argv
+    assert 'web_search="live"' in argv
+    assert "model_context_window=1000000" in argv
+    assert "model_auto_compact_token_limit=900000" in argv
     assert argv[-2:] == ["--", "prompt"]

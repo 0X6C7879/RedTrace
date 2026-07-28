@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 
 from redtrace.capabilities import CapabilityStore, codex_mcp_overrides
-from redtrace.dispatcher.config import WorkerConfig
+from redtrace.dispatcher.config import (
+    DEFAULT_MODEL_AUTO_COMPACT_TOKEN_LIMIT,
+    DEFAULT_MODEL_CONTEXT_WINDOW,
+    WorkerConfig,
+)
 from redtrace.dispatcher.workers.base import DriverResult, RegexSessionDriver
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
 
@@ -16,6 +20,22 @@ class CodexDriver(RegexSessionDriver):
 
     def local_binary(self) -> str | None:
         return "codex"
+
+    @staticmethod
+    def _long_task_args() -> list[str]:
+        return [
+            "-c",
+            'web_search="live"',
+            "-c",
+            f"model_context_window={DEFAULT_MODEL_CONTEXT_WINDOW}",
+            "-c",
+            (
+                "model_auto_compact_token_limit="
+                f"{DEFAULT_MODEL_AUTO_COMPACT_TOKEN_LIMIT}"
+            ),
+            "-c",
+            'model_auto_compact_token_limit_scope="total"',
+        ]
 
     def check_health(self, worker: WorkerConfig, *, timeout: float) -> HealthResult:
         env = worker.env
@@ -46,6 +66,7 @@ class CodexDriver(RegexSessionDriver):
                     "exec",
                     "--json",
                     "--dangerously-bypass-approvals-and-sandbox",
+                    *self._long_task_args(),
                     *capability_args,
                     "--",
                     prompt,
@@ -58,6 +79,7 @@ class CodexDriver(RegexSessionDriver):
                 "exec",
                 "--json",
                 "--dangerously-bypass-approvals-and-sandbox",
+                *self._long_task_args(),
                 "--model",
                 env["CODEX_MODEL"],
                 "-c",
@@ -88,6 +110,7 @@ class CodexDriver(RegexSessionDriver):
                 "resume",
                 session,
                 "--dangerously-bypass-approvals-and-sandbox",
+                *self._long_task_args(),
                 *capability_args,
                 "--",
                 prompt,
@@ -100,6 +123,7 @@ class CodexDriver(RegexSessionDriver):
             "resume",
             session,
             "--dangerously-bypass-approvals-and-sandbox",
+            *self._long_task_args(),
             "--model",
             env["CODEX_MODEL"],
             "-c",

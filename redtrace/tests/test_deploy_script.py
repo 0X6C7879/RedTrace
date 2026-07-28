@@ -25,3 +25,26 @@ def test_local_deploy_script_is_self_contained_and_idempotent() -> None:
     assert "uv sync --frozen" in script
     assert "REDTRACE_LOCAL_PATH_PREPEND" in script
     assert "pid_is_running" in script
+    assert "detected Windows WSL" in script
+    assert "ensure_brave_search_skill" in script
+    assert "set_common_env_secret" in script
+    assert "test_brave_search_skill" in script
+    assert "REDTRACE_SKIP_BRAVE_TEST" in script
+    assert 'chmod 600 "$CONFIG_PATH"' in script
+
+
+def test_macos_deploy_configures_and_tests_brave_search_securely() -> None:
+    script = (REPO_ROOT / "deploy-macos.sh").read_text(encoding="utf-8")
+
+    assert "ensure_brave_search_skill" in script
+    assert "npm ci --prefix" in script
+    assert "set_common_env_secret" in script
+    assert "test_brave_search_skill" in script
+    assert "REDTRACE_SKIP_BRAVE_TEST" in script
+    assert "skipping optional Python and Ruby security tools" in script
+    assert "start_launch_agents" in script
+    assert "launchctl bootstrap" in script
+    assert "KeepAlive" in script
+    assert "DEFAULT_USE_LAUNCHD" in script
+    assert "os.setsid()" in script
+    assert 'chmod 600 "$CONFIG_PATH"' in script

@@ -706,14 +706,21 @@ curl -sS --fail -o /dev/null \
 第一阶段执行：
 
 ```bash
-claude --session-id "{session}" --dangerously-skip-permissions -p -- "{prompt}"
+claude --session-id "{session}" --permission-mode dontAsk \
+  --allowedTools "Bash(*)" Read Edit Write Glob Grep NotebookEdit Agent Task Skill WebFetch WebSearch "mcp__*" \
+  -p -- "{prompt}"
 ```
 
 二阶段收尾：
 
 ```bash
-claude -r "{session}" --dangerously-skip-permissions -p -- "{prompt}"
+claude -r "{session}" --permission-mode dontAsk \
+  --allowedTools "Bash(*)" Read Edit Write Glob Grep NotebookEdit Agent Task Skill WebFetch WebSearch "mcp__*" \
+  -p -- "{prompt}"
 ```
+
+以上为默认 WSL root 路径；Claude Code 禁止 root 使用
+`--dangerously-skip-permissions`。非 root 本地模式仍使用该原生 bypass 参数。
 
 #### `codex` driver
 
@@ -743,6 +750,10 @@ curl -sS --fail -o /dev/null \
 
 ```bash
 codex exec --dangerously-bypass-approvals-and-sandbox --model "{env.CODEX_MODEL}" \
+  -c 'web_search="live"' \
+  -c 'model_context_window=1000000' \
+  -c 'model_auto_compact_token_limit=900000' \
+  -c 'model_auto_compact_token_limit_scope="total"' \
   -c 'model_provider="redtrace"' \
   -c 'model_providers.redtrace.name="redtrace"' \
   -c 'model_providers.redtrace.wire_api="responses"' \
@@ -756,6 +767,10 @@ codex exec --dangerously-bypass-approvals-and-sandbox --model "{env.CODEX_MODEL}
 
 ```bash
 codex exec resume "{session}" --dangerously-bypass-approvals-and-sandbox --model "{env.CODEX_MODEL}" \
+  -c 'web_search="live"' \
+  -c 'model_context_window=1000000' \
+  -c 'model_auto_compact_token_limit=900000' \
+  -c 'model_auto_compact_token_limit_scope="total"' \
   -c 'model_provider="redtrace"' \
   -c 'model_providers.redtrace.name="redtrace"' \
   -c 'model_providers.redtrace.wire_api="responses"' \
@@ -949,19 +964,19 @@ runtime:
   max_running_projects: 3  # total active projects admitted by this dispatcher runtime
   max_project_workers: 2  # per-project running tasks, including bootstrap + reason + explore
   interval: 3  # intentional shared cadence: scheduler loop interval + claim-task heartbeat interval, in seconds
-  healthcheck_timeout: 15  # shared watchdog for all worker healthchecks, in seconds
+  healthcheck_timeout: 60  # shared watchdog for all worker healthchecks, in seconds
   worker_healthcheck: "startup_only"  # startup_and_task | startup_only | disabled
   prompt_group: "default"  # selects prompts/<group>/
 
 tasks:
   bootstrap:
-    timeout: 120
-    conclude_timeout: 30
+    timeout: 1800
+    conclude_timeout: 300
   reason:
-    timeout: 45
+    timeout: 300
   explore:
-    timeout: 600
-    conclude_timeout: 120
+    timeout: 1800
+    conclude_timeout: 300
 
 container:
   image: "tmp:latest"

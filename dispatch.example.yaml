@@ -5,6 +5,7 @@ server: "http://redtrace-server:8000"
 common_env:
   TSEC_SERVER_HOST: "<SERVER_HOST>:8000"
   TSEC_AGENT_TOKEN: "xxx"
+  # BRAVE_API_KEY: "replace-me"  # fallback after native Claude/Codex web search
 
 runtime:
   # Scheduler tick interval in seconds.
@@ -16,7 +17,7 @@ runtime:
   # Per-project worker cap. Prevents one project from monopolizing the whole dispatcher.
   max_project_workers: 4
   # Timeout for each enabled worker healthcheck.
-  healthcheck_timeout: 20
+  healthcheck_timeout: 60
   # "startup_and_task" checks at dispatcher startup and before every task.
   # "startup_only" checks only at startup. "disabled" skips automatic worker checks.
   worker_healthcheck: "startup_only"
@@ -26,9 +27,9 @@ runtime:
 tasks:
   bootstrap:
     # Main execution timeout for the initial direct solve attempt.
-    timeout: 300
+    timeout: 1800
     # Time budget for conclude fallback after the main phase times out or returns unusable output.
-    conclude_timeout: 90
+    conclude_timeout: 300
   reason:
     # Reason decides whether the goal is met and whether new intents should be proposed.
     timeout: 300
@@ -36,9 +37,9 @@ tasks:
     max_intents: 2
   explore:
     # Main execution timeout for exploring a claimed intent.
-    timeout: 300
+    timeout: 1800
     # Time budget for conclude fallback used to summarize confirmed findings from the same session.
-    conclude_timeout: 90
+    conclude_timeout: 300
 
 context_harness:
   # Shared post-RTK layer for Claude Code, Codex, and Pi. Set false for raw execution.
@@ -46,12 +47,12 @@ context_harness:
   # Complete security/HTTP/Web output is stored inside the task workspace.
   artifact_root: ".redtrace/artifacts/context"
   # Small plain text remains transparent; structured Web/security data is summarized.
-  inline_bytes: 32768
-  visible_bytes: 8192
-  query_bytes: 65536
-  parse_bytes: 16777216
+  inline_bytes: 262144
+  visible_bytes: 65536
+  query_bytes: 1048576
+  parse_bytes: 67108864
   # Bounded prefix+tail retained from each outer Worker stdout/stderr stream.
-  worker_output_chars: 8388608
+  worker_output_chars: 33554432
 
 container:
   # Base worker container. The dispatcher execs agent commands inside one container per project.
@@ -98,4 +99,4 @@ workers:
   #     PI_BASE_URL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
   #     PI_API_KEY: "sk-xxx"
   #     PI_PROVIDER_API: "openai-completions"
-  #     PI_MODEL_CONTEXT_WINDOW: "262144"
+  #     PI_MODEL_CONTEXT_WINDOW: "1000000"

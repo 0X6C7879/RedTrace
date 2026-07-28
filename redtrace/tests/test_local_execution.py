@@ -347,6 +347,17 @@ def test_shipped_local_example_config_is_valid() -> None:
     assert config.container is None
     assert config.local is not None
     assert config.local.completed_action == "keep"
+    assert config.runtime.healthcheck_timeout == 60
+    assert config.tasks.bootstrap.timeout == 1800
+    assert config.tasks.bootstrap.conclude_timeout == 300
+    assert config.tasks.reason.timeout == 300
+    assert config.tasks.explore.timeout == 1800
+    assert config.tasks.explore.conclude_timeout == 300
+    assert config.context_harness.inline_bytes == 256 * 1024
+    assert config.context_harness.visible_bytes == 64 * 1024
+    assert config.context_harness.query_bytes == 1024 * 1024
+    assert config.context_harness.parse_bytes == 64 * 1024 * 1024
+    assert config.context_harness.worker_output_chars == 32 * 1024 * 1024
 
 
 # --------------------------------------------------------------------------- startup CLI check
@@ -387,7 +398,16 @@ def test_codex_local_driver_omits_provider_injection() -> None:
     worker = _bare_worker("codex")
     argv = CodexDriver(local=True).build_execute(worker, "PROMPT", None).argv
 
-    assert argv == ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--", "PROMPT"]
+    assert argv[:4] == [
+        "codex",
+        "exec",
+        "--json",
+        "--dangerously-bypass-approvals-and-sandbox",
+    ]
+    assert 'web_search="live"' in argv
+    assert "model_context_window=1000000" in argv
+    assert "model_auto_compact_token_limit=900000" in argv
+    assert argv[-2:] == ["--", "PROMPT"]
     assert not any("model_providers" in part for part in argv)
     assert "--model" not in argv
 
@@ -402,6 +422,7 @@ def test_pi_local_driver_omits_models_json_and_provider() -> None:
     argv = PiDriver(local=True).build_execute(worker, "PROMPT", None).argv
 
     assert argv[0] == "pi"
+    assert "--approve" in argv
     assert "--provider" not in argv
     assert "--model" not in argv
     assert argv[-2:] == ["-p", "PROMPT"]

@@ -41,6 +41,7 @@ from redtrace.native_cli_config import (
 )
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 TASK_TYPES = frozenset({"bootstrap", "reason", "explore"})
 EDITABLE_WORKER_TYPES = frozenset({"claudecode", "codex", "pi"})
 LOCK_TIMEOUT_SECONDS = 10.0
@@ -429,7 +430,7 @@ class WorkerConnectionTester:
                     [path, "--version"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    timeout=min(config.runtime.healthcheck_timeout, 15),
+                    timeout=config.runtime.healthcheck_timeout,
                     check=False,
                 )
             except (OSError, subprocess.SubprocessError):
@@ -493,6 +494,34 @@ class WorkerConfigService:
             "cli_config_home": str(self.cli_config_home),
             "workers": workers,
         }
+
+    def set_common_env_secret(self, name: str, value: str) -> None:
+        """Persist a shared Worker environment value in the encrypted store."""
+        name = name.strip()
+        if not ENV_NAME_PATTERN.fullmatch(name):
+            raise WorkerConfigError(
+                "shared secret name must match ^[A-Z_][A-Z0-9_]*$"
+            )
+        if not value or len(value) > 4096:
+            raise WorkerConfigError(
+                "shared secret value must contain between 1 and 4096 characters"
+            )
+
+        raw, revision = _read_raw(self.path)
+        common_env = raw.get("common_env")
+        if common_env is None:
+            common_env = {}
+        if not isinstance(common_env, dict):
+            raise WorkerConfigError("common_env must be an object")
+
+        secrets = self.secrets.load()
+        existing_secret_id = secret_id_from_reference(common_env.get(name))
+        secret_id = existing_secret_id or token_hex(16)
+        updated_secrets = {**secrets, secret_id: value}
+        updated_common_env = deepcopy(common_env)
+        updated_common_env[name] = secret_reference(secret_id)
+        raw["common_env"] = updated_common_env
+        self._commit(raw, revision, secrets=updated_secrets)
 
     def test_payload(
         self,

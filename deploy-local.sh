@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# RedTrace local-mode bootstrap for a fresh Ubuntu or Kali Linux host.
-# Run as the same user that should own and reuse the Claude/Codex/Pi login state.
+# RedTrace local-mode bootstrap. The primary deployment target is Kali running
+# as root inside Windows WSL; Ubuntu and non-root Linux remain supported.
 set -Eeuo pipefail
 
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,6 +10,7 @@ LOG_DIR="$PROJECT_DIR/.redtrace/log"
 TOOL_VENV="${REDTRACE_TOOL_VENV:-$HOME/.local/share/redtrace-tools}"
 NPM_REGISTRY="${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}"
 PYPI_INDEX="${UV_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
+BRAVE_SKILL_DIR="$PROJECT_DIR/skills/brave-search"
 
 log() { printf '[RedTrace] %s\n' "$*"; }
 warn() { printf '[RedTrace] WARNING: %s\n' "$*" >&2; }
@@ -32,9 +33,16 @@ case "$DISTRO_ID" in
   *) die "supported distributions are Ubuntu and Kali; detected: ${DISTRO_ID:-unknown}" ;;
 esac
 
+if grep -qi microsoft /proc/version 2>/dev/null; then
+  log "detected Windows WSL"
+else
+  warn "the primary deployment target is Windows WSL; continuing on native Linux"
+fi
+
 if (( EUID == 0 )); then
   SUDO=()
 else
+  warn "the primary Kali/WSL deployment runs as root; continuing with sudo"
   has sudo || die "sudo is required for apt source and package setup"
   SUDO=(sudo)
 fi
@@ -241,6 +249,18 @@ ensure_pi_mcp_extension() {
   pi install npm:pi-mcp-extension@1.5.0
 }
 
+ensure_brave_search_skill() {
+  [[ -f "$BRAVE_SKILL_DIR/SKILL.md" ]] || die "brave-search SKILL.md is missing"
+  [[ -f "$BRAVE_SKILL_DIR/package-lock.json" ]] || die "brave-search package-lock.json is missing"
+  if npm --prefix "$BRAVE_SKILL_DIR" ls --depth=0 >/dev/null 2>&1; then
+    log "brave-search Node dependencies are already installed"
+  else
+    log "installing brave-search Node dependencies"
+    npm ci --prefix "$BRAVE_SKILL_DIR" --registry="$NPM_REGISTRY"
+  fi
+  chmod +x "$BRAVE_SKILL_DIR/search.js" "$BRAVE_SKILL_DIR/content.js"
+}
+
 install_skill_python_dependencies() {
   local python="$TOOL_VENV/bin/python"
   if [[ ! -x "$python" ]]; then
@@ -336,6 +356,88 @@ prepare_local_config() {
   log "created local config: $CONFIG_PATH"
 }
 
+configure_brave_search_secret() {
+  local api_key="${BRAVE_API_KEY:-}"
+  if [[ -z "$api_key" ]]; then
+    if uv run --project "$PROJECT_DIR/redtrace" python - "$CONFIG_PATH" <<'PY'
+import sys
+import yaml
+
+from redtrace.config_secrets import secret_id_from_reference
+from redtrace.worker_config import WorkerConfigService
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    raw = yaml.safe_load(handle) or {}
+value = (raw.get("common_env") or {}).get("BRAVE_API_KEY")
+if secret_id_from_reference(value):
+    raise SystemExit(0)
+if isinstance(value, str) and value:
+    WorkerConfigService(sys.argv[1]).set_common_env_secret("BRAVE_API_KEY", value)
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+    then
+      log "BRAVE_API_KEY is already configured for all local workers"
+      return
+    fi
+    warn "BRAVE_API_KEY is not configured; export it and rerun to enable Brave fallback"
+    return
+  fi
+
+  BRAVE_API_KEY="$api_key" uv run --project "$PROJECT_DIR/redtrace" python - "$CONFIG_PATH" <<'PY'
+import os
+import sys
+
+from redtrace.worker_config import WorkerConfigService
+
+WorkerConfigService(sys.argv[1]).set_common_env_secret(
+    "BRAVE_API_KEY",
+    os.environ["BRAVE_API_KEY"],
+)
+PY
+  unset BRAVE_API_KEY
+  log "stored BRAVE_API_KEY in the encrypted local Worker configuration"
+}
+
+test_brave_search_skill() {
+  if [[ "${REDTRACE_SKIP_BRAVE_TEST:-0}" == "1" ]]; then
+    log "skipping brave-search API test (REDTRACE_SKIP_BRAVE_TEST=1)"
+    return
+  fi
+
+  local api_key attempt
+  api_key="$(
+    uv run --project "$PROJECT_DIR/redtrace" python - "$CONFIG_PATH" <<'PY'
+import sys
+from pathlib import Path
+
+from redtrace.dispatcher.config import DispatchConfig
+
+print(
+    DispatchConfig.load(Path(sys.argv[1])).common_env.get("BRAVE_API_KEY", "")
+)
+PY
+  )"
+  if [[ -z "$api_key" ]]; then
+    warn "brave-search API test skipped because BRAVE_API_KEY is not configured"
+    return
+  fi
+
+  log "testing brave-search API"
+  for attempt in 1 2 3; do
+    if BRAVE_API_KEY="$api_key" node "$BRAVE_SKILL_DIR/search.js" \
+      "RedTrace collaborative agent framework" -n 1 >/dev/null; then
+      unset api_key
+      log "brave-search API test passed"
+      return
+    fi
+    warn "brave-search API test attempt $attempt failed"
+    ((attempt < 3)) && sleep 2
+  done
+  unset api_key
+  die "brave-search API test failed after 3 attempts"
+}
+
 pid_is_running() {
   local pid_file="$1"
   [[ -s "$pid_file" ]] || return 1
@@ -389,6 +491,7 @@ ensure_npm_cli claude '@anthropic-ai/claude-code@latest'
 ensure_npm_cli codex '@openai/codex@latest'
 ensure_npm_cli pi '@earendil-works/pi-coding-agent@latest' --ignore-scripts
 ensure_pi_mcp_extension
+ensure_brave_search_skill
 ensure_rtk
 install_skill_python_dependencies
 install_optional_language_tools
@@ -396,6 +499,9 @@ install_optional_language_tools
 log "syncing RedTrace Python environment"
 UV_INDEX_URL="$PYPI_INDEX" uv sync --frozen --project "$PROJECT_DIR/redtrace"
 prepare_local_config
+chmod 600 "$CONFIG_PATH"
+configure_brave_search_secret
+test_brave_search_skill
 
 mkdir -p "$RUN_DIR" "$LOG_DIR" "$PROJECT_DIR/workspaces"
 GEM_BIN="$(ruby -e 'print Gem.user_dir')/bin"

@@ -14,6 +14,14 @@ def render_prompt(template: str, replacements: dict[str, str]) -> str:
     text = template
     for key, value in replacements.items():
         text = text.replace("{" + key + "}", value)
+    # The mock prompt group is a machine-readable JSON fixture. Appending human
+    # guidance would make it invalid JSON and break end-to-end scheduler tests.
+    try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    else:
+        return text.rstrip()
     return (
         text.rstrip()
         + "\n\n## 语言与编码要求\n\n"
@@ -47,6 +55,12 @@ def add_blackboard_guidance(
         + "the current task, use resource IDs instead of requesting stored secrets, and publish a task "
         + "result to the blackboard only when its bounded summary materially advances the investigation. "
         + "Continue to return Fact, Intent, Hint, and task conclusions through RedTrace's existing output contract."
+        + "\n\n## Web research order\n\n"
+        + "When Web research is needed, Claude Code and Codex should use their native Web search/fetch "
+        + "tools first. If native search or fetch is unavailable, unsupported by the configured provider, "
+        + "or returns an error, use the shared `brave-search` Skill as the fallback. Pi should use "
+        + "`brave-search` directly. Preserve source URLs in conclusions and do not repeat the same query "
+        + "through both providers after one succeeds."
         + "\n\nGlobal RedTrace plugins enabled for Claude, Codex, and Pi are described in "
         + "`.redtrace/plugins.json`. Inspect that compact catalog only when a plugin is relevant to the "
         + "current task. Plugin source and enablement are managed centrally under `RedTrace/plugins`; "

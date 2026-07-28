@@ -109,6 +109,41 @@ def test_worker_config_encrypts_keys_and_never_returns_them(
     assert DispatchConfig.load(config_path).workers[0].env["OPENAI_API_KEY"] == secret
 
 
+def test_common_env_secret_is_encrypted_and_shared_by_every_worker(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "dispatch.yaml"
+    secrets_dir = tmp_path / "secrets"
+    raw = _raw_config()
+    raw["runtime"]["execution"] = "local"
+    raw["runtime"]["worker_healthcheck"] = "disabled"
+    raw["local"] = {"completed_action": "keep"}
+    raw["workers"] = [
+        {
+            "name": worker_type,
+            "type": worker_type,
+            "task_types": ["explore"],
+            "max_running": 1,
+            "priority": priority,
+        }
+        for priority, worker_type in enumerate(("claudecode", "codex", "pi"))
+    ]
+    _write_config(config_path, raw)
+    monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(secrets_dir))
+
+    secret = "brave-test-secret"
+    WorkerConfigService(config_path).set_common_env_secret("BRAVE_API_KEY", secret)
+
+    persisted = config_path.read_text(encoding="utf-8")
+    assert secret not in persisted
+    reference = yaml.safe_load(persisted)["common_env"]["BRAVE_API_KEY"]
+    assert secret_id_from_reference(reference) is not None
+    assert secret.encode() not in (secrets_dir / "worker-config.enc").read_bytes()
+    config = DispatchConfig.load(config_path)
+    assert all(worker.env["BRAVE_API_KEY"] == secret for worker in config.workers)
+
+
 def test_worker_api_response_contains_api_key_for_local_debugging(
     tmp_path: Path,
     monkeypatch,
@@ -340,7 +375,7 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     assert "cytoscape-klay" not in index
     assert "rankDir: 'TB'" in index
     assert "c2Expanded: false" in index
-    assert '@click="c2Expanded = !c2Expanded"' in index
+    assert '@click="setAppPage(\'c2-listeners\'); c2Expanded = !c2Expanded"' in index
     assert "if (page === 'webshell' || page.startsWith('c2-'))" not in index
     assert "const responseText = await r.text();" in index
     assert "data = JSON.parse(responseText);" in index

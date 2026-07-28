@@ -56,17 +56,22 @@ additional query count, parse time, task duration, and peak harness memory.
 context_harness:
   enabled: true
   artifact_root: ".redtrace/artifacts/context"
-  inline_bytes: 32768
-  visible_bytes: 8192
-  query_bytes: 65536
-  parse_bytes: 16777216
-  worker_output_chars: 8388608
+  inline_bytes: 262144
+  visible_bytes: 65536
+  query_bytes: 1048576
+  parse_bytes: 67108864
+  worker_output_chars: 33554432
 ```
 
 Set `enabled: false` for an immediate raw-execution downgrade. Configuration is
 translated to Worker environment variables by RedTrace, not by per-Agent config.
 Changing this section requires a dispatcher restart; Worker-only hot reload
 semantics remain unchanged.
+
+These defaults are deliberately sized for RedTrace's 1M-token, long-running
+worker sessions: ordinary evidence stays visible longer, bounded queries may
+return up to 1 MiB, and large command output is still retained through the
+artifact layer rather than being silently discarded.
 
 `--passthrough` keeps real-time stdout/stderr for progress-sensitive
 non-interactive commands while still retaining an Artifact. Truly interactive

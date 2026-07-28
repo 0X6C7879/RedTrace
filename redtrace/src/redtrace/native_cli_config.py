@@ -10,7 +10,11 @@ from typing import Any
 import tomllib
 
 from redtrace.config_secrets import atomic_write_text
-from redtrace.dispatcher.config import WorkerConfig
+from redtrace.dispatcher.config import (
+    DEFAULT_MODEL_AUTO_COMPACT_TOKEN_LIMIT,
+    DEFAULT_MODEL_CONTEXT_WINDOW,
+    WorkerConfig,
+)
 
 
 class NativeCliConfigError(ValueError):
@@ -98,6 +102,11 @@ def _write_claude(home: Path, worker: WorkerConfig) -> None:
             "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
             "CLAUDE_CODE_SUBAGENT_MODEL": model,
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(
+                DEFAULT_MODEL_CONTEXT_WINDOW
+            ),
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90",
+            "CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION": "1000",
         }
     )
     updated = deepcopy(existing)
@@ -144,9 +153,20 @@ def _write_codex(home: Path, worker: WorkerConfig) -> None:
         (index for index, line in enumerate(lines) if re.match(r"^\s*\[", line)),
         len(lines),
     )
+    managed_root_keys = {
+        "approval_policy",
+        "model",
+        "model_auto_compact_token_limit",
+        "model_auto_compact_token_limit_scope",
+        "model_context_window",
+        "model_provider",
+        "sandbox_mode",
+        "web_search",
+    }
     root_lines = []
     for line in lines[:first_table]:
-        if re.match(r"^\s*(model|model_provider)\s*=", line):
+        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*=", line)
+        if match and match.group(1) in managed_root_keys:
             continue
         root_lines.append(line)
     table_lines = _remove_redtrace_provider_tables(lines[first_table:])
@@ -156,6 +176,15 @@ def _write_codex(home: Path, worker: WorkerConfig) -> None:
         CODEX_DEFAULTS_START,
         f"model = {quote(worker.env['CODEX_MODEL'])}",
         'model_provider = "redtrace"',
+        'approval_policy = "never"',
+        'sandbox_mode = "danger-full-access"',
+        'web_search = "live"',
+        f"model_context_window = {DEFAULT_MODEL_CONTEXT_WINDOW}",
+        (
+            "model_auto_compact_token_limit = "
+            f"{DEFAULT_MODEL_AUTO_COMPACT_TOKEN_LIMIT}"
+        ),
+        'model_auto_compact_token_limit_scope = "total"',
         CODEX_DEFAULTS_END,
     ]
     provider = [
@@ -188,6 +217,11 @@ def _write_pi(home: Path, worker: WorkerConfig) -> None:
     settings = deepcopy(_read_json_object(settings_path))
     settings["defaultProvider"] = "redtrace"
     settings["defaultModel"] = worker.env["PI_MODEL"]
+    settings["compaction"] = {
+        "enabled": True,
+        "reserveTokens": 64 * 1024,
+        "keepRecentTokens": 128 * 1024,
+    }
 
     models = deepcopy(_read_json_object(models_path))
     providers = models.get("providers")
@@ -196,6 +230,12 @@ def _write_pi(home: Path, worker: WorkerConfig) -> None:
     if not isinstance(providers, dict):
         raise NativeCliConfigError(f"{models_path} providers must be a JSON object")
     providers = deepcopy(providers)
+    context_window = int(
+        worker.env.get(
+            "PI_MODEL_CONTEXT_WINDOW",
+            str(DEFAULT_MODEL_CONTEXT_WINDOW),
+        )
+    )
     providers["redtrace"] = {
         "baseUrl": worker.env["PI_BASE_URL"],
         "apiKey": worker.env["PI_API_KEY"],
@@ -206,6 +246,8 @@ def _write_pi(home: Path, worker: WorkerConfig) -> None:
                 "name": worker.env["PI_MODEL"],
                 "reasoning": True,
                 "input": ["text", "image"],
+                "contextWindow": context_window,
+                "maxTokens": min(128 * 1024, context_window),
             }
         ],
     }

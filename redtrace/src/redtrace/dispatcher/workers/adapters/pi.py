@@ -64,6 +64,7 @@ class PiDriver(WorkerDriver):
             "redtrace",
             "--model",
             env["PI_MODEL"],
+            "--approve",
             "--mode",
             "json",
             "--session-dir",
@@ -83,6 +84,7 @@ class PiDriver(WorkerDriver):
             "redtrace",
             "--model",
             env["PI_MODEL"],
+            "--approve",
             "--mode",
             "json",
             "--session-dir",
@@ -99,6 +101,7 @@ class PiDriver(WorkerDriver):
         session_dir = self._session_dir(worker)
         argv = [
             "pi",
+            "--approve",
             "--mode",
             "json",
             "--session-dir",

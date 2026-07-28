@@ -241,6 +241,13 @@ def test_render_prompt_requires_chinese_utf8_worker_output() -> None:
     assert "PowerShell `-Encoding UTF8`" in rendered
 
 
+def test_render_prompt_preserves_machine_readable_json_templates() -> None:
+    rendered = render_prompt('{"phase":"{phase}"}', {"phase": "reason"})
+
+    assert json.loads(rendered) == {"phase": "reason"}
+    assert "语言与编码要求" not in rendered
+
+
 def test_local_backend_injects_redtrace_managed_harness_configuration(
     tmp_path: Path,
 ) -> None:
@@ -375,4 +382,16 @@ def test_prompt_guidance_reuses_existing_state_and_bounded_queries() -> None:
     assert "redtrace-context run -- rtk" in prompt
     assert "Fact only for a confirmed conclusion" in prompt
     assert "parallel Idea, Memory" in prompt
+    assert "native Web search/fetch" in prompt
+    assert "`brave-search` Skill as the fallback" in prompt
     assert "Context Harness" not in disabled
+
+
+def test_context_harness_defaults_are_sized_for_long_tasks() -> None:
+    config = ContextHarnessConfig()
+
+    assert config.inline_bytes == 256 * 1024
+    assert config.visible_bytes == 64 * 1024
+    assert config.query_bytes == 1024 * 1024
+    assert config.parse_bytes == 64 * 1024 * 1024
+    assert config.worker_output_chars == 32 * 1024 * 1024
