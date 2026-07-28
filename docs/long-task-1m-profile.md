@@ -17,8 +17,12 @@ RedTrace 的默认部署配置面向 1M 上下文模型和持续数小时的复�
 | `context_harness.query_bytes` | 1048576 | 单次 Artifact 查询最多返回 1 MiB |
 | `context_harness.parse_bytes` | 67108864 | 最多分析 64 MiB 内容，原始 Artifact 始终完整保存 |
 | `context_harness.worker_output_chars` | 33554432 | 每个 stdout/stderr 保留 32 Mi 字符的前缀和尾部窗口 |
+| 进程通信收尾窗口 | 60 秒 | 任务达到硬超时后等待输出线程和审计流完成 |
+| 优雅终止窗口 | 30 秒 | 先发送终止信号，让 Agent 保存会话并输出最终 JSON，再强制结束 |
 
 这些数值是硬上限而不是目标使用量。Context Harness 仍应优先返回结构化摘要；只有下一步确实需要细节时，Worker 才通过 `redtrace-context query` 读取更大的局部内容。
+
+任务超时是 RedTrace 对一次 Agent CLI 阶段设置的总墙钟时间。Agent 内部启动的 Nmap、Nuclei、编译器、浏览器或其他命令仍可能拥有自己的超时参数；长扫描应在工具调用时配置合理的工具级超时，并把中间结果持续写入 Workspace 或 Artifact，避免只在进程结束时才保留证据。
 
 ## 已有配置升级
 
@@ -44,14 +48,14 @@ dispatch.local.yaml.pre-1m.bak
 
 ## Pi 自定义模型
 
-RedTrace 的 Pi Provider 无法仅凭自定义模型 ID 推断上下文长度。使用第三方 API 时，Worker 环境必须包含：
+RedTrace 的 Pi Provider 无法仅凭自定义模型 ID 推断上下文长度。实际加载 Dispatcher 配置时，RedTrace 会为未显式配置该字段的 Pi Worker 自动注入：
 
 ```yaml
 env:
   PI_MODEL_CONTEXT_WINDOW: "1048576"
 ```
 
-迁移脚本会为所有 Pi Worker 自动补齐或提高该值。Claude Code 和 Codex 继续使用各自 CLI/Provider 的模型元数据；第三方网关本身也必须允许 1M 输入，否则仅修改 RedTrace 无法突破上游限制。
+迁移脚本也会把该值持久化到已有 YAML 中，并且不会降低用户已配置得更大的上下文窗口。Claude Code 和 Codex 继续使用各自 CLI/Provider 的模型元数据；第三方网关本身也必须允许 1M 输入，否则仅修改 RedTrace 无法突破上游限制。
 
 ## 压缩原则
 
