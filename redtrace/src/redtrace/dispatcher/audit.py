@@ -128,15 +128,11 @@ class AuditPublisher:
     def finish(self, result: ProcessResult) -> None:
         self._persist_assistant_message()
         stderr = _clean_text(result.stderr.strip())
-        # Codex writes tool-router diagnostics to stderr even when the overall
-        # turn succeeds. The corresponding command.completed events already
-        # carry the actionable exit code, so do not render a successful run as
-        # an error card.
-        if stderr and (result.returncode != 0 or self._run["provider"] != "codex"):
-            self.emit(
-                "error" if result.returncode else "stderr",
-                content=stderr,
-            )
+        # Worker CLIs may forward successful tool output and diagnostics to
+        # stderr. Command events already carry their actionable exit codes, so
+        # only surface process-level stderr when the Worker itself failed.
+        if stderr and result.returncode != 0:
+            self.emit("error", content=stderr)
         self._run.update(
             {
                 "status": "cancelled"

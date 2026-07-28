@@ -470,14 +470,55 @@ def test_static_audit_command_expands_without_ellipsis() -> None:
     assert "white-space: pre-wrap" in styles
 
 
-def test_successful_codex_router_stderr_is_not_rendered_as_worker_error(
+def test_successful_worker_stderr_is_not_rendered_as_worker_error(
     tmp_path: Path,
 ) -> None:
+    cases = (
+        (
+            "codex",
+            "Reading additional input from stdin...\nERROR codex_core::tools::router",
+        ),
+        (
+            "pi",
+            "added 94 packages, and audited 95 packages in 13s\n"
+            "found 0 vulnerabilities",
+        ),
+    )
+
+    for provider, stderr in cases:
+        client = RecordingClient()
+        worker = WorkerConfig.model_validate(
+            {
+                "name": f"{provider}-1",
+                "type": provider,
+                "task_types": ["explore"],
+                "max_running": 1,
+                "priority": 0,
+                "env": {},
+            }
+        )
+        publisher = AuditPublisher(
+            client,
+            "proj_001",
+            "i001",
+            worker,
+            "explore_execute",
+            str(tmp_path),
+            "prompt",
+        )
+        publisher.finish(ProcessResult(returncode=0, stdout="", stderr=stderr))
+        publisher.close()
+
+        events = [event for _, batch in client.batches for event in batch]
+        assert not any(event["kind"] in {"stderr", "error"} for event in events)
+
+
+def test_failed_worker_stderr_is_preserved_as_error(tmp_path: Path) -> None:
     client = RecordingClient()
     worker = WorkerConfig.model_validate(
         {
-            "name": "codex-1",
-            "type": "codex",
+            "name": "pi-1",
+            "type": "pi",
             "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
@@ -494,16 +535,13 @@ def test_successful_codex_router_stderr_is_not_rendered_as_worker_error(
         "prompt",
     )
     publisher.finish(
-        ProcessResult(
-            returncode=0,
-            stdout="",
-            stderr="Reading additional input from stdin...\nERROR codex_core::tools::router",
-        )
+        ProcessResult(returncode=1, stdout="", stderr="npm ERR! install failed")
     )
     publisher.close()
 
     events = [event for _, batch in client.batches for event in batch]
-    assert not any(event["kind"] in {"stderr", "error"} for event in events)
+    errors = [event for event in events if event["kind"] == "error"]
+    assert [event["content"] for event in errors] == ["npm ERR! install failed"]
 
 
 def test_audit_publisher_batches_unredacted_run_events(tmp_path: Path) -> None:
