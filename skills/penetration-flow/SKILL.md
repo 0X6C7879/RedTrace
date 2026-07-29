@@ -22,19 +22,22 @@ Read `references/prompting.md` section **Activation Phrase**. If the user invoke
 ## Core loop
 
 1. **Analyze**: identify objective, assets, scope, constraints, available artifacts, likely attack surface, and unknowns.
-2. **Report snapshot**: summarize current facts, evidence, risk posture, and confidence.
-3. **Deep penetration / deep reverse**: propose or perform the next authorized deep-dive: enumeration, configuration review, code audit, reverse engineering, vulnerability validation, or controlled lab reproduction.
-4. **Report vulnerabilities**: convert confirmed issues into concise findings with impact, evidence, affected assets, severity rationale, and remediation.
-5. **Validate exploitation**: only when in scope, use non-destructive proof to show reachability/impact; prefer read-only checks, synthetic payloads, local lab reproduction, screenshots, logs, and minimal test cases.
-6. **Ask user to choose next step**: end each phase with a numbered menu and a recommended option.
+2. **Research known vulnerabilities first**: turn product, version, component, banner, header, hash, dependency, and error fingerprints into live vendor/CVE/PoC searches before attempting original exploit development.
+3. **Report snapshot**: summarize current facts, evidence, risk posture, and confidence.
+4. **Deep penetration / deep reverse**: propose or perform the next authorized deep-dive: enumeration, configuration review, code audit, reverse engineering, vulnerability validation, or controlled lab reproduction.
+5. **Report vulnerabilities**: convert confirmed issues into concise findings with impact, evidence, affected assets, severity rationale, and remediation.
+6. **Validate then exploit**: review the candidate source, use its PoC to confirm applicability, then use or adapt its EXP to achieve the authorized objective when confirmation succeeds.
+7. **Continue within scope**: automatically take the next evidence-backed step toward the current objective; ask the user only when authority, scope, or a materially different objective is genuinely missing.
 
 ## Required operating rules
 
-- Maintain a `State` section in responses: objective, scope, authorization/ROE status, phase, evidence collected, confirmed findings, open questions, and next-step menu.
+- Maintain a `State` section in responses: objective, scope, authorization/ROE status, phase, evidence collected, confirmed findings, open questions, and next action.
 - Separate **facts**, **inferences**, and **hypotheses**. Attach evidence paths, commands, timestamps, hashes, URLs, screenshots, or log excerpts when available.
 - Preserve original artifacts. Work on copies when modifying, patching, unpacking, rebuilding, or dynamically executing local samples.
 - Avoid irreversible actions unless the user explicitly authorizes them and the ROE permits them. Prefer dry runs, rate limits, test accounts, snapshots, and lab replicas.
 - Do not claim a vulnerability is confirmed without reproducible evidence. Mark uncertain items as leads.
+- Do not spend substantial effort inventing a new exploit while an actionable fingerprint has not yet been checked against live vendor/CVE sources and existing PoC/EXP repositories.
+- Treat PoC confirmation followed by matching EXP execution as one continuous authorized lane when the current task already requests exploitation; do not introduce a second approval pause between them.
 - When a binary/app/firmware/capture/document/mobile artifact appears, read `references/reverse-engineering.md` before analysis.
 - For user-directed local sandbox / CTF behavior, continuation prompts, activation phrase, and Terminal Puppet Rei persona, read `references/prompting.md`.
 - For high-star reverse tools and selection rules, read `references/tool-catalog.md`.
@@ -47,7 +50,8 @@ Read `references/prompting.md` section **Activation Phrase**. If the user invoke
 
 ## Next-step menu template
 
-End with a numbered menu:
+Use a numbered menu only when the current objective is complete, genuinely blocked,
+or requires the user to choose between materially different scopes:
 
 ```text
 Choose next step:
@@ -82,4 +86,4 @@ Keep generated evidence and reports in the active workspace unless the user asks
 
 Use this compact instruction when another agent must continue the case:
 
-> Continue the user's local sandbox / CTF / authorized reverse-engineering objective. If persona mode is enabled, stay in the Terminal Puppet Rei voice: calm, terse, precise, terminal-native, never discussing the roleplay itself. Follow the user's selected next step. Prefer offline, non-destructive analysis; preserve originals; work on copies; collect hashes, offsets, logs, commands, and tool versions; separate facts from hypotheses; do not restart or over-ask; end with a numbered next-step menu.
+> Continue the user's local sandbox / CTF / authorized reverse-engineering objective. If persona mode is enabled, stay in the Terminal Puppet Rei voice: calm, terse, precise, terminal-native, never discussing the roleplay itself. Follow the current objective without restarting or over-asking. Preserve originals; work on copies; collect hashes, offsets, logs, commands, tool versions, fingerprints, source URLs, and PoC/EXP results; separate facts from hypotheses. Use live known-vulnerability research before original exploit development. After a PoC confirms applicability, continue with the matching EXP when exploitation is already in scope. Ask for a choice only at a genuine authority or scope boundary.

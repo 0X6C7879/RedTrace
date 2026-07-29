@@ -53,18 +53,25 @@ class RollbackRequest(BaseModel):
 
 
 class EvolutionImpact(BaseModel):
-    task_succeeded: bool
+    task_succeeded: bool = False
+    step_verified: bool = False
     tool_calls_saved: int = Field(default=0, ge=0)
     invalid_steps_avoided: int = Field(default=0, ge=0)
     duration_saved_ms: int = Field(default=0, ge=0)
 
 
 class EvolutionProposal(BaseModel):
-    proposed_name: str = Field(min_length=1, max_length=64)
+    evolution_type: str = Field(default="CAPTURE", min_length=3, max_length=16)
+    proposed_name: str | None = Field(default=None, min_length=1, max_length=64)
     target_skill: str | None = Field(default=None, max_length=64)
-    content: str = Field(min_length=1)
+    content: str | None = Field(default=None, min_length=1)
     summary: str = Field(min_length=1, max_length=500)
+    applicability: str | None = Field(default=None, max_length=300)
+    procedure: list[str] = Field(default_factory=list, max_length=8)
     validation: list[str] = Field(min_length=1, max_length=8)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=8)
+    merge_skills: list[str] = Field(default_factory=list, max_length=8)
+    reuse_validated: bool = False
     impact: EvolutionImpact
     project_id: str | None = Field(default=None, max_length=128)
     intent_id: str | None = Field(default=None, max_length=128)
@@ -280,6 +287,7 @@ def evolution_status(request: Request):
         "maxSkillChars": engine.store.max_skill_chars,
         "historyLimit": engine.store.history_limit,
         "matchThreshold": engine.match_threshold,
+        "deferred": engine.deferred_count(),
     }
 
 

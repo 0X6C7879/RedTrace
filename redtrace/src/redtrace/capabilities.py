@@ -33,9 +33,10 @@ CLAUDE_MCP_PATH = ".redtrace/mcp/claude.json"
 PI_MCP_PATH = ".pi/mcp.json"
 PI_MCP_EXTENSION = "npm:pi-mcp-extension@1.5.0"
 PI_PROVIDER_EXTENSION_PATH = ".redtrace/pi/redtrace-provider.js"
-DEFAULT_MAX_SKILLS = 24
+DEFAULT_MAX_SKILLS = 40
 DEFAULT_MAX_SKILL_CHARS = 65_536
 DEFAULT_HISTORY_LIMIT = 12
+SKILL_TRUST_STATES = frozenset({"provisional", "trusted", "retired"})
 
 PI_PROVIDER_EXTENSION = """\
 export default function (pi) {
@@ -93,9 +94,18 @@ def _positive_env(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
-def _content_revision(content: str, enabled: bool = True) -> str:
+def _content_revision(
+    content: str,
+    enabled: bool = True,
+    trust: str = "trusted",
+    successful_reuses: int = 0,
+    failure_count: int = 0,
+) -> str:
     digest = hashlib.sha256()
     digest.update(b"enabled=1\n" if enabled else b"enabled=0\n")
+    digest.update(f"trust={trust}\n".encode())
+    digest.update(f"successful_reuses={successful_reuses}\n".encode())
+    digest.update(f"failure_count={failure_count}\n".encode())
     digest.update(content.encode("utf-8"))
     return digest.hexdigest()
 
@@ -166,6 +176,10 @@ class SkillRecord:
     version: int
     revision: str
     updated_at: str | None
+    trust: str = "trusted"
+    successful_reuses: int = 0
+    failure_count: int = 0
+    provisional_task: str | None = None
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -176,6 +190,9 @@ class SkillRecord:
             "version": self.version,
             "revision": self.revision,
             "updatedAt": self.updated_at,
+            "trust": self.trust,
+            "successfulReuses": self.successful_reuses,
+            "failureCount": self.failure_count,
         }
 
 
@@ -245,6 +262,17 @@ class CapabilityStore:
                 version = max(1, int(state.get("version", 1)))
             except (TypeError, ValueError):
                 version = 1
+            trust = str(state.get("trust") or "trusted")
+            if trust not in SKILL_TRUST_STATES:
+                trust = "trusted"
+            try:
+                successful_reuses = max(0, int(state.get("successfulReuses", 0)))
+            except (TypeError, ValueError):
+                successful_reuses = 0
+            try:
+                failure_count = max(0, int(state.get("failureCount", 0)))
+            except (TypeError, ValueError):
+                failure_count = 0
             records.append(
                 SkillRecord(
                     name=directory.name,
@@ -253,8 +281,25 @@ class CapabilityStore:
                     content=content,
                     files=files,
                     version=version,
-                    revision=str(state.get("revision") or _content_revision(content, enabled)),
+                    revision=str(
+                        state.get("revision")
+                        or _content_revision(
+                            content,
+                            enabled,
+                            trust,
+                            successful_reuses,
+                            failure_count,
+                        )
+                    ),
                     updated_at=str(state["updatedAt"]) if state.get("updatedAt") else None,
+                    trust=trust,
+                    successful_reuses=successful_reuses,
+                    failure_count=failure_count,
+                    provisional_task=(
+                        str(state["provisionalTask"])
+                        if state.get("provisionalTask")
+                        else None
+                    ),
                 )
             )
         return records
@@ -276,6 +321,10 @@ class CapabilityStore:
         actor: str = "api",
         reason: str = "manual update",
         action: str = "update",
+        trust: str | None = None,
+        successful_reuses: int | None = None,
+        failure_count: int | None = None,
+        provisional_task: str | None = None,
     ) -> SkillRecord:
         name = validate_capability_name(name)
         if not content.strip():
@@ -283,6 +332,8 @@ class CapabilityStore:
         content = content.rstrip() + "\n"
         if len(content) > self.max_skill_chars:
             raise ValueError(f"SKILL.md exceeds {self.max_skill_chars} characters")
+        if trust is not None and trust not in SKILL_TRUST_STATES:
+            raise ValueError("Skill trust must be provisional, trusted, or retired")
         with self._skill_lock():
             existing = self._get_skill_direct(name)
             if existing is None and len(self.list_skills()) >= self.max_skills:
@@ -293,11 +344,43 @@ class CapabilityStore:
                     raise SkillConflictError(
                         f"skill revision conflict for {name}: expected {expected_revision}, current {current_revision}"
                     )
-            if existing and existing.content == content and existing.enabled == enabled:
+            next_trust = trust or (existing.trust if existing else "trusted")
+            next_reuses = (
+                successful_reuses
+                if successful_reuses is not None
+                else (existing.successful_reuses if existing else 0)
+            )
+            next_failures = (
+                failure_count
+                if failure_count is not None
+                else (existing.failure_count if existing else 0)
+            )
+            next_provisional_task = (
+                provisional_task
+                if provisional_task is not None
+                else (existing.provisional_task if existing else None)
+            )
+            if next_reuses < 0 or next_failures < 0:
+                raise ValueError("Skill quality counters must be non-negative")
+            if (
+                existing
+                and existing.content == content
+                and existing.enabled == enabled
+                and existing.trust == next_trust
+                and existing.successful_reuses == next_reuses
+                and existing.failure_count == next_failures
+                and existing.provisional_task == next_provisional_task
+            ):
                 return existing
 
             version = existing.version + 1 if existing else 1
-            revision = _content_revision(content, enabled)
+            revision = _content_revision(
+                content,
+                enabled,
+                next_trust,
+                next_reuses,
+                next_failures,
+            )
             updated_at = _utc_now()
             directory = self.skills_dir / name
             if existing:
@@ -311,6 +394,10 @@ class CapabilityStore:
                         "version": version,
                         "revision": revision,
                         "updatedAt": updated_at,
+                        "trust": next_trust,
+                        "successfulReuses": next_reuses,
+                        "failureCount": next_failures,
+                        "provisionalTask": next_provisional_task,
                     },
                     separators=(",", ":"),
                 )
@@ -328,6 +415,9 @@ class CapabilityStore:
                     "revision": revision,
                     "previousRevision": existing.revision if existing else None,
                     "reason": reason[:500],
+                    "trust": next_trust,
+                    "successfulReuses": next_reuses,
+                    "failureCount": next_failures,
                     "at": updated_at,
                 }
             )
@@ -412,6 +502,14 @@ class CapabilityStore:
             actor=actor,
             reason=f"rollback to version {version}",
             action="rollback",
+            trust=str(snapshot.get("trust") or "trusted"),
+            successful_reuses=max(0, int(snapshot.get("successfulReuses", 0))),
+            failure_count=max(0, int(snapshot.get("failureCount", 0))),
+            provisional_task=(
+                str(snapshot["provisionalTask"])
+                if snapshot.get("provisionalTask")
+                else ""
+            ),
         )
 
     def read_skill_audit(self, limit: int = 100) -> list[dict[str, Any]]:
@@ -482,6 +580,10 @@ class CapabilityStore:
                     "content": record.content,
                     "actor": actor,
                     "reason": reason[:500],
+                    "trust": record.trust,
+                    "successfulReuses": record.successful_reuses,
+                    "failureCount": record.failure_count,
+                    "provisionalTask": record.provisional_task,
                     "at": record.updated_at or _utc_now(),
                 },
                 ensure_ascii=False,
@@ -692,7 +794,11 @@ def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
         if not skill.enabled:
             continue
         enabled_names.append(skill.name)
-        skill_versions[skill.name] = {"version": skill.version, "revision": skill.revision}
+        skill_versions[skill.name] = {
+            "version": skill.version,
+            "revision": skill.revision,
+            "trust": skill.trust,
+        }
         source_dir = store.skills_dir / skill.name
         for source in sorted(source_dir.rglob("*")):
             if not source.is_file() or source.name == ".redtrace.json":
@@ -735,10 +841,24 @@ def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
     for relative, content in sorted(files.items()):
         digest_builder.update(relative.encode())
         digest_builder.update(content)
+    digest_builder.update(b".redtrace/skill-state")
+    digest_builder.update(
+        json.dumps(
+            skill_versions,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    )
     manifest = {
         "digest": digest_builder.hexdigest(),
         "skills": enabled_names,
         "skillVersions": skill_versions,
+        "skillTrust": {
+            skill.name: skill.trust
+            for skill in skills
+            if skill.enabled
+        },
         "plugins": [plugin.id for plugin in plugin_records if plugin.enabled],
         "snapshotFrozen": True,
         "runtimeFiles": {

@@ -1,8 +1,7 @@
-﻿---
+---
 name: ctf-scripting
 description: Thin routing skill for script-oriented CTF challenges and automation. Use when the primary artifact is a script (Python, Bash, Node/JS, Lua, Ruby) or the task depends on executing, instrumenting, jailbreaking, or automating scripts. Prefer domain-specific skills when the challenge is pure crypto, pure reverse engineering, or pure forensics.
 license: MIT
-compatibility: Requires filesystem-based agent with bash and Python 3.
 allowed-tools: Bash Read Write Edit Glob Grep Task WebFetch WebSearch Skill
 metadata:
   user-invocable: "false"

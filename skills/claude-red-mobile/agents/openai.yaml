@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claude Red: Mobile"
+  short_description: "Android and iOS application security testing"
+  default_prompt: "Use $claude-red-mobile to assess an authorized mobile application."

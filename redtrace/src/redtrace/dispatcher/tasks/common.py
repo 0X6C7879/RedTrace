@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
 from redtrace.dispatcher.audit import AuditPublisher
+from redtrace.dispatcher.contracts import extract_skill_feedback
 from redtrace.dispatcher.protocol.client import CairnClient
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
@@ -30,6 +31,40 @@ def preview(text: str, limit: int = LOG_PREVIEW_LIMIT) -> str:
     if len(compact) <= limit:
         return compact
     return compact[:limit] + "..."
+
+
+def queue_skill_feedback(
+    client: CairnClient,
+    payload: dict,
+    *,
+    project_id: str,
+    intent_id: str | None,
+    worker_name: str,
+    task_type: str,
+) -> None:
+    """Best-effort handoff after model output; feedback can never fail the task."""
+    feedback = extract_skill_feedback(payload)
+    if feedback is None:
+        return
+    try:
+        response = client.submit_skill_feedback(
+            feedback,
+            project_id=project_id,
+            intent_id=intent_id,
+            worker=worker_name,
+            task_type=task_type,
+        )
+        if not response.ok:
+            LOG.debug(
+                "Skill feedback not queued project=%s intent=%s worker=%s "
+                "status=%s",
+                project_id,
+                intent_id,
+                worker_name,
+                response.status_code,
+            )
+    except Exception:
+        LOG.debug("Skill feedback handoff failed", exc_info=True)
 
 
 def did_timeout(result: ProcessResult) -> bool:

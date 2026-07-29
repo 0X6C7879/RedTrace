@@ -2,7 +2,6 @@
 name: ctf-web
 description: Provides web exploitation techniques for CTF challenges. Use when the target is primarily an HTTP application, API, browser client, template engine, identity flow, or smart-contract frontend/backend surface, including XSS, SQLi, SSTI, SSRF, XXE, JWT, auth bypass, file upload, request smuggling, OAuth/OIDC, SAML, prototype pollution, and similar web bugs. Do not use it for native binary memory corruption, reverse engineering of standalone executables, disk or memory forensics, or pure cryptanalysis unless the web flaw is still the main path to the flag.
 license: MIT
-compatibility: Requires filesystem-based agent (Claude Code or similar) with bash, Python 3, and internet access for tool installation.
 allowed-tools: Bash Read Write Edit Glob Grep Task WebFetch WebSearch
 metadata:
   user-invocable: "false"
@@ -72,9 +71,10 @@ go install github.com/ffuf/ffuf/v2@latest
 
 1. Identify the real boundary: browser only, backend only, mixed app, or auth flow.
 2. Capture one normal request/response pair for every major feature before fuzzing.
-3. Enumerate hidden functionality from JS bundles, response headers, routes, and alternate methods.
-4. Classify the likely bug family: injection, authz, parser mismatch, upload, trust proxy, state machine, or client-side execution.
-5. Build the smallest proof first: leak, bypass, or primitive. Save full exploit chaining for later.
+3. Enumerate hidden functionality and fingerprints from JS bundles, response headers, routes, favicons, cookies, errors, dependency files, and alternate methods.
+4. For every product, component, or version fingerprint, perform a live vendor/CVE/PoC search before developing a custom exploit; do not clone or synchronize bulk vulnerability/PoC databases.
+5. Match affected versions and prerequisites, fetch and inspect only the specific candidate source, run its PoC first, then use or adapt its EXP after confirmation.
+6. Only when known candidates are absent or fail, classify and investigate a new bug family: injection, authz, parser mismatch, upload, trust proxy, state machine, or client-side execution.
 
 ## Quick Start Commands
 

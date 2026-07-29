@@ -109,7 +109,7 @@ def test_worker_config_encrypts_keys_and_never_returns_them(
     assert DispatchConfig.load(config_path).workers[0].env["OPENAI_API_KEY"] == secret
 
 
-def test_common_env_secret_is_encrypted_and_shared_by_every_worker(
+def test_plaintext_debug_mode_skips_encrypted_secret_store(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -119,29 +119,29 @@ def test_common_env_secret_is_encrypted_and_shared_by_every_worker(
     raw["runtime"]["execution"] = "local"
     raw["runtime"]["worker_healthcheck"] = "disabled"
     raw["local"] = {"completed_action": "keep"}
-    raw["workers"] = [
-        {
-            "name": worker_type,
-            "type": worker_type,
-            "task_types": ["explore"],
-            "max_running": 1,
-            "priority": priority,
-        }
-        for priority, worker_type in enumerate(("claudecode", "codex", "pi"))
-    ]
     _write_config(config_path, raw)
     monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(secrets_dir))
+    monkeypatch.setattr(
+        CONNECTION_TESTER,
+        "_probe",
+        lambda _config, _worker: {
+            "ok": True,
+            "status": 200,
+            "duration_ms": 1,
+            "detail": "connection successful",
+        },
+    )
+    CONNECTION_TESTER._success_cache.clear()
 
-    secret = "brave-test-secret"
-    WorkerConfigService(config_path).set_common_env_secret("BRAVE_API_KEY", secret)
+    service = WorkerConfigService(config_path, cli_config_home=tmp_path / "home")
+    secret = "sk-plaintext-debug-secret"
+    payload = _worker_payload(service.snapshot()["revision"])
+    payload["api_key"] = secret
+    service.create(payload)
 
     persisted = config_path.read_text(encoding="utf-8")
-    assert secret not in persisted
-    reference = yaml.safe_load(persisted)["common_env"]["BRAVE_API_KEY"]
-    assert secret_id_from_reference(reference) is not None
-    assert secret.encode() not in (secrets_dir / "worker-config.enc").read_bytes()
-    config = DispatchConfig.load(config_path)
-    assert all(worker.env["BRAVE_API_KEY"] == secret for worker in config.workers)
+    assert secret in persisted
+    assert not secrets_dir.exists()
 
 
 def test_worker_api_response_contains_api_key_for_local_debugging(

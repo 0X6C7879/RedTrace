@@ -2,7 +2,6 @@
 name: ctf-misc
 description: Provides miscellaneous CTF challenge techniques for problems that do not cleanly fit the main categories. Use for encoding puzzles, pyjails, bash jails, RF/SDR, DNS oddities, unicode tricks, esoteric languages, QR or audio puzzles, constraint solving, game theory, unusual sandbox escapes, and hybrid logic puzzles. Prefer a more specific skill first when the challenge is mainly web, pwn, reverse, forensics, malware, OSINT, or crypto. Treat this as the fallback skill for genuine cross-category or edge-case challenges, not the default starting point.
 license: MIT
-compatibility: Requires filesystem-based agent (Claude Code or similar) with bash, Python 3, and internet access for tool installation.
 allowed-tools: Bash Read Write Edit Glob Grep Task WebFetch WebSearch Skill
 metadata:
   user-invocable: "false"
@@ -16,21 +15,23 @@ Quick reference for miscellaneous CTF challenges. Each technique has a one-liner
 
 **Python packages (all platforms):**
 ```bash
-pip install z3-solver pwntools Pillow numpy requests dnslib
+pip install z3-solver pwntools Pillow numpy scipy requests dnslib pyzbar pytesseract segno
 ```
 
-**Linux (apt):**
+**Linux (use the detected package manager):**
 ```bash
-apt install ffmpeg qrencode
+apt install ffmpeg qrencode zbar-tools sox tesseract-ocr
+# Fedora/RHEL: dnf install ffmpeg-free qrencode zbar sox tesseract
+# Arch: pacman -S ffmpeg qrencode zbar sox tesseract
 ```
 
 **macOS (Homebrew):**
 ```bash
-brew install ffmpeg qrencode
+brew install ffmpeg qrencode zbar sox tesseract
 ```
 
-**Manual install:**
-- SageMath — Linux: `apt install sagemath`, macOS: `brew install --cask sage`
+SageMath is intentionally not a default dependency; use NumPy/SciPy/SymPy/Z3
+for the normal Misc workflow.
 
 ## Additional Resources
 

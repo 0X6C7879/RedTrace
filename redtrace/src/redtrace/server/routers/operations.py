@@ -224,6 +224,66 @@ def operation_summary(project_id: str):
         }
 
 
+@router.get("/projects/{project_id}/operations/snapshot")
+def operation_snapshot(
+    project_id: str,
+    kinds: str = "",
+    limit: int = Query(default=100, ge=1, le=500),
+    context: QueryContext = Depends(query_context),
+):
+    selected_kinds = [kind.strip() for kind in kinds.split(",") if kind.strip()]
+    unsupported = sorted(set(selected_kinds) - RESOURCE_KINDS)
+    if unsupported:
+        raise HTTPException(400, f"Unsupported resource kinds: {', '.join(unsupported)}")
+    with get_conn() as conn:
+        get_project_or_404(conn, project_id)
+        expire_stale_c2_sessions(conn, project_id)
+        clauses = ["project_id = ?"]
+        params: list[Any] = [project_id]
+        if selected_kinds:
+            placeholders = ",".join("?" for _ in selected_kinds)
+            clauses.append(f"kind IN ({placeholders})")
+            params.extend(selected_kinds)
+        params.append(limit)
+        rows = conn.execute(
+            f"""
+            SELECT * FROM shared_resources
+            WHERE {' AND '.join(clauses)}
+            ORDER BY updated_at DESC LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        if context.worker != "unknown":
+            audit_event(
+                conn,
+                project_id=project_id,
+                resource_id_value=None,
+                task_id_value=None,
+                actor_type="worker",
+                actor=context.worker,
+                action="resource.snapshot",
+                status="succeeded",
+                detail={
+                    "kinds": selected_kinds,
+                    "count": len(rows),
+                    "intent_id": context.intent_id,
+                },
+            )
+        cursor = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) FROM resource_audit_events WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()[0]
+        counts: dict[str, int] = {}
+        for row in rows:
+            counts[row["kind"]] = counts.get(row["kind"], 0) + 1
+        return {
+            "project_id": project_id,
+            "audit_cursor": cursor,
+            "counts": counts,
+            "resources": [public_resource(row) for row in rows],
+        }
+
+
 @router.get("/projects/{project_id}/resources")
 def list_resources(
     project_id: str,
@@ -341,17 +401,39 @@ def _payload_root() -> Path:
 
 
 @router.get("/projects/{project_id}/c2/listeners/{listener_id}/oneliner-kinds")
-def c2_oneliner_kinds(project_id: str, listener_id: str):
+def c2_oneliner_kinds(
+    project_id: str,
+    listener_id: str,
+    context: QueryContext = Depends(query_context),
+):
     with get_conn() as conn:
         listener = _resource_or_404(conn, project_id, listener_id)
         if listener["kind"] != "c2_listener":
             raise HTTPException(400, "Resource is not a C2 listener")
         metadata = json_load(listener["metadata_json"], {})
+        if context.worker != "unknown":
+            audit_event(
+                conn,
+                project_id=project_id,
+                resource_id_value=listener_id,
+                task_id_value=None,
+                actor_type="worker",
+                actor=context.worker,
+                action="c2.payload_kinds",
+                status="succeeded",
+                detail={"intent_id": context.intent_id},
+            )
         return {"listener_id": listener_id, "kinds": compatible_oneliners(metadata)}
 
 
 @router.post("/projects/{project_id}/c2/payloads/oneliner")
-def create_c2_oneliner(project_id: str, body: C2OnelinerRequest):
+def create_c2_oneliner(
+    project_id: str,
+    body: C2OnelinerRequest,
+    context: QueryContext = Depends(query_context),
+):
+    actor_type = "worker" if context.worker != "unknown" else "human"
+    actor = context.worker if actor_type == "worker" else "admin"
     with get_conn() as conn:
         listener = _resource_or_404(conn, project_id, body.listener_id)
         if listener["kind"] != "c2_listener":
@@ -373,17 +455,23 @@ def create_c2_oneliner(project_id: str, body: C2OnelinerRequest):
             project_id=project_id,
             resource_id_value=listener["id"],
             task_id_value=None,
-            actor_type="human",
-            actor="admin",
+            actor_type=actor_type,
+            actor=actor,
             action="c2.payload_oneliner",
             status="succeeded",
-            detail={"kind": body.kind},
+            detail={"kind": body.kind, "intent_id": context.intent_id},
         )
         return {"oneliner": oneliner, "kind": body.kind, "listener_id": listener["id"]}
 
 
 @router.post("/projects/{project_id}/c2/payloads/build", status_code=201)
-def build_c2_payload(project_id: str, body: C2BuildRequest):
+def build_c2_payload(
+    project_id: str,
+    body: C2BuildRequest,
+    context: QueryContext = Depends(query_context),
+):
+    actor_type = "worker" if context.worker != "unknown" else "human"
+    actor = context.worker if actor_type == "worker" else body.actor
     with get_conn() as conn:
         listener = _resource_or_404(conn, project_id, body.listener_id)
         if listener["kind"] != "c2_listener":
@@ -422,8 +510,10 @@ def build_c2_payload(project_id: str, body: C2BuildRequest):
                 "filename": artifact.name,
             },
             secret={"artifact_path": str(artifact)},
-            actor_type="human",
-            actor=body.actor,
+            actor_type=actor_type,
+            actor=actor,
+            worker=context.worker if actor_type == "worker" else None,
+            intent_id=context.intent_id,
             parent_resource_id=body.listener_id,
             publish_fact=True,
         )
@@ -432,11 +522,16 @@ def build_c2_payload(project_id: str, body: C2BuildRequest):
             project_id=project_id,
             resource_id_value=body.listener_id,
             task_id_value=None,
-            actor_type="human",
-            actor=body.actor,
+            actor_type=actor_type,
+            actor=actor,
             action="c2.payload_build",
             status="succeeded",
-            detail={"payload_id": resource["id"], "os": body.os, "arch": body.arch},
+            detail={
+                "payload_id": resource["id"],
+                "os": body.os,
+                "arch": body.arch,
+                "intent_id": context.intent_id,
+            },
         )
         return {"payload": resource}
 
@@ -756,6 +851,12 @@ def list_operation_tasks(
         return {"project_id": project_id, "tasks": [public_task(row) for row in rows]}
 
 
+@router.get("/projects/{project_id}/operations/tasks/{operation_id}")
+def get_operation_task(project_id: str, operation_id: str):
+    with get_conn() as conn:
+        return {"task": public_task(_task_or_404(conn, project_id, operation_id))}
+
+
 @router.post("/projects/{project_id}/operations/tasks/{operation_id}/approval")
 def decide_operation(project_id: str, operation_id: str, body: ApprovalRequest):
     with get_conn() as conn:
@@ -853,6 +954,7 @@ def list_operation_audit(
     resource_id: str | None = None,
     since: int = Query(default=0, ge=0),
     limit: int = Query(default=200, ge=1, le=500),
+    order: Literal["asc", "desc"] = "desc",
 ):
     with get_conn() as conn:
         get_project_or_404(conn, project_id)
@@ -862,11 +964,27 @@ def list_operation_audit(
             clauses.append("resource_id = ?")
             params.append(resource_id)
         params.append(limit)
+        direction = "ASC" if order == "asc" else "DESC"
         rows = conn.execute(
-            f"SELECT * FROM resource_audit_events WHERE {' AND '.join(clauses)} ORDER BY id DESC LIMIT ?",
+            f"""
+            SELECT * FROM resource_audit_events
+            WHERE {' AND '.join(clauses)}
+            ORDER BY id {direction} LIMIT ?
+            """,
             params,
         ).fetchall()
-        return {"project_id": project_id, "events": [public_audit(row) for row in rows]}
+        latest_cursor = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) FROM resource_audit_events WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()[0]
+        cursor = max((row["id"] for row in rows), default=since)
+        return {
+            "project_id": project_id,
+            "audit_cursor": cursor,
+            "latest_cursor": latest_cursor,
+            "has_more": cursor < latest_cursor,
+            "events": [public_audit(row) for row in rows],
+        }
 
 
 def _listener_for_token(conn, listener_id: str, token: str):

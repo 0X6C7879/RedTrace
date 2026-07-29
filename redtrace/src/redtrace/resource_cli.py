@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -46,6 +47,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("capabilities", help="Show resource kinds and on-demand workflow")
 
+    snapshot = commands.add_parser(
+        "snapshot",
+        help="Read a bounded current resource snapshot and an audit cursor in one request",
+    )
+    snapshot.add_argument(
+        "--kind",
+        action="append",
+        choices=[
+            "webshell",
+            "c2_listener",
+            "c2_session",
+            "c2_payload",
+            "c2_profile",
+            "proxy",
+            "file",
+            "credential_ref",
+            "plugin",
+            "result",
+        ],
+        help="Repeat to select resource kinds; defaults to all kinds",
+    )
+    snapshot.add_argument("--limit", type=int, default=100, choices=range(1, 501), metavar="1..500")
+
+    changes = commands.add_parser(
+        "changes",
+        help="Read resource changes after a snapshot audit cursor",
+    )
+    changes.add_argument("--since", type=int, required=True, help="Audit cursor returned by snapshot or changes")
+    changes.add_argument("--limit", type=int, default=100, choices=range(1, 501), metavar="1..500")
+
     list_cmd = commands.add_parser("list", help="List shared resources")
     list_cmd.add_argument("--kind")
     list_cmd.add_argument("--status")
@@ -82,6 +113,66 @@ def build_parser() -> argparse.ArgumentParser:
     register.add_argument("--parent")
     register.add_argument("--no-fact", action="store_true")
 
+    webshell_create = commands.add_parser(
+        "webshell-create",
+        help="Create a reusable WebShell resource; optionally read its password from stdin",
+    )
+    webshell_create.add_argument("--name", required=True)
+    webshell_create.add_argument("--target", required=True)
+    webshell_create.add_argument("--summary", default="")
+    webshell_create.add_argument("--shell-type", default="php", choices=["php", "asp", "aspx", "jsp", "custom"])
+    webshell_create.add_argument("--protocol", default="auto", choices=["auto", "eval", "antsword", "raw"])
+    webshell_create.add_argument("--method", default="POST", choices=["POST", "GET"])
+    webshell_create.add_argument("--command-param", default="cmd")
+    webshell_create.add_argument("--password-param", default="")
+    webshell_create.add_argument("--target-os", default="auto", choices=["auto", "linux", "windows"])
+    webshell_create.add_argument("--encoding", default="auto", choices=["auto", "utf-8", "gbk", "gb18030"])
+    webshell_create.add_argument("--verify-tls", action="store_true")
+    webshell_create.add_argument("--password-stdin", action="store_true")
+    webshell_create.add_argument("--no-fact", action="store_true")
+
+    listener_create = commands.add_parser(
+        "listener-create",
+        help="Create and enable a C2 Listener that can receive Sessions",
+    )
+    listener_create.add_argument("--name", required=True)
+    listener_create.add_argument(
+        "--listener-type",
+        default="http_beacon",
+        choices=["http_beacon", "https_beacon", "tcp_reverse", "websocket"],
+    )
+    listener_create.add_argument("--bind-host", default="0.0.0.0")
+    listener_create.add_argument("--bind-port", type=int, required=True, choices=range(1, 65536), metavar="1..65535")
+    listener_create.add_argument("--callback-host", default="")
+    listener_create.add_argument("--profile")
+    listener_create.add_argument("--summary", default="")
+    listener_create.add_argument("--status", default="available", choices=["available", "offline"])
+    listener_create.add_argument("--no-fact", action="store_true")
+
+    payload_kinds = commands.add_parser(
+        "payload-kinds",
+        help="List Payload kinds compatible with a Listener",
+    )
+    payload_kinds.add_argument("listener_id")
+
+    payload_oneliner = commands.add_parser(
+        "payload-oneliner",
+        help="Generate an executable one-line Payload for a Listener",
+    )
+    payload_oneliner.add_argument("listener_id")
+    payload_oneliner.add_argument("kind")
+    payload_oneliner.add_argument("--callback-host", default="")
+
+    payload_build = commands.add_parser(
+        "payload-build",
+        help="Build a compiled Beacon Payload for a Listener",
+    )
+    payload_build.add_argument("listener_id")
+    payload_build.add_argument("--callback-url", default="")
+    payload_build.add_argument("--os", default="linux", choices=["linux", "windows", "darwin"])
+    payload_build.add_argument("--arch", default="amd64", choices=["amd64", "arm64", "386"])
+    payload_build.add_argument("--sleep-seconds", type=int, default=5, choices=range(1, 3601), metavar="1..3600")
+
     run = commands.add_parser("run", help="Queue an operation against a resource")
     run.add_argument("resource_id")
     run.add_argument("action")
@@ -90,6 +181,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--risk", default="low", choices=["low", "medium", "high", "critical"])
     run.add_argument("--require-approval", action="store_true")
     run.add_argument("--publish-result", action="store_true")
+    run.add_argument("--wait", action="store_true", help="Wait for the operation to reach a terminal state")
+    run.add_argument("--wait-timeout", type=float, default=30.0)
+    run.add_argument("--poll-interval", type=float, default=0.2)
 
     tasks = commands.add_parser("tasks", help="List project operation tasks")
     tasks.add_argument("--resource")
@@ -145,9 +239,9 @@ def _perform(args: argparse.Namespace) -> Any:
         return {
             "kinds": {
                 "webshell": ["probe", "command", "list_files", "read_file", "write_file", "delete_file"],
-                "c2_listener": ["human start/stop; sessions check in through the listener token"],
+                "c2_listener": ["worker create/enable; generate oneline or compiled Payload; receive Sessions"],
                 "c2_session": ["command and plugin-defined agent actions"],
-                "c2_payload": [],
+                "c2_payload": ["worker generate from a Listener and deploy through an execution channel"],
                 "c2_profile": [],
                 "plugin": ["actions declared in resource.metadata.actions"],
                 "proxy": [],
@@ -156,12 +250,31 @@ def _perform(args: argparse.Namespace) -> Any:
                 "result": [],
             },
             "workflow": [
-                "list only the resource kinds relevant to the current task",
+                "snapshot relevant access kinds once and retain its audit_cursor",
+                "reuse an existing WebShell or C2 Session before creating a duplicate",
+                "if no Session exists, create a Listener and generate a Payload instead of stopping",
+                "create WebShell resources with webshell-create and use them with run --wait",
+                "before declaring no access channel, call changes once with the retained audit_cursor",
                 "get the selected resource to inspect bounded metadata and declared actions",
                 "run an action by resource ID; stored secrets stay server-side",
                 "use --publish-result only for a result that should become a blackboard Fact reference",
+                "do not poll changes at a fixed frequency",
             ],
         }
+    if args.command == "snapshot":
+        return _request(
+            args,
+            "GET",
+            f"{base}/operations/snapshot",
+            params={"kinds": ",".join(args.kind or ()), "limit": args.limit},
+        )
+    if args.command == "changes":
+        return _request(
+            args,
+            "GET",
+            f"{base}/operations/audit",
+            params={"since": args.since, "limit": args.limit, "order": "asc"},
+        )
     if args.command == "list":
         return _request(
             args,
@@ -197,6 +310,89 @@ def _perform(args: argparse.Namespace) -> Any:
                 "publish_fact": not args.no_fact,
             },
         )
+    if args.command == "webshell-create":
+        password = sys.stdin.read().rstrip("\r\n") if args.password_stdin else ""
+        return _request(
+            args,
+            "POST",
+            f"{base}/resources",
+            body={
+                "kind": "webshell",
+                "name": args.name,
+                "target": args.target,
+                "summary": args.summary,
+                "status": "available",
+                "metadata": {
+                    "shell_type": args.shell_type,
+                    "protocol": args.protocol,
+                    "method": args.method,
+                    "command_param": args.command_param,
+                    "password_param": args.password_param,
+                    "os": args.target_os,
+                    "encoding": args.encoding,
+                    "verify_tls": args.verify_tls,
+                },
+                "secret": {"password": password} if password else {},
+                "actor_type": "worker",
+                "actor": args.worker,
+                "worker": args.worker,
+                "intent_id": args.intent or None,
+                "publish_fact": not args.no_fact,
+            },
+        )
+    if args.command == "listener-create":
+        return _request(
+            args,
+            "POST",
+            f"{base}/resources",
+            body={
+                "kind": "c2_listener",
+                "name": args.name,
+                "target": f"{args.bind_host}:{args.bind_port}",
+                "summary": args.summary,
+                "status": args.status,
+                "metadata": {
+                    "listener_type": args.listener_type,
+                    "bind_host": args.bind_host,
+                    "bind_port": args.bind_port,
+                    "callback_host": args.callback_host,
+                    "profile_id": args.profile or "",
+                },
+                "actor_type": "worker",
+                "actor": args.worker,
+                "worker": args.worker,
+                "intent_id": args.intent or None,
+                "publish_fact": not args.no_fact,
+            },
+        )
+    if args.command == "payload-kinds":
+        listener = quote(args.listener_id, safe="")
+        return _request(args, "GET", f"{base}/c2/listeners/{listener}/oneliner-kinds")
+    if args.command == "payload-oneliner":
+        return _request(
+            args,
+            "POST",
+            f"{base}/c2/payloads/oneliner",
+            body={
+                "listener_id": args.listener_id,
+                "kind": args.kind,
+                "callback_host": args.callback_host,
+            },
+        )
+    if args.command == "payload-build":
+        return _request(
+            args,
+            "POST",
+            f"{base}/c2/payloads/build",
+            body={
+                "listener_id": args.listener_id,
+                "callback_url": args.callback_url,
+                "os": args.os,
+                "arch": args.arch,
+                "sleep_seconds": args.sleep_seconds,
+                "actor": args.worker,
+            },
+        )
     if args.command == "run":
         rid = quote(args.resource_id, safe="")
         arguments = _json_object(args.arguments_json, "--arguments-json")
@@ -204,7 +400,7 @@ def _perform(args: argparse.Namespace) -> Any:
             arguments["command"] = args.command_text
         if args.publish_result:
             arguments["publish_result"] = True
-        return _request(
+        created = _request(
             args,
             "POST",
             f"{base}/resources/{rid}/tasks",
@@ -218,6 +414,34 @@ def _perform(args: argparse.Namespace) -> Any:
                 "intent_id": args.intent or None,
             },
         )
+        if not args.wait:
+            return created
+        task = created.get("task") if isinstance(created, dict) else None
+        operation_id = str(task.get("id") or "") if isinstance(task, dict) else ""
+        if not operation_id:
+            raise ValueError("operation response did not include a task ID")
+        deadline = time.monotonic() + max(0.1, args.wait_timeout)
+        interval = max(0.05, args.poll_interval)
+        while True:
+            current = _request(
+                args,
+                "GET",
+                f"{base}/operations/tasks/{quote(operation_id, safe='')}",
+            )
+            current_task = current.get("task") if isinstance(current, dict) else None
+            if isinstance(current_task, dict) and current_task.get("status") in {
+                "succeeded",
+                "failed",
+                "cancelled",
+                "rejected",
+            }:
+                return current
+            if time.monotonic() >= deadline:
+                return {
+                    "task": current_task or task,
+                    "wait": {"timed_out": True, "timeout_seconds": args.wait_timeout},
+                }
+            time.sleep(interval)
     if args.command == "tasks":
         return _request(
             args,

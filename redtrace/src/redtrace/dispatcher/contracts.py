@@ -4,9 +4,49 @@ from typing import Any
 
 from redtrace.dispatcher.output_parser import extract_json_object
 
+SKILL_FEEDBACK_KEYS = ("skillFeedback", "skill_feedback")
+
 
 def parse_json_output(stdout: str) -> dict[str, Any]:
     return extract_json_object(stdout)
+
+
+def extract_skill_feedback(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract bounded optional feedback without affecting the task contract."""
+    raw: Any = None
+    for key in SKILL_FEEDBACK_KEYS:
+        if key in payload:
+            raw = payload.get(key)
+            break
+    if raw is None and isinstance(payload.get("data"), dict):
+        for key in SKILL_FEEDBACK_KEYS:
+            if key in payload["data"]:
+                raw = payload["data"].get(key)
+                break
+    if not isinstance(raw, dict):
+        return None
+    aliases = {
+        "type": "evolution_type",
+        "evolutionType": "evolution_type",
+        "proposedName": "proposed_name",
+        "targetSkill": "target_skill",
+        "evidenceRefs": "evidence_refs",
+        "mergeSkills": "merge_skills",
+        "reuseValidated": "reuse_validated",
+    }
+    feedback = {
+        aliases.get(str(key), str(key)): value
+        for key, value in raw.items()
+    }
+    if not isinstance(feedback.get("summary"), str):
+        return None
+    if not isinstance(feedback.get("validation"), list):
+        return None
+    if not isinstance(feedback.get("procedure"), list):
+        return None
+    if not isinstance(feedback.get("evidence_refs"), list):
+        return None
+    return feedback
 
 
 def _unwrap_wrapped_payload(payload: dict[str, Any]) -> tuple[bool | None, dict[str, Any] | None]:
@@ -25,9 +65,18 @@ def _is_dict(value: Any) -> bool:
     return isinstance(value, dict)
 
 
+def _without_skill_feedback(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in payload.items()
+        if key not in SKILL_FEEDBACK_KEYS
+    }
+
+
 def _looks_like_reason_data(payload: dict[str, Any]) -> bool:
     if not isinstance(payload, dict):
         return False
+    payload = _without_skill_feedback(payload)
     keys = set(payload)
     if keys == {"complete"}:
         complete = payload["complete"]
@@ -41,6 +90,7 @@ def _looks_like_reason_data(payload: dict[str, Any]) -> bool:
 
 
 def _looks_like_bootstrap_execute_data(payload: dict[str, Any]) -> bool:
+    payload = _without_skill_feedback(payload)
     if not isinstance(payload, dict) or set(payload) not in ({"fact"}, {"fact", "complete"}):
         return False
     return _is_dict(payload.get("fact")) and ("complete" not in payload or _is_dict(payload.get("complete")))
@@ -49,6 +99,7 @@ def _looks_like_bootstrap_execute_data(payload: dict[str, Any]) -> bool:
 def _looks_like_bootstrap_conclude_data(payload: dict[str, Any]) -> bool:
     if not isinstance(payload, dict):
         return False
+    payload = _without_skill_feedback(payload)
     keys = set(payload)
     if keys not in ({"fact"}, {"fact", "complete"}):
         return False
@@ -56,7 +107,10 @@ def _looks_like_bootstrap_conclude_data(payload: dict[str, Any]) -> bool:
 
 
 def _looks_like_explore_data(payload: dict[str, Any]) -> bool:
-    return isinstance(payload, dict) and set(payload) == {"description"}
+    return (
+        isinstance(payload, dict)
+        and set(_without_skill_feedback(payload)) == {"description"}
+    )
 
 
 def validate_reason_payload(
@@ -68,7 +122,7 @@ def validate_reason_payload(
     if accepted is None:
         if not _looks_like_reason_data(payload):
             raise ValueError("accepted must be true or false")
-        data = payload
+        data = _without_skill_feedback(payload)
     if not isinstance(data, dict):
         raise ValueError("accepted must be true or false")
     complete = data.get("complete")
@@ -108,7 +162,7 @@ def validate_bootstrap_execute_payload(payload: dict[str, Any]) -> tuple[str, di
     if accepted is None:
         if not _looks_like_bootstrap_execute_data(payload):
             raise ValueError("accepted must be true or false")
-        data = payload
+        data = _without_skill_feedback(payload)
     if not isinstance(data, dict):
         raise ValueError("accepted must be true or false")
 
@@ -139,7 +193,7 @@ def validate_bootstrap_conclude_payload(payload: dict[str, Any]) -> tuple[str, s
     if accepted is None:
         if not _looks_like_bootstrap_conclude_data(payload):
             raise ValueError("accepted must be true or false")
-        data = payload
+        data = _without_skill_feedback(payload)
     if not isinstance(data, dict):
         raise ValueError("accepted must be true or false")
     extra_keys = set(data) - {"fact", "complete"}
@@ -161,7 +215,7 @@ def validate_explore_payload(payload: dict[str, Any]) -> tuple[str, str | None]:
     if accepted is None:
         if not _looks_like_explore_data(payload):
             raise ValueError("accepted must be true or false")
-        data = payload
+        data = _without_skill_feedback(payload)
     if not isinstance(data, dict):
         raise ValueError("accepted must be true or false")
     description = data.get("description")

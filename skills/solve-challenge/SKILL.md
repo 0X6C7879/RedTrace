@@ -2,7 +2,6 @@
 name: solve-challenge
 description: Solves CTF challenges by performing first-pass triage, identifying the dominant category, and routing execution to the right specialized ctf-* skill. Use when the user gives you a challenge bundle, a remote service, a suspicious file, or only a vague challenge description and you must determine where to start. Do not use it when the category is already clear and a specialized skill can be invoked directly; this is the dispatcher and recon entrypoint, not the deepest reference for category-specific techniques.
 license: MIT
-compatibility: Requires filesystem-based agent (Claude Code or similar) with bash, Python 3, and internet access. Orchestrates other ctf-* skills.
 allowed-tools: Bash Read Write Edit Glob Grep Task WebFetch WebSearch Skill
 metadata:
   user-invocable: "true"
@@ -17,28 +16,13 @@ You're a skilled CTF player. Your goal is to solve the challenge and find the fl
 
 Two setup strategies depending on your workflow:
 
-### Pre-install (recommended before competitions)
+### Pre-install
 
-Use the central installer entrypoint:
+Use the RedTrace macOS or Linux deployment script before starting a challenge.
+Those scripts provision the shared security-tool environment. Do not install a
+large tool bundle inside the task unless a required command is actually missing.
 
-```bash
-bash scripts/install_ctf_tools.sh all
-```
-
-Run a narrower mode when you only want one tool group:
-
-```bash
-bash scripts/install_ctf_tools.sh python
-bash scripts/install_ctf_tools.sh apt
-bash scripts/install_ctf_tools.sh brew
-bash scripts/install_ctf_tools.sh gems
-bash scripts/install_ctf_tools.sh go
-bash scripts/install_ctf_tools.sh manual
-```
-
-The full package lists now live in [scripts/install_ctf_tools.sh](../scripts/install_ctf_tools.sh).
-
-### On-demand (during challenges)
+### On-demand
 
 Each category skill's `SKILL.md` has a **Prerequisites** section listing only the tools needed for that category. Install as you go.
 

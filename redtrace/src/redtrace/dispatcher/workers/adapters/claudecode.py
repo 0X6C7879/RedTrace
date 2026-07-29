@@ -15,6 +15,10 @@ REDTRACE_OUTPUT_SCHEMA = json.dumps(
         "properties": {
             "accepted": {"type": "boolean"},
             "data": {"type": "object"},
+            "skillFeedback": {
+                "type": ["object", "null"],
+                "additionalProperties": True,
+            },
         },
         "required": ["accepted", "data"],
         "additionalProperties": False,

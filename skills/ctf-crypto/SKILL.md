@@ -2,7 +2,6 @@
 name: ctf-crypto
 description: Provides cryptography attack techniques for CTF challenges. Use when attacking encryption, hashing, signatures, ZKP, PRNG, or mathematical crypto problems involving RSA, AES, ECC, lattices, LWE, CVP, number theory, Coppersmith, Pollard, Wiener, padding oracle, GCM, key derivation, or stream/block cipher weaknesses.
 license: MIT
-compatibility: Requires filesystem-based agent (Claude Code or similar) with bash, Python 3, and internet access for tool installation.
 allowed-tools: Bash Read Write Edit Glob Grep Task WebFetch WebSearch
 metadata:
   user-invocable: "false"
@@ -16,12 +15,14 @@ Quick reference for crypto CTF challenges. Each technique has a one-liner here; 
 
 **Python packages (all platforms):**
 ```bash
-pip install pycryptodome z3-solver sympy gmpy2 hashpumpy fpylll py_ecc
+pip install pycryptodome z3-solver sympy gmpy2 hashpumpy cysignals fpylll py_ecc
 ```
 
-**Linux (apt):**
+**Linux (use the detected package manager):**
 ```bash
-apt install hashcat sagemath
+apt install hashcat
+# Fedora/RHEL: dnf install hashcat
+# Arch: pacman -S hashcat
 ```
 
 **macOS (Homebrew):**
@@ -29,9 +30,12 @@ apt install hashcat sagemath
 brew install hashcat
 ```
 
-**Manual install:**
-- SageMath — Linux: `apt install sagemath`, macOS: `brew install --cask sage`
-- RsaCtfTool — `git clone https://github.com/RsaCtfTool/RsaCtfTool` (automated RSA attacks)
+**Automated companion:**
+- RsaCtfTool — install it in an isolated virtual environment (the RedTrace
+  deployment scripts pin and verify it).
+- SageMath is not part of the default RedTrace deployment. Use
+  fpylll/cysignals, SymPy, gmpy2, Z3, py_ecc, and RsaCtfTool first; treat
+  Sage-only techniques as an explicit opt-in environment requirement.
 
 > **Note:** `gmpy2` requires libgmp — Linux: `apt install libgmp-dev`, macOS: `brew install gmp`.
 
@@ -84,8 +88,9 @@ python3 -c "from pwn import xor; print(xor(bytes.fromhex('<hex>'), b'flag{'))"
 hashid '<hash>'
 hashcat --identify '<hash>'
 
-# SageMath (for lattice/ECC)
-sage -c "print(factor(<n>))"
+# Lattice/number theory without a SageMath dependency
+python3 -c "from sympy import factorint; print(factorint(<n>))"
+python3 -c "from fpylll import IntegerMatrix, LLL; print(LLL.reduction(IntegerMatrix.identity(2)))"
 ```
 
 ## Classic Ciphers

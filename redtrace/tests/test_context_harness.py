@@ -384,6 +384,29 @@ def test_prompt_guidance_reuses_existing_state_and_bounded_queries() -> None:
     assert "parallel Idea, Memory" in prompt
     assert "native Web search/fetch" in prompt
     assert "`brave-search` Skill as the fallback" in prompt
+    assert "## Active WebShell and C2 workflow" in prompt
+    assert "redtrace-resource snapshot --kind webshell" in prompt
+    assert "redtrace-resource webshell-create" in prompt
+    assert "redtrace-resource listener-create" in prompt
+    assert "`payload-oneliner` or a compiled Beacon with `payload-build`" in prompt
+    assert "do not stop at that boundary" in prompt
+    assert "redtrace-resource changes --since <audit_cursor>" in prompt
+    assert "decision-point refresh, not a timer" in prompt
+    assert "## Known-vulnerability-first exploitation" in prompt
+    assert "perform at least one live Web query" in prompt
+    assert "Do not install, clone, or synchronize bulk vulnerability databases" in prompt
+    assert "fetch only the specific PoC/EXP" in prompt
+    assert "pass that explicit template path" in prompt
+    assert "never invoke automatic template discovery" in prompt
+    assert "Prefer an existing PoC over inventing a new exploit" in prompt
+    assert "When the PoC confirms the vulnerability" in prompt
+    assert "execution order, not an approval gate" in prompt
+    assert "Only move to custom vulnerability discovery" in prompt
+    assert "## Missing tool bootstrap" in prompt
+    assert "official documentation" in prompt
+    assert "user-local installation" in prompt
+    assert "`--version` and a small smoke check" in prompt
+    assert "instead of looping or blocking it" in prompt
     assert "Context Harness" not in disabled
 
 

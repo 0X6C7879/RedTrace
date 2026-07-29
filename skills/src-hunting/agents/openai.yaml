@@ -1,0 +1,4 @@
+interface:
+  display_name: "SRC Hunting"
+  short_description: "Authorized business-logic and trust-boundary hunting"
+  default_prompt: "Use $src-hunting to investigate an authorized SRC target through business models, bounded hypotheses, and auditable evidence."

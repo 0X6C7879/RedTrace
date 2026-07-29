@@ -41,7 +41,6 @@ from redtrace.native_cli_config import (
 )
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 TASK_TYPES = frozenset({"bootstrap", "reason", "explore"})
 EDITABLE_WORKER_TYPES = frozenset({"claudecode", "codex", "pi"})
 LOCK_TIMEOUT_SECONDS = 10.0
@@ -495,34 +494,6 @@ class WorkerConfigService:
             "workers": workers,
         }
 
-    def set_common_env_secret(self, name: str, value: str) -> None:
-        """Persist a shared Worker environment value in the encrypted store."""
-        name = name.strip()
-        if not ENV_NAME_PATTERN.fullmatch(name):
-            raise WorkerConfigError(
-                "shared secret name must match ^[A-Z_][A-Z0-9_]*$"
-            )
-        if not value or len(value) > 4096:
-            raise WorkerConfigError(
-                "shared secret value must contain between 1 and 4096 characters"
-            )
-
-        raw, revision = _read_raw(self.path)
-        common_env = raw.get("common_env")
-        if common_env is None:
-            common_env = {}
-        if not isinstance(common_env, dict):
-            raise WorkerConfigError("common_env must be an object")
-
-        secrets = self.secrets.load()
-        existing_secret_id = secret_id_from_reference(common_env.get(name))
-        secret_id = existing_secret_id or token_hex(16)
-        updated_secrets = {**secrets, secret_id: value}
-        updated_common_env = deepcopy(common_env)
-        updated_common_env[name] = secret_reference(secret_id)
-        raw["common_env"] = updated_common_env
-        self._commit(raw, revision, secrets=updated_secrets)
-
     def test_payload(
         self,
         payload: dict[str, Any],
@@ -647,6 +618,25 @@ class WorkerConfigService:
             secret_values = dict(
                 secrets if secrets is not None else self.secrets.load()
             )
+            runtime = raw.get("runtime")
+            local_execution = (
+                isinstance(runtime, dict) and runtime.get("execution") == "local"
+            )
+            if local_execution or os.environ.get("REDTRACE_PLAINTEXT_SECRETS") == "1":
+                plaintext = _resolved_copy(deepcopy(raw), secret_values)
+                config = _validate_config(plaintext, {})
+                if (
+                    native_worker is not None
+                    and config.runtime.execution == "local"
+                    and native_worker.api_configured()
+                ):
+                    try:
+                        sync_native_cli_config(self.cli_config_home, native_worker)
+                    except NativeCliConfigError as exc:
+                        raise WorkerConfigError(str(exc)) from exc
+                atomic_write_text(self.path, _dump_raw(plaintext))
+                return
+
             secured = deepcopy(raw)
             _secure_plaintext_keys(secured, secret_values)
             config = _validate_config(secured, secret_values)

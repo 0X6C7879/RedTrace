@@ -2,7 +2,6 @@
 name: ctf-reverse
 description: Provides reverse engineering techniques for CTF challenges. Use when the main job is to understand how a compiled, obfuscated, packed, or virtualized target works before exploiting or solving it, including binaries, APKs, WASM, firmware, custom VMs, bytecode, game clients, malware-like loaders, and anti-debug or anti-analysis logic. Do not use it when the vulnerability is already understood and the remaining task is exploitation; use pwn instead. Do not use it for pure web workflows, log or disk forensics, or standalone crypto problems unless reversing the implementation is the real blocker.
 license: MIT
-compatibility: Requires filesystem-based agent (Claude Code or similar) with bash, Python 3, and internet access for tool installation.
 allowed-tools: Bash Read Write Edit Glob Grep Task WebFetch WebSearch
 metadata:
   user-invocable: "false"
@@ -16,10 +15,15 @@ Quick reference for RE challenges. For detailed techniques, see supporting files
 
 **Python packages (all platforms):**
 ```bash
-pip install frida-tools angr qiling uncompyle6 capstone lief z3-solver
+pip install frida-tools angr uncompyle6 capstone lief z3-solver
 # For Python 3.9+ bytecode: build pycdc from source
 git clone https://github.com/zrax/pycdc && cd pycdc && cmake . && make
 ```
+
+On macOS ARM64, RedTrace keeps Qiling in a verified Python 3.11 environment
+because Qiling 1.4.6's Keystone dependency is incompatible with the main
+Python 3.12 environment. Run Qiling scripts with `qiling-python script.py` or
+use `qltool`; Linux deployments expose the same stable wrappers.
 
 **Linux (apt):**
 ```bash

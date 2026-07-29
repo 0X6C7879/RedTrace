@@ -20,6 +20,7 @@ from redtrace.dispatcher.tasks.common import (
     did_timeout,
     project_allows_conclude_fallback,
     preview,
+    queue_skill_feedback,
     run_worker_process,
     task_healthcheck_enabled,
     write_conclude_result,
@@ -148,6 +149,14 @@ def run_bootstrap_task(
             try:
                 model_output = driver.extract_response_text(first.stdout, first.stderr)
                 payload = parse_json_output(model_output)
+                queue_skill_feedback(
+                    client,
+                    payload,
+                    project_id=project.project.id,
+                    intent_id=intent.id,
+                    worker_name=worker.name,
+                    task_type="bootstrap",
+                )
                 kind, data = validate_bootstrap_execute_payload(payload)
             except Exception as exc:
                 LOG.warning(
@@ -362,6 +371,14 @@ def _try_conclude_fallback(
     try:
         model_output = driver.extract_response_text(result.stdout, result.stderr)
         payload = parse_json_output(model_output)
+        queue_skill_feedback(
+            client,
+            payload,
+            project_id=project_id,
+            intent_id=intent.id,
+            worker_name=worker.name,
+            task_type="bootstrap",
+        )
         conclude_data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
         if isinstance(conclude_data, dict) and isinstance(conclude_data.get("complete"), dict):
             LOG.warning(

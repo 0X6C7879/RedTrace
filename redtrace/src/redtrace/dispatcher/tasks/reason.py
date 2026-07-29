@@ -21,6 +21,7 @@ from redtrace.dispatcher.tasks.common import (
     cancel_reason,
     did_timeout,
     preview,
+    queue_skill_feedback,
     run_worker_process,
     task_healthcheck_enabled,
     write_graph_snapshot_reference,
@@ -187,6 +188,14 @@ def run_reason_task(
         try:
             model_output = driver.extract_response_text(result.stdout, result.stderr)
             payload = parse_json_output(model_output)
+            queue_skill_feedback(
+                client,
+                payload,
+                project_id=project.project.id,
+                intent_id=None,
+                worker_name=worker.name,
+                task_type="reason",
+            )
             kind, data = validate_reason_payload(
                 payload, open_intents_empty=not open_intents, max_intents=config.tasks.reason.max_intents,
             )
