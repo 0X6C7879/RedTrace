@@ -267,7 +267,11 @@ class ContainerManager:
         env = {
             **env,
             **context_harness.environment(),
-            "PATH": f"{self._WORKSPACE}/.redtrace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PATH": (
+                f"{self._WORKSPACE}/.redtrace/bin:"
+                "/home/kali/.local/bin:/home/kali/go/bin:"
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ),
         }
         argv: list[str] = []
         if timeout_seconds is not None:

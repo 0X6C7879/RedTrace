@@ -460,7 +460,8 @@ def test_pi_runtime_extension_registers_worker_model_without_api_call(
     )
 
     assert result.returncode == 0, result.stderr
-    assert "redtrace-test-model" in result.stdout
+    # Pi releases may render the model table on either output stream.
+    assert "redtrace-test-model" in result.stdout + result.stderr
 
 
 def test_get_driver_selects_local_or_container_variant() -> None:

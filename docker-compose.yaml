@@ -1,4 +1,13 @@
 services:
+  redtrace-worker-image:
+    build:
+      context: ./container
+      dockerfile: Dockerfile
+    image: redtrace-worker-container:latest
+    container_name: redtrace-worker-image
+    restart: "no"
+    command: ["true"]
+
   redtrace-server:
     build:
       context: .
@@ -9,7 +18,7 @@ services:
       - "8000:8000"
     volumes:
       - ./datas/redtrace/:/root/.local/share/redtrace/
-      - ./dispatch.yaml:/redtrace/dispatch.yaml
+      - ${REDTRACE_DISPATCH_CONFIG_FILE:-./dispatch.yaml}:/redtrace/dispatch.yaml:ro
       - ./.redtrace-secrets:/redtrace/.redtrace-secrets
       - ./skills:/redtrace/skills
       - ./mcp:/redtrace/mcp
@@ -21,7 +30,7 @@ services:
     healthcheck:
       test:
         - "CMD"
-        - "python"
+        - "python3"
         - "-c"
         - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/projects', timeout=5)"
       interval: 10s
@@ -38,7 +47,7 @@ services:
     container_name: redtrace-dispatcher
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./dispatch.yaml:/redtrace/dispatch.yaml
+      - ${REDTRACE_DISPATCH_CONFIG_FILE:-./dispatch.yaml}:/redtrace/dispatch.yaml:ro
       - ./.redtrace-secrets:/redtrace/.redtrace-secrets
       - ./skills:/redtrace/skills
       - ./mcp:/redtrace/mcp
@@ -47,5 +56,12 @@ services:
     depends_on:
       redtrace-server:
         condition: service_healthy
+      redtrace-worker-image:
+        condition: service_completed_successfully
     restart: unless-stopped
     command: ["uv", "run", "redtrace", "dispatch", "--config", "dispatch.yaml"]
+    working_dir: /redtrace
+
+networks:
+  default:
+    name: redtrace-network

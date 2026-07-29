@@ -1,7 +1,16 @@
-FROM ghcr.io/astral-sh/uv:python3.13-trixie
+FROM kalilinux/kali-rolling:latest
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+COPY --from=ghcr.io/astral-sh/uv:0.8.9 /uv /uvx /usr/local/bin/
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends npm \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        nodejs \
+        npm \
+        python3 \
+        python3-venv \
     && npm install -g \
         @openai/codex@0.118.0 \
         @anthropic-ai/claude-code@2.1.98 \
@@ -20,4 +29,5 @@ COPY ./mcp /redtrace/mcp
 COPY ./plugins /redtrace/plugins
 RUN uv sync --frozen -i https://mirrors.aliyun.com/pypi/simple/
 
-ENV TZ=Asia/Shanghai
+ENV HOME=/root \
+    TZ=Asia/Shanghai

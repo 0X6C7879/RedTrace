@@ -167,7 +167,16 @@ def test_container_has_known_vulnerability_and_crypto_toolchain() -> None:
         encoding="utf-8"
     )
 
-    assert "python3-venv hashcat ffmpeg qrencode zbar-tools sox tesseract-ocr" in dockerfile
+    for package in (
+        "python3-venv",
+        "hashcat",
+        "ffmpeg",
+        "qrencode",
+        "zbar-tools",
+        "sox",
+        "tesseract-ocr",
+    ):
+        assert package in dockerfile
     assert "nuclei_3.11.0_checksums.txt" in dockerfile
     assert "sha256sum -c -" in dockerfile
     assert "cysignals fpylll py_ecc" in dockerfile

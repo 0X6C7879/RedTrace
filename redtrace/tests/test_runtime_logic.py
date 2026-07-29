@@ -81,6 +81,8 @@ def test_container_manager_build_exec_process_wraps_command_with_timeout() -> No
     assert process.command == ["timeout", "-k", "5s", "300s", "agent", "-p", "prompt"]
     assert process.env["A"] == "B"
     assert process.env["PATH"].startswith("/home/kali/workspace/.redtrace/bin:")
+    assert "/home/kali/.local/bin:" in process.env["PATH"]
+    assert "/home/kali/go/bin:" in process.env["PATH"]
 
 
 def test_completed_container_stop_action_only_stops_running_container() -> None:

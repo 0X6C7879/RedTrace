@@ -1,6 +1,7 @@
 server: "http://127.0.0.1:8000"
 
 runtime:
+  execution: "container"
   interval: 3
   max_workers: 4
   max_running_projects: 2
@@ -21,8 +22,8 @@ tasks:
     conclude_timeout: 5
 
 container:
-  image: "ghcr.io/oritera/redtrace-worker-container:latest"
-  network_mode: "host"
+  image: "redtrace-worker-container:latest"
+  network_mode: "redtrace-network"
   completed_action: "stop"
   cap_add:
     - "NET_RAW"

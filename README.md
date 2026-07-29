@@ -214,8 +214,29 @@ Playwright CLI 与 Chromium，并校验仓库内的 `playwright` Skill。Linux �
 
 ### Docker Compose
 
+Docker 模式在 Windows、Linux 和 macOS 上统一运行 Linux 容器。Windows/macOS
+使用 Docker Desktop（Windows 必须切换到 Linux containers），Linux 使用 Docker
+Engine + Compose plugin。控制面与任务 Worker 都以 Kali Linux 为基础；Compose
+会在本地构建 `redtrace-app` 和包含默认 Agent CLI、安全/CTF 工具链的
+`redtrace-worker-container`，不依赖私有远程 Worker 镜像。
+
 ```bash
 cp dispatch.example.yaml dispatch.yaml
+docker compose up --build
+```
+
+Apple Silicon 与 ARM64 Linux 会原生构建 `linux/arm64` Worker，Intel/AMD 主机
+构建 `linux/amd64`。如果 Docker 配置文件不叫 `dispatch.yaml`，可通过
+`REDTRACE_DISPATCH_CONFIG_FILE` 指定宿主机路径：
+
+```bash
+REDTRACE_DISPATCH_CONFIG_FILE=./dispatch.docker.yaml docker compose up --build
+```
+
+PowerShell 使用：
+
+```powershell
+$env:REDTRACE_DISPATCH_CONFIG_FILE = ".\dispatch.docker.yaml"
 docker compose up --build
 ```
 
