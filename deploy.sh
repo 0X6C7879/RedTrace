@@ -417,6 +417,27 @@ ensure_pi_mcp_extension() {
   pi install npm:pi-mcp-extension@1.5.0
 }
 
+seed_pi_prebuilt_deps() {
+  local global_pi="$HOME/.pi"
+  local managed="${REDTRACE_MANAGED_DIR:-.redtrace}"
+  local workers_dir="${REDTRACE_ROOT:-.}/$managed/workers/pi"
+  if [[ ! -d "$global_pi/agent/npm" ]] || [[ ! -d "$workers_dir" ]]; then
+    return 0
+  fi
+  find "$workers_dir" -name 'settings.json' -path '*/.pi/agent/settings.json' -print0 \
+    | while IFS= read -r -d $'\0' settings_file; do
+      local agent_dir="${settings_file%/settings.json}"
+      local npm_dir="$agent_dir/npm/node_modules"
+      if [[ -d "$npm_dir/pi-mcp-extension" ]]; then
+        continue
+      fi
+      log "seeding Pi prebuilt deps from global cache: $agent_dir"
+      mkdir -p "$npm_dir"
+      cp -rL "$global_pi/agent/npm/node_modules/." "$npm_dir/" 2>/dev/null || true
+      date +%s > "$agent_dir/.npm-seeded"
+    done
+}
+
 configure_native_build_env() {
   local openssl libffi gmp mpfr mpc zlib zbar
   openssl="$(brew --prefix openssl@3)"
@@ -1057,6 +1078,7 @@ ensure_npm_cli codex '@openai/codex@latest'
 ensure_npm_cli pi '@earendil-works/pi-coding-agent@latest' --ignore-scripts
 ensure_pi_mcp_extension
 ensure_rtk
+seed_pi_prebuilt_deps
 ensure_playwright_cli_skill
 ensure_brave_search_skill
 ensure_ghidra_headless_skill
