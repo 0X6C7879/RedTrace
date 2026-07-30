@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
 import logging
 import threading
+from dataclasses import dataclass
+from typing import Any
 
-from pydantic import TypeAdapter
 import requests
+from pydantic import TypeAdapter
+from redtrace.server.models import ProjectDetail, ProjectSummary, Settings
 from requests.adapters import HTTPAdapter
-
-from redtrace.server.models import Intent, ProjectDetail, ProjectSummary, Settings
 
 LOG = logging.getLogger(__name__)
 
@@ -57,10 +56,35 @@ class CairnClient:
         response.raise_for_status()
         return self._summary_adapter.validate_python(response.json())
 
+    def wait_for_changes(self, after: int | None, *, timeout: float) -> int:
+        response = self._session().get(
+            self._url("/dispatcher/changes"),
+            params={"after": after, "timeout": timeout},
+            timeout=(self._timeout, timeout + self._timeout),
+        )
+        response.raise_for_status()
+        return int(response.json()["generation"])
+
     def get_project(self, project_id: str) -> ProjectDetail:
-        response = self._session().get(self._url(f"/projects/{project_id}"), timeout=self._timeout)
+        response = self._session().get(
+            self._url(f"/projects/{project_id}"), timeout=self._timeout
+        )
         response.raise_for_status()
         return ProjectDetail.model_validate(response.json())
+
+    def report_project_runtime_cleaned(
+        self,
+        project_id: str,
+        *,
+        success: bool,
+        error: str = "",
+    ) -> None:
+        response = self._session().post(
+            self._url(f"/projects/{project_id}/deletion/runtime-cleaned"),
+            json={"success": success, "error": error},
+            timeout=self._timeout,
+        )
+        response.raise_for_status()
 
     def get_settings(self) -> Settings:
         response = self._session().get(self._url("/settings"), timeout=self._timeout)
@@ -111,25 +135,36 @@ class CairnClient:
             json={"worker": worker},
         )
 
-    def conclude(self, project_id: str, intent_id: str, worker: str, description: str) -> ApiResult:
+    def conclude(
+        self, project_id: str, intent_id: str, worker: str, description: str
+    ) -> ApiResult:
         return self._request_json(
             "POST",
             f"/projects/{project_id}/intents/{intent_id}/conclude",
             json={"worker": worker, "description": description},
         )
 
-    def complete(self, project_id: str, from_ids: list[str], description: str, worker: str) -> ApiResult:
+    def complete(
+        self, project_id: str, from_ids: list[str], description: str, worker: str
+    ) -> ApiResult:
         return self._request_json(
             "POST",
             f"/projects/{project_id}/complete",
             json={"from": from_ids, "description": description, "worker": worker},
         )
 
-    def create_intent(self, project_id: str, from_ids: list[str], description: str, creator: str) -> ApiResult:
+    def create_intent(
+        self, project_id: str, from_ids: list[str], description: str, creator: str
+    ) -> ApiResult:
         return self._request_json(
             "POST",
             f"/projects/{project_id}/intents",
-            json={"from": from_ids, "description": description, "creator": creator, "worker": None},
+            json={
+                "from": from_ids,
+                "description": description,
+                "creator": creator,
+                "worker": None,
+            },
         )
 
     def append_audit_events(
@@ -177,9 +212,7 @@ class CairnClient:
             LOG.debug("Skill feedback queue unavailable: %s", exc)
             return ApiResult(status_code=0, text=str(exc))
         data: Any | None = None
-        if response.headers.get("content-type", "").startswith(
-            "application/json"
-        ):
+        if response.headers.get("content-type", "").startswith("application/json"):
             try:
                 data = response.json()
             except requests.JSONDecodeError:
@@ -204,7 +237,9 @@ class CairnClient:
         data: Any | None = None
         if response.headers.get("content-type", "").startswith("application/json"):
             data = response.json()
-        return ApiResult(status_code=response.status_code, data=data, text=response.text)
+        return ApiResult(
+            status_code=response.status_code, data=data, text=response.text
+        )
 
     def _url(self, path: str) -> str:
         return f"{self._base_url}{path}"

@@ -656,6 +656,45 @@ class OperationExecutor:
             self._submitted.add(task_id_value)
         self._pool.submit(self._run, task_id_value)
 
+    def cancel_project(self, project_id: str) -> None:
+        now = utcnow()
+        with db.get_conn() as conn:
+            conn.execute(
+                """
+                UPDATE operation_tasks
+                SET cancel_requested = 1,
+                    status = CASE
+                        WHEN status IN ('queued', 'running') THEN 'cancelled'
+                        ELSE status
+                    END,
+                    completed_at = CASE
+                        WHEN status IN ('queued', 'running') THEN ?
+                        ELSE completed_at
+                    END
+                WHERE project_id = ?
+                  AND status NOT IN ('succeeded', 'failed', 'cancelled', 'rejected')
+                """,
+                (now, project_id),
+            )
+
+    def has_project_tasks(self, project_id: str) -> bool:
+        with self._lock:
+            submitted = tuple(self._submitted)
+        if not submitted:
+            return False
+        placeholders = ",".join("?" for _ in submitted)
+        with db.get_conn() as conn:
+            row = conn.execute(
+                f"""
+                SELECT 1
+                FROM operation_tasks
+                WHERE project_id = ? AND id IN ({placeholders})
+                LIMIT 1
+                """,
+                (project_id, *submitted),
+            ).fetchone()
+        return row is not None
+
     def _run(self, task_id_value: str) -> None:
         try:
             self._run_inner(task_id_value)

@@ -5,7 +5,7 @@ server: "http://redtrace-server:8000"
 common_env:
   TSEC_SERVER_HOST: "<SERVER_HOST>:8000"
   TSEC_AGENT_TOKEN: "xxx"
-  # BRAVE_API_KEY: "replace-me"  # fallback after native Claude/Codex web search
+  BRAVE_API_KEY: "replace-me"  # fallback after native Claude/Codex web search
 
 runtime:
   # Docker mode is explicit so this file cannot silently become a host-local deployment.
@@ -104,3 +104,11 @@ workers:
   #     PI_API_KEY: "sk-xxx"
   #     PI_PROVIDER_API: "openai-completions"
   #     PI_MODEL_CONTEXT_WINDOW: "1000000"
+paths:
+  root: .
+  skills: skills
+  mcp: mcp
+  plugins: plugins
+  managed: .redtrace
+  workspaces: workspaces
+  audit: .redtrace/audit

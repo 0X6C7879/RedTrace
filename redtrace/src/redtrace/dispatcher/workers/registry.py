@@ -5,6 +5,7 @@ from redtrace.dispatcher.workers.base import WorkerDriver
 
 
 _CLAUDE = ClaudeCodeDriver()
+_LOCAL_CLAUDE = ClaudeCodeDriver(local=True)
 _MOCK = MockDriver()
 
 DRIVERS: dict[str, WorkerDriver] = {
@@ -15,9 +16,10 @@ DRIVERS: dict[str, WorkerDriver] = {
 }
 
 # Local variants invoke the host CLIs in their native configuration (no redtrace provider
-# injection). claudecode and mock build identical commands in both modes, so they are shared.
+# injection). Claude reads long prompts from stdin locally to avoid Windows
+# command-line limits.
 LOCAL_DRIVERS: dict[str, WorkerDriver] = {
-    "claudecode": _CLAUDE,
+    "claudecode": _LOCAL_CLAUDE,
     "codex": CodexDriver(local=True),
     "pi": PiDriver(local=True),
     "mock": _MOCK,

@@ -153,6 +153,7 @@ def test_local_pi_and_codex_use_complete_provider_config_without_exposing_key() 
             "task_types": ["reason"],
             "max_running": 1,
             "priority": 0,
+            "context_length": 1_048_576,
             "env": {
                 "CODEX_MODEL": "gpt-test",
                 "CODEX_BASE_URL": "http://api/v1",
@@ -167,8 +168,8 @@ def test_local_pi_and_codex_use_complete_provider_config_without_exposing_key() 
     assert "--model" in codex_argv
     assert 'model_provider="redtrace"' in codex_argv
     assert 'web_search="live"' in codex_argv
-    assert "model_context_window=1000000" in codex_argv
-    assert "model_auto_compact_token_limit=900000" in codex_argv
+    assert "model_context_window=1048576" in codex_argv
+    assert "model_auto_compact_token_limit=943718" in codex_argv
     assert "codex-secret" not in codex_argv
 
 
@@ -223,7 +224,7 @@ def test_local_workers_keep_global_cli_config_and_isolate_api_overrides(
         assert process.env["CODEX_HOME"] == str(tmp_path / "codex-home")
     assert first.env["OPENAI_API_KEY"] == "first-key"
     assert first.env["CODEX_MODEL"] == "first-model"
-    assert first.env["CODEX_HOME"] == str(tmp_path / ".redtrace" / "codex-home")
+    assert first.env["CODEX_HOME"] == str(tmp_path / "codex-home")
     assert second.env["OPENAI_API_KEY"] == "second-key"
     assert second.env["CODEX_MODEL"] == "second-model"
     assert "ANTHROPIC_API_KEY" not in claude.env
@@ -316,6 +317,7 @@ def test_codex_driver_execute_argv_passes_model_endpoint_and_prompt() -> None:
             "task_types": ["reason"],
             "max_running": 1,
             "priority": 0,
+            "context_length": 1_048_576,
             "env": {
                 "CODEX_MODEL": "gpt-test",
                 "CODEX_BASE_URL": "http://api/v1",
@@ -330,6 +332,6 @@ def test_codex_driver_execute_argv_passes_model_endpoint_and_prompt() -> None:
     assert "gpt-test" in argv
     assert 'model_providers.redtrace.base_url="http://api/v1"' in argv
     assert 'web_search="live"' in argv
-    assert "model_context_window=1000000" in argv
-    assert "model_auto_compact_token_limit=900000" in argv
+    assert "model_context_window=1048576" in argv
+    assert "model_auto_compact_token_limit=943718" in argv
     assert argv[-2:] == ["--", "prompt"]

@@ -11,9 +11,9 @@ import tomllib
 
 from redtrace.config_secrets import atomic_write_text
 from redtrace.dispatcher.config import (
-    DEFAULT_MODEL_AUTO_COMPACT_TOKEN_LIMIT,
-    DEFAULT_MODEL_CONTEXT_WINDOW,
+    DEFAULT_PI_MODEL_CONTEXT_WINDOW,
     WorkerConfig,
+    model_auto_compact_token_limit,
 )
 
 
@@ -93,6 +93,7 @@ def _write_claude(home: Path, worker: WorkerConfig) -> None:
 
     model = worker.env["ANTHROPIC_MODEL"]
     env = deepcopy(env)
+    env.pop("CLAUDE_CODE_AUTO_COMPACT_WINDOW", None)
     env.update(
         {
             "ANTHROPIC_BASE_URL": worker.env["ANTHROPIC_BASE_URL"],
@@ -102,13 +103,12 @@ def _write_claude(home: Path, worker: WorkerConfig) -> None:
             "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
             "CLAUDE_CODE_SUBAGENT_MODEL": model,
-            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(
-                DEFAULT_MODEL_CONTEXT_WINDOW
-            ),
             "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90",
             "CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION": "1000",
         }
     )
+    if worker.context_length is not None:
+        env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(worker.context_length)
     updated = deepcopy(existing)
     updated["model"] = model
     updated["env"] = env
@@ -179,12 +179,18 @@ def _write_codex(home: Path, worker: WorkerConfig) -> None:
         'approval_policy = "never"',
         'sandbox_mode = "danger-full-access"',
         'web_search = "live"',
-        f"model_context_window = {DEFAULT_MODEL_CONTEXT_WINDOW}",
-        (
-            "model_auto_compact_token_limit = "
-            f"{DEFAULT_MODEL_AUTO_COMPACT_TOKEN_LIMIT}"
+        *(
+            [
+                f"model_context_window = {worker.context_length}",
+                (
+                    "model_auto_compact_token_limit = "
+                    f"{model_auto_compact_token_limit(worker.context_length)}"
+                ),
+                'model_auto_compact_token_limit_scope = "total"',
+            ]
+            if worker.context_length is not None
+            else []
         ),
-        'model_auto_compact_token_limit_scope = "total"',
         CODEX_DEFAULTS_END,
     ]
     provider = [
@@ -230,11 +236,10 @@ def _write_pi(home: Path, worker: WorkerConfig) -> None:
     if not isinstance(providers, dict):
         raise NativeCliConfigError(f"{models_path} providers must be a JSON object")
     providers = deepcopy(providers)
-    context_window = int(
-        worker.env.get(
-            "PI_MODEL_CONTEXT_WINDOW",
-            str(DEFAULT_MODEL_CONTEXT_WINDOW),
-        )
+    context_window = (
+        worker.context_length
+        if worker.context_length is not None
+        else DEFAULT_PI_MODEL_CONTEXT_WINDOW
     )
     providers["redtrace"] = {
         "baseUrl": worker.env["PI_BASE_URL"],

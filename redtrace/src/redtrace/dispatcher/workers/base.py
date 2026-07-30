@@ -13,6 +13,7 @@ from redtrace.dispatcher.workers.health import HealthResult
 class DriverResult:
     argv: list[str]
     session: str | None = None
+    stdin: str | None = None
 
 
 class WorkerDriver(abc.ABC):
@@ -44,7 +45,12 @@ class WorkerDriver(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def build_conclude(self, worker: WorkerConfig, prompt: str, session: str) -> list[str]:
+    def build_conclude(
+        self,
+        worker: WorkerConfig,
+        prompt: str,
+        session: str,
+    ) -> DriverResult:
         raise NotImplementedError
 
     def extract_session(self, session: str | None, stdout: str, stderr: str) -> str | None:

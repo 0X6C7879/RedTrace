@@ -57,7 +57,7 @@ export default function (pi) {
   const contextWindow =
     Number.isFinite(configuredContext) && configuredContext > 0
       ? configuredContext
-      : 1000000;
+      : 128000;
   const model = {
     id: values.PI_MODEL,
     name: values.PI_MODEL,
@@ -121,13 +121,12 @@ def resolve_capabilities_root(explicit: str | Path | None = None) -> Path:
     if configured:
         return Path(configured).expanduser().resolve()
 
-    cwd = Path.cwd().resolve()
-    if any((cwd / name).is_dir() for name in ("skills", "mcp", "plugins")):
-        return cwd
-
     source_root = Path(__file__).resolve().parents[3]
     if any((source_root / name).is_dir() for name in ("skills", "mcp", "plugins")):
         return source_root
+    cwd = Path.cwd().resolve()
+    if any((cwd / name).is_dir() for name in ("skills", "mcp", "plugins")):
+        return cwd
     if (cwd / "redtrace" / "pyproject.toml").is_file() or (cwd / "pyproject.toml").is_file():
         return cwd
     return source_root
@@ -217,11 +216,22 @@ class McpRecord:
 
 
 class CapabilityStore:
-    def __init__(self, root: str | Path | None = None):
+    def __init__(
+        self,
+        root: str | Path | None = None,
+        *,
+        skills_dir: str | Path | None = None,
+        mcp_dir: str | Path | None = None,
+        plugins_dir: str | Path | None = None,
+    ):
         self.root = resolve_capabilities_root(root)
-        self.skills_dir = self.root / "skills"
-        self.mcp_dir = self.root / "mcp"
-        self.plugins_dir = self.root / "plugins"
+        self.skills_dir = (
+            Path(skills_dir).resolve() if skills_dir else self.root / "skills"
+        )
+        self.mcp_dir = Path(mcp_dir).resolve() if mcp_dir else self.root / "mcp"
+        self.plugins_dir = (
+            Path(plugins_dir).resolve() if plugins_dir else self.root / "plugins"
+        )
         self.skill_meta_dir = self.skills_dir / ".redtrace"
         self.max_skills = _positive_env("REDTRACE_MAX_SKILLS", DEFAULT_MAX_SKILLS)
         self.max_skill_chars = _positive_env("REDTRACE_MAX_SKILL_CHARS", DEFAULT_MAX_SKILL_CHARS)

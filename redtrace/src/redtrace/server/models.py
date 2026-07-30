@@ -46,7 +46,7 @@ class ProjectReason(BaseModel):
 class ProjectMeta(BaseModel):
     id: str
     title: str
-    status: Literal["active", "stopped", "completed"]
+    status: Literal["active", "stopped", "completed", "deleting"]
     bootstrap_enabled: bool
     created_at: str
     reason: ProjectReason | None = None

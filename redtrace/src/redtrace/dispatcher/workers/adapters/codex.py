@@ -4,9 +4,8 @@ import json
 
 from redtrace.capabilities import CapabilityStore, codex_mcp_overrides
 from redtrace.dispatcher.config import (
-    DEFAULT_MODEL_AUTO_COMPACT_TOKEN_LIMIT,
-    DEFAULT_MODEL_CONTEXT_WINDOW,
     WorkerConfig,
+    model_auto_compact_token_limit,
 )
 from redtrace.dispatcher.workers.base import DriverResult, RegexSessionDriver
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
@@ -22,20 +21,26 @@ class CodexDriver(RegexSessionDriver):
         return "codex"
 
     @staticmethod
-    def _long_task_args() -> list[str]:
-        return [
+    def _long_task_args(worker: WorkerConfig) -> list[str]:
+        args = [
             "-c",
             'web_search="live"',
-            "-c",
-            f"model_context_window={DEFAULT_MODEL_CONTEXT_WINDOW}",
-            "-c",
-            (
-                "model_auto_compact_token_limit="
-                f"{DEFAULT_MODEL_AUTO_COMPACT_TOKEN_LIMIT}"
-            ),
-            "-c",
-            'model_auto_compact_token_limit_scope="total"',
         ]
+        if worker.context_length is not None:
+            args.extend(
+                [
+                    "-c",
+                    f"model_context_window={worker.context_length}",
+                    "-c",
+                    (
+                        "model_auto_compact_token_limit="
+                        f"{model_auto_compact_token_limit(worker.context_length)}"
+                    ),
+                    "-c",
+                    'model_auto_compact_token_limit_scope="total"',
+                ]
+            )
+        return args
 
     def check_health(self, worker: WorkerConfig, *, timeout: float) -> HealthResult:
         env = worker.env
@@ -58,7 +63,7 @@ class CodexDriver(RegexSessionDriver):
         return f"POST {worker.env['CODEX_BASE_URL']}/responses (model={worker.env['CODEX_MODEL']})"
 
     def build_execute(self, worker: WorkerConfig, prompt: str, session: str | None) -> DriverResult:
-        capability_args = codex_mcp_overrides(CapabilityStore().list_mcp())
+        capability_args = self._resource_args(worker)
         if self.local and not worker.api_configured():
             return DriverResult(
                 argv=[
@@ -66,11 +71,12 @@ class CodexDriver(RegexSessionDriver):
                     "exec",
                     "--json",
                     "--dangerously-bypass-approvals-and-sandbox",
-                    *self._long_task_args(),
+                    *self._long_task_args(worker),
                     *capability_args,
                     "--",
-                    prompt,
-                ]
+                    "-",
+                ],
+                stdin=prompt,
             )
         env = worker.env
         return DriverResult(
@@ -79,7 +85,7 @@ class CodexDriver(RegexSessionDriver):
                 "exec",
                 "--json",
                 "--dangerously-bypass-approvals-and-sandbox",
-                *self._long_task_args(),
+                *self._long_task_args(worker),
                 "--model",
                 env["CODEX_MODEL"],
                 "-c",
@@ -100,30 +106,40 @@ class CodexDriver(RegexSessionDriver):
             ]
         )
 
-    def build_conclude(self, worker: WorkerConfig, prompt: str, session: str) -> list[str]:
-        capability_args = codex_mcp_overrides(CapabilityStore().list_mcp())
+    def build_conclude(
+        self,
+        worker: WorkerConfig,
+        prompt: str,
+        session: str,
+    ) -> DriverResult:
+        capability_args = self._resource_args(worker)
         if self.local and not worker.api_configured():
-            return [
+            return DriverResult(
+                argv=[
                 "codex",
                 "exec",
                 "--json",
                 "resume",
                 session,
                 "--dangerously-bypass-approvals-and-sandbox",
-                *self._long_task_args(),
-                *capability_args,
-                "--",
-                prompt,
-            ]
+                *self._long_task_args(worker),
+                    *capability_args,
+                    "--",
+                    "-",
+                ],
+                session=session,
+                stdin=prompt,
+            )
         env = worker.env
-        return [
+        return DriverResult(
+            argv=[
             "codex",
             "exec",
             "--json",
             "resume",
             session,
             "--dangerously-bypass-approvals-and-sandbox",
-            *self._long_task_args(),
+            *self._long_task_args(worker),
             "--model",
             env["CODEX_MODEL"],
             "-c",
@@ -141,7 +157,9 @@ class CodexDriver(RegexSessionDriver):
             *capability_args,
             "--",
             prompt,
-        ]
+            ],
+            session=session,
+        )
 
     def extract_session(self, session: str | None, stdout: str, stderr: str) -> str | None:
         if session:
@@ -164,6 +182,19 @@ class CodexDriver(RegexSessionDriver):
             if isinstance(text, str) and text.strip():
                 return text
         return stdout
+
+    @staticmethod
+    def _resource_args(worker: WorkerConfig) -> list[str]:
+        raw = worker.env.get("REDTRACE_CODEX_RESOURCE_ARGS")
+        if raw is None:
+            return codex_mcp_overrides(CapabilityStore().list_mcp())
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("invalid REDTRACE_CODEX_RESOURCE_ARGS") from exc
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            raise ValueError("REDTRACE_CODEX_RESOURCE_ARGS must be a JSON string array")
+        return value
 
     @staticmethod
     def _iter_events(stdout: str) -> list[dict]:

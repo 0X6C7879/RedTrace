@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
 from concurrent.futures import Future
 
+from conftest import make_config, make_intent, make_project
 from redtrace.dispatcher.models import ReasonCheckpoint, RunningTask
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
-from redtrace.dispatcher.scheduler.loop import DispatcherLoop
+from redtrace.dispatcher.scheduler.loop import (
+    DispatcherLoop,
+    _compact_project_snapshot,
+)
 from redtrace.dispatcher.scheduler.worker_select import choose_worker
 from redtrace.server.models import Fact, ProjectSummary
-
-from conftest import make_config, make_intent, make_project
 
 
 def _loop() -> DispatcherLoop:
@@ -38,6 +41,17 @@ def _summary(project_id: str, status: str) -> ProjectSummary:
         unclaimed_intent_count=0,
         hint_count=0,
     )
+
+
+def test_compact_project_snapshot_uses_already_loaded_detail() -> None:
+    project = make_project(intents=[make_intent()])
+
+    payload = json.loads(_compact_project_snapshot(project))
+
+    assert payload["project"]["title"] == project.project.title
+    assert payload["facts"][0]["id"] == "origin"
+    assert payload["intents"][0]["from"] == project.intents[0].from_
+    assert "shared_resources" not in payload
 
 
 def test_reason_trigger_detects_new_facts_and_open_intent_completion() -> None:
@@ -134,7 +148,9 @@ def test_new_fact_dispatches_reason_before_unclaimed_explore_intent() -> None:
         hint_count=1,
         open_intent_count=1,
     )
-    loop.container_manager = type("Containers", (), {"container_name": lambda _self, project_id: project_id})()
+    loop.container_manager = type(
+        "Containers", (), {"container_name": lambda _self, project_id: project_id}
+    )()
     loop.client = type(
         "Client",
         (),
@@ -144,7 +160,9 @@ def test_new_fact_dispatches_reason_before_unclaimed_explore_intent() -> None:
         },
     )()
     dispatched: list[tuple[str, str]] = []
-    loop._dispatch_reason = lambda _project, _graph, trigger: dispatched.append(("reason", trigger)) or True
+    loop._dispatch_reason = lambda _project, _graph, trigger: (
+        dispatched.append(("reason", trigger)) or True
+    )
     loop._dispatch_explore = lambda *_args: dispatched.append(("explore", "")) or True
 
     assert loop._try_dispatch_project(_summary("proj_001", "active"))
@@ -157,14 +175,18 @@ def test_initial_enabled_project_without_bootstrap_worker_dispatches_reason() ->
     loop.config = config.model_copy(
         update={
             "workers": [
-                config.workers[0].model_copy(update={"task_types": ["reason", "explore"]})
+                config.workers[0].model_copy(
+                    update={"task_types": ["reason", "explore"]}
+                )
             ]
         }
     )
     loop.futures = {}
     project = make_project()
     project.facts = project.facts[:2]
-    loop.container_manager = type("Containers", (), {"container_name": lambda _self, project_id: project_id})()
+    loop.container_manager = type(
+        "Containers", (), {"container_name": lambda _self, project_id: project_id}
+    )()
     loop.client = type(
         "Client",
         (),
@@ -174,8 +196,12 @@ def test_initial_enabled_project_without_bootstrap_worker_dispatches_reason() ->
         },
     )()
     dispatched: list[tuple[str, str]] = []
-    loop._dispatch_initial_project = lambda _project: dispatched.append(("bootstrap", "")) or True
-    loop._dispatch_reason = lambda _project, _graph, trigger: dispatched.append(("reason", trigger)) or True
+    loop._dispatch_initial_project = lambda _project: (
+        dispatched.append(("bootstrap", "")) or True
+    )
+    loop._dispatch_reason = lambda _project, _graph, trigger: (
+        dispatched.append(("reason", trigger)) or True
+    )
 
     assert loop._try_dispatch_project(_summary("proj_001", "active"))
     assert dispatched == [("reason", "initial")]
@@ -188,7 +214,9 @@ def test_initial_disabled_project_skips_configured_bootstrap_worker() -> None:
     project = make_project()
     project.project.bootstrap_enabled = False
     project.facts = project.facts[:2]
-    loop.container_manager = type("Containers", (), {"container_name": lambda _self, project_id: project_id})()
+    loop.container_manager = type(
+        "Containers", (), {"container_name": lambda _self, project_id: project_id}
+    )()
     loop.client = type(
         "Client",
         (),
@@ -198,8 +226,12 @@ def test_initial_disabled_project_skips_configured_bootstrap_worker() -> None:
         },
     )()
     dispatched: list[tuple[str, str]] = []
-    loop._dispatch_initial_project = lambda _project: dispatched.append(("bootstrap", "")) or True
-    loop._dispatch_reason = lambda _project, _graph, trigger: dispatched.append(("reason", trigger)) or True
+    loop._dispatch_initial_project = lambda _project: (
+        dispatched.append(("bootstrap", "")) or True
+    )
+    loop._dispatch_reason = lambda _project, _graph, trigger: (
+        dispatched.append(("reason", trigger)) or True
+    )
 
     assert loop._try_dispatch_project(_summary("proj_001", "active"))
     assert dispatched == [("reason", "initial")]
@@ -211,7 +243,9 @@ def test_initial_enabled_project_without_bootstrap_worker_skips_bootstrap() -> N
     loop.config = config.model_copy(
         update={
             "workers": [
-                config.workers[0].model_copy(update={"task_types": ["reason", "explore"]})
+                config.workers[0].model_copy(
+                    update={"task_types": ["reason", "explore"]}
+                )
             ]
         }
     )
@@ -222,13 +256,17 @@ def test_initial_enabled_project_without_bootstrap_worker_skips_bootstrap() -> N
     assert not loop._project_requires_bootstrap(project)
 
 
-def test_initial_enabled_project_keeps_existing_bootstrap_intent_when_workers_change() -> None:
+def test_initial_enabled_project_keeps_existing_bootstrap_intent_when_workers_change() -> (
+    None
+):
     loop = _loop()
     config = make_config()
     loop.config = config.model_copy(
         update={
             "workers": [
-                config.workers[0].model_copy(update={"task_types": ["reason", "explore"]})
+                config.workers[0].model_copy(
+                    update={"task_types": ["reason", "explore"]}
+                )
             ]
         }
     )
@@ -245,19 +283,29 @@ def test_initial_enabled_project_keeps_existing_bootstrap_intent_when_workers_ch
 def test_cancel_inactive_tasks_marks_stopped_and_deleted_projects() -> None:
     loop = _loop()
     stopped = TaskCancellation()
+    deleting = TaskCancellation()
     deleted = TaskCancellation()
     loop.futures = {
         Future(): RunningTask("stopped", "explore", "worker", stopped),
+        Future(): RunningTask("deleting", "explore", "worker", deleting),
         Future(): RunningTask("deleted", "reason", "worker", deleted),
     }
 
-    loop._cancel_inactive_tasks([_summary("stopped", "stopped")])
+    loop._cancel_inactive_tasks(
+        [
+            _summary("stopped", "stopped"),
+            _summary("deleting", "deleting"),
+        ]
+    )
 
     assert stopped.reason == "stopped"
+    assert deleting.reason == "deleting"
     assert deleted.reason == "deleted"
 
 
-def test_initialize_reason_checkpoint_only_for_active_projects_with_open_intents() -> None:
+def test_initialize_reason_checkpoint_only_for_active_projects_with_open_intents() -> (
+    None
+):
     loop = _loop()
     active = _summary("active", "active")
     active.unclaimed_intent_count = 1
@@ -275,14 +323,24 @@ def test_initialize_reason_checkpoint_only_for_active_projects_with_open_intents
     }
 
 
-def test_select_worker_reports_busy_unhealthy_rejected_and_unsupported_workers(monkeypatch) -> None:
+def test_select_worker_reports_busy_unhealthy_rejected_and_unsupported_workers(
+    monkeypatch,
+) -> None:
     loop = _loop()
     base = make_config()
     busy = base.workers[0].model_copy(update={"name": "busy", "task_types": ["reason"]})
-    unhealthy = base.workers[0].model_copy(update={"name": "unhealthy", "task_types": ["reason"]})
-    rejected = base.workers[0].model_copy(update={"name": "rejected", "task_types": ["reason"]})
-    unsupported = base.workers[0].model_copy(update={"name": "unsupported", "task_types": ["explore"]})
-    loop.config = base.model_copy(update={"workers": [busy, unhealthy, rejected, unsupported]})
+    unhealthy = base.workers[0].model_copy(
+        update={"name": "unhealthy", "task_types": ["reason"]}
+    )
+    rejected = base.workers[0].model_copy(
+        update={"name": "rejected", "task_types": ["reason"]}
+    )
+    unsupported = base.workers[0].model_copy(
+        update={"name": "unsupported", "task_types": ["explore"]}
+    )
+    loop.config = base.model_copy(
+        update={"workers": [busy, unhealthy, rejected, unsupported]}
+    )
     loop.futures = {Future(): RunningTask("proj", "reason", "busy", TaskCancellation())}
     loop.worker_unhealthy_until = {"unhealthy": 110.0}
     loop.worker_rejected_until = {("proj", "reason", "rejected"): 120.0}
@@ -297,14 +355,22 @@ def test_select_worker_reports_busy_unhealthy_rejected_and_unsupported_workers(m
     assert selection.blocked_task_type == ["unsupported"]
 
 
-def test_disabled_worker_healthcheck_skips_automatic_startup_but_force_runs_diagnostic() -> None:
+def test_disabled_worker_healthcheck_skips_automatic_startup_but_force_runs_diagnostic() -> (
+    None
+):
     loop = _loop()
     config = make_config()
     loop.config = config.model_copy(
-        update={"runtime": config.runtime.model_copy(update={"worker_healthcheck": "disabled"})}
+        update={
+            "runtime": config.runtime.model_copy(
+                update={"worker_healthcheck": "disabled"}
+            )
+        }
     )
     calls: list[bool] = []
-    loop._run_startup_healthchecks = lambda *, show_commands: calls.append(show_commands)
+    loop._run_startup_healthchecks = lambda *, show_commands: calls.append(
+        show_commands
+    )
     loop._startup_healthchecks_checked = False
 
     loop.run_startup_healthchecks()
@@ -322,10 +388,16 @@ def test_startup_only_worker_healthcheck_runs_automatic_startup_check() -> None:
     loop = _loop()
     config = make_config()
     loop.config = config.model_copy(
-        update={"runtime": config.runtime.model_copy(update={"worker_healthcheck": "startup_only"})}
+        update={
+            "runtime": config.runtime.model_copy(
+                update={"worker_healthcheck": "startup_only"}
+            )
+        }
     )
     calls: list[bool] = []
-    loop._run_startup_healthchecks = lambda *, show_commands: calls.append(show_commands)
+    loop._run_startup_healthchecks = lambda *, show_commands: calls.append(
+        show_commands
+    )
     loop._startup_healthchecks_checked = False
 
     loop.run_startup_healthchecks()

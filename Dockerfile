@@ -24,9 +24,6 @@ WORKDIR /redtrace
 RUN uv sync --frozen --no-install-project -i https://mirrors.aliyun.com/pypi/simple/
 
 COPY ./redtrace /redtrace
-COPY ./skills /redtrace/skills
-COPY ./mcp /redtrace/mcp
-COPY ./plugins /redtrace/plugins
 RUN uv sync --frozen -i https://mirrors.aliyun.com/pypi/simple/
 
 ENV HOME=/root \

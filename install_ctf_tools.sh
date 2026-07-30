@@ -518,8 +518,8 @@ Optional/manual tools:
   pwndbg   - https://github.com/pwndbg/pwndbg
   pycdc    - https://github.com/zrax/pycdc
   dnSpyEx  - https://github.com/dnSpyEx/dnSpy (Windows/.NET)
-SageMath is intentionally not installed. fpylll, cysignals, SymPy, gmpy2,
-Z3, py_ecc, and RsaCtfTool provide the default Crypto workflow.
+fpylll, cysignals, SymPy, gmpy2, Z3, py_ecc, and RsaCtfTool provide the
+default Crypto workflow.
 No vulnerability database, PoC collection, or Nuclei template repository is
 downloaded. Agents perform live fingerprint-based research and fetch only the
 specific candidate PoC/EXP or validation template they need.

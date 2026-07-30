@@ -5,6 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, SecretStr
 
+from redtrace.dispatcher.config import MODEL_CONTEXT_1M
 from redtrace.worker_config import (
     WorkerConfigConflict,
     WorkerConfigError,
@@ -23,6 +24,7 @@ class WorkerView(BaseModel):
     api_key: str
     api_key_configured: bool
     model_id: str
+    context_length: int | None
     task_types: list[str]
     priority: int
     max_running: int
@@ -48,6 +50,7 @@ class WorkerMutation(BaseModel):
     api_key: SecretStr | None = None
     clear_api_key: bool = False
     model_id: str = ""
+    context_length: Literal[MODEL_CONTEXT_1M] | None = None
     task_types: list[Literal["bootstrap", "reason", "explore"]]
     priority: int
     max_running: int

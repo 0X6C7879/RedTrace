@@ -1,29 +1,34 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
 import subprocess
+import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
 import requests
-
-from redtrace.dispatcher.config import DispatchConfig, LocalConfig, WorkerConfig
+from redtrace.agent_runtime import AgentRuntimeManager
+from redtrace.dispatcher.config import LocalConfig, WorkerConfig
 from redtrace.dispatcher.config_reload import DispatchConfigReloader
 from redtrace.dispatcher.models import ReasonCheckpoint, RunningTask
 from redtrace.dispatcher.protocol.client import CairnClient
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.local_backend import LocalBackend
-from redtrace.dispatcher.runtime.startup_healthcheck import format_failure_summary, run_startup_healthchecks
+from redtrace.dispatcher.runtime.startup_healthcheck import (
+    format_failure_summary,
+    run_startup_healthchecks,
+)
 from redtrace.dispatcher.scheduler.worker_select import choose_worker
-from redtrace.dispatcher.workers.registry import get_driver
 from redtrace.dispatcher.tasks.bootstrap import run_bootstrap_task
 from redtrace.dispatcher.tasks.explore import run_explore_task
 from redtrace.dispatcher.tasks.reason import run_reason_task
+from redtrace.dispatcher.workers.registry import get_driver
 from redtrace.server.models import Intent, ProjectDetail, ProjectSummary
 
 LOG = logging.getLogger(__name__)
@@ -36,8 +41,35 @@ def _local_cli_probe_command(path: str, *, platform: str = os.name) -> list[str]
         comspec = os.environ.get("COMSPEC", "cmd.exe")
         return [comspec, "/d", "/s", "/c", subprocess.list2cmdline([path, "--help"])]
     return [path, "--help"]
+
+
 BOOTSTRAP_INTENT_DESCRIPTION = "bootstrap"
 BOOTSTRAP_INTENT_CREATOR = "dispatcher.bootstrap"
+
+
+def _compact_project_snapshot(project: ProjectDetail) -> str:
+    """Serialize only scheduling context already fetched with ProjectDetail.
+
+    Live resources remain available on demand through redtrace-resource, so a
+    dispatch never needs a second HTTP export or its extra SQL/YAML work.
+    """
+    return json.dumps(
+        {
+            "project": {
+                "title": project.project.title,
+                "status": project.project.status,
+                "bootstrap_enabled": project.project.bootstrap_enabled,
+            },
+            "facts": [fact.model_dump(mode="json") for fact in project.facts],
+            "hints": [hint.model_dump(mode="json") for hint in project.hints],
+            "intents": [
+                intent.model_dump(mode="json", by_alias=True)
+                for intent in project.intents
+            ],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 @dataclass(slots=True)
@@ -54,22 +86,33 @@ class DispatcherLoop:
         self.config_path = config_path
         self._config_reloader = DispatchConfigReloader(config_path)
         self.config = self._config_reloader.config
+        self.agent_runtime = AgentRuntimeManager(
+            self.config.paths.layout(),
+            execution=self.config.runtime.execution,
+        )
+        self.agent_runtime.initialize(self.config.workers)
         self.client = CairnClient(self.config.server)
         if self.config.runtime.execution == "local":
             self.container_manager = LocalBackend(
                 self.config.local or LocalConfig(),
                 self.config.context_harness,
+                self.config.paths.layout(),
             )
         else:
             assert self.config.container is not None
             self.container_manager = ContainerManager(
                 self.config.container,
                 self.config.context_harness,
+                self.config.paths.layout(),
             )
         self.executor = ThreadPoolExecutor(max_workers=self.config.runtime.max_workers)
-        self.cleanup_executor = ThreadPoolExecutor(max_workers=max(1, min(8, self.config.runtime.max_workers)))
+        self.cleanup_executor = ThreadPoolExecutor(
+            max_workers=max(1, min(8, self.config.runtime.max_workers))
+        )
         self.futures: dict[Future[str], RunningTask] = {}
-        self.cleanup_futures: dict[Future[bool], tuple[str, str | None, str | None]] = {}
+        self.cleanup_futures: dict[
+            Future[bool], tuple[str, str | None, str | None]
+        ] = {}
         self.reason_checkpoints: dict[str, ReasonCheckpoint] = {}
         self.runtime_project_ids: set[str] = set()
         self.worker_unhealthy_until: dict[str, float] = {}
@@ -80,6 +123,8 @@ class DispatcherLoop:
         self.project_cursor = 0
         self._settings_checked = False
         self._startup_healthchecks_checked = False
+        self._change_cursor: int | None = None
+        self._wakeup = threading.Event()
 
     def close(self) -> None:
         if self.futures:
@@ -104,6 +149,7 @@ class DispatcherLoop:
                     self._reap_futures()
                     self._reap_cleanup_futures()
                     self._refresh_worker_config()
+                    self.agent_runtime.refresh_capabilities(self.config.workers)
                     summaries = self.client.list_projects()
                     self._initialize_reason_checkpoints(summaries)
                     self._refresh_runtime_projects(summaries)
@@ -122,7 +168,27 @@ class DispatcherLoop:
                     continue
                 if once:
                     break
-                time.sleep(self.config.runtime.interval)
+                if self.futures or self.cleanup_futures:
+                    self._wakeup.wait(
+                        timeout=max(1.0, min(5.0, self.config.runtime.interval))
+                    )
+                    self._wakeup.clear()
+                else:
+                    try:
+                        self._change_cursor = self.client.wait_for_changes(
+                            self._change_cursor,
+                            timeout=max(
+                                5.0,
+                                min(15.0, self.config.runtime.interval * 5),
+                            ),
+                        )
+                    except requests.RequestException as exc:
+                        LOG.warning(
+                            "dispatcher change wait failed error=%s retry_in=%ss",
+                            exc,
+                            self.config.runtime.interval,
+                        )
+                        time.sleep(self.config.runtime.interval)
         finally:
             self.close()
 
@@ -132,7 +198,9 @@ class DispatcherLoop:
         finally:
             self.close()
 
-    def run_startup_healthchecks(self, *, show_commands: bool = False, force: bool = False) -> None:
+    def run_startup_healthchecks(
+        self, *, show_commands: bool = False, force: bool = False
+    ) -> None:
         if self._startup_healthchecks_checked:
             return
         if self.config.runtime.execution == "local":
@@ -140,7 +208,9 @@ class DispatcherLoop:
             self._startup_healthchecks_checked = True
             return
         if not force and self.config.runtime.worker_healthcheck == "disabled":
-            LOG.info("skip startup worker healthchecks because runtime.worker_healthcheck=disabled")
+            LOG.info(
+                "skip startup worker healthchecks because runtime.worker_healthcheck=disabled"
+            )
             self._startup_healthchecks_checked = True
             return
         self._run_startup_healthchecks(show_commands=show_commands)
@@ -162,7 +232,9 @@ class DispatcherLoop:
         if not binaries:
             return
 
-        LOG.info("[*] Local execution: checking %d worker CLI(s) on this host", len(binaries))
+        LOG.info(
+            "[*] Local execution: checking %d worker CLI(s) on this host", len(binaries)
+        )
         available: list[str] = []
         missing: list[str] = []
         for binary in sorted(binaries):
@@ -176,7 +248,13 @@ class DispatcherLoop:
                 LOG.info("[+] %-8s %s (workers: %s)", binary, path, workers)
             else:
                 available.append(binary)
-                LOG.warning("[!] %-8s %s found but `%s --help` failed (workers: %s)", binary, path, binary, workers)
+                LOG.warning(
+                    "[!] %-8s %s found but `%s --help` failed (workers: %s)",
+                    binary,
+                    path,
+                    binary,
+                    workers,
+                )
 
         if not available:
             raise RuntimeError(
@@ -213,6 +291,7 @@ class DispatcherLoop:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=15,
+                check=False,
             )
         except (OSError, subprocess.SubprocessError):
             return path, False
@@ -229,14 +308,22 @@ class DispatcherLoop:
             return
         active = [summary for summary in summaries if summary.status == "active"]
         if not active:
-            self._log_changed("dispatch/global", logging.INFO, "skip dispatch because no active projects")
+            self._log_changed(
+                "dispatch/global",
+                logging.INFO,
+                "skip dispatch because no active projects",
+            )
             return
 
         running_projects = self._ordered_projects(
             [summary for summary in active if summary.id in self.runtime_project_ids]
         )
         idle_projects = self._ordered_projects(
-            [summary for summary in active if summary.id not in self.runtime_project_ids]
+            [
+                summary
+                for summary in active
+                if summary.id not in self.runtime_project_ids
+            ]
         )
 
         dispatched = True
@@ -249,7 +336,10 @@ class DispatcherLoop:
                         return
             if dispatched:
                 continue
-            if self._running_project_count(active) >= self.config.runtime.max_running_projects:
+            if (
+                self._running_project_count(active)
+                >= self.config.runtime.max_running_projects
+            ):
                 self._log_changed(
                     "dispatch/idle-limit",
                     logging.INFO,
@@ -258,7 +348,10 @@ class DispatcherLoop:
                 )
                 return
             for summary in idle_projects:
-                if self._running_project_count(active) >= self.config.runtime.max_running_projects:
+                if (
+                    self._running_project_count(active)
+                    >= self.config.runtime.max_running_projects
+                ):
                     self._log_changed(
                         "dispatch/idle-limit",
                         logging.INFO,
@@ -270,7 +363,9 @@ class DispatcherLoop:
                     dispatched = True
                     break
 
-    def _ordered_projects(self, summaries: list[ProjectSummary]) -> list[ProjectSummary]:
+    def _ordered_projects(
+        self, summaries: list[ProjectSummary]
+    ) -> list[ProjectSummary]:
         if not summaries:
             return []
         ids = [summary.id for summary in summaries]
@@ -293,7 +388,10 @@ class DispatcherLoop:
                 container_name,
             )
             return False
-        if self._project_running_task_count(summary.id) >= self.config.runtime.max_project_workers:
+        if (
+            self._project_running_task_count(summary.id)
+            >= self.config.runtime.max_project_workers
+        ):
             self._log_changed(
                 f"{skip_scope}:max_project_workers",
                 logging.INFO,
@@ -318,13 +416,19 @@ class DispatcherLoop:
                 return False
             if self._project_requires_bootstrap(project):
                 return self._dispatch_initial_project(project)
-            export_yaml = self.client.export_project(summary.id)
-            return self._dispatch_reason(project, export_yaml, "initial")
+            return self._dispatch_reason(
+                project,
+                _compact_project_snapshot(project),
+                "initial",
+            )
         if project.project.reason is None:
             reason_trigger = self._reason_trigger(project)
             if reason_trigger is not None:
-                export_yaml = self.client.export_project(summary.id)
-                return self._dispatch_reason(project, export_yaml, reason_trigger)
+                return self._dispatch_reason(
+                    project,
+                    _compact_project_snapshot(project),
+                    reason_trigger,
+                )
         running_intent_ids = self._project_running_explore_intents(summary.id)
         unclaimed_intents = [
             intent
@@ -344,8 +448,11 @@ class DispatcherLoop:
             )
         if unclaimed_intents:
             newest = max(unclaimed_intents, key=lambda i: i.created_at)
-            export_yaml = self.client.export_project(summary.id)
-            return self._dispatch_explore(project, export_yaml, newest)
+            return self._dispatch_explore(
+                project,
+                _compact_project_snapshot(project),
+                newest,
+            )
         if project.project.reason is not None:
             self._log_changed(
                 f"{skip_scope}:reason_claimed",
@@ -393,7 +500,9 @@ class DispatcherLoop:
             return False
         return self._dispatch_bootstrap(project, intent)
 
-    def _dispatch_reason(self, project: ProjectDetail, export_yaml: str, trigger: str) -> bool:
+    def _dispatch_reason(
+        self, project: ProjectDetail, export_yaml: str, trigger: str
+    ) -> bool:
         selection = self._select_worker(project.project.id, "reason")
         worker = selection.worker
         if worker is None:
@@ -439,7 +548,11 @@ class DispatcherLoop:
                 cancellation := TaskCancellation(),
             )
         except Exception:
-            LOG.exception("failed to submit reason task project=%s worker=%s", project.project.id, worker.name)
+            LOG.exception(
+                "failed to submit reason task project=%s worker=%s",
+                project.project.id,
+                worker.name,
+            )
             self._best_effort_release_reason(project.project.id, worker.name)
             return False
         self.futures[future] = RunningTask(
@@ -452,9 +565,15 @@ class DispatcherLoop:
             hint_count=len(project.hints),
             open_intent_count=self._project_open_intent_count(project),
         )
+        future.add_done_callback(lambda _future: self._wakeup.set())
         self.runtime_project_ids.add(project.project.id)
         self._clear_project_log_state(project.project.id)
-        LOG.info("dispatched reason project=%s worker=%s trigger=%s", project.project.id, worker.name, trigger)
+        LOG.info(
+            "dispatched reason project=%s worker=%s trigger=%s",
+            project.project.id,
+            worker.name,
+            trigger,
+        )
         return True
 
     def _dispatch_bootstrap(self, project: ProjectDetail, intent: Intent) -> bool:
@@ -506,16 +625,35 @@ class DispatcherLoop:
                 cancellation := TaskCancellation(),
             )
         except Exception:
-            LOG.exception("failed to submit bootstrap task project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
+            LOG.exception(
+                "failed to submit bootstrap task project=%s intent=%s worker=%s",
+                project.project.id,
+                intent.id,
+                worker.name,
+            )
             self._best_effort_release(project.project.id, intent.id, worker.name)
             return False
-        self.futures[future] = RunningTask(project.project.id, "bootstrap", worker.name, cancellation, intent_id=intent.id)
+        self.futures[future] = RunningTask(
+            project.project.id,
+            "bootstrap",
+            worker.name,
+            cancellation,
+            intent_id=intent.id,
+        )
+        future.add_done_callback(lambda _future: self._wakeup.set())
         self.runtime_project_ids.add(project.project.id)
         self._clear_project_log_state(project.project.id)
-        LOG.info("dispatched bootstrap project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
+        LOG.info(
+            "dispatched bootstrap project=%s intent=%s worker=%s",
+            project.project.id,
+            intent.id,
+            worker.name,
+        )
         return True
 
-    def _dispatch_explore(self, project: ProjectDetail, export_yaml: str, intent: Intent) -> bool:
+    def _dispatch_explore(
+        self, project: ProjectDetail, export_yaml: str, intent: Intent
+    ) -> bool:
         selection = self._select_worker(project.project.id, "explore")
         worker = selection.worker
         if worker is None:
@@ -565,13 +703,30 @@ class DispatcherLoop:
                 cancellation := TaskCancellation(),
             )
         except Exception:
-            LOG.exception("failed to submit explore task project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
+            LOG.exception(
+                "failed to submit explore task project=%s intent=%s worker=%s",
+                project.project.id,
+                intent.id,
+                worker.name,
+            )
             self._best_effort_release(project.project.id, intent.id, worker.name)
             return False
-        self.futures[future] = RunningTask(project.project.id, "explore", worker.name, cancellation, intent_id=intent.id)
+        self.futures[future] = RunningTask(
+            project.project.id,
+            "explore",
+            worker.name,
+            cancellation,
+            intent_id=intent.id,
+        )
+        future.add_done_callback(lambda _future: self._wakeup.set())
         self.runtime_project_ids.add(project.project.id)
         self._clear_project_log_state(project.project.id)
-        LOG.info("dispatched explore project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
+        LOG.info(
+            "dispatched explore project=%s intent=%s worker=%s",
+            project.project.id,
+            intent.id,
+            worker.name,
+        )
         return True
 
     def _select_worker(self, project_id: str, task_type: str) -> WorkerSelection:
@@ -596,7 +751,9 @@ class DispatcherLoop:
             if unhealthy_until > now:
                 blocked_unhealthy.append(f"{worker.name}({unhealthy_until - now:.1f}s)")
                 continue
-            rejected_until = self.worker_rejected_until.get((project_id, task_type, worker.name), 0)
+            rejected_until = self.worker_rejected_until.get(
+                (project_id, task_type, worker.name), 0
+            )
             if rejected_until > now:
                 blocked_rejected.append(f"{worker.name}({rejected_until - now:.1f}s)")
                 continue
@@ -623,7 +780,10 @@ class DispatcherLoop:
             "worker selection project=%s task=%s candidates=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s chosen=%s",
             project_id,
             task_type,
-            [f"{worker.name}({running_counts.get(worker.name, 0)}/{worker.max_running},p{worker.priority})" for worker in candidates],
+            [
+                f"{worker.name}({running_counts.get(worker.name, 0)}/{worker.max_running},p{worker.priority})"
+                for worker in candidates
+            ],
             blocked_busy,
             blocked_unhealthy,
             blocked_rejected,
@@ -660,13 +820,18 @@ class DispatcherLoop:
         return summary
 
     def _project_has_running_bootstrap(self, project_id: str) -> bool:
-        return any(task.project_id == project_id and task.task_type == "bootstrap" for task in self.futures.values())
+        return any(
+            task.project_id == project_id and task.task_type == "bootstrap"
+            for task in self.futures.values()
+        )
 
     def _project_running_explore_intents(self, project_id: str) -> set[str]:
         return {
             task.intent_id
             for task in self.futures.values()
-            if task.project_id == project_id and task.task_type == "explore" and task.intent_id is not None
+            if task.project_id == project_id
+            and task.task_type == "explore"
+            and task.intent_id is not None
         }
 
     def _running_project_count(self, summaries: list[ProjectSummary]) -> int:
@@ -685,12 +850,20 @@ class DispatcherLoop:
         )
 
     def _get_bootstrap_intent(self, project: ProjectDetail) -> Intent | None:
-        intents = [intent for intent in project.intents if self._is_bootstrap_intent(intent)]
+        intents = [
+            intent for intent in project.intents if self._is_bootstrap_intent(intent)
+        ]
         if not intents:
             return None
         if len(intents) > 1:
-            LOG.warning("project has multiple bootstrap intents project=%s intents=%s", project.project.id, [intent.id for intent in intents])
-        intents.sort(key=lambda intent: (intent.worker is not None, intent.created_at, intent.id))
+            LOG.warning(
+                "project has multiple bootstrap intents project=%s intents=%s",
+                project.project.id,
+                [intent.id for intent in intents],
+            )
+        intents.sort(
+            key=lambda intent: (intent.worker is not None, intent.created_at, intent.id)
+        )
         return intents[0]
 
     def _is_initial_project(self, project: ProjectDetail) -> bool:
@@ -719,7 +892,10 @@ class DispatcherLoop:
             BOOTSTRAP_INTENT_CREATOR,
         )
         if response.status_code == 403:
-            LOG.info("project became inactive before bootstrap intent create project=%s", project_id)
+            LOG.info(
+                "project became inactive before bootstrap intent create project=%s",
+                project_id,
+            )
             return None
         if not response.ok:
             LOG.warning(
@@ -730,7 +906,9 @@ class DispatcherLoop:
             )
             return None
         if not isinstance(response.data, dict):
-            LOG.warning("bootstrap intent create returned empty body project=%s", project_id)
+            LOG.warning(
+                "bootstrap intent create returned empty body project=%s", project_id
+            )
             return None
         intent = Intent.model_validate(response.data)
         LOG.info("created bootstrap intent project=%s intent=%s", project_id, intent.id)
@@ -776,7 +954,9 @@ class DispatcherLoop:
                 self._clear_project_log_state(task.project_id)
                 if outcome == "unhealthy":
                     retry_after_seconds = UNHEALTHY_RETRY_AFTER_SECONDS
-                    self.worker_unhealthy_until[task.worker_name] = time.time() + retry_after_seconds
+                    self.worker_unhealthy_until[task.worker_name] = (
+                        time.time() + retry_after_seconds
+                    )
                     LOG.info(
                         "worker marked unhealthy worker=%s retry_after=%.0fs",
                         task.worker_name,
@@ -787,7 +967,9 @@ class DispatcherLoop:
                 rejection_key = (task.project_id, task.task_type, task.worker_name)
                 if outcome == "rejected":
                     retry_after_seconds = REJECTED_RETRY_AFTER_SECONDS
-                    self.worker_rejected_until[rejection_key] = time.time() + retry_after_seconds
+                    self.worker_rejected_until[rejection_key] = (
+                        time.time() + retry_after_seconds
+                    )
                     LOG.info(
                         "worker marked rejected project=%s task=%s worker=%s retry_after=%.0fs",
                         task.project_id,
@@ -814,7 +996,12 @@ class DispatcherLoop:
                         task.open_intent_count,
                     )
             except Exception:
-                LOG.exception("task crashed project=%s task=%s worker=%s", task.project_id, task.task_type, task.worker_name)
+                LOG.exception(
+                    "task crashed project=%s task=%s worker=%s",
+                    task.project_id,
+                    task.task_type,
+                    task.worker_name,
+                )
 
     def _cleanup_completed_containers(self, summaries: list[ProjectSummary]) -> None:
         for summary in summaries:
@@ -828,8 +1015,11 @@ class DispatcherLoop:
             if not self.container_manager.needs_completed_cleanup(summary.id):
                 self._inactive_cleanup_done[summary.id] = summary.status
                 continue
-            future = self.cleanup_executor.submit(self.container_manager.cleanup_completed, summary.id)
+            future = self.cleanup_executor.submit(
+                self.container_manager.cleanup_completed, summary.id
+            )
             self.cleanup_futures[future] = (container_name, summary.id, summary.status)
+            future.add_done_callback(lambda _future: self._wakeup.set())
             self._cleanup_pending.add(container_name)
 
     def _cleanup_stopped_containers(self, summaries: list[ProjectSummary]) -> None:
@@ -844,11 +1034,62 @@ class DispatcherLoop:
             if not self.container_manager.needs_stopped_cleanup(summary.id):
                 self._inactive_cleanup_done[summary.id] = summary.status
                 continue
-            future = self.cleanup_executor.submit(self.container_manager.cleanup_stopped, summary.id)
+            future = self.cleanup_executor.submit(
+                self.container_manager.cleanup_stopped, summary.id
+            )
             self.cleanup_futures[future] = (container_name, summary.id, summary.status)
+            future.add_done_callback(lambda _future: self._wakeup.set())
+            self._cleanup_pending.add(container_name)
+
+    def _cleanup_deleted_project(self, project_id: str) -> bool:
+        try:
+            success = self.container_manager.cleanup_deleted(project_id)
+        except Exception as exc:
+            try:
+                self.client.report_project_runtime_cleaned(
+                    project_id,
+                    success=False,
+                    error=str(exc),
+                )
+            except requests.RequestException:
+                LOG.warning(
+                    "could not report deletion cleanup failure project=%s",
+                    project_id,
+                    exc_info=True,
+                )
+            raise
+        if not success:
+            self.client.report_project_runtime_cleaned(
+                project_id,
+                success=False,
+                error="runtime cleanup did not complete",
+            )
+            return False
+        self.client.report_project_runtime_cleaned(project_id, success=True)
+        return True
+
+    def _cleanup_deleting_projects(self, summaries: list[ProjectSummary]) -> None:
+        running_projects = {task.project_id for task in self.futures.values()}
+        for summary in summaries:
+            if summary.status != "deleting" or summary.id in running_projects:
+                continue
+            container_name = self.container_manager.container_name(summary.id)
+            if container_name in self._cleanup_pending:
+                continue
+            future = self.cleanup_executor.submit(
+                self._cleanup_deleted_project,
+                summary.id,
+            )
+            self.cleanup_futures[future] = (
+                container_name,
+                summary.id,
+                summary.status,
+            )
+            future.add_done_callback(lambda _future: self._wakeup.set())
             self._cleanup_pending.add(container_name)
 
     def _queue_container_cleanups(self, summaries: list[ProjectSummary]) -> None:
+        self._cleanup_deleting_projects(summaries)
         self._cleanup_completed_containers(summaries)
         self._cleanup_stopped_containers(summaries)
 
@@ -859,7 +1100,11 @@ class DispatcherLoop:
             self._cleanup_pending.discard(name)
             try:
                 success = future.result()
-                if success and project_id is not None and target_status in ("completed", "stopped"):
+                if (
+                    success
+                    and project_id is not None
+                    and target_status in ("completed", "stopped")
+                ):
                     self._inactive_cleanup_done[project_id] = target_status
                 elif project_id is not None:
                     self._inactive_cleanup_done.pop(project_id, None)
@@ -871,7 +1116,11 @@ class DispatcherLoop:
     def _refresh_runtime_projects(self, summaries: list[ProjectSummary]) -> None:
         active_ids = {summary.id for summary in summaries if summary.status == "active"}
         self.runtime_project_ids.intersection_update(active_ids)
-        inactive_status_by_id = {summary.id: summary.status for summary in summaries if summary.status != "active"}
+        inactive_status_by_id = {
+            summary.id: summary.status
+            for summary in summaries
+            if summary.status != "active"
+        }
         for project_id, status in list(self._inactive_cleanup_done.items()):
             current_status = inactive_status_by_id.get(project_id)
             if current_status != status:
@@ -896,7 +1145,9 @@ class DispatcherLoop:
                 continue
             if summary.id in self.reason_checkpoints:
                 continue
-            open_intent_count = summary.working_intent_count + summary.unclaimed_intent_count
+            open_intent_count = (
+                summary.working_intent_count + summary.unclaimed_intent_count
+            )
             if open_intent_count == 0:
                 continue
             self.reason_checkpoints[summary.id] = ReasonCheckpoint(
@@ -912,15 +1163,28 @@ class DispatcherLoop:
                 open_intent_count,
             )
 
-    def _best_effort_release(self, project_id: str, intent_id: str, worker_name: str) -> None:
+    def _best_effort_release(
+        self, project_id: str, intent_id: str, worker_name: str
+    ) -> None:
         response = self.client.release(project_id, intent_id, worker_name)
         if not response.ok and response.status_code not in (403, 409):
-            LOG.warning("release failed project=%s intent=%s worker=%s status=%s", project_id, intent_id, worker_name, response.status_code)
+            LOG.warning(
+                "release failed project=%s intent=%s worker=%s status=%s",
+                project_id,
+                intent_id,
+                worker_name,
+                response.status_code,
+            )
 
     def _best_effort_release_reason(self, project_id: str, worker_name: str) -> None:
         response = self.client.release_reason(project_id, worker_name)
         if not response.ok and response.status_code not in (403, 409):
-            LOG.warning("reason release failed project=%s worker=%s status=%s", project_id, worker_name, response.status_code)
+            LOG.warning(
+                "reason release failed project=%s worker=%s status=%s",
+                project_id,
+                worker_name,
+                response.status_code,
+            )
 
     def _log_changed(self, scope: str, level: int, message: str, *args: object) -> None:
         state = (level, message, args)
@@ -941,7 +1205,10 @@ class DispatcherLoop:
     def _validate_server_settings(self) -> None:
         settings = self.client.get_settings()
         interval = self.config.runtime.interval
-        for name, value in (("intent_timeout", settings.intent_timeout), ("reason_timeout", settings.reason_timeout)):
+        for name, value in (
+            ("intent_timeout", settings.intent_timeout),
+            ("reason_timeout", settings.reason_timeout),
+        ):
             if value <= interval:
                 raise RuntimeError(
                     f"server {name}={value}s must be greater than dispatcher interval={interval}s"
@@ -977,11 +1244,10 @@ class DispatcherLoop:
             return
         assert refreshed.config is not None
         self.config = refreshed.config
+        self.agent_runtime.initialize(self.config.workers)
         if self.config.runtime.execution == "local":
             self._run_local_binary_check()
-        active_names = {
-            worker.name for worker in self.config.workers if worker.enabled
-        }
+        active_names = {worker.name for worker in self.config.workers if worker.enabled}
         self.worker_unhealthy_until = {
             name: until
             for name, until in self.worker_unhealthy_until.items()

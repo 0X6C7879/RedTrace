@@ -44,7 +44,9 @@ def run_reason_task(
     driver = get_driver(worker.type, config.runtime.execution)
     task_started = time.perf_counter()
     healthcheck_timeout = config.runtime.healthcheck_timeout
-    lease = HeartbeatLease.for_reason(client, project.project.id, worker.name, config.runtime.interval)
+    lease = HeartbeatLease.for_reason(
+        client, project.project.id, worker.name, config.runtime.interval
+    )
     lease.start()
     try:
         container_name = container_manager.ensure_running(project.project.id)
@@ -120,6 +122,7 @@ def run_reason_task(
             prompt = add_blackboard_guidance(
                 prompt,
                 project.blackboard_revision,
+                task_type="reason",
                 context_harness_enabled=config.context_harness.enabled,
                 local_execution=config.runtime.execution == "local",
             )
@@ -132,6 +135,7 @@ def run_reason_task(
             container_name,
             worker,
             command.argv,
+            stdin_text=command.stdin,
             client=client,
             project_id=project.project.id,
             blackboard_revision=project.blackboard_revision,
@@ -197,7 +201,9 @@ def run_reason_task(
                 task_type="reason",
             )
             kind, data = validate_reason_payload(
-                payload, open_intents_empty=not open_intents, max_intents=config.tasks.reason.max_intents,
+                payload,
+                open_intents_empty=not open_intents,
+                max_intents=config.tasks.reason.max_intents,
             )
         except Exception as exc:
             LOG.warning(
@@ -222,9 +228,15 @@ def run_reason_task(
             )
             return "rejected"
         if kind == "complete":
-            response = client.complete(project.project.id, data["from"], data["description"], worker.name)
+            response = client.complete(
+                project.project.id, data["from"], data["description"], worker.name
+            )
             if response.status_code == 403:
-                LOG.info("project became inactive during reason complete project=%s worker=%s", project.project.id, worker.name)
+                LOG.info(
+                    "project became inactive during reason complete project=%s worker=%s",
+                    project.project.id,
+                    worker.name,
+                )
                 return "success"
             if not response.ok:
                 LOG.warning(
@@ -247,12 +259,27 @@ def run_reason_task(
         if kind == "intents":
             created = 0
             for intent_data in data:
-                response = client.create_intent(project.project.id, intent_data["from"], intent_data["description"], worker.name)
+                response = client.create_intent(
+                    project.project.id,
+                    intent_data["from"],
+                    intent_data["description"],
+                    worker.name,
+                )
                 if response.status_code == 403:
-                    LOG.info("project became inactive during reason intent create project=%s worker=%s created=%s", project.project.id, worker.name, created)
+                    LOG.info(
+                        "project became inactive during reason intent create project=%s worker=%s created=%s",
+                        project.project.id,
+                        worker.name,
+                        created,
+                    )
                     return "success"
                 if response.status_code == 409:
-                    LOG.info("reason intent lost race project=%s worker=%s from=%s", project.project.id, worker.name, intent_data["from"])
+                    LOG.info(
+                        "reason intent lost race project=%s worker=%s from=%s",
+                        project.project.id,
+                        worker.name,
+                        intent_data["from"],
+                    )
                     continue
                 if not response.ok:
                     LOG.warning(

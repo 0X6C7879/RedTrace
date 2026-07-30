@@ -1,13 +1,43 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+import time
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator
 
 DEFAULT_DB = Path.home() / ".local" / "share" / "redtrace" / "redtrace.db"
 
 _db_path: Path | None = None
+_change_condition = threading.Condition()
+_change_generation = 0
+
+
+def current_change_generation() -> int:
+    with _change_condition:
+        return _change_generation
+
+
+def wait_for_change(after: int | None, timeout: float) -> int:
+    deadline = time.monotonic() + max(0.0, timeout)
+    with _change_condition:
+        if after is None or after != _change_generation:
+            return _change_generation
+        while after == _change_generation:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            _change_condition.wait(remaining)
+        return _change_generation
+
+
+def _publish_change() -> None:
+    global _change_generation
+    with _change_condition:
+        _change_generation += 1
+        _change_condition.notify_all()
+
 
 SCHEMA = """\
 CREATE TABLE IF NOT EXISTS settings (
@@ -208,6 +238,15 @@ CREATE TABLE IF NOT EXISTS shared_resources (
     last_seen_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS project_deletions (
+    project_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    requested_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_error TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_shared_resources_project
 ON shared_resources(project_id, kind, updated_at);
 
@@ -323,7 +362,9 @@ def configure(path: Path) -> None:
 def _ensure_project_columns(conn: sqlite3.Connection) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
     if "bootstrap_enabled" not in columns:
-        conn.execute("ALTER TABLE projects ADD COLUMN bootstrap_enabled INTEGER NOT NULL DEFAULT 1")
+        conn.execute(
+            "ALTER TABLE projects ADD COLUMN bootstrap_enabled INTEGER NOT NULL DEFAULT 1"
+        )
         if "bootstrap_mode" in columns:
             conn.execute(
                 "UPDATE projects SET bootstrap_enabled = CASE WHEN bootstrap_mode = 'disabled' THEN 0 ELSE 1 END"
@@ -387,9 +428,12 @@ def get_conn() -> Generator[sqlite3.Connection, None, None]:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    changes_before = conn.total_changes
     try:
         yield conn
         conn.commit()
+        if conn.total_changes != changes_before:
+            _publish_change()
     except Exception:
         conn.rollback()
         raise

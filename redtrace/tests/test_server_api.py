@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi.testclient import TestClient
 import pytest
-
+from fastapi.testclient import TestClient
 from redtrace.server import db
 from redtrace.server.app import app
 
@@ -32,7 +31,25 @@ def _create_project(client: TestClient) -> str:
     return response.json()["project"]["id"]
 
 
-def test_delete_project_cascades_without_blackboard_trigger_failure(client: TestClient) -> None:
+def test_dispatcher_change_cursor_advances_on_project_write(
+    client: TestClient,
+) -> None:
+    before = client.get("/dispatcher/changes", params={"timeout": 0}).json()[
+        "generation"
+    ]
+
+    _create_project(client)
+
+    after = client.get(
+        "/dispatcher/changes",
+        params={"after": before, "timeout": 0},
+    ).json()["generation"]
+    assert after != before
+
+
+def test_delete_project_cascades_without_blackboard_trigger_failure(
+    client: TestClient,
+) -> None:
     project_id = _create_project(client)
     intent = client.post(
         f"/projects/{project_id}/intents",
@@ -47,21 +64,43 @@ def test_delete_project_cascades_without_blackboard_trigger_failure(client: Test
 
     response = client.delete(f"/projects/{project_id}")
 
-    assert response.status_code == 204
+    assert response.status_code == 202
+    finalize = client.post(
+        f"/projects/{project_id}/deletion/runtime-cleaned",
+        json={"success": True},
+    )
+    assert finalize.status_code == 200
+    assert finalize.json()["completed"] is True
     assert client.get(f"/projects/{project_id}").status_code == 404
     with db.get_conn() as conn:
         for table in (
             "facts",
             "intents",
+            "intent_sources",
             "hints",
             "scoped_counters",
             "blackboard_events",
+            "blackboard_query_audit",
+            "audit_runs",
+            "audit_events",
+            "shared_resources",
+            "operation_tasks",
+            "operation_results",
+            "resource_audit_events",
         ):
             count = conn.execute(
                 f"SELECT COUNT(*) FROM {table} WHERE project_id = ?",
                 (project_id,),
             ).fetchone()[0]
             assert count == 0
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM project_deletions WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()[0]
+            == 0
+        )
+    assert client.delete(f"/projects/{project_id}").status_code == 204
 
 
 def test_audit_events_are_task_scoped_and_workspace_is_browsable(
@@ -71,7 +110,9 @@ def test_audit_events_are_task_scoped_and_workspace_is_browsable(
     project_id = _create_project(client)
     workspace = tmp_path / "workspace"
     (workspace / "scripts").mkdir(parents=True)
-    (workspace / "scripts" / "exploit.py").write_text("print('audited')\n", encoding="utf-8")
+    (workspace / "scripts" / "exploit.py").write_text(
+        "print('audited')\n", encoding="utf-8"
+    )
     run = {
         "id": "run-001",
         "project_id": project_id,
@@ -126,7 +167,9 @@ def test_audit_events_are_task_scoped_and_workspace_is_browsable(
     tasks = client.get("/audit/tasks").json()
     assert tasks[0]["id"] == project_id
     assert tasks[0]["run_count"] == 1
-    assert client.get(f"/audit/tasks/{project_id}/runs").json()[0]["worker"] == "codex-1"
+    assert (
+        client.get(f"/audit/tasks/{project_id}/runs").json()[0]["worker"] == "codex-1"
+    )
 
     history = client.get(f"/audit/tasks/{project_id}/events").json()
     assert [event["kind"] for event in history] == ["user.message", "assistant.message"]
@@ -141,12 +184,19 @@ def test_audit_events_are_task_scoped_and_workspace_is_browsable(
     assert file_response.json()["content"].splitlines() == ["print('audited')"]
 
 
-def test_project_workflow_create_conclude_complete_and_reopen(client: TestClient) -> None:
+def test_project_workflow_create_conclude_complete_and_reopen(
+    client: TestClient,
+) -> None:
     project_id = _create_project(client)
 
     response = client.post(
         f"/projects/{project_id}/intents",
-        json={"from": ["origin"], "description": "investigate", "creator": "reasoner", "worker": None},
+        json={
+            "from": ["origin"],
+            "description": "investigate",
+            "creator": "reasoner",
+            "worker": None,
+        },
     )
     assert response.status_code == 201
     assert response.json()["id"] == "i001"
@@ -184,11 +234,18 @@ def test_project_workflow_create_conclude_complete_and_reopen(client: TestClient
     assert payload["intent"]["to"] == "f002"
 
 
-def test_stopping_project_releases_claims_and_reason_but_keeps_hints_writable(client: TestClient) -> None:
+def test_stopping_project_releases_claims_and_reason_but_keeps_hints_writable(
+    client: TestClient,
+) -> None:
     project_id = _create_project(client)
     client.post(
         f"/projects/{project_id}/intents",
-        json={"from": ["origin"], "description": "work", "creator": "worker-a", "worker": "worker-a"},
+        json={
+            "from": ["origin"],
+            "description": "work",
+            "creator": "worker-a",
+            "worker": "worker-a",
+        },
     )
     client.post(
         f"/projects/{project_id}/reason/claim",
@@ -201,48 +258,91 @@ def test_stopping_project_releases_claims_and_reason_but_keeps_hints_writable(cl
 
     detail = client.get(f"/projects/{project_id}").json()
     assert detail["intents"][0]["worker"] is None
-    assert client.post(
-        f"/projects/{project_id}/hints",
-        json={"content": "manual note", "creator": "human"},
-    ).status_code == 201
-    assert client.post(
-        f"/projects/{project_id}/intents",
-        json={"from": ["origin"], "description": "blocked", "creator": "reasoner", "worker": None},
-    ).status_code == 403
+    assert (
+        client.post(
+            f"/projects/{project_id}/hints",
+            json={"content": "manual note", "creator": "human"},
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            f"/projects/{project_id}/intents",
+            json={
+                "from": ["origin"],
+                "description": "blocked",
+                "creator": "reasoner",
+                "worker": None,
+            },
+        ).status_code
+        == 403
+    )
 
 
-def test_intent_creation_rejects_goal_source_and_mismatched_initial_worker(client: TestClient) -> None:
+def test_intent_creation_rejects_goal_source_and_mismatched_initial_worker(
+    client: TestClient,
+) -> None:
     project_id = _create_project(client)
 
-    assert client.post(
-        f"/projects/{project_id}/intents",
-        json={"from": ["goal"], "description": "invalid", "creator": "reasoner", "worker": None},
-    ).status_code == 400
-    assert client.post(
-        f"/projects/{project_id}/intents",
-        json={"from": ["origin"], "description": "invalid", "creator": "reasoner", "worker": "explorer"},
-    ).status_code == 400
+    assert (
+        client.post(
+            f"/projects/{project_id}/intents",
+            json={
+                "from": ["goal"],
+                "description": "invalid",
+                "creator": "reasoner",
+                "worker": None,
+            },
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            f"/projects/{project_id}/intents",
+            json={
+                "from": ["origin"],
+                "description": "invalid",
+                "creator": "reasoner",
+                "worker": "explorer",
+            },
+        ).status_code
+        == 400
+    )
 
 
-def test_settings_and_export_are_backed_by_the_same_database(client: TestClient) -> None:
+def test_settings_and_export_are_backed_by_the_same_database(
+    client: TestClient,
+) -> None:
     project_id = _create_project(client)
 
-    response = client.put("/settings", json={"intent_timeout": 30, "reason_timeout": 45})
+    response = client.put(
+        "/settings", json={"intent_timeout": 30, "reason_timeout": 45}
+    )
     assert response.status_code == 200
-    assert client.get("/settings").json() == {"intent_timeout": 30, "reason_timeout": 45}
+    assert client.get("/settings").json() == {
+        "intent_timeout": 30,
+        "reason_timeout": 45,
+    }
 
     exported = client.get(f"/projects/{project_id}/export?format=yaml")
     assert exported.status_code == 200
     assert "origin: starting point" in exported.text
     assert "goal: finish" in exported.text
-    assert client.get(f"/projects/{project_id}/export?format=invalid").status_code == 400
+    assert (
+        client.get(f"/projects/{project_id}/export?format=invalid").status_code == 400
+    )
 
 
 def test_expired_intent_and_reason_leases_can_be_reclaimed(client: TestClient) -> None:
     project_id = _create_project(client)
     client.post(
         f"/projects/{project_id}/intents",
-        json={"from": ["origin"], "description": "work", "creator": "worker-a", "worker": "worker-a"},
+        json={
+            "from": ["origin"],
+            "description": "work",
+            "creator": "worker-a",
+            "worker": "worker-a",
+        },
     )
     client.post(
         f"/projects/{project_id}/reason/claim",
@@ -275,10 +375,13 @@ def test_expired_intent_and_reason_leases_can_be_reclaimed(client: TestClient) -
 
 def test_live_reason_lease_rejects_competing_worker(client: TestClient) -> None:
     project_id = _create_project(client)
-    assert client.post(
-        f"/projects/{project_id}/reason/claim",
-        json={"worker": "worker-a", "trigger": "bootstrap"},
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/projects/{project_id}/reason/claim",
+            json={"worker": "worker-a", "trigger": "bootstrap"},
+        ).status_code
+        == 200
+    )
 
     response = client.post(
         f"/projects/{project_id}/reason/claim",
@@ -289,7 +392,9 @@ def test_live_reason_lease_rejects_competing_worker(client: TestClient) -> None:
     assert "worker-a" in response.json()["detail"]
 
 
-def test_project_creation_persists_disabled_bootstrap_and_exports_it(client: TestClient) -> None:
+def test_project_creation_persists_disabled_bootstrap_and_exports_it(
+    client: TestClient,
+) -> None:
     response = client.post(
         "/projects",
         json={
@@ -302,8 +407,14 @@ def test_project_creation_persists_disabled_bootstrap_and_exports_it(client: Tes
 
     assert response.status_code == 201
     project_id = response.json()["project"]["id"]
-    assert client.get(f"/projects/{project_id}").json()["project"]["bootstrap_enabled"] is False
-    assert "bootstrap_enabled: false" in client.get(f"/projects/{project_id}/export?format=yaml").text
+    assert (
+        client.get(f"/projects/{project_id}").json()["project"]["bootstrap_enabled"]
+        is False
+    )
+    assert (
+        "bootstrap_enabled: false"
+        in client.get(f"/projects/{project_id}/export?format=yaml").text
+    )
 
 
 def test_project_creation_rejects_invalid_bootstrap_enabled(client: TestClient) -> None:

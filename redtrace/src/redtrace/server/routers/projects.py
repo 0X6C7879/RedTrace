@@ -1,31 +1,39 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-from redtrace.server.db import get_conn
+from redtrace.paths import PathResolutionError
+from redtrace.server.db import get_conn, wait_for_change
 from redtrace.server.models import (
     CompleteRequest,
     CreateProjectRequest,
     Fact,
-    Hint,
     HeartbeatRequest,
+    Hint,
     Intent,
     ProjectDetail,
     ProjectMeta,
     ProjectSummary,
+    ReasonClaimRequest,
     ReopenRequest,
     ReopenResponse,
-    ReasonClaimRequest,
-    UpdateProjectTitleRequest,
     UpdateProjectStatusRequest,
+    UpdateProjectTitleRequest,
+)
+from redtrace.server.project_cleanup import (
+    deletion_status,
+    report_runtime_cleanup,
+    request_deletion,
 )
 from redtrace.server.services import (
     build_intents,
-    check_project_completed,
     check_project_active,
+    check_project_completed,
     clear_project_reason,
     expire_reason_leases,
     expire_workers,
-    get_completion_intent_or_409,
     get_blackboard_revision,
+    get_completion_intent_or_409,
     get_project_or_404,
     intent_to_model,
     next_fact_id,
@@ -40,6 +48,17 @@ from redtrace.server.services import (
 )
 
 router = APIRouter(tags=["projects"])
+
+
+@router.get("/dispatcher/changes")
+def wait_for_dispatcher_changes(after: int | None = None, timeout: float = 10.0):
+    bounded_timeout = max(0.0, min(timeout, 30.0))
+    return {"generation": wait_for_change(after, bounded_timeout)}
+
+
+class RuntimeCleanupReport(BaseModel):
+    success: bool
+    error: str = ""
 
 
 @router.get("/projects", response_model=list[ProjectSummary])
@@ -102,7 +121,9 @@ def create_project(body: CreateProjectRequest):
                     "INSERT INTO hints (id, project_id, content, creator, created_at) VALUES (?, ?, ?, ?, ?)",
                     (hid, pid, h.content, h.creator, now),
                 )
-                hints.append(Hint(id=hid, content=h.content, creator=h.creator, created_at=now))
+                hints.append(
+                    Hint(id=hid, content=h.content, creator=h.creator, created_at=now)
+                )
 
         return ProjectDetail(
             project=ProjectMeta(
@@ -147,11 +168,42 @@ def get_project(project_id: str):
         )
 
 
-@router.delete("/projects/{project_id}", status_code=204)
+@router.delete("/projects/{project_id}", status_code=202)
 def delete_project(project_id: str):
-    with get_conn() as conn:
-        get_project_or_404(conn, project_id)
-        conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+    try:
+        state = request_deletion(project_id)
+    except PathResolutionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if state == "missing":
+        return Response(status_code=204)
+    return JSONResponse(
+        {"projectId": project_id, "state": state},
+        status_code=202,
+    )
+
+
+@router.get("/projects/{project_id}/deletion")
+def get_deletion_status(project_id: str):
+    try:
+        value = deletion_status(project_id)
+    except PathResolutionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if value is None:
+        return Response(status_code=204)
+    return value
+
+
+@router.post("/projects/{project_id}/deletion/runtime-cleaned")
+def runtime_cleaned(project_id: str, body: RuntimeCleanupReport):
+    try:
+        completed = report_runtime_cleanup(
+            project_id,
+            success=body.success,
+            error=body.error,
+        )
+    except (PathResolutionError, RuntimeError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"projectId": project_id, "completed": completed}
 
 
 @router.put("/projects/{project_id}/title", response_model=ProjectMeta)
@@ -162,7 +214,9 @@ def update_project_title(project_id: str, body: UpdateProjectTitleRequest):
             "UPDATE projects SET title = ? WHERE id = ?",
             (body.title, project_id),
         )
-        updated = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        updated = conn.execute(
+            "SELECT * FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
         return project_meta_from_row(updated)
 
 
@@ -187,7 +241,9 @@ def update_project_status(project_id: str, body: UpdateProjectStatusRequest):
                 (project_id,),
             )
             clear_project_reason(conn, project_id)
-        updated = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        updated = conn.execute(
+            "SELECT * FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
         return project_meta_from_row(updated)
 
 
@@ -199,7 +255,9 @@ def claim_project_reason(project_id: str, body: ReasonClaimRequest):
         row = get_project_or_404(conn, project_id)
         current_worker = row["reason_worker"]
         if current_worker is not None and current_worker != body.worker:
-            raise HTTPException(409, f"Project reason is currently claimed by {current_worker}")
+            raise HTTPException(
+                409, f"Project reason is currently claimed by {current_worker}"
+            )
         if current_worker == body.worker:
             return project_meta_from_row(row)
 
@@ -215,7 +273,9 @@ def claim_project_reason(project_id: str, body: ReasonClaimRequest):
             """,
             (body.worker, body.trigger, now, now, project_id),
         )
-        updated = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        updated = conn.execute(
+            "SELECT * FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
         return project_meta_from_row(updated)
 
 
@@ -229,14 +289,18 @@ def heartbeat_project_reason(project_id: str, body: HeartbeatRequest):
         if current_worker is None:
             raise HTTPException(409, "Project reason is not currently claimed")
         if current_worker != body.worker:
-            raise HTTPException(409, f"Project reason is currently claimed by {current_worker}")
+            raise HTTPException(
+                409, f"Project reason is currently claimed by {current_worker}"
+            )
 
         now = utcnow()
         conn.execute(
             "UPDATE projects SET reason_last_heartbeat_at = ? WHERE id = ?",
             (now, project_id),
         )
-        updated = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        updated = conn.execute(
+            "SELECT * FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
         return project_meta_from_row(updated)
 
 
@@ -250,10 +314,14 @@ def release_project_reason(project_id: str, body: HeartbeatRequest):
         if current_worker is None:
             return project_meta_from_row(row)
         if current_worker != body.worker:
-            raise HTTPException(409, f"Project reason is currently claimed by {current_worker}")
+            raise HTTPException(
+                409, f"Project reason is currently claimed by {current_worker}"
+            )
 
         clear_project_reason(conn, project_id)
-        updated = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        updated = conn.execute(
+            "SELECT * FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
         return project_meta_from_row(updated)
 
 
@@ -270,7 +338,16 @@ def complete_project(project_id: str, body: CompleteRequest):
 
         conn.execute(
             "INSERT INTO intents (id, project_id, to_fact_id, description, creator, worker, last_heartbeat_at, created_at, concluded_at) VALUES (?, ?, 'goal', ?, ?, ?, ?, ?, ?)",
-            (iid, project_id, body.description, body.worker, body.worker, now, now, now),
+            (
+                iid,
+                project_id,
+                body.description,
+                body.worker,
+                body.worker,
+                now,
+                now,
+                now,
+            ),
         )
         for fid in body.from_:
             conn.execute(
@@ -334,7 +411,17 @@ def reopen_project(project_id: str, body: ReopenRequest):
         )
         conn.execute(
             "INSERT INTO intents (id, project_id, to_fact_id, description, creator, worker, last_heartbeat_at, created_at, concluded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (intent_id, project_id, fact_id, "external_feedback", creator, creator, now, now, now),
+            (
+                intent_id,
+                project_id,
+                fact_id,
+                "external_feedback",
+                creator,
+                creator,
+                now,
+                now,
+                now,
+            ),
         )
         for source_id in source_ids:
             conn.execute(
@@ -347,7 +434,9 @@ def reopen_project(project_id: str, body: ReopenRequest):
             (project_id,),
         )
 
-        updated_project = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        updated_project = conn.execute(
+            "SELECT * FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
         updated_intent = conn.execute(
             "SELECT * FROM intents WHERE id = ? AND project_id = ?",
             (intent_id, project_id),

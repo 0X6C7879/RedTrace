@@ -196,16 +196,6 @@ brew_install_required() {
   brew install "${missing[@]}"
 }
 
-brew_install_required_cask() {
-  local cask missing=()
-  for cask in "$@"; do
-    brew list --cask "$cask" >/dev/null 2>&1 || missing+=("$cask")
-  done
-  ((${#missing[@]} == 0)) && { log "required Homebrew casks already installed"; return; }
-  log "installing ${#missing[@]} required Homebrew cask(s)"
-  brew install --cask "${missing[@]}"
-}
-
 brew_install_optional() {
   local formula available=()
   for formula in "$@"; do
@@ -604,29 +594,6 @@ path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 }
 
-ensure_sage() {
-  local candidate
-  if has sage && sage --version >/dev/null 2>&1; then
-    log "SageMath already installed"
-    return
-  fi
-  brew_install_required_cask sage
-  hash -r
-  if ! has sage; then
-    candidate="$(
-      find /Applications -maxdepth 9 -path '*/SageMath-*.app/*' \
-        -type f -name sage -perm -111 -print -quit 2>/dev/null || true
-    )"
-    if [[ -n "$candidate" ]]; then
-      mkdir -p "$HOME/.local/bin"
-      ln -sfn "$candidate" "$HOME/.local/bin/sage"
-      hash -r
-    fi
-  fi
-  has sage && sage --version >/dev/null 2>&1 \
-    || die "SageMath was installed but its CLI is unavailable"
-}
-
 ensure_rsactftool() {
   if has RsaCtfTool && RsaCtfTool --help >/dev/null 2>&1; then
     log "RsaCtfTool already installed"
@@ -681,11 +648,6 @@ verify_security_toolchain() {
   nuclei -version >/dev/null 2>&1 || die "Nuclei verification failed"
   RsaCtfTool --help >/dev/null 2>&1 || die "RsaCtfTool verification failed"
   qiling-python -c "import qiling" >/dev/null 2>&1 || die "Qiling verification failed"
-  if has sage; then
-    sage --version >/dev/null 2>&1 || die "installed SageMath CLI is broken"
-  else
-    log "SageMath intentionally not installed; using fpylll/SymPy/gmpy2/Z3"
-  fi
   hashcat --version >/dev/null 2>&1 || die "hashcat verification failed"
   ffmpeg -version >/dev/null 2>&1 || die "FFmpeg verification failed"
   if [[ "$OS" == "Darwin" ]]; then
@@ -695,7 +657,13 @@ verify_security_toolchain() {
   zbarimg --version >/dev/null 2>&1 || die "zbarimg verification failed"
   sox --version >/dev/null 2>&1 || die "SoX verification failed"
   tesseract --version >/dev/null 2>&1 || die "Tesseract verification failed"
-  "$gem_bin/zsteg" --help >/dev/null 2>&1 || die "zsteg verification failed"
+  if [[ -x "$gem_bin/zsteg" ]]; then
+    "$gem_bin/zsteg" --help >/dev/null 2>&1 || die "zsteg verification failed"
+  elif has zsteg; then
+    zsteg --help >/dev/null 2>&1 || die "zsteg verification failed"
+  else
+    die "zsteg verification failed: executable not found"
+  fi
   "$python" - <<'PY'
 from Crypto.Cipher import AES
 from cysignals import signals
@@ -1094,11 +1062,6 @@ ensure_brave_search_skill
 ensure_ghidra_headless_skill
 ensure_nuclei
 if [[ "${REDTRACE_SKIP_OPTIONAL_TOOLS:-0}" != "1" ]]; then
-  if [[ "$OS" == "Darwin" && "${REDTRACE_INSTALL_SAGE:-0}" == "1" ]]; then
-    ensure_sage
-  elif [[ "$OS" == "Darwin" ]]; then
-    log "skipping SageMath (set REDTRACE_INSTALL_SAGE=1 to opt in)"
-  fi
   ensure_rsactftool
   ensure_qiling
   [[ "$OS" == "Linux" ]] || configure_native_build_env

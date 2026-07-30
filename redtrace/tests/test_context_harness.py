@@ -394,7 +394,9 @@ def test_prompt_guidance_reuses_existing_state_and_bounded_queries() -> None:
     assert "decision-point refresh, not a timer" in prompt
     assert "## Known-vulnerability-first exploitation" in prompt
     assert "perform at least one live Web query" in prompt
-    assert "Do not install, clone, or synchronize bulk vulnerability databases" in prompt
+    assert (
+        "Do not install, clone, or synchronize bulk vulnerability databases" in prompt
+    )
     assert "fetch only the specific PoC/EXP" in prompt
     assert "pass that explicit template path" in prompt
     assert "never invoke automatic template discovery" in prompt
@@ -408,6 +410,21 @@ def test_prompt_guidance_reuses_existing_state_and_bounded_queries() -> None:
     assert "`--version` and a small smoke check" in prompt
     assert "instead of looping or blocking it" in prompt
     assert "Context Harness" not in disabled
+
+
+def test_prompt_guidance_is_scoped_by_task_type() -> None:
+    bootstrap = add_blackboard_guidance("task", 1, task_type="bootstrap")
+    reason = add_blackboard_guidance("task", 1, task_type="reason")
+    explore = add_blackboard_guidance("task", 1, task_type="explore")
+
+    assert "Known-vulnerability-first" in bootstrap
+    assert "Active WebShell and C2" not in bootstrap
+    assert "Known-vulnerability-first" not in reason
+    assert "Active WebShell and C2" not in reason
+    assert "Context Harness" not in reason
+    assert "Active WebShell and C2" in explore
+    assert len(reason) < 1000
+    assert len(bootstrap) < len(explore)
 
 
 def test_context_harness_defaults_are_sized_for_long_tasks() -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 import json
+import os
 from importlib import resources
 from pathlib import Path
 from typing import Any, Literal
@@ -10,6 +11,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from redtrace.config_secrets import resolve_config_secrets
+from redtrace.paths import RedTracePaths, resolve_portable_path
 
 
 TaskType = Literal["reason", "explore", "bootstrap"]
@@ -19,8 +21,12 @@ WorkerHealthcheckMode = Literal["startup_and_task", "startup_only", "disabled"]
 ExecutionMode = Literal["container", "local"]
 LocalCompletedAction = Literal["keep", "remove"]
 
-DEFAULT_MODEL_CONTEXT_WINDOW = 1_000_000
-DEFAULT_MODEL_AUTO_COMPACT_TOKEN_LIMIT = 900_000
+MODEL_CONTEXT_1M = 1_048_576
+DEFAULT_PI_MODEL_CONTEXT_WINDOW = 128_000
+
+
+def model_auto_compact_token_limit(context_length: int) -> int:
+    return context_length * 9 // 10
 
 WORKER_ENV_KEYS: dict[WorkerType, tuple[str, ...]] = {
     "claudecode": (
@@ -167,6 +173,31 @@ class LocalConfig(BaseModel):
     completed_action: LocalCompletedAction = "keep"
 
 
+class PathsConfig(BaseModel):
+    """Portable RedTrace directory layout, normalized by ``DispatchConfig.load``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    root: str = "."
+    skills: str = "skills"
+    mcp: str = "mcp"
+    plugins: str = "plugins"
+    managed: str = ".redtrace"
+    workspaces: str = "workspaces"
+    audit: str = ".redtrace/audit"
+
+    def layout(self) -> RedTracePaths:
+        return RedTracePaths(
+            root=Path(self.root),
+            skills=Path(self.skills),
+            mcp=Path(self.mcp),
+            plugins=Path(self.plugins),
+            managed=Path(self.managed),
+            workspaces=Path(self.workspaces),
+            audit=Path(self.audit),
+        )
+
+
 class ContextHarnessConfig(BaseModel):
     """Low-overhead, post-RTK Artifact capture visible to every Worker type."""
 
@@ -225,6 +256,7 @@ class WorkerConfig(BaseModel):
     task_types: list[TaskType]
     max_running: int = Field(gt=0)
     priority: int = Field(ge=0)
+    context_length: int | None = Field(default=None, gt=0)
     env: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("task_types")
@@ -243,6 +275,9 @@ class WorkerConfig(BaseModel):
         # The checks below are mode-independent and always apply.
         if self.type == "pi":
             _validate_optional_positive_int_env(self.name, self.env, "PI_MODEL_CONTEXT_WINDOW")
+            legacy_context = self.env.get("PI_MODEL_CONTEXT_WINDOW", "").strip()
+            if self.context_length is None and legacy_context:
+                self.context_length = int(legacy_context)
         if self.type == "mock":
             resolve_mock_behavior(self.name, self.env)
         return self
@@ -266,6 +301,7 @@ class DispatchConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     server: str
+    paths: PathsConfig = Field(default_factory=PathsConfig)
     runtime: RuntimeConfig
     tasks: TasksConfig
     context_harness: ContextHarnessConfig = Field(
@@ -345,11 +381,62 @@ class DispatchConfig(BaseModel):
 
     @classmethod
     def load(cls, path: Path) -> "DispatchConfig":
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        data = resolve_config_secrets(path, data)
+        config_path = path.expanduser().resolve()
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        data = _resolve_config_paths(config_path, data)
+        data = resolve_config_secrets(config_path, data)
         config = cls.model_validate(data)
         validate_prompt_resources(config.runtime.prompt_group)
         return config
+
+
+def _resolve_config_paths(config_path: Path, data: Any) -> Any:
+    if not isinstance(data, dict):
+        return data
+    raw_paths = data.get("paths")
+    raw_paths = dict(raw_paths) if isinstance(raw_paths, dict) else {}
+    config_dir = config_path.parent
+    root = resolve_portable_path(
+        os.environ.get("REDTRACE_ROOT", raw_paths.get("root", ".")),
+        base=config_dir,
+    )
+    resolved: dict[str, str] = {"root": str(root)}
+    overrides = {
+        "skills": "REDTRACE_SKILLS_DIR",
+        "mcp": "REDTRACE_MCP_DIR",
+        "plugins": "REDTRACE_PLUGINS_DIR",
+        "managed": "REDTRACE_MANAGED_DIR",
+        "workspaces": "REDTRACE_WORKSPACE_ROOT",
+        "audit": "REDTRACE_AUDIT_ROOT",
+    }
+    defaults = {
+        "skills": "skills",
+        "mcp": "mcp",
+        "plugins": "plugins",
+        "managed": ".redtrace",
+        "workspaces": "workspaces",
+        "audit": ".redtrace/audit",
+    }
+    for name, env_name in overrides.items():
+        value = os.environ.get(env_name, raw_paths.get(name, defaults[name]))
+        resolved[name] = str(resolve_portable_path(value, base=root))
+    updated = dict(data)
+    updated["paths"] = resolved
+    local = updated.get("local")
+    if isinstance(local, dict) or (
+        isinstance(updated.get("runtime"), dict)
+        and updated["runtime"].get("execution") == "local"
+    ):
+        local_copy = dict(local) if isinstance(local, dict) else {}
+        workspace_root = local_copy.get("workspace_root")
+        if workspace_root:
+            local_copy["workspace_root"] = str(
+                resolve_portable_path(workspace_root, base=root)
+            )
+        else:
+            local_copy["workspace_root"] = resolved["workspaces"]
+        updated["local"] = local_copy
+    return updated
 
 
 def _validate_optional_positive_int_env(worker_name: str, env: dict[str, str], key: str) -> None:

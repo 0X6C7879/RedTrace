@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import subprocess
+import sys
 import threading
 from typing import Any
 
@@ -159,6 +160,8 @@ class LocalContainerManager:
     ) -> LocalProcess:
         assert timeout_seconds is not None
         assert kill_after_seconds == 5
+        if os.name == "nt" and command[0] == "python3":
+            command = [sys.executable, *command[1:]]
         return LocalProcess(command, env)
 
     def write_text_file(self, container_name: str, path: str, content: str) -> None:

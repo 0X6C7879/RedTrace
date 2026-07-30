@@ -7,7 +7,12 @@ from types import SimpleNamespace
 import redtrace.worker_config as worker_config_module
 import tomllib
 import yaml
-from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
+from redtrace.dispatcher.config import (
+    MODEL_CONTEXT_1M,
+    DispatchConfig,
+    WorkerConfig,
+    model_auto_compact_token_limit,
+)
 from redtrace.dispatcher.workers.health import HealthResult
 from redtrace.native_cli_config import sync_native_cli_config
 from redtrace.worker_config import CONNECTION_TESTER, WorkerConfigService
@@ -39,6 +44,7 @@ def _worker(worker_type: str) -> WorkerConfig:
             "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
+            "context_length": MODEL_CONTEXT_1M,
             "env": environments[worker_type],
         }
     )
@@ -175,7 +181,7 @@ def test_claude_settings_merge_preserves_existing_values(tmp_path: Path) -> None
         "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-test",
         "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-test",
         "CLAUDE_CODE_SUBAGENT_MODEL": "claude-test",
-        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(MODEL_CONTEXT_1M),
         "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90",
         "CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION": "1000",
     }
@@ -217,8 +223,10 @@ base_url = "https://old.example/v1"
     assert value["approval_policy"] == "never"
     assert value["sandbox_mode"] == "danger-full-access"
     assert value["web_search"] == "live"
-    assert value["model_context_window"] == 1_000_000
-    assert value["model_auto_compact_token_limit"] == 900_000
+    assert value["model_context_window"] == MODEL_CONTEXT_1M
+    assert value["model_auto_compact_token_limit"] == model_auto_compact_token_limit(
+        MODEL_CONTEXT_1M
+    )
     assert value["model_auto_compact_token_limit_scope"] == "total"
     assert value["features"]["shell_snapshot"] is True
     assert value["model_providers"]["other"]["name"] == "Other"
@@ -268,7 +276,7 @@ def test_pi_settings_and_models_merge_preserves_other_providers(tmp_path: Path) 
                 "name": "pi-test",
                 "reasoning": True,
                 "input": ["text", "image"],
-                "contextWindow": 1_000_000,
+                "contextWindow": MODEL_CONTEXT_1M,
                 "maxTokens": 128 * 1024,
             }
         ],

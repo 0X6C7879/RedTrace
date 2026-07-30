@@ -5,7 +5,11 @@ import time
 
 from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
 from redtrace.dispatcher.contracts import parse_json_output, validate_explore_payload
-from redtrace.dispatcher.prompting import add_blackboard_guidance, load_prompt, render_prompt
+from redtrace.dispatcher.prompting import (
+    add_blackboard_guidance,
+    load_prompt,
+    render_prompt,
+)
 from redtrace.dispatcher.protocol.client import CairnClient
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
@@ -41,7 +45,9 @@ def run_explore_task(
     driver = get_driver(worker.type, config.runtime.execution)
     task_started = time.perf_counter()
     healthcheck_timeout = config.runtime.healthcheck_timeout
-    lease = HeartbeatLease.for_intent(client, project.project.id, intent.id, worker.name, config.runtime.interval)
+    lease = HeartbeatLease.for_intent(
+        client, project.project.id, intent.id, worker.name, config.runtime.interval
+    )
     lease.start()
     try:
         container_name = container_manager.ensure_running(project.project.id)
@@ -104,6 +110,7 @@ def run_explore_task(
             prompt = add_blackboard_guidance(
                 prompt,
                 project.blackboard_revision,
+                task_type="explore",
                 context_harness_enabled=config.context_harness.enabled,
                 local_execution=config.runtime.execution == "local",
             )
@@ -120,6 +127,7 @@ def run_explore_task(
             container_name,
             worker,
             execute.argv,
+            stdin_text=execute.stdin,
             phase="explore_execute",
             timeout=config.tasks.explore.timeout,
             lease=lease,
@@ -251,7 +259,12 @@ def run_explore_task(
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return "failed"
     except Exception:
-        LOG.exception("explore task crashed project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
+        LOG.exception(
+            "explore task crashed project=%s intent=%s worker=%s",
+            project.project.id,
+            intent.id,
+            worker.name,
+        )
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return "failed"
     finally:
@@ -284,7 +297,12 @@ def _try_conclude_fallback(
         best_effort_release(client, project_id, intent.id, worker.name)
         return "failed"
     if lease.failure is not None:
-        LOG.warning("conclude fallback skipped because heartbeat already lost project=%s intent=%s worker=%s", project_id, intent.id, worker.name)
+        LOG.warning(
+            "conclude fallback skipped because heartbeat already lost project=%s intent=%s worker=%s",
+            project_id,
+            intent.id,
+            worker.name,
+        )
         best_effort_release(client, project_id, intent.id, worker.name)
         return "failed"
     if cancellation.is_cancelled:
@@ -322,8 +340,13 @@ def _try_conclude_fallback(
             "intent_description": intent.description,
         },
     )
-    conclude_argv = driver.build_conclude(worker, prompt, session)
-    LOG.info("starting conclude fallback project=%s intent=%s worker=%s", project_id, intent.id, worker.name)
+    conclude = driver.build_conclude(worker, prompt, session)
+    LOG.info(
+        "starting conclude fallback project=%s intent=%s worker=%s",
+        project_id,
+        intent.id,
+        worker.name,
+    )
     conclude_started = time.perf_counter()
     result = _run_process(
         client,
@@ -332,7 +355,8 @@ def _try_conclude_fallback(
         container_manager,
         container_name,
         worker,
-        conclude_argv,
+        conclude.argv,
+        stdin_text=conclude.stdin,
         phase="explore_conclude",
         timeout=config.tasks.explore.conclude_timeout,
         lease=lease,
@@ -424,6 +448,7 @@ def _run_process(
     worker: WorkerConfig,
     argv: list[str],
     *,
+    stdin_text: str | None = None,
     phase: str,
     timeout: int,
     lease: HeartbeatLease,
@@ -435,6 +460,7 @@ def _run_process(
         container_name,
         worker,
         argv,
+        stdin_text=stdin_text,
         client=client,
         project_id=project_id,
         intent_id=intent_id,

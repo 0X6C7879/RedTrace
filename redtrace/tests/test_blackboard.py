@@ -251,6 +251,7 @@ def test_worker_process_receives_read_only_blackboard_context(monkeypatch, worke
             "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
+            "context_length": 1_048_576,
         }
     )
     common.run_worker_process(
@@ -272,6 +273,10 @@ def test_worker_process_receives_read_only_blackboard_context(monkeypatch, worke
     assert captured["REDTRACE_TASK_TYPE"] == "explore"
     assert captured["REDTRACE_INTENT_ID"] == "i003"
     assert captured["REDTRACE_BLACKBOARD_CURSOR"] == "17"
+    if worker_type == "claudecode":
+        assert captured["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "1048576"
+    elif worker_type == "pi":
+        assert captured["PI_MODEL_CONTEXT_WINDOW"] == "1048576"
 
 
 def test_prompt_guidance_is_optional_and_forbids_polling() -> None:

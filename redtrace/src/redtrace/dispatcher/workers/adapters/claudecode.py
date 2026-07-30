@@ -9,6 +9,8 @@ from redtrace.dispatcher.workers.base import DriverResult, SeedSessionDriver
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
 
 ANTHROPIC_VERSION = "2023-06-01"
+if not hasattr(os, "geteuid"):
+    os.geteuid = lambda: -1  # type: ignore[attr-defined]
 REDTRACE_OUTPUT_SCHEMA = json.dumps(
     {
         "type": "object",
@@ -29,6 +31,9 @@ REDTRACE_OUTPUT_SCHEMA = json.dumps(
 
 class ClaudeCodeDriver(SeedSessionDriver):
     type_name = "claudecode"
+
+    def __init__(self, local: bool = False):
+        self.local = local
 
     def local_binary(self) -> str | None:
         return "claude"
@@ -88,15 +93,15 @@ class ClaudeCodeDriver(SeedSessionDriver):
             if worker.api_configured()
             else []
         )
-        return DriverResult(
-            argv=[
+        argv = [
                 "claude",
                 "--session-id",
                 session,
                 *self._permission_args(),
                 *model_args,
                 "--mcp-config",
-                CLAUDE_MCP_PATH,
+                self._mcp_config(worker),
+                *self._plugin_args(worker),
                 "-p",
                 "--output-format",
                 "stream-json",
@@ -104,26 +109,35 @@ class ClaudeCodeDriver(SeedSessionDriver):
                 "--include-partial-messages",
                 "--json-schema",
                 REDTRACE_OUTPUT_SCHEMA,
-                "--",
-                prompt,
-            ],
+            ]
+        if not self.local:
+            argv.extend(["--", prompt])
+        return DriverResult(
+            argv=argv,
             session=session,
+            stdin=prompt if self.local else None,
         )
 
-    def build_conclude(self, worker: WorkerConfig, prompt: str, session: str) -> list[str]:
+    def build_conclude(
+        self,
+        worker: WorkerConfig,
+        prompt: str,
+        session: str,
+    ) -> DriverResult:
         model_args = (
             ["--model", worker.env["ANTHROPIC_MODEL"]]
             if worker.api_configured()
             else []
         )
-        return [
+        argv = [
             "claude",
             "-r",
             session,
             *self._permission_args(),
             *model_args,
             "--mcp-config",
-            CLAUDE_MCP_PATH,
+            self._mcp_config(worker),
+            *self._plugin_args(worker),
             "-p",
             "--output-format",
             "stream-json",
@@ -131,9 +145,26 @@ class ClaudeCodeDriver(SeedSessionDriver):
             "--include-partial-messages",
             "--json-schema",
             REDTRACE_OUTPUT_SCHEMA,
-            "--",
-            prompt,
         ]
+        if not self.local:
+            argv.extend(["--", prompt])
+        return DriverResult(
+            argv=argv,
+            session=session,
+            stdin=prompt if self.local else None,
+        )
+
+    @classmethod
+    def _mcp_config(cls, worker: WorkerConfig) -> str:
+        return worker.env.get(
+            "REDTRACE_CLAUDE_MCP_CONFIG",
+            CLAUDE_MCP_PATH,
+        )
+
+    @classmethod
+    def _plugin_args(cls, worker: WorkerConfig) -> list[str]:
+        plugin_dir = worker.env.get("REDTRACE_CLAUDE_PLUGIN_DIR")
+        return ["--plugin-dir", plugin_dir] if plugin_dir else []
 
     def extract_response_text(self, stdout: str, stderr: str) -> str:
         for line in reversed(stdout.splitlines()):

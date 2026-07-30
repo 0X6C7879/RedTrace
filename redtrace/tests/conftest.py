@@ -166,9 +166,9 @@ class FakeDriver:
         self.execute_prompts.append(prompt)
         return DriverResult(["execute"], session=session)
 
-    def build_conclude(self, _worker, prompt: str, _session: str) -> list[str]:
+    def build_conclude(self, _worker, prompt: str, _session: str) -> DriverResult:
         self.conclude_prompts.append(prompt)
-        return ["conclude"]
+        return DriverResult(["conclude"], session=_session)
 
     def extract_session(self, session: str | None, _stdout: str, _stderr: str) -> str | None:
         return session

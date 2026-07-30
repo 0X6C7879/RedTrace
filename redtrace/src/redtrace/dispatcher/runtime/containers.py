@@ -1,27 +1,18 @@
 from __future__ import annotations
 
 import io
-import json
 import logging
+import os
 import tarfile
 import threading
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import docker
 from docker.errors import APIError, DockerException, NotFound
 from docker.models.containers import Container
-
-from redtrace.audit import archive_container_workspace
-from redtrace.capabilities import (
-    MANIFEST_PATH,
-    NAME_PATTERN,
-    CapabilityStore,
-    runtime_workspace_patch,
-    workspace_payload,
-    workspace_tar,
-)
 from redtrace.dispatcher.config import ContainerConfig, ContextHarnessConfig
 from redtrace.dispatcher.runtime.process import ManagedProcess
+from redtrace.paths import RedTracePaths, safe_project_key
 
 LOG = logging.getLogger(__name__)
 
@@ -34,20 +25,20 @@ class ContainerManager:
         self,
         config: ContainerConfig,
         context_harness: ContextHarnessConfig | None = None,
+        paths: RedTracePaths | None = None,
     ):
         self._config = config
         self._context_harness = context_harness or ContextHarnessConfig()
         self._client = docker.from_env()
         self._ensure_running_locks: dict[str, threading.Lock] = {}
         self._ensure_running_locks_guard = threading.Lock()
-        self._capabilities = CapabilityStore()
-        self._capability_digests: dict[str, str] = {}
+        self._paths = paths
 
     def close(self) -> None:
         self._client.close()
 
     def container_name(self, project_id: str) -> str:
-        sanitized = project_id.replace("/", "-")
+        sanitized = safe_project_key(project_id)
         return f"{self._PREFIX}{sanitized}"
 
     def ensure_running(self, project_id: str) -> str:
@@ -58,13 +49,25 @@ class ContainerManager:
     def _ensure_running_locked(self, project_id: str, name: str) -> str:
         state = self.inspect_state(name)
         if state == "running":
-            LOG.debug("container already running project=%s container=%s", project_id, name)
+            LOG.debug(
+                "container already running project=%s container=%s", project_id, name
+            )
             return self._ready(name)
         if state is not None:
-            LOG.info("starting existing container project=%s container=%s state=%s", project_id, name, state)
+            LOG.info(
+                "starting existing container project=%s container=%s state=%s",
+                project_id,
+                name,
+                state,
+            )
             self._start_existing(name)
             return self._ready(name)
-        LOG.info("creating container project=%s container=%s image=%s", project_id, name, self._config.image)
+        LOG.info(
+            "creating container project=%s container=%s image=%s",
+            project_id,
+            name,
+            self._config.image,
+        )
         try:
             self._client.containers.run(
                 self._config.image,
@@ -73,79 +76,34 @@ class ContainerManager:
                 name=name,
                 network_mode=self._config.network_mode,
                 cap_add=self._config.cap_add or None,
+                volumes=self._shared_volumes(),
             )
             LOG.info("created container project=%s container=%s", project_id, name)
             return self._ready(name)
         except APIError as exc:
             if not self._is_name_conflict(exc):
                 raise RuntimeError(f"failed to create container {name}: {exc}") from exc
-        LOG.info("container name conflict, reusing existing container project=%s container=%s", project_id, name)
+        LOG.info(
+            "container name conflict, reusing existing container project=%s container=%s",
+            project_id,
+            name,
+        )
         state = self.inspect_state(name)
         if state == "running":
             return self._ready(name)
         if state is not None:
-            LOG.info("starting conflicted existing container project=%s container=%s state=%s", project_id, name, state)
+            LOG.info(
+                "starting conflicted existing container project=%s container=%s state=%s",
+                project_id,
+                name,
+                state,
+            )
             self._start_existing(name)
             return self._ready(name)
         raise RuntimeError(f"failed to create container {name}")
 
     def _ready(self, name: str) -> str:
-        self._sync_capabilities(name)
         return name
-
-    def _sync_capabilities(self, name: str) -> None:
-        if name in self._capability_digests:
-            return
-
-        container = self._require_container(name)
-        previous: dict = {}
-        try:
-            result = container.exec_run(["cat", f"{self._WORKSPACE}/{MANIFEST_PATH}"])
-            if result.exit_code == 0:
-                previous = json.loads(result.output.decode("utf-8"))
-        except (DockerException, UnicodeDecodeError, json.JSONDecodeError):
-            previous = {}
-        if previous.get("snapshotFrozen") is True and isinstance(previous.get("digest"), str):
-            patch = runtime_workspace_patch(previous)
-            if patch:
-                try:
-                    ok = container.put_archive(self._WORKSPACE, workspace_tar(patch))
-                except DockerException as exc:
-                    raise RuntimeError(
-                        f"failed to sync runtime context harness into {name}: {exc}"
-                    ) from exc
-                if not ok:
-                    raise RuntimeError(
-                        f"failed to sync runtime context harness into {name}"
-                    )
-            self._capability_digests[name] = previous["digest"]
-            return
-
-        digest, files = workspace_payload(self._capabilities)
-        current_manifest = json.loads(files[MANIFEST_PATH].decode("utf-8"))
-        managed_names = {
-            skill
-            for skill in [*previous.get("skills", []), *current_manifest.get("skills", [])]
-            if isinstance(skill, str) and NAME_PATTERN.fullmatch(skill)
-        }
-        if managed_names:
-            paths = [
-                f"{self._WORKSPACE}/{prefix}/{skill}"
-                for skill in sorted(managed_names)
-                for prefix in (".agents/skills", ".claude/skills")
-            ]
-            try:
-                container.exec_run(["rm", "-rf", "--", *paths])
-            except DockerException as exc:
-                raise RuntimeError(f"failed to refresh capabilities in {name}: {exc}") from exc
-
-        try:
-            ok = container.put_archive(self._WORKSPACE, workspace_tar(files))
-        except DockerException as exc:
-            raise RuntimeError(f"failed to sync capabilities into {name}: {exc}") from exc
-        if not ok:
-            raise RuntimeError(f"failed to sync capabilities into {name}")
-        self._capability_digests[name] = digest
 
     def _ensure_running_lock(self, name: str) -> threading.Lock:
         with self._ensure_running_locks_guard:
@@ -172,22 +130,12 @@ class ContainerManager:
         if state is None:
             return True
         container = self._require_container(name)
-        if self._config.completed_action == "remove":
-            try:
-                archive_container_workspace(project_id, container)
-            except Exception:
-                LOG.warning("failed to archive completed project workspace project=%s", project_id, exc_info=True)
-            LOG.info("removing completed project container project=%s container=%s", project_id, name)
-            try:
-                container.remove(force=True)
-            except NotFound:
-                return True
-            except DockerException as exc:
-                LOG.warning("failed to remove container=%s error=%s", name, exc)
-                return False
-            return self.inspect_state(name) is None
-        elif state == "running":
-            LOG.info("stopping completed project container project=%s container=%s", project_id, name)
+        if state == "running":
+            LOG.info(
+                "stopping completed project container project=%s container=%s",
+                project_id,
+                name,
+            )
             try:
                 container.stop(timeout=1)
             except NotFound:
@@ -203,16 +151,25 @@ class ContainerManager:
         state = self.inspect_state(name)
         if state != "running":
             return True
-        LOG.info("stopping stopped project container project=%s container=%s", project_id, name)
+        LOG.info(
+            "stopping stopped project container project=%s container=%s",
+            project_id,
+            name,
+        )
         container = self._require_container(name)
         try:
             container.stop(timeout=1)
         except NotFound:
             return True
         except DockerException as exc:
-            LOG.warning("failed to stop stopped project container=%s error=%s", name, exc)
+            LOG.warning(
+                "failed to stop stopped project container=%s error=%s", name, exc
+            )
             return False
         return self.inspect_state(name) != "running"
+
+    def cleanup_deleted(self, project_id: str) -> bool:
+        return self.cleanup_orphan(self.container_name(project_id))
 
     def cleanup_orphan(self, name: str) -> bool:
         state = self.inspect_state(name)
@@ -235,15 +192,17 @@ class ContainerManager:
         except DockerException as exc:
             LOG.warning("failed to list managed containers error=%s", exc)
             return []
-        return sorted(container.name for container in containers if container.name.startswith(self._PREFIX))
+        return sorted(
+            container.name
+            for container in containers
+            if container.name.startswith(self._PREFIX)
+        )
 
     def needs_completed_cleanup(self, project_id: str) -> bool:
         name = self.container_name(project_id)
         state = self.inspect_state(name)
         if state is None:
             return False
-        if self._config.completed_action == "remove":
-            return True
         return state == "running"
 
     def needs_orphan_cleanup(self, name: str) -> bool:
@@ -257,9 +216,12 @@ class ContainerManager:
         container_name: str,
         env: dict[str, str],
         command: list[str],
+        stdin_text: str | None = None,
         timeout_seconds: int | None = None,
         kill_after_seconds: int = 5,
     ) -> ManagedProcess:
+        if stdin_text is not None:
+            raise ValueError("container Worker stdin is not supported")
         container = self._require_container(container_name)
         context_harness = getattr(self, "_context_harness", None)
         if context_harness is None:
@@ -268,7 +230,7 @@ class ContainerManager:
             **env,
             **context_harness.environment(),
             "PATH": (
-                f"{self._WORKSPACE}/.redtrace/bin:"
+                "/opt/redtrace/runtime/bin:"
                 "/home/kali/.local/bin:/home/kali/go/bin:"
                 "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
             ),
@@ -290,6 +252,60 @@ class ContainerManager:
             env,
             max_output_chars=context_harness.worker_output_chars,
         )
+
+    def _shared_volumes(self) -> dict[str, dict[str, str]]:
+        if self._paths is None:
+            return {}
+        bindings = {
+            self._host_source(self._paths.skills): {
+                "bind": "/opt/redtrace/claude-plugin/skills",
+                "mode": "ro",
+            },
+            self._host_source(self._paths.mcp): {
+                "bind": "/opt/redtrace/mcp",
+                "mode": "ro",
+            },
+            self._host_source(self._paths.plugins): {
+                "bind": "/opt/redtrace/plugins",
+                "mode": "ro",
+            },
+            self._host_source(self._paths.runtime): {
+                "bind": "/opt/redtrace/runtime",
+                "mode": "ro",
+            },
+            self._host_source(self._paths.runtime / "claude-plugin"): {
+                "bind": "/opt/redtrace/claude-plugin",
+                "mode": "ro",
+            },
+            self._host_source(self._paths.workers): {
+                "bind": "/opt/redtrace/workers",
+                "mode": "rw",
+            },
+        }
+        return {str(source): spec for source, spec in bindings.items()}
+
+    def _host_source(self, path: Path) -> Path:
+        """Translate a dispatcher-container path to the Docker host mount source."""
+        if not os.environ.get("HOSTNAME"):
+            return path.resolve()
+        try:
+            current = self._client.containers.get(os.environ["HOSTNAME"])
+            mounts = current.attrs.get("Mounts", [])
+        except DockerException:
+            return path.resolve()
+        resolved = path.resolve()
+        matches: list[tuple[Path, Path]] = []
+        for mount in mounts:
+            destination = Path(str(mount.get("Destination") or ""))
+            source = Path(str(mount.get("Source") or ""))
+            try:
+                relative = resolved.relative_to(destination)
+            except (ValueError, OSError):
+                continue
+            matches.append((destination, source / relative))
+        if not matches:
+            return resolved
+        return max(matches, key=lambda item: len(item[0].parts))[1]
 
     def write_text_file(self, container_name: str, path: str, content: str) -> str:
         archive_path, archive = self._text_file_archive(path, content)

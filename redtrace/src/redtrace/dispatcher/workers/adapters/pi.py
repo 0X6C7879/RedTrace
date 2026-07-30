@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import PurePosixPath
 from typing import Any
 
-from redtrace.capabilities import PI_MCP_EXTENSION, PI_PROVIDER_EXTENSION_PATH
+from redtrace.capabilities import (
+    PI_MCP_EXTENSION,
+    PI_PROVIDER_EXTENSION_PATH,
+    resolve_capabilities_root,
+)
 from redtrace.dispatcher.config import WorkerConfig
 from redtrace.dispatcher.workers.base import DriverResult, WorkerDriver
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
@@ -57,7 +60,11 @@ class PiDriver(WorkerDriver):
 
     def build_execute(self, worker: WorkerConfig, prompt: str, session: str | None) -> DriverResult:
         if self.local and not worker.api_configured():
-            return DriverResult(argv=self._local_argv(worker, prompt, session), session=session)
+            return DriverResult(
+                argv=self._local_argv(worker, prompt, session),
+                session=session,
+                stdin=prompt,
+            )
         env = worker.env
         argv = [
             "--provider",
@@ -73,11 +80,20 @@ class PiDriver(WorkerDriver):
         if session:
             argv.extend(["--session", session])
         argv.extend(["-p", prompt])
-        return DriverResult(argv=self._configured_argv(argv), session=session)
+        return DriverResult(argv=self._configured_argv(worker, argv), session=session)
 
-    def build_conclude(self, worker: WorkerConfig, prompt: str, session: str) -> list[str]:
+    def build_conclude(
+        self,
+        worker: WorkerConfig,
+        prompt: str,
+        session: str,
+    ) -> DriverResult:
         if self.local and not worker.api_configured():
-            return self._local_argv(worker, prompt, session)
+            return DriverResult(
+                argv=self._local_argv(worker, prompt, session),
+                session=session,
+                stdin=prompt,
+            )
         env = worker.env
         argv = [
             "--provider",
@@ -94,7 +110,10 @@ class PiDriver(WorkerDriver):
             "-p",
             prompt,
         ]
-        return self._configured_argv(argv)
+        return DriverResult(
+            argv=self._configured_argv(worker, argv),
+            session=session,
+        )
 
     def _local_argv(self, worker: WorkerConfig, prompt: str, session: str | None) -> list[str]:
         # Native pi: no provider/model overrides, so the host login and global config win.
@@ -107,11 +126,12 @@ class PiDriver(WorkerDriver):
             "--session-dir",
             session_dir,
             "--extension",
-            PI_MCP_EXTENSION,
+            worker.env.get("REDTRACE_PI_MCP_EXTENSION", PI_MCP_EXTENSION),
+            *self._skill_args(worker),
         ]
         if session:
             argv.extend(["--session", session])
-        argv.extend(["-p", prompt])
+        argv.append("-p")
         return argv
 
     def extract_session(self, session: str | None, stdout: str, stderr: str) -> str | None:
@@ -156,25 +176,48 @@ class PiDriver(WorkerDriver):
                 parts.append(text)
         return "\n".join(parts).strip() or stdout
 
-    @staticmethod
-    def _configured_argv(pi_argv: list[str]) -> list[str]:
+    @classmethod
+    def _configured_argv(
+        cls,
+        worker: WorkerConfig,
+        pi_argv: list[str],
+    ) -> list[str]:
         return [
             "pi",
             "--extension",
-            PI_MCP_EXTENSION,
+            worker.env.get("REDTRACE_PI_MCP_EXTENSION", PI_MCP_EXTENSION),
             "--extension",
-            PI_PROVIDER_EXTENSION_PATH,
+            worker.env.get(
+                "REDTRACE_PI_PROVIDER_EXTENSION",
+                PI_PROVIDER_EXTENSION_PATH,
+            ),
+            *cls._skill_args(worker),
             *pi_argv,
         ]
 
     @staticmethod
     def _session_dir(worker: WorkerConfig) -> str:
+        configured = worker.env.get("REDTRACE_PI_SESSION_DIR")
+        if configured:
+            return configured
         return str(
-            PurePosixPath(".redtrace")
+            resolve_capabilities_root()
+            / ".redtrace"
+            / "workers"
             / "pi"
-            / "sessions"
             / worker.name
+            / "sessions"
         )
+
+    @staticmethod
+    def _skill_args(worker: WorkerConfig) -> list[str]:
+        try:
+            paths = json.loads(worker.env.get("REDTRACE_SKILL_PATHS", "[]"))
+        except json.JSONDecodeError as exc:
+            raise ValueError("invalid REDTRACE_SKILL_PATHS") from exc
+        if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+            raise ValueError("REDTRACE_SKILL_PATHS must be a JSON string array")
+        return [argument for path in paths for argument in ("--skill", path)]
 
     @staticmethod
     def _iter_events(stdout: str) -> list[dict[str, Any]]:

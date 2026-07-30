@@ -1820,7 +1820,7 @@
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">Agent CLI</span><select x-model="workerForm.type" class="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><option value="claudecode">Claude Code</option><option value="codex">Codex</option><option value="pi">Pi</option></select></label>
       <label class="block sm:col-span-2"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">API 端点</span><input x-model.trim="workerForm.api_endpoint" type="url" autocomplete="off" placeholder="https://api.example.com/v1" class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">API Key</span><input x-model="workerForm.api_key" type="text" autocomplete="off" placeholder="输入 API Key" class="h-10 w-full rounded-xl border border-slate-200 px-3 font-mono text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><span class="mt-1.5 block text-[10px] text-slate-400">本地部署调试模式：当前密钥会以明文显示。</span></label>
-      <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">模型 ID</span><input x-model.trim="workerForm.model_id" maxlength="256" autocomplete="off" placeholder="模型标识" class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
+      <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">模型 ID</span><span class="flex items-center gap-2"><input x-model.trim="workerForm.model_id" maxlength="256" autocomplete="off" placeholder="模型标识" class="h-10 min-w-0 flex-1 rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><span class="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-600"><input type="checkbox" x-model="workerForm.context_1m" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span>1M</span></span></span><span class="mt-1.5 block text-[10px] text-slate-400">勾选后写入 context_length: 1048576。</span></label>
       <div class="sm:col-span-2"><span class="mb-2 block text-[11px] font-medium text-slate-500">任务类型</span><div class="flex flex-wrap gap-4"><template x-for="taskType in ['bootstrap','reason','explore']" :key="taskType"><label class="inline-flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" :value="taskType" x-model="workerForm.task_types" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span x-text="workerTaskLabel(taskType)"></span></label></template></div></div>
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">优先级</span><input x-model.number="workerForm.priority" type="number" min="0" max="1000" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><span class="mt-1.5 block text-[10px] text-slate-400">数字越小优先级越高。</span></label>
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">最大并发数</span><input x-model.number="workerForm.max_running" type="number" min="1" :max="workerConfig.runtime_max_workers || 1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><span class="mt-1.5 block text-[10px] text-slate-400" x-text="`全局上限 ${workerConfig.runtime_max_workers || 1}`"></span></label>
@@ -1946,7 +1946,7 @@ function redtraceApp() {
     workerSaveBusy: false,
     workerTestBusy: false,
     workerTestResult: null,
-    workerForm: { name: '', type: 'codex', enabled: true, api_endpoint: '', api_key: '', model_id: '', task_types: ['explore'], priority: 0, max_running: 1 },
+    workerForm: { name: '', type: 'codex', enabled: true, api_endpoint: '', api_key: '', model_id: '', context_1m: false, task_types: ['explore'], priority: 0, max_running: 1 },
     deleteConfirm: { id: '', title: '' },
     isDeletingProject: false,
     yamlPreviewTitle: '',
@@ -2385,6 +2385,21 @@ function redtraceApp() {
       try {
         this.isDeletingProject = true;
         await this.api('DELETE', `/projects/${projectId}`);
+        let deletionComplete = false;
+        for (let attempt = 0; attempt < 240; attempt += 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          const deletion = await this.api('GET', `/projects/${projectId}/deletion`);
+          if (deletion === null) {
+            deletionComplete = true;
+            break;
+          }
+          if (deletion?.state === 'failed') {
+            throw new Error(deletion.last_error || `Failed to delete ${projectId}`);
+          }
+        }
+        if (!deletionComplete) {
+          throw new Error(`Deletion of ${projectId} is still pending`);
+        }
         this.closeDeleteModal(true);
         if (this.selectedProjectId === projectId && this.view === 'graph') {
           this.backToList();
@@ -2453,6 +2468,7 @@ function redtraceApp() {
         api_endpoint: worker.api_endpoint || '',
         api_key: worker.api_key || '',
         model_id: worker.model_id || '',
+        context_1m: Number(worker.context_length) === 1048576,
         task_types: [...worker.task_types],
         priority: worker.priority,
         max_running: worker.max_running,
@@ -2463,6 +2479,7 @@ function redtraceApp() {
         api_endpoint: '',
         api_key: '',
         model_id: '',
+        context_1m: false,
         task_types: ['explore'],
         priority: 0,
         max_running: 1,
@@ -2488,6 +2505,7 @@ function redtraceApp() {
         api_key: this.workerForm.api_key || null,
         clear_api_key: false,
         model_id: this.workerForm.model_id,
+        context_length: this.workerForm.context_1m ? 1048576 : null,
         task_types: [...this.workerForm.task_types],
         priority: Number(this.workerForm.priority),
         max_running: Number(this.workerForm.max_running),

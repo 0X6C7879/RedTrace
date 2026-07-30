@@ -5,10 +5,9 @@ import os
 import shutil
 from pathlib import Path
 
-from redtrace.audit import archive_local_workspace
-from redtrace.capabilities import CapabilityStore, materialize_local_workspace
 from redtrace.dispatcher.config import ContextHarnessConfig, LocalConfig
 from redtrace.dispatcher.runtime.local_process import LocalProcess
+from redtrace.paths import RedTracePaths, contained_path, safe_project_key
 
 LOG = logging.getLogger(__name__)
 
@@ -16,24 +15,38 @@ LOG = logging.getLogger(__name__)
 class LocalBackend:
     """Runs workers directly on the dispatcher host instead of in per-project containers.
 
-    Each project gets an isolated working directory under ``workspace_root`` (defaulting
-    to the directory the dispatcher was started in). Worker processes inherit the host
-    environment so ``claude`` / ``codex`` / ``pi`` keep using the user's global login,
-    settings, Skills and extensions. A Worker's configured API values are merged over
-    that environment for only that process. There are no containers to build or tear
-    down, so the container-lifecycle methods are inert.
+    Each project gets an isolated working directory under the configured
+    ``workspace_root``. Worker processes use RedTrace-managed, Worker-isolated writable
+    state and the root project's shared Skills, MCP and plugin resources. A Worker's
+    configured API values are merged over the host environment for only that process.
+    There are no containers to build or tear down.
     """
 
     def __init__(
         self,
         config: LocalConfig,
         context_harness: ContextHarnessConfig | None = None,
+        paths: RedTracePaths | None = None,
     ):
         self._config = config
         self._context_harness = context_harness or ContextHarnessConfig()
         root = config.workspace_root
-        self._root = Path(root).expanduser() if root else Path.cwd()
-        self._capabilities = CapabilityStore()
+        default_root = (
+            paths.workspaces
+            if paths is not None
+            else Path(__file__).resolve().parents[5] / "workspaces"
+        )
+        self._root = (Path(root).expanduser() if root else default_root).resolve()
+        self._runtime_bin = (
+            paths.runtime / "bin"
+            if paths is not None
+            else Path(__file__).resolve().parents[5] / ".redtrace" / "runtime" / "bin"
+        )
+        self._project_state_root = (
+            paths.projects
+            if paths is not None
+            else Path(__file__).resolve().parents[5] / ".redtrace" / "projects"
+        )
         self._path_prepend = tuple(
             part
             for part in os.environ.get("REDTRACE_LOCAL_PATH_PREPEND", "").split(
@@ -51,8 +64,9 @@ class LocalBackend:
     def ensure_running(self, project_id: str) -> str:
         project_dir = self._project_dir(project_id)
         project_dir.mkdir(parents=True, exist_ok=True)
-        materialize_local_workspace(self._capabilities, project_dir)
-        LOG.debug("local project workdir ready project=%s dir=%s", project_id, project_dir)
+        LOG.debug(
+            "local project workdir ready project=%s dir=%s", project_id, project_dir
+        )
         return str(project_dir)
 
     def build_exec_process(
@@ -60,6 +74,7 @@ class LocalBackend:
         container_name: str,
         env: dict[str, str],
         command: list[str],
+        stdin_text: str | None = None,
         timeout_seconds: int | None = None,
         kill_after_seconds: int = 5,
     ) -> LocalProcess:
@@ -87,18 +102,7 @@ class LocalBackend:
             ):
                 if key not in (env or {}):
                     merged_env.pop(key, None)
-        if all(
-            (env or {}).get(key)
-            for key in (
-                "CODEX_BASE_URL",
-                "OPENAI_API_KEY",
-                "CODEX_MODEL",
-            )
-        ):
-            codex_home = Path(container_name) / ".redtrace" / "codex-home"
-            codex_home.mkdir(parents=True, exist_ok=True)
-            merged_env["CODEX_HOME"] = str(codex_home)
-        cli_dir = str(Path(container_name) / ".redtrace" / "bin")
+        cli_dir = str(self._runtime_bin)
         merged_env["PATH"] = os.pathsep.join(
             (cli_dir, *self._path_prepend, merged_env.get("PATH", ""))
         )
@@ -106,6 +110,7 @@ class LocalBackend:
             command,
             cwd=container_name,
             env=merged_env,
+            stdin_text=stdin_text,
             timeout_seconds=timeout_seconds,
             term_grace_seconds=kill_after_seconds,
             max_output_chars=self._context_harness.worker_output_chars,
@@ -117,7 +122,17 @@ class LocalBackend:
             parts = Path(relative).parts
             if not parts or any(part in ("", ".", "..") for part in parts):
                 raise ValueError(f"invalid local prompt path: {path}")
-            target = Path(container_name) / ".redtrace" / "prompts" / Path(*parts)
+            workspace = Path(container_name).resolve()
+            project_id = safe_project_key(workspace.name)
+            if workspace != self._project_dir(project_id):
+                raise ValueError(
+                    f"local workspace is outside managed root: {container_name}"
+                )
+            target = (
+                contained_path(self._project_state_root, project_id)
+                / "prompts"
+                / Path(*parts)
+            )
         else:
             target = Path(path)
             if not target.is_absolute():
@@ -127,27 +142,33 @@ class LocalBackend:
         return str(target)
 
     def needs_completed_cleanup(self, project_id: str) -> bool:
-        return self._config.completed_action == "remove" and self._project_dir(project_id).exists()
+        return False
 
     def needs_stopped_cleanup(self, project_id: str) -> bool:
         return False
 
     def cleanup_completed(self, project_id: str) -> bool:
-        if self._config.completed_action == "remove":
-            project_dir = self._project_dir(project_id)
-            try:
-                archive_local_workspace(project_id, project_dir)
-            except Exception:
-                LOG.warning("failed to archive completed project workdir project=%s", project_id, exc_info=True)
-            LOG.info("removing completed project workdir project=%s dir=%s", project_id, project_dir)
-            shutil.rmtree(project_dir, ignore_errors=True)
+        # Completion preserves project evidence and Workspace. Only the explicit
+        # Web/API deletion lifecycle is allowed to release project resources.
         return True
 
     def cleanup_stopped(self, project_id: str) -> bool:
         return True
 
+    def cleanup_deleted(self, project_id: str) -> bool:
+        project_dir = self._project_dir(project_id)
+        if not project_dir.exists():
+            return True
+        LOG.info(
+            "removing deleted project workdir project=%s dir=%s",
+            project_id,
+            project_dir,
+        )
+        shutil.rmtree(project_dir)
+        return not project_dir.exists()
+
     def managed_container_names(self) -> list[str]:
         return []
 
     def _project_dir(self, project_id: str) -> Path:
-        return self._root / project_id.replace("/", "-")
+        return contained_path(self._root, safe_project_key(project_id))

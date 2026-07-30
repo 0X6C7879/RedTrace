@@ -56,8 +56,8 @@ local:
 # dispatcher's own environment ({**os.environ, **common_env}), so use it for things the
 # CLIs need at runtime, e.g. an outbound proxy. (Alternatively just `export` them in the
 # shell that starts the dispatcher — local workers inherit that environment.)
-# common_env:
-#   BRAVE_API_KEY: "replace-me"  # native Claude/Codex web search is preferred
+common_env:
+  BRAVE_API_KEY: "replace-me"  # native Claude/Codex web search is preferred
 #   https_proxy: "http://127.0.0.1:7897"
 #   http_proxy: "http://127.0.0.1:7897"
 #   all_proxy: "http://127.0.0.1:7897"
@@ -99,3 +99,11 @@ workers:
   #     PI_MODEL: "pi-model-id"
   #     PI_PROVIDER_API: "openai-completions"
   #     PI_MODEL_CONTEXT_WINDOW: "1000000"
+paths:
+  root: .
+  skills: skills
+  mcp: mcp
+  plugins: plugins
+  managed: .redtrace
+  workspaces: workspaces
+  audit: .redtrace/audit

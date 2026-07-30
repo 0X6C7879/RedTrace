@@ -9,7 +9,12 @@ from redtrace.dispatcher.contracts import (
     validate_bootstrap_conclude_payload,
     validate_bootstrap_execute_payload,
 )
-from redtrace.dispatcher.prompting import add_blackboard_guidance, format_hints, load_prompt, render_prompt
+from redtrace.dispatcher.prompting import (
+    add_blackboard_guidance,
+    format_hints,
+    load_prompt,
+    render_prompt,
+)
 from redtrace.dispatcher.protocol.client import CairnClient
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
@@ -44,7 +49,9 @@ def run_bootstrap_task(
     driver = get_driver(worker.type, config.runtime.execution)
     task_started = time.perf_counter()
     healthcheck_timeout = config.runtime.healthcheck_timeout
-    lease = HeartbeatLease.for_intent(client, project.project.id, intent.id, worker.name, config.runtime.interval)
+    lease = HeartbeatLease.for_intent(
+        client, project.project.id, intent.id, worker.name, config.runtime.interval
+    )
     lease.start()
     try:
         container_name = container_manager.ensure_running(project.project.id)
@@ -98,6 +105,7 @@ def run_bootstrap_task(
             prompt = add_blackboard_guidance(
                 prompt,
                 project.blackboard_revision,
+                task_type="bootstrap",
                 context_harness_enabled=config.context_harness.enabled,
                 local_execution=config.runtime.execution == "local",
             )
@@ -111,6 +119,7 @@ def run_bootstrap_task(
             container_name,
             worker,
             execute.argv,
+            stdin_text=execute.stdin,
             client=client,
             project_id=project.project.id,
             intent_id=intent.id,
@@ -255,7 +264,12 @@ def run_bootstrap_task(
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return "failed"
     except Exception:
-        LOG.exception("bootstrap task crashed project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
+        LOG.exception(
+            "bootstrap task crashed project=%s intent=%s worker=%s",
+            project.project.id,
+            intent.id,
+            worker.name,
+        )
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return "failed"
     finally:
@@ -321,14 +335,20 @@ def _try_conclude_fallback(
         load_prompt(config.runtime.prompt_group, "bootstrap_conclude.md"),
         _bootstrap_prompt_replacements(project),
     )
-    conclude_argv = driver.build_conclude(worker, prompt, session)
-    LOG.info("starting bootstrap conclude fallback project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
+    conclude = driver.build_conclude(worker, prompt, session)
+    LOG.info(
+        "starting bootstrap conclude fallback project=%s intent=%s worker=%s",
+        project.project.id,
+        intent.id,
+        worker.name,
+    )
     conclude_started = time.perf_counter()
     result = run_worker_process(
         container_manager,
         container_name,
         worker,
-        conclude_argv,
+        conclude.argv,
+        stdin_text=conclude.stdin,
         client=client,
         project_id=project.project.id,
         intent_id=intent.id,
@@ -374,13 +394,17 @@ def _try_conclude_fallback(
         queue_skill_feedback(
             client,
             payload,
-            project_id=project_id,
+            project_id=project.project.id,
             intent_id=intent.id,
             worker_name=worker.name,
             task_type="bootstrap",
         )
-        conclude_data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-        if isinstance(conclude_data, dict) and isinstance(conclude_data.get("complete"), dict):
+        conclude_data = (
+            payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        )
+        if isinstance(conclude_data, dict) and isinstance(
+            conclude_data.get("complete"), dict
+        ):
             LOG.warning(
                 "bootstrap conclude returned unexpected complete payload project=%s intent=%s worker=%s complete_preview=%s",
                 project.project.id,
@@ -476,7 +500,9 @@ def _write_bootstrap_complete_result(
         )
         return "success"
 
-    response = client.complete(project_id, [conclude.fact_id], complete_description, worker_name)
+    response = client.complete(
+        project_id, [conclude.fact_id], complete_description, worker_name
+    )
     if response.status_code in (403, 409):
         LOG.info(
             "bootstrap complete deferred project=%s intent=%s worker=%s source=%s status=%s fact_id=%s",

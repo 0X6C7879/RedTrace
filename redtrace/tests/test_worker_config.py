@@ -67,6 +67,7 @@ def _worker_payload(revision: str, *, name: str = "codex-primary") -> dict:
         "api_endpoint": "https://api.example.test/v1",
         "api_key": f"sk-{name}-secret",
         "model_id": "gpt-test",
+        "context_length": 1_048_576,
         "task_types": ["reason", "explore"],
         "priority": 0,
         "max_running": 2,
@@ -100,10 +101,12 @@ def test_worker_config_encrypts_keys_and_never_returns_them(
 
     assert created["workers"][0]["api_key"] == secret
     assert created["workers"][0]["api_key_configured"] is True
+    assert created["workers"][0]["context_length"] == 1_048_576
     persisted = config_path.read_text(encoding="utf-8")
     assert secret not in persisted
     raw = yaml.safe_load(persisted)
     reference = raw["workers"][0]["env"]["OPENAI_API_KEY"]
+    assert raw["workers"][0]["context_length"] == 1_048_576
     assert secret_id_from_reference(reference) is not None
     assert secret.encode() not in (secrets_dir / "worker-config.enc").read_bytes()
     assert DispatchConfig.load(config_path).workers[0].env["OPENAI_API_KEY"] == secret
@@ -381,5 +384,7 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     assert "data = JSON.parse(responseText);" in index
     assert 'x-model="workerForm.api_key" type="text"' in index
     assert "api_key: worker.api_key || ''" in index
+    assert 'x-model="workerForm.context_1m"' in index
+    assert "context_length: this.workerForm.context_1m ? 1048576 : null" in index
     assert "return 'admin';" in index
     assert "return 'admin';" in operations

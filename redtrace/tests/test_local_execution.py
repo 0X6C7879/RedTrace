@@ -24,6 +24,7 @@ from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.workers.adapters.codex import CodexDriver
 from redtrace.dispatcher.workers.adapters.pi import PiDriver
 from redtrace.dispatcher.workers.registry import get_driver
+from redtrace.paths import RedTracePaths
 
 from conftest import FakeClient, make_config, make_intent, make_project
 
@@ -107,7 +108,9 @@ def test_local_process_times_out_and_kills_within_grace() -> None:
 
 def test_local_process_kill_terminates_child_process_group(tmp_path: Path) -> None:
     if os.name == "nt":
-        pytest.skip("POSIX process-group assertion; Windows tree kill is covered by timeout tests")
+        pytest.skip(
+            "POSIX process-group assertion; Windows tree kill is covered by timeout tests"
+        )
     pid_file = tmp_path / "child.pid"
     script = f"sleep 30 & echo $! > {pid_file}; wait"
     process = LocalProcess(
@@ -161,8 +164,21 @@ def test_local_backend_creates_isolated_project_dir(tmp_path: Path) -> None:
     assert backend.container_name("proj_001") == str(tmp_path / "proj_001")
 
 
-def test_local_graph_snapshot_uses_workspace_native_path(tmp_path: Path) -> None:
-    backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path)))
+def test_local_graph_snapshot_uses_managed_project_path(tmp_path: Path) -> None:
+    root = tmp_path / "redtrace"
+    paths = RedTracePaths(
+        root=root,
+        skills=root / "skills",
+        mcp=root / "mcp",
+        plugins=root / "plugins",
+        managed=root / ".redtrace",
+        workspaces=root / "workspaces",
+        audit=root / ".redtrace" / "audit",
+    )
+    backend = LocalBackend(
+        LocalConfig(workspace_root=str(paths.workspaces)),
+        paths=paths,
+    )
     handle = backend.ensure_running("proj_001")
 
     reference = common.write_graph_snapshot_reference(
@@ -173,15 +189,15 @@ def test_local_graph_snapshot_uses_workspace_native_path(tmp_path: Path) -> None
     )
 
     snapshot = next(
-        (Path(handle) / ".redtrace" / "prompts").glob(
-            "reason_execute-*/graph.yaml"
-        )
+        (paths.projects / "proj_001" / "prompts").glob("reason_execute-*/graph.yaml")
     )
     assert snapshot.read_text(encoding="utf-8") == "facts:\n- id: f001\n"
     assert str(snapshot) in reference
 
 
-def test_local_backend_merges_host_env_with_worker_env(tmp_path: Path, monkeypatch) -> None:
+def test_local_backend_merges_host_env_with_worker_env(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setenv("REDTRACE_HOST_VAR", "host")
     backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path)))
     handle = backend.ensure_running("proj_001")
@@ -198,7 +214,9 @@ def test_local_backend_merges_host_env_with_worker_env(tmp_path: Path, monkeypat
     assert result.stdout == "host-worker"
 
 
-def test_local_common_env_reaches_worker_subprocess(tmp_path: Path, monkeypatch) -> None:
+def test_local_common_env_reaches_worker_subprocess(
+    tmp_path: Path, monkeypatch
+) -> None:
     # common_env (e.g. an outbound proxy) merges into every worker's env and must survive
     # all the way to the host subprocess in local mode.
     payload = _local_payload()
@@ -238,7 +256,9 @@ def test_local_backend_write_text_file_writes_to_host(tmp_path: Path) -> None:
 
 
 def test_local_backend_keep_leaves_dir_and_reports_no_cleanup(tmp_path: Path) -> None:
-    backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path), completed_action="keep"))
+    backend = LocalBackend(
+        LocalConfig(workspace_root=str(tmp_path), completed_action="keep")
+    )
     handle = backend.ensure_running("proj_001")
 
     assert backend.needs_completed_cleanup("proj_001") is False
@@ -246,12 +266,18 @@ def test_local_backend_keep_leaves_dir_and_reports_no_cleanup(tmp_path: Path) ->
     assert Path(handle).is_dir()
 
 
-def test_local_backend_remove_deletes_dir_on_completion(tmp_path: Path) -> None:
-    backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path), completed_action="remove"))
+def test_local_backend_completion_preserves_workspace_until_deletion(
+    tmp_path: Path,
+) -> None:
+    backend = LocalBackend(
+        LocalConfig(workspace_root=str(tmp_path), completed_action="remove")
+    )
     handle = backend.ensure_running("proj_001")
 
-    assert backend.needs_completed_cleanup("proj_001") is True
+    assert backend.needs_completed_cleanup("proj_001") is False
     assert backend.cleanup_completed("proj_001") is True
+    assert Path(handle).exists()
+    assert backend.cleanup_deleted("proj_001") is True
     assert not Path(handle).exists()
 
 
@@ -285,9 +311,27 @@ def _local_payload() -> dict:
             "explore": {"timeout": 10, "conclude_timeout": 5},
         },
         "workers": [
-            {"name": "local-claude", "type": "claudecode", "task_types": ["explore"], "max_running": 1, "priority": 0},
-            {"name": "local-codex", "type": "codex", "task_types": ["explore"], "max_running": 1, "priority": 1},
-            {"name": "local-pi", "type": "pi", "task_types": ["reason"], "max_running": 1, "priority": 2},
+            {
+                "name": "local-claude",
+                "type": "claudecode",
+                "task_types": ["explore"],
+                "max_running": 1,
+                "priority": 0,
+            },
+            {
+                "name": "local-codex",
+                "type": "codex",
+                "task_types": ["explore"],
+                "max_running": 1,
+                "priority": 1,
+            },
+            {
+                "name": "local-pi",
+                "type": "pi",
+                "task_types": ["reason"],
+                "max_running": 1,
+                "priority": 2,
+            },
         ],
     }
 
@@ -323,7 +367,11 @@ def test_container_execution_still_requires_worker_env() -> None:
     payload = _local_payload()
     payload["runtime"]["execution"] = "container"
     payload["runtime"]["worker_healthcheck"] = "startup_only"
-    payload["container"] = {"image": "img", "network_mode": "host", "completed_action": "stop"}
+    payload["container"] = {
+        "image": "img",
+        "network_mode": "host",
+        "completed_action": "stop",
+    }
 
     with pytest.raises(ValidationError, match="missing env keys"):
         DispatchConfig.model_validate(payload)
@@ -371,10 +419,20 @@ def _bare_loop(config: DispatchConfig) -> loop_module.DispatcherLoop:
 
 def test_local_cli_check_passes_when_cli_present() -> None:
     payload = _local_payload()
-    payload["workers"] = [{"name": "m", "type": "mock", "task_types": ["reason"], "max_running": 1, "priority": 0}]
+    payload["workers"] = [
+        {
+            "name": "m",
+            "type": "mock",
+            "task_types": ["reason"],
+            "max_running": 1,
+            "priority": 0,
+        }
+    ]
     config = DispatchConfig.model_validate(payload)
 
-    _bare_loop(config)._run_local_binary_check()  # mock -> python3 --help runs; must not raise
+    _bare_loop(
+        config
+    )._run_local_binary_check()  # mock -> python3 --help runs; must not raise
 
 
 def test_local_cli_check_exits_when_no_cli_installed(monkeypatch) -> None:
@@ -388,15 +446,27 @@ def test_local_cli_check_exits_when_no_cli_installed(monkeypatch) -> None:
 # --------------------------------------------------------------------------- drivers
 
 
-def _bare_worker(worker_type: str) -> WorkerConfig:
+def _bare_worker(
+    worker_type: str,
+    *,
+    context_length: int | None = None,
+) -> WorkerConfig:
     return WorkerConfig.model_validate(
-        {"name": worker_type, "type": worker_type, "task_types": ["explore"], "max_running": 1, "priority": 0}
+        {
+            "name": worker_type,
+            "type": worker_type,
+            "task_types": ["explore"],
+            "max_running": 1,
+            "priority": 0,
+            "context_length": context_length,
+        }
     )
 
 
 def test_codex_local_driver_omits_provider_injection() -> None:
-    worker = _bare_worker("codex")
-    argv = CodexDriver(local=True).build_execute(worker, "PROMPT", None).argv
+    worker = _bare_worker("codex", context_length=1_048_576)
+    execute = CodexDriver(local=True).build_execute(worker, "PROMPT", None)
+    argv = execute.argv
 
     assert argv[:4] == [
         "codex",
@@ -405,27 +475,31 @@ def test_codex_local_driver_omits_provider_injection() -> None:
         "--dangerously-bypass-approvals-and-sandbox",
     ]
     assert 'web_search="live"' in argv
-    assert "model_context_window=1000000" in argv
-    assert "model_auto_compact_token_limit=900000" in argv
-    assert argv[-2:] == ["--", "PROMPT"]
+    assert "model_context_window=1048576" in argv
+    assert "model_auto_compact_token_limit=943718" in argv
+    assert argv[-2:] == ["--", "-"]
+    assert execute.stdin == "PROMPT"
     assert not any("model_providers" in part for part in argv)
     assert "--model" not in argv
 
     conclude = CodexDriver(local=True).build_conclude(worker, "PROMPT", "sess-1")
-    assert conclude[:5] == ["codex", "exec", "--json", "resume", "sess-1"]
-    assert conclude[-2:] == ["--", "PROMPT"]
-    assert not any("model_providers" in part for part in conclude)
+    assert conclude.argv[:5] == ["codex", "exec", "--json", "resume", "sess-1"]
+    assert conclude.argv[-2:] == ["--", "-"]
+    assert conclude.stdin == "PROMPT"
+    assert not any("model_providers" in part for part in conclude.argv)
 
 
 def test_pi_local_driver_omits_models_json_and_provider() -> None:
     worker = _bare_worker("pi")
-    argv = PiDriver(local=True).build_execute(worker, "PROMPT", None).argv
+    execute = PiDriver(local=True).build_execute(worker, "PROMPT", None)
+    argv = execute.argv
 
     assert argv[0] == "pi"
     assert "--approve" in argv
     assert "--provider" not in argv
     assert "--model" not in argv
-    assert argv[-2:] == ["-p", "PROMPT"]
+    assert argv[-1] == "-p"
+    assert execute.stdin == "PROMPT"
 
 
 @pytest.mark.skipif(PI_TEST_BINARY is None, reason="pi CLI is not installed")
@@ -468,8 +542,9 @@ def test_get_driver_selects_local_or_container_variant() -> None:
     assert get_driver("codex", "local").local is True
     assert get_driver("codex").local is False
     assert get_driver("pi", "local").local is True
-    # claudecode and mock are shared instances across both modes
-    assert get_driver("claudecode", "local") is get_driver("claudecode")
+    assert get_driver("claudecode", "local").local is True
+    assert get_driver("claudecode").local is False
+    # mock has no native CLI mode differences.
     assert get_driver("mock", "local") is get_driver("mock")
 
 
@@ -496,7 +571,13 @@ def _local_config_for_worker(name: str, worker_type: str) -> DispatchConfig:
                 "explore": {"timeout": 30, "conclude_timeout": 10},
             },
             "workers": [
-                {"name": name, "type": worker_type, "task_types": ["explore"], "max_running": 1, "priority": 0}
+                {
+                    "name": name,
+                    "type": worker_type,
+                    "task_types": ["explore"],
+                    "max_running": 1,
+                    "priority": 0,
+                }
             ],
         }
     )
@@ -525,7 +606,7 @@ def test_explore_runs_real_local_cli_end_to_end(tmp_path: Path, monkeypatch) -> 
         tmp_path,
         monkeypatch,
         "claude",
-        "echo '{\"accepted\":true,\"data\":{\"description\":\"local fake fact\"}}'",
+        'echo \'{"accepted":true,"data":{"description":"local fake fact"}}\'',
     )
     monkeypatch.setattr(common, "GRAPH_SNAPSHOT_ROOT", str(tmp_path / "prompts"))
 
@@ -553,12 +634,14 @@ def test_explore_runs_real_local_cli_end_to_end(tmp_path: Path, monkeypatch) -> 
     assert any(p.name == "graph.yaml" for p in snapshot_root.rglob("*"))
 
 
-def test_explore_local_cli_rejection_releases_intent(tmp_path: Path, monkeypatch) -> None:
+def test_explore_local_cli_rejection_releases_intent(
+    tmp_path: Path, monkeypatch
+) -> None:
     _install_fake_cli(
         tmp_path,
         monkeypatch,
         "claude",
-        "echo '{\"accepted\":false,\"reason\":\"policy_refusal\"}'",
+        'echo \'{"accepted":false,"reason":"policy_refusal"}\'',
     )
     monkeypatch.setattr(common, "GRAPH_SNAPSHOT_ROOT", str(tmp_path / "prompts"))
 

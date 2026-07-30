@@ -252,7 +252,7 @@ def test_drivers_keep_native_features_and_add_shared_mcp(monkeypatch, tmp_path: 
 
     claude = ClaudeCodeDriver().build_execute(_worker("claudecode"), "PROMPT", "session").argv
     mcp_index = claude.index("--mcp-config")
-    assert ["--mcp-config", CLAUDE_MCP_PATH] == claude[mcp_index : mcp_index + 2]
+    assert claude[mcp_index + 1] == CLAUDE_MCP_PATH
 
     codex = CodexDriver(local=True).build_execute(_worker("codex"), "PROMPT", None).argv
     assert "mcp_servers.filesystem.command=\"mcp-filesystem\"" in codex
@@ -265,10 +265,7 @@ def test_drivers_keep_native_features_and_add_shared_mcp(monkeypatch, tmp_path: 
     assert "--tools" not in pi
 
 
-def test_container_sync_uploads_once_and_refreshes_managed_skills(tmp_path: Path) -> None:
-    store = CapabilityStore(tmp_path)
-    store.write_skill("recon", SKILL)
-
+def test_container_ready_does_not_upload_capabilities_to_workspace() -> None:
     class FakeContainer:
         def __init__(self) -> None:
             self.archives: list[bytes] = []
@@ -285,73 +282,8 @@ def test_container_sync_uploads_once_and_refreshes_managed_skills(tmp_path: Path
 
     container = FakeContainer()
     manager = ContainerManager.__new__(ContainerManager)
-    manager._capabilities = store
-    manager._capability_digests = {}
     manager._require_container = lambda _name: container
 
-    manager._sync_capabilities("worker")
-    manager._sync_capabilities("worker")
-
-    assert len(container.archives) == 1
-    with tarfile.open(fileobj=io.BytesIO(container.archives[0]), mode="r:") as archive:
-        names = set(archive.getnames())
-    assert ".agents/skills/recon/SKILL.md" in names
-    assert ".claude/skills/recon/SKILL.md" in names
-
-    store.set_skill_enabled("recon", False)
-    manager._sync_capabilities("worker")
-    assert len(container.archives) == 1
-
-    manager._sync_capabilities("next-worker")
-    assert len(container.archives) == 2
-    with tarfile.open(fileobj=io.BytesIO(container.archives[1]), mode="r:") as archive:
-        names = set(archive.getnames())
-    assert ".agents/skills/recon/SKILL.md" not in names
-    assert ".claude/skills/recon/SKILL.md" not in names
-
-
-def test_container_reuses_frozen_snapshot_after_dispatcher_restart(tmp_path: Path) -> None:
-    store = CapabilityStore(tmp_path)
-    store.write_skill("recon", SKILL)
-
-    class FrozenContainer:
-        def __init__(self) -> None:
-            self.archives: list[bytes] = []
-
-        def exec_run(self, _command):
-            manifest = {"digest": "frozen-digest", "snapshotFrozen": True}
-            return SimpleNamespace(exit_code=0, output=json.dumps(manifest).encode())
-
-        def put_archive(self, _path: str, archive: bytes) -> bool:
-            self.archives.append(archive)
-            return True
-
-    container = FrozenContainer()
-    manager = ContainerManager.__new__(ContainerManager)
-    manager._capabilities = store
-    manager._capability_digests = {}
-    manager._require_container = lambda _name: container
-
-    manager._sync_capabilities("worker")
-
-    assert manager._capability_digests["worker"] == "frozen-digest"
-    assert len(container.archives) == 1
-    with tarfile.open(fileobj=io.BytesIO(container.archives[0]), mode="r:") as archive:
-        names = set(archive.getnames())
-        manifest = json.loads(
-            archive.extractfile(MANIFEST_PATH).read().decode("utf-8")
-        )
-        assert names == {
-            ".redtrace",
-            ".redtrace/bin",
-            ".redtrace/pi",
-            BLACKBOARD_CLI_PATH,
-            CONTEXT_CLI_PATH,
-            MANIFEST_PATH,
-            PI_PROVIDER_EXTENSION_PATH,
-            RESOURCE_CLI_PATH,
-            SKILL_CLI_PATH,
-        }
-    assert manifest["digest"] == "frozen-digest"
-    assert manifest["snapshotFrozen"] is True
-    assert CONTEXT_CLI_PATH in manifest["runtimeFiles"]
+    assert manager._ready("worker") == "worker"
+    assert container.archives == []
+    assert container.commands == []

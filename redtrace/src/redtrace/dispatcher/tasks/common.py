@@ -113,6 +113,7 @@ def run_worker_process(
     worker: WorkerConfig,
     argv: list[str],
     *,
+    stdin_text: str | None = None,
     client: CairnClient | None = None,
     project_id: str | None = None,
     intent_id: str | None = None,
@@ -130,6 +131,13 @@ def run_worker_process(
         timeout_seconds,
     )
     process_env = dict(worker.env)
+    if worker.context_length is not None:
+        if worker.type == "claudecode":
+            process_env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(
+                worker.context_length
+            )
+        elif worker.type == "pi":
+            process_env["PI_MODEL_CONTEXT_WINDOW"] = str(worker.context_length)
     if client is not None and project_id is not None:
         process_env.update(
             {
@@ -145,11 +153,14 @@ def run_worker_process(
             process_env["REDTRACE_SERVER"] = server_url
         if intent_id is not None:
             process_env["REDTRACE_INTENT_ID"] = intent_id
+    process_options: dict[str, object] = {"timeout_seconds": timeout_seconds}
+    if stdin_text is not None:
+        process_options["stdin_text"] = stdin_text
     process = container_manager.build_exec_process(
         container_name,
         process_env,
         argv,
-        timeout_seconds=timeout_seconds,
+        **process_options,
     )
     publisher = None
     if client is not None and project_id is not None and worker.type != "mock":

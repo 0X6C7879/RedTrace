@@ -91,7 +91,7 @@ Dispatcher 是独立运行的客户端执行器，也是协议写入的唯一入
 Runtime 为每个任务提供可控的执行环境：
 
 - **Container Backend**：适合 Docker/Compose 部署，按项目管理容器、Workspace 和清理流程；
-- **Local Backend**：直接调用宿主机上的 `claude`、`codex`、`pi`，复用用户级登录和原生扩展；
+- **Local Backend**：直接调用宿主机上的 `claude`、`codex`、`pi`，使用 RedTrace 管理的 Worker 级登录、会话和缓存；
 - **进程治理**：统一处理 stdout/stderr 流、心跳、超时、取消、退出码和输出截断。
 
 Worker Adapter 将不同 Agent CLI 归一为统一接口，同时保留原生配置：
@@ -104,6 +104,10 @@ Worker Adapter 将不同 Agent CLI 归一为统一接口，同时保留原生配
 | Mock | `mock` | 协议测试、调度测试和端到端回归 |
 
 设置页面中的 Endpoint、API Key 和 Model ID 可按 Worker 覆盖运行参数；空值时回退到原生 CLI 配置。Claude/Pi 的网关密钥写入原生 JSON，Codex 密钥由 RedTrace 加密保存并按进程注入 `OPENAI_API_KEY`。
+
+`dispatch.yaml` 的 `paths` 段统一声明 `root`、`skills`、`mcp`、`plugins`、`managed`、`workspaces` 和 `audit`。相对路径始终以配置文件所在目录及 `paths.root` 为基准解析，不依赖启动命令的当前目录；对应的 `REDTRACE_*_DIR` 环境变量可覆盖单项路径。可写 Agent 状态位于 `.redtrace/workers/<agent>/<worker>/`，共享只读资源仍直接引用根目录，任务 Workspace 不再生成 `.claude`、`.codex`、`.pi`、`.agents` 或能力副本。
+
+Web 删除项目采用“标记删除 → 取消任务/进程 → 回收 Runtime → 文件清理 → 数据库级联”的服务端流程。删除状态持久化，可在 Server 或 Dispatcher 重启后继续；失败会保留项目和错误状态供重试，重复删除保持幂等。项目 Workspace、Prompt、审计、会话文件和项目关联表会被清理，根目录 Skills/MCP/Plugins 与其他 Worker 状态不受影响。
 
 ### 4. 能力与 Skill 演进面
 
@@ -264,8 +268,7 @@ Server 和 Dispatcher；按 `Ctrl+C` 会一起停止本次启动的进程：
 macOS 和 Linux 共用唯一的 `deploy.sh`。Linux 支持 APT、DNF/YUM、Pacman、
 Zypper 和 APK，覆盖 Debian/Ubuntu/Kali、Fedora/RHEL/Rocky/Alma、Arch、
 openSUSE 与 Alpine；脚本会通过 `install_ctf_tools.sh` 使用对应发行版的包名
-映射准备 CLI、RTK、项目依赖和安全工具。macOS 使用 Homebrew；SageMath 默认
-不安装：
+映射准备 CLI、RTK、项目依赖和安全工具。macOS 使用 Homebrew。
 
 ```bash
 bash deploy.sh

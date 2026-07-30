@@ -9,7 +9,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 
-AUDIT_ROOT = Path.home() / ".local" / "share" / "redtrace" / "audit"
+AUDIT_ROOT = Path(
+    os.environ.get(
+        "REDTRACE_AUDIT_ROOT",
+        Path.home() / ".local" / "share" / "redtrace" / "audit",
+    )
+).expanduser().resolve()
 MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
 MAX_ARCHIVE_FILE_BYTES = 10 * 1024 * 1024
 EXCLUDED_PARTS = {
