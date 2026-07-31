@@ -343,11 +343,11 @@ def store_result(conn, project_id: str, task_id_value: str, content: str) -> tup
     return rid, f"/projects/{project_id}/operations/results/{rid}"
 
 
-def output_summary(content: str, limit: int = 600) -> str:
+def output_summary(content: str, limit: int = 0) -> str:
     compact = " ".join(content.split())
-    if len(compact) <= limit:
-        return compact
-    return compact[:limit] + "…"
+    if limit and len(compact) > limit:
+        return compact[:limit] + "…"
+    return compact
 
 
 def _webshell_command(action: str, arguments: dict[str, Any]) -> tuple[str, str | None]:

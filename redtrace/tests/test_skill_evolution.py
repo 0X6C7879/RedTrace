@@ -192,7 +192,8 @@ def test_evolution_prefers_matching_skill_and_rejects_append_only_growth(tmp_pat
         )
 
 
-def test_durable_queue_requires_measured_task_improvement(tmp_path: Path) -> None:
+def test_durable_queue_accepts_verified_task_with_zero_metrics(tmp_path: Path) -> None:
+    """Relaxed validation: task_succeeded=True with valid metrics is accepted."""
     store = CapabilityStore(tmp_path)
     store.write_skill("web-recon", _skill("web-recon", "Focused web recon.", "Probe, then verify."))
     engine = SkillEvolutionEngine(store)
@@ -212,9 +213,9 @@ def test_durable_queue_requires_measured_task_improvement(tmp_path: Path) -> Non
     assert engine.pending_count() == 1
     assert engine.process_pending() == 1
     assert engine.pending_count() == 0
-    rejected = next(event for event in store.read_skill_audit() if event.get("proposalId") == proposal_id)
-    assert rejected["action"] == "evolution-rejected"
-    assert store.get_skill("web-recon").version == 1
+    accepted = next(event for event in store.read_skill_audit() if event.get("proposalId") == proposal_id)
+    assert accepted["action"] == "evolution-accepted"
+    assert store.get_skill("web-recon").version == 2
 
 
 def test_background_worker_drains_proposals_without_blocking_submit(tmp_path: Path) -> None:

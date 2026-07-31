@@ -88,8 +88,8 @@
   border-radius: 9px;
 }
 .audit-skill {
-  border: 1px solid #ede9fe;
-  background: #faf8ff;
+  border: 1px solid rgba(139, 92, 246, 0.10);
+  background: rgba(139, 92, 246, 0.03);
   border-radius: 9px;
 }
 .audit-terminal {

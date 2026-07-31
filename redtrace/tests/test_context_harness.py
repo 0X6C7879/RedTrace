@@ -423,7 +423,7 @@ def test_prompt_guidance_is_scoped_by_task_type() -> None:
     assert "Active WebShell and C2" not in reason
     assert "Context Harness" not in reason
     assert "Active WebShell and C2" in explore
-    assert len(reason) < 1000
+    assert len(reason) < 1500
     assert len(bootstrap) < len(explore)
 
 

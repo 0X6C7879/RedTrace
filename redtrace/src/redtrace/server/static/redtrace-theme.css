@@ -1609,6 +1609,18 @@ section[x-show="appPage === 'plugins'"] header {
   box-shadow: inset 2px 0 0 rgba(66, 223, 134, 0.72) !important;
 }
 
+.audit-skill {
+  border: 1px solid rgba(167, 131, 255, 0.18) !important;
+  border-radius: 6px !important;
+  background: rgba(167, 131, 255, 0.05) !important;
+  box-shadow: none !important;
+}
+
+.audit-skill:hover {
+  border-color: rgba(167, 131, 255, 0.32) !important;
+  background: rgba(167, 131, 255, 0.08) !important;
+}
+
 body .fixed.z-50 > .bg-white {
   border-color: #29384b !important;
   background: #0d1622 !important;

@@ -12,9 +12,23 @@ def utcnow() -> str:
 
 
 def next_project_id(conn: sqlite3.Connection) -> str:
-    conn.execute("UPDATE counters SET value = value + 1 WHERE name = 'project'")
-    row = conn.execute("SELECT value FROM counters WHERE name = 'project'").fetchone()
-    return f"proj_{row['value']:03d}"
+    """Allocate the first available proj_XXX id, reusing numbers freed by deletions."""
+    rows = conn.execute("SELECT id FROM projects WHERE id LIKE 'proj_%'").fetchall()
+    used: set[int] = set()
+    for row in rows:
+        try:
+            used.add(int(row["id"][5:]))
+        except (ValueError, IndexError):
+            continue
+    candidate = 1
+    while candidate in used:
+        candidate += 1
+    # Keep the counter table consistent (never decrease it)
+    conn.execute(
+        "UPDATE counters SET value = MAX(value, ?) WHERE name = 'project'",
+        (candidate,),
+    )
+    return f"proj_{candidate:03d}"
 
 
 def _next_scoped_id(

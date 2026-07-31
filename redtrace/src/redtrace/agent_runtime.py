@@ -43,6 +43,7 @@ class AgentRuntimeManager:
         )
         self._shared_initialized = False
         self._skill_paths_cache: list[Path] = []
+        self._skill_index_cache: str = ""
         self._mcp_records_cache: list[dict] = []
         self._capability_signature_cache: tuple[int, ...] | None = None
 
@@ -92,6 +93,7 @@ class AgentRuntimeManager:
             return False
         self._write_shared_runtime()
         self._skill_paths_cache = self._enabled_skill_paths()
+        self._skill_index_cache = self._build_skill_index(self._skill_paths_cache)
         self._mcp_records_cache = self._store.list_mcp()
         self._capability_signature_cache = self._capability_signature()
         return True
@@ -166,6 +168,33 @@ class AgentRuntimeManager:
             paths.append(directory.resolve())
         return paths
 
+    @staticmethod
+    def _build_skill_index(skill_paths: list[Path]) -> str:
+        """Build a compact skill index from SKILL.md frontmatter at startup."""
+        lines: list[str] = []
+        for path in skill_paths:
+            skill_md = path / "SKILL.md"
+            try:
+                text = skill_md.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            name = path.name
+            description = ""
+            # Parse YAML frontmatter between --- delimiters.
+            if text.startswith("---"):
+                parts = text.split("---", 2)
+                if len(parts) >= 3:
+                    frontmatter = parts[1]
+                    for line in frontmatter.splitlines():
+                        stripped = line.strip()
+                        if stripped.startswith("name:"):
+                            name = stripped[5:].strip().strip("'\"") or path.name
+                        elif stripped.startswith("description:"):
+                            description = stripped[12:].strip().strip("'\"")
+            entry = f"- {name}: {description}" if description else f"- {name}"
+            lines.append(entry)
+        return "\n".join(lines)
+
     def _initialize_worker(
         self,
         worker: WorkerConfig,
@@ -235,6 +264,7 @@ class AgentRuntimeManager:
                 ),
                 "REDTRACE_PI_SESSION_DIR": str(worker_home / "sessions"),
                 "REDTRACE_SKILL_PATHS": json.dumps(skills),
+                "REDTRACE_SKILL_INDEX": self._skill_index_cache,
                 "REDTRACE_CODEX_RESOURCE_ARGS": json.dumps(resource_args),
             }
         )

@@ -18,6 +18,9 @@ function auditPage() {
     selectedFile: null,
     fileLoading: false,
     error: '',
+    renderWindow: 150,
+    RENDER_BATCH: 100,
+    _completedKeys: new Set(),
 
     async setActive(active) {
       if (this.active === active) return;
@@ -79,17 +82,29 @@ function auditPage() {
       this.selectedWorker = 'all';
       this.events = [];
       this.runs = [];
+      this.renderWindow = 150;
+      this._completedKeys = new Set();
+      this._hasServerMore = true;
+      this._loadingMore = false;
       this.workspacePath = '';
       this.workspaceEntries = [];
       this.selectedFile = null;
       this.error = '';
       const results = await Promise.allSettled([
         this.request(`/audit/tasks/${encodeURIComponent(projectId)}/runs`),
-        this.request(`/audit/tasks/${encodeURIComponent(projectId)}/events?limit=200`),
+        this.request(`/audit/tasks/${encodeURIComponent(projectId)}/events?limit=500`),
         this.loadWorkspace(''),
       ]);
       if (results[0].status === 'fulfilled') this.runs = results[0].value;
-      if (results[1].status === 'fulfilled') this.events = results[1].value;
+      if (results[1].status === 'fulfilled') {
+        this.events = results[1].value;
+        for (const event of this.events) {
+          if (event.call_id && event.run_id && ['command.completed', 'tool.completed', 'skill.completed'].includes(event.kind)) {
+            this._completedKeys.add(`${event.run_id}:${event.call_id}`);
+          }
+        }
+        if (this.events.length < 500) this._hasServerMore = false;
+      }
       if (results[1].status === 'rejected') this.error = results[1].reason.message;
       if (this.active) this.connectStream();
       this.$nextTick(() => this.scrollToBottom());
@@ -134,6 +149,9 @@ function auditPage() {
           }
         }
         this.events.push(event);
+        if (event.call_id && event.run_id && ['command.completed', 'tool.completed', 'skill.completed'].includes(event.kind)) {
+          this._completedKeys.add(`${event.run_id}:${event.call_id}`);
+        }
       }
       if (event.kind === 'run.started' || event.kind === 'run.completed') {
         this.refreshRuns();
@@ -166,18 +184,53 @@ function auditPage() {
 
     hasCompletion(event) {
       if (!event?.run_id || !event?.call_id) return false;
-      const completedKind = {
-        'command.started': 'command.completed',
-        'tool.started': 'tool.completed',
-        'skill.started': 'skill.completed',
-      }[event.kind];
-      if (!completedKind) return false;
-      return this.events.some(candidate =>
-        candidate !== event
-        && candidate.run_id === event.run_id
-        && candidate.call_id === event.call_id
-        && candidate.kind === completedKind
-      );
+      return this._completedKeys.has(`${event.run_id}:${event.call_id}`);
+    },
+
+    visibleEvents() {
+      const total = this.events.length;
+      if (total <= this.renderWindow) return this.events;
+      return this.events.slice(total - this.renderWindow);
+    },
+
+    hasMoreEvents() {
+      return this.events.length > this.renderWindow || this._hasServerMore;
+    },
+
+    loadMoreEvents() {
+      if (this.events.length > this.renderWindow) {
+        this.renderWindow = Math.min(this.renderWindow + this.RENDER_BATCH, this.events.length);
+        return;
+      }
+      this.loadOlderFromServer();
+    },
+
+    async loadOlderFromServer() {
+      if (this._loadingMore || !this._hasServerMore || !this.selectedTaskId) return;
+      this._loadingMore = true;
+      try {
+        const firstId = this.events.length ? this.events[0].id : null;
+        const query = firstId ? `?limit=500&before_id=${firstId}` : '?limit=500';
+        const older = await this.request(
+          `/audit/tasks/${encodeURIComponent(this.selectedTaskId)}/events${query}`
+        );
+        if (!older.length) {
+          this._hasServerMore = false;
+          return;
+        }
+        for (const event of older) {
+          if (event.call_id && event.run_id && ['command.completed', 'tool.completed', 'skill.completed'].includes(event.kind)) {
+            this._completedKeys.add(`${event.run_id}:${event.call_id}`);
+          }
+        }
+        this.events = [...older, ...this.events];
+        this.renderWindow += older.length;
+        if (older.length < 500) this._hasServerMore = false;
+      } catch (_) {
+        this._hasServerMore = false;
+      } finally {
+        this._loadingMore = false;
+      }
     },
 
     providerLabel(provider) {

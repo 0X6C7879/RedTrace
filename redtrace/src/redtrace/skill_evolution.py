@@ -499,9 +499,10 @@ class SkillEvolutionEngine:
                 move_to_deferred = True
                 self._degrade_failed_skill(proposal)
                 LOG.info(
-                    "Skill evolution deferred id=%s reason=%s",
+                    "skill.evolution.deferred id=%s target=%s reason=%s",
                     proposal_id,
-                    exc,
+                    proposal.get("target_skill"),
+                    str(exc)[:200],
                 )
             except SkillConflictError as exc:
                 proposal_id = str(proposal.get("proposal_id") or path.stem)
@@ -514,9 +515,10 @@ class SkillEvolutionEngine:
                     ),
                 )
                 LOG.info(
-                    "Stale Skill evolution rejected id=%s reason=%s",
+                    "skill.evolution.rejected id=%s target=%s reason=%s",
                     proposal_id,
-                    exc,
+                    proposal.get("target_skill"),
+                    str(exc)[:200],
                 )
             except Exception as exc:
                 proposal_id = str(proposal.get("proposal_id") or path.stem)
@@ -529,11 +531,23 @@ class SkillEvolutionEngine:
                     ),
                 )
                 LOG.warning(
-                    "Skill evolution proposal rejected id=%s reason=%s",
+                    "skill.evolution.rejected id=%s target=%s reason=%s",
                     proposal_id,
-                    exc,
+                    proposal.get("target_skill"),
+                    str(exc)[:200],
                 )
                 self._degrade_failed_skill(proposal)
+            else:
+                if decision.status == "accepted":
+                    LOG.info(
+                        "skill.evolution.updated id=%s skill=%s version=%s "
+                        "type=%s merged=%s",
+                        decision.proposal_id,
+                        decision.skill,
+                        decision.version,
+                        decision.evolution_type,
+                        list(decision.merged) or None,
+                    )
             self.store.record_skill_audit(
                 {
                     "action": f"evolution-{decision.status}",
@@ -570,8 +584,19 @@ class SkillEvolutionEngine:
             proposal.get("proposal_id") or uuid.uuid4().hex
         )
         evolution_type = proposal["evolution_type"]
-        self._validate_evidence(proposal)
+        evidence_tier = self._validate_evidence(proposal)
         self._validate_feedback_safety(proposal)
+
+        # Minimal-evidence proposals are deferred to the pending-verification
+        # queue. They accumulate occurrences until a future task provides
+        # sufficient validation for full authoring.
+        if evidence_tier == "minimal" and proposal.get("occurrences", 1) < 3:
+            raise EvolutionDeferred(
+                "insufficient evidence for immediate evolution; deferred to "
+                "pending-verification queue (occurrences="
+                f"{proposal.get('occurrences', 1)})"
+            )
+
         records = self.store.list_skills()
         target = self._select_target(proposal, records)
 
@@ -668,85 +693,91 @@ class SkillEvolutionEngine:
             trust=record.trust,
         )
 
-    def _validate_evidence(self, proposal: dict[str, Any]) -> None:
+    def _validate_evidence(self, proposal: dict[str, Any]) -> str:
+        """Validate feedback evidence and return confidence tier.
+
+        Returns "full" when all strict requirements are met (ready for
+        immediate authoring) or "minimal" when only summary is present
+        (should be deferred to the pending-verification queue).
+
+        Raises ValueError only for fundamentally invalid data.
+        """
         summary = proposal.get("summary")
-        validation = proposal.get("validation")
-        impact = proposal.get("impact")
         if not isinstance(summary, str) or not summary.strip() or len(summary) > 500:
             raise ValueError("summary must contain 1-500 characters")
-        if (
-            not isinstance(validation, list)
-            or not validation
-            or len(validation) > 8
-            or any(
-                not isinstance(item, str)
-                or not item.strip()
-                or len(item) > 300
-                for item in validation
-            )
-        ):
-            raise ValueError(
-                "1-8 concrete validation results up to 300 characters are required"
-            )
-        if not isinstance(impact, dict):
-            raise ValueError("impact must be an object")
-        verified = (
-            impact.get("task_succeeded") is True
-            or impact.get("step_verified") is True
-        )
-        if not verified:
-            raise ValueError(
-                "a successful task or independently verified step is required"
-            )
-        metrics = (
-            impact.get("tool_calls_saved", 0),
-            impact.get("invalid_steps_avoided", 0),
-            impact.get("duration_saved_ms", 0),
-        )
-        if any(
-            not isinstance(value, int)
-            or isinstance(value, bool)
-            or value < 0
-            for value in metrics
-        ):
-            raise ValueError("impact metrics must be non-negative integers")
-        content = proposal.get("content")
-        if isinstance(content, str) and content.strip():
-            if impact.get("task_succeeded") is True and not any(metrics):
-                raise ValueError(
-                    "full replacement proposals must measure an improvement"
-                )
-            return
+
+        # Check strict requirements for full-confidence evolution.
+        validation = proposal.get("validation")
+        impact = proposal.get("impact")
         procedure = proposal.get("procedure")
         evidence_refs = proposal.get("evidence_refs")
-        if (
-            not isinstance(procedure, list)
-            or not procedure
-            or len(procedure) > 8
-            or any(
-                not isinstance(item, str)
-                or not item.strip()
-                or len(item) > 300
+        content = proposal.get("content")
+
+        # Impact verification check.
+        impact_verified = False
+        if isinstance(impact, dict):
+            impact_verified = (
+                impact.get("task_succeeded") is True
+                or impact.get("step_verified") is True
+            )
+            if impact_verified:
+                metrics = (
+                    impact.get("tool_calls_saved", 0),
+                    impact.get("invalid_steps_avoided", 0),
+                    impact.get("duration_saved_ms", 0),
+                )
+                if any(
+                    not isinstance(value, int)
+                    or isinstance(value, bool)
+                    or value < 0
+                    for value in metrics
+                ):
+                    # Malformed metrics — treat as minimal rather than rejecting.
+                    impact_verified = False
+
+        # Validation list check.
+        validation_ok = (
+            isinstance(validation, list)
+            and len(validation) > 0
+            and len(validation) <= 8
+            and all(
+                isinstance(item, str) and item.strip() and len(item) <= 300
+                for item in validation
+            )
+        )
+
+        # Procedure check.
+        procedure_ok = (
+            isinstance(procedure, list)
+            and len(procedure) > 0
+            and len(procedure) <= 8
+            and all(
+                isinstance(item, str) and item.strip() and len(item) <= 300
                 for item in procedure
             )
-        ):
-            raise ValueError(
-                "compact feedback requires 1-8 reusable procedure steps"
-            )
-        if (
-            not isinstance(evidence_refs, list)
-            or not evidence_refs
-            or len(evidence_refs) > 8
-            or any(
-                not isinstance(item, str)
-                or not item.strip()
-                or len(item) > 200
+        )
+
+        # Evidence refs check.
+        evidence_ok = (
+            isinstance(evidence_refs, list)
+            and len(evidence_refs) > 0
+            and len(evidence_refs) <= 8
+            and all(
+                isinstance(item, str) and item.strip() and len(item) <= 200
                 for item in evidence_refs
             )
-        ):
-            raise ValueError(
-                "compact feedback requires 1-8 bounded evidence references"
-            )
+        )
+
+        # Full-content proposals have their own path.
+        if isinstance(content, str) and content.strip():
+            if impact_verified and validation_ok:
+                return "full"
+            return "minimal"
+
+        # Compact feedback: full tier requires all strict fields.
+        if impact_verified and validation_ok and procedure_ok and evidence_ok:
+            return "full"
+        return "minimal"
 
     def _degrade_failed_skill(self, proposal: dict[str, Any]) -> None:
         """Record a verified FIX signal even when authoring cannot complete."""
@@ -883,7 +914,8 @@ class SkillEvolutionEngine:
             for record in records:
                 if record.name == requested:
                     return record
-            raise ValueError(f"target Skill does not exist: {requested}")
+            # Target not found by exact name — fall through to similarity
+            # matching instead of rejecting the proposal outright.
         proposed_name = str(
             proposal.get("proposed_name") or ""
         ).strip().lower()
@@ -893,7 +925,7 @@ class SkillEvolutionEngine:
         best = self._related_records(proposal, records)
         if not best:
             return None
-        score = _proposal_similarity(proposal, proposed_name, best[0])
+        score = _proposal_similarity(proposal, proposed_name or requested, best[0])
         return best[0] if score >= self.match_threshold else None
 
     def _related_records(

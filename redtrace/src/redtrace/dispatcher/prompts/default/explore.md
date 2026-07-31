@@ -16,6 +16,7 @@ Normal return example:
 ```
 
 # Rules
+- Before your first substantive action, check the Available Skills index (if present below) and invoke any Skill that matches the current task domain. Re-check when the task phase shifts or a concrete vulnerability type is confirmed.
 - Exploring the direction of an Intent may be valuable or may fail. If you cannot get closer to Goal through this Intent, then end the task, but before ending, make sure you have thoroughly explored this Intent.
 - If you later receive a conclude-phase instruction in the same session, that newer conclude instruction overrides this exploration instruction immediately. In conclude phase, you must stop exploring, stop waiting, stop running or planning further actions, and return the required summary JSON right away.
 - `description` must clearly state the confirmed key objective results. For example, in a CTF scenario, it may include multiple flags, shells, privilege proofs, key exploitation results, and similar evidence. Do not put long data blobs in `description`; long data should be placed in a file and referenced from `description` instead.

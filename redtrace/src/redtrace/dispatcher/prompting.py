@@ -45,6 +45,8 @@ def add_blackboard_guidance(
     task_type: str = "explore",
     context_harness_enabled: bool = True,
     local_execution: bool = False,
+    skill_index: str = "",
+    worker_type: str = "",
 ) -> str:
     if task_type not in {"bootstrap", "reason", "explore"}:
         raise ValueError(f"unsupported task type: {task_type}")
@@ -97,16 +99,52 @@ def add_blackboard_guidance(
             "Before duplicating a channel, call `redtrace-resource changes --since <audit_cursor>` once. "
             "This is a decision-point refresh, not a timer; never request stored secrets."
         )
-    if task_type != "reason":
+    # Skill-first matching rule — active, not passive.
+    if task_type != "reason" and skill_index:
+        if worker_type == "pi":
+            invoke_hint = (
+                "If a Skill clearly matches, read its SKILL.md from the skills directory "
+                "(e.g. `$REDTRACE_SKILLS_DIR/<skill-name>/SKILL.md`) and follow the procedure inside. "
+                "Load the most specific one; up to 10 complementary Skills if needed."
+            )
+        else:
+            invoke_hint = (
+                "If a Skill clearly matches, invoke it via your native Skill tool using the "
+                "plugin-qualified name `redtrace-capabilities:<skill-name>` "
+                "(load the most specific one; up to 10 complementary Skills if needed)."
+            )
         sections.append(
-            "Inspect the managed plugin catalog only on demand. Skills, MCP and plugins are shared from "
-            "the RedTrace root and are not Workspace copies."
+            "## Skill-first matching\n\n"
+            "Before your first substantive action, scan the Available Skills index below and match against "
+            "the current task domain. This index is the authoritative reference for Skill names and "
+            "descriptions — prefer it over any plugin catalog listing. Rules:\n"
+            f"- {invoke_hint}\n"
+            "- If no Skill matches, proceed directly without delay.\n"
+            "- Re-match when the task phase shifts or a concrete vulnerability/tool type is confirmed.\n"
+            "- Do not make extra model calls solely for matching.\n\n"
+            f"Available Skills:\n{skill_index}"
+        )
+    elif task_type != "reason":
+        sections.append(
+            "Skills, MCP and plugins are shared from the RedTrace root. Use your native Skill loading "
+            "mechanism to discover and invoke relevant Skills before starting substantive work."
         )
     sections.append(
-        "## Automatic Skill feedback checkpoint\n\n"
-        "At final output, add one compact `skillFeedback` only for a verified reusable improvement; "
-        "otherwise omit it. Never write or scan private Skill copies, make another model call, poll, retry, "
-        "or delay the task. RedTrace validates and writes accepted evolution only to root `skills/`."
+        "## Skill feedback checkpoint\n\n"
+        "At final output, if you discovered a reusable lesson that improves, fixes, or extends a Skill, "
+        "append exactly one `skillFeedback` object to your JSON output. The object MUST use these keys:\n"
+        '```json\n'
+        '{"target_skill": "skill-name", "summary": "one-sentence reusable lesson", '
+        '"evolution_type": "IMPROVE"}\n'
+        '```\n'
+        "`evolution_type` values: `IMPROVE` (enhance an existing Skill's procedure), "
+        "`FIX` (correct a broken or outdated step), `CAPTURE` (propose a brand-new Skill). "
+        "Choose IMPROVE or FIX when `target_skill` names an existing Skill; use CAPTURE only when "
+        "no existing Skill covers the lesson.\n"
+        "Optional fields: `procedure` (string[]), `validation` (string[]), `evidence_refs` (string[]), "
+        "`confidence` (0-1). Omit `skillFeedback` entirely (or set null) when there is no improvement. "
+        "Never include target IPs, credentials, flags, or absolute paths in feedback. "
+        "Do not make another model call, poll, or delay the task for feedback."
     )
     guidance = prompt.rstrip() + "\n\n" + "\n\n".join(sections)
     if local_execution and os.name == "nt":
@@ -142,3 +180,22 @@ def format_hints(hints: list[dict[str, Any]]) -> str:
 
 def format_json_block(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def build_skill_index(skills: list[dict[str, str]]) -> str:
+    """Build a compact skill index for prompt injection.
+
+    Each enabled skill becomes one line: ``- name: description``.
+    Descriptions are truncated to keep the prompt lightweight.
+    """
+    if not skills:
+        return ""
+    lines: list[str] = []
+    for skill in skills:
+        name = skill.get("name", "")
+        description = skill.get("description", "")
+        if not name:
+            continue
+        entry = f"- {name}: {description}"
+        lines.append(entry)
+    return "\n".join(lines)

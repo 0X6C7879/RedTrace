@@ -25,3 +25,4 @@ plugins/**/target/
 plugins/**/.gradle/
 plugins/**/build/
 plugins/**/lib/*.jar
+vendor/

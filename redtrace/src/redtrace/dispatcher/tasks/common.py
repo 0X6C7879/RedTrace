@@ -15,7 +15,6 @@ from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
 from redtrace.dispatcher.runtime.process import ProcessResult
 
 PROCESS_COMMUNICATE_GRACE_SECONDS = 15
-LOG_PREVIEW_LIMIT = 1200
 GRAPH_SNAPSHOT_ROOT = "/tmp/redtrace-prompts"
 LOG = logging.getLogger(__name__)
 
@@ -26,11 +25,11 @@ class ConcludeWriteResult:
     fact_id: str | None = None
 
 
-def preview(text: str, limit: int = LOG_PREVIEW_LIMIT) -> str:
+def preview(text: str, limit: int = 0) -> str:
     compact = " ".join(text.split())
-    if len(compact) <= limit:
-        return compact
-    return compact[:limit] + "..."
+    if limit and len(compact) > limit:
+        return compact[:limit] + "..."
+    return compact
 
 
 def queue_skill_feedback(
@@ -43,9 +42,31 @@ def queue_skill_feedback(
     task_type: str,
 ) -> None:
     """Best-effort handoff after model output; feedback can never fail the task."""
-    feedback = extract_skill_feedback(payload)
+    feedback, rejection_reason = extract_skill_feedback(payload)
     if feedback is None:
+        if rejection_reason is not None:
+            LOG.warning(
+                "skill.feedback.invalid project=%s intent=%s worker=%s reason=%s",
+                project_id,
+                intent_id,
+                worker_name,
+                rejection_reason,
+            )
+        else:
+            LOG.debug(
+                "skill.feedback.omitted project=%s intent=%s worker=%s",
+                project_id,
+                intent_id,
+                worker_name,
+            )
         return
+    LOG.info(
+        "skill.feedback.normalized project=%s intent=%s worker=%s target=%s",
+        project_id,
+        intent_id,
+        worker_name,
+        feedback.get("target_skill"),
+    )
     try:
         response = client.submit_skill_feedback(
             feedback,
@@ -54,17 +75,26 @@ def queue_skill_feedback(
             worker=worker_name,
             task_type=task_type,
         )
-        if not response.ok:
-            LOG.debug(
-                "Skill feedback not queued project=%s intent=%s worker=%s "
-                "status=%s",
+        if response.ok:
+            LOG.info(
+                "skill.feedback.queued project=%s intent=%s worker=%s target=%s",
+                project_id,
+                intent_id,
+                worker_name,
+                feedback.get("target_skill"),
+            )
+        else:
+            LOG.warning(
+                "skill.feedback.rejected project=%s intent=%s worker=%s "
+                "status=%s target=%s",
                 project_id,
                 intent_id,
                 worker_name,
                 response.status_code,
+                feedback.get("target_skill"),
             )
     except Exception:
-        LOG.debug("Skill feedback handoff failed", exc_info=True)
+        LOG.debug("skill.feedback.handoff_failed project=%s", project_id, exc_info=True)
 
 
 def did_timeout(result: ProcessResult) -> bool:

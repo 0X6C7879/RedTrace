@@ -20,6 +20,7 @@ Return the following only after you have confirmed that Goal has been satisfied:
 ```
 
 # Rules
+- Before your first substantive action, check the Available Skills index (if present below) and invoke any Skill that matches the current task domain. Re-check when the task phase shifts or a concrete vulnerability type is confirmed.
 - If the problem is not yet solved, do not try to solve the whole task in bootstrap. Confirm the target shape, constraints, credentials, reachable services, or other high-value objective facts, then return a `fact` payload.
 - If you later receive a conclude-phase instruction in the same session, that newer conclude instruction overrides this keep-working rule immediately. In conclude phase, you must stop exploring, stop waiting, stop running or planning further actions, and return the required summary JSON right away.
 - Output `complete` only if Goal has already been definitively achieved in this session. If Goal is not yet achieved, do not output `complete`, do not summarize partial progress as completion, and keep working until a conclude-phase instruction replaces this task.

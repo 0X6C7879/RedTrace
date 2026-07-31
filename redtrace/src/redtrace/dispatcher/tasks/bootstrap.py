@@ -108,6 +108,8 @@ def run_bootstrap_task(
                 task_type="bootstrap",
                 context_harness_enabled=config.context_harness.enabled,
                 local_execution=config.runtime.execution == "local",
+                skill_index=worker.env.get("REDTRACE_SKILL_INDEX", ""),
+                worker_type=worker.type,
             )
 
         session = driver.prepare_session()
