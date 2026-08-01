@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +37,9 @@ DEFAULT_QUEUE_LIMIT = 128
 DEFAULT_MATCH_THRESHOLD = 0.34
 DEFAULT_DUPLICATE_RATIO = 0.08
 DEFAULT_AUTHOR_TIMEOUT = 600
+DEFAULT_VERIFICATION_ATTEMPTS = 3
+DEFAULT_VERIFICATION_RETRY_SECONDS = 60
+AUTHOR_PROTOCOL_VERSION = 3
 REQUIRED_SECTION_GROUPS = (
     ("trigger", "触发"),
     ("scope", "applicability", "适用"),
@@ -57,6 +61,7 @@ TARGET_SPECIFIC_PATTERNS = (
     re.compile(r"(?:/Users/|/home/|/tmp/|[A-Za-z]:\\)[^\s`]+"),
     re.compile(r"\b[0-9a-f]{8}-[0-9a-f-]{27,}\b", re.IGNORECASE),
 )
+PROPOSAL_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 class EvolutionDeferred(RuntimeError):
@@ -101,8 +106,9 @@ class EvolutionDecision:
 class NativeSkillAuthor:
     """Use one installed native Worker CLI as a bounded background author."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, preferred_worker: Any = None):
         self.root = root
+        self.preferred_worker = preferred_worker
         self._workers: dict[str, Any] = {}
         self.timeout = _positive_env(
             "REDTRACE_SKILL_AUTHOR_TIMEOUT",
@@ -122,57 +128,108 @@ class NativeSkillAuthor:
             )
         prompt = self._prompt(proposal, target, related)
         failures: list[str] = []
+        deadline = time.monotonic() + self.timeout
         for tool in tools:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                failures.append(
+                    f"Skill authoring exceeded the {self.timeout}s total budget"
+                )
+                break
             worker = self._configured_worker(tool)
-            command = self._command(tool, prompt, worker)
-            if os.name == "posix" and shutil.which("nice"):
-                command = ["nice", "-n", "10", *command]
-            environment = dict(os.environ)
-            if worker is not None:
-                environment.update(worker.env)
-                if tool == "claude" and worker.api_configured():
-                    for key in (
-                        "ANTHROPIC_API_KEY",
-                        "ANTHROPIC_OAUTH_TOKEN",
-                        "CLAUDE_CODE_USE_BEDROCK",
-                        "CLAUDE_CODE_USE_VERTEX",
-                        "CLAUDE_CODE_USE_FOUNDRY",
-                    ):
-                        if key not in worker.env:
-                            environment.pop(key, None)
             try:
-                result = subprocess.run(
-                    command,
-                    cwd=self.root,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=self.timeout,
-                    check=False,
-                    env=environment,
-                )
-            except subprocess.TimeoutExpired:
-                failures.append(
-                    f"{tool} background author timed out after {self.timeout}s"
-                )
+                stdout = self._run_tool(tool, prompt, worker, remaining)
+            except EvolutionDeferred as exc:
+                failures.append(str(exc))
                 continue
-            except OSError as exc:
-                failures.append(f"{tool} background author failed: {exc}")
-                continue
-            if result.returncode != 0:
-                detail = (result.stderr or result.stdout).strip()[-300:]
-                failures.append(
-                    f"{tool} background author exited {result.returncode}: {detail}"
-                )
-                continue
-            content = _extract_authored_skill(tool, result.stdout)
+            content = _extract_authored_skill(tool, stdout)
             if content:
+                for _repair_attempt in range(2):
+                    defects = _authoring_defects(content, target)
+                    if not defects:
+                        break
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    repair_prompt = (
+                        f"{prompt}\n\n"
+                        "Your previous complete-Skill draft failed deterministic "
+                        "validation. Repair it without adding unverified claims. "
+                        f"DEFECTS: {', '.join(defects)}\n\n"
+                        f"PREVIOUS DRAFT:\n{content}\n\n"
+                        "Return only the corrected complete SKILL.md."
+                    )
+                    try:
+                        repaired_stdout = self._run_tool(
+                            tool,
+                            repair_prompt,
+                            worker,
+                            remaining,
+                        )
+                        repaired = _extract_authored_skill(tool, repaired_stdout)
+                        if repaired:
+                            content = repaired
+                    except EvolutionDeferred as exc:
+                        failures.append(str(exc))
+                        break
                 return content
             failures.append(f"{tool} did not return a complete SKILL.md")
         raise EvolutionDeferred("; ".join(failures))
 
+    def verify(
+        self,
+        proposal: dict[str, Any],
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Ask the reserved Worker for one bounded independent verification."""
+        tools = self._select_tools(proposal)
+        if not tools:
+            raise EvolutionDeferred("reserved Worker CLI is unavailable")
+        tool = tools[0]
+        worker = self._configured_worker(tool)
+        stdout = self._run_tool(
+            tool,
+            self._verification_prompt(proposal, evidence),
+            worker,
+            self.timeout,
+        )
+        result = _extract_verification(tool, stdout)
+        if result is None:
+            raise EvolutionDeferred("verification Worker did not return valid JSON")
+        if result.get("verified") is not True:
+            reason = str(result.get("validation") or "candidate was not verified")
+            raise EvolutionDeferred(reason[:300])
+        validation = str(result.get("validation") or "").strip()
+        metric = str(result.get("metric") or "")
+        metric_value = result.get("metric_value")
+        if not validation:
+            raise EvolutionDeferred("verification result omitted its conclusion")
+        if metric not in {
+            "tool_calls_saved",
+            "invalid_steps_avoided",
+            "duration_saved_ms",
+        }:
+            raise EvolutionDeferred("verification result used an unsupported metric")
+        if (
+            not isinstance(metric_value, int)
+            or isinstance(metric_value, bool)
+            or metric_value <= 0
+        ):
+            raise EvolutionDeferred("verification result omitted a positive measured impact")
+        return {
+            "validation": validation[:300],
+            "metric": metric,
+            "metric_value": metric_value,
+        }
+
     def _select_tools(self, proposal: dict[str, Any]) -> list[str]:
+        if self.preferred_worker is not None:
+            tool = {
+                "claudecode": "claude",
+                "codex": "codex",
+                "pi": "pi",
+            }.get(str(self.preferred_worker.type))
+            return [tool] if tool and shutil.which(tool) else []
         configured = os.environ.get("REDTRACE_SKILL_AUTHOR", "auto").strip().lower()
         if configured in {"off", "disabled", "none"}:
             return []
@@ -313,6 +370,13 @@ class NativeSkillAuthor:
         ]
 
     def _configured_worker(self, tool: str) -> Any:
+        if self.preferred_worker is not None:
+            worker_tool = {
+                "claudecode": "claude",
+                "codex": "codex",
+                "pi": "pi",
+            }.get(str(self.preferred_worker.type))
+            return self.preferred_worker if worker_tool == tool else None
         if tool in self._workers:
             return self._workers[tool]
         try:
@@ -357,6 +421,84 @@ class NativeSkillAuthor:
                 exc_info=True,
             )
             return None
+
+    def _run_tool(
+        self,
+        tool: str,
+        prompt: str,
+        worker: Any,
+        timeout: float,
+    ) -> str:
+        command = self._command(tool, prompt, worker)
+        if os.name == "posix" and shutil.which("nice"):
+            command = ["nice", "-n", "10", *command]
+        environment = dict(os.environ)
+        if worker is not None:
+            environment.update(worker.env)
+            if tool == "claude" and worker.api_configured():
+                for key in (
+                    "ANTHROPIC_API_KEY",
+                    "ANTHROPIC_OAUTH_TOKEN",
+                    "CLAUDE_CODE_USE_BEDROCK",
+                    "CLAUDE_CODE_USE_VERTEX",
+                    "CLAUDE_CODE_USE_FOUNDRY",
+                ):
+                    if key not in worker.env:
+                        environment.pop(key, None)
+        try:
+            result = subprocess.run(
+                command,
+                cwd=self.root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=max(1, timeout),
+                check=False,
+                env=environment,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise EvolutionDeferred(f"{tool} Worker exceeded its time budget") from exc
+        except OSError as exc:
+            raise EvolutionDeferred(f"{tool} Worker failed: {exc}") from exc
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()[-300:]
+            raise EvolutionDeferred(
+                f"{tool} Worker exited {result.returncode}: {detail}"
+            )
+        return result.stdout
+
+    def _verification_prompt(
+        self,
+        proposal: dict[str, Any],
+        evidence: dict[str, Any],
+    ) -> str:
+        candidate = {
+            key: proposal.get(key)
+            for key in (
+                "target_skill",
+                "summary",
+                "applicability",
+                "procedure",
+                "validation",
+                "evidence_refs",
+            )
+        }
+        return (
+            "You are the independent RedTrace Skill verification Worker. "
+            "Evaluate the candidate only against the supplied task evidence. "
+            "Do not modify files, submit proposals, or claim a benefit that the "
+            "evidence does not support. Mark verified=true only when a reusable "
+            "claim is independently supported and at least one quantitative "
+            "benefit is defensible. Use invalid_steps_avoided for distinct failed "
+            "branches that this guidance would prevent, tool_calls_saved only for "
+            "documented redundant calls, and duration_saved_ms only for recorded "
+            "timings. Return exactly one JSON object with keys verified (boolean), "
+            "validation (string), metric (tool_calls_saved, invalid_steps_avoided, "
+            "or duration_saved_ms), and metric_value (positive integer).\n\n"
+            f"CANDIDATE:\n{json.dumps(candidate, ensure_ascii=False, indent=2)}\n\n"
+            f"TASK EVIDENCE:\n{json.dumps(evidence, ensure_ascii=False, indent=2)}"
+        )
 
     def _prompt(
         self,
@@ -460,6 +602,7 @@ class SkillEvolutionEngine:
             "REDTRACE_SKILL_FAILURE_LIMIT",
             3,
         )
+        self._process_lock = threading.Lock()
 
     def submit(self, proposal: dict[str, Any]) -> str:
         payload = _normalize_proposal(proposal)
@@ -541,11 +684,29 @@ class SkillEvolutionEngine:
                 restored += 1
         return restored
 
+    def requeue_ready_deferred(self, proposal_id: str) -> bool:
+        """Move one fully evidenced candidate back to the authoring inbox."""
+        if not PROPOSAL_ID_PATTERN.fullmatch(proposal_id):
+            raise ValueError("invalid proposal id")
+        path = self.deferred / f"{proposal_id}.json"
+        destination = self.inbox / path.name
+        self.inbox.mkdir(parents=True, exist_ok=True)
+        with self.store._skill_lock():
+            if not path.is_file():
+                return destination.is_file()
+            proposal = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(proposal, dict) or not self._ready(proposal):
+                return False
+            os.replace(path, destination)
+        return True
+
     def _ready(self, proposal: dict[str, Any]) -> bool:
         try:
-            return self._validate_evidence(proposal) == "full" or int(
-                proposal.get("occurrences") or 1
-            ) >= 3
+            evidence_tier = self._validate_evidence(proposal)
+            return evidence_tier == "full" or (
+                evidence_tier == "minimal"
+                and int(proposal.get("occurrences") or 1) >= 3
+            )
         except (TypeError, ValueError):
             return False
 
@@ -563,9 +724,364 @@ class SkillEvolutionEngine:
             else 0
         )
 
-    def process_pending(self, limit: int = 8) -> int:
+    def deferred_items(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return bounded, safe summaries for human review."""
+        if not self.deferred.is_dir():
+            return []
+        items: list[dict[str, Any]] = []
+        paths = sorted(
+            self.deferred.glob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )[: max(1, min(limit, 100))]
+        for path in paths:
+            try:
+                proposal = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if not isinstance(proposal, dict):
+                continue
+            try:
+                tier = self._validate_evidence(proposal)
+            except (TypeError, ValueError):
+                tier = "invalid"
+            impact = proposal.get("impact")
+            impact = impact if isinstance(impact, dict) else {}
+            checks = [
+                {
+                    "label": "任务或步骤已验证",
+                    "complete": impact.get("task_succeeded") is True
+                    or impact.get("step_verified") is True,
+                },
+                {
+                    "label": "至少一项量化收益",
+                    "complete": any(
+                        isinstance(impact.get(key), int)
+                        and not isinstance(impact.get(key), bool)
+                        and impact.get(key, 0) > 0
+                        for key in (
+                            "tool_calls_saved",
+                            "invalid_steps_avoided",
+                            "duration_saved_ms",
+                        )
+                    ),
+                },
+                {
+                    "label": "验证结论",
+                    "complete": bool(proposal.get("validation")),
+                },
+                {
+                    "label": "可复用步骤",
+                    "complete": bool(proposal.get("procedure")),
+                },
+                {
+                    "label": "来源任务",
+                    "complete": bool(
+                        proposal.get("source_tasks")
+                        or proposal.get("evidence_refs")
+                    ),
+                },
+            ]
+            verification = proposal.get("verification")
+            verification = verification if isinstance(verification, dict) else {}
+            verification_status = str(verification.get("status") or "queued")
+            attempts = int(verification.get("attempts") or 0)
+            if verification_status == "running":
+                verification_label = "空闲 Worker 正在独立核验"
+            elif verification_status == "author_failed":
+                verification_label = "作者输出未通过，等待其他 Worker 重试"
+            elif verification_status == "failed":
+                verification_label = (
+                    "自动核验失败，已停止重试"
+                    if attempts >= DEFAULT_VERIFICATION_ATTEMPTS
+                    else "自动核验失败，系统稍后重试"
+                )
+            elif verification_status == "verified":
+                verification_label = "AI 核验通过，等待进化处理"
+            else:
+                verification_label = "等待空闲 Worker 自动核验"
+            reason = {
+                "unmeasured": "缺少量化收益；等待 AI 自动核验",
+                "minimal": "证据不完整；等待 AI 重复验证",
+                "full": "证据已满足；等待恢复处理",
+                "invalid": "候选格式无效；建议人工放弃",
+            }.get(tier, "等待 AI 复核")
+            items.append(
+                {
+                    "proposalId": str(
+                        proposal.get("proposal_id") or path.stem
+                    ),
+                    "targetSkill": proposal.get("target_skill"),
+                    "summary": str(proposal.get("summary") or "")[:500],
+                    "projectId": proposal.get("project_id"),
+                    "intentId": proposal.get("intent_id"),
+                    "occurrences": int(proposal.get("occurrences") or 1),
+                    "evidenceTier": tier,
+                    "evidenceChecks": checks,
+                    "requirementsMet": sum(
+                        1 for check in checks if check["complete"]
+                    ),
+                    "requirementsTotal": len(checks),
+                    "sourceTasks": list(proposal.get("source_tasks") or [])[:8],
+                    "verificationStatus": verification_status,
+                    "verificationWorker": verification.get("worker"),
+                    "verificationAttempts": attempts,
+                    "verificationLabel": verification_label,
+                    "reason": reason,
+                }
+            )
+        return items
+
+    def claim_deferred_verification(
+        self,
+        worker_name: str,
+    ) -> dict[str, Any] | None:
+        """Atomically claim one deferred candidate for an idle Worker."""
+        if not self.deferred.is_dir():
+            return None
+        now = time.time()
+        claimed: dict[str, Any] | None = None
+        with self.store._skill_lock():
+            for path in sorted(self.deferred.glob("*.json")):
+                try:
+                    proposal = json.loads(path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if not isinstance(proposal, dict):
+                    continue
+                ready = self._ready(proposal)
+                verification = proposal.get("verification")
+                verification = verification if isinstance(verification, dict) else {}
+                failed_workers = [
+                    str(item)
+                    for item in (verification.get("failed_workers") or [])
+                ]
+                if verification.get("author_protocol") != AUTHOR_PROTOCOL_VERSION:
+                    failed_workers = []
+                if worker_name in failed_workers:
+                    continue
+                attempts = int(verification.get("attempts") or 0)
+                status = str(verification.get("status") or "queued")
+                started_at = float(verification.get("started_at") or 0)
+                next_attempt_at = float(verification.get("next_attempt_at") or 0)
+                if status == "running" and now - started_at < DEFAULT_AUTHOR_TIMEOUT:
+                    continue
+                if attempts >= DEFAULT_VERIFICATION_ATTEMPTS and not ready:
+                    continue
+                if next_attempt_at > now:
+                    continue
+                proposal["verification"] = {
+                    "status": "running",
+                    "worker": worker_name,
+                    "attempts": attempts + 1,
+                    "started_at": now,
+                    "failed_workers": failed_workers,
+                    "author_protocol": AUTHOR_PROTOCOL_VERSION,
+                }
+                _atomic_write(
+                    path,
+                    json.dumps(proposal, ensure_ascii=False, separators=(",", ":"))
+                    + "\n",
+                )
+                claimed = proposal
+                break
+        if claimed is not None:
+            self.store.record_skill_audit(
+                {
+                    "action": "evolution-verification-started",
+                    "actor": worker_name,
+                    "proposalId": claimed.get("proposal_id"),
+                    "attempt": claimed["verification"]["attempts"],
+                }
+            )
+        return claimed
+
+    def fail_deferred_verification(
+        self,
+        proposal_id: str,
+        worker_name: str,
+        reason: str,
+    ) -> None:
+        """Record a bounded autonomous verification failure for later retry."""
+        path = self.deferred / f"{proposal_id}.json"
+        attempts = 0
+        with self.store._skill_lock():
+            if not path.is_file():
+                return
+            proposal = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(proposal, dict):
+                return
+            verification = proposal.get("verification")
+            verification = verification if isinstance(verification, dict) else {}
+            attempts = int(verification.get("attempts") or 1)
+            failed_workers = [
+                str(item)
+                for item in (verification.get("failed_workers") or [])
+            ]
+            proposal["verification"] = {
+                "status": "failed",
+                "worker": worker_name,
+                "attempts": attempts,
+                "error": reason[:300],
+                "next_attempt_at": time.time()
+                + DEFAULT_VERIFICATION_RETRY_SECONDS,
+                "failed_workers": failed_workers,
+                "author_protocol": AUTHOR_PROTOCOL_VERSION,
+            }
+            _atomic_write(
+                path,
+                json.dumps(proposal, ensure_ascii=False, separators=(",", ":"))
+                + "\n",
+            )
+        self.store.record_skill_audit(
+            {
+                "action": "evolution-verification-failed",
+                "actor": worker_name,
+                "proposalId": proposal_id,
+                "attempt": attempts,
+                "reason": reason[:300],
+            }
+        )
+
+    def apply_autonomous_verification(
+        self,
+        proposal_id: str,
+        worker_name: str,
+        evidence: dict[str, Any],
+    ) -> bool:
+        """Attach one Worker-produced verification and requeue when ready."""
+        if not PROPOSAL_ID_PATTERN.fullmatch(proposal_id):
+            raise ValueError("invalid proposal id")
+        validation = str(evidence.get("validation") or "").strip()
+        metric = str(evidence.get("metric") or "")
+        metric_value = evidence.get("metric_value")
+        if not validation:
+            raise ValueError("validation is required")
+        if metric not in {
+            "tool_calls_saved",
+            "invalid_steps_avoided",
+            "duration_saved_ms",
+        }:
+            raise ValueError("unsupported evidence metric")
+        if (
+            not isinstance(metric_value, int)
+            or isinstance(metric_value, bool)
+            or metric_value <= 0
+        ):
+            raise ValueError("metric_value must be a positive integer")
+
+        path = self.deferred / f"{proposal_id}.json"
+        self.inbox.mkdir(parents=True, exist_ok=True)
+        with self.store._skill_lock():
+            if not path.is_file():
+                raise FileNotFoundError(proposal_id)
+            proposal = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(proposal, dict):
+                raise ValueError("proposal root must be an object")
+            verification = proposal.get("verification")
+            verification = verification if isinstance(verification, dict) else {}
+            attempt = int(verification.get("attempts") or 1)
+            failed_workers = [
+                str(item)
+                for item in (verification.get("failed_workers") or [])
+            ]
+            source_task = f"ai-verification:{proposal_id}:{attempt}"
+            if source_task in (proposal.get("source_tasks") or []):
+                raise ValueError("evidence must come from another task")
+            incoming = {
+                "validation": [validation],
+                "evidence_refs": [source_task],
+                "source_tasks": [source_task],
+                "impact": {
+                    "task_succeeded": False,
+                    "step_verified": True,
+                    "tool_calls_saved": 0,
+                    "invalid_steps_avoided": 0,
+                    "duration_saved_ms": 0,
+                    metric: metric_value,
+                },
+            }
+            merged = _merge_duplicate_proposals(proposal, incoming)
+            merged["verification"] = {
+                "status": "verified",
+                "worker": worker_name,
+                "attempts": attempt,
+                "completed_at": time.time(),
+                "failed_workers": failed_workers,
+                "author_protocol": AUTHOR_PROTOCOL_VERSION,
+            }
+            ready = self._ready(merged)
+            destination = self.inbox / path.name if ready else path
+            _atomic_write(
+                destination,
+                json.dumps(merged, ensure_ascii=False, separators=(",", ":"))
+                + "\n",
+            )
+            if destination != path:
+                path.unlink(missing_ok=True)
+        self.store.record_skill_audit(
+            {
+                "action": "evolution-evidence-added",
+                "actor": worker_name,
+                "proposalId": proposal_id,
+                "sourceTask": source_task,
+                "metric": metric,
+                "metricValue": metric_value,
+                "ready": ready,
+            }
+        )
+        return ready
+
+    def discard_deferred(self, proposal_id: str) -> bool:
+        """Discard one reviewed deferred candidate without touching Skills."""
+        if not PROPOSAL_ID_PATTERN.fullmatch(proposal_id):
+            raise ValueError("invalid proposal id")
+        path = self.deferred / f"{proposal_id}.json"
+        with self.store._skill_lock():
+            if not path.is_file():
+                return False
+            path.unlink()
+        self.store.record_skill_audit(
+            {
+                "action": "evolution-discarded",
+                "actor": "api",
+                "proposalId": proposal_id,
+                "reason": "deferred candidate discarded after human review",
+            }
+        )
+        return True
+
+    def process_pending(
+        self,
+        limit: int = 8,
+        *,
+        proposal_id: str | None = None,
+    ) -> int:
+        """Finalize queued candidates serially.
+
+        ``proposal_id`` is the task-end fast path: it finalizes the candidate
+        produced by the current task before that task is concluded. The
+        background worker continues to use the bounded batch path.
+        """
+        with self._process_lock:
+            return self._process_pending_locked(
+                limit=limit,
+                proposal_id=proposal_id,
+            )
+
+    def _process_pending_locked(
+        self,
+        *,
+        limit: int,
+        proposal_id: str | None,
+    ) -> int:
         processed = 0
-        for path in sorted(self.inbox.glob("*.json"))[: max(1, limit)]:
+        if proposal_id is not None:
+            candidate = self.inbox / f"{proposal_id}.json"
+            paths = [candidate] if candidate.is_file() else []
+        else:
+            paths = sorted(self.inbox.glob("*.json"))[: max(1, limit)]
+        for path in paths:
             decision: EvolutionDecision
             proposal: dict[str, Any] = {}
             move_to_deferred = False
@@ -595,37 +1111,102 @@ class SkillEvolutionEngine:
                 )
             except SkillConflictError as exc:
                 proposal_id = str(proposal.get("proposal_id") or path.stem)
+                verification = proposal.get("verification")
+                verification = verification if isinstance(verification, dict) else {}
+                autonomous = any(
+                    isinstance(item, str) and item.startswith("ai-verification:")
+                    for item in (proposal.get("source_tasks") or [])
+                )
+                if autonomous:
+                    worker_name = str(verification.get("worker") or "unknown")
+                    failed_workers = [
+                        str(item)
+                        for item in (verification.get("failed_workers") or [])
+                    ]
+                    if worker_name not in failed_workers:
+                        failed_workers.append(worker_name)
+                    proposal["verification"] = {
+                        **verification,
+                        "status": "author_failed",
+                        "error": str(exc)[:300],
+                        "failed_workers": failed_workers,
+                        "author_protocol": AUTHOR_PROTOCOL_VERSION,
+                    }
+                    _atomic_write(
+                        path,
+                        json.dumps(
+                            proposal,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        + "\n",
+                    )
                 decision = EvolutionDecision(
                     proposal_id,
-                    "rejected",
+                    "deferred" if autonomous else "rejected",
                     str(exc),
                     evolution_type=str(
                         proposal.get("evolution_type") or "CAPTURE"
                     ),
                 )
+                move_to_deferred = autonomous
                 LOG.info(
-                    "skill.evolution.rejected id=%s target=%s reason=%s",
+                    "skill.evolution.%s id=%s target=%s reason=%s",
+                    decision.status,
                     proposal_id,
                     proposal.get("target_skill"),
                     str(exc)[:200],
                 )
             except Exception as exc:
                 proposal_id = str(proposal.get("proposal_id") or path.stem)
+                verification = proposal.get("verification")
+                verification = verification if isinstance(verification, dict) else {}
+                autonomous = any(
+                    isinstance(item, str) and item.startswith("ai-verification:")
+                    for item in (proposal.get("source_tasks") or [])
+                )
+                if autonomous:
+                    worker_name = str(verification.get("worker") or "unknown")
+                    failed_workers = [
+                        str(item)
+                        for item in (verification.get("failed_workers") or [])
+                    ]
+                    if worker_name not in failed_workers:
+                        failed_workers.append(worker_name)
+                    proposal["verification"] = {
+                        **verification,
+                        "status": "author_failed",
+                        "error": str(exc)[:300],
+                        "failed_workers": failed_workers,
+                        "author_protocol": AUTHOR_PROTOCOL_VERSION,
+                    }
+                    _atomic_write(
+                        path,
+                        json.dumps(
+                            proposal,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        + "\n",
+                    )
                 decision = EvolutionDecision(
                     proposal_id,
-                    "rejected",
+                    "deferred" if autonomous else "rejected",
                     str(exc),
                     evolution_type=str(
                         proposal.get("evolution_type") or "CAPTURE"
                     ),
                 )
+                move_to_deferred = autonomous
                 LOG.warning(
-                    "skill.evolution.rejected id=%s target=%s reason=%s",
+                    "skill.evolution.%s id=%s target=%s reason=%s",
+                    decision.status,
                     proposal_id,
                     proposal.get("target_skill"),
                     str(exc)[:200],
                 )
-                self._degrade_failed_skill(proposal)
+                if not autonomous:
+                    self._degrade_failed_skill(proposal)
             else:
                 if decision.status == "accepted":
                     LOG.info(
@@ -637,11 +1218,21 @@ class SkillEvolutionEngine:
                         decision.evolution_type,
                         list(decision.merged) or None,
                     )
+            verification_actor = proposal.get("verification")
+            verification_actor = (
+                verification_actor
+                if isinstance(verification_actor, dict)
+                else {}
+            )
             self.store.record_skill_audit(
                 {
                     "action": f"evolution-{decision.status}",
                     "evolutionType": decision.evolution_type,
-                    "actor": str(proposal.get("worker") or "worker"),
+                    "actor": str(
+                        verification_actor.get("worker")
+                        or proposal.get("worker")
+                        or "worker"
+                    ),
                     "proposalId": decision.proposal_id,
                     "skill": decision.skill,
                     "version": decision.version,
@@ -667,6 +1258,43 @@ class SkillEvolutionEngine:
             processed += 1
         return processed
 
+    def decision_for(self, proposal_id: str) -> dict[str, Any]:
+        """Return the durable state of one submitted candidate."""
+        for event in self.store.read_skill_audit(limit=500):
+            if event.get("proposalId") != proposal_id:
+                continue
+            action = str(event.get("action") or "")
+            if not action.startswith("evolution-"):
+                continue
+            return {
+                "proposalId": proposal_id,
+                "status": action.removeprefix("evolution-"),
+                "reason": event.get("reason"),
+                "skill": event.get("skill"),
+                "version": event.get("version"),
+                "revision": event.get("revision"),
+                "trust": event.get("trust"),
+                "evolutionType": event.get("evolutionType"),
+                "merged": event.get("merged") or [],
+            }
+        if (self.deferred / f"{proposal_id}.json").is_file():
+            return {
+                "proposalId": proposal_id,
+                "status": "deferred",
+                "reason": "candidate is waiting for independent measured evidence",
+            }
+        if (self.inbox / f"{proposal_id}.json").is_file():
+            return {
+                "proposalId": proposal_id,
+                "status": "queued",
+                "reason": "candidate has not been finalized",
+            }
+        return {
+            "proposalId": proposal_id,
+            "status": "unknown",
+            "reason": "candidate state is unavailable",
+        }
+
     def evolve(self, proposal: dict[str, Any]) -> EvolutionDecision:
         proposal = _normalize_proposal(proposal)
         proposal_id = str(
@@ -675,6 +1303,12 @@ class SkillEvolutionEngine:
         evolution_type = proposal["evolution_type"]
         evidence_tier = self._validate_evidence(proposal)
         self._validate_feedback_safety(proposal)
+
+        if evidence_tier == "unmeasured":
+            raise EvolutionDeferred(
+                "no measured successful impact; deferred until a task records "
+                "at least one saved tool call, avoided invalid step, or saved millisecond"
+            )
 
         # Minimal-evidence proposals are deferred to the pending-verification
         # queue. They accumulate occurrences until a future task provides
@@ -744,11 +1378,9 @@ class SkillEvolutionEngine:
             require_complete=target is None or major_change,
         )
         source_task = _source_task(proposal)
-        trust = (
-            "provisional"
-            if target is None or major_change
-            else target.trust
-        )
+        # Trust belongs to a revision, not to the Skill name. Every content
+        # mutation must prove itself in a later independent project.
+        trust = "provisional"
         record = self.store.write_skill(
             candidate_name,
             content,
@@ -758,9 +1390,7 @@ class SkillEvolutionEngine:
             reason=str(proposal.get("summary") or ""),
             action=action,
             trust=trust,
-            successful_reuses=(
-                target.successful_reuses if target is not None else 0
-            ),
+            successful_reuses=0,
             failure_count=0 if evolution_type == "FIX" else (
                 target.failure_count if target is not None else 0
             ),
@@ -805,24 +1435,25 @@ class SkillEvolutionEngine:
         # Impact verification check.
         impact_verified = False
         if isinstance(impact, dict):
-            impact_verified = (
+            outcome_verified = (
                 impact.get("task_succeeded") is True
                 or impact.get("step_verified") is True
             )
-            if impact_verified:
-                metrics = (
-                    impact.get("tool_calls_saved", 0),
-                    impact.get("invalid_steps_avoided", 0),
-                    impact.get("duration_saved_ms", 0),
-                )
-                if any(
-                    not isinstance(value, int)
-                    or isinstance(value, bool)
-                    or value < 0
-                    for value in metrics
-                ):
-                    # Malformed metrics — treat as minimal rather than rejecting.
-                    impact_verified = False
+            metrics = (
+                impact.get("tool_calls_saved", 0),
+                impact.get("invalid_steps_avoided", 0),
+                impact.get("duration_saved_ms", 0),
+            )
+            metrics_valid = not any(
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 0
+                for value in metrics
+            )
+            impact_verified = outcome_verified and metrics_valid and any(metrics)
+
+        if not impact_verified:
+            return "unmeasured"
 
         # Validation list check.
         validation_ok = (
@@ -1045,13 +1676,19 @@ class SkillEvolutionEngine:
         if target is None:
             raise ValueError("validated reuse requires an existing target Skill")
         source_task = _source_task(proposal)
-        if (
-            target.provisional_task
-            and source_task
-            and source_task == target.provisional_task
-        ):
+        if not source_task:
             raise ValueError(
-                "provisional Skill must be reused in an independent task"
+                "validated reuse requires a project and intent evidence source"
+            )
+        provisional_project = (
+            target.provisional_task.rsplit(":", 1)[0]
+            if target.provisional_task
+            else None
+        )
+        source_project = source_task.rsplit(":", 1)[0]
+        if provisional_project and source_project == provisional_project:
+            raise ValueError(
+                "provisional Skill must be reused in an independent project"
             )
         trust = (
             "trusted"
@@ -1217,6 +1854,11 @@ class SkillEvolutionWorker:
     def notify(self) -> None:
         self._event.set()
 
+    def finalize(self, proposal_id: str) -> dict[str, Any]:
+        """Finalize the current task's candidate before task conclusion."""
+        self.engine.process_pending(proposal_id=proposal_id)
+        return self.engine.decision_for(proposal_id)
+
     def stop(self) -> None:
         self._stop.set()
         self._event.set()
@@ -1290,7 +1932,14 @@ def _merge_duplicate_proposals(
     incoming: dict[str, Any],
 ) -> dict[str, Any]:
     merged = dict(existing)
-    merged["occurrences"] = int(existing.get("occurrences") or 1) + 1
+    existing_sources = [
+        item for item in (existing.get("source_tasks") or []) if isinstance(item, str)
+    ]
+    incoming_sources = [
+        item for item in (incoming.get("source_tasks") or []) if isinstance(item, str)
+    ]
+    new_sources = [item for item in incoming_sources if item not in existing_sources]
+    merged["occurrences"] = int(existing.get("occurrences") or 1) + len(new_sources)
     for key in ("validation", "evidence_refs"):
         values: list[str] = []
         for item in [
@@ -1300,14 +1949,38 @@ def _merge_duplicate_proposals(
             if isinstance(item, str) and item not in values:
                 values.append(item)
         merged[key] = values[:8]
-    source_tasks: list[str] = []
-    for item in [
-        *(existing.get("source_tasks") or []),
-        *(incoming.get("source_tasks") or []),
-    ]:
-        if isinstance(item, str) and item not in source_tasks:
-            source_tasks.append(item)
-    merged["source_tasks"] = source_tasks[:8]
+    merged["source_tasks"] = [*existing_sources, *new_sources][:8]
+    existing_impact = existing.get("impact")
+    incoming_impact = incoming.get("impact")
+    existing_impact = existing_impact if isinstance(existing_impact, dict) else {}
+    incoming_impact = incoming_impact if isinstance(incoming_impact, dict) else {}
+    merged["impact"] = {
+        "task_succeeded": existing_impact.get("task_succeeded") is True
+        or incoming_impact.get("task_succeeded") is True,
+        "step_verified": existing_impact.get("step_verified") is True
+        or incoming_impact.get("step_verified") is True,
+        **{
+            key: max(
+                [
+                    0,
+                    *[
+                        value
+                        for value in (
+                            existing_impact.get(key, 0),
+                            incoming_impact.get(key, 0),
+                        )
+                        if isinstance(value, int)
+                        and not isinstance(value, bool)
+                    ],
+                ]
+            )
+            for key in (
+                "tool_calls_saved",
+                "invalid_steps_avoided",
+                "duration_saved_ms",
+            )
+        },
+    }
     return merged
 
 
@@ -1354,7 +2027,82 @@ def _proposal_similarity(
     return (name_score * 0.65) + (context_score * 0.35)
 
 
+def _authoring_defects(
+    content: str,
+    target: SkillRecord | None = None,
+) -> list[str]:
+    defects: list[str] = []
+    try:
+        metadata = _frontmatter(content)
+    except ValueError:
+        metadata = {}
+    if not metadata.get("name"):
+        defects.append("missing frontmatter name")
+    if not metadata.get("description"):
+        defects.append("missing frontmatter description")
+    if target is not None and metadata.get("name") != target.name:
+        defects.append(f"frontmatter name must remain {target.name}")
+    headings = _headings(content).lower()
+    missing = [
+        group[0]
+        for group in REQUIRED_SECTION_GROUPS
+        if not any(token in headings for token in group)
+    ]
+    if missing:
+        defects.append("missing sections: " + ", ".join(missing))
+    if CONTENT_SECRET_PATTERN.search(content):
+        defects.append("contains a credential-like literal")
+    if _contains_target_specific_content(content):
+        defects.append("contains target- or task-specific content")
+    duplicate_ratio = _duplicate_paragraph_ratio(content)
+    if duplicate_ratio > DEFAULT_DUPLICATE_RATIO:
+        defects.append("contains duplicate paragraphs")
+    if target is not None:
+        growth_budget = min(8192, max(1024, int(len(target.content) * 0.25)))
+        if len(content) > len(target.content) + growth_budget:
+            defects.append("exceeds the bounded replacement growth budget")
+        current_body = _normalized_body(target.content)
+        candidate_body = _normalized_body(content)
+        if current_body and candidate_body.startswith(current_body):
+            defects.append("is append-only instead of a compact replacement")
+    return defects
+
+
 def _extract_authored_skill(tool: str, stdout: str) -> str | None:
+    text = _extract_agent_text(tool, stdout)
+
+    match = FENCED_SKILL_PATTERN.search(text)
+    if match:
+        return match.group(1).strip() + "\n"
+    start = text.find("---")
+    if start >= 0:
+        candidate = text[start:].strip()
+        if len(candidate.split("---", 2)) == 3:
+            return candidate + "\n"
+    return None
+
+
+def _extract_verification(tool: str, stdout: str) -> dict[str, Any] | None:
+    text = _extract_agent_text(tool, stdout).strip()
+    if text.startswith("```json") and text.endswith("```"):
+        text = text[7:-3].strip()
+    elif text.startswith("```") and text.endswith("```"):
+        text = text[3:-3].strip()
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        try:
+            payload = json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _extract_agent_text(tool: str, stdout: str) -> str:
     text = stdout
     if tool == "codex":
         for line in reversed(stdout.splitlines()):
@@ -1390,15 +2138,7 @@ def _extract_authored_skill(tool: str, stdout: str) -> str | None:
             if parts:
                 text = "\n".join(parts)
                 break
-    match = FENCED_SKILL_PATTERN.search(text)
-    if match:
-        return match.group(1).strip() + "\n"
-    start = text.find("---")
-    if start >= 0:
-        candidate = text[start:].strip()
-        if len(candidate.split("---", 2)) == 3:
-            return candidate + "\n"
-    return None
+    return text
 
 
 def _positive_env(name: str, default: int) -> int:

@@ -6,7 +6,6 @@ from typing import Any
 from redtrace.capabilities import (
     PI_MCP_EXTENSION,
     PI_PROVIDER_EXTENSION_PATH,
-    resolve_capabilities_root,
 )
 from redtrace.dispatcher.config import WorkerConfig
 from redtrace.dispatcher.workers.base import DriverResult, WorkerDriver
@@ -74,8 +73,6 @@ class PiDriver(WorkerDriver):
             "--approve",
             "--mode",
             "json",
-            "--session-dir",
-            self._session_dir(worker),
         ]
         if session:
             argv.extend(["--session", session])
@@ -103,8 +100,6 @@ class PiDriver(WorkerDriver):
             "--approve",
             "--mode",
             "json",
-            "--session-dir",
-            self._session_dir(worker),
             "--session",
             session,
             "-p",
@@ -117,14 +112,11 @@ class PiDriver(WorkerDriver):
 
     def _local_argv(self, worker: WorkerConfig, prompt: str, session: str | None) -> list[str]:
         # Native pi: no provider/model overrides, so the host login and global config win.
-        session_dir = self._session_dir(worker)
         argv = [
             "pi",
             "--approve",
             "--mode",
             "json",
-            "--session-dir",
-            session_dir,
             "--extension",
             worker.env.get("REDTRACE_PI_MCP_EXTENSION", PI_MCP_EXTENSION),
             *self._skill_args(worker),
@@ -185,29 +177,15 @@ class PiDriver(WorkerDriver):
         return [
             "pi",
             "--extension",
-            worker.env.get("REDTRACE_PI_MCP_EXTENSION", PI_MCP_EXTENSION),
-            "--extension",
             worker.env.get(
                 "REDTRACE_PI_PROVIDER_EXTENSION",
                 PI_PROVIDER_EXTENSION_PATH,
             ),
+            "--extension",
+            worker.env.get("REDTRACE_PI_MCP_EXTENSION", PI_MCP_EXTENSION),
             *cls._skill_args(worker),
             *pi_argv,
         ]
-
-    @staticmethod
-    def _session_dir(worker: WorkerConfig) -> str:
-        configured = worker.env.get("REDTRACE_PI_SESSION_DIR")
-        if configured:
-            return configured
-        return str(
-            resolve_capabilities_root()
-            / ".redtrace"
-            / "workers"
-            / "pi"
-            / worker.name
-            / "sessions"
-        )
 
     @staticmethod
     def _skill_args(worker: WorkerConfig) -> list[str]:

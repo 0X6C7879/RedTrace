@@ -53,6 +53,9 @@ class InProcessClient:
     def heartbeat(self, project_id: str, intent_id: str, worker: str) -> ApiResult:
         return self._post(f"/projects/{project_id}/intents/{intent_id}/heartbeat", {"worker": worker})
 
+    def claim_intent(self, project_id: str, intent_id: str, worker: str) -> ApiResult:
+        return self._post(f"/projects/{project_id}/intents/{intent_id}/claim", {"worker": worker})
+
     def claim_reason(self, project_id: str, worker: str, trigger: str) -> ApiResult:
         return self._post(f"/projects/{project_id}/reason/claim", {"worker": worker, "trigger": trigger})
 
@@ -149,6 +152,11 @@ class LocalContainerManager:
 
     def ensure_running(self, project_id: str) -> str:
         return self.container_name(project_id)
+
+    def conversation_environment(
+        self, _project_id: str, _worker_type: str
+    ) -> dict[str, str]:
+        return {}
 
     def build_exec_process(
         self,
@@ -332,6 +340,7 @@ def test_mock_scheduler_runs_reason_explore_reason_complete_chain(http_client: T
     project_id = _create_project(http_client)
     seed = client.create_intent(project_id, ["origin"], "seed", "seed-worker")
     assert seed.ok
+    assert client.claim_intent(project_id, "i001", "seed-worker").ok
     assert client.heartbeat(project_id, "i001", "seed-worker").ok
     assert client.conclude(project_id, "i001", "seed-worker", "seed fact").ok
 

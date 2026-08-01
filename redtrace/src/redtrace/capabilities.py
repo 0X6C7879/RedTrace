@@ -8,6 +8,7 @@ import re
 import shutil
 import tarfile
 import tempfile
+import threading
 import time
 from collections.abc import Iterable
 from contextlib import contextmanager
@@ -37,6 +38,9 @@ DEFAULT_MAX_SKILLS = 40
 DEFAULT_MAX_SKILL_CHARS = 65_536
 DEFAULT_HISTORY_LIMIT = 12
 SKILL_TRUST_STATES = frozenset({"provisional", "trusted", "retired"})
+SKILL_FILE_SCAN_IGNORES = frozenset(
+    {".git", ".venv", "__pycache__", "node_modules"}
+)
 
 PI_PROVIDER_EXTENSION = """\
 export default function (pi) {
@@ -216,6 +220,10 @@ class McpRecord:
 
 
 class CapabilityStore:
+    _skill_list_cache_lock = threading.Lock()
+    _skill_list_cache: dict[str, tuple[float, tuple[SkillRecord, ...]]] = {}
+    _skill_list_cache_seconds = 1.0
+
     def __init__(
         self,
         root: str | Path | None = None,
@@ -244,82 +252,140 @@ class CapabilityStore:
         self.skill_meta_dir.mkdir(parents=True, exist_ok=True)
 
     def list_skills(self) -> list[SkillRecord]:
+        """Read bounded Skill entrypoint metadata without walking dependencies."""
         self.ensure()
+        cache_key = str(self.skills_dir)
+        now = time.monotonic()
+        with self._skill_list_cache_lock:
+            cached = self._skill_list_cache.get(cache_key)
+            if cached is not None and now - cached[0] < self._skill_list_cache_seconds:
+                return list(cached[1])
+            records = self._list_skills_uncached()
+            self._skill_list_cache[cache_key] = (now, tuple(records))
+            return records
+
+    def _list_skills_uncached(self) -> list[SkillRecord]:
         records: list[SkillRecord] = []
         for directory in sorted(self.skills_dir.iterdir(), key=lambda item: item.name):
             if not directory.is_dir() or not NAME_PATTERN.fullmatch(directory.name):
                 continue
-            entrypoint = directory / "SKILL.md"
-            if not entrypoint.is_file():
-                continue
-            content = entrypoint.read_text(encoding="utf-8")
-            metadata = _frontmatter(content)
-            state_path = directory / ".redtrace.json"
-            state: dict[str, Any] = {}
-            if state_path.is_file():
-                try:
-                    loaded = json.loads(state_path.read_text(encoding="utf-8"))
-                    state = loaded if isinstance(loaded, dict) else {}
-                except (json.JSONDecodeError, OSError):
-                    state = {}
-            files = tuple(
-                str(path.relative_to(directory)).replace("\\", "/")
-                for path in sorted(directory.rglob("*"))
-                if path.is_file() and path.name != ".redtrace.json"
-            )
-            enabled = bool(state.get("enabled", True))
-            try:
-                version = max(1, int(state.get("version", 1)))
-            except (TypeError, ValueError):
-                version = 1
-            trust = str(state.get("trust") or "trusted")
-            if trust not in SKILL_TRUST_STATES:
-                trust = "trusted"
-            try:
-                successful_reuses = max(0, int(state.get("successfulReuses", 0)))
-            except (TypeError, ValueError):
-                successful_reuses = 0
-            try:
-                failure_count = max(0, int(state.get("failureCount", 0)))
-            except (TypeError, ValueError):
-                failure_count = 0
-            records.append(
-                SkillRecord(
-                    name=directory.name,
-                    description=metadata.get("description", ""),
-                    enabled=enabled,
-                    content=content,
-                    files=files,
-                    version=version,
-                    revision=str(
-                        state.get("revision")
-                        or _content_revision(
-                            content,
-                            enabled,
-                            trust,
-                            successful_reuses,
-                            failure_count,
-                        )
-                    ),
-                    updated_at=str(state["updatedAt"]) if state.get("updatedAt") else None,
-                    trust=trust,
-                    successful_reuses=successful_reuses,
-                    failure_count=failure_count,
-                    provisional_task=(
-                        str(state["provisionalTask"])
-                        if state.get("provisionalTask")
-                        else None
-                    ),
-                )
-            )
+            record = self._read_skill(directory, include_files=False)
+            if record is not None:
+                records.append(record)
         return records
 
-    def get_skill(self, name: str) -> SkillRecord:
+    def _invalidate_skill_list_cache(self) -> None:
+        with self._skill_list_cache_lock:
+            self._skill_list_cache.pop(str(self.skills_dir), None)
+
+    def get_skill(
+        self,
+        name: str,
+        *,
+        include_files: bool = True,
+    ) -> SkillRecord:
         name = validate_capability_name(name)
-        for record in self.list_skills():
-            if record.name == name:
-                return record
-        raise FileNotFoundError(name)
+        record = self._read_skill(
+            self.skills_dir / name,
+            include_files=include_files,
+        )
+        if record is None:
+            raise FileNotFoundError(name)
+        return record
+
+    def _read_skill(
+        self,
+        directory: Path,
+        *,
+        include_files: bool,
+    ) -> SkillRecord | None:
+        entrypoint = directory / "SKILL.md"
+        if not directory.is_dir() or not entrypoint.is_file():
+            return None
+        content = entrypoint.read_text(encoding="utf-8")
+        metadata = _frontmatter(content)
+        state_path = directory / ".redtrace.json"
+        state: dict[str, Any] = {}
+        if state_path.is_file():
+            try:
+                loaded = json.loads(state_path.read_text(encoding="utf-8"))
+                state = loaded if isinstance(loaded, dict) else {}
+            except (json.JSONDecodeError, OSError):
+                state = {}
+        files = self._list_skill_files(directory) if include_files else ()
+        enabled = bool(state.get("enabled", True))
+        try:
+            version = max(1, int(state.get("version", 1)))
+        except (TypeError, ValueError):
+            version = 1
+        trust = str(state.get("trust") or "trusted")
+        if trust not in SKILL_TRUST_STATES:
+            trust = "trusted"
+        try:
+            successful_reuses = max(0, int(state.get("successfulReuses", 0)))
+        except (TypeError, ValueError):
+            successful_reuses = 0
+        try:
+            failure_count = max(0, int(state.get("failureCount", 0)))
+        except (TypeError, ValueError):
+            failure_count = 0
+        stored_revision = str(state.get("revision") or "")
+        observed_revision = _content_revision(
+            content,
+            enabled,
+            trust,
+            successful_reuses,
+            failure_count,
+        )
+        provisional_task = (
+            str(state["provisionalTask"])
+            if state.get("provisionalTask")
+            else None
+        )
+        if stored_revision and stored_revision != observed_revision:
+            trust = "provisional"
+            successful_reuses = 0
+            provisional_task = "out-of-band"
+            stored_revision = _content_revision(
+                content,
+                enabled,
+                trust,
+                successful_reuses,
+                failure_count,
+            )
+        return SkillRecord(
+            name=directory.name,
+            description=metadata.get("description", ""),
+            enabled=enabled,
+            content=content,
+            files=files,
+            version=version,
+            revision=stored_revision or observed_revision,
+            updated_at=str(state["updatedAt"]) if state.get("updatedAt") else None,
+            trust=trust,
+            successful_reuses=successful_reuses,
+            failure_count=failure_count,
+            provisional_task=provisional_task,
+        )
+
+    def _list_skill_files(self, directory: Path) -> tuple[str, ...]:
+        files: list[str] = []
+        for root, directories, names in os.walk(directory):
+            directories[:] = sorted(
+                name
+                for name in directories
+                if name not in SKILL_FILE_SCAN_IGNORES
+            )
+            root_path = Path(root)
+            for name in sorted(names):
+                if name == ".redtrace.json":
+                    continue
+                files.append(
+                    str((root_path / name).relative_to(directory)).replace(
+                        "\\", "/"
+                    )
+                )
+        return tuple(files)
 
     def write_skill(
         self,
@@ -413,6 +479,7 @@ class CapabilityStore:
                 )
                 + "\n",
             )
+            self._invalidate_skill_list_cache()
             record = self._get_skill_direct(name)
             assert record is not None
             self._record_history(record, actor=actor, reason=reason)
@@ -461,6 +528,7 @@ class CapabilityStore:
                 raise FileNotFoundError(name)
             self._record_history(record, actor=actor, reason=reason)
             shutil.rmtree(self.skills_dir / record.name)
+            self._invalidate_skill_list_cache()
             self._append_skill_audit(
                 {
                     "action": action,
@@ -544,10 +612,10 @@ class CapabilityStore:
             self._append_skill_audit(payload)
 
     def _get_skill_direct(self, name: str) -> SkillRecord | None:
-        for record in self.list_skills():
-            if record.name == name:
-                return record
-        return None
+        return self._read_skill(
+            self.skills_dir / name,
+            include_files=False,
+        )
 
     @contextmanager
     def _skill_lock(self):

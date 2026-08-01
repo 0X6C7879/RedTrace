@@ -1,23 +1,16 @@
 from __future__ import annotations
 
-import io
 import json
-import tarfile
 from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
-
 from redtrace.capabilities import (
-    BLACKBOARD_CLI_PATH,
     CLAUDE_MCP_PATH,
-    CONTEXT_CLI_PATH,
-    MANIFEST_PATH,
     PI_MCP_EXTENSION,
     PI_MCP_PATH,
     PI_PROVIDER_EXTENSION_PATH,
     PLUGIN_CATALOG_PATH,
-    RESOURCE_CLI_PATH,
     SKILL_CLI_PATH,
     CapabilityStore,
     build_claude_mcp,
@@ -25,12 +18,12 @@ from redtrace.capabilities import (
     codex_mcp_overrides,
     materialize_local_workspace,
 )
-from redtrace.plugin_registry import PluginRegistry
 from redtrace.dispatcher.config import WorkerConfig
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.workers.adapters.claudecode import ClaudeCodeDriver
 from redtrace.dispatcher.workers.adapters.codex import CodexDriver
 from redtrace.dispatcher.workers.adapters.pi import PiDriver
+from redtrace.plugin_registry import PluginRegistry
 from redtrace.server.app import app
 
 SKILL = """---
@@ -169,8 +162,13 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
         assert 'x-data="skillsPage()"' in index.text
         assert 'x-data="mcpPage()"' in index.text
         assert 'x-data="pluginsPage()"' in index.text
+        assert "Skill evolution queue" in index.text
+        assert "选择回滚版本" in index.text
         assert "先选择一个 RedTrace 项目" not in index.text[index.text.index("x-data=\"pluginsPage()\"") :]
-        assert client.get("/static/capabilities.js").status_code == 200
+        capabilities_script = client.get("/static/capabilities.js")
+        assert capabilities_script.status_code == 200
+        assert "latestDecision" in capabilities_script.text
+        assert "async rollback()" in capabilities_script.text
 
         status = client.get("/capabilities")
         assert status.status_code == 200
@@ -243,22 +241,93 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
         assert plugin_dir.is_dir()
 
 
-def test_drivers_keep_native_features_and_add_shared_mcp(monkeypatch, tmp_path: Path) -> None:
+def test_evolution_api_returns_terminal_decision_before_response(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.setenv("REDTRACE_CAPABILITIES_ROOT", str(tmp_path))
-    CapabilityStore(tmp_path).write_mcp(
+    with TestClient(app) as client:
+        response = client.post(
+            "/capabilities/evolution/proposals",
+            json={
+                "evolution_type": "IMPROVE",
+                "target_skill": "web-recon",
+                "summary": "A verified branch should be captured for later reuse.",
+                "project_id": "project-a",
+                "intent_id": "intent-a",
+                "worker": "codex-1",
+                "task_type": "explore",
+            },
+        )
+
+        assert response.status_code == 200
+        decision = response.json()
+        assert decision["status"] == "deferred"
+        assert decision["proposalId"]
+        status = client.get("/capabilities/evolution").json()
+        assert status["pending"] == 0
+        assert status["deferred"] == 1
+        assert status["deferredItems"][0]["evidenceTier"] == "unmeasured"
+        assert "量化收益" in status["deferredItems"][0]["reason"]
+
+def test_skill_list_does_not_walk_dependency_directories(tmp_path: Path) -> None:
+    store = CapabilityStore(tmp_path)
+    store.write_skill("recon", SKILL)
+    skill_dir = tmp_path / "skills" / "recon"
+    dependency = skill_dir / "node_modules" / "package" / "index.js"
+    dependency.parent.mkdir(parents=True)
+    dependency.write_text("module.exports = {};\n", encoding="utf-8")
+    reference = skill_dir / "references" / "workflow.md"
+    reference.parent.mkdir()
+    reference.write_text("# Workflow\n", encoding="utf-8")
+
+    listed = store.list_skills()
+    detail = store.get_skill("recon")
+
+    assert listed[0].files == ()
+    assert "references/workflow.md" in detail.files
+    assert not any(path.startswith("node_modules/") for path in detail.files)
+
+
+def test_skill_list_reuses_short_process_cache(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = CapabilityStore(tmp_path)
+    store.write_skill("recon", SKILL)
+    first = store.list_skills()
+
+    def unexpected_rescan():
+        raise AssertionError("Skill metadata was rescanned inside the cache window")
+
+    monkeypatch.setattr(store, "_list_skills_uncached", unexpected_rescan)
+
+    assert store.list_skills() == first
+
+
+def test_drivers_keep_native_config_and_inject_shared_mcp(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("REDTRACE_CAPABILITIES_ROOT", str(tmp_path))
+    store = CapabilityStore(tmp_path)
+    store.write_mcp(
         "filesystem",
         {"transport": "stdio", "command": "mcp-filesystem", "args": ["."]},
     )
 
-    claude = ClaudeCodeDriver().build_execute(_worker("claudecode"), "PROMPT", "session").argv
-    mcp_index = claude.index("--mcp-config")
-    assert claude[mcp_index + 1] == CLAUDE_MCP_PATH
+    claude_worker = _worker("claudecode")
+    claude_worker.env["REDTRACE_CLAUDE_MCP_CONFIG"] = "runtime/mcp/claude.json"
+    claude = ClaudeCodeDriver().build_execute(claude_worker, "PROMPT", "session").argv
+    assert claude[claude.index("--mcp-config") + 1] == "runtime/mcp/claude.json"
 
-    codex = CodexDriver(local=True).build_execute(_worker("codex"), "PROMPT", None).argv
-    assert "mcp_servers.filesystem.command=\"mcp-filesystem\"" in codex
+    codex_worker = _worker("codex")
+    codex_worker.env["REDTRACE_CODEX_RESOURCE_ARGS"] = json.dumps(
+        codex_mcp_overrides(store.list_mcp())
+    )
+    codex = CodexDriver(local=True).build_execute(codex_worker, "PROMPT", None).argv
+    assert any("mcp_servers.filesystem.command" in argument for argument in codex)
 
     pi = PiDriver(local=True).build_execute(_worker("pi"), "PROMPT", None).argv
     assert PI_MCP_EXTENSION in pi
+    assert "--session-dir" not in pi
     assert "--approve" in pi
     assert "--no-extensions" not in pi
     assert "--no-skills" not in pi

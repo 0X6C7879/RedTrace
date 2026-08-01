@@ -131,14 +131,28 @@ def get_intent_or_404(
     return row
 
 
-def get_claimable_open_intent_or_404(
+def get_unclaimed_open_intent_or_404(
+    conn: sqlite3.Connection, project_id: str, intent_id: str
+) -> sqlite3.Row:
+    expire_workers(conn, project_id)
+    row = get_intent_or_404(conn, project_id, intent_id)
+    if row["to_fact_id"] is not None:
+        raise HTTPException(409, "Intent already concluded")
+    if row["worker"] is not None:
+        raise HTTPException(409, f"Intent is currently claimed by {row['worker']}")
+    return row
+
+
+def get_owned_open_intent_or_404(
     conn: sqlite3.Connection, project_id: str, intent_id: str, worker: str
 ) -> sqlite3.Row:
     expire_workers(conn, project_id)
     row = get_intent_or_404(conn, project_id, intent_id)
     if row["to_fact_id"] is not None:
         raise HTTPException(409, "Intent already concluded")
-    if row["worker"] is not None and row["worker"] != worker:
+    if row["worker"] is None:
+        raise HTTPException(409, "Intent is not currently claimed")
+    if row["worker"] != worker:
         raise HTTPException(409, f"Intent is currently claimed by {row['worker']}")
     return row
 

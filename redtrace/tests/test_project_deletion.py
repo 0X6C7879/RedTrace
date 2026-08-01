@@ -45,14 +45,7 @@ def test_deletion_failure_is_visible_and_retry_finishes_cleanup(
     project_state = managed / "projects" / project_id
     workspace = root / "workspaces" / project_id
     archive = audit / project_id
-    session_file = (
-        managed
-        / "workers"
-        / "pi"
-        / "pi-worker"
-        / "sessions"
-        / "session-delete-001.jsonl"
-    )
+    session_file = project_state / "conversations" / "pi" / "session-delete-001.jsonl"
     for directory in (project_state, workspace, archive, session_file.parent):
         directory.mkdir(parents=True, exist_ok=True)
     (project_state / "prompt.md").write_text("prompt", encoding="utf-8")

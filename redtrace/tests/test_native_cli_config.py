@@ -216,6 +216,7 @@ base_url = "https://old.example/v1"
     sync_native_cli_config(tmp_path, _worker("codex"))
     second = path.read_text(encoding="utf-8")
     value = tomllib.loads(second)
+    auth = json.loads((tmp_path / ".codex" / "auth.json").read_text(encoding="utf-8"))
 
     assert first == second
     assert value["model"] == "gpt-test"
@@ -237,6 +238,7 @@ base_url = "https://old.example/v1"
         "env_key": "OPENAI_API_KEY",
     }
     assert "codex-secret" not in second
+    assert auth["OPENAI_API_KEY"] == "codex-secret"
 
 
 def test_pi_settings_and_models_merge_preserves_other_providers(tmp_path: Path) -> None:
@@ -283,12 +285,20 @@ def test_pi_settings_and_models_merge_preserves_other_providers(tmp_path: Path) 
     }
 
 
-def test_local_worker_save_syncs_native_config_and_reports_paths(
+def test_container_worker_save_syncs_native_config_and_reports_paths(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "dispatch.yaml"
     raw = _local_config(_worker("claudecode")).model_dump(mode="json")
+    raw["runtime"]["execution"] = "container"
+    raw["container"] = {
+        "image": "redtrace-worker-container:latest",
+        "network_mode": "host",
+        "cap_add": [],
+        "completed_action": "stop",
+    }
+    raw["local"] = None
     raw["workers"] = []
     config_path.write_text(
         yaml.safe_dump(raw, sort_keys=False),

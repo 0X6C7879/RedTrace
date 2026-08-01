@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 from redtrace.dispatcher.config import ContextHarnessConfig, LocalConfig
+from redtrace.dispatcher.runtime.backend import is_agent_runtime_state
 from redtrace.dispatcher.runtime.local_process import LocalProcess
 from redtrace.paths import RedTracePaths, contained_path, safe_project_key
 
@@ -16,9 +18,8 @@ class LocalBackend:
     """Runs workers directly on the dispatcher host instead of in per-project containers.
 
     Each project gets an isolated working directory under the configured
-    ``workspace_root``. Worker processes use RedTrace-managed, Worker-isolated writable
-    state and the root project's shared Skills, MCP and plugin resources. A Worker's
-    configured API values are merged over the host environment for only that process.
+    ``workspace_root``. Workers read the host user's Agent configuration, keep
+    conversations in project state, and use the root project's shared Skills.
     There are no containers to build or tear down.
     """
 
@@ -64,10 +65,45 @@ class LocalBackend:
     def ensure_running(self, project_id: str) -> str:
         project_dir = self._project_dir(project_id)
         project_dir.mkdir(parents=True, exist_ok=True)
+        pi_mcp = self._runtime_bin.parent / "mcp" / "pi.json"
+        if pi_mcp.is_file():
+            target = project_dir / ".pi" / "mcp.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.is_symlink() and target.resolve(strict=False) != pi_mcp.resolve():
+                target.unlink()
+            elif target.exists() and not target.is_symlink():
+                target.unlink()
+            _ensure_link(target, pi_mcp)
         LOG.debug(
             "local project workdir ready project=%s dir=%s", project_id, project_dir
         )
         return str(project_dir)
+
+    def conversation_environment(
+        self, project_id: str, worker_type: str
+    ) -> dict[str, str]:
+        state = contained_path(
+            self._project_state_root,
+            safe_project_key(project_id),
+            "conversations",
+            worker_type,
+        )
+        state.mkdir(parents=True, exist_ok=True)
+        if worker_type == "pi":
+            return {"PI_CODING_AGENT_SESSION_DIR": str(state)}
+        homes = {
+            "claudecode": ("CLAUDE_CONFIG_DIR", Path.home() / ".claude"),
+            "codex": ("CODEX_HOME", Path.home() / ".codex"),
+        }
+        if worker_type not in homes:
+            return {}
+        variable, user_home = homes[worker_type]
+        user_home.mkdir(parents=True, exist_ok=True)
+        for source in user_home.iterdir():
+            if is_agent_runtime_state(worker_type, source.name):
+                continue
+            _ensure_link(state / source.name, source)
+        return {variable: str(state)}
 
     def build_exec_process(
         self,
@@ -172,3 +208,20 @@ class LocalBackend:
 
     def _project_dir(self, project_id: str) -> Path:
         return contained_path(self._root, safe_project_key(project_id))
+def _ensure_link(link: Path, target: Path) -> None:
+    if link.exists() or link.is_symlink():
+        return
+    try:
+        link.symlink_to(target, target_is_directory=target.is_dir())
+        return
+    except OSError:
+        if os.name != "nt" or not target.is_dir():
+            raise
+    completed = subprocess.run(
+        ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"cannot link Agent user configuration: {target}")

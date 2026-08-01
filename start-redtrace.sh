@@ -102,16 +102,15 @@ signal_tree() {
 
 stop_process() {
   local pid="$1"
-  local elapsed=0
+  local deadline=$((SECONDS + SHUTDOWN_TIMEOUT))
 
   process_is_alive "$pid" || {
     wait "$pid" 2>/dev/null || true
     return 0
   }
   signal_tree TERM "$pid"
-  while process_is_alive "$pid" && ((elapsed < SHUTDOWN_TIMEOUT)); do
-    sleep 1
-    elapsed=$((elapsed + 1))
+  while process_is_alive "$pid" && ((SECONDS < deadline)); do
+    sleep 0.1
   done
   if process_is_alive "$pid"; then
     signal_tree KILL "$pid"
@@ -191,7 +190,7 @@ else
   SERVER_PID=$!
   OWNS_SERVER=1
 
-  elapsed=0
+  start_deadline=$((SECONDS + START_TIMEOUT))
   until server_is_ready; do
     if ! process_is_alive "$SERVER_PID"; then
       server_status=0
@@ -199,11 +198,10 @@ else
       SERVER_PID=""
       die "Server exited before becoming ready (status $server_status)"
     fi
-    if ((elapsed >= START_TIMEOUT)); then
+    if ((SECONDS >= start_deadline)); then
       die "Server health check timed out after ${START_TIMEOUT}s"
     fi
-    sleep 1
-    elapsed=$((elapsed + 1))
+    sleep 0.1
   done
 fi
 

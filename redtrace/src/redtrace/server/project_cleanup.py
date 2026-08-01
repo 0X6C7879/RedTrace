@@ -92,19 +92,7 @@ def report_runtime_cleanup(
         if operation_executor.has_project_tasks(project_id):
             raise RuntimeError("project operations are still stopping")
 
-        with db.get_conn() as conn:
-            sessions = [
-                (str(row["worker"]), str(row["session_id"]))
-                for row in conn.execute(
-                    """
-                    SELECT worker, session_id
-                    FROM audit_runs
-                    WHERE project_id = ? AND session_id IS NOT NULL
-                    """,
-                    (project_id,),
-                ).fetchall()
-            ]
-        _cleanup_project_files(project_id, sessions)
+        _cleanup_project_files(project_id)
         with db.get_conn() as conn:
             conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
             conn.execute(
@@ -130,10 +118,7 @@ def _mark_failed(project_id: str, error: str) -> None:
         )
 
 
-def _cleanup_project_files(
-    project_id: str,
-    sessions: list[tuple[str, str]],
-) -> None:
+def _cleanup_project_files(project_id: str) -> None:
     project_id = safe_project_key(project_id)
     config_path = os.environ.get("REDTRACE_DISPATCH_CONFIG")
     if config_path and Path(config_path).is_file():
@@ -164,20 +149,3 @@ def _cleanup_project_files(
     for target in targets:
         if target.exists():
             shutil.rmtree(target)
-
-    workers = managed / "workers"
-    if not workers.is_dir():
-        return
-    for worker_name, session_id in sessions:
-        safe_project_key(worker_name)
-        safe_project_key(session_id)
-        for worker_root in workers.glob(f"*/{worker_name}"):
-            try:
-                worker_root.resolve().relative_to(workers.resolve())
-            except ValueError:
-                continue
-            for candidate in worker_root.rglob(f"*{session_id}*"):
-                if candidate.is_symlink() or candidate.is_dir():
-                    continue
-                candidate.resolve().relative_to(worker_root.resolve())
-                candidate.unlink(missing_ok=True)

@@ -223,6 +223,9 @@ def test_worker_process_receives_read_only_blackboard_context(monkeypatch, worke
             return ProcessResult(0, "", "")
 
     class Manager:
+        def conversation_environment(self, _project_id, agent_type):
+            return {"REDTRACE_TEST_CONVERSATION_HOME": agent_type}
+
         def build_exec_process(self, _name, env, _argv, **_kwargs):
             captured.update(env)
             return Process()
@@ -273,6 +276,7 @@ def test_worker_process_receives_read_only_blackboard_context(monkeypatch, worke
     assert captured["REDTRACE_TASK_TYPE"] == "explore"
     assert captured["REDTRACE_INTENT_ID"] == "i003"
     assert captured["REDTRACE_BLACKBOARD_CURSOR"] == "17"
+    assert captured["REDTRACE_TEST_CONVERSATION_HOME"] == worker_type
     if worker_type == "claudecode":
         assert captured["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "1048576"
     elif worker_type == "pi":
@@ -281,11 +285,11 @@ def test_worker_process_receives_read_only_blackboard_context(monkeypatch, worke
 
 def test_prompt_guidance_is_optional_and_forbids_polling() -> None:
     prompt = add_blackboard_guidance("Do the task.", 23)
-    assert "revision 23" in prompt
+    assert "snapshot revision 为 23" in prompt
     assert "`redtrace-blackboard`" in prompt
-    assert "do not poll it" in prompt
-    assert "fixed frequency" in prompt
-    assert "may call" in prompt
+    assert "不得轮询" in prompt
+    assert "按固定频率调用" in prompt
+    assert "才可调用只读" in prompt
 
 
 def test_prompt_guidance_describes_windows_local_shell() -> None:
@@ -296,7 +300,7 @@ def test_prompt_guidance_describes_windows_local_shell() -> None:
     )
     if os.name == "nt":
         assert "Windows local execution" in prompt
-        assert "never pass PowerShell syntax directly to Bash" in prompt
+        assert "不得将 PowerShell syntax 传给 Bash" in prompt
         assert "rtk proxy powershell" in prompt
     else:
         assert "Windows local execution" not in prompt

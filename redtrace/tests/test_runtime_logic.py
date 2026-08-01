@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from redtrace.dispatcher.config import ContainerConfig
 from redtrace.dispatcher.protocol.client import ApiResult
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
+from redtrace.paths import RedTracePaths
 
 
 @dataclass
@@ -83,6 +85,58 @@ def test_container_manager_build_exec_process_wraps_command_with_timeout() -> No
     assert process.env["PATH"].startswith("/opt/redtrace/runtime/bin:")
     assert "/home/kali/.local/bin:" in process.env["PATH"]
     assert "/home/kali/go/bin:" in process.env["PATH"]
+
+
+def test_container_mounts_project_conversations_and_native_agent_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    (home / ".claude").mkdir()
+    (home / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    (home / ".codex").mkdir()
+    (home / ".codex" / "config.toml").write_text("", encoding="utf-8")
+    paths = RedTracePaths(
+        root=tmp_path,
+        skills=tmp_path / "skills",
+        mcp=tmp_path / "mcp",
+        plugins=tmp_path / "plugins",
+        managed=tmp_path / ".redtrace",
+        workspaces=tmp_path / "workspaces",
+        audit=tmp_path / ".redtrace" / "audit",
+    )
+    manager = ContainerManager.__new__(ContainerManager)
+    manager._paths = paths
+    manager._host_source = lambda path: path.resolve()
+
+    volumes = manager._shared_volumes("project-1")
+
+    conversations = paths.projects / "project-1" / "conversations"
+    assert volumes[str((conversations / "claudecode").resolve())]["bind"] == (
+        "/home/kali/.claude"
+    )
+    assert volumes[str((conversations / "codex").resolve())]["bind"] == (
+        "/home/kali/.codex"
+    )
+    assert volumes[str((home / ".pi").resolve())]["bind"] == "/home/kali/.pi"
+    assert volumes[str((conversations / "pi").resolve())]["bind"] == (
+        "/home/kali/.pi/sessions"
+    )
+    assert volumes[str((home / ".claude" / "settings.json").resolve())]["bind"] == (
+        "/home/kali/.claude/settings.json"
+    )
+    assert volumes[str((home / ".codex" / "config.toml").resolve())]["bind"] == (
+        "/home/kali/.codex/config.toml"
+    )
+    assert volumes[str((paths.runtime / "mcp" / "pi.json").resolve())]["bind"] == (
+        "/home/kali/workspace/.pi/mcp.json"
+    )
+    targets = {volume["bind"] for volume in volumes.values()}
+    assert "/opt/redtrace/workers" not in targets
+    assert volumes[str(paths.mcp.resolve())]["bind"] == "/opt/redtrace/mcp"
+    assert "/opt/redtrace/plugins" not in targets
 
 
 def test_completed_container_stop_action_only_stops_running_container() -> None:

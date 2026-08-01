@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,52 @@ def _create_project(client: TestClient) -> str:
     assert response.status_code == 201
     assert response.json()["project"]["bootstrap_enabled"] is True
     return response.json()["project"]["id"]
+
+
+def test_projects_can_be_created_concurrently_without_id_collisions(
+    client: TestClient,
+) -> None:
+    def create(index: int):
+        return client.post(
+            "/projects",
+            json={
+                "title": f"task {index}",
+                "origin": f"origin {index}",
+                "goal": f"goal {index}",
+            },
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        responses = list(executor.map(create, range(8)))
+
+    assert [response.status_code for response in responses] == [201] * 8
+    project_ids = {response.json()["project"]["id"] for response in responses}
+    assert project_ids == {f"proj_{index:03d}" for index in range(1, 9)}
+
+
+def test_concurrent_intent_claim_has_exactly_one_winner(client: TestClient) -> None:
+    project_id = _create_project(client)
+    response = client.post(
+        f"/projects/{project_id}/intents",
+        json={
+            "from": ["origin"],
+            "description": "parallel work",
+            "creator": "reasoner",
+            "worker": None,
+        },
+    )
+    assert response.status_code == 201
+
+    def claim(worker: str):
+        return client.post(
+            f"/projects/{project_id}/intents/i001/claim",
+            json={"worker": worker},
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        responses = list(executor.map(claim, (f"worker-{index}" for index in range(8))))
+
+    assert sorted(response.status_code for response in responses) == [200] + [409] * 7
 
 
 def test_dispatcher_change_cursor_advances_on_project_write(
@@ -202,6 +249,20 @@ def test_project_workflow_create_conclude_complete_and_reopen(
     assert response.json()["id"] == "i001"
 
     response = client.post(
+        f"/projects/{project_id}/intents/i001/claim",
+        json={"worker": "explorer"},
+    )
+    assert response.status_code == 200
+    assert response.json()["worker"] == "explorer"
+
+    response = client.post(
+        f"/projects/{project_id}/intents/i001/claim",
+        json={"worker": "explorer"},
+    )
+    assert response.status_code == 409
+    assert "explorer" in response.json()["detail"]
+
+    response = client.post(
         f"/projects/{project_id}/intents/i001/heartbeat",
         json={"worker": "explorer"},
     )
@@ -359,11 +420,17 @@ def test_expired_intent_and_reason_leases_can_be_reclaimed(client: TestClient) -
         )
 
     response = client.post(
-        f"/projects/{project_id}/intents/i001/heartbeat",
+        f"/projects/{project_id}/intents/i001/claim",
         json={"worker": "worker-b"},
     )
     assert response.status_code == 200
     assert response.json()["worker"] == "worker-b"
+
+    response = client.post(
+        f"/projects/{project_id}/intents/i001/heartbeat",
+        json={"worker": "worker-b"},
+    )
+    assert response.status_code == 200
 
     response = client.post(
         f"/projects/{project_id}/reason/claim",
@@ -388,6 +455,13 @@ def test_live_reason_lease_rejects_competing_worker(client: TestClient) -> None:
         json={"worker": "worker-b", "trigger": "facts:2->3"},
     )
 
+    assert response.status_code == 409
+    assert "worker-a" in response.json()["detail"]
+
+    response = client.post(
+        f"/projects/{project_id}/reason/claim",
+        json={"worker": "worker-a", "trigger": "duplicate"},
+    )
     assert response.status_code == 409
     assert "worker-a" in response.json()["detail"]
 

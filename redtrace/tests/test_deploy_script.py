@@ -3,7 +3,6 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -29,6 +28,8 @@ def test_deploy_script_unifies_linux_and_macos_without_legacy_entrypoints() -> N
     assert "/etc/apt/sources" not in script
     assert '"$HOME/.profile"' not in script
     assert "REDTRACE_KEEP_APT_SOURCES" not in script
+    assert "seed_pi_prebuilt_deps" not in script
+    assert ".redtrace/workers" not in script
     assert "registry.npmmirror.com" in script
     assert "mirrors.aliyun.com/pypi/simple" in script
     assert 'if has "$command"; then' in script
@@ -64,9 +65,9 @@ def test_deploy_script_unifies_linux_and_macos_without_legacy_entrypoints() -> N
     assert "REDTRACE_SKIP_BRAVE_TEST" in script
     assert 'chmod 600 "$CONFIG_PATH"' in script
     assert "openjdk@21 ghidra" in script
-    assert "ensure_sage" in script
-    assert "REDTRACE_INSTALL_SAGE" in script
-    assert "skipping SageMath" in script
+    assert "ensure_sage" not in script
+    assert "REDTRACE_INSTALL_SAGE" not in script
+    assert "SageMath" not in script
     assert "repair_brew_formula_cli ffmpeg ffmpeg -version" in script
     assert "repair_tshark" in script
     assert "brew reinstall lz4" in script
@@ -130,7 +131,7 @@ def test_ctf_tool_installer_supports_all_linux_package_families() -> None:
     assert "github.com/RsaCtfTool/RsaCtfTool.git@" in script
     assert "install_qiling" in script
     assert "isolated Python 3.11 environment" in script
-    assert "SageMath is intentionally not installed" in script
+    assert "SageMath" not in script
     assert "No vulnerability database, PoC collection" in script
     assert "nuclei-templates" not in script
     assert "exploitdb" not in script

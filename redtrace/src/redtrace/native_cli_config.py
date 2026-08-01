@@ -38,7 +38,8 @@ def native_config_paths(home: Path, worker_type: str) -> list[Path]:
     if worker_type == "claudecode":
         return [home / ".claude" / "settings.json"]
     if worker_type == "codex":
-        return [home / ".codex" / "config.toml"]
+        root = home / ".codex"
+        return [root / "config.toml", root / "auth.json"]
     if worker_type == "pi":
         root = home / ".pi" / "agent"
         return [root / "settings.json", root / "models.json"]
@@ -138,7 +139,7 @@ def _remove_redtrace_provider_tables(lines: list[str]) -> list[str]:
 
 
 def _write_codex(home: Path, worker: WorkerConfig) -> None:
-    path = native_config_paths(home, worker.type)[0]
+    path, auth_path = native_config_paths(home, worker.type)
     try:
         existing = path.read_text(encoding="utf-8") if path.exists() else ""
         if existing.strip():
@@ -216,6 +217,9 @@ def _write_codex(home: Path, worker: WorkerConfig) -> None:
             f"could not safely merge RedTrace settings into {path}"
         ) from exc
     atomic_write_text(path, updated)
+    auth = deepcopy(_read_json_object(auth_path))
+    auth["OPENAI_API_KEY"] = worker.env["OPENAI_API_KEY"]
+    _write_json(auth_path, auth)
 
 
 def _write_pi(home: Path, worker: WorkerConfig) -> None:

@@ -28,8 +28,8 @@ from redtrace.config_secrets import (
     secret_reference,
 )
 from redtrace.dispatcher.config import (
-    DispatchConfig,
     MODEL_CONTEXT_1M,
+    DispatchConfig,
     WorkerConfig,
     validate_prompt_resources,
 )
@@ -40,7 +40,6 @@ from redtrace.native_cli_config import (
     resolve_cli_config_home,
     sync_native_cli_config,
 )
-from redtrace.paths import resolve_portable_path, safe_project_key
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 TASK_TYPES = frozenset({"bootstrap", "reason", "explore"})
@@ -497,21 +496,7 @@ class WorkerConfigService:
     ):
         self.path = resolve_dispatch_config_path(config_path)
         self.secrets = SecretStore(self.path)
-        self._explicit_cli_config_home = cli_config_home is not None
         self.cli_config_home = resolve_cli_config_home(cli_config_home)
-        raw, _ = _read_raw(self.path)
-        path_config = raw.get("paths") if isinstance(raw.get("paths"), dict) else {}
-        root = resolve_portable_path(
-            os.environ.get("REDTRACE_ROOT", path_config.get("root", ".")),
-            base=self.path.parent,
-        )
-        self.managed_root = resolve_portable_path(
-            os.environ.get(
-                "REDTRACE_MANAGED_DIR",
-                path_config.get("managed", ".redtrace"),
-            ),
-            base=root,
-        )
 
     def snapshot(self) -> dict[str, Any]:
         raw, revision = _read_raw(self.path)
@@ -522,11 +507,7 @@ class WorkerConfigService:
             "revision": revision,
             "execution": config.runtime.execution,
             "runtime_max_workers": config.runtime.max_workers,
-            "cli_config_home": str(
-                self.cli_config_home
-                if self._explicit_cli_config_home
-                else self.managed_root / "workers"
-            ),
+            "cli_config_home": str(self.cli_config_home),
             "workers": workers,
         }
 
@@ -660,15 +641,15 @@ class WorkerConfigService:
             )
             if local_execution or os.environ.get("REDTRACE_PLAINTEXT_SECRETS") == "1":
                 plaintext = _resolved_copy(deepcopy(raw), secret_values)
-                config = _validate_config(plaintext, {})
-                self._sync_explicit_native_config(config, native_worker)
+                _validate_config(plaintext, {})
+                self._sync_native_config(native_worker)
                 atomic_write_text(self.path, _dump_raw(plaintext))
                 return
 
             secured = deepcopy(raw)
             _secure_plaintext_keys(secured, secret_values)
-            config = _validate_config(secured, secret_values)
-            self._sync_explicit_native_config(config, native_worker)
+            _validate_config(secured, secret_values)
+            self._sync_native_config(native_worker)
             # Keep old entries through the YAML swap so a concurrent dispatcher read can
             # resolve either the old or new atomic config snapshot.
             old_values = self.secrets.load()
@@ -745,31 +726,12 @@ class WorkerConfigService:
             "editable": True,
             "native_config_paths": [
                 str(path)
-                for path in native_config_paths(self._worker_home(worker), worker.type)
+                for path in native_config_paths(self.cli_config_home, worker.type)
             ],
         }
 
-    def _worker_home(self, worker: WorkerConfig) -> Path:
-        if self._explicit_cli_config_home:
-            return self.cli_config_home
-        return (
-            self.managed_root
-            / "workers"
-            / worker.type
-            / safe_project_key(worker.name)
-        )
-
-    def _sync_explicit_native_config(
-        self,
-        config: DispatchConfig,
-        worker: WorkerConfig | None,
-    ) -> None:
-        if (
-            not self._explicit_cli_config_home
-            or worker is None
-            or config.runtime.execution != "local"
-            or not worker.api_configured()
-        ):
+    def _sync_native_config(self, worker: WorkerConfig | None) -> None:
+        if worker is None or not worker.api_configured():
             return
         try:
             sync_native_cli_config(self.cli_config_home, worker)

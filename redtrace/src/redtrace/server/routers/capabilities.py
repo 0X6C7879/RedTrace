@@ -68,11 +68,11 @@ class EvolutionProposal(BaseModel):
     summary: str = Field(min_length=1, max_length=500)
     applicability: str | None = Field(default=None, max_length=300)
     procedure: list[str] = Field(default_factory=list, max_length=8)
-    validation: list[str] = Field(min_length=1, max_length=8)
+    validation: list[str] = Field(default_factory=list, max_length=8)
     evidence_refs: list[str] = Field(default_factory=list, max_length=8)
     merge_skills: list[str] = Field(default_factory=list, max_length=8)
     reuse_validated: bool = False
-    impact: EvolutionImpact
+    impact: EvolutionImpact = Field(default_factory=EvolutionImpact)
     project_id: str | None = Field(default=None, max_length=128)
     intent_id: str | None = Field(default=None, max_length=128)
     worker: str | None = Field(default=None, max_length=128)
@@ -170,7 +170,14 @@ def create_skill(body: SkillWrite):
         raise HTTPException(409, f"skill already exists: {body.name}")
     try:
         return _skill_payload(
-            store.write_skill(body.name, body.content, enabled=body.enabled),
+            store.write_skill(
+                body.name,
+                body.content,
+                enabled=body.enabled,
+                trust="provisional",
+                successful_reuses=0,
+                provisional_task="manual:api",
+            ),
             include_content=True,
         )
     except ValueError as exc:
@@ -181,13 +188,22 @@ def create_skill(body: SkillWrite):
 def update_skill(name: str, body: SkillUpdate):
     store = _store()
     try:
-        store.get_skill(name)
+        current = store.get_skill(name)
+        content_changed = current.content.rstrip() != body.content.rstrip()
         return _skill_payload(
             store.write_skill(
                 name,
                 body.content,
                 enabled=body.enabled,
                 expected_revision=body.expected_revision,
+                trust="provisional" if content_changed else current.trust,
+                successful_reuses=(
+                    0 if content_changed else current.successful_reuses
+                ),
+                failure_count=current.failure_count,
+                provisional_task=(
+                    "manual:api" if content_changed else current.provisional_task
+                ),
             ),
             include_content=True,
         )
@@ -237,7 +253,7 @@ def delete_skill(name: str):
 @router.get("/skills/{name}/versions")
 def list_skill_versions(name: str):
     try:
-        _store().get_skill(name)
+        _store().get_skill(name, include_files=False)
         return _store().list_skill_versions(name)
     except FileNotFoundError:
         raise _not_found("skill", name) from None
@@ -264,7 +280,7 @@ def rollback_skill(name: str, version: int, body: RollbackRequest):
         raise HTTPException(400, str(exc)) from exc
 
 
-@router.post("/evolution/proposals", status_code=202)
+@router.post("/evolution/proposals")
 def submit_evolution(body: EvolutionProposal, request: Request):
     worker = getattr(request.app.state, "skill_evolution", None)
     engine = worker.engine if worker is not None else SkillEvolutionEngine(_store())
@@ -273,8 +289,9 @@ def submit_evolution(body: EvolutionProposal, request: Request):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     if worker is not None:
-        worker.notify()
-    return {"proposalId": proposal_id, "status": "queued"}
+        return worker.finalize(proposal_id)
+    engine.process_pending(proposal_id=proposal_id)
+    return engine.decision_for(proposal_id)
 
 
 @router.get("/evolution")
@@ -288,7 +305,21 @@ def evolution_status(request: Request):
         "historyLimit": engine.store.history_limit,
         "matchThreshold": engine.match_threshold,
         "deferred": engine.deferred_count(),
+        "deferredItems": engine.deferred_items(),
     }
+
+
+@router.delete("/evolution/deferred/{proposal_id}", status_code=204)
+def discard_deferred_evolution(proposal_id: str, request: Request):
+    worker = getattr(request.app.state, "skill_evolution", None)
+    engine = worker.engine if worker is not None else SkillEvolutionEngine(_store())
+    try:
+        removed = engine.discard_deferred(proposal_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not removed:
+        raise HTTPException(404, "deferred candidate not found")
+    return Response(status_code=204)
 
 
 @router.get("/evolution/audit")

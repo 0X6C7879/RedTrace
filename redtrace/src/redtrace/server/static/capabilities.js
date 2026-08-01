@@ -18,11 +18,17 @@ function displayAgent(agent) {
 window.skillsPage = function skillsPage() {
   return {
     status: null,
+    evolution: null,
+    audit: [],
     items: [],
     agents: ['Claude', 'Codex', 'Pi'],
     query: '',
     selectedName: '',
     draft: null,
+    versions: [],
+    rollbackVersion: '',
+    showDeferred: false,
+    discardingProposal: '',
     isNew: false,
     loading: false,
     saving: false,
@@ -42,6 +48,11 @@ window.skillsPage = function skillsPage() {
       );
     },
 
+    get latestDecision() {
+      if (!this.draft || this.isNew) return null;
+      return this.audit.find((event) => event.skill === this.draft.name) || null;
+    },
+
     async init() {
       await this.load();
     },
@@ -50,11 +61,15 @@ window.skillsPage = function skillsPage() {
       this.loading = true;
       this.message = '';
       try {
-        const [status, items] = await Promise.all([
+        const [status, items, evolution, audit] = await Promise.all([
           capabilityRequest('GET', '/capabilities'),
           capabilityRequest('GET', '/capabilities/skills'),
+          capabilityRequest('GET', '/capabilities/evolution'),
+          capabilityRequest('GET', '/capabilities/evolution/audit?limit=100'),
         ]);
         this.status = status;
+        this.evolution = evolution;
+        this.audit = audit;
         this.agents = status.agents.map((agent) => displayAgent(agent.id));
         this.items = items;
         if (this.selectedName && items.some((item) => item.name === this.selectedName)) {
@@ -74,9 +89,15 @@ window.skillsPage = function skillsPage() {
       this.isNew = false;
       this.deleteArmed = false;
       this.selectedName = name;
+      this.rollbackVersion = '';
       this.message = '';
       try {
-        this.draft = await capabilityRequest('GET', `/capabilities/skills/${encodeURIComponent(name)}`);
+        const [draft, versions] = await Promise.all([
+          capabilityRequest('GET', `/capabilities/skills/${encodeURIComponent(name)}`),
+          capabilityRequest('GET', `/capabilities/skills/${encodeURIComponent(name)}/versions`),
+        ]);
+        this.draft = draft;
+        this.versions = versions;
       } catch (error) {
         this.message = error.message;
       }
@@ -93,6 +114,8 @@ window.skillsPage = function skillsPage() {
         files: [],
         content: '---\nname: skill-name\ndescription: Describe when this skill should be used.\n---\n\n# Skill name\n\nAdd the workflow and any required rules here.\n',
       };
+      this.versions = [];
+      this.rollbackVersion = '';
     },
 
     async save() {
@@ -125,6 +148,57 @@ window.skillsPage = function skillsPage() {
 
     async refreshList() {
       this.items = await capabilityRequest('GET', '/capabilities/skills');
+    },
+
+    async refreshEvolution() {
+      const [evolution, audit] = await Promise.all([
+        capabilityRequest('GET', '/capabilities/evolution'),
+        capabilityRequest('GET', '/capabilities/evolution/audit?limit=100'),
+      ]);
+      this.evolution = evolution;
+      this.audit = audit;
+      if (!evolution.deferred) this.showDeferred = false;
+    },
+
+    async discardDeferred(candidate) {
+      if (!candidate?.proposalId || this.discardingProposal) return;
+      if (!window.confirm(`放弃 ${candidate.targetSkill || '未匹配 Skill'} 的这条待补证据候选？`)) return;
+      this.discardingProposal = candidate.proposalId;
+      this.message = '';
+      try {
+        await capabilityRequest(
+          'DELETE',
+          `/capabilities/evolution/deferred/${encodeURIComponent(candidate.proposalId)}`,
+        );
+        await this.refreshEvolution();
+        this.message = '已放弃该候选；没有修改任何 Skill。';
+      } catch (error) {
+        this.message = error.message;
+      } finally {
+        this.discardingProposal = '';
+      }
+    },
+
+    async rollback() {
+      if (!this.draft || !this.rollbackVersion || this.saving) return;
+      const version = Number(this.rollbackVersion);
+      if (!Number.isInteger(version)) return;
+      if (!window.confirm(`将 ${this.draft.name} 回滚到 v${version}？当前内容会作为新历史版本保留。`)) return;
+      this.saving = true;
+      this.message = '';
+      try {
+        this.draft = await capabilityRequest(
+          'POST',
+          `/capabilities/skills/${encodeURIComponent(this.draft.name)}/rollback/${version}`,
+          { expected_revision: this.draft.revision },
+        );
+        this.message = `已回滚到 v${version}，并保留完整历史。`;
+        await this.load();
+      } catch (error) {
+        this.message = error.message;
+      } finally {
+        this.saving = false;
+      }
     },
 
     armDelete() {

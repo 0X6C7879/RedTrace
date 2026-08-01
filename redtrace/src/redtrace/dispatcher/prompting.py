@@ -6,6 +6,12 @@ from importlib import resources
 from typing import Any
 
 
+LANGUAGE_GUIDANCE = """## 输出语言
+
+自然语言及 JSON 自由文本值须用简体中文。
+JSON key、enum/status、phase、工具/Skill/MCP/plugin 名、命令、代码、路径、占位符和原始输出/错误保持原样；raw JSON contract 只输出 JSON。"""
+
+
 def load_prompt(group: str, name: str) -> str:
     return (
         resources.files("redtrace.dispatcher.prompts")
@@ -19,23 +25,15 @@ def render_prompt(template: str, replacements: dict[str, str]) -> str:
     text = template
     for key, value in replacements.items():
         text = text.replace("{" + key + "}", value)
-    # The mock prompt group is a machine-readable JSON fixture. Appending human
-    # guidance would make it invalid JSON and break end-to-end scheduler tests.
+    # The mock prompt group is a machine-readable JSON fixture. Human guidance
+    # would make it invalid JSON and break end-to-end scheduler tests.
     try:
         json.loads(text)
     except json.JSONDecodeError:
         pass
     else:
         return text.rstrip()
-    return (
-        text.rstrip()
-        + "\n\n## 语言与编码要求\n\n"
-        + "请优先使用简体中文回答，并用中文写入 Fact、Intent、Hint、任务结论、日志摘要和黑板记录。"
-        + "命令、路径、代码、JSON 键名、工具名和原始错误可保留原文；不要翻译会影响执行的命令。"
-        + "所有文件和进程输出按 UTF-8 处理。Windows 下读取或写入文本时显式指定 UTF-8（例如 "
-        + "Python `encoding='utf-8'`、PowerShell `-Encoding UTF8`）；不要依赖系统默认 GBK。"
-        + "如果终端直接显示中文会乱码，改用 UTF-8 文件、JSON 或 Unicode 转义传递，再在结论中还原为可读中文。"
-    )
+    return LANGUAGE_GUIDANCE + "\n\n" + text.rstrip()
 
 
 def add_blackboard_guidance(
@@ -52,118 +50,101 @@ def add_blackboard_guidance(
         raise ValueError(f"unsupported task type: {task_type}")
     sections = [
         (
-            "## Optional shared blackboard access\n\n"
-            f"The snapshot is at revision {revision}. If fresher context materially helps, you may call the "
-            "read-only `redtrace-blackboard` (`status`, `changes`, `node`, `path`, or `context`). "
-            "Use bounded calls only: do not poll it or call it at a fixed frequency. Return Facts, Intents, "
-            "Hints, and conclusions through the existing output contract."
+            "## 可选的共享 Blackboard 访问\n\n"
+            f"当前 snapshot revision 为 {revision}。仅当更新的上下文确有帮助时，才可调用只读 "
+            "`redtrace-blackboard`（`status`、`changes`、`node`、`path` 或 `context`）。"
+            "调用必须有明确边界；不得轮询或按固定频率调用。Fact、Intent、Hint 和结论仍通过既有 output contract 返回。"
         )
     ]
     if task_type in {"bootstrap", "explore"}:
         sections.extend(
             [
                 (
-                    "## Web research order\n\n"
-                    "When research is needed, Claude/Codex use native Web search/fetch first and the shared "
-                    "`brave-search` Skill as the fallback; Pi uses `brave-search`. Preserve URLs and do not "
-                    "repeat a successful query through another provider."
+                    "## Web 调研顺序\n\n"
+                    "需要调研时，Claude/Codex 优先使用原生 Web search/fetch，共享 `brave-search` Skill "
+                    "作为 fallback；Pi 使用 `brave-search`。保留 URL，成功的 query 不得换 provider 重复执行。"
                 ),
                 (
-                    "## Known-vulnerability-first exploitation\n\n"
-                    "For an actionable product/version/banner/hash fingerprint, check existing Facts, then "
-                    "perform at least one live Web query before custom exploit work. Verify applicability and "
-                    "source. Do not install, clone, or synchronize bulk vulnerability databases; fetch only the "
-                    "specific PoC/EXP or template, pass that explicit template path to Nuclei, and never invoke "
-                    "automatic template discovery or updates. Prefer an existing PoC over inventing a new "
-                    "exploit. Validate with the smallest PoC. When the PoC confirms the vulnerability, use the "
-                    "matching EXP. This is an execution order, not an approval gate. Record results. Only move "
-                    "to custom vulnerability discovery after bounded candidates fail."
+                    "## 已知漏洞优先利用\n\n"
+                    "发现可操作的 product/version/banner/hash fingerprint 后，先检查既有 Fact，再至少执行一次实时 "
+                    "Web query，然后才进行自定义 exploit 工作；核验适用性和来源。不得安装、clone 或同步批量漏洞库；"
+                    "只获取特定 PoC/EXP 或 template，向 Nuclei 传入明确的 template path，且不得自动发现或更新 "
+                    "template。优先复用现有 PoC，以最小 PoC 验证；确认漏洞后使用匹配的 EXP。此为执行顺序，不是 "
+                    "approval gate。记录结果；只有有界候选均失败后，才转向自定义漏洞发现。"
                 ),
                 (
-                    "## Missing tool bootstrap\n\n"
-                    "Only for a required missing tool, identify an installed equivalent and verify OS and "
-                    "architecture. Use official documentation, a pinned non-interactive user-local installation, "
-                    "published checksums when available, then `--version` and a small smoke check. Try at most "
-                    "one justified fallback and continue instead of looping or blocking it."
+                    "## 缺失工具 Bootstrap\n\n"
+                    "仅在必需工具缺失时，先寻找已安装的等价工具并核验 OS/architecture。依据官方文档，以固定版本、"
+                    "非交互、user-local 方式安装；如有公开 checksum 则校验，随后运行 `--version` 和最小 smoke check。"
+                    "最多尝试一个有依据的 fallback，失败后继续推进，不得循环或阻塞。"
                 ),
             ]
         )
     if task_type == "explore":
         sections.append(
-            "## Active WebShell and C2 workflow\n\n"
-            "Use `redtrace-resource snapshot --kind webshell --kind c2_listener --kind c2_session "
-            "--kind c2_payload`, reuse a matching resource, and inspect it by ID. Register shells with "
-            "`redtrace-resource webshell-create`; execute with `redtrace-resource run`. If no session exists, "
-            "do not stop at that boundary: use `redtrace-resource listener-create`, then "
-            "`payload-oneliner` or a compiled Beacon with `payload-build`, deploy it, and refresh once. "
-            "Before duplicating a channel, call `redtrace-resource changes --since <audit_cursor>` once. "
-            "This is a decision-point refresh, not a timer; never request stored secrets."
+            "## Active WebShell 与 C2 工作流\n\n"
+            "运行 `redtrace-resource snapshot --kind webshell --kind c2_listener --kind c2_session "
+            "--kind c2_payload`，复用匹配资源并按 ID 检查。用 `redtrace-resource webshell-create` 注册 shell，"
+            "用 `redtrace-resource run` 执行。若无 session，不要止步：运行 `redtrace-resource listener-create`，"
+            "再用 `payload-oneliner`，或通过 `payload-build` 构建 Beacon，部署后 refresh 一次。重复建立 channel 前，"
+            "调用一次 `redtrace-resource changes --since <audit_cursor>`；这是 decision-point refresh，不是 timer。"
+            "不得索取已存储的 secret。"
         )
-    # Skill-first matching rule — active, not passive.
+    # Skill-first matching rule: active, not passive.
     if task_type != "reason" and skill_index:
         if worker_type == "pi":
             invoke_hint = (
-                "If a Skill clearly matches, read its SKILL.md from the skills directory "
-                "(e.g. `$REDTRACE_SKILLS_DIR/<skill-name>/SKILL.md`) and follow the procedure inside. "
-                "Load the most specific one; up to 10 complementary Skills if needed."
+                "匹配时读取 `$REDTRACE_SKILLS_DIR/<skill-name>/SKILL.md` 并遵循 procedure；"
+                "选最具体的 Skill，必要时最多组合 10 个。"
             )
         else:
             invoke_hint = (
-                "If a Skill clearly matches, invoke it via your native Skill tool using the "
-                "plugin-qualified name `redtrace-capabilities:<skill-name>` "
-                "(load the most specific one; up to 10 complementary Skills if needed)."
+                "匹配时用原生 Skill tool 调用 `redtrace-capabilities:<skill-name>`；"
+                "选最具体的 Skill，必要时最多组合 10 个。"
             )
         sections.append(
-            "## Skill-first matching\n\n"
-            "Before your first substantive action, scan the Available Skills index below and match against "
-            "the current task domain. This index is the authoritative reference for Skill names and "
-            "descriptions — prefer it over any plugin catalog listing. Rules:\n"
+            "## Skill-first 匹配\n\n"
+            "首次实质操作前按下方 Available Skills index 匹配；它是 Skill name/description 的权威来源。\n"
             f"- {invoke_hint}\n"
-            "- If no Skill matches, proceed directly without delay.\n"
-            "- Re-match when the task phase shifts or a concrete vulnerability/tool type is confirmed.\n"
-            "- Do not make extra model calls solely for matching.\n\n"
-            f"Available Skills:\n{skill_index}"
+            "- 无匹配项就继续；phase 变化或确认 vulnerability/tool type 时重试。\n"
+            "- 不得仅为匹配额外调用 model。\n\n"
+            f"Available Skills：\n{skill_index}"
         )
     elif task_type != "reason":
         sections.append(
-            "Skills, MCP and plugins are shared from the RedTrace root. Use your native Skill loading "
-            "mechanism to discover and invoke relevant Skills before starting substantive work."
+            "Skill、MCP 和 plugin 由 RedTrace root 共享。开始实质工作前，使用原生 Skill loading 机制发现并调用相关 Skill。"
         )
     sections.append(
         "## Skill feedback checkpoint\n\n"
-        "At final output, always include the `skillFeedback` key. Set it to one object when you discovered "
-        "a reusable lesson that improves, fixes, or extends a Skill; otherwise set it to null. "
-        "The object MUST use these keys:\n"
-        '```json\n'
-        '{"target_skill": "skill-name", "summary": "one-sentence reusable lesson", '
-        '"evolution_type": "IMPROVE"}\n'
-        '```\n'
-        "`evolution_type` values: `IMPROVE` (enhance an existing Skill's procedure), "
-        "`FIX` (correct a broken or outdated step), `CAPTURE` (propose a brand-new Skill). "
-        "Choose IMPROVE or FIX when `target_skill` names an existing Skill; use CAPTURE only when "
-        "no existing Skill covers the lesson.\n"
-        "Optional fields: `procedure` (string[]), `validation` (string[]), `evidence_refs` (string[]), "
-        "`confidence` (0-1). Use null when there is no improvement. "
-        "Never include target IPs, credentials, flags, or absolute paths in feedback. "
-        "Do not make another model call, poll, or delay the task for feedback."
+        "结束任务前必须完成一次学习复盘：对照本次实际结果、失败边界和已调用 Skill，判断是否存在可复用的纠错、"
+        "步骤压缩或缺失分支。存在明确经验时不得省略 `skillFeedback`；只有确实没有可泛化变化时才为 null。\n"
+        "非 null 时使用：\n"
+        "```json\n"
+        '{"target_skill": "skill-name", "summary": "一句可复用经验", '
+        '"evolution_type": "IMPROVE", "procedure": ["可复现步骤"], '
+        '"validation": ["本任务中的验证结果"], "evidence_refs": ["context/fact/artifact 引用"], '
+        '"impact": {"task_succeeded": true, "step_verified": true, '
+        '"tool_calls_saved": 0, "invalid_steps_avoided": 1, "duration_saved_ms": 0}}\n'
+        "```\n"
+        "现有 Skill 用 `IMPROVE`/`FIX`，全新 Skill 用 `CAPTURE`。只填实际测得的 impact；未测得时三个收益值保持 0，"
+        "系统会保留候选但不会直接改写 Skill。`reuse_validated` 仅用于当前任务真实使用了该 revision，且来源项目不同的情况。"
+        "不得包含 target IP、credential、flag、absolute path，也不得额外调用 model、轮询或延迟。"
     )
     guidance = prompt.rstrip() + "\n\n" + "\n\n".join(sections)
     if local_execution and os.name == "nt":
         guidance += (
             "\n\n## Windows local execution\n\n"
-            "Identify whether the actual shell is PowerShell or Bash; never pass PowerShell syntax directly "
-            "to Bash. Use Workspace paths, keep RTK outermost, and invoke PowerShell explicitly with "
-            "`rtk proxy powershell -NoProfile -Command <script>` when needed."
+            "确认 shell（PowerShell/Bash），不得将 PowerShell syntax 传给 Bash。使用 Workspace path，RTK 置于最外层；"
+            "需要时运行 `rtk proxy powershell -NoProfile -Command <script>`。"
         )
     if not context_harness_enabled or task_type == "reason":
         return guidance
     return (
-        guidance + "\n\n## Context Harness (post-RTK)\n\n"
-        "Keep using RTK first. Route still-large tool/HTTP/page output through "
-        "`redtrace-context run -- rtk ...`; prefer structured output. Raw data is stored under "
-        "`.redtrace/artifacts/context`; query evidence with bounded selectors instead of rereading it. "
-        "Do not create a parallel Idea, Memory, or task-state store. Write a Fact only for a confirmed "
-        "conclusion and include its evidence ID/path."
+        guidance
+        + "\n\n## Context Harness (post-RTK)\n\n"
+        "继续优先使用 RTK。仍然过大的 tool/HTTP/page output 通过 `redtrace-context run -- rtk ...` 处理，"
+        "优先 structured output。raw data 存于 `.redtrace/artifacts/context`；用有界 selector 查询 evidence，"
+        "不要重复读取。不得另建 Idea、Memory 或 task-state store。只为已确认结论写入 Fact，并包含 evidence ID/path。"
     )
 
 

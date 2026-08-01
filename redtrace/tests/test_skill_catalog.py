@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 from redtrace.capabilities import CapabilityStore, workspace_payload
@@ -54,6 +55,13 @@ def _catalog_directories() -> list[Path]:
     )
 
 
+@pytest.fixture(scope="module")
+def materialized_catalog() -> tuple[CapabilityStore, dict[str, bytes]]:
+    store = CapabilityStore(REPO_ROOT)
+    _, files = workspace_payload(store)
+    return store, files
+
+
 def test_skill_catalog_is_bounded_and_well_formed() -> None:
     directories = _catalog_directories()
 
@@ -81,9 +89,10 @@ def test_skill_catalog_is_bounded_and_well_formed() -> None:
     assert not list(SKILLS_DIR.rglob(".DS_Store"))
 
 
-def test_claude_red_is_classified_and_shared_with_all_workers() -> None:
-    store = CapabilityStore(REPO_ROOT)
-    _, files = workspace_payload(store)
+def test_claude_red_is_classified_and_shared_with_all_workers(
+    materialized_catalog: tuple[CapabilityStore, dict[str, bytes]],
+) -> None:
+    store, files = materialized_catalog
 
     assert not (SKILLS_DIR / "claude-red").exists()
     assert sum(map(len, CLAUDE_RED_REFERENCES.values())) == 21
@@ -118,9 +127,10 @@ def test_claude_red_is_classified_and_shared_with_all_workers() -> None:
     assert ".agents/skills/brave-search/SKILL.md" in files
 
 
-def test_playwright_cli_skill_is_shared_with_all_workers() -> None:
-    store = CapabilityStore(REPO_ROOT)
-    _, files = workspace_payload(store)
+def test_playwright_cli_skill_is_shared_with_all_workers(
+    materialized_catalog: tuple[CapabilityStore, dict[str, bytes]],
+) -> None:
+    store, files = materialized_catalog
 
     assert store.get_skill("playwright").enabled is True
     for prefix in (".claude/skills", ".agents/skills"):

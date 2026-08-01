@@ -3,8 +3,13 @@ from pathlib import Path
 import click
 import uvicorn
 
+from redtrace.dispatcher.config import DispatchConfig
 from redtrace.dispatcher.logging import configure_logging
 from redtrace.dispatcher.scheduler.loop import DispatcherLoop
+from redtrace.dispatcher.singleton import (
+    DispatcherAlreadyRunning,
+    DispatcherInstanceLock,
+)
 from redtrace.server import db
 
 
@@ -57,11 +62,13 @@ def serve(host: str, port: int, db_path: str, log_level: str, access_log: bool):
 def dispatch(config_path: Path, once: bool, startup_healthcheck_only: bool, log_level: str):
     """Run the RedTrace dispatcher."""
     configure_logging(log_level, bare=startup_healthcheck_only)
-    loop = DispatcherLoop(config_path)
     try:
         if startup_healthcheck_only:
+            loop = DispatcherLoop(config_path)
             loop.run_startup_healthchecks_only()
             return
-        loop.run(once=once)
-    except RuntimeError as exc:
+        with DispatcherInstanceLock(DispatchConfig.load(config_path).server):
+            loop = DispatcherLoop(config_path)
+            loop.run(once=once)
+    except (DispatcherAlreadyRunning, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc

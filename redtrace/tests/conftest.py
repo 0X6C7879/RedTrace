@@ -143,6 +143,9 @@ class FakeClient:
     def heartbeat(self, _project_id: str, _intent_id: str, _worker: str) -> ApiResult:
         return ApiResult(200, {})
 
+    def claim_intent(self, _project_id: str, _intent_id: str, _worker: str) -> ApiResult:
+        return ApiResult(200, {})
+
     def reason_heartbeat(self, _project_id: str, _worker: str) -> ApiResult:
         return ApiResult(200, {})
 

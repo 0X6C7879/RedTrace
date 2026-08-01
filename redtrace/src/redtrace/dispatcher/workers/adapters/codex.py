@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 
-from redtrace.capabilities import CapabilityStore, codex_mcp_overrides
 from redtrace.dispatcher.config import (
     WorkerConfig,
     model_auto_compact_token_limit,
@@ -185,9 +184,7 @@ class CodexDriver(RegexSessionDriver):
 
     @staticmethod
     def _resource_args(worker: WorkerConfig) -> list[str]:
-        raw = worker.env.get("REDTRACE_CODEX_RESOURCE_ARGS")
-        if raw is None:
-            return codex_mcp_overrides(CapabilityStore().list_mcp())
+        raw = worker.env.get("REDTRACE_CODEX_RESOURCE_ARGS", "[]")
         try:
             value = json.loads(raw)
         except json.JSONDecodeError as exc:

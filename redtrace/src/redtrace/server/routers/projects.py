@@ -96,7 +96,7 @@ def list_projects():
 
 @router.post("/projects", response_model=ProjectDetail, status_code=201)
 def create_project(body: CreateProjectRequest):
-    with get_conn() as conn:
+    with get_conn(immediate=True) as conn:
         pid = next_project_id(conn)
         now = utcnow()
 
@@ -222,7 +222,7 @@ def update_project_title(project_id: str, body: UpdateProjectTitleRequest):
 
 @router.put("/projects/{project_id}/status", response_model=ProjectMeta)
 def update_project_status(project_id: str, body: UpdateProjectStatusRequest):
-    with get_conn() as conn:
+    with get_conn(immediate=True) as conn:
         expire_reason_leases(conn, project_id)
         row = get_project_or_404(conn, project_id)
         current_status = row["status"]
@@ -249,17 +249,15 @@ def update_project_status(project_id: str, body: UpdateProjectStatusRequest):
 
 @router.post("/projects/{project_id}/reason/claim", response_model=ProjectMeta)
 def claim_project_reason(project_id: str, body: ReasonClaimRequest):
-    with get_conn() as conn:
+    with get_conn(immediate=True) as conn:
         check_project_active(conn, project_id)
         expire_reason_leases(conn, project_id)
         row = get_project_or_404(conn, project_id)
         current_worker = row["reason_worker"]
-        if current_worker is not None and current_worker != body.worker:
+        if current_worker is not None:
             raise HTTPException(
                 409, f"Project reason is currently claimed by {current_worker}"
             )
-        if current_worker == body.worker:
-            return project_meta_from_row(row)
 
         now = utcnow()
         conn.execute(
@@ -281,7 +279,7 @@ def claim_project_reason(project_id: str, body: ReasonClaimRequest):
 
 @router.post("/projects/{project_id}/reason/heartbeat", response_model=ProjectMeta)
 def heartbeat_project_reason(project_id: str, body: HeartbeatRequest):
-    with get_conn() as conn:
+    with get_conn(immediate=True) as conn:
         check_project_active(conn, project_id)
         expire_reason_leases(conn, project_id)
         row = get_project_or_404(conn, project_id)
@@ -306,7 +304,7 @@ def heartbeat_project_reason(project_id: str, body: HeartbeatRequest):
 
 @router.post("/projects/{project_id}/reason/release", response_model=ProjectMeta)
 def release_project_reason(project_id: str, body: HeartbeatRequest):
-    with get_conn() as conn:
+    with get_conn(immediate=True) as conn:
         check_project_active(conn, project_id)
         expire_reason_leases(conn, project_id)
         row = get_project_or_404(conn, project_id)
@@ -327,7 +325,7 @@ def release_project_reason(project_id: str, body: HeartbeatRequest):
 
 @router.post("/projects/{project_id}/complete", response_model=Intent)
 def complete_project(project_id: str, body: CompleteRequest):
-    with get_conn() as conn:
+    with get_conn(immediate=True) as conn:
         check_project_active(conn, project_id)
         expire_reason_leases(conn, project_id)
         validate_facts_exist(conn, project_id, body.from_)
@@ -382,7 +380,7 @@ def complete_project(project_id: str, body: CompleteRequest):
 
 @router.post("/projects/{project_id}/reopen", response_model=ReopenResponse)
 def reopen_project(project_id: str, body: ReopenRequest):
-    with get_conn() as conn:
+    with get_conn(immediate=True) as conn:
         expire_reason_leases(conn, project_id)
         check_project_completed(conn, project_id)
         completion = get_completion_intent_or_409(conn, project_id)

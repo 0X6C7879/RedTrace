@@ -149,9 +149,5 @@ class RedTracePaths:
         return self.managed / "runtime"
 
     @property
-    def workers(self) -> Path:
-        return self.managed / "workers"
-
-    @property
     def projects(self) -> Path:
         return self.managed / "projects"

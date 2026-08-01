@@ -13,7 +13,7 @@ router = APIRouter(tags=["hints"])
     status_code=201,
 )
 def create_hint(project_id: str, body: CreateHintRequest):
-    with get_conn() as conn:
+    with get_conn(immediate=True) as conn:
         check_project_hint_writable(conn, project_id)
 
         now = utcnow()

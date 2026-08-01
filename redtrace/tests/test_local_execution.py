@@ -164,6 +164,48 @@ def test_local_backend_creates_isolated_project_dir(tmp_path: Path) -> None:
     assert backend.container_name("proj_001") == str(tmp_path / "proj_001")
 
 
+def test_local_backend_keeps_agent_config_linked_and_conversations_in_project(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    config = codex_home / "config.toml"
+    config.write_text('model = "user-model"\n', encoding="utf-8")
+    (codex_home / "sessions").mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    paths = RedTracePaths(
+        root=tmp_path,
+        skills=tmp_path / "skills",
+        mcp=tmp_path / "mcp",
+        plugins=tmp_path / "plugins",
+        managed=tmp_path / ".redtrace",
+        workspaces=tmp_path / "workspaces",
+        audit=tmp_path / ".redtrace" / "audit",
+    )
+    pi_mcp = paths.runtime / "mcp" / "pi.json"
+    pi_mcp.parent.mkdir(parents=True)
+    pi_mcp.write_text('{"mcpServers":{}}\n', encoding="utf-8")
+    backend = LocalBackend(LocalConfig(workspace_root=str(paths.workspaces)), paths=paths)
+
+    workspace = Path(backend.ensure_running("proj_001"))
+    env = backend.conversation_environment("proj_001", "codex")
+    state = paths.projects / "proj_001" / "conversations" / "codex"
+
+    assert env == {"CODEX_HOME": str(state)}
+    assert (state / "config.toml").read_text(encoding="utf-8") == config.read_text(
+        encoding="utf-8"
+    )
+    assert not (state / "sessions").exists()
+    assert (workspace / ".pi" / "mcp.json").resolve() == pi_mcp.resolve()
+    assert backend.conversation_environment("proj_001", "pi") == {
+        "PI_CODING_AGENT_SESSION_DIR": str(
+            paths.projects / "proj_001" / "conversations" / "pi"
+        )
+    }
+
+
 def test_local_graph_snapshot_uses_managed_project_path(tmp_path: Path) -> None:
     root = tmp_path / "redtrace"
     paths = RedTracePaths(

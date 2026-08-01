@@ -41,16 +41,12 @@ def queue_skill_feedback(
     worker_name: str,
     task_type: str,
 ) -> None:
-    """Best-effort handoff after model output; feedback can never fail the task."""
+    """Finalize the model's learning checkpoint before task conclusion."""
     feedback, rejection_reason = extract_skill_feedback(payload)
     if feedback is None:
         if rejection_reason is not None:
-            LOG.warning(
-                "skill.feedback.invalid project=%s intent=%s worker=%s reason=%s",
-                project_id,
-                intent_id,
-                worker_name,
-                rejection_reason,
+            raise ValueError(
+                f"invalid skillFeedback: {rejection_reason}"
             )
         else:
             LOG.debug(
@@ -76,25 +72,37 @@ def queue_skill_feedback(
             task_type=task_type,
         )
         if response.ok:
+            decision = response.data if isinstance(response.data, dict) else {}
+            status = str(decision.get("status") or "")
+            if status not in {"accepted", "deferred", "rejected"}:
+                raise RuntimeError(
+                    "Skill evolution did not reach a terminal decision "
+                    f"(status={status or 'missing'})"
+                )
             LOG.info(
-                "skill.feedback.queued project=%s intent=%s worker=%s target=%s",
+                "skill.feedback.finalized project=%s intent=%s worker=%s "
+                "target=%s status=%s proposal=%s",
                 project_id,
                 intent_id,
                 worker_name,
                 feedback.get("target_skill"),
+                status,
+                decision.get("proposalId"),
             )
         else:
-            LOG.warning(
-                "skill.feedback.rejected project=%s intent=%s worker=%s "
-                "status=%s target=%s",
-                project_id,
-                intent_id,
-                worker_name,
-                response.status_code,
-                feedback.get("target_skill"),
+            raise RuntimeError(
+                "Skill evolution finalization failed "
+                f"(HTTP {response.status_code}): {response.text[:300]}"
             )
     except Exception:
-        LOG.debug("skill.feedback.handoff_failed project=%s", project_id, exc_info=True)
+        LOG.warning(
+            "skill.feedback.finalization_failed project=%s intent=%s worker=%s",
+            project_id,
+            intent_id,
+            worker_name,
+            exc_info=True,
+        )
+        raise
 
 
 def did_timeout(result: ProcessResult) -> bool:
@@ -130,10 +138,9 @@ def write_graph_snapshot_reference(
     written_path = container_manager.write_text_file(container_name, path, graph_yaml)
     readable_path = written_path or path
     return (
-        "The graph YAML snapshot is stored in this file inside the current workspace:\n\n"
+        "Graph 的 YAML snapshot 位于当前 Workspace 的以下文件：\n\n"
         f"{readable_path}\n\n"
-        "Before using the graph, read the entire file and treat its contents as the YAML snapshot "
-        "for this Graph section."
+        "使用 Graph 前读取完整文件，并将其内容作为本 Graph section 的 YAML snapshot。"
     )
 
 
@@ -161,6 +168,10 @@ def run_worker_process(
         timeout_seconds,
     )
     process_env = dict(worker.env)
+    if project_id is not None:
+        process_env.update(
+            container_manager.conversation_environment(project_id, worker.type)
+        )
     if worker.context_length is not None:
         if worker.type == "claudecode":
             process_env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(

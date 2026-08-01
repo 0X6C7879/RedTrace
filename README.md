@@ -103,15 +103,15 @@ Worker Adapter 将不同 Agent CLI 归一为统一接口，同时保留原生配
 | Pi | `pi` | 轻量、可扩展的 Agent CLI |
 | Mock | `mock` | 协议测试、调度测试和端到端回归 |
 
-设置页面中的 Endpoint、API Key 和 Model ID 可按 Worker 覆盖运行参数；空值时回退到原生 CLI 配置。Claude/Pi 的网关密钥写入原生 JSON，Codex 密钥由 RedTrace 加密保存并按进程注入 `OPENAI_API_KEY`。
+设置页面中的 Endpoint、API Key 和 Model ID 会同步到运行 RedTrace 的用户级 `~/.claude`、`~/.codex`、`~/.pi` 配置，同时可按 Worker 覆盖运行参数；空值时回退到原生 CLI 配置。Codex 密钥仍由 RedTrace 加密保存，并写入本地 `auth.json` 供原生 CLI 使用。
 
-`dispatch.yaml` 的 `paths` 段统一声明 `root`、`skills`、`mcp`、`plugins`、`managed`、`workspaces` 和 `audit`。相对路径始终以配置文件所在目录及 `paths.root` 为基准解析，不依赖启动命令的当前目录；对应的 `REDTRACE_*_DIR` 环境变量可覆盖单项路径。可写 Agent 状态位于 `.redtrace/workers/<agent>/<worker>/`，共享只读资源仍直接引用根目录，任务 Workspace 不再生成 `.claude`、`.codex`、`.pi`、`.agents` 或能力副本。
+`dispatch.yaml` 的 `paths` 段统一声明 `root`、`skills`、`mcp`、`plugins`、`managed`、`workspaces` 和 `audit`。相对路径始终以配置文件所在目录及 `paths.root` 为基准解析，不依赖启动命令的当前目录；对应的 `REDTRACE_*_DIR` 环境变量可覆盖单项路径。Agent 配置与登录始终使用用户级目录；任务会话统一写入 `.redtrace/projects/<project_id>/conversations`，删除任务时一并删除。`.redtrace/workers` 不再创建或挂载。只有 `skills/` 作为三个 Agent 的统一 Skill 源注入运行时，任务 Workspace 不生成 Agent 配置副本。
 
 Web 删除项目采用“标记删除 → 取消任务/进程 → 回收 Runtime → 文件清理 → 数据库级联”的服务端流程。删除状态持久化，可在 Server 或 Dispatcher 重启后继续；失败会保留项目和错误状态供重试，重复删除保持幂等。项目 Workspace、Prompt、审计、会话文件和项目关联表会被清理，根目录 Skills/MCP/Plugins 与其他 Worker 状态不受影响。
 
 ### 4. 能力与 Skill 演进面
 
-仓库根目录的 `skills/` 是 Claude Code、Codex 和 Pi 共用的唯一 Skill 源；`mcp/` 保存共用 MCP 配置，运行时再转换为各 Agent 的原生格式；`plugins/manifest.json` 是浏览器、Burp 等外部插件的统一注册表。
+仓库根目录的 `skills/` 与 `mcp/` 分别是 Claude Code、Codex 和 Pi 共用的唯一 Skill、MCP 源，并在运行时转换为各 Agent 的原生参数或配置；其他配置继续沿用用户目录。`plugins/manifest.json` 仅作为浏览器、Burp 等 RedTrace 外部插件的注册表。
 
 `CapabilityStore` 负责能力的发现、启停、可信状态、复用/失败计数、SHA-256 revision、历史、锁和审计。Worker 在原任务的最终 JSON 中至多附带一份紧凑 `skillFeedback`，不编写完整 Skill，也不额外调用工具或模型。`SkillEvolutionEngine` 会：
 
@@ -283,6 +283,12 @@ Linux 分支不会改写 `/etc/apt`、Shell profile、持久 PATH 或其他既�
 bash install_ctf_tools.sh all
 bash install_ctf_tools.sh --dry-run dnf
 ```
+
+### 新建多个任务并行运行
+
+Web 控制台中的一个“项目”就是一个顶层任务。连续点击“新建项目”即可创建多个任务；只需运行一个 Dispatcher，它会按 `runtime.max_workers`、`runtime.max_running_projects`、`runtime.max_project_workers` 和各 Worker 的 `max_running` 自动并行调度。不要复制配置启动多个 Dispatcher 指向同一 Server。
+
+不同项目使用独立 Workspace/容器，适合并行修改文件。同一项目也可以创建多个 Intent 并行探索，但它们共享项目 Workspace：只有在输出路径互不覆盖或通过 Resource 锁协调时才把 `max_project_workers` 设为大于 `1`；会修改同一批文件的任务应拆成不同项目，或将该值设为 `1`。
 
 ### 常用 CLI
 

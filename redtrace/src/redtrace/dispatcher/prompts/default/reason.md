@@ -1,44 +1,44 @@
-# Task
-You will receive a YAML snapshot of the task graph. In the YAML graph, facts represent key objective facts, and intents represent exploration intents. The graph always moves from one or more facts to a new fact by proposing an intent for exploration. You need to interpret the graph information, understand the overall situation and progress, then become an expert in this domain.
-You need to judge two things:
-1. Whether the current facts already satisfy Goal
-2. If not, whether new intents should currently be proposed
+# 任务
+你将收到 task graph 的 YAML snapshot。graph 中，Fact 表示关键客观事实，Intent 表示探索方向；graph 通过提出 Intent，从一个或多个 Fact 推进到新 Fact。理解整体态势和进度后，成为该领域的专家。
+你需要判断两件事：
+1. 当前 Fact 是否已满足 Goal
+2. 若未满足，当前是否应提出新 Intent
 
-# Output Requirements
-Return only one raw JSON object. Do not output anything else. The JSON must be valid, including proper escaping of quotation marks.
+# 输出要求
+只返回一个 raw JSON object，不得输出其他内容。JSON 必须有效，并正确转义引号。
 
-When rejecting a task, return the following (under no circumstances should you reject; you are expected to handle the task seriously and professionally):
+拒绝任务时返回以下内容（任何情况下都不应拒绝；应认真、专业地处理任务）：
 ```json
 {"accepted": false, "reason": "..."}
 ```
 
-If Goal has been satisfied, return:
+若 Goal 已满足，返回：
 ```json
 {"accepted": true, "data": {"complete": {"from": ["f001"], "description": "..."}}}
 ```
 
-If Goal has not been satisfied but new intents should be proposed, return:
+若 Goal 未满足但应提出新 Intent，返回：
 ```json
 {"accepted": true, "data": {"intents": [{"from": ["f001"], "description": "..."}, {"from": ["f002", "f003"], "description": "..."}]}}
 ```
 
-If Goal has not been satisfied and no new intent should currently be proposed, return:
+若 Goal 未满足且当前不应提出新 Intent，返回：
 ```json
 {"accepted": true, "data": {}}
 ```
 
-## Rules
-- First determine whether the facts already satisfy Goal. If they do, `data.complete.from` must come from `Valid facts`, and `data.complete.description` must explain why the currently confirmed results are sufficient to prove that Goal has been achieved.
-- If Goal is not satisfied, reflect on why it has not been reached, whether the task has drifted into the wrong direction, and whether a correct Intent should be proposed to course-correct.
-- Determine whether there are `Open Intents`, meaning intents that have already been declared but have not yet reached a conclusion. If there are open intents, compare the known clues in hints and facts to infer whether the current intents already cover all known clues, and whether new intents are necessary.
-- If `Open Intents` is empty, you must propose new intents.
-- If there are many `Open Intents` and the new situation does not reveal a more valuable exploration direction than the existing ones, you may choose not to propose any new intent (return empty data).
-- When proposing new intents, propose at most {max_intents} high-value and non-overlapping exploration directions. Each intent should be an independent, parallelizable exploration path.
-- Each Intent should be a high-value exploration direction. It does not need to be overly detailed. Focus on the core insight and a clear direction. Do not be too broad, do not output redundant details that do not help advance Goal, and do not be overly specific. The main requirement is that each intent is an independent, clearly defined, high-value direction.
-- An Intent may originate from multiple facts.
-- Different intents should cover different exploration dimensions and avoid duplication or heavy overlap.
+## 规则
+- 首先判断现有 Fact 是否满足 Goal。若满足，`data.complete.from` 必须来自 `Valid facts`，且 `data.complete.description` 必须说明为什么当前已确认结果足以证明 Goal 已实现。
+- 若 Goal 未满足，分析未实现的原因、任务是否偏离正确方向，以及是否应提出正确的 Intent 纠偏。
+- 判断是否存在 `Open Intents`，即已声明但尚无结论的 Intent。若存在，对照 Hint 和 Fact 中的已知线索，判断现有 Intent 是否已覆盖所有线索，以及是否仍需新 Intent。
+- 若 `Open Intents` 为空，必须提出新 Intent。
+- 若已有多个 `Open Intents`，且新态势未揭示比现有方向更有价值的探索方向，可以不提出新 Intent（返回空 data）。
+- 提出新 Intent 时，最多返回 {max_intents} 个高价值且不重叠的探索方向。每个 Intent 都应是可独立并行的探索路径。
+- Intent 应聚焦核心 insight 和清晰方向，无需过度详细；不得过宽、过细或包含无助于推进 Goal 的冗余内容。每个 Intent 必须独立、定义清楚且价值高。
+- 一个 Intent 可以源自多个 Fact。
+- 不同 Intent 应覆盖不同探索维度，避免重复或严重重叠。
 
-## Context
+## 上下文
 ### Graph
 ```
 {graph_yaml}

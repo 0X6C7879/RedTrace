@@ -12,7 +12,7 @@
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/vendor/cytoscape-dagre.js"></script>
 <script defer src="/static/audit.js?v=20260801-skill-name"></script>
-<script defer src="/static/capabilities.js"></script>
+<script defer src="/static/capabilities.js?v=20260801-autonomous-evolution"></script>
 <script defer src="/static/operations.js"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
 <style>
@@ -239,7 +239,7 @@
     }
   }
 </script>
-<link rel="stylesheet" href="/static/redtrace-theme.css">
+<link rel="stylesheet" href="/static/redtrace-theme.css?v=20260801-opaque-evolution">
 </head>
 <body class="bg-slate-50 text-slate-800 h-screen overflow-hidden" :class="{ 'select-none cursor-col-resize': isResizingPanel }" x-data="redtraceApp()">
 <div class="app-shell flex h-full min-h-0" :class="{ 'app-shell-operations': appPage === 'webshell' || appPage === 'plugins' || appPage.startsWith('c2-') }">
@@ -1325,7 +1325,7 @@
                   <span class="truncate text-[10px] text-slate-300" x-text="event.worker"></span>
                 </div>
                 <template x-if="isMessage(event)">
-                  <div class="whitespace-pre-wrap break-words text-[13px] leading-6 text-slate-700" x-text="displayText(event.content)"></div>
+                  <div class="max-h-72 overflow-auto whitespace-pre-wrap break-words text-[13px] leading-6 text-slate-700" x-text="displayText(event.content)"></div>
                 </template>
                 <template x-if="isTool(event)">
                   <details class="audit-tool overflow-hidden" :open="event.kind === 'file.changed'">
@@ -1346,7 +1346,7 @@
                   </div>
                 </template>
                 <template x-if="isCommand(event)">
-                  <details class="audit-terminal overflow-hidden" :open="event.kind === 'command.started'">
+                  <details class="audit-terminal overflow-hidden">
                     <summary class="flex cursor-pointer list-none items-center gap-2 px-3 py-2 font-mono text-[11px]">
                       <span class="text-emerald-400">$</span><span class="audit-command-text min-w-0 flex-1" x-text="eventCommand(event)"></span>
                       <span class="text-[10px]" :class="event.error ? 'text-rose-500' : event.kind.endsWith('completed') ? 'text-emerald-500' : 'text-amber-500'" x-text="eventStatus(event)"></span>
@@ -1355,7 +1355,7 @@
                   </details>
                 </template>
                 <template x-if="['error', 'stderr'].includes(event.kind)">
-                  <pre class="whitespace-pre-wrap rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-[11px] leading-relaxed text-rose-700" x-text="event.content"></pre>
+                  <pre class="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-[11px] leading-relaxed text-rose-700" x-text="event.content"></pre>
                 </template>
                 <template x-if="event.kind === 'run.completed'">
                   <div class="audit-run-complete flex items-center gap-2 rounded-lg border border-emerald-100 bg-emerald-50/60 px-3 py-2 text-[11px] text-emerald-700">
@@ -1411,6 +1411,23 @@
         <div class="flex items-center gap-2"><h1 class="text-[15px] font-semibold tracking-tight text-slate-800">Skills</h1><span class="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-700" x-text="`${enabledCount}/${items.length} 已启用`"></span></div>
         <p class="mt-0.5 truncate text-[10px] text-slate-400" x-text="status?.skillsDir || '加载共享目录…'"></p>
       </div>
+      <div class="relative hidden items-center gap-1.5 sm:flex" aria-label="Skill evolution queue">
+        <span class="rounded-lg bg-sky-50 px-2 py-1 text-[10px] font-medium text-sky-700" x-text="`${evolution?.pending || 0} 待决策`"></span>
+        <button type="button" @click="showDeferred = !showDeferred" class="capability-press rounded-lg bg-amber-50 px-2 py-1 text-[10px] font-medium text-amber-700 hover:bg-amber-100" :aria-expanded="showDeferred" title="这些候选已完成决策，不会阻塞任务；需要后续任务补充量化证据" x-text="`${evolution?.deferred || 0} 待补证据`"></button>
+        <div x-show="showDeferred" x-transition.opacity @click.outside="showDeferred = false" class="capability-evolution-popover absolute right-0 top-8 z-50 rounded-xl border p-3">
+          <div class="mb-2.5 flex items-start justify-between gap-3"><div><div class="text-xs font-semibold text-slate-700">AI 自动补证</div><p class="mt-0.5 text-[10px] leading-relaxed text-slate-400">Dispatcher 会在正常任务之后调用空闲 Worker；核验、回写和 Skill 更新无需人工介入。</p></div><span class="shrink-0 text-[10px] text-slate-400">不阻塞任务</span></div>
+          <template x-for="candidate in evolution?.deferredItems || []" :key="candidate.proposalId">
+            <article class="capability-deferred-card rounded-lg border p-3 text-left">
+              <div class="flex items-start gap-3"><div class="min-w-0 flex-1"><div class="flex items-center gap-2"><span class="truncate text-[11px] font-semibold text-slate-700" x-text="candidate.targetSkill || '未匹配 Skill'"></span><span class="shrink-0 font-mono text-[9px] text-slate-400" x-text="`${candidate.requirementsMet || 0}/${candidate.requirementsTotal || 0}`"></span></div><p class="mt-1.5 line-clamp-3 text-[10px] leading-relaxed text-slate-500" x-text="candidate.summary"></p></div></div>
+              <div class="mt-2.5 grid grid-cols-2 gap-x-3 gap-y-1">
+                <template x-for="check in candidate.evidenceChecks || []" :key="check.label"><div class="flex min-w-0 items-center gap-1.5 text-[9px]" :class="check.complete ? 'text-slate-400' : 'text-amber-700'"><span class="font-mono" x-text="check.complete ? '✓' : '○'"></span><span class="truncate" x-text="check.label"></span></div></template>
+              </div>
+              <div class="mt-2.5 flex items-center justify-between gap-3 border-t border-slate-200/70 pt-2"><div class="min-w-0"><p class="truncate text-[10px] font-medium" :class="candidate.verificationStatus === 'running' ? 'text-sky-700' : (candidate.verificationStatus === 'failed' ? 'text-rose-500' : 'text-amber-700')" x-text="candidate.verificationLabel || candidate.reason"></p><p x-show="candidate.verificationWorker" class="mt-0.5 text-[9px] text-slate-400" x-text="`${candidate.verificationWorker} · 第 ${candidate.verificationAttempts || 1} 次验证`"></p></div><button type="button" @click="discardDeferred(candidate)" :disabled="discardingProposal === candidate.proposalId" class="shrink-0 rounded-md px-2 py-1 text-[10px] text-slate-400 hover:text-rose-500 disabled:opacity-40">放弃</button></div>
+            </article>
+          </template>
+          <p x-show="!(evolution?.deferredItems || []).length" class="py-4 text-center text-[10px] text-slate-400">没有可展示的候选。</p>
+        </div>
+      </div>
       <div class="hidden items-center gap-1.5 md:flex" aria-label="Agent compatibility">
         <template x-for="agent in agents" :key="agent"><span class="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-500" x-text="agent"></span></template>
       </div>
@@ -1433,7 +1450,7 @@
           <template x-for="skill in filteredItems" :key="skill.name">
             <button type="button" @click="select(skill.name)" class="capability-press mb-1 flex w-full items-start gap-2.5 rounded-xl px-3 py-2.5 text-left" :class="selectedName === skill.name ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50'">
               <span class="mt-1 h-2 w-2 shrink-0 rounded-full" :class="skill.enabled ? 'bg-teal-500 shadow-[0_0_0_3px_rgba(20,184,166,.10)]' : 'bg-slate-300'"></span>
-              <span class="min-w-0 flex-1"><span class="block truncate text-xs font-semibold" x-text="skill.name"></span><span class="mt-1 block line-clamp-2 text-[10px] leading-relaxed text-slate-400" x-text="skill.description || '暂无描述'"></span></span>
+              <span class="min-w-0 flex-1"><span class="flex items-center gap-1.5"><span class="min-w-0 flex-1 truncate text-xs font-semibold" x-text="skill.name"></span><span class="rounded px-1.5 py-0.5 text-[9px] font-medium" :class="skill.trust === 'trusted' ? 'bg-teal-50 text-teal-600' : (skill.trust === 'retired' ? 'bg-slate-100 text-slate-400' : 'bg-amber-50 text-amber-600')" x-text="skill.trust || 'trusted'"></span></span><span class="mt-1 block line-clamp-2 text-[10px] leading-relaxed text-slate-400" x-text="skill.description || '暂无描述'"></span></span>
             </button>
           </template>
           <div x-show="!loading && filteredItems.length === 0" class="px-4 py-12 text-center text-xs leading-relaxed text-slate-400">没有匹配的 Skill。<br>创建一个即可被三个 agent 原生发现。</div>
@@ -1445,12 +1462,27 @@
           <div class="flex h-14 shrink-0 items-center gap-3 border-b border-slate-200 px-5">
             <div class="min-w-0 flex-1">
               <input x-model="draft.name" :disabled="!isNew" placeholder="skill-name" class="h-7 w-full bg-transparent text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-300 disabled:cursor-default">
-              <p class="text-[10px] text-slate-400" x-text="isNew ? '使用小写字母、数字、连字符或下划线' : `${draft.files?.length || 0} 个文件 · 原生热加载`"></p>
+              <p class="text-[10px] text-slate-400" x-text="isNew ? '使用小写字母、数字、连字符或下划线' : `v${draft.version} · ${draft.files?.length || 0} 个文件 · revision ${draft.revision?.slice(0, 10)}`"></p>
             </div>
             <label class="capability-press inline-flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-slate-500 hover:bg-slate-50"><input type="checkbox" x-model="draft.enabled" class="h-4 w-4 rounded border-slate-300 text-teal-500 focus:ring-teal-200"><span>启用</span></label>
             <button x-show="!isNew && deleteArmed" @click="remove()" class="capability-press h-8 rounded-lg bg-red-500 px-3 text-xs font-medium text-white hover:bg-red-600">确认删除</button>
             <button x-show="!isNew && !deleteArmed" @click="armDelete()" class="capability-press h-8 rounded-lg px-3 text-xs text-red-500 hover:bg-red-50">删除</button>
             <button @click="save()" :disabled="saving || !draft.name || !draft.content" class="capability-press h-8 rounded-lg bg-brand-500 px-4 text-xs font-medium text-white shadow-sm shadow-brand-100 hover:bg-brand-600 disabled:opacity-40" x-text="saving ? '保存中…' : '保存'"></button>
+          </div>
+          <div x-show="!isNew" class="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/70 px-5 py-2 text-[10px] text-slate-500">
+            <span class="rounded-md px-2 py-1 font-semibold" :class="draft.trust === 'trusted' ? 'bg-teal-50 text-teal-700' : (draft.trust === 'retired' ? 'bg-slate-200 text-slate-500' : 'bg-amber-50 text-amber-700')" x-text="draft.trust || 'trusted'"></span>
+            <span x-text="`${draft.successfulReuses || 0} 次独立复用`"></span>
+            <span>·</span>
+            <span x-text="`${draft.failureCount || 0} 次失败`"></span>
+            <span x-show="draft.provisionalTask" class="max-w-56 truncate font-mono text-amber-600" :title="draft.provisionalTask" x-text="`来源 ${draft.provisionalTask}`"></span>
+            <template x-if="latestDecision"><span class="max-w-80 truncate text-slate-400" :title="latestDecision.reason" x-text="`最近决策：${latestDecision.action?.replace('evolution-', '')} · ${latestDecision.reason || ''}`"></span></template>
+            <div class="ml-auto flex items-center gap-1.5">
+              <select x-model="rollbackVersion" class="h-7 rounded-lg border border-slate-200 bg-white px-2 text-[10px] text-slate-500 outline-none" aria-label="选择回滚版本">
+                <option value="">历史版本</option>
+                <template x-for="version in versions.filter((item) => item.version !== draft.version)" :key="version.version"><option :value="version.version" x-text="`v${version.version} · ${version.trust || 'trusted'}`"></option></template>
+              </select>
+              <button type="button" @click="rollback()" :disabled="!rollbackVersion || saving" class="capability-press h-7 rounded-lg border border-slate-200 bg-white px-2.5 font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-40">回滚</button>
+            </div>
           </div>
           <div class="min-h-0 flex-1 p-4">
             <textarea x-model="draft.content" spellcheck="false" class="capability-editor h-full w-full resize-none rounded-xl border border-slate-200 bg-slate-950 p-4 font-mono text-[12px] leading-6 text-slate-200 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50" aria-label="SKILL.md"></textarea>
@@ -1586,7 +1618,7 @@
     <div class="flex flex-col items-start justify-between gap-4 sm:flex-row sm:gap-5">
       <div>
         <h1 class="text-xl font-semibold tracking-tight text-slate-800">Worker 配置</h1>
-        <p class="mt-1 max-w-2xl text-sm leading-6 text-slate-400">集中管理 Claude Code、Codex 与 Pi。保存前会校验网关连接；本地执行时还会同步到运行 RedTrace 的用户级 CLI 配置。</p>
+        <p class="mt-1 max-w-2xl text-sm leading-6 text-slate-400">集中管理 Claude Code、Codex 与 Pi。保存前会校验网关连接，并同步到运行 RedTrace 的用户级 CLI 配置；本地与容器 Worker 共用该配置。</p>
       </div>
       <button type="button" @click="openWorkerEditor()" class="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl bg-slate-800 px-4 text-xs font-medium text-white shadow-sm transition hover:bg-slate-900">
         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
@@ -1620,7 +1652,7 @@
                 <span class="rounded-md px-2 py-0.5 text-[10px] font-medium" :class="worker.enabled ? 'bg-teal-50 text-teal-600' : 'bg-slate-100 text-slate-400'" x-text="worker.enabled ? '已启用' : '已停用'"></span>
               </div>
               <div class="mt-2 flex flex-wrap gap-x-5 gap-y-1.5 text-[11px] text-slate-400">
-                <span class="max-w-64 truncate" :title="worker.api_endpoint || ''" x-text="worker.api_endpoint || (workerConfig.execution === 'local' ? '使用 CLI 本地配置' : '未配置端点')"></span>
+                <span class="max-w-64 truncate" :title="worker.api_endpoint || ''" x-text="worker.api_endpoint || '使用用户级 CLI 配置'"></span>
                 <span x-text="worker.model_id || '未指定模型'"></span>
                 <span x-text="`优先级 ${worker.priority}`"></span>
                 <span x-text="`最大并发 ${worker.max_running}`"></span>
@@ -1841,7 +1873,7 @@
 
 <!-- Export Preview -->
 <div x-show="showYamlModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center overlay" @click.self="showYamlModal = false">
-  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl mx-4 border border-slate-200/60 overflow-hidden" @click.stop>
+  <div class="snapshot-modal rounded-2xl shadow-2xl w-full max-w-4xl mx-4 border overflow-hidden" @click.stop>
     <div class="px-5 py-4 border-b border-slate-200/80 flex items-center justify-between gap-4">
       <div class="min-w-0 flex items-center gap-3">
         <div class="flex rounded-lg border border-slate-200 overflow-hidden shrink-0">
@@ -1857,8 +1889,8 @@
         <button @click="showYamlModal = false" class="px-3 py-1.5 text-sm text-slate-500 hover:bg-slate-50 rounded-xl transition">关闭</button>
       </div>
     </div>
-    <div class="max-h-[75vh] overflow-auto bg-slate-50 p-4">
-      <div class="rounded-xl border border-slate-200 bg-white overflow-auto shadow-sm">
+    <div class="max-h-[75vh] overflow-auto bg-slate-50/40 p-4">
+      <div class="snapshot-preview-shell rounded-xl border overflow-auto">
         <div class="min-w-max p-0 text-[12px] leading-6 font-mono select-text" x-html="yamlPreviewHtml"></div>
       </div>
     </div>
@@ -2188,13 +2220,13 @@ function redtraceApp() {
     highlightYamlScalar(value) {
       const escaped = this.escapeHtml(value);
       if (!value.trim()) return escaped;
-      if (/^\s*#.*$/.test(value)) return `<span style="color:#64748b">${escaped}</span>`;
-      if (/^\s*['"].*['"]\s*$/.test(value)) return `<span style="color:#15803d">${escaped}</span>`;
-      if (/^\s*\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2})\s*$/.test(value)) return `<span style="color:#b45309">${escaped}</span>`;
-      if (/^\s*(true|false|null|~)\s*$/i.test(value)) return `<span style="color:#b91c1c">${escaped}</span>`;
-      if (/^\s*-?\d+(\.\d+)?\s*$/.test(value)) return `<span style="color:#0f766e">${escaped}</span>`;
-      if (/^\s*(origin|goal|f\d+|i\d+)\s*$/i.test(value)) return `<span style="color:#6d28d9">${escaped}</span>`;
-      return `<span style="color:#0f172a">${escaped}</span>`;
+      if (/^\s*#.*$/.test(value)) return `<span style="color:#6f7e93">${escaped}</span>`;
+      if (/^\s*['"].*['"]\s*$/.test(value)) return `<span style="color:#42df86">${escaped}</span>`;
+      if (/^\s*\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2})\s*$/.test(value)) return `<span style="color:#ffb82e">${escaped}</span>`;
+      if (/^\s*(true|false|null|~)\s*$/i.test(value)) return `<span style="color:#ff6469">${escaped}</span>`;
+      if (/^\s*-?\d+(\.\d+)?\s*$/.test(value)) return `<span style="color:#52d6ff">${escaped}</span>`;
+      if (/^\s*(origin|goal|f\d+|i\d+)\s*$/i.test(value)) return `<span style="color:#a783ff">${escaped}</span>`;
+      return `<span style="color:#d7e0ec">${escaped}</span>`;
     },
 
     highlightYamlLine(line) {
@@ -2224,12 +2256,12 @@ function redtraceApp() {
 
     yamlSectionTint(sectionName) {
       const tints = {
-        project: { header: '#eff6ff', body: '#fafcff', itemA: '#f3f8ff', itemB: '#edf5ff' },
-        hints: { header: '#fffbeb', body: '#fffef8', itemA: '#fffaf0', itemB: '#fff6e8' },
-        facts: { header: '#eef2ff', body: '#fafaff', itemA: '#f5f7ff', itemB: '#eef3ff' },
-        intents: { header: '#ecfdf5', body: '#f8fdfb', itemA: '#f1fbf5', itemB: '#eaf8ef' },
+        project: { header: '#101b28', body: '#080d14', itemA: '#0b121b', itemB: '#0d1621' },
+        hints: { header: '#1c1810', body: '#0a0e14', itemA: '#12130f', itemB: '#17150e' },
+        facts: { header: '#151525', body: '#090d15', itemA: '#10101c', itemB: '#141321' },
+        intents: { header: '#0e1c19', body: '#080e13', itemA: '#0d1616', itemB: '#101b18' },
       };
-      return tints[sectionName] || { header: '#f8fafc', body: '#ffffff', itemA: '#f8fafc', itemB: '#f1f5f9' };
+      return tints[sectionName] || { header: '#101721', body: '#080d14', itemA: '#0b1119', itemB: '#0d141d' };
     },
 
     async copyYamlPreview() {
@@ -2311,19 +2343,19 @@ function redtraceApp() {
           background = activeItemStripe === 0 ? tint.itemA : tint.itemB;
         }
 
-        return `<div style="white-space:pre;padding:0 16px;background:${background};font-weight:${fontWeight};color:#0f172a">${lineHtml}</div>`;
+        return `<div style="white-space:pre;padding:0 16px;background:${background};font-weight:${fontWeight};color:#d7e0ec">${lineHtml}</div>`;
       }).join('');
     },
 
     highlightTimeline(text) {
       const lines = String(text ?? '').split('\n');
-      const stripes = ['#fffbf5', '#fef5ee'];
+      const stripes = ['#080d14', '#0d121a'];
       let blockIndex = -1;
       return lines.map((line) => {
         if (/^\[/.test(line)) blockIndex++;
         const bg = blockIndex < 0 ? stripes[0] : stripes[blockIndex % 2];
         const isBlank = /^\s*$/.test(line);
-        return `<div style="white-space:pre;padding:0 16px;background:${bg};color:#0f172a">${isBlank ? '&nbsp;' : this.escapeHtml(line)}</div>`;
+        return `<div style="white-space:pre;padding:0 16px;background:${bg};color:#d7e0ec">${isBlank ? '&nbsp;' : this.escapeHtml(line)}</div>`;
       }).join('');
     },
 
@@ -2455,7 +2487,7 @@ function redtraceApp() {
     workerNativeConfigPaths(type) {
       const home = this.workerConfig.cli_config_home || '~';
       if (type === 'claudecode') return [`${home}/.claude/settings.json`];
-      if (type === 'codex') return [`${home}/.codex/config.toml`];
+      if (type === 'codex') return [`${home}/.codex/config.toml`, `${home}/.codex/auth.json`];
       if (type === 'pi') return [`${home}/.pi/agent/settings.json`, `${home}/.pi/agent/models.json`];
       return [];
     },

@@ -3,23 +3,27 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 
-import yaml
 import pytest
+import redtrace.worker_config as worker_config_module
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
 from redtrace.config_secrets import secret_id_from_reference
 from redtrace.dispatcher.config import DispatchConfig
 from redtrace.dispatcher.config_reload import DispatchConfigReloader
 from redtrace.dispatcher.scheduler.loop import DispatcherLoop
 from redtrace.dispatcher.workers.health import HealthResult
 from redtrace.server.routers.workers import router as worker_router
-import redtrace.worker_config as worker_config_module
 from redtrace.worker_config import (
     CONNECTION_TESTER,
     WorkerConfigConflict,
     WorkerConfigService,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolate_native_cli_home(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("REDTRACE_CLI_CONFIG_HOME", str(tmp_path / "home"))
 
 
 def _raw_config() -> dict:
@@ -377,6 +381,7 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     assert "cytoscape-elk" not in index
     assert "cytoscape-klay" not in index
     assert "rankDir: 'TB'" in index
+    assert 'class="max-h-72 overflow-auto whitespace-pre-wrap break-words' in index
     assert "c2Expanded: false" in index
     assert '@click="setAppPage(\'c2-listeners\'); c2Expanded = !c2Expanded"' in index
     assert "if (page === 'webshell' || page.startsWith('c2-'))" not in index

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import threading
 from concurrent.futures import Future
+from types import SimpleNamespace
 
 from conftest import make_config, make_intent, make_project
 from redtrace.dispatcher.models import ReasonCheckpoint, RunningTask
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.scheduler.loop import (
     DispatcherLoop,
+    SkillVerificationTask,
     _compact_project_snapshot,
 )
 from redtrace.dispatcher.scheduler.worker_select import choose_worker
@@ -25,6 +28,8 @@ def _loop() -> DispatcherLoop:
     loop.worker_rejected_until = {}
     loop._log_state = {}
     loop.project_cursor = 0
+    loop.futures = {}
+    loop.skill_futures = {}
     return loop
 
 
@@ -353,6 +358,38 @@ def test_select_worker_reports_busy_unhealthy_rejected_and_unsupported_workers(
     assert selection.blocked_unhealthy == ["unhealthy(10.0s)"]
     assert selection.blocked_rejected == ["rejected(20.0s)"]
     assert selection.blocked_task_type == ["unsupported"]
+
+
+def test_dispatcher_uses_only_spare_worker_capacity_for_skill_verification() -> None:
+    loop = _loop()
+    base = make_config()
+    worker = base.workers[0].model_copy(
+        update={"name": "codex-idle", "type": "codex", "max_running": 1}
+    )
+    loop.config = base.model_copy(update={"workers": [worker]})
+    claimed: list[str] = []
+    loop.skill_evolution = SimpleNamespace(
+        claim_deferred_verification=lambda name: (
+            claimed.append(name) or {"proposal_id": "proposal-1"}
+        )
+    )
+    submitted: list[tuple[object, ...]] = []
+
+    class Executor:
+        def submit(self, *args):
+            submitted.append(args)
+            return Future()
+
+    loop.executor = Executor()
+    loop._wakeup = threading.Event()
+
+    loop._dispatch_skill_verification()
+
+    assert claimed == ["codex-idle"]
+    assert len(submitted) == 1
+    task = next(iter(loop.skill_futures.values()))
+    assert task == SkillVerificationTask("proposal-1", "codex-idle")
+    assert loop._running_task_count() == 1
 
 
 def test_disabled_worker_healthcheck_skips_automatic_startup_but_force_runs_diagnostic() -> (

@@ -527,10 +527,16 @@ def _as_skill_event(
     return event
 
 
+SKILL_PLUGIN_PREFIX = "redtrace-capabilities:"
+
+
 def _skill_name_from_event(event: dict[str, Any]) -> str:
     direct_name = event.get("skill_name") or event.get("skillName")
     if isinstance(direct_name, str) and direct_name.strip():
-        return direct_name.strip()
+        name = direct_name.strip()
+        if name.startswith(SKILL_PLUGIN_PREFIX):
+            name = name[len(SKILL_PLUGIN_PREFIX):]
+        return name
 
     title = str(event.get("title") or "").strip().lower().replace("_", " ")
     arguments = event.get("arguments")

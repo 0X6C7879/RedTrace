@@ -20,7 +20,11 @@ from redtrace.capabilities import (
 )
 from redtrace.context_cli import __file__ as context_cli_file
 from redtrace.dispatcher.config import ContextHarnessConfig, LocalConfig
-from redtrace.dispatcher.prompting import add_blackboard_guidance, render_prompt
+from redtrace.dispatcher.prompting import (
+    add_blackboard_guidance,
+    load_prompt,
+    render_prompt,
+)
 from redtrace.dispatcher.runtime.local_backend import LocalBackend
 from redtrace.dispatcher.runtime.local_process import LocalProcess
 from redtrace.dispatcher.runtime.stream_buffer import (
@@ -233,19 +237,38 @@ def test_context_config_is_bounded_and_exports_worker_environment() -> None:
         ContextHarnessConfig(artifact_root="../outside")
 
 
-def test_render_prompt_requires_chinese_utf8_worker_output() -> None:
+def test_render_prompt_requires_chinese_with_english_protocol() -> None:
     rendered = render_prompt("{task}", {"task": "执行任务"})
 
-    assert "请优先使用简体中文回答" in rendered
-    assert "用中文写入 Fact、Intent、Hint" in rendered
-    assert "PowerShell `-Encoding UTF8`" in rendered
+    assert "自然语言及 JSON 自由文本值须用简体中文" in rendered
+    assert "JSON key、enum/status、phase" in rendered
+    assert "raw JSON contract 只输出 JSON" in rendered
 
 
 def test_render_prompt_preserves_machine_readable_json_templates() -> None:
     rendered = render_prompt('{"phase":"{phase}"}', {"phase": "reason"})
 
     assert json.loads(rendered) == {"phase": "reason"}
-    assert "语言与编码要求" not in rendered
+    assert "输出语言" not in rendered
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "bootstrap.md",
+        "bootstrap_conclude.md",
+        "reason.md",
+        "explore.md",
+        "explore_conclude.md",
+    ],
+)
+def test_default_prompts_use_chinese_prose_with_english_protocol(name: str) -> None:
+    template = load_prompt("default", name)
+
+    assert "输出要求" in template
+    assert "只返回一个 raw JSON object" in template
+    assert '"accepted"' in template
+    assert "Return only one raw JSON object" not in template
 
 
 def test_local_backend_injects_redtrace_managed_harness_configuration(
@@ -380,35 +403,35 @@ def test_prompt_guidance_reuses_existing_state_and_bounded_queries() -> None:
     )
 
     assert "redtrace-context run -- rtk" in prompt
-    assert "Fact only for a confirmed conclusion" in prompt
-    assert "parallel Idea, Memory" in prompt
-    assert "native Web search/fetch" in prompt
-    assert "`brave-search` Skill as the fallback" in prompt
-    assert "## Active WebShell and C2 workflow" in prompt
+    assert "只为已确认结论写入 Fact" in prompt
+    assert "不得另建 Idea、Memory" in prompt
+    assert "优先使用原生 Web search/fetch" in prompt
+    assert "`brave-search` Skill 作为 fallback" in prompt
+    assert "## Active WebShell 与 C2 工作流" in prompt
     assert "redtrace-resource snapshot --kind webshell" in prompt
     assert "redtrace-resource webshell-create" in prompt
     assert "redtrace-resource listener-create" in prompt
-    assert "`payload-oneliner` or a compiled Beacon with `payload-build`" in prompt
-    assert "do not stop at that boundary" in prompt
+    assert "再用 `payload-oneliner`，或通过 `payload-build` 构建 Beacon" in prompt
+    assert "若无 session，不要止步" in prompt
     assert "redtrace-resource changes --since <audit_cursor>" in prompt
-    assert "decision-point refresh, not a timer" in prompt
-    assert "## Known-vulnerability-first exploitation" in prompt
-    assert "perform at least one live Web query" in prompt
+    assert "decision-point refresh，不是 timer" in prompt
+    assert "## 已知漏洞优先利用" in prompt
+    assert "至少执行一次实时 Web query" in prompt
     assert (
-        "Do not install, clone, or synchronize bulk vulnerability databases" in prompt
+        "不得安装、clone 或同步批量漏洞库" in prompt
     )
-    assert "fetch only the specific PoC/EXP" in prompt
-    assert "pass that explicit template path" in prompt
-    assert "never invoke automatic template discovery" in prompt
-    assert "Prefer an existing PoC over inventing a new exploit" in prompt
-    assert "When the PoC confirms the vulnerability" in prompt
-    assert "execution order, not an approval gate" in prompt
-    assert "Only move to custom vulnerability discovery" in prompt
-    assert "## Missing tool bootstrap" in prompt
-    assert "official documentation" in prompt
-    assert "user-local installation" in prompt
-    assert "`--version` and a small smoke check" in prompt
-    assert "instead of looping or blocking it" in prompt
+    assert "只获取特定 PoC/EXP" in prompt
+    assert "向 Nuclei 传入明确的 template path" in prompt
+    assert "不得自动发现或更新 template" in prompt
+    assert "优先复用现有 PoC" in prompt
+    assert "确认漏洞后使用匹配的 EXP" in prompt
+    assert "执行顺序，不是 approval gate" in prompt
+    assert "才转向自定义漏洞发现" in prompt
+    assert "## 缺失工具 Bootstrap" in prompt
+    assert "依据官方文档" in prompt
+    assert "user-local 方式安装" in prompt
+    assert "`--version` 和最小 smoke check" in prompt
+    assert "不得循环或阻塞" in prompt
     assert "Context Harness" not in disabled
 
 
@@ -417,12 +440,12 @@ def test_prompt_guidance_is_scoped_by_task_type() -> None:
     reason = add_blackboard_guidance("task", 1, task_type="reason")
     explore = add_blackboard_guidance("task", 1, task_type="explore")
 
-    assert "Known-vulnerability-first" in bootstrap
-    assert "Active WebShell and C2" not in bootstrap
-    assert "Known-vulnerability-first" not in reason
-    assert "Active WebShell and C2" not in reason
+    assert "已知漏洞优先利用" in bootstrap
+    assert "Active WebShell 与 C2" not in bootstrap
+    assert "已知漏洞优先利用" not in reason
+    assert "Active WebShell 与 C2" not in reason
     assert "Context Harness" not in reason
-    assert "Active WebShell and C2" in explore
+    assert "Active WebShell 与 C2" in explore
     assert len(reason) < 1500
     assert len(bootstrap) < len(explore)
 

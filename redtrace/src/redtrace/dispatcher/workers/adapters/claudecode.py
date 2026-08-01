@@ -179,10 +179,7 @@ class ClaudeCodeDriver(SeedSessionDriver):
 
     @classmethod
     def _mcp_config(cls, worker: WorkerConfig) -> str:
-        return worker.env.get(
-            "REDTRACE_CLAUDE_MCP_CONFIG",
-            CLAUDE_MCP_PATH,
-        )
+        return worker.env.get("REDTRACE_CLAUDE_MCP_CONFIG", CLAUDE_MCP_PATH)
 
     @classmethod
     def _plugin_args(cls, worker: WorkerConfig) -> list[str]:

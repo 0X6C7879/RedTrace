@@ -11,8 +11,9 @@ from redtrace.server.models import (
 )
 from redtrace.server.services import (
     check_project_active,
-    get_claimable_open_intent_or_404,
+    get_owned_open_intent_or_404,
     get_releasable_open_intent_or_404,
+    get_unclaimed_open_intent_or_404,
     intent_to_model,
     next_fact_id,
     next_intent_id,
@@ -31,7 +32,7 @@ router = APIRouter(tags=["intents"])
     status_code=201,
 )
 def create_intent(project_id: str, body: CreateIntentRequest):
-    with get_conn() as conn:
+    with get_conn(immediate=True) as conn:
         check_project_active(conn, project_id)
         validate_facts_exist(conn, project_id, body.from_)
         validate_goal_not_in_sources(body.from_)
@@ -72,13 +73,34 @@ def create_intent(project_id: str, body: CreateIntentRequest):
 
 
 @router.post(
+    "/projects/{project_id}/intents/{intent_id}/claim",
+    response_model=Intent,
+)
+def claim(project_id: str, intent_id: str, body: HeartbeatRequest):
+    with get_conn(immediate=True) as conn:
+        check_project_active(conn, project_id)
+        get_unclaimed_open_intent_or_404(conn, project_id, intent_id)
+
+        now = utcnow()
+        conn.execute(
+            "UPDATE intents SET worker = ?, last_heartbeat_at = ? WHERE id = ? AND project_id = ?",
+            (body.worker, now, intent_id, project_id),
+        )
+        updated = conn.execute(
+            "SELECT * FROM intents WHERE id = ? AND project_id = ?",
+            (intent_id, project_id),
+        ).fetchone()
+        return intent_to_model(conn, updated, project_id)
+
+
+@router.post(
     "/projects/{project_id}/intents/{intent_id}/heartbeat",
     response_model=Intent,
 )
 def heartbeat(project_id: str, intent_id: str, body: HeartbeatRequest):
-    with get_conn() as conn:
+    with get_conn(immediate=True) as conn:
         check_project_active(conn, project_id)
-        get_claimable_open_intent_or_404(conn, project_id, intent_id, body.worker)
+        get_owned_open_intent_or_404(conn, project_id, intent_id, body.worker)
 
         now = utcnow()
         conn.execute(
@@ -98,7 +120,7 @@ def heartbeat(project_id: str, intent_id: str, body: HeartbeatRequest):
     response_model=Intent,
 )
 def release(project_id: str, intent_id: str, body: HeartbeatRequest):
-    with get_conn() as conn:
+    with get_conn(immediate=True) as conn:
         check_project_active(conn, project_id)
         row = get_releasable_open_intent_or_404(conn, project_id, intent_id, body.worker)
 
@@ -120,9 +142,9 @@ def release(project_id: str, intent_id: str, body: HeartbeatRequest):
     response_model=ConcludeResponse,
 )
 def conclude(project_id: str, intent_id: str, body: ConcludeRequest):
-    with get_conn() as conn:
+    with get_conn(immediate=True) as conn:
         check_project_active(conn, project_id)
-        get_claimable_open_intent_or_404(conn, project_id, intent_id, body.worker)
+        get_owned_open_intent_or_404(conn, project_id, intent_id, body.worker)
 
         now = utcnow()
         fid = next_fact_id(conn, project_id)

@@ -5,7 +5,6 @@ import json
 import pytest
 from conftest import make_config
 from pydantic import ValidationError
-
 from redtrace.capabilities import PI_MCP_EXTENSION, PI_PROVIDER_EXTENSION_PATH
 from redtrace.dispatcher.config import (
     DispatchConfig,
@@ -116,6 +115,7 @@ def test_pi_driver_builds_models_from_environment_without_key_in_argv() -> None:
     assert PI_PROVIDER_EXTENSION_PATH in result.argv
     assert "secret" not in result.argv
     assert PI_MCP_EXTENSION in result.argv
+    assert "--session-dir" not in result.argv
     assert "--approve" in result.argv
     assert "--tools" not in result.argv
     assert "--no-skills" not in result.argv

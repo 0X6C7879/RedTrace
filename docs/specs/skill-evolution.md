@@ -31,18 +31,21 @@ beside its normal `accepted` and `data` fields:
 }
 ```
 
-Omit `skillFeedback` when the signal is weak. The Worker does not scan Skills,
-write `SKILL.md`, invoke `redtrace-skill`, or make another model call. The
-dispatcher extracts valid feedback and performs one best-effort local HTTP
-handoff with a sub-second timeout. Handoff failure never changes the task result.
+Use `null` only when the final reflection finds no reusable correction,
+compression, or missing branch. The Worker does not scan Skills, write
+`SKILL.md`, invoke `redtrace-skill`, or make another model call. The dispatcher
+extracts feedback and waits for one durable terminal decision (`accepted`,
+`deferred`, or `rejected`) before the Intent or project can conclude. A missing
+or non-terminal decision fails that task attempt instead of silently losing its
+learning checkpoint.
 
 A candidate may come from an independently verified subflow even when the
 overall task fails. Ordinary failures, guesses, accidental success, missing
 validation, and missing evidence references are rejected.
 
-## Background pipeline
+## Task-end pipeline
 
-One daemon processes the durable inbox outside penetration-task execution:
+The proposal is persisted first, then finalized within the task-end budget:
 
 1. Normalize and deterministically reject target-specific or secret-bearing
    feedback.
@@ -55,17 +58,21 @@ One daemon processes the durable inbox outside penetration-task execution:
    entrypoints only.
 5. Validate frontmatter, required sections, generality, secret literals,
    duplication, append-only growth, size growth, and optimistic revision.
-6. Commit atomically under the cross-process Skill store lock.
+6. Commit atomically under the cross-process Skill store lock and return the
+   durable decision to the dispatcher.
 
-No extra Agent Runtime is embedded. If no author CLI is available or authoring
-times out, the candidate moves to `skills/.redtrace/deferred/`; task execution
-continues unchanged.
+No extra Agent Runtime is embedded. If no author CLI is available, evidence is
+unmeasured, or authoring exhausts its total time budget, the candidate moves to
+`skills/.redtrace/deferred/`; that deferred state is still a completed task-end
+decision. The daemon remains only as crash-recovery drainage for already durable
+inbox entries.
 
 Author selection:
 
 - `REDTRACE_SKILL_AUTHOR=auto|claude|codex|pi|disabled`
 - `REDTRACE_SKILL_AUTHOR_ORDER=claude,codex,pi`
 - `REDTRACE_SKILL_AUTHOR_TIMEOUT=600`
+- `REDTRACE_SKILL_FINALIZE_TIMEOUT=630`
 
 ## Evolution types
 
@@ -81,10 +88,11 @@ Author selection:
 ## Trust and quality
 
 Existing unmanaged Skills default to `trusted` for backward compatibility.
-New and substantially rewritten Skills are `provisional`. A provisional Skill
-becomes `trusted` only when a different project/Intent submits verified reuse
-with `reuseValidated: true`. Trust, successful reuse count, failure count, and
-the provisional source task live in `.redtrace.json`, not in `SKILL.md`.
+Every content-changing revision starts as `provisional` with a zeroed reuse
+count. It becomes `trusted` only when a different project submits measured,
+verified reuse with `reuseValidated: true`; another Intent in the source project
+cannot self-promote it. Trust, successful reuse count, failure count, and the
+provisional source task live in `.redtrace.json`, not in `SKILL.md`.
 
 The workspace manifest records each snapshot's version, revision, and trust.
 Retired Skills are disabled and excluded from later runtime snapshots. Every
@@ -98,6 +106,8 @@ and history storage.
 - Reject simple append-only replacements.
 - Bound replacement growth and total Skill count.
 - Reject repeated paragraphs and incomplete new/major Skills.
+- Detect canonical `SKILL.md` edits made outside `CapabilityStore` and expose
+  them as `provisional` out-of-band revisions instead of retaining stale trust.
 - Retire redundant Skills after a merge.
 - Prune only the oldest already-disabled Skill when the count limit is reached.
 - Never persist target addresses, accounts, secrets, task IDs, or temporary

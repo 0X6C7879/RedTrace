@@ -422,12 +422,14 @@ def _backfill_blackboard_events(conn: sqlite3.Connection) -> None:
 
 
 @contextmanager
-def get_conn() -> Generator[sqlite3.Connection, None, None]:
+def get_conn(*, immediate: bool = False) -> Generator[sqlite3.Connection, None, None]:
     assert _db_path is not None
     conn = sqlite3.connect(str(_db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    if immediate:
+        conn.execute("BEGIN IMMEDIATE")
     changes_before = conn.total_changes
     try:
         yield conn

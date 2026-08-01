@@ -11,8 +11,9 @@ import docker
 from docker.errors import APIError, DockerException, NotFound
 from docker.models.containers import Container
 from redtrace.dispatcher.config import ContainerConfig, ContextHarnessConfig
+from redtrace.dispatcher.runtime.backend import is_agent_runtime_state
 from redtrace.dispatcher.runtime.process import ManagedProcess
-from redtrace.paths import RedTracePaths, safe_project_key
+from redtrace.paths import RedTracePaths, contained_path, safe_project_key
 
 LOG = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ class ContainerManager:
                 name=name,
                 network_mode=self._config.network_mode,
                 cap_add=self._config.cap_add or None,
-                volumes=self._shared_volumes(),
+                volumes=self._shared_volumes(project_id),
             )
             LOG.info("created container project=%s container=%s", project_id, name)
             return self._ready(name)
@@ -253,20 +254,57 @@ class ContainerManager:
             max_output_chars=context_harness.worker_output_chars,
         )
 
-    def _shared_volumes(self) -> dict[str, dict[str, str]]:
+    def conversation_environment(
+        self, project_id: str, worker_type: str
+    ) -> dict[str, str]:
+        safe_project_key(project_id)
+        if worker_type == "claudecode":
+            return {"CLAUDE_CONFIG_DIR": "/home/kali/.claude"}
+        if worker_type == "codex":
+            return {"CODEX_HOME": "/home/kali/.codex"}
+        if worker_type == "pi":
+            return {"PI_CODING_AGENT_SESSION_DIR": "/home/kali/.pi/sessions"}
+        return {}
+
+    def _shared_volumes(self, project_id: str) -> dict[str, dict[str, str]]:
         if self._paths is None:
             return {}
+        project = contained_path(
+            self._paths.projects, safe_project_key(project_id), "conversations"
+        )
+        agent_homes = {
+            "claudecode": (Path.home() / ".claude", "/home/kali/.claude"),
+            "codex": (Path.home() / ".codex", "/home/kali/.codex"),
+        }
+        for directory, _ in agent_homes.values():
+            directory.mkdir(parents=True, exist_ok=True)
+        pi_home = Path.home() / ".pi"
+        pi_home.mkdir(parents=True, exist_ok=True)
+        for worker_type in (*agent_homes, "pi"):
+            (project / worker_type).mkdir(parents=True, exist_ok=True)
         bindings = {
+            self._host_source(project / "claudecode"): {
+                "bind": "/home/kali/.claude",
+                "mode": "rw",
+            },
+            self._host_source(project / "codex"): {
+                "bind": "/home/kali/.codex",
+                "mode": "rw",
+            },
+            self._host_source(pi_home): {
+                "bind": "/home/kali/.pi",
+                "mode": "rw",
+            },
+            self._host_source(project / "pi"): {
+                "bind": "/home/kali/.pi/sessions",
+                "mode": "rw",
+            },
             self._host_source(self._paths.skills): {
                 "bind": "/opt/redtrace/claude-plugin/skills",
                 "mode": "ro",
             },
             self._host_source(self._paths.mcp): {
                 "bind": "/opt/redtrace/mcp",
-                "mode": "ro",
-            },
-            self._host_source(self._paths.plugins): {
-                "bind": "/opt/redtrace/plugins",
                 "mode": "ro",
             },
             self._host_source(self._paths.runtime): {
@@ -277,11 +315,19 @@ class ContainerManager:
                 "bind": "/opt/redtrace/claude-plugin",
                 "mode": "ro",
             },
-            self._host_source(self._paths.workers): {
-                "bind": "/opt/redtrace/workers",
-                "mode": "rw",
+            self._host_source(self._paths.runtime / "mcp" / "pi.json"): {
+                "bind": "/home/kali/workspace/.pi/mcp.json",
+                "mode": "ro",
             },
         }
+        for worker_type, (user_home, container_home) in agent_homes.items():
+            for source in user_home.iterdir():
+                if is_agent_runtime_state(worker_type, source.name):
+                    continue
+                bindings[self._host_source(source)] = {
+                    "bind": f"{container_home}/{source.name}",
+                    "mode": "rw",
+                }
         return {str(source): spec for source, spec in bindings.items()}
 
     def _host_source(self, path: Path) -> Path:

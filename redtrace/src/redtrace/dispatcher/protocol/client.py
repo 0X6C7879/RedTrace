@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -107,6 +108,13 @@ class CairnClient:
             json={"worker": worker},
         )
 
+    def claim_intent(self, project_id: str, intent_id: str, worker: str) -> ApiResult:
+        return self._request_json(
+            "POST",
+            f"/projects/{project_id}/intents/{intent_id}/claim",
+            json={"worker": worker},
+        )
+
     def claim_reason(self, project_id: str, worker: str, trigger: str) -> ApiResult:
         return self._request_json(
             "POST",
@@ -188,7 +196,7 @@ class CairnClient:
         worker: str,
         task_type: str,
     ) -> ApiResult:
-        """Queue optional feedback quickly; never make task progress depend on it."""
+        """Finalize optional feedback before the current task can conclude."""
         payload = dict(feedback)
         payload["project_id"] = project_id
         payload["intent_id"] = intent_id
@@ -197,19 +205,29 @@ class CairnClient:
         impact = payload.get("impact")
         normalized_impact = dict(impact) if isinstance(impact, dict) else {}
         normalized_impact.setdefault("task_succeeded", False)
-        normalized_impact["step_verified"] = True
+        normalized_impact.setdefault("step_verified", False)
         normalized_impact.setdefault("tool_calls_saved", 0)
         normalized_impact.setdefault("invalid_steps_avoided", 0)
         normalized_impact.setdefault("duration_saved_ms", 0)
         payload["impact"] = normalized_impact
         try:
+            author_timeout = float(
+                os.environ.get("REDTRACE_SKILL_AUTHOR_TIMEOUT", "600")
+            )
+            finalize_timeout = float(
+                os.environ.get(
+                    "REDTRACE_SKILL_FINALIZE_TIMEOUT",
+                    str(author_timeout + 30),
+                )
+            )
+            finalize_timeout = max(self._timeout, finalize_timeout)
             response = self._session().post(
                 self._url("/capabilities/evolution/proposals"),
                 json=payload,
-                timeout=(0.15, 0.6),
+                timeout=(self._timeout, finalize_timeout),
             )
-        except requests.RequestException as exc:
-            LOG.debug("Skill feedback queue unavailable: %s", exc)
+        except (TypeError, ValueError, requests.RequestException) as exc:
+            LOG.warning("Skill feedback finalization unavailable: %s", exc)
             return ApiResult(status_code=0, text=str(exc))
         data: Any | None = None
         if response.headers.get("content-type", "").startswith("application/json"):

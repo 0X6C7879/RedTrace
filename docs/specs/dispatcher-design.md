@@ -25,7 +25,7 @@ Agent 不直接认领 Intent，不直接 heartbeat，不直接调用 RedTrace AP
 7. 运行日志按“状态变化优先”设计：稳定轮询、正常 heartbeat、重复 skip 原则上不刷屏；容器创建、任务派发、容器内新进程启动、健康检查、超时、收尾、释放 intent、worker 进入短暂不可选窗口等事件必须可见。
 8. 项目容器收尾不应阻塞主调度循环；多个已完成项目的容器 cleanup 可以并行进行。
 9. 项目切到非 `active` 后，Dispatcher 必须把它视为硬停止：不再派发新任务；对本地仍在运行的 `bootstrap`、`explore`、`reason` 任务立即发出取消；对已取消任务不再进入 conclude fallback；并在后续轮询中停止该项目容器，杀掉容器内仍在运行的 Agent 进程。
-10. 当前实现按“单 Dispatcher 实例”设计和测试；不支持多个 Dispatcher 同时连接同一服务端共同调度。
+10. 当前实现按“单 Dispatcher 实例”设计和测试；CLI 会按 Server 地址加进程锁，拒绝本机第二个 Dispatcher 连接同一服务端共同调度。
 11. 若项目曾 `completed` 后又被服务端显式 `reopen` 为 `active`，Dispatcher 不做特殊分支：它会把这视为普通 active 项目继续调度；同时若该项目容器仍处于已排队 cleanup 状态，Dispatcher 会先等待 cleanup 完成，避免与旧的 completed/stopped cleanup 竞态。
 12. 已知限制：当前协议只记录当前 claim 持有者，不保留 Intent 的 worker 历史；因此项目被 `stopped` 后，随着 open intent 的 `worker` 被服务端清空，Dispatcher/UI/API 都无法直接展示“停止前最后是谁在推进这个 intent”。后续若要补这部分可观测性，较合理的方向是在 Intent 上增加类似 `worker_history` 的历史字段，而不是改变当前 claim 语义。
 
@@ -149,7 +149,7 @@ Worker 选择规则：
 4. 在剩余 Worker 中，优先选择 `priority` 更小的
 5. 如果 `priority` 相同，则优先选择当前运行中任务数更少的
 6. 如果仍然相同，则随机选择
-7. 如果是 `explore`，Dispatcher 先通过 `POST /projects/{project_id}/intents/{intent_id}/heartbeat` claim 成功，再真正启动任务
+7. 如果是 `explore`，Dispatcher 先通过 `POST /projects/{project_id}/intents/{intent_id}/claim` 原子认领成功，再真正启动任务；`heartbeat` 只续租，不能认领
 8. 如果是 `reason`，claim 成功后由 `POST /projects/{project_id}/reason/heartbeat` 维持 lease；当 `runtime.worker_healthcheck=startup_and_task` 时，真正启动前再对选中的 Worker 执行一次健康检查；如果失败，则本次任务作废；该 Worker 会进入一个短暂不可选窗口，等待后续轮次再尝试
 
 ---
@@ -585,8 +585,8 @@ if running_project_count < runtime.max_running_projects:
 
 ### 并发约束
 
-- 当前设计下，只支持一个 Dispatcher 实例连接同一服务端执行调度
-- 如果同时运行多个 Dispatcher，本地维护的 admission、Worker 健康状态、并发计数、容器清理和 bootstrap 去重都不会跨进程协调，因此不属于支持场景
+- 当前设计下，只支持一个 Dispatcher 实例连接同一服务端执行调度；CLI 按规范化 Server 地址加进程锁，重复启动会立即失败
+- 多任务并行由单个 Dispatcher 的线程池完成，不应通过复制配置并启动多个 Dispatcher 扩容；本地维护的 admission、Worker 健康状态、并发计数、容器清理和 bootstrap 去重不会跨进程协调
 - 单个项目内，同一时刻最多只能有一个 `bootstrap` 任务在运行
 - Dispatcher 会尽力让单个项目在初始态时只保留一个 open `bootstrap` intent
 - 单个项目内，同一时刻最多只能有一个 `reason` 任务在运行

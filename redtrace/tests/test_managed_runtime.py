@@ -91,7 +91,7 @@ def test_config_paths_are_anchored_to_config_file_not_cwd(
     assert loaded.local.workspace_root == str((root / "workspaces").resolve())
 
 
-def test_worker_state_is_reused_and_workspace_has_no_agent_copies(
+def test_workers_use_native_agent_state_and_shared_capabilities(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -101,6 +101,10 @@ def test_worker_state_is_reused_and_workspace_has_no_agent_copies(
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text("# recon\n", encoding="utf-8")
     layout.mcp.mkdir()
+    (layout.mcp / "filesystem.json").write_text(
+        '{"command":"mcp-filesystem","args":["."]}\n',
+        encoding="utf-8",
+    )
     layout.plugins.mkdir()
     (layout.plugins / "manifest.json").write_text(
         '{"schemaVersion":1,"plugins":[]}\n',
@@ -140,12 +144,22 @@ def test_worker_state_is_reused_and_workspace_has_no_agent_copies(
     assert manager.refresh_capabilities(workers) is False
     assert scans == 2
     assert (layout.runtime / "bin" / "redtrace-skill").is_file()
-    assert (layout.workers / "pi" / "pi-a" / "sessions").is_dir()
-    assert (layout.workers / "pi" / "pi-b" / "sessions").is_dir()
-    assert (
-        workers[0].env["PI_CODING_AGENT_DIR"] != workers[1].env["PI_CODING_AGENT_DIR"]
-    )
+    assert (layout.runtime / "mcp" / "claude.json").is_file()
+    assert (layout.runtime / "mcp" / "pi.json").is_file()
+    assert not (layout.managed / "workers").exists()
+    isolated_keys = {
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "PI_CODING_AGENT_DIR",
+        "PI_CODING_AGENT_SESSION_DIR",
+        "REDTRACE_PI_SESSION_DIR",
+    }
+    assert all(isolated_keys.isdisjoint(worker.env) for worker in workers)
     assert json.loads(workers[0].env["REDTRACE_SKILL_PATHS"]) == [str(skill.resolve())]
+    resource_args = workers[0].env["REDTRACE_CODEX_RESOURCE_ARGS"]
+    assert "mcp_servers.filesystem.command" in resource_args
+    assert "sqlite_home" not in resource_args
+    assert workers[0].env["REDTRACE_PI_MCP_EXTENSION"] == "npm:pi-mcp-extension@1.5.0"
     workspace = layout.workspaces / "project-1"
     workspace.mkdir()
     assert not any(
