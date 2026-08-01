@@ -11,7 +11,7 @@
 <script src="/static/vendor/dagre.min.js"></script>
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/vendor/cytoscape-dagre.js"></script>
-<script defer src="/static/audit.js?v=20260726-logs3"></script>
+<script defer src="/static/audit.js?v=20260801-skill-name"></script>
 <script defer src="/static/capabilities.js"></script>
 <script defer src="/static/operations.js"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
@@ -1341,7 +1341,7 @@
                   <div class="audit-skill flex items-center gap-2 px-3 py-2 text-xs text-slate-500">
                     <svg class="h-3.5 w-3.5 shrink-0 text-violet-400" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M12 3.5 14.3 8l4.7.7-3.4 3.3.8 4.7-4.4-2.3-4.4 2.3.8-4.7L5 8.7 9.7 8z"/></svg>
                     <span class="text-slate-400">Skill</span>
-                    <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-violet-600" x-text="event.skill_name || '未知技能'"></span>
+                    <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-violet-600" x-text="displaySkillName(event)"></span>
                     <span class="text-[10px]" :class="event.kind === 'skill.completed' ? 'text-emerald-500' : 'text-amber-500'" x-text="event.kind === 'skill.completed' ? '已加载' : '加载中'"></span>
                   </div>
                 </template>

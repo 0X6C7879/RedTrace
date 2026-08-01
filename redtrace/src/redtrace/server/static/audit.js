@@ -283,6 +283,11 @@ function auditPage() {
       return ['skill.started', 'skill.completed'].includes(event.kind);
     },
 
+    displaySkillName(event) {
+      const name = String(event?.skill_name || '').trim();
+      return name.replace(/^redtrace-capabilities:/, '') || '未知技能';
+    },
+
     isShellTool(event) {
       if (!event || !['tool.started', 'tool.completed'].includes(event.kind)) return false;
       const title = String(event.title || '').trim().toLowerCase().replaceAll('_', ' ');

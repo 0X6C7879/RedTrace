@@ -470,6 +470,16 @@ def test_static_audit_command_expands_without_ellipsis() -> None:
     assert "white-space: pre-wrap" in styles
 
 
+def test_static_audit_hides_claude_skill_plugin_namespace() -> None:
+    static_dir = Path(__file__).parents[1] / "src" / "redtrace" / "server" / "static"
+    index = (static_dir / "index.html").read_text(encoding="utf-8")
+    audit = (static_dir / "audit.js").read_text(encoding="utf-8")
+
+    assert 'x-text="displaySkillName(event)"' in index
+    assert "replace(/^redtrace-capabilities:/, '')" in audit
+    assert "/static/audit.js?v=20260801-skill-name" in index
+
+
 def test_successful_worker_stderr_is_not_rendered_as_worker_error(
     tmp_path: Path,
 ) -> None:
