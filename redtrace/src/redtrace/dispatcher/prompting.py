@@ -11,6 +11,10 @@ LANGUAGE_GUIDANCE = """## 输出语言
 自然语言及 JSON 自由文本值须用简体中文。
 JSON key、enum/status、phase、工具/Skill/MCP/plugin 名、命令、代码、路径、占位符和原始输出/错误保持原样；raw JSON contract 只输出 JSON。"""
 
+FINAL_OUTPUT_CONTRACT = """## Final output contract
+
+只返回一个符合本任务上方 schema 的 raw JSON object，不得输出 Markdown、代码围栏或解释文字。顶层 `skillFeedback` 可选；主任务字段必须完整。"""
+
 
 def load_prompt(group: str, name: str) -> str:
     return (
@@ -43,8 +47,6 @@ def add_blackboard_guidance(
     task_type: str = "explore",
     context_harness_enabled: bool = True,
     local_execution: bool = False,
-    skill_index: str = "",
-    worker_type: str = "",
 ) -> str:
     if task_type not in {"bootstrap", "reason", "explore"}:
         raise ValueError(f"unsupported task type: {task_type}")
@@ -90,29 +92,10 @@ def add_blackboard_guidance(
             "调用一次 `redtrace-resource changes --since <audit_cursor>`；这是 decision-point refresh，不是 timer。"
             "不得索取已存储的 secret。"
         )
-    # Skill-first matching rule: active, not passive.
-    if task_type != "reason" and skill_index:
-        if worker_type == "pi":
-            invoke_hint = (
-                "匹配时读取 `$REDTRACE_SKILLS_DIR/<skill-name>/SKILL.md` 并遵循 procedure；"
-                "选最具体的 Skill，必要时最多组合 10 个。"
-            )
-        else:
-            invoke_hint = (
-                "匹配时用原生 Skill tool 调用 `redtrace-capabilities:<skill-name>`；"
-                "选最具体的 Skill，必要时最多组合 10 个。"
-            )
+    if task_type != "reason":
         sections.append(
-            "## Skill-first 匹配\n\n"
-            "首次实质操作前按下方 Available Skills index 匹配；它是 Skill name/description 的权威来源。\n"
-            f"- {invoke_hint}\n"
-            "- 无匹配项就继续；phase 变化或确认 vulnerability/tool type 时重试。\n"
-            "- 不得仅为匹配额外调用 model。\n\n"
-            f"Available Skills：\n{skill_index}"
-        )
-    elif task_type != "reason":
-        sections.append(
-            "Skill、MCP 和 plugin 由 RedTrace root 共享。开始实质工作前，使用原生 Skill loading 机制发现并调用相关 Skill。"
+            "Skill、MCP 和 plugin 由 RedTrace root 共享。首次实质操作前用 Worker 原生 Skill 机制发现并调用最具体的相关 Skill；"
+            "默认只用一个主 Skill，确有缺口时再加一个辅助 Skill，不得额外调用 model 做匹配。"
         )
     sections.append(
         "## Skill feedback checkpoint\n\n"
@@ -137,15 +120,14 @@ def add_blackboard_guidance(
             "确认 shell（PowerShell/Bash），不得将 PowerShell syntax 传给 Bash。使用 Workspace path，RTK 置于最外层；"
             "需要时运行 `rtk proxy powershell -NoProfile -Command <script>`。"
         )
-    if not context_harness_enabled or task_type == "reason":
-        return guidance
-    return (
-        guidance
-        + "\n\n## Context Harness (post-RTK)\n\n"
-        "继续优先使用 RTK。仍然过大的 tool/HTTP/page output 通过 `redtrace-context run -- rtk ...` 处理，"
-        "优先 structured output。raw data 存于 `.redtrace/artifacts/context`；用有界 selector 查询 evidence，"
-        "不要重复读取。不得另建 Idea、Memory 或 task-state store。只为已确认结论写入 Fact，并包含 evidence ID/path。"
-    )
+    if context_harness_enabled and task_type != "reason":
+        guidance += (
+            "\n\n## Context Harness (post-RTK)\n\n"
+            "继续优先使用 RTK。仍然过大的 tool/HTTP/page output 通过 `redtrace-context run -- rtk ...` 处理，"
+            "优先 structured output。raw data 存于 `.redtrace/artifacts/context`；用有界 selector 查询 evidence，"
+            "不要重复读取。不得另建 Idea、Memory 或 task-state store。只为已确认结论写入 Fact，并包含 evidence ID/path。"
+        )
+    return guidance + "\n\n" + FINAL_OUTPUT_CONTRACT
 
 
 def format_fact_ids(fact_ids: list[str]) -> str:
@@ -162,22 +144,3 @@ def format_hints(hints: list[dict[str, Any]]) -> str:
 
 def format_json_block(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
-
-
-def build_skill_index(skills: list[dict[str, str]]) -> str:
-    """Build a compact skill index for prompt injection.
-
-    Each enabled skill becomes one line: ``- name: description``.
-    Descriptions are truncated to keep the prompt lightweight.
-    """
-    if not skills:
-        return ""
-    lines: list[str] = []
-    for skill in skills:
-        name = skill.get("name", "")
-        description = skill.get("description", "")
-        if not name:
-            continue
-        entry = f"- {name}: {description}"
-        lines.append(entry)
-    return "\n".join(lines)

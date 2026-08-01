@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -91,15 +90,6 @@ class CairnClient:
         response = self._session().get(self._url("/settings"), timeout=self._timeout)
         response.raise_for_status()
         return Settings.model_validate(response.json())
-
-    def export_project(self, project_id: str) -> str:
-        response = self._session().get(
-            self._url(f"/projects/{project_id}/export"),
-            params={"format": "yaml"},
-            timeout=self._timeout,
-        )
-        response.raise_for_status()
-        return response.text
 
     def heartbeat(self, project_id: str, intent_id: str, worker: str) -> ApiResult:
         return self._request_json(
@@ -196,7 +186,7 @@ class CairnClient:
         worker: str,
         task_type: str,
     ) -> ApiResult:
-        """Finalize optional feedback before the current task can conclude."""
+        """Persist optional feedback for asynchronous evolution."""
         payload = dict(feedback)
         payload["project_id"] = project_id
         payload["intent_id"] = intent_id
@@ -211,23 +201,13 @@ class CairnClient:
         normalized_impact.setdefault("duration_saved_ms", 0)
         payload["impact"] = normalized_impact
         try:
-            author_timeout = float(
-                os.environ.get("REDTRACE_SKILL_AUTHOR_TIMEOUT", "600")
-            )
-            finalize_timeout = float(
-                os.environ.get(
-                    "REDTRACE_SKILL_FINALIZE_TIMEOUT",
-                    str(author_timeout + 30),
-                )
-            )
-            finalize_timeout = max(self._timeout, finalize_timeout)
             response = self._session().post(
                 self._url("/capabilities/evolution/proposals"),
                 json=payload,
-                timeout=(self._timeout, finalize_timeout),
+                timeout=(0.2, 0.8),
             )
-        except (TypeError, ValueError, requests.RequestException) as exc:
-            LOG.warning("Skill feedback finalization unavailable: %s", exc)
+        except requests.RequestException as exc:
+            LOG.warning("Skill feedback queue unavailable: %s", exc)
             return ApiResult(status_code=0, text=str(exc))
         data: Any | None = None
         if response.headers.get("content-type", "").startswith("application/json"):

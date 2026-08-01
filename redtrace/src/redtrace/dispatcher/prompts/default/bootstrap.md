@@ -20,7 +20,6 @@
 ```
 
 # 规则
-- 首次实质操作前，检查 Available Skills index（若下方提供）并调用与当前任务领域匹配的 Skill。任务 phase 变化或确认具体 vulnerability type 时重新检查。
 - 若问题尚未解决，不要在 bootstrap 阶段尝试完成整个任务。先确认 target shape、constraint、credential、reachable service 或其他高价值客观事实，再返回 `fact` payload。
 - 若同一 session 随后收到 conclude phase 指令，新指令立即覆盖继续工作的要求。此时停止探索、等待、运行或规划其他操作，并立即返回所要求的 summary JSON。
 - 仅当本 session 已明确实现 Goal 时输出 `complete`。Goal 尚未实现时，不得输出 `complete`，不得把部分进展总结为完成；继续工作，直到 conclude phase 指令替代本任务。

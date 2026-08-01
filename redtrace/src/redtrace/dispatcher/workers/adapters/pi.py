@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from typing import Any
 
 from redtrace.capabilities import (
@@ -198,8 +199,7 @@ class PiDriver(WorkerDriver):
         return [argument for path in paths for argument in ("--skill", path)]
 
     @staticmethod
-    def _iter_events(stdout: str) -> list[dict[str, Any]]:
-        events: list[dict[str, Any]] = []
+    def _iter_events(stdout: str) -> Iterator[dict[str, Any]]:
         for line in stdout.splitlines():
             line = line.strip()
             if not line:
@@ -209,5 +209,4 @@ class PiDriver(WorkerDriver):
             except json.JSONDecodeError:
                 continue
             if isinstance(payload, dict):
-                events.append(payload)
-        return events
+                yield payload

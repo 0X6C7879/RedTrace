@@ -289,7 +289,12 @@ def submit_evolution(body: EvolutionProposal, request: Request):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     if worker is not None:
-        return worker.finalize(proposal_id)
+        worker.notify()
+        return {
+            "proposalId": proposal_id,
+            "status": "queued",
+            "reason": "candidate queued for background evolution",
+        }
     engine.process_pending(proposal_id=proposal_id)
     return engine.decision_for(proposal_id)
 

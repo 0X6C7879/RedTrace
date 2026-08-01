@@ -30,6 +30,7 @@ from redtrace.dispatcher.workers.registry import get_driver
 from redtrace.server.models import ProjectDetail
 
 LOG = logging.getLogger(__name__)
+FORMAT_REPAIR_TIMEOUT_SECONDS = 60
 
 
 def run_reason_task(
@@ -125,8 +126,6 @@ def run_reason_task(
                 task_type="reason",
                 context_harness_enabled=config.context_harness.enabled,
                 local_execution=config.runtime.execution == "local",
-                skill_index=worker.env.get("REDTRACE_SKILL_INDEX", ""),
-                worker_type=worker.type,
             )
 
         session = driver.prepare_session()
@@ -194,31 +193,115 @@ def run_reason_task(
         try:
             model_output = driver.extract_response_text(result.stdout, result.stderr)
             payload = parse_json_output(model_output)
-            queue_skill_feedback(
-                client,
-                payload,
-                project_id=project.project.id,
-                intent_id=None,
-                worker_name=worker.name,
-                task_type="reason",
-            )
             kind, data = validate_reason_payload(
                 payload,
                 open_intents_empty=not open_intents,
                 max_intents=config.tasks.reason.max_intents,
             )
         except Exception as exc:
-            LOG.warning(
-                "reason parse failed project=%s worker=%s error=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
+            if not driver.supports_conclude() or session is None:
+                LOG.warning(
+                    "reason parse failed project=%s worker=%s error=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
+                    project.project.id,
+                    worker.name,
+                    exc,
+                    execute_ms,
+                    total_ms,
+                    preview(result.stdout),
+                    preview(result.stderr),
+                )
+                return "failed"
+            LOG.info(
+                "reason output invalid; requesting format-only repair project=%s worker=%s error=%s",
                 project.project.id,
                 worker.name,
                 exc,
-                execute_ms,
-                total_ms,
-                preview(result.stdout),
-                preview(result.stderr),
             )
-            return "failed"
+            repair_prompt = (
+                "你上一条最终响应不符合 reason JSON contract。\n"
+                f"校验错误：{preview(str(exc), 300)}\n"
+                "不得调用工具、继续分析或重复任务。立即只返回一个修正后的 raw JSON object，"
+                "不得输出 Markdown 或解释文字。只允许以下三种主结构：\n"
+                '{"accepted":false,"reason":"policy_refusal"}\n'
+                '{"accepted":true,"data":{"complete":{"from":["fact-id"],"description":"..."}}}\n'
+                '{"accepted":true,"data":{"intents":[{"from":["fact-id"],"description":"..."}]}}\n'
+                "顶层 skillFeedback 可选。"
+            )
+            try:
+                repair_command = driver.build_conclude(worker, repair_prompt, session)
+                repair = run_worker_process(
+                    container_manager,
+                    container_name,
+                    worker,
+                    repair_command.argv,
+                    stdin_text=repair_command.stdin,
+                    client=client,
+                    project_id=project.project.id,
+                    blackboard_revision=project.blackboard_revision,
+                    phase="reason_format_repair",
+                    timeout_seconds=min(
+                        config.tasks.reason.timeout, FORMAT_REPAIR_TIMEOUT_SECONDS
+                    ),
+                    lease=lease,
+                    cancellation=cancellation,
+                )
+            except Exception as repair_exc:
+                LOG.warning(
+                    "reason format repair execution failed project=%s worker=%s error=%s",
+                    project.project.id,
+                    worker.name,
+                    repair_exc,
+                )
+                return "failed"
+            cancelled = cancel_reason(repair, cancellation)
+            if cancelled is not None:
+                LOG.info(
+                    "reason format repair cancelled project=%s worker=%s reason=%s",
+                    project.project.id,
+                    worker.name,
+                    cancelled,
+                )
+                return "cancelled"
+            if lease.failure is not None or did_timeout(repair) or repair.returncode != 0:
+                LOG.warning(
+                    "reason format repair failed project=%s worker=%s code=%s timed_out=%s stdout_preview=%s stderr_preview=%s",
+                    project.project.id,
+                    worker.name,
+                    repair.returncode,
+                    repair.timed_out,
+                    preview(repair.stdout),
+                    preview(repair.stderr),
+                )
+                return "failed"
+            try:
+                model_output = driver.extract_response_text(
+                    repair.stdout, repair.stderr
+                )
+                payload = parse_json_output(model_output)
+                kind, data = validate_reason_payload(
+                    payload,
+                    open_intents_empty=not open_intents,
+                    max_intents=config.tasks.reason.max_intents,
+                )
+            except Exception as repair_exc:
+                LOG.warning(
+                    "reason format repair invalid project=%s worker=%s error=%s stdout_preview=%s stderr_preview=%s",
+                    project.project.id,
+                    worker.name,
+                    repair_exc,
+                    preview(repair.stdout),
+                    preview(repair.stderr),
+                )
+                return "failed"
+            result = repair
+        queue_skill_feedback(
+            client,
+            payload,
+            project_id=project.project.id,
+            intent_id=None,
+            worker_name=worker.name,
+            task_type="reason",
+        )
         if kind == "rejected":
             LOG.warning(
                 "reason rejected project=%s worker=%s execute_ms=%s total_ms=%s stdout_preview=%s",

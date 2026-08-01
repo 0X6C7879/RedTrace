@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -220,6 +221,15 @@ def test_audit_events_are_task_scoped_and_workspace_is_browsable(
 
     history = client.get(f"/audit/tasks/{project_id}/events").json()
     assert [event["kind"] for event in history] == ["user.message", "assistant.message"]
+    assert history[0]["content"] == "inspect the script"
+    with db.get_conn() as conn:
+        stored = json.loads(
+            conn.execute(
+                "SELECT payload FROM audit_events WHERE event_uid = ?",
+                ("event-001",),
+            ).fetchone()["payload"]
+        )
+    assert "content" not in stored
 
     tree = client.get(f"/audit/tasks/{project_id}/workspace").json()
     assert tree["entries"][0]["name"] == "scripts"

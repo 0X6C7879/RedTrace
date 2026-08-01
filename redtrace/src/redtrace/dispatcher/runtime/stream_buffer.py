@@ -15,7 +15,7 @@ class BoundedTextBuffer:
         self.max_chars = max(16, max_chars)
         self.prefix_chars = min(
             self.max_chars // 2,
-            prefix_chars if prefix_chars is not None else 256 * 1024,
+            prefix_chars if prefix_chars is not None else 64 * 1024,
         )
         self.tail_chars = self.max_chars - self.prefix_chars
         self._prefix: list[str] = []

@@ -7,6 +7,7 @@ from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.process import ProcessResult
 from redtrace.dispatcher.workers.health import HealthResult
 from redtrace.dispatcher.tasks import bootstrap, explore, reason
+from redtrace.dispatcher.tasks.common import queue_skill_feedback
 
 from conftest import (
     FakeClient,
@@ -66,6 +67,90 @@ def test_reason_writes_graph_snapshot_and_creates_intent(monkeypatch) -> None:
     assert content == graph_yaml
     assert graph_yaml not in driver.execute_prompts[0]
     assert path in driver.execute_prompts[0]
+    assert driver.conclude_prompts == []
+
+
+def test_reason_repairs_invalid_format_once(monkeypatch) -> None:
+    config = make_config()
+    project = make_project()
+    client = FakeClient(project)
+    containers = FakeContainerManager()
+    driver = FakeDriver()
+    lease = FakeLease()
+    results: Iterator[ProcessResult] = iter(
+        [
+            ProcessResult(0, "analysis finished, but this is not JSON", ""),
+            ProcessResult(
+                0,
+                '{"accepted":true,"data":{"intents":[{"from":["f001"],"description":"next"}]}}',
+                "",
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(reason, "get_driver", lambda *_a, **_k: driver)
+    monkeypatch.setattr(reason.HeartbeatLease, "for_reason", _lease_factory(lease))
+    monkeypatch.setattr(
+        reason, "run_worker_process", lambda *_args, **_kwargs: next(results)
+    )
+
+    outcome = reason.run_reason_task(
+        config,
+        client,
+        containers,
+        project,
+        "graph",
+        config.workers[0],
+        TaskCancellation(),
+    )
+
+    assert outcome == "success"
+    assert client.created_intents == [("proj_001", ["f001"], "next", "test-worker")]
+    assert len(driver.conclude_prompts) == 1
+    assert "不得调用工具" in driver.conclude_prompts[0]
+
+
+def test_explore_queues_feedback_only_after_main_payload_validation(monkeypatch) -> None:
+    config = make_config()
+    intent = make_intent()
+    project = make_project(intents=[intent])
+    client = FakeClient(project)
+    driver = FakeDriver()
+    lease = FakeLease()
+    queued: list[dict] = []
+    results: Iterator[ProcessResult] = iter(
+        [
+            ProcessResult(
+                0,
+                '{"accepted":true,"data":{},"skillFeedback":{"target_skill":"recon","summary":"invalid result"}}',
+                "",
+            ),
+            ProcessResult(0, '{"accepted":true,"data":{"description":"fact"}}', ""),
+        ]
+    )
+
+    monkeypatch.setattr(explore, "get_driver", lambda *_a, **_k: driver)
+    monkeypatch.setattr(explore.HeartbeatLease, "for_intent", _lease_factory(lease))
+    monkeypatch.setattr(explore, "_run_process", lambda *_args, **_kwargs: next(results))
+    monkeypatch.setattr(
+        explore,
+        "queue_skill_feedback",
+        lambda _client, payload, **_kwargs: queued.append(payload),
+    )
+
+    outcome = explore.run_explore_task(
+        config,
+        client,
+        FakeContainerManager(),
+        project,
+        "graph",
+        intent,
+        config.workers[0],
+        TaskCancellation(),
+    )
+
+    assert outcome == "success"
+    assert queued == [{"accepted": True, "data": {"description": "fact"}}]
 
 
 def test_explore_early_plain_text_exit_uses_conclude_fallback(monkeypatch) -> None:
@@ -100,9 +185,8 @@ def test_explore_early_plain_text_exit_uses_conclude_fallback(monkeypatch) -> No
 
     assert outcome == "success"
     assert client.concluded == [("proj_001", "i001", "test-worker", "confirmed fact")]
-    assert len(containers.writes) == 2
+    assert len(containers.writes) == 1
     assert "/explore_execute-" in containers.writes[0][1]
-    assert "/explore_conclude-" in containers.writes[1][1]
     assert len(driver.execute_prompts) == 1
     assert len(driver.conclude_prompts) == 1
     assert lease.started and lease.stopped
@@ -174,6 +258,21 @@ def test_bootstrap_success_concludes_fact_then_completes_project(monkeypatch) ->
     assert client.concluded == [("proj_001", "i001", "test-worker", "solved")]
     assert client.completed == [("proj_001", ["f002"], "goal met", "test-worker")]
     assert lease.started and lease.stopped
+
+
+def test_skill_feedback_failure_does_not_change_task_result() -> None:
+    class UnavailableClient:
+        def submit_skill_feedback(self, *_args, **_kwargs) -> ApiResult:
+            raise RuntimeError("offline")
+
+    queue_skill_feedback(
+        UnavailableClient(),
+        {"skillFeedback": {"target_skill": "recon", "summary": "reuse this"}},
+        project_id="project",
+        intent_id="intent",
+        worker_name="worker",
+        task_type="explore",
+    )
 
 
 def test_bootstrap_partial_fact_concludes_without_completing_project(monkeypatch) -> None:

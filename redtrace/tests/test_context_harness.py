@@ -32,6 +32,7 @@ from redtrace.dispatcher.runtime.stream_buffer import (
     BoundedTextBuffer,
     TRUNCATED_STREAM_LINE,
 )
+from redtrace.dispatcher.tasks.common import preview
 
 
 CLI = Path(context_cli_file)
@@ -390,6 +391,13 @@ def test_live_audit_line_emitter_bounds_pathological_single_records() -> None:
     assert emitted == [TRUNCATED_STREAM_LINE, "normal\n"]
 
 
+def test_log_preview_bounds_work_before_compacting() -> None:
+    value = preview(("word \n" * 10_000), limit=100)
+
+    assert len(value) <= 103
+    assert value.endswith("...")
+
+
 def test_prompt_guidance_reuses_existing_state_and_bounded_queries() -> None:
     prompt = add_blackboard_guidance(
         "task",
@@ -433,6 +441,8 @@ def test_prompt_guidance_reuses_existing_state_and_bounded_queries() -> None:
     assert "`--version` 和最小 smoke check" in prompt
     assert "不得循环或阻塞" in prompt
     assert "Context Harness" not in disabled
+    assert prompt.rstrip().endswith("主任务字段必须完整。")
+    assert disabled.rstrip().endswith("主任务字段必须完整。")
 
 
 def test_prompt_guidance_is_scoped_by_task_type() -> None:
@@ -446,6 +456,7 @@ def test_prompt_guidance_is_scoped_by_task_type() -> None:
     assert "Active WebShell 与 C2" not in reason
     assert "Context Harness" not in reason
     assert "Active WebShell 与 C2" in explore
+    assert reason.rstrip().endswith("主任务字段必须完整。")
     assert len(reason) < 1500
     assert len(bootstrap) < len(explore)
 
@@ -457,4 +468,4 @@ def test_context_harness_defaults_are_sized_for_long_tasks() -> None:
     assert config.visible_bytes == 64 * 1024
     assert config.query_bytes == 1024 * 1024
     assert config.parse_bytes == 64 * 1024 * 1024
-    assert config.worker_output_chars == 32 * 1024 * 1024
+    assert config.worker_output_chars == 8 * 1024 * 1024

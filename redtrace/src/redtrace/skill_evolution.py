@@ -712,14 +712,14 @@ class SkillEvolutionEngine:
 
     def pending_count(self) -> int:
         return (
-            len(list(self.inbox.glob("*.json")))
+            sum(1 for _ in self.inbox.glob("*.json"))
             if self.inbox.is_dir()
             else 0
         )
 
     def deferred_count(self) -> int:
         return (
-            len(list(self.deferred.glob("*.json")))
+            sum(1 for _ in self.deferred.glob("*.json"))
             if self.deferred.is_dir()
             else 0
         )
@@ -1059,9 +1059,8 @@ class SkillEvolutionEngine:
     ) -> int:
         """Finalize queued candidates serially.
 
-        ``proposal_id`` is the task-end fast path: it finalizes the candidate
-        produced by the current task before that task is concluded. The
-        background worker continues to use the bounded batch path.
+        ``proposal_id`` restricts an explicit caller to one candidate. The
+        background worker uses the bounded batch path.
         """
         with self._process_lock:
             return self._process_pending_locked(
@@ -1853,11 +1852,6 @@ class SkillEvolutionWorker:
 
     def notify(self) -> None:
         self._event.set()
-
-    def finalize(self, proposal_id: str) -> dict[str, Any]:
-        """Finalize the current task's candidate before task conclusion."""
-        self.engine.process_pending(proposal_id=proposal_id)
-        return self.engine.decision_for(proposal_id)
 
     def stop(self) -> None:
         self._stop.set()

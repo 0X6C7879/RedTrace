@@ -380,16 +380,33 @@ def test_dispatcher_uses_only_spare_worker_capacity_for_skill_verification() -> 
             submitted.append(args)
             return Future()
 
-    loop.executor = Executor()
+    loop.skill_executor = Executor()
     loop._wakeup = threading.Event()
 
-    loop._dispatch_skill_verification()
+    loop._dispatch_skill_verification([_summary("active", "active")])
+    assert claimed == []
+
+    loop._dispatch_skill_verification([])
 
     assert claimed == ["codex-idle"]
     assert len(submitted) == 1
     task = next(iter(loop.skill_futures.values()))
     assert task == SkillVerificationTask("proposal-1", "codex-idle")
-    assert loop._running_task_count() == 1
+    assert loop._running_task_count() == 0
+
+
+def test_stable_summary_skips_project_detail_request() -> None:
+    loop = _loop()
+    loop.config = make_config()
+    loop.container_manager = SimpleNamespace(container_name=lambda project_id: project_id)
+    loop.client = SimpleNamespace(
+        get_project=lambda project_id: (_ for _ in ()).throw(
+            AssertionError(f"unexpected detail request for {project_id}")
+        )
+    )
+    loop.reason_checkpoints["stable"] = ReasonCheckpoint(2, 0, 0)
+
+    assert loop._try_dispatch_project(_summary("stable", "active")) is False
 
 
 def test_disabled_worker_healthcheck_skips_automatic_startup_but_force_runs_diagnostic() -> (

@@ -209,7 +209,7 @@ class ContextHarnessConfig(BaseModel):
     visible_bytes: int = Field(default=64 * 1024, ge=512)
     query_bytes: int = Field(default=1024 * 1024, ge=1024)
     parse_bytes: int = Field(default=64 * 1024 * 1024, ge=64 * 1024)
-    worker_output_chars: int = Field(default=32 * 1024 * 1024, ge=64 * 1024)
+    worker_output_chars: int = Field(default=8 * 1024 * 1024, ge=64 * 1024)
 
     @field_validator("artifact_root")
     @classmethod

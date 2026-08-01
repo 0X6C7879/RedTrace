@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -241,7 +242,7 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
         assert plugin_dir.is_dir()
 
 
-def test_evolution_api_returns_terminal_decision_before_response(
+def test_evolution_api_queues_before_background_processing(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -262,9 +263,14 @@ def test_evolution_api_returns_terminal_decision_before_response(
 
         assert response.status_code == 200
         decision = response.json()
-        assert decision["status"] == "deferred"
+        assert decision["status"] == "queued"
         assert decision["proposalId"]
-        status = client.get("/capabilities/evolution").json()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            status = client.get("/capabilities/evolution").json()
+            if status["deferred"] == 1:
+                break
+            time.sleep(0.01)
         assert status["pending"] == 0
         assert status["deferred"] == 1
         assert status["deferredItems"][0]["evidenceTier"] == "unmeasured"

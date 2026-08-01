@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 
 from redtrace.dispatcher.config import ContainerConfig
 from redtrace.dispatcher.protocol.client import ApiResult
@@ -137,6 +138,31 @@ def test_container_mounts_project_conversations_and_native_agent_config(
     assert "/opt/redtrace/workers" not in targets
     assert volumes[str(paths.mcp.resolve())]["bind"] == "/opt/redtrace/mcp"
     assert "/opt/redtrace/plugins" not in targets
+
+
+def test_host_mount_lookup_is_cached(monkeypatch, tmp_path: Path) -> None:
+    calls = 0
+
+    def get(_name: str):
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(
+            attrs={
+                "Mounts": [
+                    {"Destination": str(tmp_path), "Source": "C:/host/redtrace"}
+                ]
+            }
+        )
+
+    manager = ContainerManager.__new__(ContainerManager)
+    manager._client = SimpleNamespace(containers=SimpleNamespace(get=get))
+    manager._host_mounts = None
+    monkeypatch.setenv("HOSTNAME", "dispatcher")
+
+    manager._host_source(tmp_path / "one")
+    manager._host_source(tmp_path / "two")
+
+    assert calls == 1
 
 
 def test_completed_container_stop_action_only_stops_running_container() -> None:

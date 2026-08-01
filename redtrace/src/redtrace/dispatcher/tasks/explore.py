@@ -93,15 +93,16 @@ def run_explore_task(
                 best_effort_release(client, project.project.id, intent.id, worker.name)
                 return "unhealthy"
 
+        graph_reference = write_graph_snapshot_reference(
+            container_manager,
+            container_name,
+            export_yaml.strip(),
+            phase="explore_execute",
+        )
         prompt = render_prompt(
             load_prompt(config.runtime.prompt_group, "explore.md"),
             {
-                "graph_yaml": write_graph_snapshot_reference(
-                    container_manager,
-                    container_name,
-                    export_yaml.strip(),
-                    phase="explore_execute",
-                ),
+                "graph_yaml": graph_reference,
                 "intent_id": intent.id,
                 "intent_description": intent.description,
             },
@@ -113,8 +114,6 @@ def run_explore_task(
                 task_type="explore",
                 context_harness_enabled=config.context_harness.enabled,
                 local_execution=config.runtime.execution == "local",
-                skill_index=worker.env.get("REDTRACE_SKILL_INDEX", ""),
-                worker_type=worker.type,
             )
 
         session = driver.prepare_session()
@@ -165,6 +164,7 @@ def run_explore_task(
             try:
                 model_output = driver.extract_response_text(first.stdout, first.stderr)
                 payload = parse_json_output(model_output)
+                kind, description = validate_explore_payload(payload)
                 queue_skill_feedback(
                     client,
                     payload,
@@ -173,7 +173,6 @@ def run_explore_task(
                     worker_name=worker.name,
                     task_type="explore",
                 )
-                kind, description = validate_explore_payload(payload)
             except Exception as exc:
                 LOG.warning(
                     "explore parse failed project=%s intent=%s worker=%s error=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -195,7 +194,7 @@ def run_explore_task(
                     driver,
                     project.project.id,
                     intent,
-                    export_yaml,
+                    graph_reference,
                     session,
                     lease,
                     cancellation,
@@ -242,7 +241,7 @@ def run_explore_task(
                 driver,
                 project.project.id,
                 intent,
-                export_yaml,
+                graph_reference,
                 session,
                 lease,
                 cancellation,
@@ -282,7 +281,7 @@ def _try_conclude_fallback(
     driver,
     project_id: str,
     intent: Intent,
-    export_yaml: str,
+    graph_reference: str,
     session: str | None,
     lease: HeartbeatLease,
     cancellation: TaskCancellation,
@@ -332,12 +331,7 @@ def _try_conclude_fallback(
     prompt = render_prompt(
         load_prompt(config.runtime.prompt_group, "explore_conclude.md"),
         {
-            "graph_yaml": write_graph_snapshot_reference(
-                container_manager,
-                container_name,
-                export_yaml.strip(),
-                phase="explore_conclude",
-            ),
+            "graph_yaml": graph_reference,
             "intent_id": intent.id,
             "intent_description": intent.description,
         },
@@ -397,6 +391,7 @@ def _try_conclude_fallback(
     try:
         model_output = driver.extract_response_text(result.stdout, result.stderr)
         payload = parse_json_output(model_output)
+        kind, description = validate_explore_payload(payload)
         queue_skill_feedback(
             client,
             payload,
@@ -405,7 +400,6 @@ def _try_conclude_fallback(
             worker_name=worker.name,
             task_type="explore",
         )
-        kind, description = validate_explore_payload(payload)
     except Exception as exc:
         LOG.warning(
             "conclude parse failed project=%s intent=%s worker=%s error=%s conclude_ms=%s stdout_preview=%s stderr_preview=%s",

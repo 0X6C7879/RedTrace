@@ -108,8 +108,6 @@ def run_bootstrap_task(
                 task_type="bootstrap",
                 context_harness_enabled=config.context_harness.enabled,
                 local_execution=config.runtime.execution == "local",
-                skill_index=worker.env.get("REDTRACE_SKILL_INDEX", ""),
-                worker_type=worker.type,
             )
 
         session = driver.prepare_session()
@@ -160,6 +158,7 @@ def run_bootstrap_task(
             try:
                 model_output = driver.extract_response_text(first.stdout, first.stderr)
                 payload = parse_json_output(model_output)
+                kind, data = validate_bootstrap_execute_payload(payload)
                 queue_skill_feedback(
                     client,
                     payload,
@@ -168,7 +167,6 @@ def run_bootstrap_task(
                     worker_name=worker.name,
                     task_type="bootstrap",
                 )
-                kind, data = validate_bootstrap_execute_payload(payload)
             except Exception as exc:
                 LOG.warning(
                     "bootstrap parse failed project=%s intent=%s worker=%s error=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -393,14 +391,6 @@ def _try_conclude_fallback(
     try:
         model_output = driver.extract_response_text(result.stdout, result.stderr)
         payload = parse_json_output(model_output)
-        queue_skill_feedback(
-            client,
-            payload,
-            project_id=project.project.id,
-            intent_id=intent.id,
-            worker_name=worker.name,
-            task_type="bootstrap",
-        )
         conclude_data = (
             payload.get("data") if isinstance(payload.get("data"), dict) else payload
         )
@@ -415,6 +405,14 @@ def _try_conclude_fallback(
                 preview(str(conclude_data.get("complete"))),
             )
         kind, fact_description = validate_bootstrap_conclude_payload(payload)
+        queue_skill_feedback(
+            client,
+            payload,
+            project_id=project.project.id,
+            intent_id=intent.id,
+            worker_name=worker.name,
+            task_type="bootstrap",
+        )
     except Exception as exc:
         LOG.warning(
             "bootstrap conclude parse failed project=%s intent=%s worker=%s error=%s conclude_ms=%s stdout_preview=%s stderr_preview=%s",

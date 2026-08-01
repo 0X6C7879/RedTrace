@@ -264,7 +264,9 @@ def _loop(config: DispatchConfig, client: InProcessClient, containers: LocalCont
     loop.container_manager = containers
     loop.executor = ThreadPoolExecutor(max_workers=config.runtime.max_workers)
     loop.cleanup_executor = ThreadPoolExecutor(max_workers=1)
+    loop.skill_executor = ThreadPoolExecutor(max_workers=1)
     loop.futures = {}
+    loop.skill_futures = {}
     loop.cleanup_futures = {}
     loop.reason_checkpoints = {}
     loop.runtime_project_ids = set()
@@ -273,6 +275,7 @@ def _loop(config: DispatchConfig, client: InProcessClient, containers: LocalCont
     loop._log_state = {}
     loop._cleanup_pending = set()
     loop._inactive_cleanup_done = {}
+    loop._wakeup = threading.Event()
     loop.project_cursor = 0
     return loop
 

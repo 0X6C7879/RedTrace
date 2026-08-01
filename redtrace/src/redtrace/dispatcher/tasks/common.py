@@ -25,11 +25,10 @@ class ConcludeWriteResult:
     fact_id: str | None = None
 
 
-def preview(text: str, limit: int = 0) -> str:
-    compact = " ".join(text.split())
-    if limit and len(compact) > limit:
-        return compact[:limit] + "..."
-    return compact
+def preview(text: str, limit: int = 2048) -> str:
+    truncated = len(text) > limit
+    compact = " ".join(text[:limit].split())
+    return compact + ("..." if truncated else "")
 
 
 def queue_skill_feedback(
@@ -41,12 +40,16 @@ def queue_skill_feedback(
     worker_name: str,
     task_type: str,
 ) -> None:
-    """Finalize the model's learning checkpoint before task conclusion."""
+    """Best-effort queue of the model's optional learning checkpoint."""
     feedback, rejection_reason = extract_skill_feedback(payload)
     if feedback is None:
         if rejection_reason is not None:
-            raise ValueError(
-                f"invalid skillFeedback: {rejection_reason}"
+            LOG.warning(
+                "skill.feedback.invalid project=%s intent=%s worker=%s reason=%s",
+                project_id,
+                intent_id,
+                worker_name,
+                rejection_reason,
             )
         else:
             LOG.debug(
@@ -71,38 +74,35 @@ def queue_skill_feedback(
             worker=worker_name,
             task_type=task_type,
         )
-        if response.ok:
-            decision = response.data if isinstance(response.data, dict) else {}
-            status = str(decision.get("status") or "")
-            if status not in {"accepted", "deferred", "rejected"}:
-                raise RuntimeError(
-                    "Skill evolution did not reach a terminal decision "
-                    f"(status={status or 'missing'})"
-                )
-            LOG.info(
-                "skill.feedback.finalized project=%s intent=%s worker=%s "
-                "target=%s status=%s proposal=%s",
-                project_id,
-                intent_id,
-                worker_name,
-                feedback.get("target_skill"),
-                status,
-                decision.get("proposalId"),
-            )
-        else:
-            raise RuntimeError(
-                "Skill evolution finalization failed "
-                f"(HTTP {response.status_code}): {response.text[:300]}"
-            )
     except Exception:
         LOG.warning(
-            "skill.feedback.finalization_failed project=%s intent=%s worker=%s",
+            "skill.feedback.queue_failed project=%s intent=%s worker=%s",
             project_id,
             intent_id,
             worker_name,
             exc_info=True,
         )
-        raise
+        return
+    if not response.ok:
+        LOG.warning(
+            "skill.feedback.queue_failed project=%s intent=%s worker=%s status=%s detail=%s",
+            project_id,
+            intent_id,
+            worker_name,
+            response.status_code,
+            response.text[:300],
+        )
+        return
+    decision = response.data if isinstance(response.data, dict) else {}
+    LOG.info(
+        "skill.feedback.queued project=%s intent=%s worker=%s target=%s status=%s proposal=%s",
+        project_id,
+        intent_id,
+        worker_name,
+        feedback.get("target_skill"),
+        decision.get("status"),
+        decision.get("proposalId"),
+    )
 
 
 def did_timeout(result: ProcessResult) -> bool:

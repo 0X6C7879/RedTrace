@@ -352,6 +352,11 @@ def configure(path: Path) -> None:
         return
     _db_path = path
     _db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(_db_path))
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    finally:
+        conn.close()
     with get_conn() as conn:
         conn.executescript(SCHEMA)
         conn.executescript(BLACKBOARD_DELETE_TRIGGERS)
@@ -426,7 +431,6 @@ def get_conn(*, immediate: bool = False) -> Generator[sqlite3.Connection, None, 
     assert _db_path is not None
     conn = sqlite3.connect(str(_db_path))
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     if immediate:
         conn.execute("BEGIN IMMEDIATE")

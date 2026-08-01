@@ -34,6 +34,7 @@ class ContainerManager:
         self._ensure_running_locks: dict[str, threading.Lock] = {}
         self._ensure_running_locks_guard = threading.Lock()
         self._paths = paths
+        self._host_mounts: list[tuple[Path, Path]] | None = None
 
     def close(self) -> None:
         self._client.close()
@@ -334,16 +335,22 @@ class ContainerManager:
         """Translate a dispatcher-container path to the Docker host mount source."""
         if not os.environ.get("HOSTNAME"):
             return path.resolve()
-        try:
-            current = self._client.containers.get(os.environ["HOSTNAME"])
-            mounts = current.attrs.get("Mounts", [])
-        except DockerException:
-            return path.resolve()
+        host_mounts = self._host_mounts
+        if host_mounts is None:
+            try:
+                current = self._client.containers.get(os.environ["HOSTNAME"])
+                mounts = current.attrs.get("Mounts", [])
+            except DockerException:
+                return path.resolve()
+            host_mounts = [
+                (Path(str(mount.get("Destination"))), Path(str(mount.get("Source"))))
+                for mount in mounts
+                if mount.get("Destination") and mount.get("Source")
+            ]
+            self._host_mounts = host_mounts
         resolved = path.resolve()
         matches: list[tuple[Path, Path]] = []
-        for mount in mounts:
-            destination = Path(str(mount.get("Destination") or ""))
-            source = Path(str(mount.get("Source") or ""))
+        for destination, source in host_mounts:
             try:
                 relative = resolved.relative_to(destination)
             except (ValueError, OSError):

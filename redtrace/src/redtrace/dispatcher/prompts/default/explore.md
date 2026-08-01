@@ -16,7 +16,6 @@
 ```
 
 # 规则
-- 首次实质操作前，检查 Available Skills index（若下方提供）并调用与当前任务领域匹配的 Skill。任务 phase 变化或确认具体 vulnerability type 时重新检查。
 - 探索 Intent 可能成功，也可能失败。若无法沿该 Intent 接近 Goal，可结束任务，但结束前必须充分探索该 Intent。
 - 若同一 session 随后收到 conclude phase 指令，新指令立即覆盖探索要求。此时停止探索、等待、运行或规划其他操作，并立即返回所要求的 summary JSON。
 - `description` 必须清楚说明已确认的关键客观结果。例如 CTF 场景可包含多个 flag、shell、privilege proof、关键 exploit 结果及类似 evidence。不要放入长 data blob；应写入文件并在 `description` 中引用。

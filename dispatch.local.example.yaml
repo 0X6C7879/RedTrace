@@ -44,7 +44,7 @@ context_harness:
   visible_bytes: 65536
   query_bytes: 1048576
   parse_bytes: 67108864
-  worker_output_chars: 33554432
+  worker_output_chars: 8388608
 
 # Optional. If omitted: workspace_root defaults to the dispatcher's current directory,
 # completed_action defaults to keep. Each project gets an isolated <workspace_root>/<project_id>/.

@@ -54,7 +54,7 @@ context_harness:
   query_bytes: 1048576
   parse_bytes: 67108864
   # Bounded prefix+tail retained from each outer Worker stdout/stderr stream.
-  worker_output_chars: 33554432
+  worker_output_chars: 8388608
 
 container:
   # Built locally by docker compose. The dispatcher execs agent commands inside

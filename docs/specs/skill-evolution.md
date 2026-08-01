@@ -34,18 +34,18 @@ beside its normal `accepted` and `data` fields:
 Use `null` only when the final reflection finds no reusable correction,
 compression, or missing branch. The Worker does not scan Skills, write
 `SKILL.md`, invoke `redtrace-skill`, or make another model call. The dispatcher
-extracts feedback and waits for one durable terminal decision (`accepted`,
-`deferred`, or `rejected`) before the Intent or project can conclude. A missing
-or non-terminal decision fails that task attempt instead of silently losing its
-learning checkpoint.
+persists valid feedback, receives `queued`, and concludes the task without
+waiting for authoring. Invalid or unavailable feedback is logged but never
+changes the original task result.
 
 A candidate may come from an independently verified subflow even when the
 overall task fails. Ordinary failures, guesses, accidental success, missing
 validation, and missing evidence references are rejected.
 
-## Task-end pipeline
+## Asynchronous pipeline
 
-The proposal is persisted first, then finalized within the task-end budget:
+The request persists the proposal and wakes one low-priority background worker.
+Outside the task lifecycle, that worker:
 
 1. Normalize and deterministically reject target-specific or secret-bearing
    feedback.
@@ -58,21 +58,19 @@ The proposal is persisted first, then finalized within the task-end budget:
    entrypoints only.
 5. Validate frontmatter, required sections, generality, secret literals,
    duplication, append-only growth, size growth, and optimistic revision.
-6. Commit atomically under the cross-process Skill store lock and return the
-   durable decision to the dispatcher.
+6. Commit atomically under the cross-process Skill store lock and record the
+   durable decision for status and audit queries.
 
 No extra Agent Runtime is embedded. If no author CLI is available, evidence is
 unmeasured, or authoring exhausts its total time budget, the candidate moves to
-`skills/.redtrace/deferred/`; that deferred state is still a completed task-end
-decision. The daemon remains only as crash-recovery drainage for already durable
-inbox entries.
+`skills/.redtrace/deferred/`. The same daemon also drains durable inbox entries
+after a restart.
 
 Author selection:
 
 - `REDTRACE_SKILL_AUTHOR=auto|claude|codex|pi|disabled`
 - `REDTRACE_SKILL_AUTHOR_ORDER=claude,codex,pi`
 - `REDTRACE_SKILL_AUTHOR_TIMEOUT=600`
-- `REDTRACE_SKILL_FINALIZE_TIMEOUT=630`
 
 ## Evolution types
 

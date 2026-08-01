@@ -120,6 +120,7 @@ class DispatcherLoop:
         self.cleanup_executor = ThreadPoolExecutor(
             max_workers=max(1, min(8, self.config.runtime.max_workers))
         )
+        self.skill_executor = ThreadPoolExecutor(max_workers=1)
         self.futures: dict[Future[str], RunningTask] = {}
         self.skill_futures: dict[Future[str], SkillVerificationTask] = {}
         self.skill_evolution = SkillEvolutionEngine(CapabilityStore())
@@ -148,6 +149,7 @@ class DispatcherLoop:
             )
         self.executor.shutdown(wait=True)
         self.cleanup_executor.shutdown(wait=True)
+        self.skill_executor.shutdown(wait=False, cancel_futures=True)
         self.container_manager.close()
         self.client.close()
 
@@ -170,7 +172,7 @@ class DispatcherLoop:
                     self._cancel_inactive_tasks(summaries)
                     self._queue_container_cleanups(summaries)
                     self._dispatch_available(summaries)
-                    self._dispatch_skill_verification()
+                    self._dispatch_skill_verification(summaries)
                 except requests.RequestException as exc:
                     if once:
                         raise
@@ -378,9 +380,15 @@ class DispatcherLoop:
                     dispatched = True
                     break
 
-    def _dispatch_skill_verification(self) -> None:
+    def _dispatch_skill_verification(
+        self, summaries: list[ProjectSummary] | None = None
+    ) -> None:
         """Use only spare Dispatcher capacity for autonomous Skill verification."""
-        if self._running_task_count() >= self.config.runtime.max_workers:
+        if (
+            self.futures
+            or self.skill_futures
+            or any(summary.status == "active" for summary in summaries or ())
+        ):
             return
         now = time.time()
         running_counts = self._worker_counts()
@@ -399,7 +407,7 @@ class DispatcherLoop:
             if proposal is None:
                 continue
             proposal_id = str(proposal.get("proposal_id") or "")
-            future = self.executor.submit(
+            future = self.skill_executor.submit(
                 self._run_skill_verification,
                 proposal,
                 worker,
@@ -520,6 +528,17 @@ class DispatcherLoop:
                 summary.id,
                 self._project_running_task_summary(summary.id),
             )
+            return False
+
+        summary_trigger = self._reason_trigger_counts(
+            summary.id,
+            summary.fact_count,
+            summary.hint_count,
+            summary.working_intent_count + summary.unclaimed_intent_count,
+        )
+        if summary.unclaimed_intent_count == 0 and (
+            summary.reason is not None or summary_trigger is None
+        ):
             return False
 
         project = self.client.get_project(summary.id)
@@ -923,12 +942,10 @@ class DispatcherLoop:
         counts: dict[str, int] = {}
         for task in self.futures.values():
             counts[task.worker_name] = counts.get(task.worker_name, 0) + 1
-        for task in getattr(self, "skill_futures", {}).values():
-            counts[task.worker_name] = counts.get(task.worker_name, 0) + 1
         return counts
 
     def _running_task_count(self) -> int:
-        return len(self.futures) + len(getattr(self, "skill_futures", {}))
+        return len(self.futures)
 
     def _project_running_task_count(self, project_id: str) -> int:
         return sum(1 for task in self.futures.values() if task.project_id == project_id)
@@ -1041,15 +1058,28 @@ class DispatcherLoop:
         return intent
 
     def _reason_trigger(self, project: ProjectDetail) -> str | None:
-        open_intent_count = self._project_open_intent_count(project)
-        checkpoint = self.reason_checkpoints.get(project.project.id)
+        return self._reason_trigger_counts(
+            project.project.id,
+            len(project.facts),
+            len(project.hints),
+            self._project_open_intent_count(project),
+        )
+
+    def _reason_trigger_counts(
+        self,
+        project_id: str,
+        fact_count: int,
+        hint_count: int,
+        open_intent_count: int,
+    ) -> str | None:
+        checkpoint = self.reason_checkpoints.get(project_id)
         if checkpoint is None:
             return "initial"
         changes: list[str] = []
-        if len(project.facts) > checkpoint.fact_count:
-            changes.append(f"facts:{checkpoint.fact_count}->{len(project.facts)}")
-        if len(project.hints) > checkpoint.hint_count:
-            changes.append(f"hints:{checkpoint.hint_count}->{len(project.hints)}")
+        if fact_count > checkpoint.fact_count:
+            changes.append(f"facts:{checkpoint.fact_count}->{fact_count}")
+        if hint_count > checkpoint.hint_count:
+            changes.append(f"hints:{checkpoint.hint_count}->{hint_count}")
         if checkpoint.open_intent_count > 0 and open_intent_count == 0:
             changes.append(f"open_intents:{checkpoint.open_intent_count}->0")
         if not changes:

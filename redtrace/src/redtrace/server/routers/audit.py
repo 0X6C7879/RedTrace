@@ -106,7 +106,11 @@ def append_events(body: AuditBatch) -> dict[str, int]:
                         event.get("role"),
                         event.get("title"),
                         event.get("content"),
-                        json.dumps(event, ensure_ascii=False, separators=(",", ":")),
+                        json.dumps(
+                            {key: value for key, value in event.items() if key != "content"},
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
                         int(bool(event.get("redacted"))),
                     )
                 )
@@ -173,7 +177,7 @@ def list_events(
         rows = conn.execute(
             f"""
             SELECT * FROM (
-                SELECT id, payload FROM audit_events
+                SELECT id, content, payload FROM audit_events
                 WHERE project_id = ? {before}
                 ORDER BY id DESC
                 LIMIT ?
@@ -185,6 +189,8 @@ def list_events(
         events = []
         for row in rows:
             payload = json.loads(row["payload"])
+            if row["content"] is not None:
+                payload["content"] = row["content"]
             payload["id"] = row["id"]
             events.append(payload)
         return events

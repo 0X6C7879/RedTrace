@@ -447,7 +447,7 @@ def test_shipped_local_example_config_is_valid() -> None:
     assert config.context_harness.visible_bytes == 64 * 1024
     assert config.context_harness.query_bytes == 1024 * 1024
     assert config.context_harness.parse_bytes == 64 * 1024 * 1024
-    assert config.context_harness.worker_output_chars == 32 * 1024 * 1024
+    assert config.context_harness.worker_output_chars == 8 * 1024 * 1024
 
 
 # --------------------------------------------------------------------------- startup CLI check
