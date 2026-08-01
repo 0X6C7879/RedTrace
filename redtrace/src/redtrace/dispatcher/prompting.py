@@ -131,8 +131,9 @@ def add_blackboard_guidance(
         )
     sections.append(
         "## Skill feedback checkpoint\n\n"
-        "At final output, if you discovered a reusable lesson that improves, fixes, or extends a Skill, "
-        "append exactly one `skillFeedback` object to your JSON output. The object MUST use these keys:\n"
+        "At final output, always include the `skillFeedback` key. Set it to one object when you discovered "
+        "a reusable lesson that improves, fixes, or extends a Skill; otherwise set it to null. "
+        "The object MUST use these keys:\n"
         '```json\n'
         '{"target_skill": "skill-name", "summary": "one-sentence reusable lesson", '
         '"evolution_type": "IMPROVE"}\n'
@@ -142,7 +143,7 @@ def add_blackboard_guidance(
         "Choose IMPROVE or FIX when `target_skill` names an existing Skill; use CAPTURE only when "
         "no existing Skill covers the lesson.\n"
         "Optional fields: `procedure` (string[]), `validation` (string[]), `evidence_refs` (string[]), "
-        "`confidence` (0-1). Omit `skillFeedback` entirely (or set null) when there is no improvement. "
+        "`confidence` (0-1). Use null when there is no improvement. "
         "Never include target IPs, credentials, flags, or absolute paths in feedback. "
         "Do not make another model call, poll, or delay the task for feedback."
     )

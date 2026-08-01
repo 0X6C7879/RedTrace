@@ -65,7 +65,7 @@ Author selection:
 
 - `REDTRACE_SKILL_AUTHOR=auto|claude|codex|pi|disabled`
 - `REDTRACE_SKILL_AUTHOR_ORDER=claude,codex,pi`
-- `REDTRACE_SKILL_AUTHOR_TIMEOUT=120`
+- `REDTRACE_SKILL_AUTHOR_TIMEOUT=600`
 
 ## Evolution types
 

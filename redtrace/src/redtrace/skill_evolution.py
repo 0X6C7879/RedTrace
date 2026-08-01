@@ -35,7 +35,7 @@ EVOLUTION_TYPES = frozenset({"FIX", "IMPROVE", "CAPTURE", "MERGE", "RETIRE"})
 DEFAULT_QUEUE_LIMIT = 128
 DEFAULT_MATCH_THRESHOLD = 0.34
 DEFAULT_DUPLICATE_RATIO = 0.08
-DEFAULT_AUTHOR_TIMEOUT = 120
+DEFAULT_AUTHOR_TIMEOUT = 600
 REQUIRED_SECTION_GROUPS = (
     ("trigger", "触发"),
     ("scope", "applicability", "适用"),
@@ -115,47 +115,67 @@ class NativeSkillAuthor:
         target: SkillRecord | None,
         related: list[SkillRecord],
     ) -> str:
-        tool = self._select_tool()
-        if tool is None:
+        tools = self._select_tools(proposal)
+        if not tools:
             raise EvolutionDeferred(
                 "no Claude Code, Codex, or Pi CLI is available for background authoring"
             )
         prompt = self._prompt(proposal, target, related)
-        worker = self._configured_worker(tool)
-        command = self._command(tool, prompt, worker)
-        if os.name == "posix" and shutil.which("nice"):
-            command = ["nice", "-n", "10", *command]
-        environment = dict(os.environ)
-        if worker is not None:
-            environment.update(worker.env)
-        kwargs: dict[str, Any] = {
-            "cwd": self.root,
-            "capture_output": True,
-            "text": True,
-            "encoding": "utf-8",
-            "errors": "replace",
-            "timeout": self.timeout,
-            "check": False,
-            "env": environment,
-        }
-        try:
-            result = subprocess.run(command, **kwargs)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise EvolutionDeferred(f"{tool} background author failed: {exc}") from exc
-        if result.returncode != 0:
-            detail = (result.stderr or result.stdout).strip()[-500:]
-            raise EvolutionDeferred(
-                f"{tool} background author exited {result.returncode}: {detail}"
-            )
-        content = _extract_authored_skill(tool, result.stdout)
-        if not content:
-            raise EvolutionDeferred(f"{tool} did not return a complete SKILL.md")
-        return content
+        failures: list[str] = []
+        for tool in tools:
+            worker = self._configured_worker(tool)
+            command = self._command(tool, prompt, worker)
+            if os.name == "posix" and shutil.which("nice"):
+                command = ["nice", "-n", "10", *command]
+            environment = dict(os.environ)
+            if worker is not None:
+                environment.update(worker.env)
+                if tool == "claude" and worker.api_configured():
+                    for key in (
+                        "ANTHROPIC_API_KEY",
+                        "ANTHROPIC_OAUTH_TOKEN",
+                        "CLAUDE_CODE_USE_BEDROCK",
+                        "CLAUDE_CODE_USE_VERTEX",
+                        "CLAUDE_CODE_USE_FOUNDRY",
+                    ):
+                        if key not in worker.env:
+                            environment.pop(key, None)
+            try:
+                result = subprocess.run(
+                    command,
+                    cwd=self.root,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=self.timeout,
+                    check=False,
+                    env=environment,
+                )
+            except subprocess.TimeoutExpired:
+                failures.append(
+                    f"{tool} background author timed out after {self.timeout}s"
+                )
+                continue
+            except OSError as exc:
+                failures.append(f"{tool} background author failed: {exc}")
+                continue
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout).strip()[-300:]
+                failures.append(
+                    f"{tool} background author exited {result.returncode}: {detail}"
+                )
+                continue
+            content = _extract_authored_skill(tool, result.stdout)
+            if content:
+                return content
+            failures.append(f"{tool} did not return a complete SKILL.md")
+        raise EvolutionDeferred("; ".join(failures))
 
-    def _select_tool(self) -> str | None:
+    def _select_tools(self, proposal: dict[str, Any]) -> list[str]:
         configured = os.environ.get("REDTRACE_SKILL_AUTHOR", "auto").strip().lower()
         if configured in {"off", "disabled", "none"}:
-            return None
+            return []
         order = (
             [configured]
             if configured != "auto"
@@ -172,13 +192,33 @@ class NativeSkillAuthor:
         available: list[str] = []
         for item in order:
             binary = aliases.get(item, item)
-            if binary in {"claude", "codex", "pi"} and shutil.which(binary):
+            if (
+                binary in {"claude", "codex", "pi"}
+                and binary not in available
+                and shutil.which(binary)
+            ):
                 available.append(binary)
-        for binary in available:
-            worker = self._configured_worker(binary)
-            if worker is not None and worker.api_configured():
-                return binary
-        return available[0] if available else None
+        if configured != "auto":
+            return available
+        source_worker = str(proposal.get("worker") or "").strip().casefold()
+        workers = {
+            binary: self._configured_worker(binary)
+            for binary in available
+        }
+        return sorted(
+            available,
+            key=lambda binary: (
+                0
+                if (
+                    (worker := workers[binary]) is not None
+                    and worker.api_configured()
+                    and worker.name.casefold() == source_worker
+                )
+                else 1,
+                0 if worker is not None and worker.api_configured() else 1,
+                available.index(binary),
+            ),
+        )
 
     def _command(
         self,
@@ -363,6 +403,20 @@ class NativeSkillAuthor:
                     "headings": _headings(record.content),
                 }
             )
+        growth_budget = (
+            min(8192, max(1024, int(len(target.content) * 0.25)))
+            if target is not None
+            else None
+        )
+        constraints = {
+            "required_sections": [group[0] for group in REQUIRED_SECTION_GROUPS],
+            "max_characters": (
+                len(target.content) + growth_budget
+                if target is not None and growth_budget is not None
+                else _positive_env("REDTRACE_MAX_SKILL_CHARS", 65_536)
+            ),
+            "replacement_must_not_be_append_only": target is not None,
+        }
         return (
             "You are the low-priority RedTrace Skill author. Follow the included "
             "skill-creator contract. Use only the verified candidate evidence below. "
@@ -371,6 +425,7 @@ class NativeSkillAuthor:
             "Skill; create a new Skill only if no existing entry can cover it. "
             "Return only one complete SKILL.md beginning with YAML frontmatter. "
             "Do not call tools or modify files.\n\n"
+            f"ENGINE CONSTRAINTS:\n{json.dumps(constraints, ensure_ascii=False, indent=2)}\n\n"
             f"SKILL CREATOR CONTRACT:\n{creator}\n\n"
             f"CANDIDATE:\n{json.dumps(evidence, ensure_ascii=False, indent=2)}\n\n"
             f"RELEVANT SKILL ENTRIES:\n{json.dumps(existing, ensure_ascii=False, indent=2)}"
@@ -422,7 +477,9 @@ class SkillEvolutionEngine:
         source_task = _source_task(payload)
         payload["source_tasks"] = [source_task] if source_task else []
         with self.store._skill_lock():
-            paths = list(self.inbox.glob("*.json"))
+            deferred_paths = list(self.deferred.glob("*.json")) if self.deferred.is_dir() else []
+            inbox_paths = list(self.inbox.glob("*.json"))
+            paths = [*inbox_paths, *deferred_paths]
             for path in paths:
                 try:
                     existing = json.loads(path.read_text(encoding="utf-8"))
@@ -433,8 +490,11 @@ class SkillEvolutionEngine:
                     and existing.get("fingerprint") == fingerprint
                 ):
                     merged = _merge_duplicate_proposals(existing, payload)
+                    destination = path
+                    if path.parent == self.deferred and self._ready(merged):
+                        destination = self.inbox / path.name
                     _atomic_write(
-                        path,
+                        destination,
                         json.dumps(
                             merged,
                             ensure_ascii=False,
@@ -442,6 +502,8 @@ class SkillEvolutionEngine:
                         )
                         + "\n",
                     )
+                    if destination != path:
+                        path.unlink(missing_ok=True)
                     return str(existing.get("proposal_id") or path.stem)
             if len(paths) >= self.queue_limit:
                 raise ValueError(
@@ -459,6 +521,33 @@ class SkillEvolutionEngine:
                 + "\n",
             )
         return proposal_id
+
+    def restore_ready_deferred(self) -> int:
+        """Requeue deferred candidates that now satisfy the current evidence rules."""
+        if not self.deferred.is_dir():
+            return 0
+        restored = 0
+        self.inbox.mkdir(parents=True, exist_ok=True)
+        with self.store._skill_lock():
+            for path in self.deferred.glob("*.json"):
+                try:
+                    proposal = json.loads(path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if not isinstance(proposal, dict) or not self._ready(proposal):
+                    continue
+                destination = self.inbox / path.name
+                os.replace(path, destination)
+                restored += 1
+        return restored
+
+    def _ready(self, proposal: dict[str, Any]) -> bool:
+        try:
+            return self._validate_evidence(proposal) == "full" or int(
+                proposal.get("occurrences") or 1
+            ) >= 3
+        except (TypeError, ValueError):
+            return False
 
     def pending_count(self) -> int:
         return (
@@ -758,7 +847,7 @@ class SkillEvolutionEngine:
         )
 
         # Evidence refs check.
-        evidence_ok = (
+        evidence_ok = bool(_source_task(proposal)) or (
             isinstance(evidence_refs, list)
             and len(evidence_refs) > 0
             and len(evidence_refs) <= 8
@@ -1121,6 +1210,7 @@ class SkillEvolutionWorker:
             daemon=True,
         )
         self._thread.start()
+        self.engine.restore_ready_deferred()
         if self.engine.pending_count():
             self._event.set()
 

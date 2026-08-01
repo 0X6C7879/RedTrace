@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,7 +14,11 @@ from redtrace.capabilities import (
     SkillConflictError,
     workspace_payload,
 )
-from redtrace.skill_evolution import SkillEvolutionEngine, SkillEvolutionWorker
+from redtrace.skill_evolution import (
+    NativeSkillAuthor,
+    SkillEvolutionEngine,
+    SkillEvolutionWorker,
+)
 
 
 def _skill(name: str, description: str, guidance: str) -> str:
@@ -305,6 +311,99 @@ def test_duplicate_feedback_is_coalesced_before_authoring(tmp_path: Path) -> Non
     assert engine.pending_count() == 1
     queued = next(engine.inbox.glob("*.json")).read_text(encoding="utf-8")
     assert '"occurrences":2' in queued
+
+
+def test_deferred_feedback_accumulates_and_requeues(tmp_path: Path) -> None:
+    author = _Author(_complete_skill("web-verification"))
+    engine = SkillEvolutionEngine(CapabilityStore(tmp_path), author=author)
+    feedback = _feedback()
+    feedback["procedure"] = []
+
+    proposal_id = engine.submit(feedback)
+    assert engine.process_pending() == 1
+    assert engine.deferred_count() == 1
+
+    assert engine.submit(_feedback(intent="intent-b") | {"procedure": []}) == proposal_id
+    assert engine.deferred_count() == 1
+    assert engine.pending_count() == 0
+
+    assert engine.submit(_feedback(intent="intent-c") | {"procedure": []}) == proposal_id
+    assert engine.deferred_count() == 0
+    assert engine.pending_count() == 1
+    assert engine.process_pending() == 1
+    assert author.calls == 1
+    event = next(
+        item
+        for item in engine.store.read_skill_audit()
+        if item.get("proposalId") == proposal_id
+    )
+    assert event["action"] == "evolution-accepted"
+
+
+def test_source_task_is_a_bounded_evidence_reference(tmp_path: Path) -> None:
+    author = _Author(_complete_skill("web-verification"))
+    engine = SkillEvolutionEngine(CapabilityStore(tmp_path), author=author)
+    feedback = _feedback()
+    feedback["evidence_refs"] = []
+
+    decision = engine.evolve(feedback)
+
+    assert decision.status == "accepted"
+    assert author.calls == 1
+
+
+def test_ready_deferred_feedback_is_restored_on_startup(tmp_path: Path) -> None:
+    engine = SkillEvolutionEngine(CapabilityStore(tmp_path))
+    proposal_id = engine.submit(_feedback())
+    queued = engine.inbox / f"{proposal_id}.json"
+    engine.deferred.mkdir(parents=True)
+    queued.replace(engine.deferred / queued.name)
+
+    assert engine.restore_ready_deferred() == 1
+    assert engine.pending_count() == 1
+    assert engine.deferred_count() == 0
+
+
+def test_native_author_prefers_source_worker_and_falls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    author = NativeSkillAuthor(tmp_path)
+    workers = {
+        "claude": SimpleNamespace(name="Claude", api_configured=lambda: True),
+        "pi": SimpleNamespace(name="Pi", api_configured=lambda: True),
+    }
+    monkeypatch.setattr(author, "_configured_worker", workers.get)
+    monkeypatch.setattr(
+        "redtrace.skill_evolution.shutil.which",
+        lambda tool: None if tool == "nice" else f"/bin/{tool}",
+    )
+
+    assert author._select_tools({"worker": "Pi"})[:2] == ["pi", "claude"]
+
+    calls: list[str] = []
+    monkeypatch.setattr(author, "_select_tools", lambda proposal: ["pi", "claude"])
+    monkeypatch.setattr(author, "_configured_worker", lambda tool: None)
+    monkeypatch.setattr(author, "_prompt", lambda proposal, target, related: "prompt")
+    monkeypatch.setattr(author, "_command", lambda tool, prompt, worker: [tool])
+
+    def run(command, **kwargs):
+        calls.append(command[0])
+        if command[0] == "pi":
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=_complete_skill("web-verification"),
+            stderr="",
+        )
+
+    monkeypatch.setattr("redtrace.skill_evolution.subprocess.run", run)
+
+    content = author.author(_feedback(), None, [])
+
+    assert calls == ["pi", "claude"]
+    assert content.startswith("---\nname: web-verification")
 
 
 def test_independent_reuse_promotes_provisional_skill_to_trusted(

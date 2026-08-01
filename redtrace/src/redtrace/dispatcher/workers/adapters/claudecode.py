@@ -45,7 +45,7 @@ REDTRACE_OUTPUT_SCHEMA = json.dumps(
                 "additionalProperties": True,
             },
         },
-        "required": ["accepted", "data"],
+        "required": ["accepted", "data", "skillFeedback"],
         "additionalProperties": False,
     },
     separators=(",", ":"),
