@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repository": "zhaoxuya520/reverse-skill",
+    "ref": "b28f7d27606cc6c4eb0449ff40f45307141c9618",
+    "priority": "reverse-skill"
+  },
+  "catalogLimits": {
+    "maxSkills": 96,
+    "maxSkillChars": 262144,
+    "maxSkillLines": 5000
+  },
+  "preserveRedTraceSkills": [
+    "brave-search",
+    "browser-tools",
+    "exploit-pipeline-fallback",
+    "penetration-flow",
+    "playwright",
+    "skill-creator",
+    "solve-challenge"
+  ],
+  "semanticReplacements": {
+    "reverse-engineering": ["ctf-reverse"],
+    "ghidra-reverse": ["ghidra-headless"],
+    "mobile-reverse": ["claude-red-mobile"],
+    "malware-analysis": ["ctf-malware"],
+    "digital-forensics": ["ctf-forensics"],
+    "cloud-k8s": ["claude-red-cloud"],
+    "windows-ad": ["claude-red-active-directory"],
+    "wifi-wireless": ["claude-red-wireless"],
+    "firmware-pentest": ["claude-red-iot"],
+    "pwn-chain": ["ctf-pwn", "claude-red-exploit-development"],
+    "pentest-tools": ["src-hunting"],
+    "ctf-sandbox-orchestrator": [
+      "ctf-ai-ml",
+      "ctf-crypto",
+      "ctf-misc",
+      "ctf-osint",
+      "ctf-scripting",
+      "ctf-web"
+    ]
+  },
+  "excludeSourceSkills": [],
+  "copyCtfBundle": true,
+  "state": {
+    "enabled": true,
+    "trust": "provisional"
+  }
+}
