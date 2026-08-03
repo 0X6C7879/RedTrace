@@ -100,6 +100,26 @@ def test_playwright_cli_skill_is_complete_and_deployable() -> None:
     assert "@playwright/cli" in wrapper.read_text(encoding="utf-8")
 
 
+def test_reverse_skill_dependencies_and_tool_index_are_initialized_by_deploy() -> None:
+    script = (REPO_ROOT / "deploy.sh").read_text(encoding="utf-8")
+    initializer = (
+        REPO_ROOT
+        / "skills"
+        / "reverse-skill"
+        / "redtrace-tools"
+        / "initialize.sh"
+    )
+
+    assert initializer.is_file()
+    assert initializer.stat().st_mode & 0o111
+    content = initializer.read_text(encoding="utf-8")
+    assert "refresh-tool-index.sh" in content
+    assert "tool-index.md" in content
+    assert "tool-index.json" in content
+    assert "mv --" in content
+    assert 'bash "$REVERSE_SKILL_INITIALIZER"' in script
+
+
 def test_ctf_tool_installer_supports_all_linux_package_families() -> None:
     script_path = REPO_ROOT / "install_ctf_tools.sh"
     script = script_path.read_text(encoding="utf-8")

@@ -42,6 +42,7 @@ class AgentRuntimeManager:
         self._shared_initialized = False
         self._skill_paths_cache: list[Path] = []
         self._mcp_args_cache: list[str] = []
+        self._global_instructions_cache = ""
         self._capability_signature_cache: tuple[int, ...] | None = None
 
     def initialize(self, workers: list[WorkerConfig]) -> None:
@@ -80,6 +81,9 @@ class AgentRuntimeManager:
         self._write_shared_runtime(mcp_records)
         self._mcp_args_cache = codex_mcp_overrides(mcp_records)
         self._skill_paths_cache = self._enabled_skill_paths()
+        self._global_instructions_cache = self._load_global_instructions(
+            self._skill_paths_cache
+        )
         self._capability_signature_cache = self._capability_signature()
         return True
 
@@ -87,6 +91,7 @@ class AgentRuntimeManager:
         watched = (
             self.paths.skills,
             self.paths.skills / ".redtrace" / "audit.jsonl",
+            self.paths.skills / "reverse-skill" / "REDTRACE_RULES.md",
             self.paths.mcp,
         )
         return tuple(
@@ -130,6 +135,16 @@ class AgentRuntimeManager:
                     pass
             paths.append(directory.resolve())
         return paths
+
+    @staticmethod
+    def _load_global_instructions(skill_paths: list[Path]) -> str:
+        for skill_path in skill_paths:
+            if skill_path.name != "reverse-skill":
+                continue
+            rules = skill_path / "REDTRACE_RULES.md"
+            if rules.is_file():
+                return rules.read_text(encoding="utf-8")
+        return ""
 
     def _initialize_worker(
         self,
@@ -182,6 +197,12 @@ class AgentRuntimeManager:
                 "REDTRACE_CODEX_RESOURCE_ARGS": json.dumps(resource_args),
             }
         )
+        if self._global_instructions_cache:
+            worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"] = (
+                self._global_instructions_cache
+            )
+        else:
+            worker.env.pop("REDTRACE_GLOBAL_INSTRUCTIONS", None)
 
     @staticmethod
     def _codex_skills_config(skills: list[str]) -> str:

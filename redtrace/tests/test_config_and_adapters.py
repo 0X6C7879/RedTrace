@@ -263,6 +263,27 @@ def test_claude_driver_uses_configured_model_and_native_fallback() -> None:
     assert "--json-schema" in native_argv
 
 
+def test_claude_and_pi_receive_redtrace_global_instructions() -> None:
+    instructions = "RedTrace automation rules"
+    claude_worker = WorkerConfig.model_validate(
+        {
+            "name": "claude",
+            "type": "claudecode",
+            "task_types": ["explore"],
+            "max_running": 1,
+            "priority": 0,
+            "env": {"REDTRACE_GLOBAL_INSTRUCTIONS": instructions},
+        }
+    )
+    pi_worker = claude_worker.model_copy(update={"name": "pi", "type": "pi"})
+
+    claude = ClaudeCodeDriver().build_execute(claude_worker, "prompt", "session").argv
+    pi = PiDriver(local=True).build_execute(pi_worker, "prompt", None).argv
+
+    assert claude[claude.index("--append-system-prompt") + 1] == instructions
+    assert pi[pi.index("--append-system-prompt") + 1] == instructions
+
+
 def test_claude_driver_root_mode_is_noninteractive_and_allows_native_web(
     monkeypatch,
 ) -> None:

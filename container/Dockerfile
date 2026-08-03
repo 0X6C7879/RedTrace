@@ -1,6 +1,10 @@
 FROM kalilinux/kali-rolling:latest
 
 ARG TARGETARCH
+ARG CODEX_VERSION=0.146.0
+ARG CLAUDE_CODE_VERSION=2.1.220
+ARG PI_CODING_AGENT_VERSION=0.83.0
+ARG PLAYWRIGHT_CLI_VERSION=0.1.17
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
@@ -45,7 +49,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     cysignals fpylll py_ecc pycparser==2.23 Pillow numpy scipy requests dnslib \
     pyzbar pytesseract segno \
     --break-system-packages && \
-    sudo npm install -g @playwright/cli@latest && \
+    sudo npm install -g "@playwright/cli@${PLAYWRIGHT_CLI_VERSION}" && \
     cd /tmp && playwright-cli install-browser chromium --with-deps
 
 RUN case "$TARGETARCH" in amd64|arm64) asset_arch="$TARGETARCH" ;; \
@@ -82,9 +86,9 @@ RUN command -v fd >/dev/null 2>&1 || sudo ln -s /usr/bin/fdfind /usr/local/bin/f
 RUN sudo pip3 install tccli awscli --break-system-packages && \
     sudo bash -c "$(curl -fsSL https://aliyuncli.alicdn.com/install.sh)"
 
-RUN sudo npm install -g @openai/codex@0.118.0
-RUN sudo npm install -g @anthropic-ai/claude-code@2.1.98
-RUN sudo npm install -g @mariozechner/pi-coding-agent@0.73.0 && \
+RUN sudo npm install -g "@openai/codex@${CODEX_VERSION}"
+RUN sudo npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+RUN sudo npm install -g "@earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION}" --ignore-scripts && \
     sudo env HOME=/home/kali /usr/local/bin/pi install npm:pi-mcp-extension@1.5.0 && \
     sudo chown -R kali:kali /home/kali
 

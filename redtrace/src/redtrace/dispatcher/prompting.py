@@ -93,14 +93,26 @@ def add_blackboard_guidance(
             "不得索取已存储的 secret。"
         )
     if task_type != "reason":
-        sections.append(
-            "Skill、MCP 和 plugin 由 RedTrace root 共享。首次实质操作前用 Worker 原生 Skill 机制发现并调用最具体的相关 Skill；"
-            "默认只用一个主 Skill，确有缺口时再加一个辅助 Skill，不得额外调用 model 做匹配。"
+        sections.extend(
+            [
+                (
+                    "## RedTrace 全自动执行覆盖规则\n\n"
+                    "阶段结束后自动选择证据最充分、最能推进 Goal 的具体下一步并立即执行；"
+                    "不得等待用户从下一步菜单中选择，不得因常规分支、工具替代或阶段切换暂停。"
+                    "仅在授权范围即将改变或缺少无法安全推断的必要输入时停下。"
+                ),
+                (
+                    "Skill、MCP 和 plugin 由 RedTrace root 共享。首次实质操作前用 Worker 原生 Skill 机制发现并调用最具体的相关 Skill；"
+                    "安全任务必须从 `reverse-skill` 进入并由其内部路由。默认只用一个主 Skill，确有缺口时再加一个辅助 Skill，"
+                    "不得额外调用 model 做匹配。"
+                ),
+            ]
         )
     sections.append(
         "## reverse-skill 原生经验回写\n\n"
         "安全任务结束前按 `reverse-skill` 的 field-journal 规则完成一次复盘。只有产生已验证且可复用的新经验时，"
-        "才由当前 Worker 直接写入 `$REDTRACE_SKILLS_DIR/reverse-skill/upstream/skills/field-journal/` 并更新 `_index.md`；"
+        "先在 Workspace 写脱敏 draft，再调用 `$REDTRACE_SKILLS_DIR/reverse-skill/redtrace-tools/field-journal/write.py` 的"
+        " `--slug --summary --keywords --entry-file` 接口事务写入；不得直接修改共享 `_index.md`。"
         "必须脱敏，不得写 target、credential、flag、secret 或 Workspace 绝对路径。没有可复用经验则不写。"
         "不得提交 RedTrace evolution proposal、调用额外 model、等待后台治理或启动独立验证任务。"
     )

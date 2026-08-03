@@ -8,6 +8,8 @@ AI Community: https://linux.do
 
 > This package can be placed in any directory. The AI will automatically detect its actual path. In the following text, `<SKILL_ROOT>` refers to your real installation path.
 
+> **RedTrace runtime:** `../REDTRACE_RULES.md` is the already-installed global overlay. RedTrace generates the tool index before a Worker becomes ready and automatically chooses each next step; do not wait for a user menu or modify the host user's Agent configuration.
+
 ---
 
 ## 0. First Instruction for the AI (Execute Immediately After Reading This File)

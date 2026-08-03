@@ -98,6 +98,7 @@ class ClaudeCodeDriver(SeedSessionDriver):
                 "--mcp-config",
                 self._mcp_config(worker),
                 *self._plugin_args(worker),
+                *self._global_instruction_args(worker),
                 "-p",
                 "--output-format",
                 "stream-json",
@@ -134,6 +135,7 @@ class ClaudeCodeDriver(SeedSessionDriver):
             "--mcp-config",
             self._mcp_config(worker),
             *self._plugin_args(worker),
+            *self._global_instruction_args(worker),
             "-p",
             "--output-format",
             "stream-json",
@@ -158,6 +160,11 @@ class ClaudeCodeDriver(SeedSessionDriver):
     def _plugin_args(cls, worker: WorkerConfig) -> list[str]:
         plugin_dir = worker.env.get("REDTRACE_CLAUDE_PLUGIN_DIR")
         return ["--plugin-dir", plugin_dir] if plugin_dir else []
+
+    @staticmethod
+    def _global_instruction_args(worker: WorkerConfig) -> list[str]:
+        instructions = worker.env.get("REDTRACE_GLOBAL_INSTRUCTIONS", "").strip()
+        return ["--append-system-prompt", instructions] if instructions else []
 
     def extract_response_text(self, stdout: str, stderr: str) -> str:
         for line in reversed(stdout.splitlines()):

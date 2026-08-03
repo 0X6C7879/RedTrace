@@ -121,6 +121,7 @@ class PiDriver(WorkerDriver):
             "--extension",
             worker.env.get("REDTRACE_PI_MCP_EXTENSION", PI_MCP_EXTENSION),
             *self._skill_args(worker),
+            *self._global_instruction_args(worker),
         ]
         if session:
             argv.extend(["--session", session])
@@ -185,6 +186,7 @@ class PiDriver(WorkerDriver):
             "--extension",
             worker.env.get("REDTRACE_PI_MCP_EXTENSION", PI_MCP_EXTENSION),
             *cls._skill_args(worker),
+            *cls._global_instruction_args(worker),
             *pi_argv,
         ]
 
@@ -197,6 +199,11 @@ class PiDriver(WorkerDriver):
         if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
             raise ValueError("REDTRACE_SKILL_PATHS must be a JSON string array")
         return [argument for path in paths for argument in ("--skill", path)]
+
+    @staticmethod
+    def _global_instruction_args(worker: WorkerConfig) -> list[str]:
+        instructions = worker.env.get("REDTRACE_GLOBAL_INSTRUCTIONS", "").strip()
+        return ["--append-system-prompt", instructions] if instructions else []
 
     @staticmethod
     def _iter_events(stdout: str) -> Iterator[dict[str, Any]]:

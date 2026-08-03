@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -327,7 +328,7 @@ def test_container_ready_does_not_upload_capabilities_to_workspace() -> None:
 
         def exec_run(self, command):
             self.commands.append(command)
-            return SimpleNamespace(exit_code=1, output=b"")
+            return SimpleNamespace(exit_code=0, output=b"initialized")
 
         def put_archive(self, path: str, archive: bytes) -> bool:
             assert path == "/home/kali/workspace"
@@ -337,7 +338,14 @@ def test_container_ready_does_not_upload_capabilities_to_workspace() -> None:
     container = FakeContainer()
     manager = ContainerManager.__new__(ContainerManager)
     manager._require_container = lambda _name: container
+    manager._reverse_skill_initialized = False
+    manager._reverse_skill_init_lock = threading.Lock()
 
     assert manager._ready("worker") == "worker"
     assert container.archives == []
-    assert container.commands == []
+    assert container.commands == [
+        [
+            "bash",
+            "/opt/redtrace/claude-plugin/skills/reverse-skill/redtrace-tools/initialize.sh",
+        ]
+    ]

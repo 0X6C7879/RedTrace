@@ -37,6 +37,8 @@ issues-index.txt
 # 工具索引（每台机器不同）
 skills/tool-index.md
 skills/tool-index.json
+.redtrace-*.lock
+.redtrace-*.lock.d/
 
 # 编译产物
 *.exe

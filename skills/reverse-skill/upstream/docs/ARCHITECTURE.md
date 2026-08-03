@@ -123,7 +123,8 @@ flowchart TD
     Verify -->|失败| Manual[输出手动安装引导]
     
     AddPath --> Continue([继续执行任务])
-    Manual --> Wait([等待用户确认])
+    Manual --> Fallback[记录手动步骤<br/>切换等价工具]
+    Fallback --> Continue
 ```
 
 ## 渗透测试循环

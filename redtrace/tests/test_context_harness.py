@@ -440,6 +440,9 @@ def test_prompt_guidance_reuses_existing_state_and_bounded_queries() -> None:
     assert "user-local 方式安装" in prompt
     assert "`--version` 和最小 smoke check" in prompt
     assert "不得循环或阻塞" in prompt
+    assert "## RedTrace 全自动执行覆盖规则" in prompt
+    assert "自动选择证据最充分" in prompt
+    assert "不得等待用户从下一步菜单中选择" in prompt
     assert "Context Harness" not in disabled
     assert prompt.rstrip().endswith("主任务字段必须完整。")
     assert disabled.rstrip().endswith("主任务字段必须完整。")

@@ -33,6 +33,8 @@ class ContainerManager:
         self._client = docker.from_env()
         self._ensure_running_locks: dict[str, threading.Lock] = {}
         self._ensure_running_locks_guard = threading.Lock()
+        self._reverse_skill_init_lock = threading.Lock()
+        self._reverse_skill_initialized = False
         self._paths = paths
         self._host_mounts: list[tuple[Path, Path]] | None = None
 
@@ -105,7 +107,35 @@ class ContainerManager:
         raise RuntimeError(f"failed to create container {name}")
 
     def _ready(self, name: str) -> str:
+        self._ensure_reverse_skill_initialized(name)
         return name
+
+    def _ensure_reverse_skill_initialized(self, name: str) -> None:
+        if self._reverse_skill_initialized:
+            return
+        with self._reverse_skill_init_lock:
+            if self._reverse_skill_initialized:
+                return
+            container = self._require_container(name)
+            initializer = (
+                "/opt/redtrace/claude-plugin/skills/reverse-skill/"
+                "redtrace-tools/initialize.sh"
+            )
+            try:
+                result = container.exec_run(["bash", initializer])
+            except DockerException as exc:
+                raise RuntimeError(
+                    f"failed to initialize reverse-skill in container {name}: {exc}"
+                ) from exc
+            exit_code = int(result.exit_code)
+            output = result.output.decode("utf-8", errors="replace").strip()
+            if exit_code != 0:
+                raise RuntimeError(
+                    "failed to initialize reverse-skill in container "
+                    f"{name} (exit={exit_code}): {output}"
+                )
+            self._reverse_skill_initialized = True
+            LOG.info("reverse-skill initialized container=%s output=%s", name, output)
 
     def _ensure_running_lock(self, name: str) -> threading.Lock:
         with self._ensure_running_locks_guard:

@@ -7,14 +7,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.8.9 /uv /uvx /usr/local/bin/
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
-        nodejs \
-        npm \
         python3 \
         python3-venv \
-    && npm install -g \
-        @openai/codex@0.118.0 \
-        @anthropic-ai/claude-code@2.1.98 \
-        @mariozechner/pi-coding-agent@0.73.0 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

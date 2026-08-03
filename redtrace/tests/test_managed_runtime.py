@@ -8,6 +8,9 @@ import yaml
 from conftest import make_config
 from redtrace.agent_runtime import AgentRuntimeManager
 from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
+from redtrace.dispatcher.workers.adapters.claudecode import ClaudeCodeDriver
+from redtrace.dispatcher.workers.adapters.codex import CodexDriver
+from redtrace.dispatcher.workers.adapters.pi import PiDriver
 from redtrace.paths import (
     PathResolutionError,
     RedTracePaths,
@@ -200,3 +203,62 @@ def test_shared_skill_link_recovers_after_project_move(
     skill_link = moved_layout.runtime / "claude-plugin" / "skills"
     assert skill_link.resolve() == moved_layout.skills.resolve()
     assert (skill_link / "portable" / "SKILL.md").is_file()
+
+
+def test_runtime_loads_reverse_skill_rules_as_global_worker_instructions(
+    tmp_path: Path,
+) -> None:
+    layout = _layout(tmp_path / "redtrace")
+    reverse_skill = layout.skills / "reverse-skill"
+    reverse_skill.mkdir(parents=True)
+    (reverse_skill / "SKILL.md").write_text("# reverse-skill\n", encoding="utf-8")
+    (reverse_skill / "REDTRACE_RULES.md").write_text(
+        "automatic reverse rules\n",
+        encoding="utf-8",
+    )
+    layout.mcp.mkdir()
+    layout.plugins.mkdir()
+    worker = WorkerConfig(
+        name="pi",
+        type="pi",
+        task_types=["explore"],
+        max_running=1,
+        priority=0,
+    )
+
+    AgentRuntimeManager(layout, execution="local").initialize([worker])
+
+    assert worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"] == "automatic reverse rules\n"
+
+
+def test_all_native_workers_receive_and_can_invoke_reverse_skill(tmp_path: Path) -> None:
+    layout = _layout(tmp_path / "redtrace")
+    reverse_skill = layout.skills / "reverse-skill"
+    reverse_skill.mkdir(parents=True)
+    (reverse_skill / "SKILL.md").write_text("# reverse-skill\n", encoding="utf-8")
+    (reverse_skill / "REDTRACE_RULES.md").write_text("automatic\n", encoding="utf-8")
+    layout.mcp.mkdir()
+    layout.plugins.mkdir()
+    workers = [
+        WorkerConfig(
+            name=worker_type,
+            type=worker_type,
+            task_types=["explore"],
+            max_running=1,
+            priority=0,
+        )
+        for worker_type in ("claudecode", "codex", "pi")
+    ]
+
+    AgentRuntimeManager(layout, execution="local").initialize(workers)
+    expected_path = str(reverse_skill.resolve())
+    claude = ClaudeCodeDriver(local=True).build_execute(
+        workers[0], "prompt", "session"
+    ).argv
+    codex = CodexDriver(local=True).build_execute(workers[1], "prompt", None).argv
+    pi = PiDriver(local=True).build_execute(workers[2], "prompt", None).argv
+
+    assert claude[claude.index("--plugin-dir") + 1].endswith("claude-plugin")
+    assert expected_path in " ".join(codex)
+    assert pi[pi.index("--skill") + 1] == expected_path
+    assert all(worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"] == "automatic\n" for worker in workers)

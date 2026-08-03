@@ -43,6 +43,7 @@ QILING_WRAPPER="$PROJECT_DIR/skills/reverse-skill/redtrace-tools/qiling/qiling-p
 NUCLEI_VERSION="${REDTRACE_NUCLEI_VERSION:-3.11.0}"
 RSACTFTOOL_REVISION="${REDTRACE_RSACTFTOOL_REVISION:-7c98848f1945de3e67a420871e8672f5ad9aa5d5}"
 CTF_TOOL_INSTALLER="$PROJECT_DIR/install_ctf_tools.sh"
+REVERSE_SKILL_INITIALIZER="$PROJECT_DIR/skills/reverse-skill/redtrace-tools/initialize.sh"
 JAVA_INSTALL_DIR="${REDTRACE_JAVA_HOME:-$HOME/.local/share/redtrace-tools/temurin-21}"
 DISTRO_ID=""
 PACKAGE_MANAGER=""
@@ -1072,6 +1073,10 @@ if [[ "${REDTRACE_SKIP_OPTIONAL_TOOLS:-0}" != "1" ]]; then
 else
   log "skipping optional Python and Ruby security tools"
 fi
+
+[[ -x "$REVERSE_SKILL_INITIALIZER" ]] || die "reverse-skill initializer is missing or not executable"
+log "installing reverse-skill runtime dependencies and generating tool index"
+bash "$REVERSE_SKILL_INITIALIZER"
 
 log "syncing RedTrace Python environment"
 if ! UV_INDEX_URL="$PYPI_INDEX" uv sync --frozen --project "$PROJECT_DIR/redtrace"; then

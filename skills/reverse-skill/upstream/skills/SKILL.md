@@ -15,7 +15,7 @@ description: Routes reverse engineering, exploitation, penetration testing, malw
 3. `NOW`：按 `ops/role-map.md` 标 lead/specialist；立即打开 PRIMARY `SKILL.md` 执行 ACTION REQUIRED。
 4. `NEXT`：涉及本机工具时读 `tool-index.md`；**禁止猜路径**；缺工具 → `bootstrap-reverse.ps1`（仅 manifest）。
 5. `ACT`：执行并 **追加 timeline / 更新 workitems**；结论用 Evidence→Finding→Path（`ops/evidence-finding-path.md`）。
-6. 结束：`docs-generator` 报告 + 脱敏 `field-journal`；阶段菜单 3–6 项。
+6. 结束：`docs-generator` 报告 + 脱敏 `field-journal`；在 RedTrace 中自动推进到任务输出契约完成。
 
 **身份**：见 `ops/IDENTITY.md`（轻量路由包 + 工具自举 + journal；**不是** Z3r0 式平台）。
 
@@ -96,28 +96,9 @@ description: Routes reverse engineering, exploitation, penetration testing, malw
 3. **深入分析** → 如果需要反编译→IDA；需要动态 Hook→Frida；需要符号执行→angr
 4. **一条路走不通就换一条** → 静态分析不行就动态，Java 层不行就看 so，页面观察不够就断点
 
-## 下一步菜单模式（Next-Step Menu Pattern）
+## 自动推进模式（RedTrace Automation Pattern）
 
-每个子 skill 在执行完一个阶段后，`MUST` 提供给用户 3-6 个编号的下步选项，让用户选择方向。不要在无用户选择的情况下跨阶段推进。
-
-格式要求：
-- 每个选项以数字编号（1-6 范围）
-- 每个选项描述一项具体可执行的动作（不是抽象方向）
-- 至少包含一个"导出报告/写 writeup"选项
-- 至少包含一个"继续深入分析"或"换一种方法"选项
-- 必要时包含一个"停止/暂停/询问其他问题"出口
-
-示例：
-```
-## 建议下一步（选一个编号）
-
-1. 对 sub_140001000 做深度反编译，还原算法
-2. 用 Frida 动态 Hook 验证参数猜想
-3. 导出当前已命名函数，生成符号迁移 YAML
-4. 生成当前阶段的分析报告
-5. 换 radare2 做轻量侦察对比
-6. 暂停，我先确认前面的证据
-```
+每个子 skill 完成一个阶段后，必须根据 Goal、当前证据、授权范围与失败记录，自动选择最有价值的下一项具体动作并继续执行。不得输出下一步菜单等待用户选择；只有授权范围即将改变或缺少无法安全推断的必要输入时才暂停。
 
 ## 目录是动态扩充的
 

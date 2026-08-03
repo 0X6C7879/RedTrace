@@ -102,6 +102,23 @@ def test_reverse_skill_is_complete_and_shared_with_all_workers(
     assert ".agents/skills/brave-search/SKILL.md" in files
 
 
+def test_reverse_skill_controller_is_non_interactive_for_redtrace_workers() -> None:
+    skill_dir = SKILLS_DIR / "reverse-skill"
+    automation_rules = (skill_dir / "REDTRACE_RULES.md").read_text(encoding="utf-8")
+    controller_files = (
+        skill_dir / "upstream" / "skills" / "SKILL.md",
+        skill_dir / "upstream" / "skills" / "CONTRIBUTING.md",
+        skill_dir / "upstream" / "skills" / "dotnet-reverse" / "SKILL.md",
+    )
+    controller_text = "\n".join(path.read_text(encoding="utf-8") for path in controller_files)
+
+    assert "自动选择" in automation_rules
+    assert "不得等待用户选择" in automation_rules
+    assert "3-6 个编号" not in controller_text
+    assert "3–6 项下一步菜单" not in controller_text
+    assert "无用户选择的情况下跨阶段" not in controller_text
+
+
 def test_playwright_cli_skill_is_shared_with_all_workers(
     materialized_catalog: tuple[CapabilityStore, dict[str, bytes]],
 ) -> None:
