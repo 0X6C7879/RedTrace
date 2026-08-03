@@ -92,6 +92,11 @@
   background: rgba(139, 92, 246, 0.03);
   border-radius: 9px;
 }
+.audit-thinking-text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #64748b;
+}
 .audit-terminal {
   background: #111827;
   color: #d1fae5;

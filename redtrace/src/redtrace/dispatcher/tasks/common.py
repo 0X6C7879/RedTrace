@@ -12,6 +12,7 @@ from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
 from redtrace.dispatcher.runtime.process import ProcessResult
+from redtrace.dispatcher.workers.adapters.claudecode import CLAUDE_MAX_THINKING_TOKENS
 
 PROCESS_COMMUNICATE_GRACE_SECONDS = 15
 GRAPH_SNAPSHOT_ROOT = "/tmp/redtrace-prompts"
@@ -104,6 +105,13 @@ def run_worker_process(
             )
         elif worker.type == "pi":
             process_env["PI_MODEL_CONTEXT_WINDOW"] = str(worker.context_length)
+    if worker.type == "claudecode":
+        # Run Claude Code at full extended-thinking strength. A value already
+        # present in dispatch.yaml env wins over this default.
+        process_env.setdefault("MAX_THINKING_TOKENS", CLAUDE_MAX_THINKING_TOKENS)
+    # RedTrace workers default to Chinese thinking; override in dispatch.yaml
+    # by setting REDTRACE_LANG to a different value in worker env.
+    process_env.setdefault("REDTRACE_LANG", "zh-CN")
     if client is not None and project_id is not None:
         process_env.update(
             {

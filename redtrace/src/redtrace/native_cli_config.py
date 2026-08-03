@@ -95,6 +95,8 @@ def _write_claude(home: Path, worker: WorkerConfig) -> None:
     model = worker.env["ANTHROPIC_MODEL"]
     env = deepcopy(env)
     env.pop("CLAUDE_CODE_AUTO_COMPACT_WINDOW", None)
+    # Instruct Claude to think and respond in Chinese.
+    env["CLAUDE_CODE_USER_PROMPT_APPEND"] = "\n请始终使用中文进行思考、分析和回答。"
     env.update(
         {
             "ANTHROPIC_BASE_URL": worker.env["ANTHROPIC_BASE_URL"],
@@ -106,6 +108,8 @@ def _write_claude(home: Path, worker: WorkerConfig) -> None:
             "CLAUDE_CODE_SUBAGENT_MODEL": model,
             "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90",
             "CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION": "1000",
+            # Full extended-thinking strength for native Claude Code runs.
+            "MAX_THINKING_TOKENS": "31999",
         }
     )
     if worker.context_length is not None:
@@ -161,6 +165,8 @@ def _write_codex(home: Path, worker: WorkerConfig) -> None:
         "model_auto_compact_token_limit_scope",
         "model_context_window",
         "model_provider",
+        "model_reasoning_effort",
+        "model_reasoning_summary",
         "sandbox_mode",
         "web_search",
     }
@@ -180,6 +186,10 @@ def _write_codex(home: Path, worker: WorkerConfig) -> None:
         'approval_policy = "never"',
         'sandbox_mode = "danger-full-access"',
         'web_search = "live"',
+        # Full reasoning strength for native Codex runs.
+        'model_reasoning_effort = "high"',
+        'model_reasoning_summary = "always"',
+        'custom_instructions = "请始终使用中文进行思考、分析和回答。"',
         *(
             [
                 f"model_context_window = {worker.context_length}",
@@ -261,5 +271,7 @@ def _write_pi(home: Path, worker: WorkerConfig) -> None:
         ],
     }
     models["providers"] = providers
+    if "systemPromptAppend" not in settings:
+        settings["systemPromptAppend"] = "请始终使用中文进行思考、分析和回答。"
     _write_json(models_path, models)
     _write_json(settings_path, settings)

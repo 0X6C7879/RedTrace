@@ -19,6 +19,7 @@ from redtrace.dispatcher.runtime.stream_buffer import TRUNCATED_STREAM_LINE
 
 LOG = logging.getLogger(__name__)
 ASSISTANT_MESSAGE_CHUNK = 32 * 1024
+THINKING_MESSAGE_CHUNK = 32 * 1024
 CRITICAL_KINDS = {
     "error",
     "run.completed",
@@ -59,8 +60,11 @@ class AuditPublisher:
         self._queue: queue.Queue[dict[str, Any] | None] = queue.Queue(maxsize=2048)
         self._assistant_parts: list[str] = []
         self._assistant_chars = 0
+        self._thinking_parts: list[str] = []
+        self._thinking_chars = 0
         self._tool_calls: dict[str, dict[str, Any]] = {}
         self._claude_tool_blocks: dict[int, dict[str, Any]] = {}
+        self._pi_state: dict[str, Any] = {"thinking_streamed": False}
         self._run = {
             "id": self.run_id,
             "project_id": project_id,
@@ -96,21 +100,36 @@ class AuditPublisher:
             self._run["provider"],
             line,
             claude_tool_state=self._claude_tool_blocks,
+            pi_state=self._pi_state,
         ):
             event = _enrich_tool_event(event, self._tool_calls)
-            if event["kind"] == "assistant.delta":
+            kind = event["kind"]
+            if kind == "assistant.delta":
                 content = str(event.get("content", ""))
                 self._assistant_parts.append(content)
                 self._assistant_chars += len(content)
                 if self._assistant_chars >= ASSISTANT_MESSAGE_CHUNK:
                     self._persist_assistant_message()
-            elif event["kind"] in {
+                # A visible text block always starts after the thinking block
+                # ends, so any buffered thinking text is complete at this point.
+                self._persist_thinking_message()
+            elif kind == "thinking.delta":
+                content = str(event.get("content", ""))
+                self._thinking_parts.append(content)
+                self._thinking_chars += len(content)
+                if self._thinking_chars >= THINKING_MESSAGE_CHUNK:
+                    self._persist_thinking_message()
+            elif kind == "thinking.completed":
+                fallback = str(event.pop("final_text", "") or "")
+                self._persist_thinking_message(fallback_text=fallback)
+            elif kind in {
                 "tool.started",
                 "command.started",
                 "skill.started",
                 "turn.completed",
             }:
                 self._persist_assistant_message()
+                self._persist_thinking_message()
             if event["kind"] in {"tool.started", "command.started", "skill.started"}:
                 call_id = event.get("call_id")
                 if isinstance(call_id, str) and call_id:
@@ -127,6 +146,7 @@ class AuditPublisher:
 
     def finish(self, result: ProcessResult) -> None:
         self._persist_assistant_message()
+        self._persist_thinking_message()
         stderr = _clean_text(result.stderr.strip())
         # Worker CLIs may forward successful tool output and diagnostics to
         # stderr. Command events already carry their actionable exit codes, so
@@ -217,6 +237,22 @@ class AuditPublisher:
                 persist_only=True,
             )
 
+    def _persist_thinking_message(self, fallback_text: str = "") -> None:
+        text = "".join(self._thinking_parts)
+        if not text:
+            text = fallback_text
+        self._thinking_parts.clear()
+        self._thinking_chars = 0
+        if not text.strip():
+            return
+        for offset in range(0, len(text), THINKING_MESSAGE_CHUNK):
+            self.emit(
+                "thinking.message",
+                role="assistant",
+                content=text[offset : offset + THINKING_MESSAGE_CHUNK],
+                persist_only=True,
+            )
+
     def _run_loop(self) -> None:
         batch: list[dict[str, Any]] = []
         deadline = time.monotonic() + 0.05
@@ -257,6 +293,7 @@ def normalize_event(
     line: str,
     *,
     claude_tool_state: dict[int, dict[str, Any]] | None = None,
+    pi_state: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     try:
         payload = json.loads(line)
@@ -270,7 +307,7 @@ def normalize_event(
     if provider == "codex":
         return _normalize_codex(payload, timestamp)
     if provider == "pi":
-        return _normalize_pi(payload, timestamp)
+        return _normalize_pi(payload, timestamp, pi_state)
     return []
 
 
@@ -289,6 +326,10 @@ def _normalize_claude(
             delta = event.get("delta") or {}
             if delta.get("type") == "text_delta":
                 return [_event("assistant.delta", timestamp, content=delta.get("text", ""))]
+            if delta.get("type") == "thinking_delta":
+                return [
+                    _event("thinking.delta", timestamp, content=delta.get("thinking", ""))
+                ]
             if delta.get("type") == "input_json_delta" and tool_state is not None:
                 index = event.get("index")
                 if isinstance(index, int) and index in tool_state:
@@ -296,10 +337,17 @@ def _normalize_claude(
                 return []
         if event_type == "content_block_start":
             block = event.get("content_block") or {}
-            if block.get("type") == "tool_use":
+            block_type = block.get("type")
+            if block_type == "thinking":
+                index = event.get("index")
+                if isinstance(index, int) and tool_state is not None:
+                    tool_state[index] = {"kind": "thinking", "parts": []}
+                return []
+            if block_type == "tool_use":
                 index = event.get("index")
                 if isinstance(index, int) and tool_state is not None:
                     tool_state[index] = {
+                        "kind": "tool",
                         "call_id": block.get("id"),
                         "title": block.get("name"),
                         "parts": [],
@@ -319,6 +367,8 @@ def _normalize_claude(
             state = tool_state.pop(index, None) if isinstance(index, int) else None
             if state is None:
                 return []
+            if state.get("kind") == "thinking":
+                return [_event("thinking.completed", timestamp)]
             arguments: Any = {}
             raw_arguments = "".join(state["parts"]).strip()
             if raw_arguments:
@@ -372,6 +422,8 @@ def _normalize_codex(payload: dict[str, Any], timestamp: str) -> list[dict[str, 
         return [_event("session.started", timestamp, session_id=payload.get("thread_id"))]
     if event_type == "turn.started":
         return [_event("turn.started", timestamp)]
+    if event_type == "item.delta":
+        return _normalize_codex_delta(item, item_type, timestamp)
     if event_type == "item.started" and item_type in {"command_execution", "mcp_tool_call"}:
         return [
             _event(
@@ -384,6 +436,19 @@ def _normalize_codex(payload: dict[str, Any], timestamp: str) -> list[dict[str, 
             )
         ]
     if event_type == "item.completed":
+        if item_type == "reasoning":
+            content = _codex_reasoning_text(item)
+            if not content:
+                return []
+            return [
+                _event(
+                    "thinking.message",
+                    timestamp,
+                    role="assistant",
+                    content=content,
+                    message_id=item.get("id"),
+                )
+            ]
         if item_type == "agent_message":
             return [
                 _event(
@@ -431,14 +496,68 @@ def _normalize_codex(payload: dict[str, Any], timestamp: str) -> list[dict[str, 
     return []
 
 
-def _normalize_pi(payload: dict[str, Any], timestamp: str) -> list[dict[str, Any]]:
+def _normalize_codex_delta(
+    item: dict[str, Any],
+    item_type: str,
+    timestamp: str,
+) -> list[dict[str, Any]]:
+    if item_type == "reasoning":
+        text = _codex_reasoning_delta_text(item)
+        if not text:
+            return []
+        return [_event("thinking.delta", timestamp, content=text)]
+    if item_type == "agent_message":
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return []
+        return [_event("assistant.delta", timestamp, content=text)]
+    return []
+
+
+def _codex_reasoning_delta_text(item: dict[str, Any]) -> str:
+    text = item.get("text")
+    if isinstance(text, str) and text.strip():
+        return _clean_text(text).strip()
+    return _codex_reasoning_text(item)
+
+
+def _normalize_pi(
+    payload: dict[str, Any],
+    timestamp: str,
+    state: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     event_type = payload.get("type")
     if event_type == "session":
         return [_event("session.started", timestamp, session_id=payload.get("id"))]
     if event_type == "message_update":
         update = payload.get("assistantMessageEvent") or {}
-        if update.get("type") == "text_delta":
+        update_type = update.get("type")
+        if update_type == "text_delta":
             return [_event("assistant.delta", timestamp, content=update.get("delta", ""))]
+        if update_type == "thinking_delta":
+            if state is not None:
+                state["thinking_streamed"] = True
+            return [_event("thinking.delta", timestamp, content=update.get("delta", ""))]
+        if update_type in {"thinking_end", "thinking_start"}:
+            if update_type == "thinking_end":
+                streamed = bool(state.get("thinking_streamed")) if state else False
+                if state is not None:
+                    state["thinking_streamed"] = False
+                if streamed:
+                    return [_event("thinking.completed", timestamp)]
+                content = _clean_text(update.get("content", ""))
+                if content.strip():
+                    # Provider delivered the thinking block without streaming
+                    # deltas; surface the complete text as a single card.
+                    return [
+                        _event(
+                            "thinking.message",
+                            timestamp,
+                            role="assistant",
+                            content=content,
+                        )
+                    ]
+            return []
     if event_type == "tool_execution_start":
         return [
             _event(
@@ -467,6 +586,19 @@ def _normalize_pi(payload: dict[str, Any], timestamp: str) -> list[dict[str, Any
 
 def _event(kind: str, timestamp: str, **fields: Any) -> dict[str, Any]:
     return {"kind": kind, "timestamp": timestamp, **fields}
+
+
+def _codex_reasoning_text(item: dict[str, Any]) -> str:
+    parts: list[str] = []
+    summary = item.get("summary")
+    if isinstance(summary, list):
+        for entry in summary:
+            if not isinstance(entry, dict):
+                continue
+            text = entry.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(_clean_text(text).strip())
+    return "\n\n".join(part for part in parts if part).strip()
 
 
 def _content_text(value: Any) -> str:

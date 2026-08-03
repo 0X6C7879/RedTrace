@@ -21,6 +21,9 @@ from redtrace.server.services import get_project_or_404
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 MAX_FILE_BYTES = 256 * 1024
+# Stream-only events: broadcast live but never persisted. The assembled
+# assistant.message / thinking.message chunks carry the durable copy.
+TRANSIENT_EVENT_KINDS = {"assistant.delta", "thinking.delta", "thinking.completed"}
 
 
 class AuditBatch(BaseModel):
@@ -94,7 +97,7 @@ def append_events(body: AuditBatch) -> dict[str, int]:
                     "UPDATE audit_runs SET session_id = ? WHERE id = ?",
                     (event["session_id"], run["id"]),
                 )
-            if event.get("kind") != "assistant.delta":
+            if event.get("kind") not in TRANSIENT_EVENT_KINDS:
                 persistent.append(
                     (
                         event.get("event_uid"),

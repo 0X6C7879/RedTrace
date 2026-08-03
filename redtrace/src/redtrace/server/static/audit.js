@@ -128,26 +128,23 @@ function auditPage() {
     },
 
     applyEvent(event) {
-      if (event.kind === 'assistant.delta') {
+      const deltaKinds = ['assistant.delta', 'thinking.delta'];
+      if (deltaKinds.includes(event.kind)) {
         let current = null;
         for (let index = this.events.length - 1; index >= 0; index -= 1) {
           const candidate = this.events[index];
           if (candidate.run_id !== event.run_id) continue;
-          if (candidate.kind === 'assistant.delta' && !candidate.closed) current = candidate;
+          if (candidate.kind === event.kind && !candidate.closed) current = candidate;
           break;
         }
         if (current) {
           current.content = `${current.content || ''}${event.content || ''}`;
         } else {
+          this.closeOpenDelta(event.run_id, deltaKinds);
           this.events.push({ ...event, content: event.content || '' });
         }
       } else {
-        for (let index = this.events.length - 1; index >= 0; index -= 1) {
-          if (this.events[index].run_id === event.run_id && this.events[index].kind === 'assistant.delta') {
-            this.events[index].closed = true;
-            break;
-          }
-        }
+        this.closeOpenDelta(event.run_id, deltaKinds);
         this.events.push(event);
         if (event.call_id && event.run_id && ['command.completed', 'tool.completed', 'skill.completed'].includes(event.kind)) {
           this._completedKeys.add(`${event.run_id}:${event.call_id}`);
@@ -158,6 +155,19 @@ function auditPage() {
         this.loadTasks();
       }
       if (this.autoFollow) this.$nextTick(() => this.scrollToBottom());
+    },
+
+    closeOpenDelta(runId, deltaKinds) {
+      // At most one streaming delta of a run is open at any moment, so a
+      // backwards scan can stop at the first match.
+      for (let index = this.events.length - 1; index >= 0; index -= 1) {
+        const candidate = this.events[index];
+        if (candidate.run_id !== runId) continue;
+        if (deltaKinds.includes(candidate.kind) && !candidate.closed) {
+          candidate.closed = true;
+        }
+        break;
+      }
     },
 
     async refreshRuns() {
@@ -172,7 +182,7 @@ function auditPage() {
     },
 
     eventVisible(event) {
-      if (event.kind === 'run.started' || event.kind === 'session.started' || event.kind === 'turn.started') {
+      if (event.kind === 'run.started' || event.kind === 'session.started' || event.kind === 'turn.started' || event.kind === 'thinking.completed') {
         return false;
       }
       if (['command.started', 'tool.started', 'skill.started'].includes(event.kind) && this.hasCompletion(event)) {
@@ -251,6 +261,8 @@ function auditPage() {
         'user.message': '用户',
         'assistant.message': '助手',
         'assistant.delta': '助手',
+        'thinking.message': '思考',
+        'thinking.delta': '思考',
         'tool.started': event.title || '工具',
         'tool.completed': event.title || '工具结果',
         'command.started': '执行',
@@ -268,6 +280,10 @@ function auditPage() {
 
     isMessage(event) {
       return ['user.message', 'assistant.message', 'assistant.delta'].includes(event.kind);
+    },
+
+    isThinking(event) {
+      return ['thinking.message', 'thinking.delta'].includes(event.kind);
     },
 
     isTool(event) {

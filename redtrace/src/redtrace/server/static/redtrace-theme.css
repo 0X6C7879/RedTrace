@@ -1632,6 +1632,12 @@ section[x-show="appPage === 'plugins'"] header {
   background: rgba(167, 131, 255, 0.08) !important;
 }
 
+/* Thinking text streams inline like assistant output; it is only set apart by
+   a slightly smaller, dimmer treatment. */
+.audit-thinking-text {
+  color: #8fa1b8 !important;
+}
+
 body .fixed.z-50 > .bg-white {
   border-color: #29384b !important;
   background: #0d1622 !important;

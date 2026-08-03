@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RedTrace</title>
 <link rel="icon" href="/static/favicon.svg?v=20260727-logo3" type="image/svg+xml">
-<link rel="stylesheet" href="/static/audit.css">
+<link rel="stylesheet" href="/static/audit.css?v=20260803-thinking">
 <link rel="stylesheet" href="/static/operations.css">
 <script src="/static/vendor/tailwindcss.js"></script>
 <script src="/static/vendor/dagre.min.js"></script>
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/vendor/cytoscape-dagre.js"></script>
-<script defer src="/static/audit.js?v=20260801-skill-name"></script>
+<script defer src="/static/audit.js?v=20260803-thinking"></script>
 <script defer src="/static/capabilities.js?v=20260803-reverse-skill-tree"></script>
 <script defer src="/static/operations.js"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
@@ -239,7 +239,7 @@
     }
   }
 </script>
-<link rel="stylesheet" href="/static/redtrace-theme.css?v=20260803-reverse-skill-tree">
+<link rel="stylesheet" href="/static/redtrace-theme.css?v=20260803-thinking">
 </head>
 <body class="bg-slate-50 text-slate-800 h-screen overflow-hidden" :class="{ 'select-none cursor-col-resize': isResizingPanel }" x-data="redtraceApp()">
 <div class="app-shell flex h-full min-h-0" :class="{ 'app-shell-operations': appPage === 'webshell' || appPage === 'plugins' || appPage.startsWith('c2-') }">
@@ -1326,6 +1326,9 @@
                 </div>
                 <template x-if="isMessage(event)">
                   <div class="max-h-72 overflow-auto whitespace-pre-wrap break-words text-[13px] leading-6 text-slate-700" x-text="displayText(event.content)"></div>
+                </template>
+                <template x-if="isThinking(event)">
+                  <div class="audit-thinking-text max-h-72 overflow-auto whitespace-pre-wrap break-words" x-text="displayText(event.content)"></div>
                 </template>
                 <template x-if="isTool(event)">
                   <details class="audit-tool overflow-hidden" :open="event.kind === 'file.changed'">

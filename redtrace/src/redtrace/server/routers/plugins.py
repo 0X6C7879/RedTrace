@@ -150,9 +150,9 @@ def _is_plugin_project(conn: Any, project_id: str) -> bool:
 def _audit_event(event: dict[str, Any]) -> str | None:
     kind = str(event.get("kind") or "event")
     content = str(event.get("content") or event.get("title") or "")
-    if kind == "assistant.delta" and content:
+    if kind in ("assistant.delta", "thinking.delta") and content:
         return _sse("reasoning_chain_stream_delta", content)
-    if kind == "assistant.message" and content:
+    if kind in ("assistant.message", "thinking.message") and content:
         return _sse("reasoning_chain", content)
     if kind.startswith("tool.") and content:
         return _sse(kind.replace(".", "_"), content)

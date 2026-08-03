@@ -16,11 +16,25 @@ from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_
 class PiDriver(WorkerDriver):
     type_name = "pi"
 
+    # Pi thinking levels accepted by `pi --thinking`, weakest to strongest.
+    THINKING_LEVELS = frozenset(
+        {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+    )
+
     def __init__(self, local: bool = False):
         self.local = local
 
     def local_binary(self) -> str | None:
         return "pi"
+
+    @classmethod
+    def _thinking_args(cls, worker: WorkerConfig) -> list[str]:
+        # Workers run at full thinking strength by default; operators can
+        # override (or disable) via REDTRACE_PI_THINKING_LEVEL in dispatch env.
+        level = str(worker.env.get("REDTRACE_PI_THINKING_LEVEL", "max")).strip().lower()
+        if level not in cls.THINKING_LEVELS:
+            level = "max"
+        return ["--thinking", level]
 
     def check_health(self, worker: WorkerConfig, *, timeout: float) -> HealthResult:
         env = worker.env
@@ -72,6 +86,7 @@ class PiDriver(WorkerDriver):
             "--model",
             env["PI_MODEL"],
             "--approve",
+            *self._thinking_args(worker),
             "--mode",
             "json",
         ]
@@ -99,6 +114,7 @@ class PiDriver(WorkerDriver):
             "--model",
             env["PI_MODEL"],
             "--approve",
+            *self._thinking_args(worker),
             "--mode",
             "json",
             "--session",
@@ -116,6 +132,7 @@ class PiDriver(WorkerDriver):
         argv = [
             "pi",
             "--approve",
+            *self._thinking_args(worker),
             "--mode",
             "json",
             "--extension",

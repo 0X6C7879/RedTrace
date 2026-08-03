@@ -6,9 +6,9 @@
 
 ## 统计
 
-- 真实项目数：9
+- 真实项目数：11
 - 种子参考数：17
-- 总条目数：25
+- 总条目数：28
 
 ## 按场景分类
 
@@ -56,6 +56,10 @@
 ### 其他
 
 - [[种子] seed-012_log4shell-jndi-rce](./seed-012_log4shell-jndi-rce.md)
+
+### RedTrace 自动回写
+
+- [2026-08-03_redtrace-fact-filesystem-drift-detection](./2026-08-03_redtrace-fact-filesystem-drift-detection.md) — Fact-graph assertions about file existence and code state may diverge from physical filesystem; always verify with direct filesystem inspection before relying on fact-described changes as ground truth.；关键词: fact-filesystem-drift, verification, graph-vs-reality, payload-audit, offline-exploit
 
 ## 使用说明
 
