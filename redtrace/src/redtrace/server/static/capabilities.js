@@ -18,17 +18,14 @@ function displayAgent(agent) {
 window.skillsPage = function skillsPage() {
   return {
     status: null,
-    evolution: null,
-    audit: [],
     items: [],
+    nestedEntries: [],
     agents: ['Claude', 'Codex', 'Pi'],
     query: '',
     selectedName: '',
     draft: null,
     versions: [],
     rollbackVersion: '',
-    showDeferred: false,
-    discardingProposal: '',
     isNew: false,
     loading: false,
     saving: false,
@@ -42,15 +39,14 @@ window.skillsPage = function skillsPage() {
 
     get filteredItems() {
       const needle = this.query.trim().toLowerCase();
-      if (!needle) return this.items;
-      return this.items.filter((item) =>
-        `${item.name} ${item.description || ''}`.toLowerCase().includes(needle)
+      const entries = this.items.flatMap((item) => [
+        { ...item, key: item.name },
+        ...this.nestedEntries.filter((entry) => entry.parent === item.name),
+      ]);
+      if (!needle) return entries;
+      return entries.filter((item) =>
+        `${item.name} ${item.path || ''} ${item.description || ''}`.toLowerCase().includes(needle)
       );
-    },
-
-    get latestDecision() {
-      if (!this.draft || this.isNew) return null;
-      return this.audit.find((event) => event.skill === this.draft.name) || null;
     },
 
     async init() {
@@ -61,19 +57,20 @@ window.skillsPage = function skillsPage() {
       this.loading = true;
       this.message = '';
       try {
-        const [status, items, evolution, audit] = await Promise.all([
+        const [status, items] = await Promise.all([
           capabilityRequest('GET', '/capabilities'),
           capabilityRequest('GET', '/capabilities/skills'),
-          capabilityRequest('GET', '/capabilities/evolution'),
-          capabilityRequest('GET', '/capabilities/evolution/audit?limit=100'),
         ]);
         this.status = status;
-        this.evolution = evolution;
-        this.audit = audit;
         this.agents = status.agents.map((agent) => displayAgent(agent.id));
         this.items = items;
-        if (this.selectedName && items.some((item) => item.name === this.selectedName)) {
-          await this.select(this.selectedName);
+        const reverseSkill = items.find((item) => item.name === 'reverse-skill');
+        this.nestedEntries = reverseSkill
+          ? await capabilityRequest('GET', '/capabilities/skills/reverse-skill/entries')
+          : [];
+        const selected = this.filteredItems.find((item) => item.key === this.selectedName);
+        if (selected) {
+          await this.select(selected);
         } else if (!this.isNew) {
           this.selectedName = '';
           this.draft = null;
@@ -85,13 +82,24 @@ window.skillsPage = function skillsPage() {
       }
     },
 
-    async select(name) {
+    async select(item) {
       this.isNew = false;
       this.deleteArmed = false;
-      this.selectedName = name;
+      this.selectedName = item.key || item.name;
       this.rollbackVersion = '';
       this.message = '';
       try {
+        if (item.nested) {
+          const path = item.path.split('/').map(encodeURIComponent).join('/');
+          this.draft = await capabilityRequest(
+            'GET',
+            `/capabilities/skills/${encodeURIComponent(item.parent)}/entries/${path}`,
+          );
+          this.draft.enabled = this.items.find((parent) => parent.name === item.parent)?.enabled;
+          this.versions = [];
+          return;
+        }
+        const name = item.name;
         const [draft, versions] = await Promise.all([
           capabilityRequest('GET', `/capabilities/skills/${encodeURIComponent(name)}`),
           capabilityRequest('GET', `/capabilities/skills/${encodeURIComponent(name)}/versions`),
@@ -119,7 +127,7 @@ window.skillsPage = function skillsPage() {
     },
 
     async save() {
-      if (!this.draft || this.saving) return;
+      if (!this.draft || this.draft.nested || this.saving) return;
       this.saving = true;
       this.message = '';
       try {
@@ -148,35 +156,6 @@ window.skillsPage = function skillsPage() {
 
     async refreshList() {
       this.items = await capabilityRequest('GET', '/capabilities/skills');
-    },
-
-    async refreshEvolution() {
-      const [evolution, audit] = await Promise.all([
-        capabilityRequest('GET', '/capabilities/evolution'),
-        capabilityRequest('GET', '/capabilities/evolution/audit?limit=100'),
-      ]);
-      this.evolution = evolution;
-      this.audit = audit;
-      if (!evolution.deferred) this.showDeferred = false;
-    },
-
-    async discardDeferred(candidate) {
-      if (!candidate?.proposalId || this.discardingProposal) return;
-      if (!window.confirm(`放弃 ${candidate.targetSkill || '未匹配 Skill'} 的这条待补证据候选？`)) return;
-      this.discardingProposal = candidate.proposalId;
-      this.message = '';
-      try {
-        await capabilityRequest(
-          'DELETE',
-          `/capabilities/evolution/deferred/${encodeURIComponent(candidate.proposalId)}`,
-        );
-        await this.refreshEvolution();
-        this.message = '已放弃该候选；没有修改任何 Skill。';
-      } catch (error) {
-        this.message = error.message;
-      } finally {
-        this.discardingProposal = '';
-      }
     },
 
     async rollback() {
@@ -208,7 +187,7 @@ window.skillsPage = function skillsPage() {
     },
 
     async remove() {
-      if (!this.draft || this.isNew) return;
+      if (!this.draft || this.draft.nested || this.isNew) return;
       const name = this.draft.name;
       try {
         await capabilityRequest('DELETE', `/capabilities/skills/${encodeURIComponent(name)}`);

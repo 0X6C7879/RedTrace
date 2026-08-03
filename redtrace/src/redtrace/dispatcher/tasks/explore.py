@@ -20,7 +20,6 @@ from redtrace.dispatcher.tasks.common import (
     did_timeout,
     project_allows_conclude_fallback,
     preview,
-    queue_skill_feedback,
     run_worker_process,
     task_healthcheck_enabled,
     write_conclude_result,
@@ -165,14 +164,6 @@ def run_explore_task(
                 model_output = driver.extract_response_text(first.stdout, first.stderr)
                 payload = parse_json_output(model_output)
                 kind, description = validate_explore_payload(payload)
-                queue_skill_feedback(
-                    client,
-                    payload,
-                    project_id=project.project.id,
-                    intent_id=intent.id,
-                    worker_name=worker.name,
-                    task_type="explore",
-                )
             except Exception as exc:
                 LOG.warning(
                     "explore parse failed project=%s intent=%s worker=%s error=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -392,14 +383,6 @@ def _try_conclude_fallback(
         model_output = driver.extract_response_text(result.stdout, result.stderr)
         payload = parse_json_output(model_output)
         kind, description = validate_explore_payload(payload)
-        queue_skill_feedback(
-            client,
-            payload,
-            project_id=project_id,
-            intent_id=intent.id,
-            worker_name=worker.name,
-            task_type="explore",
-        )
     except Exception as exc:
         LOG.warning(
             "conclude parse failed project=%s intent=%s worker=%s error=%s conclude_ms=%s stdout_preview=%s stderr_preview=%s",

@@ -17,35 +17,8 @@ REDTRACE_OUTPUT_SCHEMA = json.dumps(
         "properties": {
             "accepted": {"type": "boolean"},
             "data": {"type": "object"},
-            "skillFeedback": {
-                "type": ["object", "null"],
-                "properties": {
-                    "target_skill": {"type": "string"},
-                    "summary": {"type": "string"},
-                    "evolution_type": {
-                        "type": "string",
-                        "enum": ["IMPROVE", "FIX", "CAPTURE"],
-                    },
-                    "procedure": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "validation": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "evidence_refs": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "impact": {"type": "object"},
-                    "confidence": {"type": "number"},
-                },
-                "required": ["target_skill", "summary"],
-                "additionalProperties": True,
-            },
         },
-        "required": ["accepted", "data", "skillFeedback"],
+        "required": ["accepted", "data"],
         "additionalProperties": False,
     },
     separators=(",", ":"),

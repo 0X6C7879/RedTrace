@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
 from redtrace.dispatcher.audit import AuditPublisher
-from redtrace.dispatcher.contracts import extract_skill_feedback
 from redtrace.dispatcher.protocol.client import CairnClient
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
@@ -29,80 +28,6 @@ def preview(text: str, limit: int = 2048) -> str:
     truncated = len(text) > limit
     compact = " ".join(text[:limit].split())
     return compact + ("..." if truncated else "")
-
-
-def queue_skill_feedback(
-    client: CairnClient,
-    payload: dict,
-    *,
-    project_id: str,
-    intent_id: str | None,
-    worker_name: str,
-    task_type: str,
-) -> None:
-    """Best-effort queue of the model's optional learning checkpoint."""
-    feedback, rejection_reason = extract_skill_feedback(payload)
-    if feedback is None:
-        if rejection_reason is not None:
-            LOG.warning(
-                "skill.feedback.invalid project=%s intent=%s worker=%s reason=%s",
-                project_id,
-                intent_id,
-                worker_name,
-                rejection_reason,
-            )
-        else:
-            LOG.debug(
-                "skill.feedback.omitted project=%s intent=%s worker=%s",
-                project_id,
-                intent_id,
-                worker_name,
-            )
-        return
-    LOG.info(
-        "skill.feedback.normalized project=%s intent=%s worker=%s target=%s",
-        project_id,
-        intent_id,
-        worker_name,
-        feedback.get("target_skill"),
-    )
-    try:
-        response = client.submit_skill_feedback(
-            feedback,
-            project_id=project_id,
-            intent_id=intent_id,
-            worker=worker_name,
-            task_type=task_type,
-        )
-    except Exception:
-        LOG.warning(
-            "skill.feedback.queue_failed project=%s intent=%s worker=%s",
-            project_id,
-            intent_id,
-            worker_name,
-            exc_info=True,
-        )
-        return
-    if not response.ok:
-        LOG.warning(
-            "skill.feedback.queue_failed project=%s intent=%s worker=%s status=%s detail=%s",
-            project_id,
-            intent_id,
-            worker_name,
-            response.status_code,
-            response.text[:300],
-        )
-        return
-    decision = response.data if isinstance(response.data, dict) else {}
-    LOG.info(
-        "skill.feedback.queued project=%s intent=%s worker=%s target=%s status=%s proposal=%s",
-        project_id,
-        intent_id,
-        worker_name,
-        feedback.get("target_skill"),
-        decision.get("status"),
-        decision.get("proposalId"),
-    )
 
 
 def did_timeout(result: ProcessResult) -> bool:

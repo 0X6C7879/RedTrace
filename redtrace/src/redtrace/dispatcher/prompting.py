@@ -13,7 +13,7 @@ JSON key、enum/status、phase、工具/Skill/MCP/plugin 名、命令、代码�
 
 FINAL_OUTPUT_CONTRACT = """## Final output contract
 
-只返回一个符合本任务上方 schema 的 raw JSON object，不得输出 Markdown、代码围栏或解释文字。顶层 `skillFeedback` 可选；主任务字段必须完整。"""
+只返回一个符合本任务上方 schema 的 raw JSON object，不得输出 Markdown、代码围栏或解释文字。主任务字段必须完整。"""
 
 
 def load_prompt(group: str, name: str) -> str:
@@ -98,20 +98,11 @@ def add_blackboard_guidance(
             "默认只用一个主 Skill，确有缺口时再加一个辅助 Skill，不得额外调用 model 做匹配。"
         )
     sections.append(
-        "## Skill feedback checkpoint\n\n"
-        "结束任务前必须完成一次学习复盘：对照本次实际结果、失败边界和已调用 Skill，判断是否存在可复用的纠错、"
-        "步骤压缩或缺失分支。存在明确经验时不得省略 `skillFeedback`；只有确实没有可泛化变化时才为 null。\n"
-        "非 null 时使用：\n"
-        "```json\n"
-        '{"target_skill": "skill-name", "summary": "一句可复用经验", '
-        '"evolution_type": "IMPROVE", "procedure": ["可复现步骤"], '
-        '"validation": ["本任务中的验证结果"], "evidence_refs": ["context/fact/artifact 引用"], '
-        '"impact": {"task_succeeded": true, "step_verified": true, '
-        '"tool_calls_saved": 0, "invalid_steps_avoided": 1, "duration_saved_ms": 0}}\n'
-        "```\n"
-        "现有 Skill 用 `IMPROVE`/`FIX`，全新 Skill 用 `CAPTURE`。只填实际测得的 impact；未测得时三个收益值保持 0，"
-        "系统会保留候选但不会直接改写 Skill。`reuse_validated` 仅用于当前任务真实使用了该 revision，且来源项目不同的情况。"
-        "不得包含 target IP、credential、flag、absolute path，也不得额外调用 model、轮询或延迟。"
+        "## reverse-skill 原生经验回写\n\n"
+        "安全任务结束前按 `reverse-skill` 的 field-journal 规则完成一次复盘。只有产生已验证且可复用的新经验时，"
+        "才由当前 Worker 直接写入 `$REDTRACE_SKILLS_DIR/reverse-skill/upstream/skills/field-journal/` 并更新 `_index.md`；"
+        "必须脱敏，不得写 target、credential、flag、secret 或 Workspace 绝对路径。没有可复用经验则不写。"
+        "不得提交 RedTrace evolution proposal、调用额外 model、等待后台治理或启动独立验证任务。"
     )
     guidance = prompt.rstrip() + "\n\n" + "\n\n".join(sections)
     if local_execution and os.name == "nt":

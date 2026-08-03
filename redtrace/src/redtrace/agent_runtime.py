@@ -22,7 +22,6 @@ from redtrace.paths import RedTracePaths
 _CLI_SOURCES = {
     "redtrace-blackboard": "blackboard_cli.py",
     "redtrace-resource": "resource_cli.py",
-    "redtrace-skill": "skill_cli.py",
     "redtrace-context": "context_cli.py",
 }
 
@@ -166,6 +165,7 @@ class AgentRuntimeManager:
                     if self.execution == "local"
                     else "/opt/redtrace/claude-plugin/skills"
                 ),
+                "REDTRACE_EXECUTION": self.execution,
                 "REDTRACE_MCP_DIR": (
                     str(self.paths.mcp)
                     if self.execution == "local"

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,7 +11,6 @@ from redtrace.capabilities import (
     PI_MCP_PATH,
     PI_PROVIDER_EXTENSION_PATH,
     PLUGIN_CATALOG_PATH,
-    SKILL_CLI_PATH,
     CapabilityStore,
     build_claude_mcp,
     build_pi_mcp,
@@ -92,7 +90,6 @@ def test_store_and_materializer_share_native_agent_resources(tmp_path: Path) -> 
 
     assert (workspace / ".agents" / "skills" / "recon" / "SKILL.md").read_text(encoding="utf-8") == SKILL
     assert (workspace / ".claude" / "skills" / "recon" / "scripts" / "run.sh").is_file()
-    assert (workspace / SKILL_CLI_PATH).is_file()
     assert not (workspace / ".agents" / "skills" / "disabled").exists()
 
     claude = json.loads((workspace / CLAUDE_MCP_PATH).read_text(encoding="utf-8"))
@@ -163,12 +160,13 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
         assert 'x-data="skillsPage()"' in index.text
         assert 'x-data="mcpPage()"' in index.text
         assert 'x-data="pluginsPage()"' in index.text
-        assert "Skill evolution queue" in index.text
+        assert "Skill evolution queue" not in index.text
+        assert "包内 Skill" in index.text
         assert "选择回滚版本" in index.text
         assert "先选择一个 RedTrace 项目" not in index.text[index.text.index("x-data=\"pluginsPage()\"") :]
         capabilities_script = client.get("/static/capabilities.js")
         assert capabilities_script.status_code == 200
-        assert "latestDecision" in capabilities_script.text
+        assert "nestedEntries" in capabilities_script.text
         assert "async rollback()" in capabilities_script.text
 
         status = client.get("/capabilities")
@@ -182,6 +180,21 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
         )
         assert created.status_code == 201
         assert created.json()["description"] == "Run a focused reconnaissance workflow."
+
+        nested = tmp_path / "skills" / "recon" / "modules" / "deep" / "SKILL.md"
+        nested.parent.mkdir(parents=True)
+        nested.write_text(
+            "---\nname: deep-recon\ndescription: Inspect one nested route.\n---\n\n# Deep\n",
+            encoding="utf-8",
+        )
+        entries = client.get("/capabilities/skills/recon/entries")
+        assert entries.status_code == 200
+        assert entries.json()[0]["name"] == "deep-recon"
+        detail = client.get(
+            "/capabilities/skills/recon/entries/modules/deep/SKILL.md"
+        )
+        assert detail.status_code == 200
+        assert detail.json()["content"].endswith("# Deep\n")
 
         toggled = client.patch("/capabilities/skills/recon/enabled", json={"enabled": False})
         assert toggled.status_code == 200
@@ -241,40 +254,6 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
         assert client.delete("/capabilities/plugins/browser").status_code == 204
         assert plugin_dir.is_dir()
 
-
-def test_evolution_api_queues_before_background_processing(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("REDTRACE_CAPABILITIES_ROOT", str(tmp_path))
-    with TestClient(app) as client:
-        response = client.post(
-            "/capabilities/evolution/proposals",
-            json={
-                "evolution_type": "IMPROVE",
-                "target_skill": "web-recon",
-                "summary": "A verified branch should be captured for later reuse.",
-                "project_id": "project-a",
-                "intent_id": "intent-a",
-                "worker": "codex-1",
-                "task_type": "explore",
-            },
-        )
-
-        assert response.status_code == 200
-        decision = response.json()
-        assert decision["status"] == "queued"
-        assert decision["proposalId"]
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            status = client.get("/capabilities/evolution").json()
-            if status["deferred"] == 1:
-                break
-            time.sleep(0.01)
-        assert status["pending"] == 0
-        assert status["deferred"] == 1
-        assert status["deferredItems"][0]["evidenceTier"] == "unmeasured"
-        assert "量化收益" in status["deferredItems"][0]["reason"]
 
 def test_skill_list_does_not_walk_dependency_directories(tmp_path: Path) -> None:
     store = CapabilityStore(tmp_path)

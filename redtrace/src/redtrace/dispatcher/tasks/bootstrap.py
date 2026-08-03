@@ -25,7 +25,6 @@ from redtrace.dispatcher.tasks.common import (
     did_timeout,
     project_allows_conclude_fallback,
     preview,
-    queue_skill_feedback,
     run_worker_process,
     task_healthcheck_enabled,
     write_conclude_result,
@@ -159,14 +158,6 @@ def run_bootstrap_task(
                 model_output = driver.extract_response_text(first.stdout, first.stderr)
                 payload = parse_json_output(model_output)
                 kind, data = validate_bootstrap_execute_payload(payload)
-                queue_skill_feedback(
-                    client,
-                    payload,
-                    project_id=project.project.id,
-                    intent_id=intent.id,
-                    worker_name=worker.name,
-                    task_type="bootstrap",
-                )
             except Exception as exc:
                 LOG.warning(
                     "bootstrap parse failed project=%s intent=%s worker=%s error=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -405,14 +396,6 @@ def _try_conclude_fallback(
                 preview(str(conclude_data.get("complete"))),
             )
         kind, fact_description = validate_bootstrap_conclude_payload(payload)
-        queue_skill_feedback(
-            client,
-            payload,
-            project_id=project.project.id,
-            intent_id=intent.id,
-            worker_name=worker.name,
-            task_type="bootstrap",
-        )
     except Exception as exc:
         LOG.warning(
             "bootstrap conclude parse failed project=%s intent=%s worker=%s error=%s conclude_ms=%s stdout_preview=%s stderr_preview=%s",

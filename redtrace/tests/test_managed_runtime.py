@@ -143,7 +143,6 @@ def test_workers_use_native_agent_state_and_shared_capabilities(
     assert manager.refresh_capabilities(workers) is True
     assert manager.refresh_capabilities(workers) is False
     assert scans == 2
-    assert (layout.runtime / "bin" / "redtrace-skill").is_file()
     assert (layout.runtime / "mcp" / "claude.json").is_file()
     assert (layout.runtime / "mcp" / "pi.json").is_file()
     assert not (layout.managed / "workers").exists()

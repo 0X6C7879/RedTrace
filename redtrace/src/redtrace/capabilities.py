@@ -21,12 +21,10 @@ NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 MANIFEST_PATH = ".redtrace/capabilities.json"
 BLACKBOARD_CLI_PATH = ".redtrace/bin/redtrace-blackboard"
 RESOURCE_CLI_PATH = ".redtrace/bin/redtrace-resource"
-SKILL_CLI_PATH = ".redtrace/bin/redtrace-skill"
 CONTEXT_CLI_PATH = ".redtrace/bin/redtrace-context"
 WORKSPACE_CLI_PATHS = {
     BLACKBOARD_CLI_PATH,
     RESOURCE_CLI_PATH,
-    SKILL_CLI_PATH,
     CONTEXT_CLI_PATH,
 }
 PLUGIN_CATALOG_PATH = ".redtrace/plugins.json"
@@ -912,7 +910,6 @@ def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
     ).encode()
     files[BLACKBOARD_CLI_PATH] = _workspace_cli_bytes("blackboard_cli.py")
     files[RESOURCE_CLI_PATH] = _workspace_cli_bytes("resource_cli.py")
-    files[SKILL_CLI_PATH] = _workspace_cli_bytes("skill_cli.py")
     context_cli = _workspace_cli_bytes("context_cli.py")
     files[CONTEXT_CLI_PATH] = context_cli
     digest_builder = hashlib.sha256()
@@ -948,7 +945,6 @@ def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
         "managedFiles": [
             BLACKBOARD_CLI_PATH,
             RESOURCE_CLI_PATH,
-            SKILL_CLI_PATH,
             CONTEXT_CLI_PATH,
             PLUGIN_CATALOG_PATH,
             CLAUDE_MCP_PATH,
@@ -970,7 +966,6 @@ def runtime_workspace_patch(
     runtime_contents = {
         BLACKBOARD_CLI_PATH: _workspace_cli_bytes("blackboard_cli.py"),
         RESOURCE_CLI_PATH: _workspace_cli_bytes("resource_cli.py"),
-        SKILL_CLI_PATH: _workspace_cli_bytes("skill_cli.py"),
         CONTEXT_CLI_PATH: _workspace_cli_bytes("context_cli.py"),
         PI_PROVIDER_EXTENSION_PATH: PI_PROVIDER_EXTENSION.encode(),
     }
@@ -1076,7 +1071,6 @@ def workspace_tar(files: dict[str, bytes]) -> bytes:
             if relative in {
                 BLACKBOARD_CLI_PATH,
                 RESOURCE_CLI_PATH,
-                SKILL_CLI_PATH,
                 CONTEXT_CLI_PATH,
             }:
                 info.mode = 0o755

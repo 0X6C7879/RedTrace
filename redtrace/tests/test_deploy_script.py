@@ -135,15 +135,27 @@ def test_ctf_tool_installer_supports_all_linux_package_families() -> None:
     assert "No vulnerability database, PoC collection" in script
     assert "nuclei-templates" not in script
     assert "exploitdb" not in script
-    qiling_wrapper = REPO_ROOT / "skills" / "ctf-reverse" / "scripts" / "qiling-python"
+    qiling_wrapper = (
+        REPO_ROOT
+        / "skills"
+        / "reverse-skill"
+        / "redtrace-tools"
+        / "qiling"
+        / "qiling-python"
+    )
     assert qiling_wrapper.is_file()
     assert qiling_wrapper.stat().st_mode & 0o111
 
 
-def test_ghidra_headless_skill_is_installed_with_all_exporters() -> None:
-    skill_dir = REPO_ROOT / "skills" / "ghidra-headless"
+def test_reverse_skill_keeps_redtrace_ghidra_exporters() -> None:
+    skill_dir = (
+        REPO_ROOT
+        / "skills"
+        / "reverse-skill"
+        / "redtrace-tools"
+        / "ghidra-headless"
+    )
 
-    assert (skill_dir / "SKILL.md").is_file()
     assert (skill_dir / "scripts" / "find-ghidra.sh").is_file()
     assert (skill_dir / "scripts" / "ghidra-analyze.sh").is_file()
     exporters = {

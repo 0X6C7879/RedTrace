@@ -1,4 +1,0 @@
-interface:
-  display_name: "Claude Red: IoT"
-  short_description: "IoT hardware, firmware, and protocol assessment"
-  default_prompt: "Use $claude-red-iot to assess an authorized IoT target."

@@ -4,115 +4,8 @@ from typing import Any
 
 from redtrace.dispatcher.output_parser import extract_json_object
 
-SKILL_FEEDBACK_KEYS = ("skillFeedback", "skill_feedback")
-
-# Legacy alias → canonical field mapping for agent-produced feedback.
-_FEEDBACK_ALIASES: dict[str, str] = {
-    # target_skill aliases
-    "skill": "target_skill",
-    "skillName": "target_skill",
-    "skill_name": "target_skill",
-    "targetSkill": "target_skill",
-    # summary aliases
-    "improvement": "summary",
-    "lesson": "summary",
-    "experience": "summary",
-    "insight": "summary",
-    # procedure aliases
-    "steps": "procedure",
-    # evidence_refs aliases
-    "evidenceRefs": "evidence_refs",
-    "evidence": "evidence_refs",
-    # other canonical mappings
-    "type": "evolution_type",
-    "evolutionType": "evolution_type",
-    "proposedName": "proposed_name",
-    "mergeSkills": "merge_skills",
-    "reuseValidated": "reuse_validated",
-}
-
-
 def parse_json_output(stdout: str) -> dict[str, Any]:
     return extract_json_object(stdout)
-
-
-def extract_skill_feedback(
-    payload: dict[str, Any],
-) -> tuple[dict[str, Any] | None, str | None]:
-    """Extract optional skill feedback with lenient field requirements.
-
-    Returns (feedback, None) on success or (None, reason) when feedback is
-    absent or invalid.  Minimum acceptable feedback requires only
-    ``target_skill`` (str) and ``summary`` (str).  All other fields are
-    optional and default to empty values.
-    """
-    raw: Any = None
-    for key in SKILL_FEEDBACK_KEYS:
-        if key in payload:
-            raw = payload.get(key)
-            break
-    if raw is None and isinstance(payload.get("data"), dict):
-        for key in SKILL_FEEDBACK_KEYS:
-            if key in payload["data"]:
-                raw = payload["data"].get(key)
-                break
-    if raw is None:
-        return None, None  # no feedback emitted — not an error
-    if not isinstance(raw, dict):
-        return None, "skillFeedback is not an object"
-    if not raw:
-        return None, "skillFeedback is an empty object"
-
-    # Detect the "satisfaction survey" format some models produce
-    # (e.g. {"satisfactory": [...], "unsatisfactory": [...], "missing": [...]}).
-    if "satisfactory" in raw or "unsatisfactory" in raw:
-        return None, "satisfaction-survey format; expected target_skill + summary"
-
-    # Normalize aliases to canonical field names.
-    feedback: dict[str, Any] = {}
-    for key, value in raw.items():
-        canonical = _FEEDBACK_ALIASES.get(str(key), str(key))
-        # First writer wins when multiple aliases map to the same field.
-        if canonical not in feedback:
-            feedback[canonical] = value
-
-    # Coerce summary-like values that models sometimes emit as non-str.
-    summary = feedback.get("summary")
-    if not isinstance(summary, str):
-        if isinstance(summary, (list, dict)):
-            import json as _json
-            summary = _json.dumps(summary, ensure_ascii=False)
-            feedback["summary"] = summary
-        else:
-            return None, "summary is missing or not a string"
-    if not summary.strip():
-        return None, "summary is empty"
-
-    # target_skill: required for routing but accept missing gracefully.
-    target = feedback.get("target_skill")
-    if not isinstance(target, str) or not target.strip():
-        return None, "target_skill is missing or empty"
-    feedback["target_skill"] = target.strip().lower()
-
-    # Optional list fields — default to empty lists.
-    for list_field in ("procedure", "validation", "evidence_refs"):
-        value = feedback.get(list_field)
-        if isinstance(value, list):
-            feedback[list_field] = [
-                item for item in value if isinstance(item, str) and item.strip()
-            ][:8]
-        elif isinstance(value, str) and value.strip():
-            feedback[list_field] = [value.strip()]
-        else:
-            feedback[list_field] = []
-
-    # Optional scalar fields.
-    if not isinstance(feedback.get("impact"), dict):
-        feedback.pop("impact", None)
-    if not isinstance(feedback.get("confidence"), (int, float)):
-        feedback.pop("confidence", None)
-
-    return feedback, None
 
 
 def _unwrap_wrapped_payload(payload: dict[str, Any]) -> tuple[bool | None, dict[str, Any] | None]:
@@ -131,18 +24,9 @@ def _is_dict(value: Any) -> bool:
     return isinstance(value, dict)
 
 
-def _without_skill_feedback(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in payload.items()
-        if key not in SKILL_FEEDBACK_KEYS
-    }
-
-
 def _looks_like_reason_data(payload: dict[str, Any]) -> bool:
     if not isinstance(payload, dict):
         return False
-    payload = _without_skill_feedback(payload)
     keys = set(payload)
     if keys == {"complete"}:
         complete = payload["complete"]
@@ -156,7 +40,6 @@ def _looks_like_reason_data(payload: dict[str, Any]) -> bool:
 
 
 def _looks_like_bootstrap_execute_data(payload: dict[str, Any]) -> bool:
-    payload = _without_skill_feedback(payload)
     if not isinstance(payload, dict) or set(payload) not in ({"fact"}, {"fact", "complete"}):
         return False
     return _is_dict(payload.get("fact")) and ("complete" not in payload or _is_dict(payload.get("complete")))
@@ -165,7 +48,6 @@ def _looks_like_bootstrap_execute_data(payload: dict[str, Any]) -> bool:
 def _looks_like_bootstrap_conclude_data(payload: dict[str, Any]) -> bool:
     if not isinstance(payload, dict):
         return False
-    payload = _without_skill_feedback(payload)
     keys = set(payload)
     if keys not in ({"fact"}, {"fact", "complete"}):
         return False
@@ -175,7 +57,7 @@ def _looks_like_bootstrap_conclude_data(payload: dict[str, Any]) -> bool:
 def _looks_like_explore_data(payload: dict[str, Any]) -> bool:
     return (
         isinstance(payload, dict)
-        and set(_without_skill_feedback(payload)) == {"description"}
+        and set(payload) == {"description"}
     )
 
 
@@ -188,7 +70,7 @@ def validate_reason_payload(
     if accepted is None:
         if not _looks_like_reason_data(payload):
             raise ValueError("accepted must be true or false")
-        data = _without_skill_feedback(payload)
+        data = payload
     if not isinstance(data, dict):
         raise ValueError("accepted must be true or false")
     complete = data.get("complete")
@@ -228,7 +110,7 @@ def validate_bootstrap_execute_payload(payload: dict[str, Any]) -> tuple[str, di
     if accepted is None:
         if not _looks_like_bootstrap_execute_data(payload):
             raise ValueError("accepted must be true or false")
-        data = _without_skill_feedback(payload)
+        data = payload
     if not isinstance(data, dict):
         raise ValueError("accepted must be true or false")
 
@@ -259,7 +141,7 @@ def validate_bootstrap_conclude_payload(payload: dict[str, Any]) -> tuple[str, s
     if accepted is None:
         if not _looks_like_bootstrap_conclude_data(payload):
             raise ValueError("accepted must be true or false")
-        data = _without_skill_feedback(payload)
+        data = payload
     if not isinstance(data, dict):
         raise ValueError("accepted must be true or false")
     extra_keys = set(data) - {"fact", "complete"}
@@ -281,7 +163,7 @@ def validate_explore_payload(payload: dict[str, Any]) -> tuple[str, str | None]:
     if accepted is None:
         if not _looks_like_explore_data(payload):
             raise ValueError("accepted must be true or false")
-        data = _without_skill_feedback(payload)
+        data = payload
     if not isinstance(data, dict):
         raise ValueError("accepted must be true or false")
     description = data.get("description")

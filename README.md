@@ -22,8 +22,8 @@ RedTrace 解决的是“如何让多个异构 Agent 在一个可验证、可恢�
 1. **事实图优先**：把已确认信息、待探索方向和人工判断分开建模，避免把临时对话误当成结论。
 2. **控制面与执行面分离**：Server 维护状态和协议一致性；Dispatcher 负责调度与生命周期；Worker 只专注于完成当前任务。
 3. **异构 Worker 原生接入**：Claude Code、Codex、Pi 和 Mock 通过统一适配器运行，同时保留各自 CLI 的原生能力。
-4. **按需读取、异步演进**：Worker 可以通过只读状态面板 CLI 和资源 CLI 获取有限上下文；Skill 演进进入持久队列，由低优先级后台线程处理，不阻塞任务执行。
-5. **证据和审计可回放**：任务输出、工具事件、心跳、取消、资源操作和 Skill 变更均可查询、导出和追踪。
+4. **按需读取、原生回写**：安全能力统一由 reverse-skill 路由；Worker 在原任务中直接完成脱敏 field-journal 回写，不经过额外模型、队列或治理线程。
+5. **证据和审计可回放**：任务输出、工具事件、心跳、取消和资源操作均可查询、导出和追踪。
 
 ## 完整架构设计
 
@@ -40,7 +40,7 @@ flowchart TB
     RT["运行时<br/>Container Backend / Local Process"]
     W["Worker Adapter<br/>Claude Code · Codex · Pi · Mock"]
     CLI["只读辅助 CLI<br/>状态面板 · Resource · Context"]
-    EV["SkillEvolutionWorker<br/>候选去重 · 原生 CLI 编写 · 信任/版本/审计"]
+    REV["reverse-skill<br/>原生路由 · case · tool-index · field-journal"]
 
     U --> API
     API --> GRAPH
@@ -53,15 +53,15 @@ flowchart TB
     RT --> W
     W --> CLI
     CLI --> API
-    W -. 紧凑 skillFeedback .-> EV
-    API --> EV
-    EV --> CAPS
+    CAPS --> REV
+    REV --> W
+    W -. "任务内直接经验回写" .-> REV
     W -. "任务结果 / 心跳 / 事件" .-> D
 ```
 
 ### 1. Server：状态与协议控制面
 
-Server 是 FastAPI 应用，启动时初始化 SQLite 数据库、恢复未完成任务，并启动 Skill 演进后台 Worker。它不负责直接运行模型进程，而是提供一致的读写协议和 Web 控制台。
+Server 是 FastAPI 应用，启动时初始化 SQLite 数据库并恢复未完成任务。它不负责直接运行模型进程，也不参与 Skill 自我进化，只提供一致的读写协议和 Web 控制台。
 
 - **项目状态图**：保存 Project、Fact、Intent、Hint；Fact 采用追加式记录，Intent 支持声明、认领、heartbeat、release、结论和完成。
 - **项目生命周期**：Project 状态为 `active`、`stopped` 或 `completed`；支持暂停、恢复、标题修改和 Reason 租约。
@@ -109,22 +109,13 @@ Worker Adapter 将不同 Agent CLI 归一为统一接口，同时保留原生配
 
 Web 删除项目采用“标记删除 → 取消任务/进程 → 回收 Runtime → 文件清理 → 数据库级联”的服务端流程。删除状态持久化，可在 Server 或 Dispatcher 重启后继续；失败会保留项目和错误状态供重试，重复删除保持幂等。项目 Workspace、Prompt、审计、会话文件和项目关联表会被清理，根目录 Skills/MCP/Plugins 与其他 Worker 状态不受影响。
 
-### 4. 能力与 Skill 演进面
+### 4. 能力与 reverse-skill 面
 
 仓库根目录的 `skills/` 与 `mcp/` 分别是 Claude Code、Codex 和 Pi 共用的唯一 Skill、MCP 源，并在运行时转换为各 Agent 的原生参数或配置；其他配置继续沿用用户目录。`plugins/manifest.json` 仅作为浏览器、Burp 等 RedTrace 外部插件的注册表。
 
-`CapabilityStore` 负责能力的发现、启停、可信状态、复用/失败计数、SHA-256 revision、历史、锁和审计。Worker 在原任务的最终 JSON 中至多附带一份紧凑 `skillFeedback`，不编写完整 Skill，也不额外调用工具或模型。`SkillEvolutionEngine` 会：
+`CapabilityStore` 只负责共享 Skill 目录的发现、启停、手工编辑和版本回滚。安全领域以 `skills/reverse-skill/` 为唯一主入口；其完整上游包固定在 `upstream/`，原生 case、scope、timeline、workitems、tool-index、bootstrap、CTF 编排和 field-journal 均保留。
 
-- 接受整个任务成功，或任务失败但独立子流程已验证的候选；
-- 要求 1–8 条具体验证结果、可复用步骤和有界证据引用，并过滤目标/凭据/临时路径；
-- 合并相同候选，只对高信号候选在后台调用本机 Claude Code、Codex 或 Pi；
-- 统一处理 `FIX`、`IMPROVE`、`CAPTURE`、`MERGE`、`RETIRE`；
-- 拒绝重复内容、单纯追加、过度增长、不完整 Skill 和过期 revision；
-- 优先匹配并更新已有 Skill，只有在容量允许且没有可复用 Skill 时才新建；
-- 将新建或大幅修改的 Skill 标记为 `provisional`，经另一独立任务验证复用后升为 `trusted`；
-- 对冗余或失效 Skill 做合并/退役，并保留来源任务、验证证据、版本和回滚记录。
-
-候选写入持久 inbox 后由 `SkillEvolutionWorker` 低优先级异步处理；正在运行的 Skill 快照不刷新，演进失败也不会影响任务。`redtrace-skill propose` 仍保留为人工提交完整替换的兼容入口。
+Worker 按需读取一个主 Skill，必要时再读取一个互补 Skill。任务产生已验证且可复用的新经验时，当前 Worker 直接向 reverse-skill 的 `field-journal/` 写一份脱敏记录并更新索引；没有新经验则不写。RedTrace 不接收进化提案、不启动后台进化线程、不调用额外模型，也不派发独立验证任务。容器运行时将统一 Skill 目录可写挂载，以便原任务内完成原生回写。
 
 ### 5. 辅助 CLI 与上下文面
 
@@ -180,13 +171,12 @@ Context Harness 输出固定的 JSON/JSONL 工件和摘要引用，支持跨任�
 | `redtrace/src/redtrace/server/` | FastAPI 应用、SQLite、协议模型、路由、审计和静态 Web UI |
 | `redtrace/src/redtrace/dispatcher/` | 配置、调度循环、任务、Prompt、运行时和 Worker 适配器 |
 | `redtrace/src/redtrace/capabilities.py` | Skill/MCP 能力仓库、版本和审计 |
-| `redtrace/src/redtrace/skill_evolution.py` | Skill 提案校验、异步演进和回滚链 |
 | `redtrace/src/redtrace/worker_config.py` | Worker 配置、连接测试和本地 CLI 同步 |
-| `redtrace/src/redtrace/*_cli.py` | 状态面板、资源、上下文和 Skill 命令行工具 |
-| `skills/` | Claude Code、Codex、Pi 共用的 Skill 源 |
+| `redtrace/src/redtrace/*_cli.py` | 状态面板、资源和上下文命令行工具 |
+| `skills/` | Claude Code、Codex、Pi 共用的 Skill 源；安全能力由 `reverse-skill` 统一提供 |
 | `mcp/` | 共用 MCP 配置 |
 | `plugins/` | 插件注册表及浏览器/Burp 插件源码 |
-| `docs/specs/` | Server 协议、Dispatcher、插件兼容和 Skill 演进规范 |
+| `docs/specs/` | Server 协议、Dispatcher、上下文和插件兼容规范 |
 | `dispatch*.yaml` | 容器、本地和 Mock 调度配置示例 |
 
 ## 快速开始
@@ -317,13 +307,6 @@ redtrace-resource payload-kinds lis_123
 redtrace-resource payload-oneliner lis_123 curl_beacon
 redtrace-resource payload-build lis_123 --os linux --arch amd64
 
-# 人工提交完整替换（Worker 自动反馈不使用此命令）
-redtrace-skill propose \
-  --name my-skill \
-  --candidate skills/my-skill/SKILL.md \
-  --summary "压缩重复步骤并减少无效工具调用" \
-  --validated "pytest -q redtrace/tests/test_skill_evolution.py" \
-  --tool-calls-saved 2
 ```
 
 ### 测试
@@ -337,7 +320,6 @@ uv run --project redtrace --group dev pytest
 - [`docs/specs/server-protocol.md`](docs/specs/server-protocol.md)：事实图、Project/Fact/Intent/Hint 和 API 协议；
 - [`docs/specs/dispatcher-design.md`](docs/specs/dispatcher-design.md)：调度、任务状态机、Worker 与运行时；
 - [`docs/specs/context-harness.md`](docs/specs/context-harness.md)：有预算的上下文摘要和增量工件；
-- [`docs/specs/skill-evolution.md`](docs/specs/skill-evolution.md)：统一 Skill 源、提案门槛、版本和回滚；
 - [`docs/specs/plugin-compatibility.md`](docs/specs/plugin-compatibility.md)：外部插件 API 与迁移兼容；
 - [`docs/shared-blackboard-cli.md`](docs/shared-blackboard-cli.md)：状态面板只读 CLI 与服务端查询协议。
 

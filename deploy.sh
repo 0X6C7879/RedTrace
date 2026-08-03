@@ -34,12 +34,12 @@ fi
 REDTRACE_PLAINTEXT_SECRETS="${REDTRACE_PLAINTEXT_SECRETS:-$DEFAULT_PLAINTEXT_SECRETS}"
 export REDTRACE_PLAINTEXT_SECRETS
 BRAVE_SKILL_DIR="$PROJECT_DIR/skills/brave-search"
-GHIDRA_SKILL_DIR="$PROJECT_DIR/skills/ghidra-headless"
+GHIDRA_SKILL_DIR="$PROJECT_DIR/skills/reverse-skill/redtrace-tools/ghidra-headless"
 PLAYWRIGHT_SKILL_DIR="$PROJECT_DIR/skills/playwright"
 GHIDRA_INSTALL_DIR="${REDTRACE_GHIDRA_HOME:-$HOME/.local/share/redtrace-tools/ghidra}"
 RSACTFTOOL_VENV="${REDTRACE_RSACTFTOOL_VENV:-$HOME/.local/share/redtrace-rsactftool}"
 QILING_VENV="${REDTRACE_QILING_VENV:-$HOME/.local/share/redtrace-qiling}"
-QILING_WRAPPER="$PROJECT_DIR/skills/ctf-reverse/scripts/qiling-python"
+QILING_WRAPPER="$PROJECT_DIR/skills/reverse-skill/redtrace-tools/qiling/qiling-python"
 NUCLEI_VERSION="${REDTRACE_NUCLEI_VERSION:-3.11.0}"
 RSACTFTOOL_REVISION="${REDTRACE_RSACTFTOOL_REVISION:-7c98848f1945de3e67a420871e8672f5ad9aa5d5}"
 CTF_TOOL_INSTALLER="$PROJECT_DIR/install_ctf_tools.sh"
@@ -531,7 +531,8 @@ PY
 
 ensure_ghidra_headless_skill() {
   local java_home java_major analyze_headless
-  [[ -f "$GHIDRA_SKILL_DIR/SKILL.md" ]] || die "ghidra-headless SKILL.md is missing"
+  [[ -f "$PROJECT_DIR/skills/reverse-skill/SKILL.md" ]] \
+    || die "reverse-skill SKILL.md is missing"
   [[ -f "$GHIDRA_SKILL_DIR/scripts/ghidra-analyze.sh" ]] \
     || die "ghidra-headless wrapper is missing"
   [[ -f "$GHIDRA_SKILL_DIR/scripts/ghidra_scripts/ExportAll.java" ]] \

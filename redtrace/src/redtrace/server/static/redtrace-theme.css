@@ -391,19 +391,6 @@ body .shadow-2xl {
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.22) !important;
 }
 
-.capability-evolution-popover {
-  width: min(440px, calc(100vw - 32px));
-  border-color: #2a384c !important;
-  background: #0b1119 !important;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.34) !important;
-  isolation: isolate;
-}
-
-.capability-deferred-card {
-  border-color: #263446 !important;
-  background: #0f1722 !important;
-}
-
 .snapshot-modal {
   border-color: #2a384c !important;
   background: linear-gradient(180deg, #0c121b, #080d14) !important;

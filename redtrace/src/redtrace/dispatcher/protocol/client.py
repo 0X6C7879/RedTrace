@@ -177,50 +177,6 @@ class CairnClient:
         )
         response.raise_for_status()
 
-    def submit_skill_feedback(
-        self,
-        feedback: dict[str, Any],
-        *,
-        project_id: str,
-        intent_id: str | None,
-        worker: str,
-        task_type: str,
-    ) -> ApiResult:
-        """Persist optional feedback for asynchronous evolution."""
-        payload = dict(feedback)
-        payload["project_id"] = project_id
-        payload["intent_id"] = intent_id
-        payload["worker"] = worker
-        payload["task_type"] = task_type
-        impact = payload.get("impact")
-        normalized_impact = dict(impact) if isinstance(impact, dict) else {}
-        normalized_impact.setdefault("task_succeeded", False)
-        normalized_impact.setdefault("step_verified", False)
-        normalized_impact.setdefault("tool_calls_saved", 0)
-        normalized_impact.setdefault("invalid_steps_avoided", 0)
-        normalized_impact.setdefault("duration_saved_ms", 0)
-        payload["impact"] = normalized_impact
-        try:
-            response = self._session().post(
-                self._url("/capabilities/evolution/proposals"),
-                json=payload,
-                timeout=(0.2, 0.8),
-            )
-        except requests.RequestException as exc:
-            LOG.warning("Skill feedback queue unavailable: %s", exc)
-            return ApiResult(status_code=0, text=str(exc))
-        data: Any | None = None
-        if response.headers.get("content-type", "").startswith("application/json"):
-            try:
-                data = response.json()
-            except requests.JSONDecodeError:
-                data = None
-        return ApiResult(
-            status_code=response.status_code,
-            data=data,
-            text=response.text,
-        )
-
     def _request_json(self, method: str, path: str, json: dict[str, Any]) -> ApiResult:
         try:
             response = self._session().request(

@@ -6,11 +6,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from redtrace import __version__
-from redtrace.capabilities import CapabilityStore
 from redtrace.server import db
 from redtrace.server.operations import resume_pending_tasks
 from redtrace.server.routers import audit, blackboard, capabilities, export, hints, intents, operations, plugins, projects, settings, workers
-from redtrace.skill_evolution import SkillEvolutionEngine, SkillEvolutionWorker
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -19,13 +17,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 async def lifespan(app: FastAPI):
     db.configure(db.DEFAULT_DB)
     resume_pending_tasks()
-    skill_evolution = SkillEvolutionWorker(SkillEvolutionEngine(CapabilityStore()))
-    app.state.skill_evolution = skill_evolution
-    skill_evolution.start()
-    try:
-        yield
-    finally:
-        skill_evolution.stop()
+    yield
 
 
 app = FastAPI(

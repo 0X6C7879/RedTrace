@@ -1,4 +1,0 @@
-interface:
-  display_name: "Claude Red: Cloud"
-  short_description: "AWS, Azure, and GCP offensive security workflows"
-  default_prompt: "Use $claude-red-cloud to assess an authorized cloud environment."

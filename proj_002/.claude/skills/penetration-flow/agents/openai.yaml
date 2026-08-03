@@ -1,0 +1,6 @@
+interface:
+  display_name: "Penetration Flow"
+  short_description: "授权渗透测试、CTF 与逆向分析流程技能"
+  default_prompt: "Use $penetration-flow to run an authorized local sandbox or CTF security assessment, produce a phase report, and ask me to choose the next step."
+policy:
+  allow_implicit_invocation: true

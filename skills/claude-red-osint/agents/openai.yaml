@@ -1,4 +1,0 @@
-interface:
-  display_name: "Claude Red: OSINT"
-  short_description: "Scoped public-source intelligence collection"
-  default_prompt: "Use $claude-red-osint for an authorized public-source intelligence task."

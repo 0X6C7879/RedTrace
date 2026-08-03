@@ -21,7 +21,6 @@ from redtrace.dispatcher.tasks.common import (
     cancel_reason,
     did_timeout,
     preview,
-    queue_skill_feedback,
     run_worker_process,
     task_healthcheck_enabled,
     write_graph_snapshot_reference,
@@ -225,7 +224,6 @@ def run_reason_task(
                 '{"accepted":false,"reason":"policy_refusal"}\n'
                 '{"accepted":true,"data":{"complete":{"from":["fact-id"],"description":"..."}}}\n'
                 '{"accepted":true,"data":{"intents":[{"from":["fact-id"],"description":"..."}]}}\n'
-                "顶层 skillFeedback 可选。"
             )
             try:
                 repair_command = driver.build_conclude(worker, repair_prompt, session)
@@ -294,14 +292,6 @@ def run_reason_task(
                 )
                 return "failed"
             result = repair
-        queue_skill_feedback(
-            client,
-            payload,
-            project_id=project.project.id,
-            intent_id=None,
-            worker_name=worker.name,
-            task_type="reason",
-        )
         if kind == "rejected":
             LOG.warning(
                 "reason rejected project=%s worker=%s execute_ms=%s total_ms=%s stdout_preview=%s",

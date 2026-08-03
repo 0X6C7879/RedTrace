@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path, PurePosixPath
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from redtrace.capabilities import CapabilityStore, SkillConflictError
+from redtrace.capabilities import CapabilityStore, SkillConflictError, _frontmatter
 from redtrace.plugin_registry import PluginRegistry
-from redtrace.skill_evolution import SkillEvolutionEngine
 
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
 
@@ -52,34 +52,6 @@ class RollbackRequest(BaseModel):
     expected_revision: str | None = None
 
 
-class EvolutionImpact(BaseModel):
-    task_succeeded: bool = False
-    step_verified: bool = False
-    tool_calls_saved: int = Field(default=0, ge=0)
-    invalid_steps_avoided: int = Field(default=0, ge=0)
-    duration_saved_ms: int = Field(default=0, ge=0)
-
-
-class EvolutionProposal(BaseModel):
-    evolution_type: str = Field(default="CAPTURE", min_length=3, max_length=16)
-    proposed_name: str | None = Field(default=None, min_length=1, max_length=64)
-    target_skill: str | None = Field(default=None, max_length=64)
-    content: str | None = Field(default=None, min_length=1)
-    summary: str = Field(min_length=1, max_length=500)
-    applicability: str | None = Field(default=None, max_length=300)
-    procedure: list[str] = Field(default_factory=list, max_length=8)
-    validation: list[str] = Field(default_factory=list, max_length=8)
-    evidence_refs: list[str] = Field(default_factory=list, max_length=8)
-    merge_skills: list[str] = Field(default_factory=list, max_length=8)
-    reuse_validated: bool = False
-    impact: EvolutionImpact = Field(default_factory=EvolutionImpact)
-    project_id: str | None = Field(default=None, max_length=128)
-    intent_id: str | None = Field(default=None, max_length=128)
-    worker: str | None = Field(default=None, max_length=128)
-    task_type: str | None = Field(default=None, max_length=64)
-    expected_revision: str | None = Field(default=None, max_length=64)
-
-
 def _store() -> CapabilityStore:
     return CapabilityStore()
 
@@ -97,6 +69,42 @@ def _skill_payload(record, *, include_content: bool = False) -> dict[str, Any]:
     if include_content:
         payload["content"] = record.content
     return payload
+
+
+def _nested_skill_payload(parent: str, root: Path, entrypoint: Path) -> dict[str, Any]:
+    content = entrypoint.read_text(encoding="utf-8")
+    relative = entrypoint.relative_to(root).as_posix()
+    metadata = _frontmatter(content)
+    return {
+        "key": f"{parent}:{relative}",
+        "parent": parent,
+        "path": relative,
+        "name": metadata.get("name") or entrypoint.parent.name,
+        "description": metadata.get("description", ""),
+        "depth": len(PurePosixPath(relative).parts) - 1,
+        "nested": True,
+    }
+
+
+def _nested_skill_path(parent: str, entry_path: str) -> tuple[Path, Path]:
+    store = _store()
+    store.get_skill(parent, include_files=False)
+    root = (store.skills_dir / parent).resolve()
+    relative = PurePosixPath(entry_path)
+    if (
+        relative.is_absolute()
+        or ".." in relative.parts
+        or relative.name != "SKILL.md"
+    ):
+        raise HTTPException(400, "invalid nested Skill path")
+    entrypoint = root.joinpath(*relative.parts).resolve()
+    try:
+        entrypoint.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(400, "nested Skill path escapes its package") from exc
+    if not entrypoint.is_file():
+        raise _not_found("nested Skill", entry_path)
+    return root, entrypoint
 
 
 @router.get("")
@@ -145,6 +153,37 @@ def get_capabilities():
 @router.get("/skills")
 def list_skills():
     return [_skill_payload(record) for record in _store().list_skills()]
+
+
+@router.get("/skills/{name}/entries")
+def list_nested_skills(name: str):
+    store = _store()
+    try:
+        store.get_skill(name, include_files=False)
+    except FileNotFoundError:
+        raise _not_found("skill", name) from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    root = store.skills_dir / name
+    return [
+        _nested_skill_payload(name, root, entrypoint)
+        for entrypoint in sorted(root.rglob("SKILL.md"))
+        if entrypoint.parent != root
+    ]
+
+
+@router.get("/skills/{name}/entries/{entry_path:path}")
+def get_nested_skill(name: str, entry_path: str):
+    try:
+        root, entrypoint = _nested_skill_path(name, entry_path)
+        return {
+            **_nested_skill_payload(name, root, entrypoint),
+            "content": entrypoint.read_text(encoding="utf-8"),
+        }
+    except FileNotFoundError:
+        raise _not_found("skill", name) from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.get("/skills/{name}")
@@ -278,58 +317,6 @@ def rollback_skill(name: str, version: int, body: RollbackRequest):
         raise HTTPException(409, str(exc)) from exc
     except (ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(400, str(exc)) from exc
-
-
-@router.post("/evolution/proposals")
-def submit_evolution(body: EvolutionProposal, request: Request):
-    worker = getattr(request.app.state, "skill_evolution", None)
-    engine = worker.engine if worker is not None else SkillEvolutionEngine(_store())
-    try:
-        proposal_id = engine.submit(body.model_dump())
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    if worker is not None:
-        worker.notify()
-        return {
-            "proposalId": proposal_id,
-            "status": "queued",
-            "reason": "candidate queued for background evolution",
-        }
-    engine.process_pending(proposal_id=proposal_id)
-    return engine.decision_for(proposal_id)
-
-
-@router.get("/evolution")
-def evolution_status(request: Request):
-    worker = getattr(request.app.state, "skill_evolution", None)
-    engine = worker.engine if worker is not None else SkillEvolutionEngine(_store())
-    return {
-        "pending": engine.pending_count(),
-        "maxSkills": engine.store.max_skills,
-        "maxSkillChars": engine.store.max_skill_chars,
-        "historyLimit": engine.store.history_limit,
-        "matchThreshold": engine.match_threshold,
-        "deferred": engine.deferred_count(),
-        "deferredItems": engine.deferred_items(),
-    }
-
-
-@router.delete("/evolution/deferred/{proposal_id}", status_code=204)
-def discard_deferred_evolution(proposal_id: str, request: Request):
-    worker = getattr(request.app.state, "skill_evolution", None)
-    engine = worker.engine if worker is not None else SkillEvolutionEngine(_store())
-    try:
-        removed = engine.discard_deferred(proposal_id)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    if not removed:
-        raise HTTPException(404, "deferred candidate not found")
-    return Response(status_code=204)
-
-
-@router.get("/evolution/audit")
-def evolution_audit(limit: int = 100):
-    return _store().read_skill_audit(limit)
 
 
 @router.get("/mcp")

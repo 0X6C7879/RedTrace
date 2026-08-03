@@ -5,7 +5,6 @@ import json
 import pytest
 
 from redtrace.dispatcher.contracts import (
-    extract_skill_feedback,
     parse_json_output,
     validate_explore_payload,
     validate_reason_payload,
@@ -47,33 +46,6 @@ def test_reason_payload_requires_intent_when_none_are_open() -> None:
             open_intents_empty=True,
             max_intents=3,
         )
-
-
-def test_skill_feedback_is_extracted_without_changing_task_contract() -> None:
-    payload = {
-        "accepted": True,
-        "data": {"description": "verified fact"},
-        "skillFeedback": {
-            "type": "CAPTURE",
-            "proposedName": "web-verification",
-            "targetSkill": "web-verification",
-            "summary": "A reusable response comparison was verified.",
-            "procedure": ["Compare one changed input with a baseline."],
-            "validation": ["The response difference repeated twice."],
-            "evidenceRefs": ["context:ev-1"],
-        },
-    }
-
-    kind, description = validate_explore_payload(payload)
-    feedback, reason = extract_skill_feedback(payload)
-
-    assert (kind, description) == ("fact", "verified fact")
-    assert reason is None
-    assert feedback is not None
-    assert feedback["evolution_type"] == "CAPTURE"
-    assert feedback["proposed_name"] == "web-verification"
-    assert feedback["target_skill"] == "web-verification"
-    assert feedback["evidence_refs"] == ["context:ev-1"]
 
 
 def test_explore_payload_rejects_planning_text() -> None:

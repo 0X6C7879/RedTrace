@@ -13,7 +13,6 @@ from pathlib import Path
 
 import requests
 from redtrace.agent_runtime import AgentRuntimeManager
-from redtrace.capabilities import CapabilityStore
 from redtrace.dispatcher.config import LocalConfig, WorkerConfig
 from redtrace.dispatcher.config_reload import DispatchConfigReloader
 from redtrace.dispatcher.models import ReasonCheckpoint, RunningTask
@@ -31,10 +30,6 @@ from redtrace.dispatcher.tasks.explore import run_explore_task
 from redtrace.dispatcher.tasks.reason import run_reason_task
 from redtrace.dispatcher.workers.registry import get_driver
 from redtrace.server.models import Intent, ProjectDetail, ProjectSummary
-from redtrace.skill_evolution import (
-    NativeSkillAuthor,
-    SkillEvolutionEngine,
-)
 
 LOG = logging.getLogger(__name__)
 UNHEALTHY_RETRY_AFTER_SECONDS = 5
@@ -86,12 +81,6 @@ class WorkerSelection:
     blocked_task_type: list[str]
 
 
-@dataclass(slots=True)
-class SkillVerificationTask:
-    proposal_id: str
-    worker_name: str
-
-
 class DispatcherLoop:
     def __init__(self, config_path: Path):
         self.config_path = config_path
@@ -120,10 +109,7 @@ class DispatcherLoop:
         self.cleanup_executor = ThreadPoolExecutor(
             max_workers=max(1, min(8, self.config.runtime.max_workers))
         )
-        self.skill_executor = ThreadPoolExecutor(max_workers=1)
         self.futures: dict[Future[str], RunningTask] = {}
-        self.skill_futures: dict[Future[str], SkillVerificationTask] = {}
-        self.skill_evolution = SkillEvolutionEngine(CapabilityStore())
         self.cleanup_futures: dict[
             Future[bool], tuple[str, str | None, str | None]
         ] = {}
@@ -141,7 +127,7 @@ class DispatcherLoop:
         self._wakeup = threading.Event()
 
     def close(self) -> None:
-        if self.futures or self.skill_futures:
+        if self.futures:
             LOG.info(
                 "dispatcher shutting down waiting_for_tasks=%s running_projects=%s",
                 self._running_task_count(),
@@ -149,7 +135,6 @@ class DispatcherLoop:
             )
         self.executor.shutdown(wait=True)
         self.cleanup_executor.shutdown(wait=True)
-        self.skill_executor.shutdown(wait=False, cancel_futures=True)
         self.container_manager.close()
         self.client.close()
 
@@ -162,7 +147,6 @@ class DispatcherLoop:
                         self._validate_server_settings()
                         self._settings_checked = True
                     self._reap_futures()
-                    self._reap_skill_futures()
                     self._reap_cleanup_futures()
                     self._refresh_worker_config()
                     self.agent_runtime.refresh_capabilities(self.config.workers)
@@ -172,7 +156,6 @@ class DispatcherLoop:
                     self._cancel_inactive_tasks(summaries)
                     self._queue_container_cleanups(summaries)
                     self._dispatch_available(summaries)
-                    self._dispatch_skill_verification(summaries)
                 except requests.RequestException as exc:
                     if once:
                         raise
@@ -185,7 +168,7 @@ class DispatcherLoop:
                     continue
                 if once:
                     break
-                if self.futures or self.skill_futures or self.cleanup_futures:
+                if self.futures or self.cleanup_futures:
                     self._wakeup.wait(
                         timeout=max(1.0, min(5.0, self.config.runtime.interval))
                     )
@@ -379,118 +362,6 @@ class DispatcherLoop:
                 if self._try_dispatch_project(summary):
                     dispatched = True
                     break
-
-    def _dispatch_skill_verification(
-        self, summaries: list[ProjectSummary] | None = None
-    ) -> None:
-        """Use only spare Dispatcher capacity for autonomous Skill verification."""
-        if (
-            self.futures
-            or self.skill_futures
-            or any(summary.status == "active" for summary in summaries or ())
-        ):
-            return
-        now = time.time()
-        running_counts = self._worker_counts()
-        candidates = [
-            worker
-            for worker in self.config.workers
-            if worker.enabled
-            and worker.type in {"claudecode", "codex", "pi"}
-            and running_counts.get(worker.name, 0) < worker.max_running
-            and self.worker_unhealthy_until.get(worker.name, 0) <= now
-        ]
-        if not candidates:
-            return
-        for worker in choose_worker(candidates, running_counts):
-            proposal = self.skill_evolution.claim_deferred_verification(worker.name)
-            if proposal is None:
-                continue
-            proposal_id = str(proposal.get("proposal_id") or "")
-            future = self.skill_executor.submit(
-                self._run_skill_verification,
-                proposal,
-                worker,
-            )
-            self.skill_futures[future] = SkillVerificationTask(
-                proposal_id=proposal_id,
-                worker_name=worker.name,
-            )
-            future.add_done_callback(lambda _future: self._wakeup.set())
-            LOG.info(
-                "dispatched Skill verification proposal=%s worker=%s",
-                proposal_id,
-                worker.name,
-            )
-            return
-
-    def _run_skill_verification(
-        self,
-        proposal: dict[str, object],
-        worker: WorkerConfig,
-    ) -> str:
-        proposal_id = str(proposal.get("proposal_id") or "")
-        author = NativeSkillAuthor(
-            self.skill_evolution.store.root,
-            preferred_worker=worker,
-        )
-        engine = SkillEvolutionEngine(self.skill_evolution.store, author=author)
-        try:
-            if engine._ready(proposal):
-                engine.requeue_ready_deferred(proposal_id)
-            else:
-                result = author.verify(
-                    proposal,
-                    self._skill_verification_evidence(proposal),
-                )
-                if not engine.apply_autonomous_verification(
-                    proposal_id,
-                    worker.name,
-                    result,
-                ):
-                    return "verified-more-evidence-needed"
-            engine.process_pending(proposal_id=proposal_id)
-            return str(engine.decision_for(proposal_id).get("status") or "unknown")
-        except Exception as exc:
-            engine.fail_deferred_verification(
-                proposal_id,
-                worker.name,
-                str(exc),
-            )
-            raise
-
-    def _skill_verification_evidence(
-        self,
-        proposal: dict[str, object],
-    ) -> dict[str, object]:
-        source_tasks = proposal.get("source_tasks")
-        source_tasks = source_tasks if isinstance(source_tasks, list) else []
-        project_id = str(proposal.get("project_id") or "")
-        if source_tasks and isinstance(source_tasks[0], str):
-            project_id = source_tasks[0].split(":", 1)[0]
-        snapshot: dict[str, object] = {"project_id": project_id, "facts": []}
-        if not project_id:
-            return snapshot
-        project = self.client.get_project(project_id)
-        refs = {
-            str(item)
-            for item in (proposal.get("evidence_refs") or [])
-            if isinstance(item, str)
-        }
-        facts: list[dict[str, object]] = []
-        for fact in project.facts:
-            if refs and fact.id not in refs:
-                continue
-            item = fact.model_dump(mode="json", by_alias=True)
-            for key, value in list(item.items()):
-                if isinstance(value, str) and len(value) > 2_000:
-                    item[key] = value[:2_000]
-            facts.append(item)
-            if len(facts) >= 12:
-                break
-        snapshot["facts"] = facts
-        snapshot["referenced_fact_ids"] = sorted(refs)
-        return snapshot
 
     def _ordered_projects(
         self, summaries: list[ProjectSummary]
@@ -1156,25 +1027,6 @@ class DispatcherLoop:
                     "task crashed project=%s task=%s worker=%s",
                     task.project_id,
                     task.task_type,
-                    task.worker_name,
-                )
-
-    def _reap_skill_futures(self) -> None:
-        done = [future for future in self.skill_futures if future.done()]
-        for future in done:
-            task = self.skill_futures.pop(future)
-            try:
-                status = future.result()
-                LOG.info(
-                    "Skill verification finished proposal=%s worker=%s status=%s",
-                    task.proposal_id,
-                    task.worker_name,
-                    status,
-                )
-            except Exception:
-                LOG.exception(
-                    "Skill verification crashed proposal=%s worker=%s",
-                    task.proposal_id,
                     task.worker_name,
                 )
 

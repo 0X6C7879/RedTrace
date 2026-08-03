@@ -137,6 +137,10 @@ def test_container_mounts_project_conversations_and_native_agent_config(
     targets = {volume["bind"] for volume in volumes.values()}
     assert "/opt/redtrace/workers" not in targets
     assert volumes[str(paths.mcp.resolve())]["bind"] == "/opt/redtrace/mcp"
+    assert volumes[str(paths.skills.resolve())] == {
+        "bind": "/opt/redtrace/claude-plugin/skills",
+        "mode": "rw",
+    }
     assert "/opt/redtrace/plugins" not in targets
 
 

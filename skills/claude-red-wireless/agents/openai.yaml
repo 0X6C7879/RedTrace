@@ -1,4 +1,0 @@
-interface:
-  display_name: "Claude Red: Wireless"
-  short_description: "Wi-Fi, Bluetooth, and mesh protocol assessment"
-  default_prompt: "Use $claude-red-wireless to assess authorized wireless systems."

@@ -302,7 +302,7 @@ class ContainerManager:
             },
             self._host_source(self._paths.skills): {
                 "bind": "/opt/redtrace/claude-plugin/skills",
-                "mode": "ro",
+                "mode": "rw",
             },
             self._host_source(self._paths.mcp): {
                 "bind": "/opt/redtrace/mcp",

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Claude Red: Active Directory"
-  short_description: "AD attack-path and identity security testing"
-  default_prompt: "Use $claude-red-active-directory to assess an authorized Active Directory target."
