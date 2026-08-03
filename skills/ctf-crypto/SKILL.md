@@ -74,7 +74,17 @@ When the server encrypts/decrypts arbitrary input and the algorithm is unknown:
 
 ### 3. Modern cipher attacks
 - **ECB**: block shuffling, byte‑at‑a‑time chosen‑plaintext suffix recovery (FeatherDuster), cut‑and‑paste block manipulation.
-- **CBC**: bit‑flipping auth bypass, padding oracle, IV forgery + block truncation, padding oracle → CBC bitflip RCE, ciphertext forging via error‑message oracle, UnicodeDecodeError side‑channel.
+- **CBC**:
+  - bit‑flipping auth bypass.
+  - **padding oracle** (see [modern-ciphers.md](modern-ciphers.md)). When attacking a web‑based padding oracle, distinguish three response classes:  
+    (1) invalid PKCS7 padding (often HTTP 200 with a padding‑error message),  
+    (2) valid padding + printable plaintext (often 403 with business‑logic error),  
+    (3) valid padding + non‑printable plaintext bytes `0x00`–`0x0D` causing server crash or 500 (connection reset or backend exception).  
+    Treat (2) and (3) as **valid padding**; (1) as **invalid padding**. A naive binary oracle (200/403 only) misclassifies `0x00`–`0x0D` as invalid, wasting hundreds of requests and preventing decryption of those bytes. Add 10 ms delay between requests (e.g., `time.sleep(0.01)` with `urllib`) to avoid container instability during the ~1700‑request attack.
+  - IV forgery + block truncation.
+  - padding oracle → CBC bit‑flip RCE.
+  - ciphertext forging via error‑message oracle.
+  - UnicodeDecodeError side‑channel.
 - **CFB‑8**: static IV with 8‑bit feedback allows state reconstruction after 16 known bytes.
 - **CBC‑MAC/OFB‑MAC**: XOR keystream for signature forgery.
 - **OFB with invertible RNG**: known plaintext leaks state; run RNG backwards.
@@ -123,7 +133,7 @@ When the server encrypts/decrypts arbitrary input and the algorithm is unknown:
 ## Validation standard
 - **Oracle triage**: expansion ratio is constant; GF(2) elimination yields a definitive linear/non‑linear verdict with ≥ 200 (state, keystream) pairs. Block‑boundary detection produces consistent or absent boundaries at all tested sizes. Nonce‑reuse check uses ≥ 500 samples before concluding cryptographic randomness.
 - **Classic ciphers**: plaintext language constraints (entropy, known prefix) are satisfied.
-- **Modern ciphers**: attack recovers at least one full block of plaintext or forges a valid ciphertext.
+- **Modern ciphers**: attack recovers at least one full block of plaintext or forges a valid ciphertext. For web‑based padding oracles, the tri‑state model successfully decrypts all bytes, including non‑printable `0x00`–`0x0D`.
 - **RSA**: factorization or private‑key recovery is reproducible; decrypts or signs correctly.
 - **ECC/DSA**: private key recovered or signature forged.
 - **PRNG**: state recovered, next outputs predicted.
@@ -136,6 +146,7 @@ When the server encrypts/decrypts arbitrary input and the algorithm is unknown:
 - **Block‑boundary scan negative at all sizes**: treat as a pure stream cipher or correctly implemented CTR mode. Do not force a block‑size assumption.
 - **Nonce analysis shows no pattern**: the cipher is likely a properly implemented non‑linear construction. Stop guessing algorithms; obtain source/writeup or search for a side‑channel.
 - **Oracle triage inconclusive**: collect more data and apply offline auto‑correlation and entropy analysis before hypothesising complex algorithms.
+- **Padding oracle fails on low‑value bytes (0x00–0x0D)**: if the server produces a distinct crash/500 response on non‑printable decrypted bytes, switch to a tri‑state oracle (200 = invalid padding, 403/500 = valid padding) and add a 10 ms delay per request to stabilise the connection.
 - **Attack produces no valid result**: re‑examine assumptions (padding, encoding, key length). If blocked by tool limitations, escalate to SageMath or custom C implementation.
 - **Service / container expires**: restart and re‑collect basics; use saved data for offline work.
 

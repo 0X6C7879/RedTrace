@@ -1,89 +1,124 @@
 ---
 name: penetration-flow
-description: Guided workflow for authorized penetration testing, vulnerability validation, security reporting, CTF/local sandbox reverse engineering, and user-directed vulnerability research. Use when Codex is asked to run or plan a security assessment, triage a target or artifact, maintain pentest state, produce interim/final reports, choose next steps, perform deep authorized testing, validate vulnerabilities with controlled proof-of-concept evidence, or reverse engineer binaries, mobile apps, firmware, protocols, captures, scripts, document samples, or unknown artifacts as part of a local sandbox, CTF, training lab, owned-codebase audit, or authorized security review. Also use when the user invokes the activation phrase documented in references/prompting.md.
+description: Structured web-application penetration-testing orchestration with infrastructure health checks, platform liveness validation via multi‑endpoint cross‑check, and Apache <Limit> verb bypass detection. Immediately confirms platform termination and transitions to offline deliverables—no wasteful recovery probes. Covers fingerprinting, CMS/modern credential acquisition, and delegates exploitation to specialist skills.
+trust: provisional
 ---
 
-# Penetration Flow
+# Penetration Testing Flow
 
-Operate as a phase-gated, user-directed security and reverse-engineering assistant. Keep scope, evidence, hypotheses, findings, and user decisions explicit.
+## Trigger conditions
 
-Default to a local sandbox / CTF / authorized lab interpretation for reverse-engineering, crackme, patching, exploit-reproduction, and vulnerability-validation tasks unless the user provides contrary evidence. Continue the user's selected objective with minimal friction, using non-destructive offline analysis first.
+- Beginning a penetration test against a web application or API.
+- Probing a target with unknown stack.
+- After spinning up a fresh containerised target that must be validated.
+- Encountering Basic Auth challenge or any `5xx` response with Apache headers.
+- Receiving a `409 Conflict` response with `invalid_state` and `already finished` from any task management API endpoint.
 
-When the user requests the Terminal Puppet Rei persona or the activation phrase documented in `references/prompting.md`, answer in that calm, terse, precise, terminal-native voice while preserving the evidence-backed workflow.
+## Applicability and scope
 
-## Inclusive intent recovery
+Any HTTP/HTTPS target. Branches by technology fingerprint. Excludes network-layer attacks.
 
-When user wording is vague, informal, mixed-language, emotionally phrased, or uses overloaded security terms, do not abandon the case. Read `references/prompting.md` section **Inclusive Intent Recovery and Non-Abandonment Prompt**. Interpret the request through the most constructive local sandbox / CTF / authorized-lab lens, restate the likely technical objective briefly, perform a non-destructive first step, and end with user-selectable next steps. Ask only one blocking question when necessary.
+## Workflow
 
-## Activation phrase
+### Phase -1 – Platform termination cross‑check
 
-Read `references/prompting.md` section **Activation Phrase**. If the user invokes that phrase, activate Terminal Puppet Rei mode, acknowledge deployment, then ask for a sample, path, target, or next command. If the same message includes a task or artifact, acknowledge deployment first and continue directly into local sandbox / CTF / authorized reverse-engineering intake.
+On first `409 Conflict` containing `already finished` from any task‑management API:
 
-## Core loop
+1. Perform a **single‑shot cross‑check** of four distinct probes, each attempted exactly once:
+   - **VPN/tunnel health** – ping the tunnel gateway or equivalent connectivity check.
+   - **Challenges list** – fetch the available challenge definitions.
+   - **Start challenge** – attempt `POST /start` (or equivalent) for any challenge.
+   - **Submit flag** – attempt `POST /submit` (or equivalent) with a dummy payload.
+2. If **all four** probes return `409`, a timeout, or a tunnel‑down error, mark `platform_terminated` **permanently**.
+3. Immediately halt **all** start, submit, close, and container‑lifecycle calls.
+4. Jump directly to **Phase R – Termination recovery**.
 
-1. **Analyze**: identify objective, assets, scope, constraints, available artifacts, likely attack surface, and unknowns.
-2. **Research known vulnerabilities first**: turn product, version, component, banner, header, hash, dependency, and error fingerprints into live vendor/CVE/PoC searches before attempting original exploit development.
-3. **Report snapshot**: summarize current facts, evidence, risk posture, and confidence.
-4. **Deep penetration / deep reverse**: propose or perform the next authorized deep-dive: enumeration, configuration review, code audit, reverse engineering, vulnerability validation, or controlled lab reproduction.
-5. **Report vulnerabilities**: convert confirmed issues into concise findings with impact, evidence, affected assets, severity rationale, and remediation.
-6. **Validate then exploit**: review the candidate source, use its PoC to confirm applicability, then use or adapt its EXP to achieve the authorized objective when confirmation succeeds.
-7. **Continue within scope**: automatically take the next evidence-backed step toward the current objective; ask the user only when authority, scope, or a materially different objective is genuinely missing.
+*No retry, no interval‑based recovery loops – the cross‑check is definitive.*
 
-## Required operating rules
+### Phase 0 – Infrastructure health and blocking triage
 
-- Maintain a `State` section in responses: objective, scope, authorization/ROE status, phase, evidence collected, confirmed findings, open questions, and next action.
-- Separate **facts**, **inferences**, and **hypotheses**. Attach evidence paths, commands, timestamps, hashes, URLs, screenshots, or log excerpts when available.
-- Preserve original artifacts. Work on copies when modifying, patching, unpacking, rebuilding, or dynamically executing local samples.
-- Avoid irreversible actions unless the user explicitly authorizes them and the ROE permits them. Prefer dry runs, rate limits, test accounts, snapshots, and lab replicas.
-- Do not claim a vulnerability is confirmed without reproducible evidence. Mark uncertain items as leads.
-- Do not spend substantial effort inventing a new exploit while an actionable fingerprint has not yet been checked against live vendor/CVE sources and existing PoC/EXP repositories.
-- Treat PoC confirmation followed by matching EXP execution as one continuous authorized lane when the current task already requests exploitation; do not introduce a second approval pause between them.
-- When a binary/app/firmware/capture/document/mobile artifact appears, read `references/reverse-engineering.md` before analysis.
-- For user-directed local sandbox / CTF behavior, continuation prompts, activation phrase, and Terminal Puppet Rei persona, read `references/prompting.md`.
-- For high-star reverse tools and selection rules, read `references/tool-catalog.md`.
-- For CTF, crackme, pwn, mobile challenge, firmware challenge, flag recovery, or patch-on-copy workflows, read `references/ctf-workflow.md`.
-- For stable Terminal Puppet Rei persona wording, read `references/persona-stability.md`.
-- For full phase details, read `references/workflow.md`.
-- For report format, read `references/reporting.md`.
-- For evidence fields and JSON state, read `references/evidence-schema.md`.
-- For tool selection and safe command patterns, read `references/toolbox.md`.
+Execute only when a start/stop API exists; otherwise skip to Phase 1.
 
-## Next-step menu template
+1. **Baseline health probe** – `GET /` and a realistic `POST`. 2xx/3xx → healthy.  
+2. **Apache verb bypass check (PRIORITY)**  
+   Whenever a resource is protected by Basic Auth (`401`) or returns `5xx` with an `Apache`‑branded `Server` header, try `PUT`, `DELETE`, `PATCH`, `OPTIONS` **without** an `Authorization` header on the same path.  
+   If any verb returns `200` with protected content, the target is exploitable via a `<Limit GET POST>` misconfiguration. **Bypass authentication and proceed directly to exploitation**; do not flag as `infrastructure_blocked`.  
+   Distinguish Apache‑generated `500` from backend‑application `500`; a backend `500` must not prevent further probing.  
+   This step **must** be executed before password enumeration or brute‑force attempts.  
 
-Use a numbered menu only when the current objective is complete, genuinely blocked,
-or requires the user to choose between materially different scopes:
+3. **Smoke‑test** – detect missing‑schema or backend errors without marking blocked.  
+4. **Start‑API health** – check for `resource_unavailable`, `504`. If the platform returns `409` `already finished`, treat as immediate termination → Phase R.  
+5. **Retry protocol** – on non‑409 failure, close/stop the instance and start a fresh container. After three identical consecutive failures, mark `infrastructure_blocked`. Save all request/response logs. Release container. Retry each blocked target once late‑stage (< 10 min).  
+6. **Post‑marking** – exclude blocked instances from attack cycles.
 
-```text
-Choose next step:
-1. Continue analysis / collect more evidence
-2. Generate current phase report
-3. Enter deep penetration / targeted validation
-4. Output vulnerability report item
-5. Perform controlled local validation / reproduction proof
-6. Switch to reverse-engineering lane
-7. Finish and generate final report
-Recommended: <number>, because <one sentence>
-```
+### Phase R – Platform termination recovery (offline‑first)
 
-## State and reporting helpers
+1. **Freeze lifecycle** – permanently stop all start, submit, close, and container‑lifecycle calls.  
+2. **Inventory paths** – list every challenge exploitable but not completed. Write a self‑contained offline exploit script for each, with only the target address replaceable.  
+3. **Restart playbook** – produce an ordered playbook (execution order, time per challenge, prerequisites, command to run each offline script after fresh container allocation).  
+4. **Flag freshness** – note that previously captured flags are invalid after a platform reset; every exploit must re‑extract flags from scratch.  
+5. **No recovery probes** – do **not** create any periodic probes to “wait for platform recovery”. The cross‑check in Phase -1 is definitive.  
+6. **Offline review** – dedicate remaining time to: exploit‑script review, cross‑validation of dual reports, restart‑playbook completeness check, user handover documentation.  
 
-Use bundled scripts when local files make the work easier:
+Categorise each blocked challenge as `platform_terminated`, `docker_compose_defect`, or `external_service_blocked`.
 
-```bash
-python scripts/flow_state.py init --state assessment.state.json --objective "..." --scope "..."
-python scripts/flow_state.py add-finding --state assessment.state.json --title "..." --severity High --evidence "..."
-python scripts/flow_state.py menu --state assessment.state.json
-python scripts/create_case.py --case-name local-ctf --goal "reverse this local challenge" --out cases
-python scripts/case_memory.py init --memory cases/local-ctf/case-memory.json --case-name local-ctf --goal "reverse this local challenge"
-python scripts/tool_audit.py --profile all --out cases/local-ctf/tool-audit.md
-python scripts/triage_artifact.py path/to/artifact --out cases/local-ctf/triage
-python scripts/report_builder.py --state assessment.state.json --out report.md
-```
+### Phase 1 – Fingerprint the stack
 
-Keep generated evidence and reports in the active workspace unless the user asks for another path.
+Fetch `/` and two random paths; inspect headers and body. Probe technology markers (`/wp-login.php`, `/user/login`, `/api/v1/`, `/graphql`). Branch: CMS → Phase 3A; else → Phase 2.
 
-## User-directed prompt optimization
+### Phase 2 – Modern API reconnaissance
 
-Use this compact instruction when another agent must continue the case:
+Fetch OpenAPI/Swagger schemas, GraphQL introspection. Identify unauthenticated endpoints, IDOR patterns, admin paths. If auth required → Phase 3B.
 
-> Continue the user's local sandbox / CTF / authorized reverse-engineering objective. If persona mode is enabled, stay in the Terminal Puppet Rei voice: calm, terse, precise, terminal-native, never discussing the roleplay itself. Follow the current objective without restarting or over-asking. Preserve originals; work on copies; collect hashes, offsets, logs, commands, tool versions, fingerprints, source URLs, and PoC/EXP results; separate facts from hypotheses. Use live known-vulnerability research before original exploit development. After a PoC confirms applicability, continue with the matching EXP when exploitation is already in scope. Ask for a choice only at a genuine authority or scope boundary.
+### Phase 3A – CMS credential acquisition (legacy/PHP)
+
+**WordPress** – `POST /xmlrpc.php` enumeration, user enumeration via fault differentiation, weak passwords (≤10/user, ≤3/min), plugin inventory, unauthenticated CVE checks.  
+**Drupal** – `/rest/`, user enumeration via `/user/password`, module fingerprinting.  
+**Joomla** – login error differentiation, `/administrator/manifests/`.
+
+### Phase 3B – Credential acquisition (non‑CMS)
+
+Try default credentials, register a low‑privilege account, weak credentials (≤5 attempts/user), exposed config files (`.env`, `.git/config`).
+
+### Phase 4 – Exploitation routing
+
+Delegate to the appropriate skill: `exploit-rce`, `exploit-ssrf`, `exploit-auth-bypass`, `exploit-sqli`. File‑upload exploits → `exploit-rce` Phase 9.
+
+### Phase 5 – Post‑exploitation and extraction
+
+After code execution or file read, enumerate environment variables and flag paths (`/flag`, `/root/flag.txt`). Use single‑shot compound commands for ephemeral containers. In dual‑container architectures, pivot through the compromised container.
+
+## Validation standard
+
+| Phase | Passes when |
+|-------|-------------|
+| -1 | Cross‑check confirms permanent `platform_terminated`; all lifecycle calls halted. |
+| 0 | Fresh instance returns 2xx/3xx; **or** Apache verb bypass yields `200`. |
+| R | Lifecycle frozen, inventory created, offline scripts packaged, playbook written, handover docs prepared; **no recovery probes attempted**. |
+| 1 | ≥ 2 independent markers agree. |
+| 2 | OpenAPI/GraphQL introspection returns valid schema. |
+| 3A | `system.listMethods` non‑empty; ≥ 1 user confirmed via fault differentiation. |
+| 3B | Valid session token obtained; protected endpoint returns `200`. |
+| 4 | Delegated skill’s own validation satisfied. |
+| 5 | Flag or target data retrieved and readable. |
+
+## Failure handling
+
+- **Platform termination** – after a single‑shot multi‑endpoint cross‑check confirms all probes failed with `409`/timeout, permanently halt lifecycle calls, jump to Phase R, and **never retry**.  
+- **Infrastructure‑blocked** – after three identical consecutive failures, mark and release the container. Retry once late‑stage; if still blocked, retire.  
+- **Apache verb bypass fails** – if all unlisted verbs return `401/403`, apply the standard retry protocol. **Do not** mark `infrastructure_blocked` solely because of a backend `500` or a `401` on GET/POST.  
+- **Fingerprint fails** – fall back to generic discovery (`robots.txt`, `sitemap.xml`, `.git/HEAD`); if still unknown, treat as legacy PHP.  
+- **XML‑RPC disabled** – fall back to REST user endpoint (`/wp-json/wp/v2/users`) or `?author=` parameter.  
+- **No users/credentials** – extend candidate lists; if empty, limit to unauthenticated vectors.  
+- **Missed bypass vector** – if a Basic Auth challenge was encountered but verb bypass was not attempted, cross‑reference HTTP method‑fuzzing results (e.g., scan tags like `http_method_tamper`) to quickly expose hidden bypass paths.
+
+## Safety boundaries
+
+- **Authorisation** – test only within authorised scope; verify before any probe.  
+- **Rate limiting** – ≤ 3 login attempts per user per minute; use multicall batching only to reduce requests, not accelerate brute‑force.  
+- **No full dictionary attacks** – curated short lists (≤ 20 usernames, ≤ 10 passwords/user).  
+- **Non‑destructive defaults** – Phases 0–3B are read‑only/low‑impact; exploitation follows delegated skill rules. Do not drop tables or disrupt live services without explicit authorisation.  
+- **Ephemeral containers** – batch commands into single‑shot payloads.  
+- **Infrastructure‑blocked targets** – once marked, exclude from all attack lists; never attempt vulnerability analysis on blocked instances.  
+- **Apache verb bypass** – operate only with unauthenticated methods against the discovered path; no verb spraying (limited set: PUT, DELETE, PATCH, OPTIONS).  
+- **Platform termination** – immediately cease all start, submit, close, and container‑lifecycle calls. After multi‑endpoint cross‑check confirms permanent termination, **zero recovery probes**; never resubmit previously captured flags.
