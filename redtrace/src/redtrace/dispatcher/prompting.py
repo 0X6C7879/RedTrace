@@ -103,16 +103,18 @@ def add_blackboard_guidance(
                 ),
                 (
                     "Skill、MCP 和 plugin 由 RedTrace root 共享。首次实质操作前用 Worker 原生 Skill 机制发现并调用最具体的相关 Skill；"
-                    "安全任务必须从 `reverse-skill` 进入并由其内部路由。默认只用一个主 Skill，确有缺口时再加一个辅助 Skill，"
+                    "安全任务必须从 `route-skills` 进入并由其内部路由。默认只用一个主 Skill，确有缺口时再加一个辅助 Skill，"
                     "不得额外调用 model 做匹配。"
                 ),
             ]
         )
     sections.append(
-        "## reverse-skill 原生经验回写\n\n"
-        "安全任务结束前按 `reverse-skill` 的 field-journal 规则完成一次复盘。只有产生已验证且可复用的新经验时，"
-        "先在 Workspace 写脱敏 draft，再调用 `$REDTRACE_SKILLS_DIR/reverse-skill/redtrace-tools/field-journal/write.py` 的"
+        "## route-skills 原生经验回写\n\n"
+        "安全任务结束前按 `route-skills` 的 field-journal 规则完成一次复盘。只有产生已验证且可复用的新经验时，"
+        "先在 Workspace 写脱敏 draft，再调用 `$REDTRACE_SKILLS_DIR/route-skills/redtrace-tools/field-journal/write.py` 的"
         " `--slug --summary --keywords --entry-file` 接口事务写入；不得直接修改共享 `_index.md`。"
+        "白盒代码审计产生的可复用经验改为调用 `$REDTRACE_SKILLS_DIR/route-skills/redtrace-tools/code-audit/evolve.py` 写入"
+        " `code-audit/learned/`；项目事实只写当前任务 Workspace 的 `.redtrace/code-audit/`，不进入全局 Skill。"
         "必须脱敏，不得写 target、credential、flag、secret 或 Workspace 绝对路径。没有可复用经验则不写。"
         "不得提交 RedTrace evolution proposal、调用额外 model、等待后台治理或启动独立验证任务。"
     )

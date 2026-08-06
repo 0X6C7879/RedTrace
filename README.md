@@ -22,7 +22,7 @@ RedTrace 解决的是“如何让多个异构 Agent 在一个可验证、可恢�
 1. **事实图优先**：把已确认信息、待探索方向和人工判断分开建模，避免把临时对话误当成结论。
 2. **控制面与执行面分离**：Server 维护状态和协议一致性；Dispatcher 负责调度与生命周期；Worker 只专注于完成当前任务。
 3. **异构 Worker 原生接入**：Claude Code、Codex、Pi 和 Mock 通过统一适配器运行，同时保留各自 CLI 的原生能力。
-4. **按需读取、原生回写**：安全能力统一由 reverse-skill 路由；Worker 在原任务中直接完成脱敏 field-journal 回写，不经过额外模型、队列或治理线程。
+4. **按需读取、原生回写**：安全能力统一由 route-skills 路由（含白盒代码审计 code-audit 三模块）；Worker 在原任务中直接完成脱敏 field-journal / learned 回写，不经过额外模型、队列或治理线程。
 5. **证据和审计可回放**：任务输出、工具事件、心跳、取消和资源操作均可查询、导出和追踪。
 
 ## 完整架构设计
@@ -40,7 +40,7 @@ flowchart TB
     RT["运行时<br/>Container Backend / Local Process"]
     W["Worker Adapter<br/>Claude Code · Codex · Pi · Mock"]
     CLI["只读辅助 CLI<br/>状态面板 · Resource · Context"]
-    REV["reverse-skill<br/>原生路由 · case · tool-index · field-journal"]
+    REV["route-skills<br/>原生路由 · case · tool-index · code-audit · field-journal"]
 
     U --> API
     API --> GRAPH
@@ -109,13 +109,13 @@ Worker Adapter 将不同 Agent CLI 归一为统一接口，同时保留原生配
 
 Web 删除项目采用“标记删除 → 取消任务/进程 → 回收 Runtime → 文件清理 → 数据库级联”的服务端流程。删除状态持久化，可在 Server 或 Dispatcher 重启后继续；失败会保留项目和错误状态供重试，重复删除保持幂等。项目 Workspace、Prompt、审计、会话文件和项目关联表会被清理，根目录 Skills/MCP/Plugins 与其他 Worker 状态不受影响。
 
-### 4. 能力与 reverse-skill 面
+### 4. 能力与 route-skills 面
 
 仓库根目录的 `skills/` 与 `mcp/` 分别是 Claude Code、Codex 和 Pi 共用的唯一 Skill、MCP 源，并在运行时转换为各 Agent 的原生参数或配置；其他配置继续沿用用户目录。`plugins/manifest.json` 仅作为浏览器、Burp 等 RedTrace 外部插件的注册表。
 
-`CapabilityStore` 只负责共享 Skill 目录的发现、启停、手工编辑和版本回滚。安全领域以 `skills/reverse-skill/` 为唯一主入口；其完整上游包固定在 `upstream/`，原生 case、scope、timeline、workitems、tool-index、bootstrap、CTF 编排和 field-journal 均保留。
+`CapabilityStore` 只负责共享 Skill 目录的发现、启停、手工编辑和版本回滚。安全领域以 `skills/route-skills/`（原 reverse-skill，上游来源保留在 frontmatter 元数据）为唯一主入口；其完整上游包固定在 `upstream/`，原生 case、scope、timeline、workitems、tool-index、bootstrap、CTF 编排和 field-journal 均保留。白盒代码审计能力位于 `upstream/skills/code-audit/`（七种审计模式 + 四语言规则）、`upstream/skills/code-audit-runtime-verify/`（静态 Finding 授权动态验证）和 `upstream/skills/code-audit-benchmark/`（FP/FN 归因与回归评估）。
 
-Worker 按需读取一个主 Skill，必要时再读取一个互补 Skill。任务产生已验证且可复用的新经验时，当前 Worker 直接向 reverse-skill 的 `field-journal/` 写一份脱敏记录并更新索引；没有新经验则不写。RedTrace 不接收进化提案、不启动后台进化线程、不调用额外模型，也不派发独立验证任务。容器运行时将统一 Skill 目录可写挂载，以便原任务内完成原生回写。
+Worker 按需读取一个主 Skill，必要时再读取一个互补 Skill。任务产生已验证且可复用的新经验时，当前 Worker 直接向 route-skills 的 `field-journal/` 写一份脱敏记录并更新索引；白盒审计经验写入 `code-audit/learned/`，项目事实只写入任务 Workspace 的 `.redtrace/code-audit/`，不污染全局 Skill；没有新经验则不写。RedTrace 不接收进化提案、不启动后台进化线程、不调用额外模型，也不派发独立验证任务。容器运行时将统一 Skill 目录可写挂载，以便原任务内完成原生回写。
 
 ### 5. 辅助 CLI 与上下文面
 
@@ -173,7 +173,7 @@ Context Harness 输出固定的 JSON/JSONL 工件和摘要引用，支持跨任�
 | `redtrace/src/redtrace/capabilities.py` | Skill/MCP 能力仓库、版本和审计 |
 | `redtrace/src/redtrace/worker_config.py` | Worker 配置、连接测试和本地 CLI 同步 |
 | `redtrace/src/redtrace/*_cli.py` | 状态面板、资源和上下文命令行工具 |
-| `skills/` | Claude Code、Codex、Pi 共用的 Skill 源；安全能力由 `reverse-skill` 统一提供 |
+| `skills/` | Claude Code、Codex、Pi 共用的 Skill 源；安全能力由 `route-skills` 统一提供 |
 | `mcp/` | 共用 MCP 配置 |
 | `plugins/` | 插件注册表及浏览器/Burp 插件源码 |
 | `docs/specs/` | Server 协议、Dispatcher、上下文和插件兼容规范 |

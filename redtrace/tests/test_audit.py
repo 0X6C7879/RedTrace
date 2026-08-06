@@ -252,7 +252,7 @@ def test_claude_skill_event_keeps_only_the_skill_name(tmp_path: Path) -> None:
                 "index": 0,
                 "delta": {
                     "type": "input_json_delta",
-                    "partial_json": '{"skill":"reverse-skill"}',
+                    "partial_json": '{"skill":"route-skills"}',
                 },
             },
         },
@@ -287,7 +287,7 @@ def test_claude_skill_event_keeps_only_the_skill_name(tmp_path: Path) -> None:
         "skill.started",
         "skill.completed",
     ]
-    assert all(event["skill_name"] == "reverse-skill" for event in skill_events)
+    assert all(event["skill_name"] == "route-skills" for event in skill_events)
     assert all("arguments" not in event for event in skill_events)
     assert all("content" not in event for event in skill_events)
 
@@ -313,7 +313,7 @@ def test_codex_skill_read_command_keeps_only_the_skill_name(tmp_path: Path) -> N
         str(tmp_path),
         "prompt",
     )
-    command = "rtk read /workspace/.codex/skills/reverse-skill/SKILL.md"
+    command = "rtk read /workspace/.codex/skills/route-skills/SKILL.md"
     for payload in (
         {
             "type": "item.started",
@@ -348,7 +348,7 @@ def test_codex_skill_read_command_keeps_only_the_skill_name(tmp_path: Path) -> N
         "skill.started",
         "skill.completed",
     ]
-    assert all(event["skill_name"] == "reverse-skill" for event in skill_events)
+    assert all(event["skill_name"] == "route-skills" for event in skill_events)
     assert all("command" not in event for event in skill_events)
     assert all("content" not in event for event in skill_events)
 
@@ -380,7 +380,7 @@ def test_pi_skill_read_keeps_only_the_skill_name(tmp_path: Path) -> None:
             "toolName": "read",
             "toolCallId": "skill-1",
             "args": {
-                "path": "/workspace/.agents/skills/reverse-skill/SKILL.md"
+                "path": "/workspace/.agents/skills/route-skills/SKILL.md"
             },
         },
         {
@@ -405,7 +405,7 @@ def test_pi_skill_read_keeps_only_the_skill_name(tmp_path: Path) -> None:
         "skill.started",
         "skill.completed",
     ]
-    assert all(event["skill_name"] == "reverse-skill" for event in skill_events)
+    assert all(event["skill_name"] == "route-skills" for event in skill_events)
     assert all("arguments" not in event for event in skill_events)
     assert all("content" not in event for event in skill_events)
 

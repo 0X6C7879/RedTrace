@@ -1,0 +1,4 @@
+interface:
+  display_name: "Route Skills"
+  short_description: "Unified security routing with direct journal learning"
+  default_prompt: "Use $route-skills, follow its native routing and case workflow in the RedTrace workspace, and finish with direct anonymized field-journal write-back."

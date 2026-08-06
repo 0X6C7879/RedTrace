@@ -205,15 +205,15 @@ def test_shared_skill_link_recovers_after_project_move(
     assert (skill_link / "portable" / "SKILL.md").is_file()
 
 
-def test_runtime_loads_reverse_skill_rules_as_global_worker_instructions(
+def test_runtime_loads_route_skills_rules_as_global_worker_instructions(
     tmp_path: Path,
 ) -> None:
     layout = _layout(tmp_path / "redtrace")
-    reverse_skill = layout.skills / "reverse-skill"
-    reverse_skill.mkdir(parents=True)
-    (reverse_skill / "SKILL.md").write_text("# reverse-skill\n", encoding="utf-8")
-    (reverse_skill / "REDTRACE_RULES.md").write_text(
-        "automatic reverse rules\n",
+    route_skills = layout.skills / "route-skills"
+    route_skills.mkdir(parents=True)
+    (route_skills / "SKILL.md").write_text("# route-skills\n", encoding="utf-8")
+    (route_skills / "REDTRACE_RULES.md").write_text(
+        "automatic route rules\n",
         encoding="utf-8",
     )
     layout.mcp.mkdir()
@@ -228,15 +228,15 @@ def test_runtime_loads_reverse_skill_rules_as_global_worker_instructions(
 
     AgentRuntimeManager(layout, execution="local").initialize([worker])
 
-    assert worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"] == "automatic reverse rules\n"
+    assert worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"] == "automatic route rules\n"
 
 
-def test_all_native_workers_receive_and_can_invoke_reverse_skill(tmp_path: Path) -> None:
+def test_all_native_workers_receive_and_can_invoke_route_skills(tmp_path: Path) -> None:
     layout = _layout(tmp_path / "redtrace")
-    reverse_skill = layout.skills / "reverse-skill"
-    reverse_skill.mkdir(parents=True)
-    (reverse_skill / "SKILL.md").write_text("# reverse-skill\n", encoding="utf-8")
-    (reverse_skill / "REDTRACE_RULES.md").write_text("automatic\n", encoding="utf-8")
+    route_skills = layout.skills / "route-skills"
+    route_skills.mkdir(parents=True)
+    (route_skills / "SKILL.md").write_text("# route-skills\n", encoding="utf-8")
+    (route_skills / "REDTRACE_RULES.md").write_text("automatic\n", encoding="utf-8")
     layout.mcp.mkdir()
     layout.plugins.mkdir()
     workers = [
@@ -251,7 +251,7 @@ def test_all_native_workers_receive_and_can_invoke_reverse_skill(tmp_path: Path)
     ]
 
     AgentRuntimeManager(layout, execution="local").initialize(workers)
-    expected_path = str(reverse_skill.resolve())
+    expected_path = str(route_skills.resolve())
     claude = ClaudeCodeDriver(local=True).build_execute(
         workers[0], "prompt", "session"
     ).argv

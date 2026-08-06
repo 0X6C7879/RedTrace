@@ -100,12 +100,12 @@ def test_playwright_cli_skill_is_complete_and_deployable() -> None:
     assert "@playwright/cli" in wrapper.read_text(encoding="utf-8")
 
 
-def test_reverse_skill_dependencies_and_tool_index_are_initialized_by_deploy() -> None:
+def test_route_skills_dependencies_and_tool_index_are_initialized_by_deploy() -> None:
     script = (REPO_ROOT / "deploy.sh").read_text(encoding="utf-8")
     initializer = (
         REPO_ROOT
         / "skills"
-        / "reverse-skill"
+        / "route-skills"
         / "redtrace-tools"
         / "initialize.sh"
     )
@@ -117,7 +117,7 @@ def test_reverse_skill_dependencies_and_tool_index_are_initialized_by_deploy() -
     assert "tool-index.md" in content
     assert "tool-index.json" in content
     assert "mv --" in content
-    assert 'bash "$REVERSE_SKILL_INITIALIZER"' in script
+    assert 'bash "$ROUTE_SKILLS_INITIALIZER"' in script
 
 
 def test_ctf_tool_installer_supports_all_linux_package_families() -> None:
@@ -158,7 +158,7 @@ def test_ctf_tool_installer_supports_all_linux_package_families() -> None:
     qiling_wrapper = (
         REPO_ROOT
         / "skills"
-        / "reverse-skill"
+        / "route-skills"
         / "redtrace-tools"
         / "qiling"
         / "qiling-python"
@@ -167,11 +167,11 @@ def test_ctf_tool_installer_supports_all_linux_package_families() -> None:
     assert qiling_wrapper.stat().st_mode & 0o111
 
 
-def test_reverse_skill_keeps_redtrace_ghidra_exporters() -> None:
+def test_route_skills_keeps_redtrace_ghidra_exporters() -> None:
     skill_dir = (
         REPO_ROOT
         / "skills"
-        / "reverse-skill"
+        / "route-skills"
         / "redtrace-tools"
         / "ghidra-headless"
     )

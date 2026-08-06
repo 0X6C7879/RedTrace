@@ -21,7 +21,7 @@ ALLOWED_FRONTMATTER = {
 EXPECTED_TOP_LEVEL_SKILLS = {
     "brave-search",
     "playwright",
-    "reverse-skill",
+    "route-skills",
 }
 
 
@@ -68,13 +68,13 @@ def test_skill_catalog_is_bounded_and_well_formed() -> None:
     assert not list(SKILLS_DIR.rglob(".DS_Store"))
 
 
-def test_reverse_skill_is_complete_and_shared_with_all_workers(
+def test_route_skills_is_complete_and_shared_with_all_workers(
     materialized_catalog: tuple[CapabilityStore, dict[str, bytes]],
 ) -> None:
     store, files = materialized_catalog
 
-    skill_dir = SKILLS_DIR / "reverse-skill"
-    record = store.get_skill("reverse-skill")
+    skill_dir = SKILLS_DIR / "route-skills"
+    record = store.get_skill("route-skills")
     required = {
         "upstream/RULES.md",
         "upstream/skills/SKILL.md",
@@ -84,6 +84,10 @@ def test_reverse_skill_is_complete_and_shared_with_all_workers(
         "upstream/skills/ops/scope-contract.md",
         "upstream/skills/field-journal/_index.md",
         "upstream/skills/field-journal/_template.md",
+        "upstream/skills/code-audit/SKILL.md",
+        "upstream/skills/code-audit/capability-manifest.json",
+        "upstream/skills/code-audit-runtime-verify/SKILL.md",
+        "upstream/skills/code-audit-benchmark/SKILL.md",
         "upstream/CTF-Sandbox-Orchestrator/ctf-sandbox-orchestrator/SKILL.md",
     }
 
@@ -92,9 +96,9 @@ def test_reverse_skill_is_complete_and_shared_with_all_workers(
     assert "cab837a298fec6fa28a49ef746d0085e0b112cfa" in record.content
     assert not list(skill_dir.rglob(".git"))
     for prefix in (".claude/skills", ".agents/skills"):
-        assert f"{prefix}/reverse-skill/SKILL.md" in files
+        assert f"{prefix}/route-skills/SKILL.md" in files
         for relative in required:
-            assert f"{prefix}/reverse-skill/{relative}" in files
+            assert f"{prefix}/route-skills/{relative}" in files
 
     search = store.get_skill("brave-search")
     assert search.enabled is True
@@ -102,8 +106,8 @@ def test_reverse_skill_is_complete_and_shared_with_all_workers(
     assert ".agents/skills/brave-search/SKILL.md" in files
 
 
-def test_reverse_skill_controller_is_non_interactive_for_redtrace_workers() -> None:
-    skill_dir = SKILLS_DIR / "reverse-skill"
+def test_route_skills_controller_is_non_interactive_for_redtrace_workers() -> None:
+    skill_dir = SKILLS_DIR / "route-skills"
     automation_rules = (skill_dir / "REDTRACE_RULES.md").read_text(encoding="utf-8")
     controller_files = (
         skill_dir / "upstream" / "skills" / "SKILL.md",

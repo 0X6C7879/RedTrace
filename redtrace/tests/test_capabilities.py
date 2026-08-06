@@ -338,14 +338,14 @@ def test_container_ready_does_not_upload_capabilities_to_workspace() -> None:
     container = FakeContainer()
     manager = ContainerManager.__new__(ContainerManager)
     manager._require_container = lambda _name: container
-    manager._reverse_skill_initialized = False
-    manager._reverse_skill_init_lock = threading.Lock()
+    manager._route_skills_initialized = False
+    manager._route_skills_init_lock = threading.Lock()
 
     assert manager._ready("worker") == "worker"
     assert container.archives == []
     assert container.commands == [
         [
             "bash",
-            "/opt/redtrace/claude-plugin/skills/reverse-skill/redtrace-tools/initialize.sh",
+            "/opt/redtrace/claude-plugin/skills/route-skills/redtrace-tools/initialize.sh",
         ]
     ]

@@ -64,9 +64,9 @@ window.skillsPage = function skillsPage() {
         this.status = status;
         this.agents = status.agents.map((agent) => displayAgent(agent.id));
         this.items = items;
-        const reverseSkill = items.find((item) => item.name === 'reverse-skill');
-        this.nestedEntries = reverseSkill
-          ? await capabilityRequest('GET', '/capabilities/skills/reverse-skill/entries')
+        const routeSkills = items.find((item) => item.name === 'route-skills');
+        this.nestedEntries = routeSkills
+          ? await capabilityRequest('GET', '/capabilities/skills/route-skills/entries')
           : [];
         const selected = this.filteredItems.find((item) => item.key === this.selectedName);
         if (selected) {

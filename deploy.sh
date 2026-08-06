@@ -34,16 +34,16 @@ fi
 REDTRACE_PLAINTEXT_SECRETS="${REDTRACE_PLAINTEXT_SECRETS:-$DEFAULT_PLAINTEXT_SECRETS}"
 export REDTRACE_PLAINTEXT_SECRETS
 BRAVE_SKILL_DIR="$PROJECT_DIR/skills/brave-search"
-GHIDRA_SKILL_DIR="$PROJECT_DIR/skills/reverse-skill/redtrace-tools/ghidra-headless"
+GHIDRA_SKILL_DIR="$PROJECT_DIR/skills/route-skills/redtrace-tools/ghidra-headless"
 PLAYWRIGHT_SKILL_DIR="$PROJECT_DIR/skills/playwright"
 GHIDRA_INSTALL_DIR="${REDTRACE_GHIDRA_HOME:-$HOME/.local/share/redtrace-tools/ghidra}"
 RSACTFTOOL_VENV="${REDTRACE_RSACTFTOOL_VENV:-$HOME/.local/share/redtrace-rsactftool}"
 QILING_VENV="${REDTRACE_QILING_VENV:-$HOME/.local/share/redtrace-qiling}"
-QILING_WRAPPER="$PROJECT_DIR/skills/reverse-skill/redtrace-tools/qiling/qiling-python"
+QILING_WRAPPER="$PROJECT_DIR/skills/route-skills/redtrace-tools/qiling/qiling-python"
 NUCLEI_VERSION="${REDTRACE_NUCLEI_VERSION:-3.11.0}"
 RSACTFTOOL_REVISION="${REDTRACE_RSACTFTOOL_REVISION:-7c98848f1945de3e67a420871e8672f5ad9aa5d5}"
 CTF_TOOL_INSTALLER="$PROJECT_DIR/install_ctf_tools.sh"
-REVERSE_SKILL_INITIALIZER="$PROJECT_DIR/skills/reverse-skill/redtrace-tools/initialize.sh"
+ROUTE_SKILLS_INITIALIZER="$PROJECT_DIR/skills/route-skills/redtrace-tools/initialize.sh"
 JAVA_INSTALL_DIR="${REDTRACE_JAVA_HOME:-$HOME/.local/share/redtrace-tools/temurin-21}"
 DISTRO_ID=""
 PACKAGE_MANAGER=""
@@ -532,8 +532,8 @@ PY
 
 ensure_ghidra_headless_skill() {
   local java_home java_major analyze_headless
-  [[ -f "$PROJECT_DIR/skills/reverse-skill/SKILL.md" ]] \
-    || die "reverse-skill SKILL.md is missing"
+  [[ -f "$PROJECT_DIR/skills/route-skills/SKILL.md" ]] \
+    || die "route-skills SKILL.md is missing"
   [[ -f "$GHIDRA_SKILL_DIR/scripts/ghidra-analyze.sh" ]] \
     || die "ghidra-headless wrapper is missing"
   [[ -f "$GHIDRA_SKILL_DIR/scripts/ghidra_scripts/ExportAll.java" ]] \
@@ -1074,9 +1074,9 @@ else
   log "skipping optional Python and Ruby security tools"
 fi
 
-[[ -x "$REVERSE_SKILL_INITIALIZER" ]] || die "reverse-skill initializer is missing or not executable"
-log "installing reverse-skill runtime dependencies and generating tool index"
-bash "$REVERSE_SKILL_INITIALIZER"
+[[ -x "$ROUTE_SKILLS_INITIALIZER" ]] || die "route-skills initializer is missing or not executable"
+log "installing route-skills runtime dependencies and generating tool index"
+bash "$ROUTE_SKILLS_INITIALIZER"
 
 log "syncing RedTrace Python environment"
 if ! UV_INDEX_URL="$PYPI_INDEX" uv sync --frozen --project "$PROJECT_DIR/redtrace"; then

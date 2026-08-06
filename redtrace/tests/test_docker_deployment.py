@@ -19,14 +19,14 @@ def test_compose_builds_local_kali_worker_on_portable_bridge() -> None:
     assert worker["image"] == "redtrace-worker-container:latest"
     assert compose["networks"]["default"]["name"] == "redtrace-network"
 
-    reverse_init = services["redtrace-reverse-skill-init"]
+    reverse_init = services["redtrace-route-skills-init"]
     assert reverse_init["image"] == worker["image"]
     assert reverse_init["depends_on"]["redtrace-worker-image"]["condition"] == (
         "service_completed_successfully"
     )
     assert reverse_init["command"] == [
         "bash",
-        "/opt/redtrace/claude-plugin/skills/reverse-skill/redtrace-tools/initialize.sh",
+        "/opt/redtrace/claude-plugin/skills/route-skills/redtrace-tools/initialize.sh",
     ]
     assert "./skills:/opt/redtrace/claude-plugin/skills" in reverse_init["volumes"]
 
@@ -36,7 +36,7 @@ def test_compose_builds_local_kali_worker_on_portable_bridge() -> None:
             "${REDTRACE_DISPATCH_CONFIG_FILE:-./dispatch.yaml}" in volume
             for volume in volumes
         )
-        assert services[service_name]["depends_on"]["redtrace-reverse-skill-init"][
+        assert services[service_name]["depends_on"]["redtrace-route-skills-init"][
             "condition"
         ] == "service_completed_successfully"
 

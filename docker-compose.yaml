@@ -8,9 +8,9 @@ services:
     restart: "no"
     command: ["true"]
 
-  redtrace-reverse-skill-init:
+  redtrace-route-skills-init:
     image: redtrace-worker-container:latest
-    container_name: redtrace-reverse-skill-init
+    container_name: redtrace-route-skills-init
     depends_on:
       redtrace-worker-image:
         condition: service_completed_successfully
@@ -19,7 +19,7 @@ services:
     restart: "no"
     command:
       - "bash"
-      - "/opt/redtrace/claude-plugin/skills/reverse-skill/redtrace-tools/initialize.sh"
+      - "/opt/redtrace/claude-plugin/skills/route-skills/redtrace-tools/initialize.sh"
 
   redtrace-server:
     build:
@@ -56,7 +56,7 @@ services:
       REDTRACE_WORKSPACE_ROOT: /redtrace/workspaces
       REDTRACE_AUDIT_ROOT: /redtrace/.redtrace/audit
     depends_on:
-      redtrace-reverse-skill-init:
+      redtrace-route-skills-init:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -103,7 +103,7 @@ services:
     depends_on:
       redtrace-server:
         condition: service_healthy
-      redtrace-reverse-skill-init:
+      redtrace-route-skills-init:
         condition: service_completed_successfully
     restart: unless-stopped
     command: ["uv", "run", "redtrace", "dispatch", "--config", "dispatch.yaml"]

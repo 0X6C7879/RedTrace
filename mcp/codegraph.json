@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "transport": "stdio",
+  "command": "codegraph",
+  "args": ["mcp"],
+  "env": {
+    "CODEGRAPH_DB": "${REDTRACE_CODEGRAPH_DB:-.codegraph/codegraph.db}"
+  }
+}

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Reverse Skill"
-  short_description: "Full reverse-skill package with direct journal learning"
-  default_prompt: "Use $reverse-skill, follow its native routing and case workflow in the RedTrace workspace, and finish with direct anonymized field-journal write-back."

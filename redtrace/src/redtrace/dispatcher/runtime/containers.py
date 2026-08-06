@@ -33,8 +33,8 @@ class ContainerManager:
         self._client = docker.from_env()
         self._ensure_running_locks: dict[str, threading.Lock] = {}
         self._ensure_running_locks_guard = threading.Lock()
-        self._reverse_skill_init_lock = threading.Lock()
-        self._reverse_skill_initialized = False
+        self._route_skills_init_lock = threading.Lock()
+        self._route_skills_initialized = False
         self._paths = paths
         self._host_mounts: list[tuple[Path, Path]] | None = None
 
@@ -107,35 +107,35 @@ class ContainerManager:
         raise RuntimeError(f"failed to create container {name}")
 
     def _ready(self, name: str) -> str:
-        self._ensure_reverse_skill_initialized(name)
+        self._ensure_route_skills_initialized(name)
         return name
 
-    def _ensure_reverse_skill_initialized(self, name: str) -> None:
-        if self._reverse_skill_initialized:
+    def _ensure_route_skills_initialized(self, name: str) -> None:
+        if self._route_skills_initialized:
             return
-        with self._reverse_skill_init_lock:
-            if self._reverse_skill_initialized:
+        with self._route_skills_init_lock:
+            if self._route_skills_initialized:
                 return
             container = self._require_container(name)
             initializer = (
-                "/opt/redtrace/claude-plugin/skills/reverse-skill/"
+                "/opt/redtrace/claude-plugin/skills/route-skills/"
                 "redtrace-tools/initialize.sh"
             )
             try:
                 result = container.exec_run(["bash", initializer])
             except DockerException as exc:
                 raise RuntimeError(
-                    f"failed to initialize reverse-skill in container {name}: {exc}"
+                    f"failed to initialize route-skills in container {name}: {exc}"
                 ) from exc
             exit_code = int(result.exit_code)
             output = result.output.decode("utf-8", errors="replace").strip()
             if exit_code != 0:
                 raise RuntimeError(
-                    "failed to initialize reverse-skill in container "
+                    "failed to initialize route-skills in container "
                     f"{name} (exit={exit_code}): {output}"
                 )
-            self._reverse_skill_initialized = True
-            LOG.info("reverse-skill initialized container=%s output=%s", name, output)
+            self._route_skills_initialized = True
+            LOG.info("route-skills initialized container=%s output=%s", name, output)
 
     def _ensure_running_lock(self, name: str) -> threading.Lock:
         with self._ensure_running_locks_guard:
@@ -359,6 +359,12 @@ class ContainerManager:
                     "bind": f"{container_home}/{source.name}",
                     "mode": "rw",
                 }
+        private_cases = os.environ.get("REDTRACE_CODE_AUDIT_PRIVATE_CASES_DIR")
+        if private_cases and Path(private_cases).is_dir():
+            bindings[self._host_source(Path(private_cases))] = {
+                "bind": "/opt/redtrace/private-code-audit-cases",
+                "mode": "ro",
+            }
         return {str(source): spec for source, spec in bindings.items()}
 
     def _host_source(self, path: Path) -> Path:

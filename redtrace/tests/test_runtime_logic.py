@@ -43,7 +43,7 @@ class FakeContainer:
 
     def exec_run(self, command: list[str]):
         self.exec_calls.append(command)
-        return SimpleNamespace(exit_code=0, output=b"reverse-skill initialized\n")
+        return SimpleNamespace(exit_code=0, output=b"route-skills initialized\n")
 
 
 def _manager(*, completed_action: str = "stop") -> ContainerManager:
@@ -94,10 +94,10 @@ def test_container_manager_build_exec_process_wraps_command_with_timeout() -> No
     assert "/home/kali/go/bin:" in process.env["PATH"]
 
 
-def test_container_ready_initializes_reverse_skill_once() -> None:
+def test_container_ready_initializes_route_skills_once() -> None:
     manager = _manager()
-    manager._reverse_skill_initialized = False
-    manager._reverse_skill_init_lock = threading.Lock()
+    manager._route_skills_initialized = False
+    manager._route_skills_init_lock = threading.Lock()
     container = FakeContainer()
     manager._require_container = lambda _name: container
 
@@ -107,7 +107,7 @@ def test_container_ready_initializes_reverse_skill_once() -> None:
     assert container.exec_calls == [
         [
             "bash",
-            "/opt/redtrace/claude-plugin/skills/reverse-skill/redtrace-tools/initialize.sh",
+            "/opt/redtrace/claude-plugin/skills/route-skills/redtrace-tools/initialize.sh",
         ]
     ]
 

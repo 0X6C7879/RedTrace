@@ -21,6 +21,13 @@ server.log
 dispatcher.log
 skills/.redtrace/inbox/
 skills/.redtrace/locks/
+# 白盒私有案例：不进入公开仓库，可用 REDTRACE_CODE_AUDIT_PRIVATE_CASES_DIR 提供
+skills/route-skills/upstream/skills/code-audit/references/cases/internal-cases.json
+data/private/
+# 迁移临时脚本
+tmp_*.ps1
+# 白盒源目录迁移后归档（确认无误后可手工删除）
+白盒skills.migrated-*/
 plugins/**/dist/
 plugins/**/target/
 plugins/**/.gradle/

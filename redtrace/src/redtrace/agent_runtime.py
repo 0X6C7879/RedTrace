@@ -91,7 +91,7 @@ class AgentRuntimeManager:
         watched = (
             self.paths.skills,
             self.paths.skills / ".redtrace" / "audit.jsonl",
-            self.paths.skills / "reverse-skill" / "REDTRACE_RULES.md",
+            self.paths.skills / "route-skills" / "REDTRACE_RULES.md",
             self.paths.mcp,
         )
         return tuple(
@@ -139,8 +139,6 @@ class AgentRuntimeManager:
     @staticmethod
     def _load_global_instructions(skill_paths: list[Path]) -> str:
         for skill_path in skill_paths:
-            if skill_path.name != "reverse-skill":
-                continue
             rules = skill_path / "REDTRACE_RULES.md"
             if rules.is_file():
                 return rules.read_text(encoding="utf-8")
@@ -197,6 +195,13 @@ class AgentRuntimeManager:
                 "REDTRACE_CODEX_RESOURCE_ARGS": json.dumps(resource_args),
             }
         )
+        private_cases = os.environ.get("REDTRACE_CODE_AUDIT_PRIVATE_CASES_DIR")
+        if private_cases:
+            worker.env["REDTRACE_CODE_AUDIT_PRIVATE_CASES_DIR"] = (
+                private_cases
+                if self.execution == "local"
+                else "/opt/redtrace/private-code-audit-cases"
+            )
         if self._global_instructions_cache:
             worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"] = (
                 self._global_instructions_cache
