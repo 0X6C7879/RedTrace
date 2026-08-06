@@ -35,3 +35,4 @@ plugins/**/build/
 plugins/**/lib/*.jar
 vendor/
 nul
+*.stackdump

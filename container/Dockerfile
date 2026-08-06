@@ -5,6 +5,7 @@ ARG CODEX_VERSION=0.146.0
 ARG CLAUDE_CODE_VERSION=2.1.220
 ARG PI_CODING_AGENT_VERSION=0.83.0
 ARG PLAYWRIGHT_CLI_VERSION=0.1.17
+ARG CODEGRAPH_VERSION=1.5.0
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
@@ -91,6 +92,10 @@ RUN sudo npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 RUN sudo npm install -g "@earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION}" --ignore-scripts && \
     sudo env HOME=/home/kali /usr/local/bin/pi install npm:pi-mcp-extension@1.5.0 && \
     sudo chown -R kali:kali /home/kali
+
+RUN sudo npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
+    codegraph --version && \
+    codegraph serve --help >/dev/null
 
 RUN sudo chmod +x /usr/local/bin/kerbrute
 RUN mkdir -p /home/kali/.config/nuclei && \

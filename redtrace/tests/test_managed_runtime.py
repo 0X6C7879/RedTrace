@@ -116,6 +116,10 @@ def test_workers_use_native_agent_state_and_shared_capabilities(
     empty_home = tmp_path / "home"
     empty_home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: empty_home))
+    monkeypatch.setattr(
+        "redtrace.agent_runtime.shutil.which",
+        lambda _name: "/usr/local/bin/mcp-filesystem",
+    )
     workers = [
         WorkerConfig(
             name=name,
@@ -262,3 +266,49 @@ def test_all_native_workers_receive_and_can_invoke_route_skills(tmp_path: Path) 
     assert expected_path in " ".join(codex)
     assert pi[pi.index("--skill") + 1] == expected_path
     assert all(worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"] == "automatic\n" for worker in workers)
+
+
+def test_local_runtime_auto_disables_and_recovers_mcp_with_missing_command(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    layout = _layout(tmp_path / "redtrace")
+    layout.skills.mkdir(parents=True)
+    layout.mcp.mkdir(parents=True)
+    layout.plugins.mkdir(parents=True)
+    mcp_file = layout.mcp / "ghost.json"
+    mcp_file.write_text(
+        json.dumps(
+            {
+                "enabled": True,
+                "transport": "stdio",
+                "command": "redtrace-nonexistent-mcp-tool",
+                "args": ["serve"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    AgentRuntimeManager(layout, execution="local").initialize([])
+
+    saved = json.loads(mcp_file.read_text(encoding="utf-8"))
+    assert saved["enabled"] is False
+    assert saved["autoDisabledBy"] == "missing-command"
+    claude_config = json.loads(
+        (layout.runtime / "mcp" / "claude.json").read_text(encoding="utf-8")
+    )
+    assert "ghost" not in claude_config["mcpServers"]
+
+    monkeypatch.setattr(
+        "redtrace.agent_runtime.shutil.which",
+        lambda _name: "/usr/local/bin/redtrace-nonexistent-mcp-tool",
+    )
+    AgentRuntimeManager(layout, execution="local").initialize([])
+
+    recovered = json.loads(mcp_file.read_text(encoding="utf-8"))
+    assert recovered["enabled"] is True
+    assert "autoDisabledBy" not in recovered
+    claude_config = json.loads(
+        (layout.runtime / "mcp" / "claude.json").read_text(encoding="utf-8")
+    )
+    assert "ghost" in claude_config["mcpServers"]

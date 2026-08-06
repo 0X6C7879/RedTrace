@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -24,6 +26,10 @@ _CLI_SOURCES = {
     "redtrace-resource": "resource_cli.py",
     "redtrace-context": "context_cli.py",
 }
+
+LOG = logging.getLogger(__name__)
+_AUTO_DISABLED_MARKER = "autoDisabledBy"
+_AUTO_DISABLED_REASON = "missing-command"
 
 
 class AgentRuntimeManager:
@@ -77,7 +83,7 @@ class AgentRuntimeManager:
         signature = self._capability_signature()
         if not force and signature == self._capability_signature_cache:
             return False
-        mcp_records = self._store.list_mcp()
+        mcp_records = self._sync_mcp_command_availability(self._store.list_mcp())
         self._write_shared_runtime(mcp_records)
         self._mcp_args_cache = codex_mcp_overrides(mcp_records)
         self._skill_paths_cache = self._enabled_skill_paths()
@@ -86,6 +92,56 @@ class AgentRuntimeManager:
         )
         self._capability_signature_cache = self._capability_signature()
         return True
+
+    def _sync_mcp_command_availability(
+        self, records: list[McpRecord]
+    ) -> list[McpRecord]:
+        """Auto-disable stdio MCP servers whose command is not installed.
+
+        Container execution resolves commands inside the Worker image, so the
+        host-side availability check only applies to local execution. Records
+        disabled automatically are re-enabled once the command reappears;
+        manual disables are never overridden.
+        """
+        if self.execution != "local":
+            return [record for record in records if record.enabled]
+        usable: list[McpRecord] = []
+        for record in records:
+            command = record.config.get("command")
+            marker = record.config.get(_AUTO_DISABLED_MARKER)
+            needs_check = (
+                isinstance(command, str)
+                and command
+                and not Path(command).is_absolute()
+            )
+            available = (
+                shutil.which(command) is not None if needs_check else True
+            )
+            if needs_check and not available and record.enabled:
+                config = dict(record.config)
+                config["enabled"] = False
+                config[_AUTO_DISABLED_MARKER] = _AUTO_DISABLED_REASON
+                self._store.write_mcp(record.name, config)
+                LOG.warning(
+                    "auto-disabled MCP %s: command %r is not installed",
+                    record.name,
+                    command,
+                )
+                continue
+            if (
+                needs_check
+                and available
+                and not record.enabled
+                and marker == _AUTO_DISABLED_REASON
+            ):
+                config = dict(record.config)
+                config["enabled"] = True
+                config.pop(_AUTO_DISABLED_MARKER, None)
+                record = self._store.write_mcp(record.name, config)
+                LOG.info("re-enabled MCP %s: command %r is available", record.name, command)
+            if record.enabled:
+                usable.append(record)
+        return usable
 
     def _capability_signature(self) -> tuple[int, ...]:
         watched = (

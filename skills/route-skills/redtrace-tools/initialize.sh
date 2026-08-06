@@ -27,6 +27,20 @@ for command_name in bash python3 jq; do
   }
 done
 
+command -v codegraph >/dev/null 2>&1 || {
+  printf 'route-skills dependency is missing: codegraph\n' >&2
+  exit 1
+}
+codegraph --version >/dev/null 2>&1 || {
+  printf 'codegraph --version failed\n' >&2
+  exit 1
+}
+codegraph serve --help >/dev/null 2>&1 || {
+  printf 'codegraph MCP entry (serve --mcp) is unavailable\n' >&2
+  exit 1
+}
+printf 'codegraph available: %s\n' "$(codegraph --version 2>/dev/null)"
+
 chmod +x "$SCRIPT_DIR/field-journal/write.py"
 for tool in "$SCRIPT_DIR"/code-audit/*.py; do
   if [[ -f "$tool" ]]; then chmod +x "$tool"; fi

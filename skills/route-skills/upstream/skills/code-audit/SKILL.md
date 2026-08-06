@@ -210,6 +210,8 @@ metadata:
 2. `codegraph_node(includeCode=true)` → 展开被截断的代码（如需要）
 3. `codegraph_callees` / `codegraph_callers` → 补充调用关系（如需要）
 
+> **工具形态兼容**：独立 CLI 版 codegraph（`@colbymchenry/codegraph`）的 MCP 只暴露聚合工具 `codegraph_explore`；此时 `codegraph_search/node/callees/callers/files` 用同名 CLI 子命令等价替代（如 `codegraph query <符号>`、`codegraph node <符号>`、`codegraph callees <符号>`、`codegraph callers <符号>`、`codegraph files`），能力不降级。IDE 内置 codegraph MCP 提供全部六个工具时优先用 MCP。
+
 #### 任务→工具映射
 
 | 任务 | 首选工具 | 降级工具 |

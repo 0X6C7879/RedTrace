@@ -41,6 +41,7 @@ RSACTFTOOL_VENV="${REDTRACE_RSACTFTOOL_VENV:-$HOME/.local/share/redtrace-rsactft
 QILING_VENV="${REDTRACE_QILING_VENV:-$HOME/.local/share/redtrace-qiling}"
 QILING_WRAPPER="$PROJECT_DIR/skills/route-skills/redtrace-tools/qiling/qiling-python"
 NUCLEI_VERSION="${REDTRACE_NUCLEI_VERSION:-3.11.0}"
+CODEGRAPH_VERSION="${REDTRACE_CODEGRAPH_VERSION:-1.5.0}"
 RSACTFTOOL_REVISION="${REDTRACE_RSACTFTOOL_REVISION:-7c98848f1945de3e67a420871e8672f5ad9aa5d5}"
 CTF_TOOL_INSTALLER="$PROJECT_DIR/install_ctf_tools.sh"
 ROUTE_SKILLS_INITIALIZER="$PROJECT_DIR/skills/route-skills/redtrace-tools/initialize.sh"
@@ -1058,6 +1059,10 @@ ensure_npm_cli claude '@anthropic-ai/claude-code@latest'
 ensure_npm_cli codex '@openai/codex@latest'
 ensure_npm_cli pi '@earendil-works/pi-coding-agent@latest' --ignore-scripts
 ensure_pi_mcp_extension
+ensure_npm_cli codegraph "@colbymchenry/codegraph@${CODEGRAPH_VERSION}"
+log "verifying codegraph installation"
+codegraph --version >/dev/null 2>&1 || die "codegraph failed verification"
+codegraph serve --help >/dev/null 2>&1 || die "codegraph MCP entry (serve --mcp) is unavailable"
 ensure_rtk
 ensure_playwright_cli_skill
 ensure_brave_search_skill
