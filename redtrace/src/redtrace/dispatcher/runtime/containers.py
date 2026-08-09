@@ -266,6 +266,7 @@ class ContainerManager:
                 "/home/kali/.local/bin:/home/kali/go/bin:"
                 "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
             ),
+            "SHELL": "/bin/bash",
         }
         argv: list[str] = []
         if timeout_seconds is not None:
@@ -286,7 +287,7 @@ class ContainerManager:
         )
 
     def conversation_environment(
-        self, project_id: str, worker_type: str
+        self, project_id: str, worker_type: str, worker_name: str = ""
     ) -> dict[str, str]:
         safe_project_key(project_id)
         if worker_type == "claudecode":

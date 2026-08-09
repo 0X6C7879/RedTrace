@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import quote
 
 from redtrace.dispatcher.config import ContextHarnessConfig, LocalConfig
 from redtrace.dispatcher.runtime.backend import is_agent_runtime_state
@@ -80,13 +81,15 @@ class LocalBackend:
         return str(project_dir)
 
     def conversation_environment(
-        self, project_id: str, worker_type: str
+        self, project_id: str, worker_type: str, worker_name: str = ""
     ) -> dict[str, str]:
+        worker_key = "worker-" + quote(worker_name or worker_type, safe="")
         state = contained_path(
             self._project_state_root,
             safe_project_key(project_id),
             "conversations",
             worker_type,
+            worker_key,
         )
         state.mkdir(parents=True, exist_ok=True)
         if worker_type == "pi":
@@ -103,7 +106,13 @@ class LocalBackend:
             if is_agent_runtime_state(worker_type, source.name):
                 continue
             _ensure_link(state / source.name, source)
-        return {variable: str(state)}
+        environment = {variable: str(state)}
+        # Claude Code delegates Bash tool calls to $SHELL.  In zsh, `path` is a
+        # special array tied to PATH, so ordinary loops such as `for path in ...`
+        # silently destroy command lookup.  Use the shell the tool contract names.
+        if worker_type == "claudecode" and Path("/bin/bash").is_file():
+            environment["SHELL"] = "/bin/bash"
+        return environment
 
     def build_exec_process(
         self,

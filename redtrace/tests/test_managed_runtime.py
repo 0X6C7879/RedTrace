@@ -263,7 +263,7 @@ def test_all_native_workers_receive_and_can_invoke_route_skills(tmp_path: Path) 
     pi = PiDriver(local=True).build_execute(workers[2], "prompt", None).argv
 
     assert claude[claude.index("--plugin-dir") + 1].endswith("claude-plugin")
-    assert expected_path in " ".join(codex)
+    assert json.dumps(expected_path) in " ".join(codex)
     assert pi[pi.index("--skill") + 1] == expected_path
     assert all(worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"] == "automatic\n" for worker in workers)
 

@@ -19,7 +19,6 @@ window.skillsPage = function skillsPage() {
   return {
     status: null,
     items: [],
-    nestedEntries: [],
     agents: ['Claude', 'Codex', 'Pi'],
     query: '',
     selectedName: '',
@@ -37,15 +36,17 @@ window.skillsPage = function skillsPage() {
       return this.items.filter((item) => item.enabled).length;
     },
 
+    get nestedCount() {
+      return this.items.filter((item) => item.nested).length;
+    },
+
     get filteredItems() {
       const needle = this.query.trim().toLowerCase();
-      const entries = this.items.flatMap((item) => [
-        { ...item, key: item.name },
-        ...this.nestedEntries.filter((entry) => entry.parent === item.name),
-      ]);
-      if (!needle) return entries;
-      return entries.filter((item) =>
-        `${item.name} ${item.path || ''} ${item.description || ''}`.toLowerCase().includes(needle)
+      if (!needle) return this.items;
+      return this.items.filter((item) =>
+        `${item.name} ${item.description || ''} ${item.parent || ''} ${item.path || ''}`
+          .toLowerCase()
+          .includes(needle)
       );
     },
 
@@ -59,15 +60,11 @@ window.skillsPage = function skillsPage() {
       try {
         const [status, items] = await Promise.all([
           capabilityRequest('GET', '/capabilities'),
-          capabilityRequest('GET', '/capabilities/skills'),
+          capabilityRequest('GET', '/capabilities/skill-entries'),
         ]);
         this.status = status;
         this.agents = status.agents.map((agent) => displayAgent(agent.id));
         this.items = items;
-        const routeSkills = items.find((item) => item.name === 'route-skills');
-        this.nestedEntries = routeSkills
-          ? await capabilityRequest('GET', '/capabilities/skills/route-skills/entries')
-          : [];
         const selected = this.filteredItems.find((item) => item.key === this.selectedName);
         if (selected) {
           await this.select(selected);
@@ -155,7 +152,7 @@ window.skillsPage = function skillsPage() {
     },
 
     async refreshList() {
-      this.items = await capabilityRequest('GET', '/capabilities/skills');
+      this.items = await capabilityRequest('GET', '/capabilities/skill-entries');
     },
 
     async rollback() {

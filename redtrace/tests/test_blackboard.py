@@ -223,8 +223,10 @@ def test_worker_process_receives_read_only_blackboard_context(monkeypatch, worke
             return ProcessResult(0, "", "")
 
     class Manager:
-        def conversation_environment(self, _project_id, agent_type):
-            return {"REDTRACE_TEST_CONVERSATION_HOME": agent_type}
+        def conversation_environment(self, _project_id, agent_type, worker_name):
+            return {
+                "REDTRACE_TEST_CONVERSATION_HOME": f"{agent_type}/{worker_name}"
+            }
 
         def build_exec_process(self, _name, env, _argv, **_kwargs):
             captured.update(env)
@@ -276,7 +278,9 @@ def test_worker_process_receives_read_only_blackboard_context(monkeypatch, worke
     assert captured["REDTRACE_TASK_TYPE"] == "explore"
     assert captured["REDTRACE_INTENT_ID"] == "i003"
     assert captured["REDTRACE_BLACKBOARD_CURSOR"] == "17"
-    assert captured["REDTRACE_TEST_CONVERSATION_HOME"] == worker_type
+    assert captured["REDTRACE_TEST_CONVERSATION_HOME"] == (
+        f"{worker_type}/{worker_type}-worker"
+    )
     if worker_type == "claudecode":
         assert captured["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "1048576"
     elif worker_type == "pi":

@@ -6,15 +6,18 @@ import subprocess
 import time
 from pathlib import Path
 
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "start-redtrace.sh"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Bash process semantics are covered on Linux CI")
 def test_start_script_is_valid_bash() -> None:
     subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Bash process semantics are covered on Linux CI")
 def test_start_script_help_documents_both_components() -> None:
     result = subprocess.run(
         ["bash", str(SCRIPT), "--help"],
@@ -41,6 +44,7 @@ def test_start_script_uses_portable_project_relative_defaults() -> None:
     assert "systemctl" not in script
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signal supervision is covered on Linux CI")
 def test_start_script_supervises_and_stops_both_components(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     state_dir = tmp_path / "state"

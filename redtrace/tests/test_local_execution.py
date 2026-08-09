@@ -190,8 +190,8 @@ def test_local_backend_keeps_agent_config_linked_and_conversations_in_project(
     backend = LocalBackend(LocalConfig(workspace_root=str(paths.workspaces)), paths=paths)
 
     workspace = Path(backend.ensure_running("proj_001"))
-    env = backend.conversation_environment("proj_001", "codex")
-    state = paths.projects / "proj_001" / "conversations" / "codex"
+    env = backend.conversation_environment("proj_001", "codex", "Codex")
+    state = paths.projects / "proj_001" / "conversations" / "codex" / "worker-Codex"
 
     assert env == {"CODEX_HOME": str(state)}
     assert (state / "config.toml").read_text(encoding="utf-8") == config.read_text(
@@ -199,11 +199,28 @@ def test_local_backend_keeps_agent_config_linked_and_conversations_in_project(
     )
     assert not (state / "sessions").exists()
     assert (workspace / ".pi" / "mcp.json").resolve() == pi_mcp.resolve()
-    assert backend.conversation_environment("proj_001", "pi") == {
+    assert backend.conversation_environment("proj_001", "pi", "Pi") == {
         "PI_CODING_AGENT_SESSION_DIR": str(
-            paths.projects / "proj_001" / "conversations" / "pi"
+            paths.projects / "proj_001" / "conversations" / "pi" / "worker-Pi"
         )
     }
+    assert backend.conversation_environment("proj_001", "pi", "Pi-2") != (
+        backend.conversation_environment("proj_001", "pi", "Pi")
+    )
+
+
+def test_local_claude_uses_bash_when_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(Path, "is_file", lambda self: str(self) == "/bin/bash")
+    backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path / "workspaces")))
+
+    env = backend.conversation_environment("proj_001", "claudecode", "Claude")
+
+    assert env["SHELL"] == "/bin/bash"
 
 
 def test_local_graph_snapshot_uses_managed_project_path(tmp_path: Path) -> None:
@@ -671,9 +688,10 @@ def test_explore_runs_real_local_cli_end_to_end(tmp_path: Path, monkeypatch) -> 
 
     assert outcome == "success"
     assert client.concluded == [("proj_001", "i001", "test-worker", "local fake fact")]
-    # graph snapshot was materialised on the host under the patched root
+    # Explore now receives only the bounded current Intent context inline; it
+    # must not materialize and reread the full graph.
     snapshot_root = tmp_path / "prompts"
-    assert any(p.name == "graph.yaml" for p in snapshot_root.rglob("*"))
+    assert not snapshot_root.exists()
 
 
 def test_explore_local_cli_rejection_releases_intent(

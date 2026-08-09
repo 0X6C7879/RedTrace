@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import logging
-import time
+import re
+import subprocess
+import sys
+import tempfile
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
-from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
 from redtrace.dispatcher.audit import AuditPublisher
+from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
 from redtrace.dispatcher.protocol.client import CairnClient
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
@@ -17,6 +22,12 @@ from redtrace.dispatcher.workers.adapters.claudecode import CLAUDE_MAX_THINKING_
 PROCESS_COMMUNICATE_GRACE_SECONDS = 15
 GRAPH_SNAPSHOT_ROOT = "/tmp/redtrace-prompts"
 LOG = logging.getLogger(__name__)
+SAFE_LEARNING_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+PRIVATE_LEARNING_MARKERS = re.compile(
+    r"(?i)(?:https?://|\b\d{1,3}(?:\.\d{1,3}){3}\b|flag\s*\{|"
+    r"(?:password|credential|api[_-]?key|secret)\s*[:=]|"
+    r"(?:^|\s)(?:/home/|/tmp/|[a-z]:[\\/]))"
+)
 
 
 @dataclass(slots=True)
@@ -33,6 +44,23 @@ def preview(text: str, limit: int = 2048) -> str:
 
 def did_timeout(result: ProcessResult) -> bool:
     return not result.cancelled and (result.timed_out or result.returncode in (124, 137))
+
+
+def is_transient_model_failure(stdout: str, stderr: str) -> bool:
+    text = f"{stdout}\n{stderr}".casefold()
+    return any(
+        marker in text
+        for marker in (
+            "429",
+            "502",
+            "too many requests",
+            "rate limit",
+            "bad gateway",
+            "temporarily unavailable",
+            "overloaded",
+            "upstream timeout",
+        )
+    )
 
 
 def cancel_reason(result: ProcessResult, cancellation: TaskCancellation | None = None) -> str | None:
@@ -70,6 +98,72 @@ def write_graph_snapshot_reference(
     )
 
 
+def write_field_journal_learning(worker: WorkerConfig, payload: dict[str, Any]) -> bool:
+    data = payload.get("data") if payload.get("accepted") is True else payload
+    learning = data.get("learning") if isinstance(data, dict) else None
+    if not isinstance(learning, dict):
+        return False
+    slug = str(learning.get("slug") or "").strip()
+    summary = str(learning.get("summary") or "").strip()
+    entry = str(learning.get("entry") or "").strip()
+    keywords = learning.get("keywords")
+    if (
+        not SAFE_LEARNING_SLUG.fullmatch(slug)
+        or not summary
+        or len(summary) > 240
+        or not entry
+        or not isinstance(keywords, list)
+        or any(not isinstance(keyword, str) or not keyword.strip() for keyword in keywords)
+        or PRIVATE_LEARNING_MARKERS.search(f"{summary}\n{entry}")
+    ):
+        LOG.warning("skipping unsafe or invalid field-journal learning slug=%s", slug)
+        return False
+    skill_root = worker.env.get("REDTRACE_HOST_SKILLS_DIR", "").strip()
+    writer = Path(skill_root) / "route-skills" / "redtrace-tools" / "field-journal" / "write.py"
+    if not writer.is_file():
+        LOG.warning("field-journal writer is unavailable path=%s", writer)
+        return False
+    temporary_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".md",
+            delete=False,
+        ) as temporary:
+            temporary.write(entry)
+            temporary_name = temporary.name
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(writer),
+                "--slug",
+                slug,
+                "--summary",
+                summary,
+                "--keywords",
+                ",".join(keyword.strip() for keyword in keywords),
+                "--entry-file",
+                temporary_name,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if completed.returncode != 0:
+            LOG.warning("field-journal write failed slug=%s error=%s", slug, preview(completed.stderr))
+            return False
+        LOG.info("field-journal learning recorded slug=%s", slug)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        LOG.warning("field-journal write failed slug=%s", slug, exc_info=True)
+        return False
+    finally:
+        if temporary_name:
+            Path(temporary_name).unlink(missing_ok=True)
+
+
 def run_worker_process(
     container_manager: ContainerManager,
     container_name: str,
@@ -94,9 +188,12 @@ def run_worker_process(
         timeout_seconds,
     )
     process_env = dict(worker.env)
+    process_env.pop("REDTRACE_HOST_SKILLS_DIR", None)
     if project_id is not None:
         process_env.update(
-            container_manager.conversation_environment(project_id, worker.type)
+            container_manager.conversation_environment(
+                project_id, worker.type, worker.name
+            )
         )
     if worker.context_length is not None:
         if worker.type == "claudecode":
@@ -145,11 +242,14 @@ def run_worker_process(
             worker,
             phase,
             container_name,
-            argv[-1] if argv else "",
+            stdin_text if stdin_text is not None else (argv[-1] if argv else ""),
         )
         set_output_handler = getattr(process, "set_output_handler", None)
         if callable(set_output_handler):
             set_output_handler(publisher.handle_output)
+        attach_process = getattr(publisher, "attach_process", None)
+        if callable(attach_process):
+            attach_process(process)
     try:
         process.start()
         if lease is not None:

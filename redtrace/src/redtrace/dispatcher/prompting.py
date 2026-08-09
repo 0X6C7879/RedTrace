@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from importlib import resources
+from pathlib import Path
 from typing import Any
-
 
 LANGUAGE_GUIDANCE = """## 输出语言
 
@@ -14,6 +15,25 @@ JSON key、enum/status、phase、工具/Skill/MCP/plugin 名、命令、代码�
 FINAL_OUTPUT_CONTRACT = """## Final output contract
 
 只返回一个符合本任务上方 schema 的 raw JSON object，不得输出 Markdown、代码围栏或解释文字。主任务字段必须完整。"""
+
+PRIMARY_SKILL_MARKER = "REDTRACE_PRIMARY_SKILL="
+PRIMARY_SKILL_DIR_MARKER = "REDTRACE_PRIMARY_SKILL_DIR="
+RELATIVE_SKILL_REF_PATTERN = re.compile(
+    r"`((?:\.\.?/|references/|scripts/|templates/|payloads/|src-hunter/)[^`\s]+)`"
+)
+_PRIMARY_SKILL_ROUTES = (
+    (("源码审计", "代码审计", "code audit", "sast", "source review"), "code-audit"),
+    (("android", "apk", "smali"), "apk-reverse"),
+    (("firmware", "固件", "uart", "jtag"), "firmware-pentest"),
+    (("kubernetes", "k8s", "imds", "cloud metadata", "云元数据"), "cloud-k8s"),
+    (("kerberos", "active directory", "ad cs", "ldap", "域渗透"), "windows-ad"),
+    (("graphql", "websocket", "jwt", "oauth", "oidc", "bola", "idor"), "api-security"),
+    (("pcap", "数字取证", "内存取证", "forensic"), "digital-forensics"),
+    (("malware", "恶意软件", "yara", "sigma"), "malware-analysis"),
+    (("pwn", "heap", "stack overflow", "栈溢出", "堆利用"), "pwn-chain"),
+    (("reverse engineering", "逆向", "反编译", "disassembly", "binary analysis"), "reverse-engineering"),
+    (("lateral", "pivot", "post-exploitation", "横向", "内网", "攻击链"), "attack-chain"),
+)
 
 
 def load_prompt(group: str, name: str) -> str:
@@ -47,6 +67,8 @@ def add_blackboard_guidance(
     task_type: str = "explore",
     context_harness_enabled: bool = True,
     local_execution: bool = False,
+    primary_skill: str = "",
+    primary_skill_content: str = "",
 ) -> str:
     if task_type not in {"bootstrap", "reason", "explore"}:
         raise ValueError(f"unsupported task type: {task_type}")
@@ -83,31 +105,50 @@ def add_blackboard_guidance(
             ]
         )
     if task_type == "explore":
+        if primary_skill:
+            sections.append(
+                "## 已预加载的主执行 Skill\n\n"
+                f"{PRIMARY_SKILL_MARKER}{primary_skill}\n"
+                "调度器已完成路由并预加载下方完整主 Skill；不得再读取 `route-skills/SKILL.md`、"
+                "`REDTRACE_RULES.md`、`upstream/RULES.md`、routing/index 或同一 `SKILL.md`。"
+                "正文中的相对路径均以 `REDTRACE_PRIMARY_SKILL_DIR` 为基准。"
+                "RedTrace 已提供授权、scope、PATH 和工具基线；跳过 Skill 中的授权先例、scope 初始化、tool-index 发现和"
+                "`which`/`find`/`--help` 探测，直接尝试工作流工具。只有实际出现 command-not-found 时才做一次定向修复。"
+                "第一个实质动作直接执行该 Skill 的 ACTION REQUIRED/workflow；需要参考文件时再按它的路由精确读取一次。\n\n"
+                "--- PRIMARY SKILL BEGIN ---\n"
+                f"{primary_skill_content.strip()}\n"
+                "--- PRIMARY SKILL END ---"
+            )
         sections.append(
             "## Active WebShell 与 C2 工作流\n\n"
-            "运行 `redtrace-resource snapshot --kind webshell --kind c2_listener --kind c2_session "
-            "--kind c2_payload`，复用匹配资源并按 ID 检查。用 `redtrace-resource webshell-create` 注册 shell，"
+            "调度器已在本次 Explore 启动前载入 WebShell/C2 snapshot；直接复用上下文中的匹配资源并按 ID 检查。"
+            "用 `redtrace-resource webshell-create` 注册 shell，"
             "用 `redtrace-resource run` 执行。若无 session，不要止步：运行 `redtrace-resource listener-create`，"
             "再用 `payload-oneliner`，或通过 `payload-build` 构建 Beacon，部署后 refresh 一次。重复建立 channel 前，"
             "调用一次 `redtrace-resource changes --since <audit_cursor>`；这是 decision-point refresh，不是 timer。"
             "不得索取已存储的 secret。"
         )
-    if task_type != "reason":
-        sections.extend(
-            [
-                (
-                    "## RedTrace 全自动执行覆盖规则\n\n"
-                    "阶段结束后自动选择证据最充分、最能推进 Goal 的具体下一步并立即执行；"
-                    "不得等待用户从下一步菜单中选择，不得因常规分支、工具替代或阶段切换暂停。"
-                    "仅在授权范围即将改变或缺少无法安全推断的必要输入时停下。"
-                ),
-                (
-                    "Skill、MCP 和 plugin 由 RedTrace root 共享。首次实质操作前用 Worker 原生 Skill 机制发现并调用最具体的相关 Skill；"
-                    "安全任务必须从 `route-skills` 进入并由其内部路由。默认只用一个主 Skill，确有缺口时再加一个辅助 Skill，"
-                    "不得额外调用 model 做匹配。"
-                ),
-            ]
+        sections.append(
+            "## 执行边界\n\n"
+            "Explore 可 start/close/reset/submit Current Intent Description 中明确命名的一道或多道 "
+            "Benchmark Challenge；不得操作 `active_peer_work` 中其他 Worker 已认领的题目。操作后必须重新读取状态。"
+            "运行时已提供 `redtrace-resource`、`redtrace-context` 和 RTK；不得用 `which`、`--help` 或搜索 runtime 路径重复探测。"
+            "Resource kind 仅有 webshell/c2_listener/c2_session/c2_payload/c2_profile/proxy/file/credential_ref/plugin/result。"
+            "超过 128 KiB 的 payload 必须写入文件或 stdin，不得放入 argv。"
         )
+    if task_type != "reason":
+        sections.append(
+            "## RedTrace 全自动执行覆盖规则\n\n"
+            "阶段结束后自动选择证据最充分、最能推进 Goal 的具体下一步并立即执行；"
+            "不得等待用户从下一步菜单中选择，不得因常规分支、工具替代或阶段切换暂停。"
+            "仅在授权范围即将改变或缺少无法安全推断的必要输入时停下。"
+        )
+        if not primary_skill:
+            sections.append(
+                "Skill、MCP 和 plugin 由 RedTrace root 共享。首次实质操作前用 Worker 原生 Skill 机制发现并调用最具体的相关 Skill；"
+                "安全任务必须从 `route-skills` 进入并由其内部路由。默认只用一个主 Skill，确有缺口时再加一个辅助 Skill，"
+                "不得额外调用 model 做匹配。"
+            )
     sections.append(
         "## route-skills 原生经验回写\n\n"
         "安全任务结束前按 `route-skills` 的 field-journal 规则完成一次复盘。只有产生已验证且可复用的新经验时，"
@@ -133,6 +174,90 @@ def add_blackboard_guidance(
             "不要重复读取。不得另建 Idea、Memory 或 task-state store。只为已确认结论写入 Fact，并包含 evidence ID/path。"
         )
     return guidance + "\n\n" + FINAL_OUTPUT_CONTRACT
+
+
+def select_primary_skill(description: str) -> str:
+    normalized = description.casefold()
+    for keywords, skill in _PRIMARY_SKILL_ROUTES:
+        if any(keyword in normalized for keyword in keywords):
+            return skill
+    return "pentest-tools"
+
+
+def preload_primary_skill(
+    description: str,
+    worker_env: dict[str, str],
+) -> tuple[str, str, str]:
+    skill = select_primary_skill(description)
+    source_root = worker_env.get("REDTRACE_HOST_SKILLS_DIR", "").strip()
+    if source_root:
+        entrypoint = (
+            Path(source_root)
+            / "route-skills"
+            / "upstream"
+            / "skills"
+            / skill
+            / "SKILL.md"
+        )
+        try:
+            content = entrypoint.read_text(encoding="utf-8")
+            skill_dir = str(entrypoint.parent)
+            content = RELATIVE_SKILL_REF_PATTERN.sub(
+                lambda match: f"`{(entrypoint.parent / match.group(1)).resolve()}`",
+                content,
+            )
+            return skill, f"{PRIMARY_SKILL_DIR_MARKER}{skill_dir}\n\n{content}", skill_dir
+        except OSError:
+            pass
+    runtime_path = (
+        f"$REDTRACE_SKILLS_DIR/route-skills/upstream/skills/{skill}/SKILL.md"
+    )
+    return skill, f"预加载源不可读；立即精确读取 `{runtime_path}` 后执行，不要重跑路由。", ""
+
+
+def format_explore_context(project: Any, intent: Any) -> str:
+    """Return bounded execution state plus the few live peer claims."""
+    facts = {fact.id: fact for fact in project.facts}
+    selected_ids = list(dict.fromkeys(["origin", "goal", *intent.from_]))
+    selected_facts = [
+        {"id": fact_id, "description": facts[fact_id].description}
+        for fact_id in selected_ids
+        if fact_id in facts
+    ]
+    payload = {
+        "project": {
+            "id": project.project.id,
+            "title": project.project.title,
+            "status": project.project.status,
+        },
+        "current_intent": {
+            "id": intent.id,
+            "from": intent.from_,
+            "description": intent.description,
+        },
+        "active_peer_work": format_active_peer_work(project, intent.id),
+        "facts": selected_facts,
+        "hints": [
+            {"id": hint.id, "content": hint.content}
+            for hint in project.hints[-8:]
+        ],
+        "blackboard_revision": project.blackboard_revision,
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def format_active_peer_work(project: Any, current_intent_id: str) -> list[dict[str, str]]:
+    return [
+        {
+            "intent_id": peer.id,
+            "worker": peer.worker,
+            "description": peer.description,
+        }
+        for peer in project.intents
+        if peer.id != current_intent_id
+        and peer.worker
+        and peer.concluded_at is None
+    ]
 
 
 def format_fact_ids(fact_ids: list[str]) -> str:

@@ -3,11 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import tomllib
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
-
-import tomllib
 
 from redtrace.config_secrets import atomic_write_text
 from redtrace.dispatcher.config import (
@@ -264,7 +263,7 @@ def _write_pi(home: Path, worker: WorkerConfig) -> None:
                 "id": worker.env["PI_MODEL"],
                 "name": worker.env["PI_MODEL"],
                 "reasoning": True,
-                "input": ["text", "image"],
+                "input": ["text"],
                 "contextWindow": context_window,
                 "maxTokens": min(128 * 1024, context_window),
             }

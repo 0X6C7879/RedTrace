@@ -234,6 +234,9 @@ class AgentRuntimeManager:
                     if self.execution == "local"
                     else "/opt/redtrace/claude-plugin/skills"
                 ),
+                # Dispatcher-only source used to preload the selected expert
+                # workflow once. It is removed before the Worker is spawned.
+                "REDTRACE_HOST_SKILLS_DIR": str(self.paths.skills),
                 "REDTRACE_EXECUTION": self.execution,
                 "REDTRACE_MCP_DIR": (
                     str(self.paths.mcp)

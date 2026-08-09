@@ -167,6 +167,14 @@ while (($# > 0)); do
   esac
 done
 
+if ! command -v uv >/dev/null 2>&1; then
+  for user_bin in "$HOME/.local/bin" "$HOME/.cargo/bin"; do
+    if [[ -x "$user_bin/uv" ]]; then
+      PATH="$user_bin:$PATH"
+      break
+    fi
+  done
+fi
 command -v uv >/dev/null 2>&1 || die "uv is not installed or not on PATH"
 command -v curl >/dev/null 2>&1 || die "curl is not installed or not on PATH"
 [[ -d "$PROJECT_DIR" ]] || die "Python project not found: $PROJECT_DIR"

@@ -7,8 +7,9 @@ from typing import Any
 
 import requests
 from pydantic import TypeAdapter
-from redtrace.server.models import ProjectDetail, ProjectSummary, Settings
 from requests.adapters import HTTPAdapter
+
+from redtrace.server.models import ProjectDetail, ProjectSummary, Settings
 
 LOG = logging.getLogger(__name__)
 
@@ -71,6 +72,28 @@ class CairnClient:
         )
         response.raise_for_status()
         return ProjectDetail.model_validate(response.json())
+
+    def active_peer_work(self, project_id: str, worker: str) -> list[dict[str, str]]:
+        """Return live claimed Intents owned by other Workers."""
+        try:
+            response = self._session().get(
+                self._url(f"/projects/{project_id}"),
+                timeout=min(self._timeout, 1.0),
+            )
+            response.raise_for_status()
+            project = ProjectDetail.model_validate(response.json())
+        except (requests.RequestException, ValueError, TypeError) as exc:
+            LOG.debug("peer work refresh failed project=%s error=%s", project_id, exc)
+            return []
+        return [
+            {
+                "intent_id": intent.id,
+                "worker": intent.worker,
+                "description": intent.description,
+            }
+            for intent in project.intents
+            if intent.worker and intent.worker != worker and intent.concluded_at is None
+        ]
 
     def report_project_runtime_cleaned(
         self,
@@ -176,6 +199,85 @@ class CairnClient:
             timeout=(0.2, 0.8),
         )
         response.raise_for_status()
+
+    def snapshot_resources(
+        self,
+        project_id: str,
+        *,
+        worker: str,
+        intent_id: str | None,
+    ) -> ApiResult:
+        """Load shared access state once before an Explore worker starts."""
+        try:
+            response = self._session().get(
+                self._url(f"/projects/{project_id}/operations/snapshot"),
+                params={"kinds": "webshell,c2_listener,c2_session,c2_payload"},
+                headers={
+                    "X-RedTrace-Worker": worker,
+                    "X-RedTrace-Task": "explore",
+                    "X-RedTrace-Intent": intent_id or "",
+                },
+                timeout=min(self._timeout, 1.0),
+            )
+        except requests.RequestException as exc:
+            LOG.warning("resource snapshot failed project=%s error=%s", project_id, exc)
+            return ApiResult(status_code=0, text=str(exc))
+        data: Any | None = None
+        if response.headers.get("content-type", "").startswith("application/json"):
+            try:
+                data = response.json()
+            except ValueError:
+                pass
+        return ApiResult(response.status_code, data, response.text)
+
+    def ensure_webshell_resource(
+        self,
+        project_id: str,
+        *,
+        target: str,
+        command_param: str,
+        method: str,
+        worker: str,
+        intent_id: str | None,
+    ) -> ApiResult:
+        """Idempotently promote a verified direct WebShell command to a shared resource."""
+        try:
+            response = self._session().get(
+                self._url(f"/projects/{project_id}/resources"),
+                params={"kind": "webshell", "q": target, "limit": 100},
+                timeout=min(self._timeout, 1.0),
+            )
+            response.raise_for_status()
+            resources = response.json().get("resources", [])
+            for resource in resources:
+                if isinstance(resource, dict) and resource.get("target") == target:
+                    return ApiResult(status_code=200, data={"resource": resource})
+        except (requests.RequestException, ValueError, TypeError) as exc:
+            LOG.debug("WebShell dedupe lookup failed target=%s error=%s", target, exc)
+        name = target.rsplit("/", 1)[-1] or "detected-webshell"
+        return self._request_json(
+            "POST",
+            f"/projects/{project_id}/resources",
+            json={
+                "kind": "webshell",
+                "name": f"detected:{name}"[:200],
+                "target": target,
+                "summary": "Worker command verified this reusable WebShell endpoint.",
+                "status": "available",
+                "metadata": {
+                    "shell_type": "custom",
+                    "protocol": "raw",
+                    "method": method,
+                    "command_param": command_param,
+                },
+                "secret": {},
+                "actor_type": "worker",
+                "actor": worker,
+                "worker": worker,
+                "intent_id": intent_id,
+                "publish_fact": False,
+            },
+        )
 
     def _request_json(self, method: str, path: str, json: dict[str, Any]) -> ApiResult:
         try:

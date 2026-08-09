@@ -1,16 +1,30 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _is_executable(path: Path) -> bool:
+    if os.name != "nt":
+        return bool(path.stat().st_mode & 0o111)
+    tracked = subprocess.run(
+        ["git", "ls-files", "--stage", "--", path.relative_to(REPO_ROOT).as_posix()],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return tracked.startswith("100755 ")
+
+
 def test_deploy_script_unifies_linux_and_macos_without_legacy_entrypoints() -> None:
     script_path = REPO_ROOT / "deploy.sh"
     script = script_path.read_text(encoding="utf-8")
 
-    assert script_path.stat().st_mode & 0o111
+    assert _is_executable(script_path)
     assert not (REPO_ROOT / "deploy-local.sh").exists()
     assert not (REPO_ROOT / "deploy-macos.sh").exists()
     assert "D:\\AI\\ctf-skills" not in script
@@ -96,7 +110,7 @@ def test_playwright_cli_skill_is_complete_and_deployable() -> None:
     assert (skill_dir / "references" / "cli.md").is_file()
     assert (skill_dir / "references" / "workflows.md").is_file()
     assert wrapper.is_file()
-    assert wrapper.stat().st_mode & 0o111
+    assert _is_executable(wrapper)
     assert "@playwright/cli" in wrapper.read_text(encoding="utf-8")
 
 
@@ -111,7 +125,7 @@ def test_route_skills_dependencies_and_tool_index_are_initialized_by_deploy() ->
     )
 
     assert initializer.is_file()
-    assert initializer.stat().st_mode & 0o111
+    assert _is_executable(initializer)
     content = initializer.read_text(encoding="utf-8")
     assert "refresh-tool-index.sh" in content
     assert "tool-index.md" in content
@@ -134,15 +148,18 @@ def test_ctf_tool_installer_supports_all_linux_package_families() -> None:
     }
     for manager, pattern in mode_patterns.items():
         assert pattern in script
-        completed = subprocess.run(
-            ["bash", str(script_path), "--dry-run", manager],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        assert completed.returncode == 0, completed.stderr
-        assert f"System package manager: {manager}" in completed.stdout
-        assert "Would install" in completed.stdout
+        if os.name != "nt":
+            completed = subprocess.run(
+                ["bash", str(script_path), "--dry-run", manager],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            assert completed.returncode == 0, completed.stderr
+            assert f"System package manager: {manager}" in completed.stdout
+            assert "Would install" in completed.stdout
 
     assert "cysignals==1.12.6" in script
     assert "nuclei-engine@$NUCLEI_VERSION" in script
@@ -164,7 +181,7 @@ def test_ctf_tool_installer_supports_all_linux_package_families() -> None:
         / "qiling-python"
     )
     assert qiling_wrapper.is_file()
-    assert qiling_wrapper.stat().st_mode & 0o111
+    assert _is_executable(qiling_wrapper)
 
 
 def test_route_skills_keeps_redtrace_ghidra_exporters() -> None:
