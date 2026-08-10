@@ -1,0 +1,7 @@
+feat: scan nested skill entries with cache and unified UI list
+
+- Walk each skill package once, exposing root and nested SKILL.md entries
+- Add /capabilities/skill-entries endpoint with short-lived cache invalidated on mutations
+- Prune package walks from .git/.venv/node_modules etc. for speed
+- Frontend loads status and entry list in parallel (Promise.allSettled) so partial outages don't blank the page
+- Update capabilities tests for the unified entries model

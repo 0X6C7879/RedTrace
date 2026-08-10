@@ -1,0 +1,114 @@
+services:
+  redtrace-worker-image:
+    build:
+      context: ./container
+      dockerfile: Dockerfile
+    image: redtrace-worker-container:latest
+    container_name: redtrace-worker-image
+    restart: "no"
+    command: ["true"]
+
+  redtrace-route-skills-init:
+    image: redtrace-worker-container:latest
+    container_name: redtrace-route-skills-init
+    depends_on:
+      redtrace-worker-image:
+        condition: service_completed_successfully
+    volumes:
+      - ./skills:/opt/redtrace/claude-plugin/skills
+    restart: "no"
+    command:
+      - "bash"
+      - "/opt/redtrace/claude-plugin/skills/route-skills/redtrace-tools/initialize.sh"
+
+  redtrace-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: redtrace-app
+    container_name: redtrace-server
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./datas/redtrace/:/root/.local/share/redtrace/
+      - ${REDTRACE_DISPATCH_CONFIG_FILE:-./dispatch.yaml}:/redtrace/dispatch.yaml:ro
+      - ./.redtrace-secrets:/redtrace/.redtrace-secrets
+      - ./skills:/redtrace/skills
+      - ./mcp:/redtrace/mcp
+      - ./plugins:/redtrace/plugins
+      - ./.redtrace:/redtrace/.redtrace
+      - ./workspaces:/redtrace/workspaces
+      - type: bind
+        source: ${REDTRACE_USER_HOME:-${HOME:-${USERPROFILE}}}/.claude
+        target: /root/.claude
+      - type: bind
+        source: ${REDTRACE_USER_HOME:-${HOME:-${USERPROFILE}}}/.codex
+        target: /root/.codex
+      - type: bind
+        source: ${REDTRACE_USER_HOME:-${HOME:-${USERPROFILE}}}/.pi
+        target: /root/.pi
+    environment:
+      REDTRACE_DISPATCH_CONFIG: /redtrace/dispatch.yaml
+      REDTRACE_CONFIG_SECRETS_DIR: /redtrace/.redtrace-secrets
+      REDTRACE_PLUGIN_TOKEN: "${REDTRACE_PLUGIN_TOKEN:-}"
+      REDTRACE_ROOT: /redtrace
+      REDTRACE_MANAGED_DIR: /redtrace/.redtrace
+      REDTRACE_WORKSPACE_ROOT: /redtrace/workspaces
+      REDTRACE_AUDIT_ROOT: /redtrace/.redtrace/audit
+    depends_on:
+      redtrace-route-skills-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - "CMD"
+        - "python3"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/projects', timeout=5)"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 3s
+    restart: unless-stopped
+    command: ["uv", "run", "redtrace", "serve", "--host", "0.0.0.0", "--no-access-log"]
+  redtrace-dispatcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: redtrace-app
+    container_name: redtrace-dispatcher
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${REDTRACE_DISPATCH_CONFIG_FILE:-./dispatch.yaml}:/redtrace/dispatch.yaml:ro
+      - ./.redtrace-secrets:/redtrace/.redtrace-secrets
+      - ./skills:/redtrace/skills
+      - ./mcp:/redtrace/mcp
+      - ./plugins:/redtrace/plugins:ro
+      - ./.redtrace:/redtrace/.redtrace
+      - ./workspaces:/redtrace/workspaces
+      - type: bind
+        source: ${REDTRACE_USER_HOME:-${HOME:-${USERPROFILE}}}/.claude
+        target: /root/.claude
+      - type: bind
+        source: ${REDTRACE_USER_HOME:-${HOME:-${USERPROFILE}}}/.codex
+        target: /root/.codex
+      - type: bind
+        source: ${REDTRACE_USER_HOME:-${HOME:-${USERPROFILE}}}/.pi
+        target: /root/.pi
+    environment:
+      REDTRACE_CONFIG_SECRETS_DIR: /redtrace/.redtrace-secrets
+      REDTRACE_ROOT: /redtrace
+      REDTRACE_MANAGED_DIR: /redtrace/.redtrace
+      REDTRACE_WORKSPACE_ROOT: /redtrace/workspaces
+      REDTRACE_AUDIT_ROOT: /redtrace/.redtrace/audit
+    depends_on:
+      redtrace-server:
+        condition: service_healthy
+      redtrace-route-skills-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    command: ["uv", "run", "redtrace", "dispatch", "--config", "dispatch.yaml"]
+    working_dir: /redtrace
+
+networks:
+  default:
+    name: redtrace-network
