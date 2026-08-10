@@ -288,6 +288,18 @@ function operationsPage() {
       return this.detail?.resource || this.resources.find((item) => item.id === this.selectedResourceId) || null;
     },
 
+    webshellUsable() {
+      const resource = this.currentResource();
+      return resource?.kind === 'webshell' && resource.status === 'available';
+    },
+
+    webshellSessionLabel() {
+      if (this.runningAction) return '命令执行中';
+      return this.webshellUsable()
+        ? '会话可用'
+        : `会话${this.statusLabel(this.currentResource()?.status || 'offline')}`;
+    },
+
     resetWebshellWorkspace(resource) {
       let host = 'target';
       try {
@@ -557,8 +569,10 @@ function operationsPage() {
     async waitForTask(taskId, timeoutMs = 65000) {
       const started = Date.now();
       while (Date.now() - started < timeoutMs) {
-        const data = await this.api(`/projects/${encodeURIComponent(this.projectId())}/operations/tasks?limit=200`);
-        const task = (data.tasks || []).find((item) => item.id === taskId);
+        const data = await this.api(
+          `/projects/${encodeURIComponent(this.projectId())}/operations/tasks/${encodeURIComponent(taskId)}`
+        );
+        const task = data.task;
         if (task && ['succeeded', 'failed', 'cancelled', 'rejected'].includes(task.status)) return task;
         await new Promise((resolve) => window.setTimeout(resolve, 350));
       }
@@ -567,7 +581,7 @@ function operationsPage() {
 
     async runCommand() {
       const value = this.command.trim();
-      if (!value) return;
+      if (!value || !this.webshellUsable()) return;
       this.command = '';
       const record = {
         id: `${Date.now()}-${this.terminalHistory.length}`,
@@ -588,6 +602,7 @@ function operationsPage() {
         { silent: true }
       );
       if (!queued || queued.status === 'awaiting_approval') return;
+      this.runningAction = true;
       try {
         const completed = await this.waitForTask(queued.id);
         let output = completed.output_summary || this.statusLabel(completed.status);
@@ -606,6 +621,8 @@ function operationsPage() {
           output: error.message,
           failed: true,
         };
+      } finally {
+        this.runningAction = false;
       }
     },
 
@@ -634,7 +651,7 @@ function operationsPage() {
     },
 
     async runQuickCommand(command) {
-      if (this.runningAction) return;
+      if (this.runningAction || !this.webshellUsable()) return;
       this.command = command;
       await this.runCommand();
     },

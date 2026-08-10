@@ -39,13 +39,6 @@ def test_reason_payload_limits_number_of_intents() -> None:
     assert intents == [{"from": ["f001"], "description": "one"}]
 
 
-def test_missing_accepted_is_normalized_for_wrapped_data() -> None:
-    assert validate_explore_payload({"data": {"description": "confirmed"}}) == (
-        "fact",
-        "confirmed",
-    )
-
-
 def test_reason_payload_requires_intent_when_none_are_open() -> None:
     with pytest.raises(ValueError, match="intents is required"):
         validate_reason_payload(
@@ -79,25 +72,6 @@ def test_pi_driver_extracts_session_and_last_assistant_text() -> None:
 
     assert driver.extract_session(None, stdout, "") == "session-123"
     assert driver.extract_response_text(stdout, "") == '{"accepted":true,"data":{}}'
-
-
-def test_pi_driver_canonicalizes_fenced_contract_json() -> None:
-    stdout = json.dumps(
-        {
-            "type": "turn_end",
-            "message": {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": 'done\n```json\n{"accepted": true, "data": {}}\n```',
-                    }
-                ],
-            },
-        }
-    )
-
-    assert PiDriver().extract_response_text(stdout, "") == '{"accepted":true,"data":{}}'
 
 
 def test_close_stream_closes_response_even_when_stream_close_fails() -> None:

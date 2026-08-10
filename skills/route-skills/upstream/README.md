@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="reverse-skill.png" alt="reverse-skill" width="140" />
+</p>
+
 <h1 align="center">reverse-skill</h1>
 <h3 align="center">Cybersecurity Skills Router · 逆向技能路由包</h3>
 
@@ -9,6 +13,7 @@
   <a href="https://github.com/zhaoxuya520/reverse-skill/forks"><img src="https://img.shields.io/github/forks/zhaoxuya520/reverse-skill?style=flat&logo=github" alt="forks"></a>
   <a href="https://github.com/zhaoxuya520/reverse-skill/issues"><img src="https://img.shields.io/github/issues/zhaoxuya520/reverse-skill?style=flat&logo=github" alt="issues"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="license"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-Keep%20a%20Changelog-orange" alt="changelog"></a>
 </p>
 
 <p align="center">
@@ -59,6 +64,14 @@ User task
 - The same mistakes get repeated because experience isn't reused
 
 PRIMARY ladder: [skills/MASTER-ROUTING.md](skills/MASTER-ROUTING.md) · Full matrix: [skills/routing.md](skills/routing.md) · Ops: [skills/ops/](skills/ops/)
+
+<br/>
+
+<div align="center">
+  <a href="https://star-history.com/#zhaoxuya520/reverse-skill&Date">
+    <img src="docs/assets/star-history.svg" alt="Star History" width="650" />
+  </a>
+</div>
 
 <br/>
 

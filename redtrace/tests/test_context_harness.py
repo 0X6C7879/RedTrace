@@ -416,7 +416,7 @@ def test_prompt_guidance_reuses_existing_state_and_bounded_queries() -> None:
     assert "优先使用原生 Web search/fetch" in prompt
     assert "`brave-search` Skill 作为 fallback" in prompt
     assert "## Active WebShell 与 C2 工作流" in prompt
-    assert "Explore 启动前载入 WebShell/C2 snapshot" in prompt
+    assert "redtrace-resource snapshot --kind webshell" in prompt
     assert "redtrace-resource webshell-create" in prompt
     assert "redtrace-resource listener-create" in prompt
     assert "再用 `payload-oneliner`，或通过 `payload-build` 构建 Beacon" in prompt
@@ -435,9 +435,11 @@ def test_prompt_guidance_reuses_existing_state_and_bounded_queries() -> None:
     assert "确认漏洞后使用匹配的 EXP" in prompt
     assert "执行顺序，不是 approval gate" in prompt
     assert "才转向自定义漏洞发现" in prompt
-    assert "## 缺失工具 Bootstrap" in prompt
+    assert "## 共享工具 Bootstrap" in prompt
     assert "依据官方文档" in prompt
-    assert "user-local 方式安装" in prompt
+    assert "$REDTRACE_TOOLS_DIR" in prompt
+    assert "$REDTRACE_TOOLS_BIN" in prompt
+    assert "禁止写系统目录或修改 shell rc 文件" in prompt
     assert "`--version` 和最小 smoke check" in prompt
     assert "不得循环或阻塞" in prompt
     assert "## RedTrace 全自动执行覆盖规则" in prompt

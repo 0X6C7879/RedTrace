@@ -51,7 +51,7 @@ class ExecutionBackend(Protocol):
     def ensure_running(self, project_id: str) -> str: ...
 
     def conversation_environment(
-        self, project_id: str, worker_type: str, worker_name: str = ""
+        self, project_id: str, worker_type: str
     ) -> dict[str, str]: ...
 
     def build_exec_process(

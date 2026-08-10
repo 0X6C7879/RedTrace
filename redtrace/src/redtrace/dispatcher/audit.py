@@ -7,73 +7,39 @@ import re
 import threading
 import time
 import uuid
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlsplit, urlunsplit
-
-import yaml
 
 from redtrace.dispatcher.config import WorkerConfig
-from redtrace.dispatcher.output_parser import extract_json_object
-from redtrace.dispatcher.prompting import PRIMARY_SKILL_MARKER
 from redtrace.dispatcher.protocol.client import CairnClient
 from redtrace.dispatcher.runtime.process import ProcessResult
 from redtrace.dispatcher.runtime.stream_buffer import TRUNCATED_STREAM_LINE
 
+
 LOG = logging.getLogger(__name__)
 ASSISTANT_MESSAGE_CHUNK = 32 * 1024
 THINKING_MESSAGE_CHUNK = 32 * 1024
+AUDIT_BATCH_SIZE = 128
+AUDIT_FLUSH_INTERVAL_SECONDS = 0.25
+CRITICAL_KINDS = {
+    "error",
+    "run.completed",
+    "tool.completed",
+    "command.completed",
+    "skill.completed",
+    "output.truncated",
+}
 ANSI_PATTERN = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 MOJIBAKE_MARKERS = frozenset("ÃÂâ€™œž�ç¬åæèé")
 SHELL_TOOL_NAMES = frozenset(
     {"bash", "sh", "shell", "powershell", "pwsh", "cmd", "command", "terminal", "exec"}
 )
 SKILL_TOOL_NAMES = frozenset({"skill", "skills", "load skill", "use skill"})
-SKILL_MD_MARKERS = ("SKILL.md", "skill.md", "Skill.md")
-SKILL_PATH_BOUNDARIES = frozenset(' \t\r\n"\'`;|&<>(){}[]')
-MAX_COMMAND_BYTES = 128 * 1024
-CHALLENGE_CODE_PATTERN = re.compile(
-    r"(?i)(?<![a-z0-9])[a-z][a-z0-9]*-\d{1,4}(?![a-z0-9])"
+SKILL_PATH_PATTERN = re.compile(
+    r"""(?i)(?:^|[\\/])(?P<name>[^\\/"'\s]+)[\\/]SKILL\.md(?=$|[\s"'`;|&)])"""
 )
-URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
-WEBSHELL_PATH_PATTERN = re.compile(
-    r"(?i)(?:^|/)(?:[^/?#]*(?:shell|webshell|backdoor|cmd)[^/?#]*|ws(?:[-_.][^/?#]*)?)"
-    r"\.(?:php\d*|phtml|asp|aspx|jsp)$"
-)
-COMMAND_PARAM_NAMES = frozenset({"c", "cmd", "command", "exec"})
-DIRECT_C2_PATTERN = re.compile(
-    r"(?is)(?:\b(?:nc|ncat)\b[^\n]{0,160}\s-(?:[^\s]*l|l[^\s]*)\b|"
-    r"\bsocat\b[^\n]{0,160}\bTCP-LISTEN:|/dev/tcp/|"
-    r"\b(?:bash|sh)\s+-i\b[^\n]{0,160}(?:>&|\|\s*(?:nc|ncat)\b))"
-)
-C2_RESOURCE_COMMANDS = (
-    "listener-create",
-    "payload-oneliner",
-    "payload-build",
-)
-CHANNEL_CREATE_COMMANDS = ("listener-create", "webshell-create")
-
-
-def _challenge_lifecycle_codes(command: str) -> set[str]:
-    codes: set[str] = set()
-    for raw_url in URL_PATTERN.findall(command):
-        parsed = urlsplit(raw_url)
-        path = parsed.path.casefold().rstrip("/")
-        if re.search(r"/challenges/(?:start|close|reset)$", path):
-            candidates = parse_qs(parsed.query).get("unique_code", [])
-        else:
-            match = re.search(
-                r"/challenges/([a-z][a-z0-9]*-\d{1,4})/(?:start|close|reset)$",
-                path,
-            )
-            candidates = [match.group(1)] if match else []
-        codes.update(
-            candidate.casefold()
-            for candidate in candidates
-            if CHALLENGE_CODE_PATTERN.fullmatch(candidate)
-        )
-    return codes
 
 
 def utcnow() -> str:
@@ -94,10 +60,7 @@ class AuditPublisher:
         self.run_id = uuid.uuid4().hex
         self._client = client
         self._sequence = 0
-        # Audit is the durable execution record. An unbounded producer queue is
-        # cheaper and safer than silently evicting earlier events under bursts;
-        # the consumer still sends small bounded batches.
-        self._queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
+        self._queue: queue.Queue[dict[str, Any] | None] = queue.Queue(maxsize=2048)
         self._assistant_parts: list[str] = []
         self._assistant_chars = 0
         self._thinking_parts: list[str] = []
@@ -105,13 +68,6 @@ class AuditPublisher:
         self._tool_calls: dict[str, dict[str, Any]] = {}
         self._claude_tool_blocks: dict[int, dict[str, Any]] = {}
         self._pi_state: dict[str, Any] = {"thinking_streamed": False}
-        self._process: Any | None = None
-        self._policy_cancelled = False
-        self._registered_webshells: set[tuple[str, str, str]] = set()
-        self._resource_snapshot_seen = False
-        self._c2_managed = False
-        self._channel_creations = 0
-        self._changes_refreshed = False
         self._run = {
             "id": self.run_id,
             "project_id": project_id,
@@ -131,80 +87,7 @@ class AuditPublisher:
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
         self.emit("run.started", title=phase)
-        if self._run["task_type"] == "explore":
-            self._load_resource_snapshot()
-        primary = re.search(
-            rf"(?m)^{re.escape(PRIMARY_SKILL_MARKER)}([a-z0-9-]+)\s*$",
-            prompt,
-        )
-        self._primary_skill_name = primary.group(1) if primary else ""
-        if self._primary_skill_name:
-            self.emit(
-                "skill.started",
-                title="Skill",
-                skill_name=self._primary_skill_name,
-                source="dispatcher_preload",
-            )
         self.emit("user.message", role="user", content=prompt)
-
-    def _peer_challenge_conflicts(self, challenge_codes: set[str]) -> set[str]:
-        active_peer_work = getattr(self._client, "active_peer_work", None)
-        if not callable(active_peer_work):
-            return set()
-        try:
-            peers = active_peer_work(self._run["project_id"], self._run["worker"])
-        except Exception:
-            LOG.debug("peer work refresh failed", exc_info=True)
-            return set()
-        peer_codes = {
-            code.casefold()
-            for peer in peers
-            if isinstance(peer, dict)
-            for code in CHALLENGE_CODE_PATTERN.findall(str(peer.get("description") or ""))
-        }
-        return challenge_codes & peer_codes
-
-    def _load_resource_snapshot(self) -> None:
-        snapshot = getattr(self._client, "snapshot_resources", None)
-        if not callable(snapshot):
-            return
-        try:
-            response = snapshot(
-                self._run["project_id"],
-                worker=self._run["worker"],
-                intent_id=self._run["intent_id"],
-            )
-        except Exception:
-            LOG.debug("resource snapshot preflight failed", exc_info=True)
-            return
-        data = response.data if getattr(response, "ok", False) else None
-        if not isinstance(data, dict):
-            return
-        self._resource_snapshot_seen = True
-        resources = data.get("resources", [])
-        if not isinstance(resources, list):
-            return
-        for resource in resources:
-            if not isinstance(resource, dict):
-                continue
-            kind = resource.get("kind")
-            if kind == "webshell":
-                target = str(resource.get("target") or "")
-                metadata = resource.get("metadata")
-                metadata = metadata if isinstance(metadata, dict) else {}
-                if target:
-                    self._registered_webshells.add(
-                        (
-                            target,
-                            str(metadata.get("command_param") or "cmd"),
-                            str(metadata.get("method") or "GET").upper(),
-                        )
-                    )
-            elif kind in {"c2_listener", "c2_session", "c2_payload"}:
-                self._c2_managed = True
-
-    def attach_process(self, process: Any) -> None:
-        self._process = process
 
     def handle_output(self, channel: str, line: str) -> None:
         if line == TRUNCATED_STREAM_LINE:
@@ -262,11 +145,6 @@ class AuditPublisher:
                 call_id = event.get("call_id")
                 if isinstance(call_id, str) and call_id:
                     self._tool_calls.pop(call_id, None)
-            if event["kind"] == "command.started":
-                self._enforce_command(str(event.get("command") or ""))
-            elif event["kind"] == "command.completed":
-                self._record_command_success(event)
-                self._register_webshell_candidate(event)
             self._emit(event)
 
     def finish(self, result: ProcessResult) -> None:
@@ -293,13 +171,6 @@ class AuditPublisher:
                 "cancelled": result.cancelled,
             }
         )
-        if self._primary_skill_name and self._run["status"] == "completed":
-            self.emit(
-                "skill.completed",
-                title="Skill",
-                skill_name=self._primary_skill_name,
-                source="dispatcher_preload",
-            )
         self.emit(
             "run.completed",
             content=result.cancel_reason,
@@ -314,7 +185,12 @@ class AuditPublisher:
         self.emit("run.completed")
 
     def close(self) -> None:
-        self._queue.put(None)
+        try:
+            self._queue.put(None, timeout=0.1)
+        except queue.Full:
+            self._make_room()
+            with suppress(queue.Full):
+                self._queue.put_nowait(None)
         self._thread.join(timeout=2)
 
     def emit(self, kind: str, **fields: Any) -> None:
@@ -334,7 +210,19 @@ class AuditPublisher:
                 "phase": self._run["phase"],
             }
         )
-        self._queue.put(payload)
+        try:
+            self._queue.put_nowait(payload)
+        except queue.Full:
+            if payload["kind"] in CRITICAL_KINDS:
+                self._make_room()
+                with suppress(queue.Full):
+                    self._queue.put_nowait(payload)
+
+    def _make_room(self) -> None:
+        try:
+            self._queue.get_nowait()
+        except queue.Empty:
+            pass
 
     def _persist_assistant_message(self) -> None:
         text = "".join(self._assistant_parts)
@@ -344,122 +232,12 @@ class AuditPublisher:
             return
         self._assistant_parts.clear()
         self._assistant_chars = 0
-        if self._run["provider"] == "pi":
-            text = _canonical_contract_json(text)
         for offset in range(0, len(text), ASSISTANT_MESSAGE_CHUNK):
             self.emit(
                 "assistant.message",
                 role="assistant",
                 content=text[offset : offset + ASSISTANT_MESSAGE_CHUNK],
                 persist_only=True,
-            )
-
-    def _enforce_command(self, command: str) -> None:
-        if self._policy_cancelled or not command:
-            return
-        normalized = " ".join(command.casefold().split())
-        webshell = _webshell_candidate(command)
-        if len(command.encode("utf-8", errors="replace")) > MAX_COMMAND_BYTES:
-            reason = "command exceeds 128 KiB; write the payload to a file or stdin"
-        elif challenge_codes := _challenge_lifecycle_codes(command):
-            conflicts = self._peer_challenge_conflicts(challenge_codes)
-            if not conflicts:
-                return
-            reason = (
-                "Benchmark Challenge is currently assigned to another Worker: "
-                + ", ".join(sorted(conflicts))
-            )
-        elif "redtrace-resource snapshot" in normalized:
-            self._resource_snapshot_seen = True
-            return
-        elif "redtrace-resource changes --since" in normalized:
-            self._changes_refreshed = True
-            return
-        elif "redtrace-resource" in normalized and any(
-            action in normalized for action in CHANNEL_CREATE_COMMANDS
-        ):
-            if not self._resource_snapshot_seen:
-                reason = "snapshot shared access resources before creating a channel"
-            elif self._channel_creations and not self._changes_refreshed:
-                reason = "refresh resource changes before creating another access channel"
-            else:
-                return
-        elif "redtrace-resource" in normalized and any(
-            action in normalized for action in C2_RESOURCE_COMMANDS
-        ):
-            if not self._resource_snapshot_seen:
-                reason = "snapshot shared access resources before creating a C2 channel"
-            else:
-                return
-        elif webshell in self._registered_webshells:
-            reason = "this WebShell is registered; execute it through redtrace-resource run"
-        elif webshell is not None and not self._resource_snapshot_seen:
-            reason = "snapshot shared access resources before using a direct WebShell endpoint"
-        elif DIRECT_C2_PATTERN.search(command) and not self._resource_snapshot_seen:
-            reason = "snapshot shared access resources before establishing a remote shell"
-        elif DIRECT_C2_PATTERN.search(command) and not self._c2_managed:
-            reason = "create a RedTrace Listener and Payload before establishing a remote shell"
-        else:
-            return
-        self._policy_cancelled = True
-        self.emit("policy.violation", title="Runtime policy", content=reason)
-        cancel = getattr(self._process, "cancel", None)
-        if callable(cancel):
-            cancel(reason)
-
-    def _record_command_success(self, event: dict[str, Any]) -> None:
-        if event.get("error") or event.get("exit_code") not in (None, 0):
-            return
-        normalized = " ".join(str(event.get("command") or "").casefold().split())
-        if "redtrace-resource" in normalized and any(
-            action in normalized for action in CHANNEL_CREATE_COMMANDS
-        ):
-            self._channel_creations += 1
-            self._changes_refreshed = False
-        if "redtrace-resource" in normalized and any(
-            action in normalized for action in C2_RESOURCE_COMMANDS
-        ):
-            self._c2_managed = True
-
-    def _register_webshell_candidate(self, event: dict[str, Any]) -> None:
-        if event.get("error") or event.get("exit_code") not in (None, 0):
-            return
-        candidate = _webshell_candidate(str(event.get("command") or ""))
-        if candidate is None or candidate in self._registered_webshells:
-            return
-        content = str(event.get("content") or "")
-        if not content.strip() or "(no output)" in content.casefold():
-            return
-        command_param = re.escape(candidate[1])
-        verifies_id = re.search(
-            rf"(?i)(?:[?&]|\b){command_param}=id(?:[&#'\"\s]|$)",
-            str(event.get("command") or ""),
-        )
-        if verifies_id and not re.search(r"(?i)\b(?:uid|gid)=\d+", content):
-            return
-        register = getattr(self._client, "ensure_webshell_resource", None)
-        if not callable(register):
-            return
-        self._registered_webshells.add(candidate)
-        target, command_param, method = candidate
-        try:
-            response = register(
-                self._run["project_id"],
-                target=target,
-                command_param=command_param,
-                method=method,
-                worker=self._run["worker"],
-                intent_id=self._run["intent_id"],
-            )
-        except Exception:
-            LOG.debug("automatic WebShell registration failed target=%s", target, exc_info=True)
-            return
-        if getattr(response, "ok", False):
-            self.emit(
-                "resource.registered",
-                title="WebShell",
-                content=target,
-                source="command_detection",
             )
 
     def _persist_thinking_message(self, fallback_text: str = "") -> None:
@@ -480,7 +258,7 @@ class AuditPublisher:
 
     def _run_loop(self) -> None:
         batch: list[dict[str, Any]] = []
-        deadline = time.monotonic() + 0.05
+        deadline = time.monotonic() + AUDIT_FLUSH_INTERVAL_SECONDS
         while True:
             try:
                 item = self._queue.get(timeout=max(0.0, deadline - time.monotonic()))
@@ -491,10 +269,10 @@ class AuditPublisher:
                 return
             if item is not ...:
                 batch.append(item)
-            if len(batch) >= 32 or time.monotonic() >= deadline:
+            if len(batch) >= AUDIT_BATCH_SIZE or time.monotonic() >= deadline:
                 self._flush(batch)
                 batch.clear()
-                deadline = time.monotonic() + 0.05
+                deadline = time.monotonic() + AUDIT_FLUSH_INTERVAL_SECONDS
 
     def _flush(self, batch: list[dict[str, Any]]) -> None:
         if not batch:
@@ -503,47 +281,6 @@ class AuditPublisher:
             self._client.append_audit_events(self._run, batch)
         except Exception:
             LOG.debug("audit batch publish failed run=%s", self.run_id, exc_info=True)
-
-
-def _canonical_contract_json(text: str) -> str:
-    if '"accepted"' not in text:
-        return text
-    try:
-        payload = extract_json_object(text)
-    except (TypeError, ValueError):
-        return text
-    if payload.get("accepted") not in {True, False}:
-        return text
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-
-
-def _webshell_candidate(command: str) -> tuple[str, str, str] | None:
-    data_param = ""
-    data_match = re.search(
-        r"(?is)(?:^|\s)(?:-d|--data(?:-raw|-binary)?)\s+(?:['\"])?([a-zA-Z_][\w-]*)=",
-        command,
-    )
-    if data_match:
-        data_param = data_match.group(1)
-    for match in URL_PATTERN.finditer(command):
-        raw = match.group(0).rstrip(".,);]")
-        try:
-            parsed = urlsplit(raw)
-        except ValueError:
-            continue
-        query = parse_qs(parsed.query, keep_blank_values=True)
-        command_param = next(
-            (key for key in query if key.casefold() in COMMAND_PARAM_NAMES),
-            data_param if data_param.casefold() in COMMAND_PARAM_NAMES else "",
-        )
-        if not command_param and not WEBSHELL_PATH_PATTERN.search(parsed.path):
-            continue
-        if not command_param:
-            command_param = "cmd"
-        target = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-        method = "POST" if data_param else "GET"
-        return target, command_param, method
-    return None
 
 
 def normalize_event(
@@ -875,7 +612,7 @@ def _enrich_tool_event(
     call_id = event.get("call_id")
     if kind in {"tool.started", "command.started"}:
         skill_name = _skill_name_from_event(event)
-        if skill_name and not _is_router_skill_name(skill_name):
+        if skill_name:
             return _as_skill_event(event, "skill.started", skill_name)
         command = _command_from_event(event)
         if command:
@@ -893,7 +630,7 @@ def _enrich_tool_event(
                 str(started.get("skill_name") or "未知技能"),
             )
         skill_name = _skill_name_from_event(event)
-        if skill_name and not _is_router_skill_name(skill_name):
+        if skill_name:
             return _as_skill_event(event, "skill.completed", skill_name)
         if kind == "tool.completed" and started and started.get("kind") == "command.started":
             event["kind"] = "command.completed"
@@ -921,12 +658,12 @@ SKILL_PLUGIN_PREFIX = "redtrace-capabilities:"
 
 
 def _skill_name_from_event(event: dict[str, Any]) -> str:
-    # A concrete SKILL.md path always wins over the router package name the
-    # Agent reports, so nested package Skills show their real names.
-    for candidate in _text_candidates(event):
-        path = _extract_skill_md_path(candidate)
-        if path:
-            return _skill_name_from_skill_md(path)
+    direct_name = event.get("skill_name") or event.get("skillName")
+    if isinstance(direct_name, str) and direct_name.strip():
+        name = direct_name.strip()
+        if name.startswith(SKILL_PLUGIN_PREFIX):
+            name = name[len(SKILL_PLUGIN_PREFIX):]
+        return name
 
     title = str(event.get("title") or "").strip().lower().replace("_", " ")
     arguments = event.get("arguments")
@@ -935,48 +672,12 @@ def _skill_name_from_event(event: dict[str, Any]) -> str:
             for key in ("skill", "name", "skill_name", "skillName"):
                 value = arguments.get(key)
                 if isinstance(value, str) and value.strip():
-                    return _strip_skill_plugin_prefix(value.strip())
+                    return value.strip()
         elif isinstance(arguments, str) and arguments.strip():
-            return _strip_skill_plugin_prefix(arguments.strip())
-        # Completion events carry no arguments; only started calls may fall
-        # back to the placeholder name.
-        if arguments is not None:
-            return "未知技能"
-        return ""
+            return arguments.strip()
+        return "未知技能"
 
-    direct_name = event.get("skill_name") or event.get("skillName")
-    if isinstance(direct_name, str) and direct_name.strip():
-        return _strip_skill_plugin_prefix(direct_name.strip())
-    return ""
-
-
-def _strip_skill_plugin_prefix(name: str) -> str:
-    if name.startswith(SKILL_PLUGIN_PREFIX):
-        return name[len(SKILL_PLUGIN_PREFIX):]
-    return name
-
-
-def _is_router_skill_name(name: str) -> bool:
-    """Router Skills only forward to nested Skills, so their own load is not
-    a concrete Skill and must not surface as a Skill record."""
-    try:
-        from redtrace.capabilities import CapabilityStore
-
-        entries = CapabilityStore().list_skill_entries()
-    except Exception:
-        return False
-    return any(entry.router and entry.name == name for entry in entries)
-
-
-def _text_candidates(event: dict[str, Any]) -> list[str]:
-    candidates: list[Any] = [
-        event.get("command"),
-        event.get("path"),
-        event.get("file"),
-        event.get("input"),
-        event.get("raw"),
-    ]
-    arguments = event.get("arguments")
+    candidates: list[Any] = [event.get("command")]
     if isinstance(arguments, dict):
         candidates.extend(
             arguments.get(key)
@@ -984,63 +685,12 @@ def _text_candidates(event: dict[str, Any]) -> list[str]:
         )
     elif isinstance(arguments, str):
         candidates.append(arguments)
-    return [candidate for candidate in candidates if isinstance(candidate, str)]
-
-
-def _extract_skill_md_path(text: str) -> str:
-    offset = 0
-    lowered = text.lower()
-    while True:
-        found = -1
-        for marker in SKILL_MD_MARKERS:
-            index = lowered.find(marker.lower(), offset)
-            if index != -1 and (found == -1 or index < found):
-                found = index
-        if found == -1:
-            return ""
-        end = found + len("SKILL.md")
-        offset = end
-        start = found
-        while start > 0 and text[start - 1] not in SKILL_PATH_BOUNDARIES:
-            start -= 1
-        path = text[start:end]
-        if "/" in path or "\\" in path:
-            return path
-
-
-def _skill_name_from_skill_md(path: str) -> str:
-    try:
-        entrypoint = Path(path)
-        directory = entrypoint.parent.name
-        if entrypoint.is_file():
-            try:
-                content = entrypoint.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                content = ""
-            name = _frontmatter_name(content)
-            if name:
-                return name
-        return directory
-    except Exception:
-        return ""
-
-
-def _frontmatter_name(content: str) -> str:
-    lines = content.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return ""
-    for index in range(1, len(lines)):
-        if lines[index].strip() != "---":
+    for candidate in candidates:
+        if not isinstance(candidate, str):
             continue
-        try:
-            parsed = yaml.safe_load("\n".join(lines[1:index]))
-        except yaml.YAMLError:
-            return ""
-        if isinstance(parsed, dict):
-            name = parsed.get("name")
-            if isinstance(name, str) and name.strip():
-                return name.strip()
-        return ""
+        match = SKILL_PATH_PATTERN.search(candidate)
+        if match:
+            return match.group("name")
     return ""
 
 

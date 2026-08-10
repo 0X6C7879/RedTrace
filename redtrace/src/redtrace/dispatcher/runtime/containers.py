@@ -261,12 +261,18 @@ class ContainerManager:
         env = {
             **env,
             **context_harness.environment(),
+            "PWD": self._WORKSPACE,
+            "REDTRACE_WORKSPACE": self._WORKSPACE,
+            "TMPDIR": self._WORKSPACE,
+            "TMP": self._WORKSPACE,
+            "TEMP": self._WORKSPACE,
+            "REDTRACE_TOOLS_DIR": "/opt/redtrace/tools",
+            "REDTRACE_TOOLS_BIN": "/opt/redtrace/tools/bin",
             "PATH": (
-                "/opt/redtrace/runtime/bin:"
+                "/opt/redtrace/runtime/bin:/opt/redtrace/tools/bin:"
                 "/home/kali/.local/bin:/home/kali/go/bin:"
                 "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
             ),
-            "SHELL": "/bin/bash",
         }
         argv: list[str] = []
         if timeout_seconds is not None:
@@ -283,11 +289,12 @@ class ContainerManager:
             container,
             argv,
             env,
+            workdir=self._WORKSPACE,
             max_output_chars=context_harness.worker_output_chars,
         )
 
     def conversation_environment(
-        self, project_id: str, worker_type: str, worker_name: str = ""
+        self, project_id: str, worker_type: str
     ) -> dict[str, str]:
         safe_project_key(project_id)
         if worker_type == "claudecode":
@@ -342,6 +349,10 @@ class ContainerManager:
             self._host_source(self._paths.runtime): {
                 "bind": "/opt/redtrace/runtime",
                 "mode": "ro",
+            },
+            self._host_source(self._paths.runtime / "tools"): {
+                "bind": "/opt/redtrace/tools",
+                "mode": "rw",
             },
             self._host_source(self._paths.runtime / "claude-plugin"): {
                 "bind": "/opt/redtrace/claude-plugin",

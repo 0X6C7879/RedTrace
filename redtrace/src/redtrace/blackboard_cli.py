@@ -42,6 +42,8 @@ def build_parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("status", help="Check whether the blackboard changed")
     status.add_argument("--since", type=int, default=_default_revision(), help="Known revision")
 
+    subparsers.add_parser("snapshot", help="Read the complete current blackboard")
+
     changes = subparsers.add_parser("changes", help="Read content added after a revision")
     changes.add_argument("--since", type=int, default=_default_revision(), help="Known revision")
     changes.add_argument("--limit", type=int, default=20, choices=range(1, 101), metavar="1..100")
@@ -65,6 +67,9 @@ def _request(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "status":
         path = "status"
         params = {"since": args.since}
+    elif args.command == "snapshot":
+        path = "snapshot"
+        params = {}
     elif args.command == "changes":
         path = "changes"
         params = {"since": args.since, "limit": args.limit}

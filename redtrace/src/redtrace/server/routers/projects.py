@@ -277,7 +277,7 @@ def claim_project_reason(project_id: str, body: ReasonClaimRequest):
         return project_meta_from_row(updated)
 
 
-@router.post("/projects/{project_id}/reason/heartbeat", response_model=ProjectMeta)
+@router.post("/projects/{project_id}/reason/heartbeat")
 def heartbeat_project_reason(project_id: str, body: HeartbeatRequest):
     with get_conn(immediate=True) as conn:
         check_project_active(conn, project_id)
@@ -299,7 +299,9 @@ def heartbeat_project_reason(project_id: str, body: HeartbeatRequest):
         updated = conn.execute(
             "SELECT * FROM projects WHERE id = ?", (project_id,)
         ).fetchone()
-        return project_meta_from_row(updated)
+        result = project_meta_from_row(updated).model_dump(mode="json")
+        result["blackboard_revision"] = get_blackboard_revision(conn, project_id)
+        return result
 
 
 @router.post("/projects/{project_id}/reason/release", response_model=ProjectMeta)

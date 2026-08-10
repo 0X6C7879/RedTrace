@@ -56,6 +56,7 @@ class AgentRuntimeManager:
             self._store.ensure()
             for directory in (
                 self.runtime / "bin",
+                self.runtime / "tools" / "bin",
                 self.runtime / "mcp",
                 self.runtime / "pi",
                 self.paths.projects,
@@ -208,6 +209,7 @@ class AgentRuntimeManager:
         if self.execution == "local":
             skills = [str(path) for path in local_skill_paths]
             runtime = self.runtime
+            tools = self.runtime / "tools"
             plugin_dir = self.runtime / "claude-plugin"
         else:
             skills = [
@@ -215,6 +217,7 @@ class AgentRuntimeManager:
                 for path in local_skill_paths
             ]
             runtime = Path("/opt/redtrace/runtime")
+            tools = Path("/opt/redtrace/tools")
             plugin_dir = Path("/opt/redtrace/claude-plugin")
 
         resource_args = [
@@ -234,9 +237,6 @@ class AgentRuntimeManager:
                     if self.execution == "local"
                     else "/opt/redtrace/claude-plugin/skills"
                 ),
-                # Dispatcher-only source used to preload the selected expert
-                # workflow once. It is removed before the Worker is spawned.
-                "REDTRACE_HOST_SKILLS_DIR": str(self.paths.skills),
                 "REDTRACE_EXECUTION": self.execution,
                 "REDTRACE_MCP_DIR": (
                     str(self.paths.mcp)
@@ -244,6 +244,8 @@ class AgentRuntimeManager:
                     else "/opt/redtrace/mcp"
                 ),
                 "REDTRACE_RUNTIME_DIR": str(runtime),
+                "REDTRACE_TOOLS_DIR": str(tools),
+                "REDTRACE_TOOLS_BIN": str(tools / "bin"),
                 "REDTRACE_CLAUDE_MCP_CONFIG": str(runtime / "mcp" / "claude.json"),
                 "REDTRACE_CLAUDE_PLUGIN_DIR": str(plugin_dir),
                 "REDTRACE_PI_MCP_EXTENSION": PI_MCP_EXTENSION,

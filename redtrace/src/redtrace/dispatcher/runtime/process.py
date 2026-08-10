@@ -58,10 +58,12 @@ class ManagedProcess:
         container: Container,
         command: list[str],
         env: dict[str, str],
+        workdir: str | None = None,
         max_output_chars: int = 8 * 1024 * 1024,
     ):
         self.command = command
         self.env = env
+        self.workdir = workdir
         self._container = container
         self._api = container.client.api
         self._exec_id: str | None = None
@@ -87,6 +89,7 @@ class ManagedProcess:
             stdin=False,
             tty=False,
             environment=self.env,
+            workdir=self.workdir,
         )
         self._exec_id = exec_info["Id"]
         self._reader = threading.Thread(target=self._read_stream, daemon=True)

@@ -19,7 +19,12 @@ class EventHub:
 
     def unsubscribe(self, project_id: str, subscriber: queue.Queue[dict[str, Any]]) -> None:
         with self._lock:
-            self._subscribers[project_id].discard(subscriber)
+            subscribers = self._subscribers.get(project_id)
+            if not subscribers:
+                return
+            subscribers.discard(subscriber)
+            if not subscribers:
+                self._subscribers.pop(project_id, None)
 
     def publish(self, project_id: str, event: dict[str, Any]) -> None:
         with self._lock:
@@ -28,7 +33,11 @@ class EventHub:
             try:
                 subscriber.put_nowait(event)
             except queue.Full:
-                pass
+                try:
+                    subscriber.get_nowait()
+                    subscriber.put_nowait(event)
+                except (queue.Empty, queue.Full):
+                    pass
 
 
 event_hub = EventHub()

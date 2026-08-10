@@ -109,8 +109,47 @@ def test_reason_repairs_invalid_format_once(monkeypatch) -> None:
     assert "不得调用工具" in driver.conclude_prompts[0]
 
 
+def test_reason_only_fills_available_open_intent_slots(monkeypatch) -> None:
+    config = make_config()
+    project = make_project(intents=[make_intent("i001"), make_intent("i002")])
+    client = FakeClient(project)
+    containers = FakeContainerManager()
+    driver = FakeDriver()
+    lease = FakeLease()
+
+    monkeypatch.setattr(reason, "get_driver", lambda *_a, **_k: driver)
+    monkeypatch.setattr(reason.HeartbeatLease, "for_reason", _lease_factory(lease))
+    monkeypatch.setattr(
+        reason,
+        "run_worker_process",
+        lambda *_args, **_kwargs: ProcessResult(
+            0,
+            '{"accepted":true,"data":{"intents":['
+            '{"from":["f001"],"description":"slot one"},'
+            '{"from":["f001"],"description":"slot two"}]}}',
+            "",
+        ),
+    )
+
+    outcome = reason.run_reason_task(
+        config,
+        client,
+        containers,
+        project,
+        "graph",
+        config.workers[0],
+        TaskCancellation(),
+    )
+
+    assert outcome == "success"
+    assert client.created_intents == [
+        ("proj_001", ["f001"], "slot one", "test-worker")
+    ]
+
+
 def test_explore_early_plain_text_exit_uses_conclude_fallback(monkeypatch) -> None:
     config = make_config()
+    config.workers[0].type = "pi"
     intent = make_intent()
     project = make_project(intents=[intent])
     client = FakeClient(project)
@@ -144,6 +183,7 @@ def test_explore_early_plain_text_exit_uses_conclude_fallback(monkeypatch) -> No
     assert len(containers.writes) == 1
     assert "/explore_execute-" in containers.writes[0][1]
     assert len(driver.execute_prompts) == 1
+    assert "use the clue" in driver.execute_prompts[0]
     assert len(driver.conclude_prompts) == 1
     assert lease.started and lease.stopped
 
@@ -328,3 +368,37 @@ def test_reason_startup_only_mode_skips_task_healthcheck(monkeypatch) -> None:
 
     assert outcome == "success"
     assert client.created_intents == [("proj_001", ["f001"], "next", "test-worker")]
+
+
+def test_access_channel_fact_gets_registered_resource_id() -> None:
+    class Client:
+        @staticmethod
+        def resource_snapshot(_project_id: str):
+            return [
+                {
+                    "id": "ws_123456789abc",
+                    "intent_id": "i001",
+                    "worker": "Pi",
+                }
+            ]
+
+    description, ok = explore._attach_access_resource_ids(
+        Client(), "proj_001", "i001", "Pi", "WebShell 已验证可执行命令"
+    )
+
+    assert ok
+    assert description.endswith("Shared Resource IDs: ws_123456789abc")
+
+
+def test_access_channel_fact_without_registered_resource_is_blocked() -> None:
+    class Client:
+        @staticmethod
+        def resource_snapshot(_project_id: str):
+            return []
+
+    description, ok = explore._attach_access_resource_ids(
+        Client(), "proj_001", "i001", "Pi", "reverse shell connected"
+    )
+
+    assert not ok
+    assert description == "reverse shell connected"

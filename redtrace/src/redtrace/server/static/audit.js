@@ -20,7 +20,12 @@ function auditPage() {
     error: '',
     renderWindow: 150,
     RENDER_BATCH: 100,
+    EVENT_BUFFER_LIMIT: 2000,
     _completedKeys: new Set(),
+    _openThinking: {},
+    _eventKeys: new Set(),
+    _pendingEvents: [],
+    _frameRequest: 0,
 
     async setActive(active) {
       if (this.active === active) return;
@@ -32,7 +37,7 @@ function auditPage() {
       if (!this.initialized) {
         await this.initAudit();
       } else if (this.selectedTaskId) {
-        this.connectStream();
+        await this.selectTask(this.selectedTaskId);
       }
     },
 
@@ -84,6 +89,8 @@ function auditPage() {
       this.runs = [];
       this.renderWindow = 150;
       this._completedKeys = new Set();
+      this._openThinking = {};
+      this._eventKeys = new Set();
       this._hasServerMore = true;
       this._loadingMore = false;
       this.workspacePath = '';
@@ -98,11 +105,7 @@ function auditPage() {
       if (results[0].status === 'fulfilled') this.runs = results[0].value;
       if (results[1].status === 'fulfilled') {
         this.events = results[1].value;
-        for (const event of this.events) {
-          if (event.call_id && event.run_id && ['command.completed', 'tool.completed', 'skill.completed'].includes(event.kind)) {
-            this._completedKeys.add(`${event.run_id}:${event.call_id}`);
-          }
-        }
+        this.reindexEvents();
         if (this.events.length < 500) this._hasServerMore = false;
       }
       if (results[1].status === 'rejected') this.error = results[1].reason.message;
@@ -116,7 +119,7 @@ function auditPage() {
         `/audit/tasks/${encodeURIComponent(this.selectedTaskId)}/stream`
       );
       source.addEventListener('audit', event => {
-        this.applyEvent(JSON.parse(event.data));
+        try { this.queueEvent(JSON.parse(event.data)); } catch (_) {}
       });
       source.onerror = () => {};
       this.source = source;
@@ -125,6 +128,21 @@ function auditPage() {
     disconnectStream() {
       this.source?.close();
       this.source = null;
+      if (this._frameRequest) cancelAnimationFrame(this._frameRequest);
+      this._frameRequest = 0;
+      this._pendingEvents = [];
+    },
+
+    queueEvent(event) {
+      this._pendingEvents.push(event);
+      if (this._frameRequest) return;
+      this._frameRequest = requestAnimationFrame(() => {
+        this._frameRequest = 0;
+        const pending = this._pendingEvents.splice(0);
+        for (const item of pending) this.applyEvent(item);
+        this.trimEventBuffer();
+        if (this.autoFollow) this.$nextTick(() => this.scrollToBottom());
+      });
     },
 
     applyEvent(event) {
@@ -141,20 +159,45 @@ function auditPage() {
           current.content = `${current.content || ''}${event.content || ''}`;
         } else {
           this.closeOpenDelta(event.run_id, deltaKinds);
-          this.events.push({ ...event, content: event.content || '' });
+          const item = { ...event, content: event.content || '' };
+          this.events.push(item);
+          this.indexEvent(item);
         }
       } else {
         this.closeOpenDelta(event.run_id, deltaKinds);
         this.events.push(event);
-        if (event.call_id && event.run_id && ['command.completed', 'tool.completed', 'skill.completed'].includes(event.kind)) {
-          this._completedKeys.add(`${event.run_id}:${event.call_id}`);
-        }
+        this.indexEvent(event);
       }
       if (event.kind === 'run.started' || event.kind === 'run.completed') {
         this.refreshRuns();
         this.loadTasks();
       }
-      if (this.autoFollow) this.$nextTick(() => this.scrollToBottom());
+    },
+
+    eventKey(event) {
+      if (event?.event_uid) return `uid:${event.event_uid}`;
+      return Number.isInteger(event?.id) ? `id:${event.id}` : '';
+    },
+
+    indexEvent(event) {
+      const key = this.eventKey(event);
+      if (key) this._eventKeys.add(key);
+      if (event.call_id && event.run_id && ['command.completed', 'tool.completed', 'skill.completed'].includes(event.kind)) {
+        this._completedKeys.add(`${event.run_id}:${event.call_id}`);
+      }
+    },
+
+    reindexEvents() {
+      this._eventKeys = new Set();
+      this._completedKeys = new Set();
+      for (const event of this.events) this.indexEvent(event);
+    },
+
+    trimEventBuffer() {
+      const limit = Math.max(this.EVENT_BUFFER_LIMIT, this.renderWindow + this.RENDER_BATCH);
+      if (this.events.length <= limit) return;
+      this.events.splice(0, this.events.length - limit);
+      this.reindexEvents();
     },
 
     closeOpenDelta(runId, deltaKinds) {
@@ -219,7 +262,7 @@ function auditPage() {
       if (this._loadingMore || !this._hasServerMore || !this.selectedTaskId) return;
       this._loadingMore = true;
       try {
-        const firstId = this.events.length ? this.events[0].id : null;
+        const firstId = this.events.find(event => Number.isInteger(event.id))?.id;
         const query = firstId ? `?limit=500&before_id=${firstId}` : '?limit=500';
         const older = await this.request(
           `/audit/tasks/${encodeURIComponent(this.selectedTaskId)}/events${query}`
@@ -228,13 +271,13 @@ function auditPage() {
           this._hasServerMore = false;
           return;
         }
-        for (const event of older) {
-          if (event.call_id && event.run_id && ['command.completed', 'tool.completed', 'skill.completed'].includes(event.kind)) {
-            this._completedKeys.add(`${event.run_id}:${event.call_id}`);
-          }
-        }
-        this.events = [...older, ...this.events];
-        this.renderWindow += older.length;
+        const fresh = older.filter(event => {
+          const key = this.eventKey(event);
+          return !key || !this._eventKeys.has(key);
+        });
+        this.events = [...fresh, ...this.events];
+        this.renderWindow += fresh.length;
+        this.reindexEvents();
         if (older.length < 500) this._hasServerMore = false;
       } catch (_) {
         this._hasServerMore = false;
@@ -288,7 +331,8 @@ function auditPage() {
 
     isTool(event) {
       return ['tool.started', 'tool.completed', 'file.changed'].includes(event.kind)
-        && !this.isShellTool(event);
+        && !this.isShellTool(event)
+        && !this.isSkill(event);
     },
 
     isCommand(event) {
@@ -296,11 +340,23 @@ function auditPage() {
     },
 
     isSkill(event) {
-      return ['skill.started', 'skill.completed'].includes(event.kind);
+      const title = String(event?.title || '').trim().toLowerCase().replaceAll('_', ' ');
+      return ['skill.started', 'skill.completed'].includes(event.kind)
+        || (['tool.started', 'tool.completed'].includes(event.kind)
+          && ['skill', 'skills', 'load skill', 'use skill'].includes(title));
     },
 
     displaySkillName(event) {
-      const name = String(event?.skill_name || '').trim();
+      const legacy = String(event?.content || '')
+        .match(/(?:launching|loading)\s+skill:\s*([^\s]+)/i)?.[1];
+      const name = String(
+        event?.skill_name
+        || event?.skillName
+        || event?.arguments?.skill
+        || event?.arguments?.name
+        || legacy
+        || ''
+      ).trim();
       return name.replace(/^redtrace-capabilities:/, '') || '未知技能';
     },
 
@@ -359,6 +415,19 @@ function auditPage() {
 
     displayText(value) {
       return this.repairMojibake(value || '');
+    },
+
+    thinkingKey(event) {
+      return String(event?.event_uid || event?.id || '');
+    },
+
+    isThinkingOpen(event) {
+      return this._openThinking[this.thinkingKey(event)] === true;
+    },
+
+    toggleThinking(event) {
+      const key = this.thinkingKey(event);
+      if (key) this._openThinking[key] = !this._openThinking[key];
     },
 
     repairMojibake(value) {

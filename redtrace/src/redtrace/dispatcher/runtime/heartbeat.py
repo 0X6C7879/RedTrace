@@ -38,6 +38,8 @@ class HeartbeatLease:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._run, daemon=True)
+        self._blackboard_revision: int | None = None
+        self._on_blackboard_change: Callable[[int, int], None] | None = None
 
     @classmethod
     def for_intent(
@@ -81,6 +83,18 @@ class HeartbeatLease:
         with self._lock:
             self._process = process
 
+    def watch_blackboard(
+        self,
+        revision: int,
+        on_change: Callable[[int, int], None],
+    ) -> bool:
+        with self._lock:
+            if self._blackboard_revision is not None:
+                return False
+            self._blackboard_revision = revision
+            self._on_blackboard_change = on_change
+            return True
+
     @property
     def failure(self) -> HeartbeatFailure | None:
         return self._failure
@@ -90,6 +104,7 @@ class HeartbeatLease:
             result = self._heartbeat()
             if result.ok:
                 self._last_success_at = time.monotonic()
+                self._notify_blackboard(result)
                 continue
             if result.status_code in (403, 409):
                 self._fail(result.status_code, result.text)
@@ -108,6 +123,32 @@ class HeartbeatLease:
                 continue
             self._fail(result.status_code or None, result.text)
             return
+
+    def _notify_blackboard(self, result: ApiResult) -> None:
+        data = result.data if isinstance(result.data, dict) else {}
+        current = data.get("blackboard_revision")
+        if not isinstance(current, int):
+            return
+        with self._lock:
+            previous = self._blackboard_revision
+            callback = self._on_blackboard_change
+            if previous is None or current <= previous:
+                return
+        if callback is not None:
+            try:
+                callback(previous, current)
+            except Exception:
+                LOG.warning(
+                    "blackboard notification failed scope=%s worker=%s revision=%s",
+                    self._scope,
+                    self._worker_name,
+                    current,
+                    exc_info=True,
+                )
+                return
+        with self._lock:
+            if self._blackboard_revision == previous:
+                self._blackboard_revision = current
 
     def _fail(self, status_code: int | None, text: str) -> None:
         self._failure = HeartbeatFailure(status_code, text)

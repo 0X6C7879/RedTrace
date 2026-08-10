@@ -79,7 +79,7 @@ workers:
   # - name: "local-codex"
   #   type: "codex"
   #   enabled: true
-  #   task_types: [explore]
+  #   task_types: [bootstrap, reason, explore]
   #   max_running: 1
   #   priority: 1
   #   env:
@@ -90,7 +90,7 @@ workers:
   # - name: "local-pi"
   #   type: "pi"
   #   enabled: true
-  #   task_types: [reason]
+  #   task_types: [bootstrap, reason, explore]
   #   max_running: 1
   #   priority: 2
   #   env:

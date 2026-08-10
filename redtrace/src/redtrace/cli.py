@@ -29,7 +29,7 @@ def main():
     help="SQLite database path",
 )
 @click.option("--log-level", default="info", show_default=True, help="Uvicorn log level")
-@click.option("--access-log/--no-access-log", default=True, show_default=True, help="Enable Uvicorn access log")
+@click.option("--access-log/--no-access-log", default=False, show_default=True, help="Enable Uvicorn access log")
 def serve(host: str, port: int, db_path: str, log_level: str, access_log: bool):
     """Start the RedTrace API server."""
     db.configure(Path(db_path))

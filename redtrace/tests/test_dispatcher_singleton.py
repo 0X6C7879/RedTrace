@@ -1,3 +1,5 @@
+import tempfile
+
 import pytest
 
 from redtrace.dispatcher.singleton import (
@@ -6,21 +8,27 @@ from redtrace.dispatcher.singleton import (
 )
 
 
-def test_dispatcher_lock_is_scoped_to_server_and_released() -> None:
-    first = DispatcherInstanceLock("https://redtrace.test:18000/")
+def test_dispatcher_lock_is_scoped_to_server_and_released(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    first = DispatcherInstanceLock("http://127.0.0.1:8000/")
     first.acquire()
     try:
         with pytest.raises(DispatcherAlreadyRunning, match="already running"):
-            DispatcherInstanceLock("https://redtrace.test:18000").acquire()
+            DispatcherInstanceLock("http://127.0.0.1:8000").acquire()
     finally:
         first.release()
 
-    with DispatcherInstanceLock("https://redtrace.test:18000"):
+    with DispatcherInstanceLock("http://127.0.0.1:8000"):
         assert True
 
 
-def test_dispatcher_locks_different_servers_independently() -> None:
-    with DispatcherInstanceLock("https://redtrace.test:18000"), DispatcherInstanceLock(
-        "https://redtrace.test:18001"
+def test_dispatcher_locks_different_servers_independently(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    with DispatcherInstanceLock("http://127.0.0.1:8000"), DispatcherInstanceLock(
+        "http://127.0.0.1:8001"
     ):
         assert True

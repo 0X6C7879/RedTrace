@@ -5,15 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RedTrace</title>
 <link rel="icon" href="/static/favicon.svg?v=20260727-logo3" type="image/svg+xml">
-<link rel="stylesheet" href="/static/audit.css?v=20260808-thinking-collapse">
+<link rel="stylesheet" href="/static/audit.css?v=20260810-log-cards-3">
 <link rel="stylesheet" href="/static/operations.css">
 <script src="/static/vendor/tailwindcss.js"></script>
 <script src="/static/vendor/dagre.min.js"></script>
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/vendor/cytoscape-dagre.js"></script>
-<script defer src="/static/audit.js?v=20260808-thinking-collapse"></script>
-<script defer src="/static/capabilities.js?v=20260807-skill-entries"></script>
-<script defer src="/static/operations.js"></script>
+<script defer src="/static/audit.js?v=20260810-performance-1"></script>
+<script defer src="/static/capabilities.js?v=20260811-unified-entries-1"></script>
+<script defer src="/static/operations.js?v=20260810-performance-1"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
 <style>
   [x-cloak] { display: none !important; }
@@ -239,7 +239,7 @@
     }
   }
 </script>
-<link rel="stylesheet" href="/static/redtrace-theme.css?v=20260808-thinking-collapse">
+<link rel="stylesheet" href="/static/redtrace-theme.css?v=20260810-log-cards-3">
 </head>
 <body class="bg-slate-50 text-slate-800 h-screen overflow-hidden" :class="{ 'select-none cursor-col-resize': isResizingPanel }" x-data="redtraceApp()">
 <div class="app-shell flex h-full min-h-0" :class="{ 'app-shell-operations': appPage === 'webshell' || appPage === 'plugins' || appPage.startsWith('c2-') }">
@@ -264,19 +264,16 @@
         <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="m4 6 5 5-5 5M11 18h9"/></svg><span>WebShell管理</span>
       </button>
       <div>
-        <button
-          type="button"
-          @click="setAppPage('c2-listeners'); c2Expanded = !c2Expanded"
-          :aria-expanded="c2Expanded"
-          aria-label="打开 C2 并展开或收起菜单"
-          class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium"
-          :class="{ 'app-nav-item-active': appPage.startsWith('c2-') }"
-        >
-          <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5M19.1 4.9C23 8.8 23 15.2 19.1 19"/><circle cx="12" cy="12" r="2"/></svg>
-          <span>C2</span>
-          <svg class="c2-disclosure ml-auto h-3.5 w-3.5 shrink-0 transition-transform" :class="{ 'rotate-90': c2Expanded }" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>
-        </button>
-        <div x-show="c2Expanded" class="ml-7 mt-1 space-y-0.5 border-l border-slate-200 pl-2">
+        <div class="app-nav-item flex h-10 w-full items-center rounded-xl text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage.startsWith('c2-') }">
+          <button type="button" @click="setAppPage('c2-listeners')" aria-label="打开 C2" class="flex h-full min-w-0 flex-1 items-center gap-3 px-3 text-left">
+            <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5M19.1 4.9C23 8.8 23 15.2 19.1 19"/><circle cx="12" cy="12" r="2"/></svg>
+            <span>C2</span>
+          </button>
+          <button type="button" @click="c2Expanded = !c2Expanded" :aria-expanded="c2Expanded" aria-controls="c2-subnav" :aria-label="c2Expanded ? '收起 C2 菜单' : '展开 C2 菜单'" class="flex h-8 w-8 shrink-0 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/60">
+            <svg class="c2-disclosure h-3.5 w-3.5 shrink-0 transition-transform" :class="{ 'rotate-90': c2Expanded }" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>
+          </button>
+        </div>
+        <div id="c2-subnav" x-show="c2Expanded" class="ml-7 mt-1 space-y-0.5 border-l border-slate-200 pl-2">
           <button type="button" @click="setAppPage('c2-listeners')" class="app-subnav-item" :class="{ 'app-subnav-item-active': appPage === 'c2-listeners' }">监听器</button>
           <button type="button" @click="setAppPage('c2-sessions')" class="app-subnav-item" :class="{ 'app-subnav-item-active': appPage === 'c2-sessions' }">会话</button>
           <button type="button" @click="setAppPage('c2-tasks')" class="app-subnav-item" :class="{ 'app-subnav-item-active': appPage === 'c2-tasks' }">任务</button>
@@ -986,7 +983,7 @@
                       <span class="operations-idle-badge" x-text="runningAction ? '执行中' : '空闲'"></span>
                       <span class="operations-quickbar-label">快捷命令</span>
                       <template x-for="quick in ['whoami','id','pwd','ls -la','uname -a','ifconfig','ip a','env','hostname','ps aux','netstat']" :key="quick">
-                        <button @click="runQuickCommand(quick)" x-text="quick"></button>
+                        <button @click="runQuickCommand(quick)" :disabled="runningAction || !webshellUsable()" x-text="quick"></button>
                       </template>
                     </div>
                     <div class="operations-terminal">
@@ -996,7 +993,7 @@
                           <span x-text="currentResource()?.target"></span>
                         </div>
                         <div class="flex items-center gap-2">
-                          <span x-text="runningAction ? '命令执行中' : '会话可用'"></span>
+                          <span :class="webshellUsable() ? '' : 'text-red-400'" x-text="webshellSessionLabel()"></span>
                           <button type="button" @click="removeResource()" class="operations-delete-resource" title="删除当前 WebShell 连接">删除连接</button>
                         </div>
                       </div>
@@ -1007,8 +1004,9 @@
                             <pre :class="{ 'is-error': item.failed }" x-text="item.output"></pre>
                           </div>
                         </template>
-                        <div x-show="terminalHistory.length === 0" class="operations-terminal-welcome">共享终端已就绪。命令结果和审计记录对当前项目可见。</div>
-                        <form @submit.prevent="runCommand()" class="operations-terminal-input">
+                        <div x-show="terminalHistory.length === 0 && webshellUsable()" class="operations-terminal-welcome">共享终端已就绪。命令结果和审计记录对当前项目可见。</div>
+                        <div x-show="!webshellUsable()" class="operations-terminal-welcome text-red-300">当前 WebShell 不可用；请先重新探测连接。</div>
+                        <form x-show="webshellUsable()" @submit.prevent="runCommand()" class="operations-terminal-input">
                           <span>(</span><span class="operations-prompt-user" x-text="terminalIdentity.user"></span><span>:</span><span class="operations-prompt-path" x-text="terminalIdentity.cwd"></span><span>) $</span>
                           <input x-model="command" @keydown.enter.prevent="runCommand()" :disabled="runningAction" autocomplete="off" aria-label="WebShell 命令" autofocus>
                         </form>
@@ -1328,12 +1326,11 @@
                   <div class="max-h-72 overflow-auto whitespace-pre-wrap break-words text-[13px] leading-6 text-slate-700" x-text="displayText(event.content)"></div>
                 </template>
                 <template x-if="isThinking(event)">
-                  <details class="audit-thinking">
-                    <summary class="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs text-slate-500">
-                      <svg class="audit-thinking-chevron h-3 w-3 shrink-0 text-slate-400 transition-transform" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg>
-                      <span class="font-medium">深度思考</span>
+                  <details class="audit-terminal audit-thinking overflow-hidden" :open="isThinkingOpen(event)">
+                    <summary @click.prevent="toggleThinking(event)" :aria-expanded="isThinkingOpen(event)" class="flex cursor-pointer list-none items-center gap-2 px-3 py-2 font-mono text-[11px]">
+                      <span class="text-sky-400">›</span><span class="audit-command-text min-w-0 flex-1">思考</span>
                     </summary>
-                    <div class="audit-thinking-text max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-slate-100 px-3 py-2" x-text="displayText(event.content)"></div>
+                    <pre class="max-h-72 overflow-auto whitespace-pre-wrap border-t border-white/10 px-3 py-2 text-[11px] leading-relaxed text-slate-300" x-text="displayText(event.content)"></pre>
                   </details>
                 </template>
                 <template x-if="isTool(event)">
@@ -1351,7 +1348,6 @@
                     <svg class="h-3.5 w-3.5 shrink-0 text-violet-400" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M12 3.5 14.3 8l4.7.7-3.4 3.3.8 4.7-4.4-2.3-4.4 2.3.8-4.7L5 8.7 9.7 8z"/></svg>
                     <span class="text-slate-400">Skill</span>
                     <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-violet-600" x-text="displaySkillName(event)"></span>
-                    <span class="text-[10px]" :class="event.kind === 'skill.completed' ? 'text-emerald-500' : 'text-amber-500'" x-text="event.kind === 'skill.completed' ? '已加载' : '加载中'"></span>
                   </div>
                 </template>
                 <template x-if="isCommand(event)">
@@ -1420,7 +1416,6 @@
         <div class="flex items-center gap-2"><h1 class="text-[15px] font-semibold tracking-tight text-slate-800">Skills</h1><span class="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-700" x-text="`${enabledCount}/${items.length} 已启用`"></span></div>
         <p class="mt-0.5 truncate text-[10px] text-slate-400" x-text="status?.skillsDir || '加载共享目录…'"></p>
       </div>
-      <span class="hidden rounded-lg bg-sky-50 px-2 py-1 text-[10px] font-medium text-sky-700 sm:inline" x-text="`${nestedCount} 个包内 Skill`"></span>
       <div class="hidden items-center gap-1.5 md:flex" aria-label="Agent compatibility">
         <template x-for="agent in agents" :key="agent"><span class="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-500" x-text="agent"></span></template>
       </div>
@@ -1439,6 +1434,7 @@
             <input x-model="query" placeholder="搜索 Skills" class="h-8 w-full rounded-lg border border-slate-200 bg-slate-50/70 pl-8 pr-3 text-xs text-slate-600 outline-none transition focus:border-brand-300 focus:bg-white focus:ring-2 focus:ring-brand-50">
           </label>
         </div>
+        <div x-show="message" class="mx-3 mb-1 break-all rounded-lg px-3 py-2 text-[10px] leading-relaxed" :class="messageType === 'error' ? 'bg-red-50 text-red-600' : 'bg-teal-50 text-teal-600'" x-text="message"></div>
         <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
           <template x-for="skill in filteredItems" :key="skill.key">
             <button type="button" @click="select(skill)" class="capability-press mb-1 flex w-full items-start gap-2.5 rounded-xl py-2.5 pr-3 text-left" :class="[selectedName === skill.key ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50', skill.nested ? 'pl-7' : 'pl-3']">
@@ -1480,7 +1476,7 @@
           <div class="min-h-0 flex-1 p-4">
             <textarea x-model="draft.content" :readonly="draft.nested" spellcheck="false" class="capability-editor h-full w-full resize-none rounded-xl border border-slate-200 bg-slate-950 p-4 font-mono text-[12px] leading-6 text-slate-200 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50" aria-label="SKILL.md"></textarea>
           </div>
-          <div class="flex h-9 shrink-0 items-center border-t border-slate-100 px-5 text-[10px] text-slate-400"><span x-text="message"></span><span class="ml-auto">Claude · Codex · Pi 共用</span></div>
+          <div class="flex h-9 shrink-0 items-center border-t border-slate-100 px-5 text-[10px] text-slate-400"><span :class="{ 'text-red-500': messageType === 'error', 'text-teal-600': messageType === 'success' }" x-text="message"></span><span class="ml-auto">Claude · Codex · Pi 共用</span></div>
         </div></template>
       </main>
     </div>

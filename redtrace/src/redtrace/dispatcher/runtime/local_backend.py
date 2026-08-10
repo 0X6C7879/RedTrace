@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import contextlib
+import errno
 import logging
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
-from urllib.parse import quote
 
 from redtrace.dispatcher.config import ContextHarnessConfig, LocalConfig
 from redtrace.dispatcher.runtime.backend import is_agent_runtime_state
@@ -44,6 +46,7 @@ class LocalBackend:
             if paths is not None
             else Path(__file__).resolve().parents[5] / ".redtrace" / "runtime" / "bin"
         )
+        self._tools_dir = self._runtime_bin.parent / "tools"
         self._project_state_root = (
             paths.projects
             if paths is not None
@@ -65,15 +68,19 @@ class LocalBackend:
 
     def ensure_running(self, project_id: str) -> str:
         project_dir = self._project_dir(project_id)
-        project_dir.mkdir(parents=True, exist_ok=True)
+        _ensure_directory(project_dir)
         pi_mcp = self._runtime_bin.parent / "mcp" / "pi.json"
         if pi_mcp.is_file():
             target = project_dir / ".pi" / "mcp.json"
-            target.parent.mkdir(parents=True, exist_ok=True)
+            _ensure_directory(target.parent)
             if target.is_symlink() and target.resolve(strict=False) != pi_mcp.resolve():
-                target.unlink()
+                with contextlib.suppress(FileNotFoundError):
+                    # WSL drvfs ghost entries report is_symlink() but unlink()
+                    # fails with ENOENT; nothing can be removed in-process.
+                    target.unlink()
             elif target.exists() and not target.is_symlink():
-                target.unlink()
+                with contextlib.suppress(FileNotFoundError):
+                    target.unlink()
             _ensure_link(target, pi_mcp)
         LOG.debug(
             "local project workdir ready project=%s dir=%s", project_id, project_dir
@@ -81,17 +88,15 @@ class LocalBackend:
         return str(project_dir)
 
     def conversation_environment(
-        self, project_id: str, worker_type: str, worker_name: str = ""
+        self, project_id: str, worker_type: str
     ) -> dict[str, str]:
-        worker_key = "worker-" + quote(worker_name or worker_type, safe="")
         state = contained_path(
             self._project_state_root,
             safe_project_key(project_id),
             "conversations",
             worker_type,
-            worker_key,
         )
-        state.mkdir(parents=True, exist_ok=True)
+        _ensure_directory(state)
         if worker_type == "pi":
             return {"PI_CODING_AGENT_SESSION_DIR": str(state)}
         homes = {
@@ -101,18 +106,12 @@ class LocalBackend:
         if worker_type not in homes:
             return {}
         variable, user_home = homes[worker_type]
-        user_home.mkdir(parents=True, exist_ok=True)
+        _ensure_directory(user_home)
         for source in user_home.iterdir():
             if is_agent_runtime_state(worker_type, source.name):
                 continue
             _ensure_link(state / source.name, source)
-        environment = {variable: str(state)}
-        # Claude Code delegates Bash tool calls to $SHELL.  In zsh, `path` is a
-        # special array tied to PATH, so ordinary loops such as `for path in ...`
-        # silently destroy command lookup.  Use the shell the tool contract names.
-        if worker_type == "claudecode" and Path("/bin/bash").is_file():
-            environment["SHELL"] = "/bin/bash"
-        return environment
+        return {variable: str(state)}
 
     def build_exec_process(
         self,
@@ -128,6 +127,16 @@ class LocalBackend:
             **(env or {}),
             **self._context_harness.environment(),
         }
+        workspace = str(Path(container_name).resolve())
+        merged_env.update(
+            {
+                "PWD": workspace,
+                "REDTRACE_WORKSPACE": workspace,
+                "TMPDIR": workspace,
+                "TMP": workspace,
+                "TEMP": workspace,
+            }
+        )
         if all(
             (env or {}).get(key)
             for key in (
@@ -148,12 +157,15 @@ class LocalBackend:
                 if key not in (env or {}):
                     merged_env.pop(key, None)
         cli_dir = str(self._runtime_bin)
+        tools_bin = str(self._tools_dir / "bin")
         merged_env["PATH"] = os.pathsep.join(
-            (cli_dir, *self._path_prepend, merged_env.get("PATH", ""))
+            (cli_dir, tools_bin, *self._path_prepend, merged_env.get("PATH", ""))
         )
+        merged_env["REDTRACE_TOOLS_DIR"] = str(self._tools_dir)
+        merged_env["REDTRACE_TOOLS_BIN"] = tools_bin
         return LocalProcess(
             command,
-            cwd=container_name,
+            cwd=workspace,
             env=merged_env,
             stdin_text=stdin_text,
             timeout_seconds=timeout_seconds,
@@ -182,7 +194,7 @@ class LocalBackend:
             target = Path(path)
             if not target.is_absolute():
                 raise ValueError(f"local file path must be absolute: {path}")
-        target.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_directory(target.parent)
         target.write_text(content, encoding="utf-8")
         return str(target)
 
@@ -217,6 +229,49 @@ class LocalBackend:
 
     def _project_dir(self, project_id: str) -> Path:
         return contained_path(self._root, safe_project_key(project_id))
+
+
+def _ensure_directory(path: Path) -> None:
+    """Ensure ``path`` is a usable directory; truth is ``path.is_dir()``.
+
+    On WSL drvfs (/mnt/<drive>) a directory deleted from the Windows side
+    while a WSL process pins it (cwd or open handle) leaves a ghost dentry:
+    ``mkdir`` reports EEXIST while ``stat`` reports ENOENT, and neither
+    unlink nor rename can touch it. The ghost lives in the WSL 9P client
+    cache and persists until ``wsl --shutdown``; retrying in-process can
+    never heal it, so it is surfaced with actionable guidance instead of a
+    misleading ``FileExistsError``.
+    """
+    if path.is_dir():
+        return
+    last_error: OSError | None = None
+    for delay in (0.0, 0.05):
+        if delay:
+            time.sleep(delay)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except FileExistsError as exc:
+            last_error = exc
+        if path.is_dir():
+            # Covers both a plain create and an EEXIST raced/ghost retry
+            # that resolved into a real directory.
+            return
+    if path.exists() or path.is_symlink():
+        raise NotADirectoryError(f"managed directory path is not a directory: {path}")
+    if isinstance(last_error, FileExistsError):
+        raise RuntimeError(
+            f"workspace directory {path} is stuck in an inconsistent WSL "
+            "drvfs state (mkdir reports EEXIST while stat reports ENOENT). "
+            "This happens when the directory was deleted from the Windows "
+            "side while a WSL process still pinned it. Run "
+            "'wsl.exe --shutdown' from PowerShell, then restart the "
+            "dispatcher."
+        ) from last_error
+    if last_error is not None:
+        raise last_error
+    raise FileNotFoundError(errno.ENOENT, "managed directory missing", str(path))
+
+
 def _ensure_link(link: Path, target: Path) -> None:
     if link.exists() or link.is_symlink():
         return

@@ -280,7 +280,7 @@ def test_pi_settings_and_models_merge_preserves_other_providers(tmp_path: Path) 
                 "id": "pi-test",
                 "name": "pi-test",
                 "reasoning": True,
-                "input": ["text"],
+                "input": ["text", "image"],
                 "contextWindow": MODEL_CONTEXT_1M,
                 "maxTokens": 128 * 1024,
             }

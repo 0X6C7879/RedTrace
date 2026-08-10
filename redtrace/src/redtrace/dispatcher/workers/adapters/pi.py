@@ -9,7 +9,6 @@ from redtrace.capabilities import (
     PI_PROVIDER_EXTENSION_PATH,
 )
 from redtrace.dispatcher.config import WorkerConfig
-from redtrace.dispatcher.output_parser import extract_json_object
 from redtrace.dispatcher.workers.base import DriverResult, WorkerDriver
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
 
@@ -186,14 +185,7 @@ class PiDriver(WorkerDriver):
             text = item.get("text")
             if isinstance(text, str) and text:
                 parts.append(text)
-        text = "\n".join(parts).strip() or stdout
-        if '"accepted"' not in text:
-            return text
-        try:
-            payload = extract_json_object(text)
-        except (TypeError, ValueError):
-            return text
-        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        return "\n".join(parts).strip() or stdout
 
     @classmethod
     def _configured_argv(

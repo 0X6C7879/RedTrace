@@ -20,9 +20,9 @@
 ```
 
 # 规则
-- bootstrap 是短时初始化阶段，可按任务需要启动、关闭、重置、提交并解答一个或多个 Challenge，以确认最有价值的初始事实；避免操作下方其他 Worker 正在处理的 Challenge。确认一个高价值客观事实后立即返回 `fact` payload。
+- 若问题尚未解决，不要在 bootstrap 阶段尝试完成整个任务。先确认 target shape、constraint、credential、reachable service 或其他高价值客观事实，再返回 `fact` payload。
 - 若同一 session 随后收到 conclude phase 指令，新指令立即覆盖继续工作的要求。此时停止探索、等待、运行或规划其他操作，并立即返回所要求的 summary JSON。
-- 仅当本 session 已明确实现 Goal 时输出 `complete`。Goal 尚未实现时，不得输出 `complete`；确认初始事实后立即返回 `fact`，不要等待 conclude phase。
+- 仅当本 session 已明确实现 Goal 时输出 `complete`。Goal 尚未实现时，不得输出 `complete`，不得把部分进展总结为完成；继续工作，直到 conclude phase 指令替代本任务。
 - `fact.description` 必须清楚说明已确认的关键客观结果。例如 CTF 场景可包含多个 flag、shell、privilege proof、关键 exploit 结果及类似 evidence。
 - `complete.description` 应说明为什么当前已确认结果足以证明 Goal 已实现。
 - 不要把长 data blob 放入 `description`；应写入文件，并在 `description` 中引用。
@@ -43,9 +43,4 @@
 ## Hints
 ```
 {hints}
-```
-
-## Active Peer Work
-```json
-{active_peer_work}
 ```

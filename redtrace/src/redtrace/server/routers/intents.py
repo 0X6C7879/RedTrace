@@ -12,6 +12,7 @@ from redtrace.server.models import (
 from redtrace.server.services import (
     check_project_active,
     get_owned_open_intent_or_404,
+    get_blackboard_revision,
     get_releasable_open_intent_or_404,
     get_unclaimed_open_intent_or_404,
     intent_to_model,
@@ -95,7 +96,6 @@ def claim(project_id: str, intent_id: str, body: HeartbeatRequest):
 
 @router.post(
     "/projects/{project_id}/intents/{intent_id}/heartbeat",
-    response_model=Intent,
 )
 def heartbeat(project_id: str, intent_id: str, body: HeartbeatRequest):
     with get_conn(immediate=True) as conn:
@@ -112,7 +112,11 @@ def heartbeat(project_id: str, intent_id: str, body: HeartbeatRequest):
             "SELECT * FROM intents WHERE id = ? AND project_id = ?",
             (intent_id, project_id),
         ).fetchone()
-        return intent_to_model(conn, updated, project_id)
+        result = intent_to_model(conn, updated, project_id).model_dump(
+            mode="json", by_alias=True
+        )
+        result["blackboard_revision"] = get_blackboard_revision(conn, project_id)
+        return result
 
 
 @router.post(

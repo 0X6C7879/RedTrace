@@ -108,31 +108,6 @@ def test_webshell_create_reads_password_from_stdin_without_echo(monkeypatch) -> 
     assert captured["body"]["worker"] == "codex-1"
 
 
-def test_webshell_create_recovers_legacy_exploit_method(monkeypatch) -> None:
-    captured: dict = {}
-
-    def request(args, method, path, *, params=None, body=None):
-        captured.update({"method": method, "path": path, "body": body})
-        return {"resource": {"id": "ws_legacy"}}
-
-    monkeypatch.setattr(resource_cli, "_request", request)
-    result = resource_cli._perform(
-        _parse(
-            "webshell-create",
-            "--name",
-            "legacy",
-            "--target",
-            "https://target.test/ws.php",
-            "--method",
-            "lfi_to_rce",
-        )
-    )
-
-    assert result["resource"]["id"] == "ws_legacy"
-    assert captured["body"]["metadata"]["method"] == "POST"
-    assert captured["body"]["metadata"]["exploit_method"] == "lfi_to_rce"
-
-
 def test_snapshot_changes_and_waiting_run_are_bounded(monkeypatch) -> None:
     calls: list[tuple[str, str, dict | None]] = []
     task_states = iter(

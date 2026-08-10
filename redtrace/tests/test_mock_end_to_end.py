@@ -154,7 +154,7 @@ class LocalContainerManager:
         return self.container_name(project_id)
 
     def conversation_environment(
-        self, _project_id: str, _worker_type: str, _worker_name: str = ""
+        self, _project_id: str, _worker_type: str
     ) -> dict[str, str]:
         return {}
 

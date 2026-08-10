@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 
 from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
 from redtrace.dispatcher.contracts import parse_json_output, validate_explore_payload
 from redtrace.dispatcher.prompting import (
     add_blackboard_guidance,
-    format_explore_context,
+    format_hints,
     load_prompt,
-    preload_primary_skill,
     render_prompt,
 )
 from redtrace.dispatcher.protocol.client import CairnClient
@@ -20,21 +20,22 @@ from redtrace.dispatcher.tasks.common import (
     best_effort_release,
     cancel_reason,
     did_timeout,
-    is_transient_model_failure,
-    preview,
     project_allows_conclude_fallback,
+    preview,
     run_worker_process,
     task_healthcheck_enabled,
     write_conclude_result,
-    write_field_journal_learning,
     write_graph_snapshot_reference,
 )
 from redtrace.dispatcher.workers.registry import get_driver
 from redtrace.server.models import Intent, ProjectDetail
 
 LOG = logging.getLogger(__name__)
-
-
+_ACCESS_CHANNEL = re.compile(
+    r"web\s*shell|reverse\s*shell|c2\s*session|反弹\s*shell|反向\s*shell|持久.{0,8}通道",
+    re.IGNORECASE,
+)
+_RESOURCE_ID = re.compile(r"\b(?:ws|lis|ses|pay)_[0-9a-f]{12}\b", re.IGNORECASE)
 def run_explore_task(
     config: DispatchConfig,
     client: CairnClient,
@@ -96,30 +97,12 @@ def run_explore_task(
                 best_effort_release(client, project.project.id, intent.id, worker.name)
                 return "unhealthy"
 
-        if worker.type == "mock":
-            graph_reference = write_graph_snapshot_reference(
-                container_manager,
-                container_name,
-                export_yaml.strip(),
-                phase="explore_execute",
-            )
-            primary_skill = ""
-            primary_skill_content = ""
-        else:
-            graph_reference = format_explore_context(project, intent)
-            primary_skill, primary_skill_content, primary_skill_dir = preload_primary_skill(
-                intent.description,
-                worker.env,
-            )
-            if primary_skill_dir:
-                worker = worker.model_copy(
-                    update={
-                        "env": {
-                            **worker.env,
-                            "REDTRACE_PRIMARY_SKILL_DIR": primary_skill_dir,
-                        }
-                    }
-                )
+        graph_reference = write_graph_snapshot_reference(
+            container_manager,
+            container_name,
+            export_yaml.strip(),
+            phase="explore_execute",
+        )
         prompt = render_prompt(
             load_prompt(config.runtime.prompt_group, "explore.md"),
             {
@@ -135,8 +118,9 @@ def run_explore_task(
                 task_type="explore",
                 context_harness_enabled=config.context_harness.enabled,
                 local_execution=config.runtime.execution == "local",
-                primary_skill=primary_skill,
-                primary_skill_content=primary_skill_content,
+                hints=format_hints(
+                    [hint.model_dump() for hint in project.hints]
+                ),
             )
 
         session = driver.prepare_session()
@@ -226,7 +210,31 @@ def run_explore_task(
                 )
                 best_effort_release(client, project.project.id, intent.id, worker.name)
                 return "rejected"
-            outcome = write_conclude_result(
+            description, resource_ok = _attach_access_resource_ids(
+                client, project.project.id, intent.id, worker.name, description
+            )
+            if not resource_ok:
+                return _try_conclude_fallback(
+                    config,
+                    client,
+                    container_manager,
+                    container_name,
+                    worker,
+                    driver,
+                    project.project.id,
+                    intent,
+                    graph_reference,
+                    session,
+                    lease,
+                    cancellation,
+                    correction_prompt=(
+                        "你已声明建立 WebShell/reverse shell/C2 通道，但当前 Intent 没有共享 Resource。"
+                        "立即使用 redtrace-resource 注册；失败时查看对应子命令 --help 并修正参数重试一次。"
+                        "确认 snapshot 中出现 Resource ID 后，只返回符合原 explore schema 的 raw JSON，"
+                        "description 必须包含该 ID。不要重新利用漏洞。"
+                    ),
+                )
+            return write_conclude_result(
                 client,
                 project.project.id,
                 intent.id,
@@ -236,9 +244,6 @@ def run_explore_task(
                 phase_ms=execute_ms,
                 total_ms=int((time.perf_counter() - task_started) * 1000),
             )
-            if outcome == "success":
-                write_field_journal_learning(worker, payload)
-            return outcome
         if did_timeout(first):
             LOG.warning(
                 "explore timed out project=%s intent=%s worker=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -249,28 +254,6 @@ def run_explore_task(
                 int((time.perf_counter() - task_started) * 1000),
                 preview(first.stdout),
                 preview(first.stderr),
-            )
-            return _try_conclude_fallback(
-                config,
-                client,
-                container_manager,
-                container_name,
-                worker,
-                driver,
-                project.project.id,
-                intent,
-                graph_reference,
-                session,
-                lease,
-                cancellation,
-            )
-        if is_transient_model_failure(first.stdout, first.stderr):
-            LOG.warning(
-                "explore provider transient failure; preserving session and concluding project=%s intent=%s worker=%s code=%s",
-                project.project.id,
-                intent.id,
-                worker.name,
-                first.returncode,
             )
             return _try_conclude_fallback(
                 config,
@@ -325,6 +308,7 @@ def _try_conclude_fallback(
     session: str | None,
     lease: HeartbeatLease,
     cancellation: TaskCancellation,
+    correction_prompt: str | None = None,
 ) -> str:
     if not driver.supports_conclude() or not session:
         LOG.info(
@@ -368,7 +352,7 @@ def _try_conclude_fallback(
 
     container_name = container_manager.ensure_running(project_id)
 
-    prompt = render_prompt(
+    prompt = correction_prompt or render_prompt(
         load_prompt(config.runtime.prompt_group, "explore_conclude.md"),
         {
             "graph_yaml": graph_reference,
@@ -456,7 +440,19 @@ def _try_conclude_fallback(
         )
         best_effort_release(client, project_id, intent.id, worker.name)
         return "rejected"
-    outcome = write_conclude_result(
+    description, resource_ok = _attach_access_resource_ids(
+        client, project_id, intent.id, worker.name, description
+    )
+    if not resource_ok:
+        LOG.warning(
+            "access channel missing shared resource project=%s intent=%s worker=%s",
+            project_id,
+            intent.id,
+            worker.name,
+        )
+        best_effort_release(client, project_id, intent.id, worker.name)
+        return "failed"
+    return write_conclude_result(
         client,
         project_id,
         intent.id,
@@ -465,9 +461,28 @@ def _try_conclude_fallback(
         source="explore_conclude",
         phase_ms=conclude_ms,
     )
-    if outcome == "success":
-        write_field_journal_learning(worker, payload)
-    return outcome
+
+
+def _attach_access_resource_ids(
+    client: CairnClient,
+    project_id: str,
+    intent_id: str,
+    worker_name: str,
+    description: str,
+) -> tuple[str, bool]:
+    if not _ACCESS_CHANNEL.search(description) or _RESOURCE_ID.search(description):
+        return description, True
+    ids = [
+        str(resource["id"])
+        for resource in client.resource_snapshot(project_id)
+        if isinstance(resource, dict)
+        and resource.get("intent_id") == intent_id
+        and resource.get("worker") == worker_name
+        and _RESOURCE_ID.fullmatch(str(resource.get("id", "")))
+    ]
+    if not ids:
+        return description, False
+    return f"{description.rstrip()}\nShared Resource IDs: {', '.join(ids)}", True
 
 
 def _run_process(

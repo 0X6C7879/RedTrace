@@ -11,11 +11,12 @@ metadata:
 
 # route-skills in RedTrace
 
-`route-skills` 是 RedTrace 安全任务的总路由。根据目标类型、用户意图、工具链和当前证据，进入最具体的主 Skill；完整上游包固定在 `upstream/`（原 reverse-skill 项目，仅作来源与许可追溯）。先读 `REDTRACE_RULES.md`，再读 `upstream/RULES.md`，然后执行 `upstream/skills/SKILL.md` 与匹配的专家模块；其 case、scope、timeline、workitems、tool-index、bootstrap、report、field-journal 机制保持可用。
+`route-skills` 是 RedTrace 安全任务的总路由。根据目标类型、用户意图、工具链和当前证据，进入最具体的主 Skill；完整上游包固定在 `upstream/`（原 reverse-skill 项目，仅作来源与许可追溯）。每个会话只读一次 `REDTRACE_RULES.md`，随后从 `upstream/skills/SKILL.md` 定位并加载匹配的专家模块；除非专家模块明确引用，不读取体积较大的 `upstream/RULES.md`。其 case、scope、timeline、workitems、tool-index、bootstrap、report、field-journal 机制保持可用。
 
 ## 路由原则
 
-- 只加载一个主 Skill，必要时最多增加一个互补 Skill。
+- 路由后必须继续加载并执行最具体的专业 Skill，不能只返回名称后自行发挥。
+- 一次确定一个主 Skill 与必要的互补 Skill；连同本路由最多加载 5 个，已加载的文件不得重复读取。
 - 不把全部安全文档一次性塞入上下文，使用原生渐进加载。
 - 不展示下一步菜单等待用户选择。
 - 不替代 RedTrace 调度器、黑板和任务状态机。
@@ -48,5 +49,6 @@ metadata:
   `upstream/skills/code-audit/learned/`；项目事实只写入任务 Workspace 的
   `.redtrace/code-audit/`，不进入全局 Skill。
 
-Load only the primary specialist Skill plus at most one concrete complement;
-do not preload the full package.
+Load and execute the primary specialist Skill plus only the concrete complements
+needed by the current Intent. The complete set, including `route-skills`, must not
+exceed five Skills. Never stop after routing or reread an already loaded Skill.

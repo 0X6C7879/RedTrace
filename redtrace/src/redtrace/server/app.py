@@ -7,10 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from redtrace import __version__
 from redtrace.server import db
-from redtrace.server.operations import (
-    reconcile_interrupted_audit_runs,
-    resume_pending_tasks,
-)
+from redtrace.server.operations import resume_pending_tasks
 from redtrace.server.routers import audit, blackboard, capabilities, export, hints, intents, operations, plugins, projects, settings, workers
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -19,7 +16,6 @@ STATIC_DIR = Path(__file__).parent / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.configure(db.DEFAULT_DB)
-    reconcile_interrupted_audit_runs()
     resume_pending_tasks()
     yield
 

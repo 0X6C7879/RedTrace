@@ -383,7 +383,12 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     assert "rankDir: 'TB'" in index
     assert 'class="max-h-72 overflow-auto whitespace-pre-wrap break-words' in index
     assert "c2Expanded: false" in index
-    assert '@click="setAppPage(\'c2-listeners\'); c2Expanded = !c2Expanded"' in index
+    assert 'operations.js?v=20260810-performance-1' in index
+    assert '@click="setAppPage(\'c2-listeners\')" aria-label="打开 C2"' in index
+    assert '@click="c2Expanded = !c2Expanded"' in index
+    assert "setAppPage('c2-listeners'); c2Expanded" not in index
+    assert "/operations/tasks/${encodeURIComponent(taskId)}" in operations
+    assert "operations/tasks?limit=200`);\n        const task =" not in operations
     assert "if (page === 'webshell' || page.startsWith('c2-'))" not in index
     assert "const responseText = await r.text();" in index
     assert "data = JSON.parse(responseText);" in index
@@ -393,3 +398,8 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     assert "context_length: this.workerForm.context_1m ? 1048576 : null" in index
     assert "return 'admin';" in index
     assert "return 'admin';" in operations
+    assert "webshellSessionLabel()" in operations
+    assert "resource.status === 'available'" in operations
+    assert 'x-text="webshellSessionLabel()"' in index
+    assert 'x-show="webshellUsable()" @submit.prevent="runCommand()"' in index
+    assert "当前 WebShell 不可用" in index

@@ -80,6 +80,21 @@ def test_heartbeat_conflict_failure_kills_attached_process() -> None:
     assert process.kill_count == 1
 
 
+def test_heartbeat_notifies_only_new_blackboard_revisions() -> None:
+    seen: list[tuple[int, int]] = []
+    lease = HeartbeatLease(
+        lambda: ApiResult(200, {}), "intent", "worker", interval=60
+    )
+    assert lease.watch_blackboard(7, lambda previous, current: seen.append((previous, current)))
+    assert not lease.watch_blackboard(0, lambda *_revision: seen.append((-1, -1)))
+
+    lease._notify_blackboard(ApiResult(200, {"blackboard_revision": 7}))
+    lease._notify_blackboard(ApiResult(200, {"blackboard_revision": 9}))
+    lease._notify_blackboard(ApiResult(200, {"blackboard_revision": 9}))
+
+    assert seen == [(7, 9)]
+
+
 def test_container_manager_build_exec_process_wraps_command_with_timeout() -> None:
     manager = _manager()
     container = FakeContainer()
@@ -90,8 +105,13 @@ def test_container_manager_build_exec_process_wraps_command_with_timeout() -> No
     assert process.command == ["timeout", "-k", "5s", "300s", "agent", "-p", "prompt"]
     assert process.env["A"] == "B"
     assert process.env["PATH"].startswith("/opt/redtrace/runtime/bin:")
+    assert "/opt/redtrace/tools/bin:" in process.env["PATH"]
+    assert process.env["REDTRACE_TOOLS_DIR"] == "/opt/redtrace/tools"
     assert "/home/kali/.local/bin:" in process.env["PATH"]
     assert "/home/kali/go/bin:" in process.env["PATH"]
+    assert process.workdir == "/home/kali/workspace"
+    assert process.env["REDTRACE_WORKSPACE"] == process.workdir
+    assert process.env["TMPDIR"] == process.workdir
 
 
 def test_container_ready_initializes_route_skills_once() -> None:
@@ -163,6 +183,10 @@ def test_container_mounts_project_conversations_and_native_agent_config(
     assert volumes[str(paths.mcp.resolve())]["bind"] == "/opt/redtrace/mcp"
     assert volumes[str(paths.skills.resolve())] == {
         "bind": "/opt/redtrace/claude-plugin/skills",
+        "mode": "rw",
+    }
+    assert volumes[str((paths.runtime / "tools").resolve())] == {
+        "bind": "/opt/redtrace/tools",
         "mode": "rw",
     }
     assert "/opt/redtrace/plugins" not in targets

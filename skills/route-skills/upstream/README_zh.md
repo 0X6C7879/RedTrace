@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="reverse-skill.png" alt="reverse-skill" width="140" />
+</p>
+
 <h1 align="center">reverse-skill</h1>
 <h3 align="center">Reverse Engineering / Authorized Penetration Testing / Security Research Skill Router Pack</h3>
 
@@ -12,6 +16,7 @@
   <a href="https://github.com/zhaoxuya520/reverse-skill/forks"><img src="https://img.shields.io/github/forks/zhaoxuya520/reverse-skill?style=flat&logo=github" alt="forks"></a>
   <a href="https://github.com/zhaoxuya520/reverse-skill/issues"><img src="https://img.shields.io/github/issues/zhaoxuya520/reverse-skill?style=flat&logo=github" alt="issues"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="license"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-Keep%20a%20Changelog-orange" alt="changelog"></a>
 </p>
 
 <p align="center">
@@ -61,6 +66,14 @@
 - 同样的问题每次重新踩坑，经验无法复用
 
 PRIMARY 快路径：[skills/MASTER-ROUTING.md](skills/MASTER-ROUTING.md) · 全表：[skills/routing.md](skills/routing.md) · 作战契约：[skills/ops/](skills/ops/)
+
+<br/>
+
+<div align="center">
+  <a href="https://star-history.com/#zhaoxuya520/reverse-skill&Date">
+    <img src="docs/assets/star-history.svg" alt="Star History" width="650" />
+  </a>
+</div>
 
 <br/>
 

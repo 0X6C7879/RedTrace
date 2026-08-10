@@ -31,13 +31,12 @@ window.skillsPage = function skillsPage() {
     deleteArmed: false,
     deleteTimer: null,
     message: '',
+    messageType: 'info',
 
     get enabledCount() {
+      // Nested entries inherit enabled from their root package, so one
+      // count over the unified list already covers in-package Skills.
       return this.items.filter((item) => item.enabled).length;
-    },
-
-    get nestedCount() {
-      return this.items.filter((item) => item.nested).length;
     },
 
     get filteredItems() {
@@ -56,15 +55,27 @@ window.skillsPage = function skillsPage() {
 
     async load() {
       this.loading = true;
-      this.message = '';
+      this.setMessage('');
       try {
-        const [status, items] = await Promise.all([
+        // Status and the unified entry list load in parallel and fail
+        // independently: a partial outage must not blank the page.
+        const [statusResult, entriesResult] = await Promise.allSettled([
           capabilityRequest('GET', '/capabilities'),
           capabilityRequest('GET', '/capabilities/skill-entries'),
         ]);
-        this.status = status;
-        this.agents = status.agents.map((agent) => displayAgent(agent.id));
-        this.items = items;
+        if (statusResult.status === 'fulfilled') {
+          this.status = statusResult.value;
+          this.agents = statusResult.value.agents.map((agent) => displayAgent(agent.id));
+        }
+        if (entriesResult.status === 'fulfilled') {
+          this.items = entriesResult.value;
+        }
+        const failures = [statusResult, entriesResult]
+          .filter((result) => result.status === 'rejected')
+          .map((result) => result.reason?.message || String(result.reason));
+        if (failures.length) {
+          this.setMessage(failures.join('；'), 'error');
+        }
         const selected = this.filteredItems.find((item) => item.key === this.selectedName);
         if (selected) {
           await this.select(selected);
@@ -73,7 +84,7 @@ window.skillsPage = function skillsPage() {
           this.draft = null;
         }
       } catch (error) {
-        this.message = error.message;
+        this.setMessage(error.message, 'error');
       } finally {
         this.loading = false;
       }
@@ -84,7 +95,7 @@ window.skillsPage = function skillsPage() {
       this.deleteArmed = false;
       this.selectedName = item.key || item.name;
       this.rollbackVersion = '';
-      this.message = '';
+      this.setMessage('');
       try {
         if (item.nested) {
           const path = item.path.split('/').map(encodeURIComponent).join('/');
@@ -92,7 +103,9 @@ window.skillsPage = function skillsPage() {
             'GET',
             `/capabilities/skills/${encodeURIComponent(item.parent)}/entries/${path}`,
           );
-          this.draft.enabled = this.items.find((parent) => parent.name === item.parent)?.enabled;
+          this.draft.enabled = this.items.find(
+            (entry) => !entry.nested && entry.name === item.parent,
+          )?.enabled ?? false;
           this.versions = [];
           return;
         }
@@ -104,7 +117,7 @@ window.skillsPage = function skillsPage() {
         this.draft = draft;
         this.versions = versions;
       } catch (error) {
-        this.message = error.message;
+        this.setMessage(error.message, 'error');
       }
     },
 
@@ -112,7 +125,7 @@ window.skillsPage = function skillsPage() {
       this.isNew = true;
       this.selectedName = '';
       this.deleteArmed = false;
-      this.message = '';
+      this.setMessage('');
       this.draft = {
         name: '',
         enabled: true,
@@ -126,7 +139,7 @@ window.skillsPage = function skillsPage() {
     async save() {
       if (!this.draft || this.draft.nested || this.saving) return;
       this.saving = true;
-      this.message = '';
+      this.setMessage('');
       try {
         const path = this.isNew
           ? '/capabilities/skills'
@@ -142,10 +155,10 @@ window.skillsPage = function skillsPage() {
         this.isNew = false;
         this.selectedName = saved.name;
         this.draft = saved;
-        this.message = '已保存，将在下一个 agent 任务中自动同步。';
+        this.setMessage('已保存，将在下一个 agent 任务中自动同步。', 'success');
         await this.refreshList();
       } catch (error) {
-        this.message = error.message;
+        this.setMessage(error.message, 'error');
       } finally {
         this.saving = false;
       }
@@ -161,17 +174,17 @@ window.skillsPage = function skillsPage() {
       if (!Number.isInteger(version)) return;
       if (!window.confirm(`将 ${this.draft.name} 回滚到 v${version}？当前内容会作为新历史版本保留。`)) return;
       this.saving = true;
-      this.message = '';
+      this.setMessage('');
       try {
         this.draft = await capabilityRequest(
           'POST',
           `/capabilities/skills/${encodeURIComponent(this.draft.name)}/rollback/${version}`,
           { expected_revision: this.draft.revision },
         );
-        this.message = `已回滚到 v${version}，并保留完整历史。`;
+        this.setMessage(`已回滚到 v${version}，并保留完整历史。`, 'success');
         await this.load();
       } catch (error) {
-        this.message = error.message;
+        this.setMessage(error.message, 'error');
       } finally {
         this.saving = false;
       }
@@ -193,8 +206,13 @@ window.skillsPage = function skillsPage() {
         this.deleteArmed = false;
         await this.refreshList();
       } catch (error) {
-        this.message = error.message;
+        this.setMessage(error.message, 'error');
       }
+    },
+
+    setMessage(message, type = 'info') {
+      this.message = message;
+      this.messageType = type;
     },
   };
 };

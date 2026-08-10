@@ -89,6 +89,19 @@ def test_blackboard_status_changes_node_path_context_and_audit(client: TestClien
     assert changes["has_more"] is False
     assert changes["changes"][1]["node"]["description"] == "new shared fact"
 
+    snapshot = client.get(
+        f"/projects/{project_id}/blackboard/snapshot", headers=headers
+    ).json()
+    assert snapshot["revision"] == changes["revision"]
+    assert {item["id"] for item in snapshot["facts"]} == {
+        "origin",
+        "goal",
+        fact_id,
+    }
+    assert [item["id"] for item in snapshot["intents"]] == [intent_id]
+    assert snapshot["hints"][0]["content"] == "look here"
+    assert len(snapshot["edges"]) == 2
+
     node = client.get(f"/projects/{project_id}/blackboard/nodes/{fact_id}", headers=headers).json()
     assert node["found"] is True
     assert node["node"] == {"kind": "fact", "id": fact_id, "description": "new shared fact"}
@@ -166,6 +179,9 @@ def test_cli_uses_worker_context_and_snapshot_cursor(monkeypatch, capsys) -> Non
     assert captured["headers"]["X-redtrace-intent"] == "i009"
     assert json.loads(capsys.readouterr().out) == {"changed": False, "revision": 41}
 
+    assert blackboard_cli.main(["snapshot"]) == 0
+    assert captured["url"] == "http://redtrace.test/projects/proj_007/blackboard/snapshot"
+
 
 def test_parallel_workers_can_query_safely(client: TestClient) -> None:
     project_id, baseline = _create_project(client)
@@ -223,10 +239,8 @@ def test_worker_process_receives_read_only_blackboard_context(monkeypatch, worke
             return ProcessResult(0, "", "")
 
     class Manager:
-        def conversation_environment(self, _project_id, agent_type, worker_name):
-            return {
-                "REDTRACE_TEST_CONVERSATION_HOME": f"{agent_type}/{worker_name}"
-            }
+        def conversation_environment(self, _project_id, agent_type):
+            return {"REDTRACE_TEST_CONVERSATION_HOME": agent_type}
 
         def build_exec_process(self, _name, env, _argv, **_kwargs):
             captured.update(env)
@@ -278,22 +292,147 @@ def test_worker_process_receives_read_only_blackboard_context(monkeypatch, worke
     assert captured["REDTRACE_TASK_TYPE"] == "explore"
     assert captured["REDTRACE_INTENT_ID"] == "i003"
     assert captured["REDTRACE_BLACKBOARD_CURSOR"] == "17"
-    assert captured["REDTRACE_TEST_CONVERSATION_HOME"] == (
-        f"{worker_type}/{worker_type}-worker"
-    )
+    assert "/.redtrace/blackboard-notices/" in captured["REDTRACE_BLACKBOARD_NOTICE"]
+    assert captured["REDTRACE_BLACKBOARD_NOTICE"].endswith(".json")
+    assert captured["REDTRACE_TEST_CONVERSATION_HOME"] == worker_type
     if worker_type == "claudecode":
         assert captured["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "1048576"
     elif worker_type == "pi":
         assert captured["PI_MODEL_CONTEXT_WINDOW"] == "1048576"
 
 
-def test_prompt_guidance_is_optional_and_forbids_polling() -> None:
-    prompt = add_blackboard_guidance("Do the task.", 23)
-    assert "snapshot revision 为 23" in prompt
-    assert "`redtrace-blackboard`" in prompt
-    assert "不得轮询" in prompt
-    assert "按固定频率调用" in prompt
-    assert "才可调用只读" in prompt
+def test_running_worker_receives_blackboard_delta_notice(
+    tmp_path: Path, monkeypatch
+) -> None:
+    writes: list[tuple[str, str]] = []
+    queried_since: list[int] = []
+
+    class Process:
+        def set_output_handler(self, _handler):
+            return None
+
+        def start(self):
+            return None
+
+        def communicate(self, timeout):
+            return ProcessResult(0, "", "")
+
+    class Manager:
+        def conversation_environment(self, _project_id, _worker_type):
+            return {}
+
+        def write_text_file(self, _name, path, content):
+            writes.append((path, content))
+            return path
+
+        def build_exec_process(self, _name, _env, _argv, **_kwargs):
+            return Process()
+
+    class Client:
+        base_url = "http://redtrace.test"
+
+        def blackboard_changes(self, _project_id, since, **_context):
+            queried_since.append(since)
+            revision = 9 if len(queried_since) == 1 else 11
+            return {
+                "project": "proj_001",
+                "since": since,
+                "revision": revision,
+                "changes": [
+                    {"revision": revision, "kind": "fact", "node_id": f"f{revision:03d}"}
+                ],
+            }
+
+    class Lease:
+        callback = None
+
+        def watch_blackboard(self, _revision, callback):
+            self.callback = callback
+            return True
+
+        def attach_process(self, _process):
+            return None
+
+    class Publisher:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+        def handle_output(self, *_args):
+            return None
+
+        def finish(self, _result):
+            return None
+
+        def fail(self, _exc):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(common, "AuditPublisher", Publisher)
+    worker = WorkerConfig.model_validate(
+        {
+            "name": "pi-worker",
+            "type": "pi",
+            "task_types": ["explore"],
+            "max_running": 1,
+            "priority": 0,
+        }
+    )
+    lease = Lease()
+    workspace = tmp_path / "workspace"
+    common.run_worker_process(
+        Manager(),
+        str(workspace),
+        worker,
+        ["agent", "prompt"],
+        client=Client(),
+        project_id="proj_001",
+        intent_id="i003",
+        blackboard_revision=7,
+        phase="explore_execute",
+        timeout_seconds=10,
+        lease=lease,
+    )
+
+    initial = json.loads(writes[0][1])
+    assert initial == {
+        "project": "proj_001",
+        "since": 7,
+        "revision": 7,
+        "changed": False,
+        "changes": [],
+    }
+    assert lease.callback is not None
+    lease.callback(7, 9)
+    notice = json.loads(writes[-1][1])
+    assert notice["changed"] is True
+    assert notice["changes"][0]["node_id"] == "f009"
+    lease.callback(9, 11)
+    notice = json.loads(writes[-1][1])
+    assert queried_since == [7, 7]
+    assert notice["since"] == 7
+    assert notice["changes"][0]["node_id"] == "f011"
+
+
+def test_prompt_guidance_requires_bounded_blackboard_refresh() -> None:
+    prompt = add_blackboard_guidance("Do the task.", 23, hints='[{"content":"keep it"}]')
+    assert "Graph snapshot revision 为 23" in prompt
+    assert "`redtrace-blackboard snapshot`" in prompt
+    assert "`redtrace-blackboard changes --since" in prompt
+    assert "$REDTRACE_BLACKBOARD_NOTICE" in prompt
+    assert "不得固定频率轮询" in prompt
+    assert "$REDTRACE_WORKSPACE" in prompt
+    assert "`<题目ID>/`" in prompt
+    assert "由你依据当前任务性质自行决定" in prompt
+    assert "`/tmp`" in prompt
+    assert "通用解题脚本" in prompt
+    assert "$REDTRACE_TOOLS_DIR" in prompt
+    assert '"content":"keep it"' in prompt
+    assert "Web 调研能力贯穿整个会话" in prompt
+    assert "不限于第一轮" in prompt
+    assert "后续任一对话轮次" in prompt
+    assert "同时启用最多 5 个" in prompt
 
 
 def test_prompt_guidance_describes_windows_local_shell() -> None:

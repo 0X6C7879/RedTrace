@@ -164,6 +164,61 @@ def test_local_backend_creates_isolated_project_dir(tmp_path: Path) -> None:
     assert backend.container_name("proj_001") == str(tmp_path / "proj_001")
 
 
+def test_local_backend_retries_transient_workspace_create_race(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_dir = tmp_path / "proj_001"
+    original_mkdir = Path.mkdir
+    raced = False
+
+    def racing_mkdir(path: Path, *args, **kwargs) -> None:
+        nonlocal raced
+        if path == project_dir and not raced:
+            raced = True
+            original_mkdir(path, *args, **kwargs)
+            raise FileExistsError(path)
+        original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", racing_mkdir)
+    backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path)))
+
+    assert Path(backend.ensure_running("proj_001")) == project_dir
+    assert project_dir.is_dir()
+
+
+def test_local_backend_does_not_replace_workspace_file(tmp_path: Path) -> None:
+    project_path = tmp_path / "proj_001"
+    project_path.write_text("keep me", encoding="utf-8")
+    backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path)))
+
+    with pytest.raises(NotADirectoryError, match="managed directory path"):
+        backend.ensure_running("proj_001")
+
+    assert project_path.read_text(encoding="utf-8") == "keep me"
+
+
+def test_local_backend_reports_wsl_ghost_directory_with_guidance(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_dir = tmp_path / "proj_001"
+
+    def ghosted_mkdir(path: Path, *args, **kwargs) -> None:
+        if path == project_dir:
+            # WSL drvfs ghost: mkdir says EEXIST while stat says ENOENT.
+            raise FileExistsError(17, "File exists", str(path))
+        Path.mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", ghosted_mkdir)
+    backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path)))
+
+    with pytest.raises(RuntimeError, match="wsl.exe --shutdown"):
+        backend.ensure_running("proj_001")
+
+    assert not project_dir.exists()
+
+
 def test_local_backend_keeps_agent_config_linked_and_conversations_in_project(
     tmp_path: Path,
     monkeypatch,
@@ -190,8 +245,8 @@ def test_local_backend_keeps_agent_config_linked_and_conversations_in_project(
     backend = LocalBackend(LocalConfig(workspace_root=str(paths.workspaces)), paths=paths)
 
     workspace = Path(backend.ensure_running("proj_001"))
-    env = backend.conversation_environment("proj_001", "codex", "Codex")
-    state = paths.projects / "proj_001" / "conversations" / "codex" / "worker-Codex"
+    env = backend.conversation_environment("proj_001", "codex")
+    state = paths.projects / "proj_001" / "conversations" / "codex"
 
     assert env == {"CODEX_HOME": str(state)}
     assert (state / "config.toml").read_text(encoding="utf-8") == config.read_text(
@@ -199,28 +254,11 @@ def test_local_backend_keeps_agent_config_linked_and_conversations_in_project(
     )
     assert not (state / "sessions").exists()
     assert (workspace / ".pi" / "mcp.json").resolve() == pi_mcp.resolve()
-    assert backend.conversation_environment("proj_001", "pi", "Pi") == {
+    assert backend.conversation_environment("proj_001", "pi") == {
         "PI_CODING_AGENT_SESSION_DIR": str(
-            paths.projects / "proj_001" / "conversations" / "pi" / "worker-Pi"
+            paths.projects / "proj_001" / "conversations" / "pi"
         )
     }
-    assert backend.conversation_environment("proj_001", "pi", "Pi-2") != (
-        backend.conversation_environment("proj_001", "pi", "Pi")
-    )
-
-
-def test_local_claude_uses_bash_when_available(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    home = tmp_path / "home"
-    (home / ".claude").mkdir(parents=True)
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    monkeypatch.setattr(Path, "is_file", lambda self: str(self) == "/bin/bash")
-    backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path / "workspaces")))
-
-    env = backend.conversation_environment("proj_001", "claudecode", "Claude")
-
-    assert env["SHELL"] == "/bin/bash"
 
 
 def test_local_graph_snapshot_uses_managed_project_path(tmp_path: Path) -> None:
@@ -264,13 +302,18 @@ def test_local_backend_merges_host_env_with_worker_env(
     process = backend.build_exec_process(
         handle,
         {"REDTRACE_WORKER_VAR": "worker"},
-        ["sh", "-c", 'printf "%s-%s" "$REDTRACE_HOST_VAR" "$REDTRACE_WORKER_VAR"'],
+        [
+            "sh",
+            "-c",
+            'printf "%s-%s|%s|%s|%s" "$REDTRACE_HOST_VAR" "$REDTRACE_WORKER_VAR" "$PWD" "$REDTRACE_WORKSPACE" "$TMPDIR"',
+        ],
         timeout_seconds=10,
     )
     process.start()
     result = process.communicate(timeout=20)
 
-    assert result.stdout == "host-worker"
+    workspace = str((tmp_path / "proj_001").resolve())
+    assert result.stdout == f"host-worker|{workspace}|{workspace}|{workspace}"
 
 
 def test_local_common_env_reaches_worker_subprocess(
@@ -688,10 +731,9 @@ def test_explore_runs_real_local_cli_end_to_end(tmp_path: Path, monkeypatch) -> 
 
     assert outcome == "success"
     assert client.concluded == [("proj_001", "i001", "test-worker", "local fake fact")]
-    # Explore now receives only the bounded current Intent context inline; it
-    # must not materialize and reread the full graph.
+    # graph snapshot was materialised on the host under the patched root
     snapshot_root = tmp_path / "prompts"
-    assert not snapshot_root.exists()
+    assert any(p.name == "graph.yaml" for p in snapshot_root.rglob("*"))
 
 
 def test_explore_local_cli_rejection_releases_intent(

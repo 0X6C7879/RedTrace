@@ -97,13 +97,6 @@ RUN sudo npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
     codegraph --version && \
     codegraph serve --help >/dev/null
 
-# RTK (Rust Token Killer) compresses tool output before it reaches the Worker
-# context; the hook/integration files come from the host mounts, so the image
-# only needs the binary on the Worker PATH.
-RUN curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/master/install.sh | sh && \
-    sudo ln -sf "$(ls "$HOME/.local/bin/rtk" "$HOME/.cargo/bin/rtk" 2>/dev/null | head -n1)" /usr/local/bin/rtk && \
-    rtk --version
-
 RUN sudo chmod +x /usr/local/bin/kerbrute
 RUN mkdir -p /home/kali/.config/nuclei && \
     echo >> /home/kali/.config/nuclei/config.yaml && \

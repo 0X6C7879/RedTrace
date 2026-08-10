@@ -17,8 +17,6 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-import yaml
-
 NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 MANIFEST_PATH = ".redtrace/capabilities.json"
 BLACKBOARD_CLI_PATH = ".redtrace/bin/redtrace-blackboard"
@@ -40,15 +38,6 @@ DEFAULT_HISTORY_LIMIT = 12
 SKILL_TRUST_STATES = frozenset({"provisional", "trusted", "retired"})
 SKILL_FILE_SCAN_IGNORES = frozenset(
     {".git", ".venv", "__pycache__", "node_modules"}
-)
-SKILL_ENTRY_SCAN_IGNORES = SKILL_FILE_SCAN_IGNORES | {".redtrace"}
-SKILL_ROUTER_DESCRIPTION_MARKERS = (
-    "routes authorized",
-    "routes reverse",
-    "routes tasks",
-    "route to the most specific",
-    "路由到",
-    "总路由",
 )
 
 PI_PROVIDER_EXTENSION = """\
@@ -75,9 +64,7 @@ export default function (pi) {
     id: values.PI_MODEL,
     name: values.PI_MODEL,
     reasoning: true,
-    // Third-party OpenAI/Anthropic-compatible gateways commonly reject Pi's
-    // image_url variant. RedTrace Workers are text/tool agents by default.
-    input: ["text"],
+    input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,
     maxTokens: Math.min(131072, contextWindow),
@@ -166,38 +153,18 @@ def _atomic_write(path: Path, content: str) -> None:
         raise
 
 
-def _skill_frontmatter(content: str) -> dict[str, Any]:
-    """Parse SKILL.md YAML frontmatter, degrading safely on invalid YAML."""
-    lines = content.splitlines()
-    if not lines or lines[0].strip() != "---":
+def _frontmatter(content: str) -> dict[str, str]:
+    if not content.startswith("---"):
         return {}
-    for index in range(1, len(lines)):
-        if lines[index].strip() != "---":
-            continue
-        try:
-            parsed = yaml.safe_load("\n".join(lines[1:index]))
-        except yaml.YAMLError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
-
-
-def normalize_skill_description(value: Any) -> str:
-    """Collapse any frontmatter description into a single-line summary."""
-    if not isinstance(value, str):
-        return ""
-    return re.sub(r"\s+", " ", value.strip().lstrip("|>").strip())
-
-
-def is_router_frontmatter(metadata: dict[str, Any], description: str) -> bool:
-    """Whether a SKILL.md declares itself as a router into nested Skills."""
-    metadata_value = metadata.get("metadata")
-    if isinstance(metadata_value, dict) and bool(metadata_value.get("router")):
-        return True
-    if bool(metadata.get("router")):
-        return True
-    lowered = description.lower()
-    return any(marker in lowered for marker in SKILL_ROUTER_DESCRIPTION_MARKERS)
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return {}
+    values: dict[str, str] = {}
+    for line in parts[1].splitlines():
+        key, separator, value = line.partition(":")
+        if separator and key.strip() in {"name", "description"}:
+            values[key.strip()] = value.strip().strip("\"'")
+    return values
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,36 +198,6 @@ class SkillRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class SkillEntry:
-    """One displayable Skill: either a root package or a nested SKILL.md."""
-
-    key: str
-    name: str
-    description: str
-    parent: str
-    path: str
-    nested: bool
-    readonly: bool
-    enabled: bool
-    depth: int
-    router: bool = False
-
-    def summary(self) -> dict[str, Any]:
-        return {
-            "key": self.key,
-            "name": self.name,
-            "description": self.description,
-            "parent": self.parent,
-            "path": self.path,
-            "nested": self.nested,
-            "readonly": self.readonly,
-            "enabled": self.enabled,
-            "depth": self.depth,
-            "router": self.router,
-        }
-
-
-@dataclass(frozen=True, slots=True)
 class McpRecord:
     name: str
     enabled: bool
@@ -283,7 +220,6 @@ class McpRecord:
 class CapabilityStore:
     _skill_list_cache_lock = threading.Lock()
     _skill_list_cache: dict[str, tuple[float, tuple[SkillRecord, ...]]] = {}
-    _skill_entry_cache: dict[str, tuple[float, tuple[SkillEntry, ...]]] = {}
     _skill_list_cache_seconds = 1.0
 
     def __init__(
@@ -336,105 +272,9 @@ class CapabilityStore:
                 records.append(record)
         return records
 
-    def list_skill_entries(self) -> list[SkillEntry]:
-        """Return root Skills and all nested SKILL.md entries in one scan."""
-        self.ensure()
-        cache_key = str(self.skills_dir)
-        now = time.monotonic()
-        with self._skill_list_cache_lock:
-            cached = self._skill_entry_cache.get(cache_key)
-            if cached is not None and now - cached[0] < self._skill_list_cache_seconds:
-                return list(cached[1])
-            entries = self._list_skill_entries_uncached()
-            self._skill_entry_cache[cache_key] = (now, tuple(entries))
-            return entries
-
-    def _list_skill_entries_uncached(self) -> list[SkillEntry]:
-        entries: list[SkillEntry] = []
-        for record in self._list_skills_uncached():
-            root_dir = self.skills_dir / record.name
-            nested = self._iter_nested_skill_files(root_dir)
-            nested_paths = [
-                entrypoint.relative_to(root_dir).as_posix()
-                for entrypoint in nested
-            ]
-            root_metadata: dict[str, Any] = {}
-            root_entrypoint = root_dir / "SKILL.md"
-            if root_entrypoint.is_file():
-                try:
-                    root_metadata = _skill_frontmatter(
-                        root_entrypoint.read_text(encoding="utf-8")
-                    )
-                except OSError:
-                    root_metadata = {}
-            entries.append(
-                SkillEntry(
-                    key=record.name,
-                    name=record.name,
-                    description=record.description,
-                    parent="",
-                    path="SKILL.md",
-                    nested=False,
-                    readonly=False,
-                    enabled=record.enabled,
-                    depth=0,
-                    router=bool(nested)
-                    and is_router_frontmatter(root_metadata, record.description),
-                )
-            )
-            for entrypoint, relative in zip(nested, nested_paths):
-                try:
-                    content = entrypoint.read_text(encoding="utf-8")
-                except OSError:
-                    continue
-                metadata = _skill_frontmatter(content)
-                name = metadata.get("name")
-                description = normalize_skill_description(
-                    metadata.get("description")
-                )
-                directory = str(PurePosixPath(relative).parent)
-                has_deeper = any(
-                    other.startswith(directory + "/")
-                    for other in nested_paths
-                    if other != relative
-                )
-                entries.append(
-                    SkillEntry(
-                        key=f"{record.name}:{relative}",
-                        name=(
-                            name.strip()
-                            if isinstance(name, str) and name.strip()
-                            else entrypoint.parent.name
-                        ),
-                        description=description,
-                        parent=record.name,
-                        path=relative,
-                        nested=True,
-                        readonly=True,
-                        enabled=record.enabled,
-                        depth=len(PurePosixPath(relative).parts) - 1,
-                        router=has_deeper
-                        and is_router_frontmatter(metadata, description),
-                    )
-                )
-        return entries
-
-    def _iter_nested_skill_files(self, root_dir: Path) -> list[Path]:
-        found: list[Path] = []
-        for root, directories, names in os.walk(root_dir):
-            directories[:] = sorted(
-                name
-                for name in directories
-                if name not in SKILL_ENTRY_SCAN_IGNORES
-            )
-            if Path(root) != root_dir and "SKILL.md" in names:
-                found.append(Path(root) / "SKILL.md")
-        return sorted(found)
-
     def _invalidate_skill_list_cache(self) -> None:
         with self._skill_list_cache_lock:
             self._skill_list_cache.pop(str(self.skills_dir), None)
-            self._skill_entry_cache.pop(str(self.skills_dir), None)
 
     def get_skill(
         self,
@@ -461,7 +301,7 @@ class CapabilityStore:
         if not directory.is_dir() or not entrypoint.is_file():
             return None
         content = entrypoint.read_text(encoding="utf-8")
-        metadata = _skill_frontmatter(content)
+        metadata = _frontmatter(content)
         state_path = directory / ".redtrace.json"
         state: dict[str, Any] = {}
         if state_path.is_file():
@@ -513,7 +353,7 @@ class CapabilityStore:
             )
         return SkillRecord(
             name=directory.name,
-            description=normalize_skill_description(metadata.get("description")),
+            description=metadata.get("description", ""),
             enabled=enabled,
             content=content,
             files=files,

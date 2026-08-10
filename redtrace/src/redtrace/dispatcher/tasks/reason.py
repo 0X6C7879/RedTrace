@@ -20,7 +20,6 @@ from redtrace.dispatcher.tasks.common import (
     best_effort_release_reason,
     cancel_reason,
     did_timeout,
-    is_transient_model_failure,
     preview,
     run_worker_process,
     task_healthcheck_enabled,
@@ -95,6 +94,9 @@ def run_reason_task(
             for intent in project.intents
             if intent.to is None
         ]
+        available_intent_slots = max(
+            0, config.tasks.reason.max_intents - len(open_intents)
+        )
         allowed_fact_ids = [fact.id for fact in project.facts if fact.id != "goal"]
         LOG.debug(
             "reason context prepared project=%s worker=%s facts=%s allowed_fact_ids=%s hints=%s open_intents=%s",
@@ -196,16 +198,9 @@ def run_reason_task(
             kind, data = validate_reason_payload(
                 payload,
                 open_intents_empty=not open_intents,
-                max_intents=config.tasks.reason.max_intents,
+                max_intents=available_intent_slots,
             )
         except Exception as exc:
-            if is_transient_model_failure(result.stdout, result.stderr):
-                LOG.warning(
-                    "reason provider transient failure; skipping format repair project=%s worker=%s",
-                    project.project.id,
-                    worker.name,
-                )
-                return "failed"
             if not driver.supports_conclude() or session is None:
                 LOG.warning(
                     "reason parse failed project=%s worker=%s error=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -287,7 +282,7 @@ def run_reason_task(
                 kind, data = validate_reason_payload(
                     payload,
                     open_intents_empty=not open_intents,
-                    max_intents=config.tasks.reason.max_intents,
+                    max_intents=available_intent_slots,
                 )
             except Exception as repair_exc:
                 LOG.warning(

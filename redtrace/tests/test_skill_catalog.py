@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from redtrace.capabilities import CapabilityStore
+from redtrace.capabilities import CapabilityStore, workspace_payload
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,8 +34,10 @@ def _catalog_directories() -> list[Path]:
 
 
 @pytest.fixture(scope="module")
-def catalog() -> CapabilityStore:
-    return CapabilityStore(REPO_ROOT)
+def materialized_catalog() -> tuple[CapabilityStore, dict[str, bytes]]:
+    store = CapabilityStore(REPO_ROOT)
+    _, files = workspace_payload(store)
+    return store, files
 
 
 def test_skill_catalog_is_bounded_and_well_formed() -> None:
@@ -62,17 +64,17 @@ def test_skill_catalog_is_bounded_and_well_formed() -> None:
         assert len(description) <= 1024
         assert "<" not in description and ">" not in description
 
-    assert not {
-        path.name
-        for path in SKILLS_DIR.rglob("*")
-        if path.name in {".git", ".DS_Store"}
-    }
+    assert not list(SKILLS_DIR.rglob(".git"))
+    assert not list(SKILLS_DIR.rglob(".DS_Store"))
 
 
 def test_route_skills_is_complete_and_shared_with_all_workers(
-    catalog: CapabilityStore,
+    materialized_catalog: tuple[CapabilityStore, dict[str, bytes]],
 ) -> None:
-    record = catalog.get_skill("route-skills")
+    store, files = materialized_catalog
+
+    skill_dir = SKILLS_DIR / "route-skills"
+    record = store.get_skill("route-skills")
     required = {
         "upstream/RULES.md",
         "upstream/skills/SKILL.md",
@@ -92,8 +94,16 @@ def test_route_skills_is_complete_and_shared_with_all_workers(
     assert record.enabled is True
     assert required <= set(record.files)
     assert "cab837a298fec6fa28a49ef746d0085e0b112cfa" in record.content
-    search = catalog.get_skill("brave-search")
+    assert not list(skill_dir.rglob(".git"))
+    for prefix in (".claude/skills", ".agents/skills"):
+        assert f"{prefix}/route-skills/SKILL.md" in files
+        for relative in required:
+            assert f"{prefix}/route-skills/{relative}" in files
+
+    search = store.get_skill("brave-search")
     assert search.enabled is True
+    assert ".claude/skills/brave-search/SKILL.md" in files
+    assert ".agents/skills/brave-search/SKILL.md" in files
 
 
 def test_route_skills_controller_is_non_interactive_for_redtrace_workers() -> None:
@@ -114,14 +124,13 @@ def test_route_skills_controller_is_non_interactive_for_redtrace_workers() -> No
 
 
 def test_playwright_cli_skill_is_shared_with_all_workers(
-    catalog: CapabilityStore,
+    materialized_catalog: tuple[CapabilityStore, dict[str, bytes]],
 ) -> None:
-    record = catalog.get_skill("playwright")
+    store, files = materialized_catalog
 
-    assert record.enabled is True
-    assert {
-        "SKILL.md",
-        "scripts/playwright_cli.sh",
-        "references/cli.md",
-        "references/workflows.md",
-    } <= set(record.files)
+    assert store.get_skill("playwright").enabled is True
+    for prefix in (".claude/skills", ".agents/skills"):
+        assert f"{prefix}/playwright/SKILL.md" in files
+        assert f"{prefix}/playwright/scripts/playwright_cli.sh" in files
+        assert f"{prefix}/playwright/references/cli.md" in files
+        assert f"{prefix}/playwright/references/workflows.md" in files

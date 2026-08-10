@@ -162,13 +162,12 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
         assert 'x-data="mcpPage()"' in index.text
         assert 'x-data="pluginsPage()"' in index.text
         assert "Skill evolution queue" not in index.text
-        assert "包内 Skill" in index.text
+        assert "个包内 Skill" not in index.text
         assert "选择回滚版本" in index.text
         assert "先选择一个 RedTrace 项目" not in index.text[index.text.index("x-data=\"pluginsPage()\"") :]
         capabilities_script = client.get("/static/capabilities.js")
         assert capabilities_script.status_code == 200
         assert "skill-entries" in capabilities_script.text
-        assert "nestedEntries" not in capabilities_script.text
         assert "async rollback()" in capabilities_script.text
 
         status = client.get("/capabilities")
@@ -192,6 +191,16 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
         entries = client.get("/capabilities/skills/recon/entries")
         assert entries.status_code == 200
         assert entries.json()[0]["name"] == "deep-recon"
+        unified = client.get("/capabilities/skill-entries")
+        assert unified.status_code == 200
+        unified_by_key = {entry["key"]: entry for entry in unified.json()}
+        assert unified_by_key["recon"]["nested"] is False
+        assert unified_by_key["recon"]["enabled"] is True
+        nested_entry = unified_by_key["recon:modules/deep/SKILL.md"]
+        assert nested_entry["nested"] is True
+        assert nested_entry["name"] == "deep-recon"
+        assert nested_entry["enabled"] is True
+        assert client.get("/capabilities").json()["skills"]["total"] == 2
         detail = client.get(
             "/capabilities/skills/recon/entries/modules/deep/SKILL.md"
         )
@@ -201,6 +210,12 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
         toggled = client.patch("/capabilities/skills/recon/enabled", json={"enabled": False})
         assert toggled.status_code == 200
         assert toggled.json()["enabled"] is False
+        toggled_entries = {
+            entry["key"]: entry
+            for entry in client.get("/capabilities/skill-entries").json()
+        }
+        assert toggled_entries["recon"]["enabled"] is False
+        assert toggled_entries["recon:modules/deep/SKILL.md"]["enabled"] is False
 
         server = client.post(
             "/capabilities/mcp",
@@ -255,195 +270,6 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
         assert client.delete("/capabilities/mcp/filesystem").status_code == 204
         assert client.delete("/capabilities/plugins/browser").status_code == 204
         assert plugin_dir.is_dir()
-
-
-def test_skill_entries_unify_root_and_nested_skills(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("REDTRACE_CAPABILITIES_ROOT", str(tmp_path))
-    store = CapabilityStore(tmp_path)
-    for name in ("alpha", "beta", "pack-a"):
-        store.write_skill(name, SKILL)
-    ida = tmp_path / "skills" / "pack-a" / "upstream" / "skills" / "ida-reverse"
-    ida.mkdir(parents=True)
-    (ida / "SKILL.md").write_text(
-        "---\n"
-        "name: ida-reverse\n"
-        "description: |\n"
-        "  Use IDA Pro to analyze binaries.\n"
-        "  Focus on stripping wrappers.\n"
-        "---\n"
-        "\n"
-        "# IDA reverse\n",
-        encoding="utf-8",
-    )
-    ghidra = tmp_path / "skills" / "alpha" / "tools" / "ghidra-flow"
-    ghidra.mkdir(parents=True)
-    (ghidra / "SKILL.md").write_text(
-        "---\n"
-        "name: ghidra-flow\n"
-        "description: >\n"
-        "  Trace control flow\n"
-        "  with Ghidra.\n"
-        "---\n"
-        "\n"
-        "# Ghidra flow\n",
-        encoding="utf-8",
-    )
-    # Dependency directories never surface as Skills.
-    ignored = tmp_path / "skills" / "pack-a" / "node_modules" / "fake"
-    ignored.mkdir(parents=True)
-    (ignored / "SKILL.md").write_text("---\nname: fake\n---\n", encoding="utf-8")
-
-    with TestClient(app) as client:
-        status = client.get("/capabilities").json()
-        assert status["skills"] == {"total": 5, "enabled": 5}
-
-        entries = client.get("/capabilities/skill-entries").json()
-        assert len(entries) == 5
-        keys = {entry["key"] for entry in entries}
-        assert {"alpha", "beta", "pack-a"} <= keys
-        assert not any("node_modules" in entry["path"] for entry in entries)
-
-        ida_entry = next(
-            entry
-            for entry in entries
-            if entry["key"] == "pack-a:upstream/skills/ida-reverse/SKILL.md"
-        )
-        assert ida_entry["name"] == "ida-reverse"
-        assert ida_entry["parent"] == "pack-a"
-        assert ida_entry["nested"] is True
-        assert ida_entry["readonly"] is True
-        assert ida_entry["enabled"] is True
-        assert ida_entry["depth"] == 3
-        assert ida_entry["description"] == (
-            "Use IDA Pro to analyze binaries. Focus on stripping wrappers."
-        )
-
-        ghidra_entry = next(
-            entry for entry in entries if entry["name"] == "ghidra-flow"
-        )
-        assert ghidra_entry["parent"] == "alpha"
-        assert ghidra_entry["description"] == "Trace control flow with Ghidra."
-
-        # Disabling a root package disables every nested Skill inside it,
-        # while nested Skills of other packages stay enabled.
-        toggled = client.patch(
-            "/capabilities/skills/pack-a/enabled", json={"enabled": False}
-        )
-        assert toggled.status_code == 200
-
-        entries = client.get("/capabilities/skill-entries").json()
-        by_key = {entry["key"]: entry for entry in entries}
-        assert by_key["pack-a"]["enabled"] is False
-        assert by_key["pack-a:upstream/skills/ida-reverse/SKILL.md"]["enabled"] is False
-        assert by_key["alpha:tools/ghidra-flow/SKILL.md"]["enabled"] is True
-        status = client.get("/capabilities").json()
-        assert status["skills"] == {"total": 5, "enabled": 3}
-
-
-def test_nested_skill_entries_normalize_descriptions_and_degrade_safely(
-    tmp_path: Path,
-) -> None:
-    store = CapabilityStore(tmp_path)
-    store.write_skill("pack", SKILL)
-    root = tmp_path / "skills" / "pack"
-    cases = {
-        "literal": (
-            "---\n"
-            "name: literal-skill\n"
-            "description: |\n"
-            "  第一段\n"
-            "  第二段\n"
-            "---\n"
-            "\n"
-            "# Literal\n"
-        ),
-        "non-string": (
-            "---\n"
-            "name: non-string\n"
-            "description: [1, 2]\n"
-            "---\n"
-            "\n"
-            "# Non string\n"
-        ),
-        "broken": "---\nname: [unclosed\ndescription: nope\n---\n\n# Broken\n",
-    }
-    for directory_name, content in cases.items():
-        directory = root / directory_name
-        directory.mkdir(parents=True)
-        (directory / "SKILL.md").write_text(content, encoding="utf-8")
-
-    entries = {
-        entry.path: entry for entry in store.list_skill_entries() if entry.nested
-    }
-    literal = entries["literal/SKILL.md"]
-    assert literal.description == "第一段 第二段"
-    assert not literal.description.startswith(("|", ">", "\n", " "))
-    assert entries["non-string/SKILL.md"].description == ""
-    broken = entries["broken/SKILL.md"]
-    assert broken.name == "broken"
-    assert broken.description == ""
-
-
-def test_skill_entries_mark_routers_without_hiding_concrete_skills(
-    tmp_path: Path,
-) -> None:
-    store = CapabilityStore(tmp_path)
-    store.write_skill("pack", SKILL)
-    root = tmp_path / "skills" / "pack"
-    # Router frontmatter: explicit flag plus a routing description.
-    (root / "SKILL.md").write_text(
-        "---\n"
-        "name: pack\n"
-        "description: Routes authorized tasks to the most specific Skill.\n"
-        "metadata:\n"
-        "  router: true\n"
-        "---\n"
-        "\n"
-        "# Pack router\n",
-        encoding="utf-8",
-    )
-    sub_router = root / "upstream" / "skills"
-    sub_router.mkdir(parents=True)
-    (sub_router / "SKILL.md").write_text(
-        "---\n"
-        "name: sub-router\n"
-        "description: Routes reverse engineering tasks to specialists.\n"
-        "---\n"
-        "\n"
-        "# Sub router\n",
-        encoding="utf-8",
-    )
-    concrete = sub_router / "pentest-tools"
-    concrete.mkdir(parents=True)
-    (concrete / "SKILL.md").write_text(
-        "---\n"
-        "name: pentest-tools\n"
-        "description: Penetration testing toolchain.\n"
-        "---\n"
-        "\n"
-        "# Pentest\n",
-        encoding="utf-8",
-    )
-    sub_skill = concrete / "src-hunter"
-    sub_skill.mkdir(parents=True)
-    (sub_skill / "SKILL.md").write_text(
-        "---\n"
-        "name: src-hunter\n"
-        "description: Hunt source code.\n"
-        "---\n"
-        "\n"
-        "# Src hunter\n",
-        encoding="utf-8",
-    )
-
-    by_key = {entry.key: entry for entry in store.list_skill_entries()}
-    assert by_key["pack"].router is True
-    assert by_key["pack:upstream/skills/SKILL.md"].router is True
-    # Concrete Skills stay visible even when they bundle deeper sub-Skills.
-    assert by_key["pack:upstream/skills/pentest-tools/SKILL.md"].router is False
-    assert by_key["pack:upstream/skills/pentest-tools/src-hunter/SKILL.md"].router is False
 
 
 def test_skill_list_does_not_walk_dependency_directories(tmp_path: Path) -> None:

@@ -181,6 +181,59 @@ def blackboard_status(
         return _audit_result(conn, project_id, context, "status", {"since": since}, result, result_count=0)
 
 
+@router.get("/snapshot")
+def blackboard_snapshot(
+    project_id: str,
+    context: QueryContext = Depends(query_context),
+) -> dict[str, Any]:
+    with get_conn() as conn:
+        get_project_or_404(conn, project_id)
+        facts = [
+            {"kind": "fact", **dict(row)}
+            for row in conn.execute(
+                "SELECT id, description FROM facts WHERE project_id = ? ORDER BY rowid",
+                (project_id,),
+            ).fetchall()
+        ]
+        intents = [
+            {
+                "kind": "intent",
+                **intent_to_model(conn, row, project_id).model_dump(
+                    mode="json", by_alias=True
+                ),
+            }
+            for row in conn.execute(
+                "SELECT * FROM intents WHERE project_id = ? ORDER BY created_at, id",
+                (project_id,),
+            ).fetchall()
+        ]
+        hints = [
+            {"kind": "hint", **dict(row)}
+            for row in conn.execute(
+                "SELECT id, content, creator, created_at FROM hints WHERE project_id = ? ORDER BY created_at, id",
+                (project_id,),
+            ).fetchall()
+        ]
+        result = {
+            "project": project_id,
+            "command": "snapshot",
+            "revision": get_blackboard_revision(conn, project_id),
+            "facts": facts,
+            "intents": intents,
+            "hints": hints,
+            "edges": _graph_edges(conn, project_id),
+        }
+        return _audit_result(
+            conn,
+            project_id,
+            context,
+            "snapshot",
+            {},
+            result,
+            result_count=len(facts) + len(intents) + len(hints),
+        )
+
+
 @router.get("/changes")
 def blackboard_changes(
     project_id: str,

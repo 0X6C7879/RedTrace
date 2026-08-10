@@ -10,7 +10,6 @@ from redtrace.dispatcher.contracts import (
     validate_bootstrap_execute_payload,
 )
 from redtrace.dispatcher.prompting import (
-    format_active_peer_work,
     add_blackboard_guidance,
     format_hints,
     load_prompt,
@@ -447,9 +446,6 @@ def _bootstrap_prompt_replacements(project: ProjectDetail) -> dict[str, str]:
         "origin": facts.get("origin", ""),
         "goal": facts.get("goal", ""),
         "hints": format_hints(hints),
-        "active_peer_work": format_hints(
-            format_active_peer_work(project, "bootstrap")
-        ),
     }
 
 

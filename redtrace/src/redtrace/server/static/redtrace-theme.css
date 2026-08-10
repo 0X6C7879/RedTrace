@@ -1632,33 +1632,8 @@ section[x-show="appPage === 'plugins'"] header {
   background: rgba(167, 131, 255, 0.08) !important;
 }
 
-/* Thinking collapses into a card like tool blocks; default state is closed. */
-.audit-thinking {
-  border-color: #29384b !important;
-  background: #0f1925 !important;
-}
-
-.audit-thinking:hover {
-  border-color: #334960 !important;
-  background: #101b28 !important;
-}
-
-.audit-thinking summary {
-  color: #8fa1b8 !important;
-}
-
-.audit-thinking summary svg {
-  color: #5d7186 !important;
-}
-
-.audit-thinking .audit-thinking-text {
-  border-color: #223044 !important;
-}
-
-/* Thinking text streams inline like assistant output; it is only set apart by
-   a slightly smaller, dimmer treatment. */
-.audit-thinking-text {
-  color: #8fa1b8 !important;
+.audit-thinking > summary {
+  color: #9eb0c7 !important;
 }
 
 body .fixed.z-50 > .bg-white {

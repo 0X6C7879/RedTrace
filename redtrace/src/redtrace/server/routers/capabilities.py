@@ -1,18 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
+import time
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from redtrace.capabilities import (
-    CapabilityStore,
-    SkillConflictError,
-    _skill_frontmatter,
-    normalize_skill_description,
-)
+from redtrace.capabilities import CapabilityStore, SkillConflictError, _frontmatter
 from redtrace.plugin_registry import PluginRegistry
 
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
@@ -76,31 +74,18 @@ def _skill_payload(record, *, include_content: bool = False) -> dict[str, Any]:
     return payload
 
 
-def _nested_skill_payload(
-    parent: str,
-    root: Path,
-    entrypoint: Path,
-    *,
-    enabled: bool,
-) -> dict[str, Any]:
+def _nested_skill_payload(parent: str, root: Path, entrypoint: Path) -> dict[str, Any]:
     content = entrypoint.read_text(encoding="utf-8")
     relative = entrypoint.relative_to(root).as_posix()
-    metadata = _skill_frontmatter(content)
-    name = metadata.get("name")
+    metadata = _frontmatter(content)
     return {
         "key": f"{parent}:{relative}",
         "parent": parent,
         "path": relative,
-        "name": (
-            name.strip()
-            if isinstance(name, str) and name.strip()
-            else entrypoint.parent.name
-        ),
-        "description": normalize_skill_description(metadata.get("description")),
+        "name": metadata.get("name") or entrypoint.parent.name,
+        "description": metadata.get("description", ""),
         "depth": len(PurePosixPath(relative).parts) - 1,
         "nested": True,
-        "readonly": True,
-        "enabled": enabled,
     }
 
 
@@ -125,10 +110,87 @@ def _nested_skill_path(parent: str, entry_path: str) -> tuple[Path, Path]:
     return root, entrypoint
 
 
+# Directories that never contain Skills; pruning keeps package walks fast.
+_NESTED_SCAN_IGNORES = frozenset(
+    {
+        ".git",
+        ".redtrace",
+        ".venv",
+        ".runtime",
+        ".pytest_cache",
+        ".ruff_cache",
+        "__pycache__",
+        "node_modules",
+    }
+)
+_SKILL_ENTRIES_CACHE_SECONDS = 1.0
+_skill_entries_cache_lock = threading.Lock()
+_skill_entries_cache: dict[str, tuple[float, tuple[dict[str, Any], ...]]] = {}
+
+
+def _invalidate_skill_entries_cache() -> None:
+    with _skill_entries_cache_lock:
+        _skill_entries_cache.clear()
+
+
+def _iter_nested_entrypoints(root_dir: Path) -> list[Path]:
+    found: list[Path] = []
+    for directory, subdirs, names in os.walk(root_dir):
+        subdirs[:] = sorted(
+            name for name in subdirs if name not in _NESTED_SCAN_IGNORES
+        )
+        if Path(directory) != root_dir and "SKILL.md" in names:
+            found.append(Path(directory) / "SKILL.md")
+    return sorted(found)
+
+
+def _build_skill_entries(store: CapabilityStore) -> list[dict[str, Any]]:
+    """One walk per package; nested entries inherit enabled from their root."""
+    entries: list[dict[str, Any]] = []
+    for record in store.list_skills():
+        root_dir = store.skills_dir / record.name
+        entries.append(
+            {
+                "key": record.name,
+                "name": record.name,
+                "description": record.description,
+                "parent": "",
+                "path": "SKILL.md",
+                "nested": False,
+                "readonly": False,
+                "enabled": record.enabled,
+                "depth": 0,
+                "trust": record.trust,
+            }
+        )
+        for entrypoint in _iter_nested_entrypoints(root_dir):
+            try:
+                content = entrypoint.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            metadata = _frontmatter(content)
+            relative = entrypoint.relative_to(root_dir).as_posix()
+            name = (metadata.get("name") or "").strip()
+            entries.append(
+                {
+                    "key": f"{record.name}:{relative}",
+                    "name": name or entrypoint.parent.name,
+                    "description": (metadata.get("description") or "").strip(),
+                    "parent": record.name,
+                    "path": relative,
+                    "nested": True,
+                    "readonly": True,
+                    "enabled": record.enabled,
+                    "depth": len(PurePosixPath(relative).parts) - 1,
+                }
+            )
+    return entries
+
+
 @router.get("")
 def get_capabilities():
     store = _store()
-    skill_entries = store.list_skill_entries()
+    skill_entries = list_skill_entries()
     servers = store.list_mcp()
     plugins = _plugins().list_plugins()
     return {
@@ -138,7 +200,7 @@ def get_capabilities():
         "pluginsDir": str(store.plugins_dir),
         "skills": {
             "total": len(skill_entries),
-            "enabled": sum(entry.enabled for entry in skill_entries),
+            "enabled": sum(entry["enabled"] for entry in skill_entries),
         },
         "mcp": {"total": len(servers), "enabled": sum(server.enabled for server in servers)},
         "plugins": {
@@ -178,22 +240,37 @@ def list_skills():
 
 @router.get("/skill-entries")
 def list_skill_entries():
-    """One scan returns every displayable Skill: roots plus nested entries."""
-    return [entry.summary() for entry in _store().list_skill_entries()]
+    """One scan returns every displayable Skill: roots plus nested entries.
+
+    The result is cached briefly so concurrent page loads and the status
+    endpoint share a single directory walk; mutations invalidate it.
+    """
+    store = _store()
+    store.ensure()
+    cache_key = str(store.skills_dir)
+    now = time.monotonic()
+    with _skill_entries_cache_lock:
+        cached = _skill_entries_cache.get(cache_key)
+        if cached is not None and now - cached[0] < _SKILL_ENTRIES_CACHE_SECONDS:
+            return list(cached[1])
+    entries = _build_skill_entries(store)
+    with _skill_entries_cache_lock:
+        _skill_entries_cache[cache_key] = (time.monotonic(), tuple(entries))
+    return entries
 
 
 @router.get("/skills/{name}/entries")
 def list_nested_skills(name: str):
     store = _store()
     try:
-        record = store.get_skill(name, include_files=False)
+        store.get_skill(name, include_files=False)
     except FileNotFoundError:
         raise _not_found("skill", name) from None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     root = store.skills_dir / name
     return [
-        _nested_skill_payload(name, root, entrypoint, enabled=record.enabled)
+        _nested_skill_payload(name, root, entrypoint)
         for entrypoint in sorted(root.rglob("SKILL.md"))
         if entrypoint.parent != root
     ]
@@ -202,11 +279,9 @@ def list_nested_skills(name: str):
 @router.get("/skills/{name}/entries/{entry_path:path}")
 def get_nested_skill(name: str, entry_path: str):
     try:
-        store = _store()
-        record = store.get_skill(name, include_files=False)
         root, entrypoint = _nested_skill_path(name, entry_path)
         return {
-            **_nested_skill_payload(name, root, entrypoint, enabled=record.enabled),
+            **_nested_skill_payload(name, root, entrypoint),
             "content": entrypoint.read_text(encoding="utf-8"),
         }
     except FileNotFoundError:
@@ -228,6 +303,7 @@ def get_skill(name: str):
 @router.post("/skills", status_code=201)
 def create_skill(body: SkillWrite):
     store = _store()
+    _invalidate_skill_entries_cache()
     try:
         store.get_skill(body.name)
     except FileNotFoundError:
@@ -255,6 +331,7 @@ def create_skill(body: SkillWrite):
 @router.put("/skills/{name}")
 def update_skill(name: str, body: SkillUpdate):
     store = _store()
+    _invalidate_skill_entries_cache()
     try:
         current = store.get_skill(name)
         content_changed = current.content.rstrip() != body.content.rstrip()
@@ -287,6 +364,7 @@ def update_skill(name: str, body: SkillUpdate):
 def set_skill_enabled(name: str, body: EnabledUpdate):
     try:
         store = _store()
+        _invalidate_skill_entries_cache()
         record = store.get_skill(name)
         return _skill_payload(
             store.write_skill(
@@ -310,6 +388,7 @@ def set_skill_enabled(name: str, body: EnabledUpdate):
 @router.delete("/skills/{name}", status_code=204)
 def delete_skill(name: str):
     try:
+        _invalidate_skill_entries_cache()
         _store().delete_skill(name)
     except FileNotFoundError:
         raise _not_found("skill", name) from None
@@ -332,6 +411,7 @@ def list_skill_versions(name: str):
 @router.post("/skills/{name}/rollback/{version}")
 def rollback_skill(name: str, version: int, body: RollbackRequest):
     try:
+        _invalidate_skill_entries_cache()
         return _skill_payload(
             _store().rollback_skill(
                 name,

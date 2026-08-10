@@ -233,6 +233,9 @@ def test_runtime_loads_route_skills_rules_as_global_worker_instructions(
     AgentRuntimeManager(layout, execution="local").initialize([worker])
 
     assert worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"] == "automatic route rules\n"
+    assert worker.env["REDTRACE_TOOLS_DIR"] == str(layout.runtime / "tools")
+    assert worker.env["REDTRACE_TOOLS_BIN"] == str(layout.runtime / "tools" / "bin")
+    assert (layout.runtime / "tools" / "bin").is_dir()
 
 
 def test_all_native_workers_receive_and_can_invoke_route_skills(tmp_path: Path) -> None:
@@ -263,7 +266,7 @@ def test_all_native_workers_receive_and_can_invoke_route_skills(tmp_path: Path) 
     pi = PiDriver(local=True).build_execute(workers[2], "prompt", None).argv
 
     assert claude[claude.index("--plugin-dir") + 1].endswith("claude-plugin")
-    assert json.dumps(expected_path) in " ".join(codex)
+    assert expected_path in " ".join(codex)
     assert pi[pi.index("--skill") + 1] == expected_path
     assert all(worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"] == "automatic\n" for worker in workers)
 
