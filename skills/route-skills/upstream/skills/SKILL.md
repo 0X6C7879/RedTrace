@@ -1,6 +1,9 @@
 ---
-name: reverse-skill-router
-description: Routes reverse engineering, exploitation, penetration testing, malware, mobile, firmware, browser automation, documentation, and security tasks to the appropriate specialist skill. Use when a task spans modules or the correct reverse-skill entrypoint is unclear.
+name: route-skills-router
+description: RedTrace 安全任务中间总路由：把逆向工程、漏洞利用、渗透测试、恶意软件、移动端、固件、浏览器自动化、技术文档与安全任务路由到最具体的专家 Skill；任务跨模块或入口不明确时使用。
+metadata:
+  router: true
+  upstreamName: reverse-skill-router
 ---
 # Reverse Engineering Skills Master Control
 

@@ -35,6 +35,7 @@
 - 若已有多个 `Open Intents`，且新态势未揭示比现有方向更有价值的探索方向，可以不提出新 Intent（返回空 data）。
 - 提出新 Intent 时，最多返回 {max_intents} 个高价值且不重叠的探索方向。每个 Intent 都应是可独立并行的探索路径。
 - Intent 应聚焦核心 insight 和清晰方向，无需过度详细；不得过宽、过细或包含无助于推进 Goal 的冗余内容。每个 Intent 必须独立、定义清楚且价值高。
+- Benchmark/CTF 上下文提供 `unique_code` 时，每个 Intent 必须只命名一个具体 `unique_code`；不得使用“某系列”“easy 题目”“全部题目”等批量或范围描述。不同题目必须拆成不同 Intent。
 - 一个 Intent 可以源自多个 Fact。
 - 不同 Intent 应覆盖不同探索维度，避免重复或严重重叠。
 

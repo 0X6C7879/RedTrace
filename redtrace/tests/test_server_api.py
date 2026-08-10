@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from redtrace.server import db
 from redtrace.server.app import app
+from redtrace.server.operations import reconcile_interrupted_audit_runs
 
 
 @pytest.fixture
@@ -97,7 +98,14 @@ def test_dispatcher_change_cursor_advances_on_project_write(
 
 def test_delete_project_cascades_without_blackboard_trigger_failure(
     client: TestClient,
+    tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.delenv("REDTRACE_DISPATCH_CONFIG", raising=False)
+    monkeypatch.setenv("REDTRACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("REDTRACE_MANAGED_DIR", str(tmp_path / ".redtrace"))
+    monkeypatch.setenv("REDTRACE_WORKSPACE_ROOT", str(tmp_path / "workspaces"))
+    monkeypatch.setenv("REDTRACE_AUDIT_ROOT", str(tmp_path / "audit"))
     project_id = _create_project(client)
     intent = client.post(
         f"/projects/{project_id}/intents",
@@ -239,6 +247,30 @@ def test_audit_events_are_task_scoped_and_workspace_is_browsable(
     )
     assert file_response.status_code == 200
     assert file_response.json()["content"].splitlines() == ["print('audited')"]
+
+
+def test_server_startup_reconciles_interrupted_audit_runs(client: TestClient) -> None:
+    project_id = _create_project(client)
+    run = {
+        "id": "run-interrupted",
+        "project_id": project_id,
+        "task_type": "explore",
+        "phase": "explore_execute",
+        "worker": "pi-1",
+        "provider": "pi",
+        "workspace_kind": "local",
+        "workspace_ref": "/workspace",
+        "workspace_root": "/workspace",
+        "status": "running",
+        "started_at": "2026-01-01T00:00:00Z",
+    }
+    assert client.post("/audit/events", json={"run": run, "events": []}).status_code == 200
+
+    assert reconcile_interrupted_audit_runs() == 1
+    stored = client.get(f"/audit/tasks/{project_id}/runs").json()[0]
+    assert stored["status"] == "cancelled"
+    assert stored["cancelled"] == 1
+    assert stored["ended_at"]
 
 
 def test_project_workflow_create_conclude_complete_and_reopen(

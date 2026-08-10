@@ -122,7 +122,16 @@ def build_parser() -> argparse.ArgumentParser:
     webshell_create.add_argument("--summary", default="")
     webshell_create.add_argument("--shell-type", default="php", choices=["php", "asp", "aspx", "jsp", "custom"])
     webshell_create.add_argument("--protocol", default="auto", choices=["auto", "eval", "antsword", "raw"])
-    webshell_create.add_argument("--method", default="POST", choices=["POST", "GET"])
+    webshell_create.add_argument(
+        "--method",
+        default="POST",
+        help="HTTP transport method (GET/POST). Legacy exploit-method values are accepted and recorded.",
+    )
+    webshell_create.add_argument(
+        "--exploit-method",
+        default="",
+        help="Optional exploit chain that produced the WebShell; not the HTTP transport method.",
+    )
     webshell_create.add_argument("--command-param", default="cmd")
     webshell_create.add_argument("--password-param", default="")
     webshell_create.add_argument("--target-os", default="auto", choices=["auto", "linux", "windows"])
@@ -312,6 +321,24 @@ def _perform(args: argparse.Namespace) -> Any:
         )
     if args.command == "webshell-create":
         password = sys.stdin.read().rstrip("\r\n") if args.password_stdin else ""
+        raw_method = args.method.strip()
+        method = raw_method.upper()
+        exploit_method = args.exploit_method.strip()
+        if method not in {"GET", "POST"}:
+            exploit_method = exploit_method or raw_method
+            method = "POST"
+        metadata = {
+            "shell_type": args.shell_type,
+            "protocol": args.protocol,
+            "method": method,
+            "command_param": args.command_param,
+            "password_param": args.password_param,
+            "os": args.target_os,
+            "encoding": args.encoding,
+            "verify_tls": args.verify_tls,
+        }
+        if exploit_method:
+            metadata["exploit_method"] = exploit_method
         return _request(
             args,
             "POST",
@@ -322,16 +349,7 @@ def _perform(args: argparse.Namespace) -> Any:
                 "target": args.target,
                 "summary": args.summary,
                 "status": "available",
-                "metadata": {
-                    "shell_type": args.shell_type,
-                    "protocol": args.protocol,
-                    "method": args.method,
-                    "command_param": args.command_param,
-                    "password_param": args.password_param,
-                    "os": args.target_os,
-                    "encoding": args.encoding,
-                    "verify_tls": args.verify_tls,
-                },
+                "metadata": metadata,
                 "secret": {"password": password} if password else {},
                 "actor_type": "worker",
                 "actor": args.worker,

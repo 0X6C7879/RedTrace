@@ -4,6 +4,7 @@ from typing import Any
 
 from redtrace.dispatcher.output_parser import extract_json_object
 
+
 def parse_json_output(stdout: str) -> dict[str, Any]:
     return extract_json_object(stdout)
 
@@ -17,6 +18,8 @@ def _unwrap_wrapped_payload(payload: dict[str, Any]) -> tuple[bool | None, dict[
         if not isinstance(data, dict):
             raise ValueError("data must be an object")
         return True, data
+    if set(payload) == {"data"} and isinstance(payload["data"], dict):
+        return True, payload["data"]
     return None, None
 
 
@@ -57,7 +60,8 @@ def _looks_like_bootstrap_conclude_data(payload: dict[str, Any]) -> bool:
 def _looks_like_explore_data(payload: dict[str, Any]) -> bool:
     return (
         isinstance(payload, dict)
-        and set(payload) == {"description"}
+        and "description" in payload
+        and set(payload) <= {"description", "learning"}
     )
 
 
@@ -169,4 +173,23 @@ def validate_explore_payload(payload: dict[str, Any]) -> tuple[str, str | None]:
     description = data.get("description")
     if not isinstance(description, str) or not description.strip():
         raise ValueError("description is required")
+    learning = data.get("learning")
+    if learning is not None:
+        if not isinstance(learning, dict) or set(learning) != {
+            "slug",
+            "summary",
+            "keywords",
+            "entry",
+        }:
+            raise ValueError("learning must contain slug, summary, keywords, and entry")
+        if not all(
+            isinstance(learning.get(key), str) and learning[key].strip()
+            for key in ("slug", "summary", "entry")
+        ):
+            raise ValueError("learning text fields must be non-empty")
+        if not isinstance(learning.get("keywords"), list) or any(
+            not isinstance(keyword, str) or not keyword.strip()
+            for keyword in learning["keywords"]
+        ):
+            raise ValueError("learning.keywords must be a string array")
     return "fact", description.strip()

@@ -92,6 +92,17 @@
   background: rgba(139, 92, 246, 0.03);
   border-radius: 9px;
 }
+.audit-thinking {
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  border-radius: 9px;
+}
+.audit-thinking:hover {
+  border-color: #cbd5e1;
+}
+.audit-thinking[open] .audit-thinking-chevron {
+  rotate: 90deg;
+}
 .audit-thinking-text {
   font-size: 12px;
   line-height: 1.6;

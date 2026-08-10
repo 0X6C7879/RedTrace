@@ -841,6 +841,20 @@ class OperationExecutor:
 operation_executor = OperationExecutor()
 
 
+def reconcile_interrupted_audit_runs() -> int:
+    """Close runs left open by a previous Server/Dispatcher lifetime."""
+    with db.get_conn() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE audit_runs
+            SET status = 'cancelled', ended_at = ?, cancelled = 1
+            WHERE status = 'running'
+            """,
+            (utcnow(),),
+        )
+        return cursor.rowcount
+
+
 def resume_pending_tasks() -> None:
     with db.get_conn() as conn:
         rows = conn.execute(

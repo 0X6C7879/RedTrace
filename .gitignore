@@ -39,3 +39,4 @@ nul
 benchpacks/__pycache__/
 benchpacks/.runtime/
 benchpacks/results/
+benchpacks/**/config.local.toml

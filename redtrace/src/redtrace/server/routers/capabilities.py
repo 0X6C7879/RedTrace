@@ -7,7 +7,12 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from redtrace.capabilities import CapabilityStore, SkillConflictError, _frontmatter
+from redtrace.capabilities import (
+    CapabilityStore,
+    SkillConflictError,
+    _skill_frontmatter,
+    normalize_skill_description,
+)
 from redtrace.plugin_registry import PluginRegistry
 
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
@@ -71,18 +76,31 @@ def _skill_payload(record, *, include_content: bool = False) -> dict[str, Any]:
     return payload
 
 
-def _nested_skill_payload(parent: str, root: Path, entrypoint: Path) -> dict[str, Any]:
+def _nested_skill_payload(
+    parent: str,
+    root: Path,
+    entrypoint: Path,
+    *,
+    enabled: bool,
+) -> dict[str, Any]:
     content = entrypoint.read_text(encoding="utf-8")
     relative = entrypoint.relative_to(root).as_posix()
-    metadata = _frontmatter(content)
+    metadata = _skill_frontmatter(content)
+    name = metadata.get("name")
     return {
         "key": f"{parent}:{relative}",
         "parent": parent,
         "path": relative,
-        "name": metadata.get("name") or entrypoint.parent.name,
-        "description": metadata.get("description", ""),
+        "name": (
+            name.strip()
+            if isinstance(name, str) and name.strip()
+            else entrypoint.parent.name
+        ),
+        "description": normalize_skill_description(metadata.get("description")),
         "depth": len(PurePosixPath(relative).parts) - 1,
         "nested": True,
+        "readonly": True,
+        "enabled": enabled,
     }
 
 
@@ -110,7 +128,7 @@ def _nested_skill_path(parent: str, entry_path: str) -> tuple[Path, Path]:
 @router.get("")
 def get_capabilities():
     store = _store()
-    skills = store.list_skills()
+    skill_entries = store.list_skill_entries()
     servers = store.list_mcp()
     plugins = _plugins().list_plugins()
     return {
@@ -118,7 +136,10 @@ def get_capabilities():
         "skillsDir": str(store.skills_dir),
         "mcpDir": str(store.mcp_dir),
         "pluginsDir": str(store.plugins_dir),
-        "skills": {"total": len(skills), "enabled": sum(skill.enabled for skill in skills)},
+        "skills": {
+            "total": len(skill_entries),
+            "enabled": sum(entry.enabled for entry in skill_entries),
+        },
         "mcp": {"total": len(servers), "enabled": sum(server.enabled for server in servers)},
         "plugins": {
             "total": len(plugins),
@@ -155,18 +176,24 @@ def list_skills():
     return [_skill_payload(record) for record in _store().list_skills()]
 
 
+@router.get("/skill-entries")
+def list_skill_entries():
+    """One scan returns every displayable Skill: roots plus nested entries."""
+    return [entry.summary() for entry in _store().list_skill_entries()]
+
+
 @router.get("/skills/{name}/entries")
 def list_nested_skills(name: str):
     store = _store()
     try:
-        store.get_skill(name, include_files=False)
+        record = store.get_skill(name, include_files=False)
     except FileNotFoundError:
         raise _not_found("skill", name) from None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     root = store.skills_dir / name
     return [
-        _nested_skill_payload(name, root, entrypoint)
+        _nested_skill_payload(name, root, entrypoint, enabled=record.enabled)
         for entrypoint in sorted(root.rglob("SKILL.md"))
         if entrypoint.parent != root
     ]
@@ -175,9 +202,11 @@ def list_nested_skills(name: str):
 @router.get("/skills/{name}/entries/{entry_path:path}")
 def get_nested_skill(name: str, entry_path: str):
     try:
+        store = _store()
+        record = store.get_skill(name, include_files=False)
         root, entrypoint = _nested_skill_path(name, entry_path)
         return {
-            **_nested_skill_payload(name, root, entrypoint),
+            **_nested_skill_payload(name, root, entrypoint, enabled=record.enabled),
             "content": entrypoint.read_text(encoding="utf-8"),
         }
     except FileNotFoundError:

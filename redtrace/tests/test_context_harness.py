@@ -416,7 +416,7 @@ def test_prompt_guidance_reuses_existing_state_and_bounded_queries() -> None:
     assert "优先使用原生 Web search/fetch" in prompt
     assert "`brave-search` Skill 作为 fallback" in prompt
     assert "## Active WebShell 与 C2 工作流" in prompt
-    assert "redtrace-resource snapshot --kind webshell" in prompt
+    assert "Explore 启动前载入 WebShell/C2 snapshot" in prompt
     assert "redtrace-resource webshell-create" in prompt
     assert "redtrace-resource listener-create" in prompt
     assert "再用 `payload-oneliner`，或通过 `payload-build` 构建 Beacon" in prompt

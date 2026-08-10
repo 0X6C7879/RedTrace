@@ -5,14 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RedTrace</title>
 <link rel="icon" href="/static/favicon.svg?v=20260727-logo3" type="image/svg+xml">
-<link rel="stylesheet" href="/static/audit.css?v=20260803-thinking">
+<link rel="stylesheet" href="/static/audit.css?v=20260808-thinking-collapse">
 <link rel="stylesheet" href="/static/operations.css">
 <script src="/static/vendor/tailwindcss.js"></script>
 <script src="/static/vendor/dagre.min.js"></script>
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/vendor/cytoscape-dagre.js"></script>
-<script defer src="/static/audit.js?v=20260803-thinking"></script>
-<script defer src="/static/capabilities.js?v=20260806-route-skills-tree"></script>
+<script defer src="/static/audit.js?v=20260808-thinking-collapse"></script>
+<script defer src="/static/capabilities.js?v=20260807-skill-entries"></script>
 <script defer src="/static/operations.js"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
 <style>
@@ -239,7 +239,7 @@
     }
   }
 </script>
-<link rel="stylesheet" href="/static/redtrace-theme.css?v=20260803-thinking">
+<link rel="stylesheet" href="/static/redtrace-theme.css?v=20260808-thinking-collapse">
 </head>
 <body class="bg-slate-50 text-slate-800 h-screen overflow-hidden" :class="{ 'select-none cursor-col-resize': isResizingPanel }" x-data="redtraceApp()">
 <div class="app-shell flex h-full min-h-0" :class="{ 'app-shell-operations': appPage === 'webshell' || appPage === 'plugins' || appPage.startsWith('c2-') }">
@@ -1328,7 +1328,13 @@
                   <div class="max-h-72 overflow-auto whitespace-pre-wrap break-words text-[13px] leading-6 text-slate-700" x-text="displayText(event.content)"></div>
                 </template>
                 <template x-if="isThinking(event)">
-                  <div class="audit-thinking-text max-h-72 overflow-auto whitespace-pre-wrap break-words" x-text="displayText(event.content)"></div>
+                  <details class="audit-thinking">
+                    <summary class="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs text-slate-500">
+                      <svg class="audit-thinking-chevron h-3 w-3 shrink-0 text-slate-400 transition-transform" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg>
+                      <span class="font-medium">深度思考</span>
+                    </summary>
+                    <div class="audit-thinking-text max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-slate-100 px-3 py-2" x-text="displayText(event.content)"></div>
+                  </details>
                 </template>
                 <template x-if="isTool(event)">
                   <details class="audit-tool overflow-hidden" :open="event.kind === 'file.changed'">
@@ -1414,7 +1420,7 @@
         <div class="flex items-center gap-2"><h1 class="text-[15px] font-semibold tracking-tight text-slate-800">Skills</h1><span class="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-700" x-text="`${enabledCount}/${items.length} 已启用`"></span></div>
         <p class="mt-0.5 truncate text-[10px] text-slate-400" x-text="status?.skillsDir || '加载共享目录…'"></p>
       </div>
-      <span class="hidden rounded-lg bg-sky-50 px-2 py-1 text-[10px] font-medium text-sky-700 sm:inline" x-text="`${nestedEntries.length} 个包内 Skill`"></span>
+      <span class="hidden rounded-lg bg-sky-50 px-2 py-1 text-[10px] font-medium text-sky-700 sm:inline" x-text="`${nestedCount} 个包内 Skill`"></span>
       <div class="hidden items-center gap-1.5 md:flex" aria-label="Agent compatibility">
         <template x-for="agent in agents" :key="agent"><span class="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-500" x-text="agent"></span></template>
       </div>

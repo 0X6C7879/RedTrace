@@ -400,14 +400,19 @@ ensure_uv() {
 }
 
 ensure_rtk() {
-  if has rtk && rtk gain >/dev/null 2>&1; then
+  if ! { has rtk && rtk gain >/dev/null 2>&1; }; then
+    log "installing Rust Token Killer from rtk-ai/rtk"
+    curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/master/install.sh | sh
+    hash -r
+    has rtk && rtk gain >/dev/null 2>&1 || die "RTK installation failed"
+  else
     log "RTK already installed: $(rtk --version)"
-    return
   fi
-  log "installing Rust Token Killer from rtk-ai/rtk"
-  curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/master/install.sh | sh
-  hash -r
-  has rtk && rtk gain >/dev/null 2>&1 || die "RTK installation failed"
+  # Workers need the integration layer, not just the binary: Claude gets the
+  # transparent Bash rewrite hook, Codex and Pi get RTK usage instructions.
+  rtk init -g --auto-patch </dev/null >/dev/null 2>&1 || warn "RTK Claude hook setup failed"
+  rtk init -g --codex </dev/null >/dev/null 2>&1 || warn "RTK Codex integration failed"
+  rtk init -g --agent pi </dev/null >/dev/null 2>&1 || warn "RTK Pi integration failed"
 }
 
 ensure_pi_mcp_extension() {

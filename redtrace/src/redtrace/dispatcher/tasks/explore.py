@@ -7,7 +7,9 @@ from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
 from redtrace.dispatcher.contracts import parse_json_output, validate_explore_payload
 from redtrace.dispatcher.prompting import (
     add_blackboard_guidance,
+    format_explore_context,
     load_prompt,
+    preload_primary_skill,
     render_prompt,
 )
 from redtrace.dispatcher.protocol.client import CairnClient
@@ -18,11 +20,13 @@ from redtrace.dispatcher.tasks.common import (
     best_effort_release,
     cancel_reason,
     did_timeout,
-    project_allows_conclude_fallback,
+    is_transient_model_failure,
     preview,
+    project_allows_conclude_fallback,
     run_worker_process,
     task_healthcheck_enabled,
     write_conclude_result,
+    write_field_journal_learning,
     write_graph_snapshot_reference,
 )
 from redtrace.dispatcher.workers.registry import get_driver
@@ -92,12 +96,30 @@ def run_explore_task(
                 best_effort_release(client, project.project.id, intent.id, worker.name)
                 return "unhealthy"
 
-        graph_reference = write_graph_snapshot_reference(
-            container_manager,
-            container_name,
-            export_yaml.strip(),
-            phase="explore_execute",
-        )
+        if worker.type == "mock":
+            graph_reference = write_graph_snapshot_reference(
+                container_manager,
+                container_name,
+                export_yaml.strip(),
+                phase="explore_execute",
+            )
+            primary_skill = ""
+            primary_skill_content = ""
+        else:
+            graph_reference = format_explore_context(project, intent)
+            primary_skill, primary_skill_content, primary_skill_dir = preload_primary_skill(
+                intent.description,
+                worker.env,
+            )
+            if primary_skill_dir:
+                worker = worker.model_copy(
+                    update={
+                        "env": {
+                            **worker.env,
+                            "REDTRACE_PRIMARY_SKILL_DIR": primary_skill_dir,
+                        }
+                    }
+                )
         prompt = render_prompt(
             load_prompt(config.runtime.prompt_group, "explore.md"),
             {
@@ -113,6 +135,8 @@ def run_explore_task(
                 task_type="explore",
                 context_harness_enabled=config.context_harness.enabled,
                 local_execution=config.runtime.execution == "local",
+                primary_skill=primary_skill,
+                primary_skill_content=primary_skill_content,
             )
 
         session = driver.prepare_session()
@@ -202,7 +226,7 @@ def run_explore_task(
                 )
                 best_effort_release(client, project.project.id, intent.id, worker.name)
                 return "rejected"
-            return write_conclude_result(
+            outcome = write_conclude_result(
                 client,
                 project.project.id,
                 intent.id,
@@ -212,6 +236,9 @@ def run_explore_task(
                 phase_ms=execute_ms,
                 total_ms=int((time.perf_counter() - task_started) * 1000),
             )
+            if outcome == "success":
+                write_field_journal_learning(worker, payload)
+            return outcome
         if did_timeout(first):
             LOG.warning(
                 "explore timed out project=%s intent=%s worker=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -222,6 +249,28 @@ def run_explore_task(
                 int((time.perf_counter() - task_started) * 1000),
                 preview(first.stdout),
                 preview(first.stderr),
+            )
+            return _try_conclude_fallback(
+                config,
+                client,
+                container_manager,
+                container_name,
+                worker,
+                driver,
+                project.project.id,
+                intent,
+                graph_reference,
+                session,
+                lease,
+                cancellation,
+            )
+        if is_transient_model_failure(first.stdout, first.stderr):
+            LOG.warning(
+                "explore provider transient failure; preserving session and concluding project=%s intent=%s worker=%s code=%s",
+                project.project.id,
+                intent.id,
+                worker.name,
+                first.returncode,
             )
             return _try_conclude_fallback(
                 config,
@@ -407,7 +456,7 @@ def _try_conclude_fallback(
         )
         best_effort_release(client, project_id, intent.id, worker.name)
         return "rejected"
-    return write_conclude_result(
+    outcome = write_conclude_result(
         client,
         project_id,
         intent.id,
@@ -416,6 +465,9 @@ def _try_conclude_fallback(
         source="explore_conclude",
         phase_ms=conclude_ms,
     )
+    if outcome == "success":
+        write_field_journal_learning(worker, payload)
+    return outcome
 
 
 def _run_process(

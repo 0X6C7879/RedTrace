@@ -20,6 +20,7 @@ from redtrace.dispatcher.tasks.common import (
     best_effort_release_reason,
     cancel_reason,
     did_timeout,
+    is_transient_model_failure,
     preview,
     run_worker_process,
     task_healthcheck_enabled,
@@ -198,6 +199,13 @@ def run_reason_task(
                 max_intents=config.tasks.reason.max_intents,
             )
         except Exception as exc:
+            if is_transient_model_failure(result.stdout, result.stderr):
+                LOG.warning(
+                    "reason provider transient failure; skipping format repair project=%s worker=%s",
+                    project.project.id,
+                    worker.name,
+                )
+                return "failed"
             if not driver.supports_conclude() or session is None:
                 LOG.warning(
                     "reason parse failed project=%s worker=%s error=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",

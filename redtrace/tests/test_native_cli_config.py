@@ -184,6 +184,8 @@ def test_claude_settings_merge_preserves_existing_values(tmp_path: Path) -> None
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(MODEL_CONTEXT_1M),
         "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90",
         "CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION": "1000",
+        "CLAUDE_CODE_USER_PROMPT_APPEND": "\n请始终使用中文进行思考、分析和回答。",
+        "MAX_THINKING_TOKENS": "31999",
     }
 
 
@@ -266,6 +268,7 @@ def test_pi_settings_and_models_merge_preserves_other_providers(tmp_path: Path) 
             "reserveTokens": 64 * 1024,
             "keepRecentTokens": 128 * 1024,
         },
+        "systemPromptAppend": "请始终使用中文进行思考、分析和回答。",
     }
     assert models["providers"]["other"]["baseUrl"] == "https://other.example"
     assert models["providers"]["redtrace"] == {
@@ -277,7 +280,7 @@ def test_pi_settings_and_models_merge_preserves_other_providers(tmp_path: Path) 
                 "id": "pi-test",
                 "name": "pi-test",
                 "reasoning": True,
-                "input": ["text", "image"],
+                "input": ["text"],
                 "contextWindow": MODEL_CONTEXT_1M,
                 "maxTokens": 128 * 1024,
             }
