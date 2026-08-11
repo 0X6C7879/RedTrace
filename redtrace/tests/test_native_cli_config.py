@@ -226,6 +226,7 @@ base_url = "https://old.example/v1"
     assert value["approval_policy"] == "never"
     assert value["sandbox_mode"] == "danger-full-access"
     assert value["web_search"] == "live"
+    assert value["model_reasoning_summary"] == "detailed"
     assert value["model_context_window"] == MODEL_CONTEXT_1M
     assert value["model_auto_compact_token_limit"] == model_auto_compact_token_limit(
         MODEL_CONTEXT_1M

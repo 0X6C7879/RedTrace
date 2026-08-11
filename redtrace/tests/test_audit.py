@@ -982,7 +982,7 @@ def test_worker_drivers_run_at_maximum_thinking_strength() -> None:
         CodexDriver().build_conclude(codex_worker, "prompt", "thread-1").argv,
     ):
         assert 'model_reasoning_effort="high"' in argv
-        assert 'model_reasoning_summary="always"' in argv
+        assert 'model_reasoning_summary="detailed"' in argv
 
     pi_worker = claude_worker.model_copy(
         update={
