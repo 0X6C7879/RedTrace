@@ -123,7 +123,7 @@ MCP stdio bridge:
   "mcpServers": {
     "burpsuite": {
       "command": "node",
-      "args": ["/absolute/path/to/reverse-skill/burp-mcp-full/mcp-bridge.js"]
+      "args": ["/absolute/path/to/route-skills/upstream/burp-mcp-full/mcp-bridge.js"]
     }
   }
 }

@@ -113,7 +113,7 @@ Web 删除项目采用“标记删除 → 取消任务/进程 → 回收 Runtime
 
 仓库根目录的 `skills/` 与 `mcp/` 分别是 Claude Code、Codex 和 Pi 共用的唯一 Skill、MCP 源，并在运行时转换为各 Agent 的原生参数或配置；其他配置继续沿用用户目录。`plugins/manifest.json` 仅作为浏览器、Burp 等 RedTrace 外部插件的注册表。
 
-`CapabilityStore` 只负责共享 Skill 目录的发现、启停、手工编辑和版本回滚。安全领域以 `skills/route-skills/`（原 reverse-skill，上游来源保留在 frontmatter 元数据）为唯一主入口；其完整上游包固定在 `upstream/`，原生 case、scope、timeline、workitems、tool-index、bootstrap、CTF 编排和 field-journal 均保留。白盒代码审计能力位于 `upstream/skills/code-audit/`（七种审计模式 + 四语言规则）、`upstream/skills/code-audit-runtime-verify/`（静态 Finding 授权动态验证）和 `upstream/skills/code-audit-benchmark/`（FP/FN 归因与回归评估）。
+`CapabilityStore` 只负责共享 Skill 目录的发现、启停、手工编辑和版本回滚。安全领域以 `skills/route-skills/` 为唯一主入口；其本地专家模块使用 `upstream/` 兼容路径，case、scope、timeline、workitems、tool-index、bootstrap、CTF 编排和 field-journal 均保留。白盒代码审计能力位于 `upstream/skills/code-audit/`（七种审计模式 + 四语言规则）、`upstream/skills/code-audit-runtime-verify/`（静态 Finding 授权动态验证）和 `upstream/skills/code-audit-benchmark/`（FP/FN 归因与回归评估）。
 
 Worker 按需读取一个主 Skill，必要时再读取一个互补 Skill。任务产生已验证且可复用的新经验时，当前 Worker 直接向 route-skills 的 `field-journal/` 写一份脱敏记录并更新索引；白盒审计经验写入 `code-audit/learned/`，项目事实只写入任务 Workspace 的 `.redtrace/code-audit/`，不污染全局 Skill；没有新经验则不写。RedTrace 不接收进化提案、不启动后台进化线程、不调用额外模型，也不派发独立验证任务。容器运行时将统一 Skill 目录可写挂载，以便原任务内完成原生回写。
 

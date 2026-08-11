@@ -20,7 +20,7 @@
 5. 向用户报告配置结果
 ```
 
-通用 Agent 引导见仓库根 [README_AI.md](../README_AI.md)（检测到 Kali 时再读本文件）。
+通用执行规则见 [`RULES.md`](../RULES.md)，平台矩阵见 [`docs/PLATFORMS.md`](../docs/PLATFORMS.md)。
 
 ---
 
@@ -320,5 +320,4 @@ bash kali/scripts/bootstrap-reverse.sh r2
 ### Q: 我想同时在 Windows 和 Kali 上用这套系统
 
 没问题。`skills/` 目录通过 Git 同步，`field-journal/` 的经验两边共享。只是执行脚本时 Windows 用 `skills/scripts/*.ps1`，Kali 用 `kali/scripts/*.sh`。
-
 
