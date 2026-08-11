@@ -142,7 +142,7 @@ MOCK_ALLOWED_ENV_KEYS = frozenset(
 
 class ReasonTaskConfig(BaseModel):
     timeout: int = Field(gt=0)
-    max_intents: int = Field(gt=0, default=3)
+    max_intents: int = Field(gt=0, default=4)
 
 
 class ExploreTaskConfig(BaseModel):

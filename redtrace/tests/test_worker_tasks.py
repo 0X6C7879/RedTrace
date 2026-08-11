@@ -23,6 +23,15 @@ def _lease_factory(lease: FakeLease):
     return lambda *_args, **_kwargs: lease
 
 
+def test_reason_keeps_one_ready_intent_within_configured_cap() -> None:
+    config = make_config()
+
+    assert reason._intent_target(config) == 2
+
+    config.tasks.reason.max_intents = 1
+    assert reason._intent_target(config) == 1
+
+
 def test_reason_writes_graph_snapshot_and_creates_intent(monkeypatch) -> None:
     config = make_config()
     project = make_project()
@@ -111,7 +120,7 @@ def test_reason_repairs_invalid_format_once(monkeypatch) -> None:
 
 def test_reason_only_fills_available_open_intent_slots(monkeypatch) -> None:
     config = make_config()
-    project = make_project(intents=[make_intent("i001"), make_intent("i002")])
+    project = make_project(intents=[make_intent("i001")])
     client = FakeClient(project)
     containers = FakeContainerManager()
     driver = FakeDriver()

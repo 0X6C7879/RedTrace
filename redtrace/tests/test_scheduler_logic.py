@@ -18,6 +18,7 @@ from redtrace.server.models import Fact, ProjectSummary
 def _loop() -> DispatcherLoop:
     loop = DispatcherLoop.__new__(DispatcherLoop)
     loop.reason_checkpoints = {}
+    loop.reason_request_generations = {}
     loop.runtime_project_ids = set()
     loop.cleanup_futures = {}
     loop._cleanup_pending = set()
@@ -169,6 +170,60 @@ def test_new_fact_dispatches_reason_before_unclaimed_explore_intent() -> None:
 
     assert loop._try_dispatch_project(_summary("proj_001", "active"))
     assert dispatched == [("reason", "facts:3->4")]
+
+
+def test_ready_intent_dispatches_when_reason_worker_is_busy() -> None:
+    loop = _loop()
+    loop.config = make_config()
+    project = make_project(intents=[make_intent()])
+    project.intents[0].worker = None
+    project.facts.append(Fact(id="f002", description="new"))
+    loop.reason_checkpoints["proj_001"] = ReasonCheckpoint(3, 1, 1)
+    loop.container_manager = SimpleNamespace(
+        container_name=lambda project_id: project_id
+    )
+    loop.client = SimpleNamespace(get_project=lambda _project_id: project)
+    dispatched: list[str] = []
+    loop._dispatch_reason = lambda *_args: dispatched.append("reason") or False
+    loop._dispatch_explore = lambda *_args: dispatched.append("explore") or True
+
+    assert loop._try_dispatch_project(_summary("proj_001", "active"))
+    assert dispatched == ["reason", "explore"]
+
+
+def test_intent_completion_during_reason_requests_follow_up_reason() -> None:
+    loop = _loop()
+    loop.reason_request_generations["proj_001"] = 2
+    future: Future[str] = Future()
+    future.set_result("success")
+    loop.futures[future] = RunningTask(
+        "proj_001",
+        "reason",
+        "worker",
+        TaskCancellation(),
+        fact_count=4,
+        hint_count=1,
+        open_intent_count=1,
+        reason_request_generation=1,
+    )
+
+    loop._reap_futures()
+
+    assert loop.reason_checkpoints["proj_001"].request_generation == 1
+    assert loop._reason_trigger_counts("proj_001", 4, 1, 1) == "intent_results:1->2"
+
+
+def test_successful_explore_requests_reason() -> None:
+    loop = _loop()
+    future: Future[str] = Future()
+    future.set_result("success")
+    loop.futures[future] = RunningTask(
+        "proj_001", "explore", "worker", TaskCancellation(), intent_id="i001"
+    )
+
+    loop._reap_futures()
+
+    assert loop.reason_request_generations == {"proj_001": 1}
 
 
 def test_initial_enabled_project_without_bootstrap_worker_dispatches_reason() -> None:

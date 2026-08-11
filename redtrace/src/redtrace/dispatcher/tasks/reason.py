@@ -32,6 +32,19 @@ LOG = logging.getLogger(__name__)
 FORMAT_REPAIR_TIMEOUT_SECONDS = 60
 
 
+def _intent_target(config: DispatchConfig) -> int:
+    explore_capacity = min(
+        config.runtime.max_workers,
+        config.runtime.max_project_workers,
+        sum(
+            worker.max_running
+            for worker in config.workers
+            if worker.enabled and "explore" in worker.task_types
+        ),
+    )
+    return min(config.tasks.reason.max_intents, max(1, explore_capacity + 1))
+
+
 def run_reason_task(
     config: DispatchConfig,
     client: CairnClient,
@@ -94,9 +107,8 @@ def run_reason_task(
             for intent in project.intents
             if intent.to is None
         ]
-        available_intent_slots = max(
-            0, config.tasks.reason.max_intents - len(open_intents)
-        )
+        intent_target = _intent_target(config)
+        available_intent_slots = max(0, intent_target - len(open_intents))
         allowed_fact_ids = [fact.id for fact in project.facts if fact.id != "goal"]
         LOG.debug(
             "reason context prepared project=%s worker=%s facts=%s allowed_fact_ids=%s hints=%s open_intents=%s",
@@ -118,7 +130,7 @@ def run_reason_task(
                 ),
                 "fact_ids": format_fact_ids(allowed_fact_ids),
                 "open_intents": format_open_intents(open_intents),
-                "max_intents": str(config.tasks.reason.max_intents),
+                "max_intents": str(intent_target),
             },
         )
         if worker.type != "mock":

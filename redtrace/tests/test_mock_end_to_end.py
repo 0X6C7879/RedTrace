@@ -267,6 +267,7 @@ def _loop(config: DispatchConfig, client: InProcessClient, containers: LocalCont
     loop.futures = {}
     loop.cleanup_futures = {}
     loop.reason_checkpoints = {}
+    loop.reason_request_generations = {}
     loop.runtime_project_ids = set()
     loop.worker_unhealthy_until = {}
     loop.worker_rejected_until = {}

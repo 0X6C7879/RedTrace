@@ -114,6 +114,7 @@ class DispatcherLoop:
             Future[bool], tuple[str, str | None, str | None]
         ] = {}
         self.reason_checkpoints: dict[str, ReasonCheckpoint] = {}
+        self.reason_request_generations: dict[str, int] = {}
         self.runtime_project_ids: set[str] = set()
         self.worker_unhealthy_until: dict[str, float] = {}
         self.worker_rejected_until: dict[tuple[str, str, str], float] = {}
@@ -432,14 +433,15 @@ class DispatcherLoop:
                 _compact_project_snapshot(project),
                 "initial",
             )
-        if project.project.reason is None:
-            reason_trigger = self._reason_trigger(project)
-            if reason_trigger is not None:
-                return self._dispatch_reason(
-                    project,
-                    _compact_project_snapshot(project),
-                    reason_trigger,
-                )
+        reason_trigger = (
+            self._reason_trigger(project) if project.project.reason is None else None
+        )
+        if reason_trigger is not None and self._dispatch_reason(
+            project,
+            _compact_project_snapshot(project),
+            reason_trigger,
+        ):
+            return True
         running_intent_ids = self._project_running_explore_intents(summary.id)
         unclaimed_intents = [
             intent
@@ -575,6 +577,9 @@ class DispatcherLoop:
             fact_count=len(project.facts),
             hint_count=len(project.hints),
             open_intent_count=self._project_open_intent_count(project),
+            reason_request_generation=self.reason_request_generations.get(
+                project.project.id, 0
+            ),
         )
         future.add_done_callback(lambda _future: self._wakeup.set())
         self.runtime_project_ids.add(project.project.id)
@@ -953,6 +958,11 @@ class DispatcherLoop:
             changes.append(f"hints:{checkpoint.hint_count}->{hint_count}")
         if checkpoint.open_intent_count > 0 and open_intent_count == 0:
             changes.append(f"open_intents:{checkpoint.open_intent_count}->0")
+        request_generation = self.reason_request_generations.get(project_id, 0)
+        if request_generation > checkpoint.request_generation:
+            changes.append(
+                f"intent_results:{checkpoint.request_generation}->{request_generation}"
+            )
         if not changes:
             return None
         return ",".join(changes)
@@ -1006,14 +1016,20 @@ class DispatcherLoop:
                     )
                 else:
                     self.worker_rejected_until.pop(rejection_key, None)
+                if outcome == "success" and task.task_type in {"bootstrap", "explore"}:
+                    self.reason_request_generations[task.project_id] = (
+                        self.reason_request_generations.get(task.project_id, 0) + 1
+                    )
                 if outcome == "success" and task.task_type == "reason":
                     assert task.fact_count is not None
                     assert task.hint_count is not None
                     assert task.open_intent_count is not None
+                    assert task.reason_request_generation is not None
                     self.reason_checkpoints[task.project_id] = ReasonCheckpoint(
                         fact_count=task.fact_count,
                         hint_count=task.hint_count,
                         open_intent_count=task.open_intent_count,
+                        request_generation=task.reason_request_generation,
                     )
                     LOG.debug(
                         "reason checkpoint updated project=%s facts=%s hints=%s open_intents=%s",
@@ -1181,6 +1197,7 @@ class DispatcherLoop:
                 fact_count=summary.fact_count,
                 hint_count=summary.hint_count,
                 open_intent_count=open_intent_count,
+                request_generation=self.reason_request_generations.get(summary.id, 0),
             )
             LOG.debug(
                 "reason checkpoint initialized project=%s facts=%s hints=%s open_intents=%s",
