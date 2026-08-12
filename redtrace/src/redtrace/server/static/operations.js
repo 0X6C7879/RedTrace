@@ -59,6 +59,9 @@ function operationsPage() {
     payloadArch: 'amd64',
     payloadBuilding: false,
     builtPayload: null,
+    externalPayloadFormat: 'default',
+    externalPayloadOptions: '{}',
+    externalPayloadBuilding: false,
     pollTimer: null,
     lastProjectId: '',
     kindOptions: [
@@ -92,6 +95,7 @@ function operationsPage() {
         'c2-payloads',
         'c2-events',
         'c2-profiles',
+        'c2-credentials',
       ];
     },
 
@@ -105,23 +109,25 @@ function operationsPage() {
         'c2-payloads': 'Payload 生成',
         'c2-events': 'C2 事件',
         'c2-profiles': '流量伪装 / Malleable Profile',
+        'c2-credentials': '凭证',
       }[this.pageMode] || 'WebShell 管理';
     },
 
     pageBadge() {
-      return this.pageMode.startsWith('c2-') ? 'C2' : '项目共享';
+      return this.pageMode.startsWith('c2-') ? 'C2 · 全局共享' : '全局共享';
     },
 
     pageDescription() {
       return {
-        webshell: '项目内共享连接；人工与 Worker 复用同一 WebShell 和操作记录',
+        webshell: '所有任务共享连接；保留来源项目、Intent 与 Worker 标记',
         plugins: '按需发现插件动作；长结果独立存储，不注入模型上下文',
-        'c2-listeners': '持久 Listener 独立于 Worker 生命周期，并接收项目内 Session',
-        'c2-sessions': 'Claude Code、Codex 与 Pi 共享同一远程会话',
+        'c2-listeners': '全局 reverse / bind / Beacon / 外部 C2 Listener，独立于 Worker 生命周期',
+        'c2-sessions': '所有任务共享 reverse、bind、SSH、WinRM、PsExec、WMI 与 Beacon 会话',
         'c2-tasks': '跨 Worker 的异步任务队列、审批、取消与结果引用',
         'c2-payloads': '生成单行命令或交叉编译 Beacon；构建结果独立保存',
         'c2-events': '统一查看 C2 Session、任务和人工接管事件',
         'c2-profiles': '配置 User-Agent、Beacon URI、Jitter 和响应头',
+        'c2-credentials': '集中保存主机、Web、数据库、云与 Active Directory 凭证',
       }[this.pageMode] || '';
     },
 
@@ -135,6 +141,7 @@ function operationsPage() {
         'c2-payloads': 'c2_payload',
         'c2-events': 'c2_session',
         'c2-profiles': 'c2_profile',
+        'c2-credentials': 'credential_ref',
       }[this.pageMode] || 'webshell';
     },
 
@@ -143,7 +150,7 @@ function operationsPage() {
     },
 
     canCreateForPage() {
-      return ['webshell', 'plugins', 'c2-listeners', 'c2-profiles'].includes(this.pageMode);
+      return ['webshell', 'plugins', 'c2-listeners', 'c2-profiles', 'c2-credentials'].includes(this.pageMode);
     },
 
     createButtonLabel() {
@@ -153,6 +160,7 @@ function operationsPage() {
         'c2-listeners': '创建监听器',
         'c2-payloads': '生成 Payload',
         'c2-profiles': '创建 Profile',
+        'c2-credentials': '保存凭证',
       }[this.pageMode] || '添加';
     },
 
@@ -166,11 +174,19 @@ function operationsPage() {
         'c2-payloads': 'Payload 列表',
         'c2-events': '按会话查看事件',
         'c2-profiles': '配置列表',
+        'c2-credentials': '凭证列表',
       }[this.pageMode] || '列表';
     },
 
     projectId() {
-      return this.selectedProjectId || '';
+      // Operations resources are project-agnostic: when no RedTrace task is
+      // active, address the global pool via the ``_global`` sentinel so the
+      // list view, summary, audit and single-resource queries stay usable.
+      return this.selectedProjectId || '_global';
+    },
+
+    isGlobalScope() {
+      return !this.selectedProjectId;
     },
 
     projectName() {
@@ -188,11 +204,10 @@ function operationsPage() {
         this.detail = null;
         this.tab = pageMode === 'c2-events' ? 'audit' : 'resources';
       }
-      if (projectId && (projectId !== this.lastProjectId || !this.initialized || pageChanged)) {
-        this.lastProjectId = projectId;
+      const scopedProjectId = projectId || '_global';
+      if (scopedProjectId !== this.lastProjectId || !this.initialized || pageChanged) {
+        this.lastProjectId = scopedProjectId;
         this.refresh(true);
-      } else if (!projectId && !this.initialized) {
-        this.initialized = true;
       }
     },
 
@@ -276,6 +291,14 @@ function operationsPage() {
         this.pluginAction = resource.kind === 'plugin' ? (resource.metadata?.actions?.[0] || '') : '';
         const latest = (this.detail.tasks || []).find((task) => task.output_summary);
         if (resource.kind === 'webshell' && changed) this.resetWebshellWorkspace(resource);
+        if (resource.kind === 'c2_session' && changed) {
+          this.terminalIdentity = {
+            user: resource.metadata?.username || 'shell',
+            host: resource.metadata?.hostname || resource.target || 'target',
+            cwd: resource.metadata?.cwd || (String(resource.metadata?.os || '').toLowerCase() === 'windows' ? 'C:\\' : '/'),
+          };
+          this.terminalHistory = [];
+        }
         if (resource.kind !== 'webshell' && latest) this.terminalOutput = latest.output_summary;
       } catch (error) {
         this.error = error.message;
@@ -407,7 +430,7 @@ function operationsPage() {
         name: '',
         target: '',
         summary: '',
-        status: kind === 'c2_listener' ? 'offline' : 'available',
+        status: 'available',
         commandParam: 'cmd',
         passwordParam: '',
         password: '',
@@ -421,6 +444,7 @@ function operationsPage() {
         bindHost: '127.0.0.1',
         bindPort: '8443',
         callbackHost: '',
+        targetHost: '',
         profileId: '',
         profileName: '',
         userAgent: '',
@@ -434,6 +458,10 @@ function operationsPage() {
         metadataJson: '{}',
         parentResourceId: '',
         publishFact: true,
+        credentialType: 'host',
+        credentialUsername: '',
+        credentialDomain: '',
+        credentialSecret: '',
       };
       this.createError = '';
       this.testMessage = '';
@@ -478,9 +506,15 @@ function operationsPage() {
         metadata.bind_host = form.bindHost || '127.0.0.1';
         metadata.bind_port = Number(form.bindPort || 0);
         metadata.callback_host = form.callbackHost || '';
+        metadata.target_host = form.targetHost || '';
         metadata.profile_id = form.profileId || '';
+        if (['msf', 'sliver', 'cobalt_strike', 'custom'].includes(form.listenerType)) {
+          metadata.adapter_endpoint = form.endpoint || '';
+          if (form.endpoint) secret.adapter_endpoint = form.endpoint;
+          if (form.token) secret.token = form.token;
+        }
         form.target = `${metadata.bind_host}:${metadata.bind_port}`;
-        form.status = 'offline';
+        form.status = 'available';
       }
       if (form.kind === 'plugin') {
         metadata.actions = form.actions.split(',').map((value) => value.trim()).filter(Boolean);
@@ -501,6 +535,12 @@ function operationsPage() {
         }
         form.name = form.profileName || form.name;
         form.target = `profile://${form.name}`;
+      }
+      if (form.kind === 'credential_ref') {
+        metadata.credential_type = form.credentialType;
+        metadata.username = form.credentialUsername || '';
+        metadata.domain = form.credentialDomain || '';
+        if (form.credentialSecret) secret.value = form.credentialSecret;
       }
       try {
         const data = await this.api(`/projects/${encodeURIComponent(this.projectId())}/resources`, {
@@ -534,6 +574,15 @@ function operationsPage() {
     async createTask(action, arguments = {}, risk = 'low', requiresApproval = false, options = {}) {
       const resource = this.currentResource();
       if (!resource || this.runningAction) return null;
+      // Operation tasks must keep a project provenance (audit trail). Ask the
+      // operator to attach a task when none is selected instead of silently
+      // falling back to a phantom project.
+      if (this.isGlobalScope()) {
+        const message = '请先在「工作台」中选择一个 RedTrace 任务用于记录本次操作';
+        this.error = message;
+        if (!options.silent) this.terminalOutput = `操作失败：${message}`;
+        return null;
+      }
       this.runningAction = true;
       this.error = '';
       try {
@@ -581,7 +630,9 @@ function operationsPage() {
 
     async runCommand() {
       const value = this.command.trim();
-      if (!value || !this.webshellUsable()) return;
+      const resource = this.currentResource();
+      const usableShell = resource?.status === 'available' && ['webshell', 'c2_session'].includes(resource.kind);
+      if (!value || !usableShell) return;
       this.command = '';
       const record = {
         id: `${Date.now()}-${this.terminalHistory.length}`,
@@ -596,7 +647,7 @@ function operationsPage() {
       this.terminalHistory.push(record);
       const queued = await this.createTask(
         'command',
-        { command: this.terminalExecutionCommand(value) },
+        { command: resource.kind === 'webshell' ? this.terminalExecutionCommand(value) : value },
         'medium',
         false,
         { silent: true }
@@ -608,6 +659,7 @@ function operationsPage() {
         let output = completed.output_summary || this.statusLabel(completed.status);
         if (completed.result_ref) output = await this.api(completed.result_ref, { headers: {} });
         const renderedOutput = String(output || '').replace(/\s+$/, '');
+        this.terminalOutput = renderedOutput;
         this.terminalHistory[recordIndex] = {
           ...this.terminalHistory[recordIndex],
           output: renderedOutput,
@@ -1042,6 +1094,29 @@ function operationsPage() {
       } finally {
         this.payloadBuilding = false;
       }
+    },
+
+    async buildExternalPayload() {
+      if (!this.payloadListenerId || this.externalPayloadBuilding) return;
+      let options = {};
+      try { options = JSON.parse(this.externalPayloadOptions || '{}'); }
+      catch (_) { this.error = '外部 Payload 参数必须是有效 JSON'; return; }
+      this.externalPayloadBuilding = true;
+      this.builtPayload = null;
+      try {
+        const data = await this.api(`/projects/${encodeURIComponent(this.projectId())}/c2/payloads/external`, {
+          method: 'POST',
+          body: JSON.stringify({
+            listener_id: this.payloadListenerId,
+            format: this.externalPayloadFormat || 'default',
+            options,
+            actor: this.actorName(),
+          }),
+        });
+        this.builtPayload = data.payload;
+        await this.refresh(false);
+      } catch (error) { this.error = error.message; }
+      finally { this.externalPayloadBuilding = false; }
     },
 
     async runPlugin() {

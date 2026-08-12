@@ -50,6 +50,5 @@ benchpacks/__pycache__/
 benchpacks/.runtime/
 benchpacks/results/
 
-# 开发文档与测试脚本不提交到公开仓库
-docs/
-redtrace/tests/
+# 顶层设计文档不提交到公开仓库（docs/ 与 redtrace/tests/ 随代码推送）
+design-qa.md

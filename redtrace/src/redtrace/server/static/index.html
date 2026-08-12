@@ -13,7 +13,8 @@
 <script src="/static/vendor/cytoscape-dagre.js"></script>
 <script defer src="/static/audit.js?v=20260810-performance-1"></script>
 <script defer src="/static/capabilities.js?v=20260811-unified-entries-1"></script>
-<script defer src="/static/operations.js?v=20260810-performance-1"></script>
+<!-- Previous cache key: operations.js?v=20260810-performance-1 -->
+<script defer src="/static/operations.js?v=20260813-global-c2-2"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
 <style>
   [x-cloak] { display: none !important; }
@@ -280,6 +281,7 @@
           <button type="button" @click="setAppPage('c2-payloads')" class="app-subnav-item" :class="{ 'app-subnav-item-active': appPage === 'c2-payloads' }">Payload</button>
           <button type="button" @click="setAppPage('c2-events')" class="app-subnav-item" :class="{ 'app-subnav-item-active': appPage === 'c2-events' }">事件</button>
           <button type="button" @click="setAppPage('c2-profiles')" class="app-subnav-item" :class="{ 'app-subnav-item-active': appPage === 'c2-profiles' }">流量伪装</button>
+          <button type="button" @click="setAppPage('c2-credentials')" class="app-subnav-item" :class="{ 'app-subnav-item-active': appPage === 'c2-credentials' }">凭证</button>
         </div>
       </div>
       <button type="button" @click="setAppPage('plugins')" aria-label="插件" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'plugins' }">
@@ -846,12 +848,7 @@
         </div>
         <p class="operations-page-description mt-0.5 truncate text-[10px]" x-text="pageDescription()"></p>
       </div>
-      <select x-model="selectedProjectId" class="operations-field h-8 min-w-0 max-w-52 rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-600 outline-none" aria-label="选择项目">
-        <option value="">选择项目</option>
-        <template x-for="item in projects" :key="item.id">
-          <option :value="item.id" x-text="item.title || item.name || item.id"></option>
-        </template>
-      </select>
+      <div class="operations-field flex h-8 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600">全局资源中心</div>
       <div class="hidden items-center gap-3 border-l border-slate-200 pl-3 lg:flex">
         <div class="text-right"><div class="text-[10px] text-slate-400">可用资源</div><div class="text-xs font-semibold text-slate-700" x-text="`${availableResources()}/${filteredResources().length}`"></div></div>
         <div class="text-right"><div class="text-[10px] text-slate-400">执行中</div><div class="text-xs font-semibold text-slate-700" x-text="activeTasks()"></div></div>
@@ -871,22 +868,12 @@
       <button @click="error = ''" class="rounded p-1 hover:bg-red-100" aria-label="关闭错误">×</button>
     </div>
 
-    <div x-show="!projectId()" class="flex min-h-0 flex-1 items-center justify-center p-8 text-center">
-      <div>
-        <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-300 shadow-sm">
-          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M12 3v4m0 10v4M3 12h4m10 0h4"/><circle cx="12" cy="12" r="4"/></svg>
-        </div>
-        <p class="mt-4 text-sm font-medium text-slate-600">先选择一个 RedTrace 项目</p>
-        <p class="mt-1 text-xs text-slate-400">资源隔离在项目范围内，Worker 只能看到当前项目已授权的引用。</p>
-      </div>
-    </div>
-
-    <div x-show="projectId() && pageMode === 'c2-payloads'" class="operations-payload-page min-h-0 flex-1 overflow-y-auto p-6">
+    <div x-show="pageMode === 'c2-payloads'" class="operations-payload-page min-h-0 flex-1 overflow-y-auto p-6">
       <div class="grid gap-7 xl:grid-cols-2">
         <section class="operations-dark-card">
           <div class="operations-card-title"><div><h2>单行 Payload</h2><p>快速生成目标机可直接执行的回连命令</p></div></div>
           <label class="operations-form-label">监听器<select x-model="payloadListenerId" class="operations-dark-field"><option value="">选择监听器</option><template x-for="listener in c2Listeners()" :key="listener.id"><option :value="listener.id" x-text="`${listener.name} (${listener.metadata?.listener_type || 'http_beacon'} ${listener.target})`"></option></template></select></label>
-          <label class="operations-form-label">类型<select x-model="payloadKind" class="operations-dark-field"><option value="curl_beacon">Curl Beacon (HTTP)</option><option value="bash">Bash Reverse</option><option value="python">Python Reverse</option><option value="powershell">PowerShell Reverse</option></select></label>
+          <label class="operations-form-label">类型<select x-model="payloadKind" class="operations-dark-field"><optgroup label="Beacon"><option value="curl_beacon">Curl Beacon (HTTP)</option></optgroup><optgroup label="Reverse Shell"><option value="bash">Bash TCP</option><option value="bash_udp">Bash UDP</option><option value="python">Python</option><option value="powershell">PowerShell</option><option value="php">PHP</option><option value="perl">Perl</option><option value="ruby">Ruby</option><option value="node">Node.js</option><option value="java">Java</option><option value="lua">Lua</option><option value="awk">Awk</option><option value="nc">Netcat</option><option value="ncat">Ncat</option><option value="socat">Socat</option><option value="openssl">OpenSSL</option></optgroup><optgroup label="Bind Shell"><option value="nc_bind">Netcat Bind</option><option value="ncat_bind">Ncat Bind</option><option value="socat_bind">Socat Bind</option><option value="python_bind">Python Bind</option><option value="powershell_bind">PowerShell Bind</option></optgroup></select></label>
           <label class="operations-form-label">回连地址（可选）<input x-model="payloadCallback" class="operations-dark-field" placeholder="留空使用监听器回连地址"></label>
           <button @click="generateOneliner()" class="operations-primary-button h-12 w-full rounded-lg text-sm font-semibold text-white">生成 Oneliner</button>
           <div x-show="payloadOneliner" class="operations-generated-output"><pre x-text="payloadOneliner"></pre><button @click="navigator.clipboard.writeText(payloadOneliner)">复制</button></div>
@@ -899,10 +886,17 @@
           <button @click="buildBeacon()" :disabled="payloadBuilding || !payloadListenerId" class="operations-primary-button h-12 w-full rounded-lg text-sm font-semibold text-white disabled:opacity-40" x-text="payloadBuilding ? '正在构建…' : '构建 Beacon'"></button>
           <a x-show="builtPayload" :href="builtPayload?.target" class="operations-download-result"><span x-text="builtPayload?.name"></span><strong>下载</strong></a>
         </section>
+        <section class="operations-dark-card">
+          <div class="operations-card-title"><div><h2>外部 C2 / 自定义 Payload</h2><p>由 MSF、Sliver、Cobalt Strike 或自定义 Adapter 生成匹配载荷</p></div></div>
+          <label class="operations-form-label">监听器<select x-model="payloadListenerId" class="operations-dark-field"><option value="">选择监听器</option><template x-for="listener in c2Listeners()" :key="listener.id"><option :value="listener.id" x-text="`${listener.name} (${listener.metadata?.listener_type || 'custom'})`"></option></template></select></label>
+          <label class="operations-form-label">格式<input x-model="externalPayloadFormat" class="operations-dark-field" placeholder="windows/x64/meterpreter_reverse_https"></label>
+          <label class="operations-form-label">Adapter 参数 JSON<textarea x-model="externalPayloadOptions" rows="6" class="operations-dark-field font-mono"></textarea></label>
+          <button @click="buildExternalPayload()" :disabled="externalPayloadBuilding || !payloadListenerId" class="operations-primary-button h-12 w-full rounded-lg text-sm font-semibold text-white disabled:opacity-40" x-text="externalPayloadBuilding ? '正在生成…' : '生成外部 Payload'"></button>
+        </section>
       </div>
     </div>
 
-    <div x-show="projectId() && pageMode !== 'c2-payloads'" class="operations-grid" :class="{ 'operations-grid-webshell': pageMode === 'webshell' }">
+    <div x-show="pageMode !== 'c2-payloads'" class="operations-grid" :class="{ 'operations-grid-webshell': pageMode === 'webshell' }">
       <aside class="operations-resource-list flex min-h-0 flex-col border-r border-slate-200 bg-white">
         <div class="operations-list-heading shrink-0 p-4">
           <div class="mb-4 text-sm font-semibold" x-text="listLabel()"></div>
@@ -920,6 +914,7 @@
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-2"><span class="truncate text-xs font-semibold text-slate-700" x-text="item.name"></span><span x-show="item.locked" class="shrink-0 text-[9px] font-medium text-amber-600">已锁定</span></div>
                   <p class="mt-1 truncate text-[10px] text-slate-400" x-text="kindLabel(item.kind) + (item.target ? ` · ${item.target}` : '')"></p>
+                  <p class="mt-1 truncate text-[9px] text-slate-400" x-text="`来源 ${item.source_project_id || '全局'}${item.worker ? ` · ${item.worker}` : ''}${item.intent_id ? ` · ${item.intent_id}` : ''}`"></p>
                   <div class="mt-1.5 flex items-center gap-2 text-[9px] text-slate-400"><span class="font-mono" x-text="item.id"></span><span class="ml-auto" x-text="relativeTime(item.last_seen_at || item.updated_at)"></span></div>
                 </div>
               </div>
@@ -948,6 +943,7 @@
                     <span class="font-mono" x-text="currentResource().id"></span>
                     <span x-show="currentResource().fact_id" x-text="`黑板 ${currentResource().fact_id}`"></span>
                     <span x-show="currentResource().created_by" x-text="`${currentResource().created_by_type}: ${currentResource().created_by}`"></span>
+                    <span x-text="`来源 ${currentResource().source_project_id || '全局'}${currentResource().intent_id ? ` · ${currentResource().intent_id}` : ''}`"></span>
                   </div>
                 </div>
                 <div class="flex shrink-0 items-center gap-1.5">
@@ -1002,7 +998,7 @@
                             <pre :class="{ 'is-error': item.failed }" x-text="item.output"></pre>
                           </div>
                         </template>
-                        <div x-show="terminalHistory.length === 0 && webshellUsable()" class="operations-terminal-welcome">共享终端已就绪。命令结果和审计记录对当前项目可见。</div>
+                        <div x-show="terminalHistory.length === 0 && webshellUsable()" class="operations-terminal-welcome">全局共享终端已就绪。命令结果保留当前任务来源并对所有任务可见。</div>
                         <div x-show="!webshellUsable()" class="operations-terminal-welcome text-red-300">当前 WebShell 不可用；请先重新探测连接。</div>
                         <form x-show="webshellUsable()" @submit.prevent="runCommand()" class="operations-terminal-input">
                           <span>(</span><span class="operations-prompt-user" x-text="terminalIdentity.user"></span><span>:</span><span class="operations-prompt-path" x-text="terminalIdentity.cwd"></span><span>) $</span>
@@ -1115,12 +1111,13 @@
                       <div><div class="text-[9px] uppercase tracking-wide text-slate-400">主机</div><div class="mt-1 truncate text-xs font-medium text-slate-600" x-text="currentResource().metadata?.hostname || currentResource().target"></div></div>
                       <div><div class="text-[9px] uppercase tracking-wide text-slate-400">身份</div><div class="mt-1 truncate text-xs font-medium text-slate-600" x-text="currentResource().metadata?.username || '未知'"></div></div>
                       <div><div class="text-[9px] uppercase tracking-wide text-slate-400">平台</div><div class="mt-1 truncate text-xs font-medium text-slate-600" x-text="[currentResource().metadata?.os, currentResource().metadata?.arch].filter(Boolean).join(' · ') || '未知'"></div></div>
+                      <div><div class="text-[9px] uppercase tracking-wide text-slate-400">Shell 类型</div><div class="mt-1 truncate text-xs font-medium text-slate-600" x-text="currentResource().metadata?.shell_type || currentResource().metadata?.connection_type || '未知'"></div></div>
                     </div>
                   </div>
                   <div class="operations-terminal mt-4 overflow-hidden rounded-2xl border border-slate-700">
-                    <div class="flex items-center border-b border-white/10 px-4 py-2.5 text-[10px] text-slate-400"><span>C2 共享任务队列</span><span class="ml-auto" x-text="relativeTime(currentResource().last_seen_at)"></span></div>
+                    <div class="flex items-center border-b border-white/10 px-4 py-2.5 text-[10px] text-slate-400"><span x-text="['beacon','agent'].includes(currentResource().metadata?.connection_type) ? 'C2 共享任务队列' : '交互 Shell'"></span><span class="ml-auto" x-text="relativeTime(currentResource().last_seen_at)"></span></div>
                     <div class="operations-terminal-output h-52 overflow-y-auto px-4 py-3 text-[11px] leading-5" x-text="terminalOutput"></div>
-                    <form @submit.prevent="runCommand()" class="flex items-center gap-2 border-t border-white/10 px-4 py-2.5"><span class="text-xs text-indigo-300">›</span><input x-model="command" placeholder="命令会由 Session 下次轮询领取" class="operations-command-input min-w-0 flex-1 bg-transparent font-mono text-xs text-slate-100 outline-none placeholder:text-slate-600"><button :disabled="!command.trim()" class="operations-button rounded-lg bg-indigo-500 px-3 py-1.5 text-[10px] font-semibold text-white disabled:opacity-40">入队</button></form>
+                    <form @submit.prevent="runCommand()" class="flex items-center gap-2 border-t border-white/10 px-4 py-2.5"><span class="text-xs text-indigo-300">›</span><input x-model="command" :placeholder="['beacon','agent'].includes(currentResource().metadata?.connection_type) ? '命令会由 Session 下次轮询领取' : '输入命令并执行'" class="operations-command-input min-w-0 flex-1 bg-transparent font-mono text-xs text-slate-100 outline-none placeholder:text-slate-600"><button :disabled="!command.trim()" x-text="['beacon','agent'].includes(currentResource().metadata?.connection_type) ? '入队' : '执行'" class="operations-button rounded-lg bg-indigo-500 px-3 py-1.5 text-[10px] font-semibold text-white disabled:opacity-40"></button></form>
                   </div>
                 </div>
               </template>
@@ -1193,16 +1190,17 @@
           <label class="operations-form-label">命令参数名<input x-model="createForm.commandParam" placeholder="不填默认为 cmd；简单 PHP demo 使用 cmd" class="operations-dark-field"></label>
           <label class="operations-form-label">目标系统<select x-model="createForm.targetOs" class="operations-dark-field"><option value="auto">自动（按 Shell 类型推断）</option><option value="linux">Linux</option><option value="windows">Windows</option></select><span class="operations-form-hint">决定文件管理与上传使用 Linux 还是 Windows 命令。</span></label>
           <label class="operations-form-label">响应编码<select x-model="createForm.encoding" class="operations-dark-field"><option value="auto">自动检测</option><option value="utf-8">UTF-8</option><option value="gbk">GBK</option><option value="gb18030">GB18030</option></select></label>
-          <label class="operations-form-label">所属项目<div class="operations-dark-field flex items-center" x-text="projectName()"></div></label>
+          <label class="operations-form-label">来源任务<div class="operations-dark-field flex items-center" x-text="projectName()"></div><span class="operations-form-hint">仅记录来源；保存后所有任务都能复用。</span></label>
           <label class="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" x-model="createForm.verifyTls">校验 HTTPS 证书</label>
         </div>
 
         <div x-show="createForm.kind === 'c2_listener'" class="space-y-4">
-          <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">名称<input x-model="createForm.name" placeholder="例如 http-beacon-01" class="operations-dark-field"></label><label class="operations-form-label">类型<select x-model="createForm.listenerType" class="operations-dark-field"><option value="http_beacon">HTTP Beacon</option><option value="https_beacon">HTTPS Beacon</option><option value="tcp_reverse">TCP Reverse</option><option value="websocket">WebSocket</option></select></label></div>
-          <label class="operations-form-label">所属项目<div class="operations-dark-field flex items-center" x-text="projectName()"></div></label>
+          <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">名称<input x-model="createForm.name" placeholder="例如 http-beacon-01" class="operations-dark-field"></label><label class="operations-form-label">类型<select x-model="createForm.listenerType" class="operations-dark-field"><option value="http_beacon">HTTP Beacon</option><option value="https_beacon">HTTPS Beacon</option><option value="tcp_reverse">TCP Reverse</option><option value="tcp_bind">TCP Bind Connector</option><option value="websocket">WebSocket</option><option value="msf">Metasploit</option><option value="sliver">Sliver</option><option value="cobalt_strike">Cobalt Strike</option><option value="custom">自定义 C2</option></select></label></div>
           <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">绑定地址<input x-model="createForm.bindHost" class="operations-dark-field"><span class="operations-form-hint">使用 0.0.0.0 允许外部访问</span></label><label class="operations-form-label">绑定端口<input type="number" x-model="createForm.bindPort" placeholder="8443" class="operations-dark-field"></label></div>
           <label class="operations-form-label">Malleable Profile<select x-model="createForm.profileId" class="operations-dark-field"><option value="">不使用</option><template x-for="profile in c2Profiles()" :key="profile.id"><option :value="profile.id" x-text="profile.name"></option></template></select><span class="operations-form-hint">用于 HTTP/HTTPS Beacon 的 User-Agent、URI、Jitter 与响应头配置。</span></label>
           <label class="operations-form-label">回连地址<input x-model="createForm.callbackHost" placeholder="目标可访问的 IP 或域名" class="operations-dark-field"></label>
+          <label x-show="createForm.listenerType === 'tcp_bind'" class="operations-form-label">Bind Shell 目标<input x-model="createForm.targetHost" placeholder="目标主机 IP 或域名" class="operations-dark-field"><span class="operations-form-hint">RedTrace 主动连接目标上已打开的 Bind Shell。</span></label>
+          <div x-show="['msf','sliver','cobalt_strike','custom'].includes(createForm.listenerType)" class="space-y-4"><label class="operations-form-label">Adapter Endpoint<input x-model="createForm.endpoint" placeholder="http://adapter.internal:9000" class="operations-dark-field"><span class="operations-form-hint">Adapter 实现 GET /sessions 与 POST /execute；RedTrace 会自动同步外部会话。</span></label><label class="operations-form-label">Adapter Token<input type="password" x-model="createForm.token" autocomplete="new-password" class="operations-dark-field"></label></div>
         </div>
 
         <div x-show="createForm.kind === 'c2_profile'" class="space-y-4">
@@ -1211,6 +1209,14 @@
           <label class="operations-form-label">Beacon URI（每行一个）<textarea x-model="createForm.beaconUris" rows="4" class="operations-dark-field min-h-24"></textarea></label>
           <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">Jitter 最小值 (ms)<input type="number" x-model="createForm.jitterMin" class="operations-dark-field"></label><label class="operations-form-label">Jitter 最大值 (ms)<input type="number" x-model="createForm.jitterMax" class="operations-dark-field"></label></div>
           <label class="operations-form-label">响应头 JSON<textarea x-model="createForm.responseHeaders" rows="3" class="operations-dark-field font-mono"></textarea></label>
+        </div>
+
+        <div x-show="createForm.kind === 'credential_ref'" class="space-y-4">
+          <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">名称<input x-model="createForm.name" placeholder="例如 DOMAIN\\alice" class="operations-dark-field"></label><label class="operations-form-label">类型<select x-model="createForm.credentialType" class="operations-dark-field"><option value="host">主机</option><option value="web">Web</option><option value="database">数据库</option><option value="active_directory">Active Directory</option><option value="cloud">云</option><option value="ssh_key">SSH Key</option><option value="token">Token</option><option value="certificate">证书</option><option value="hash">Hash</option><option value="ticket">Kerberos Ticket</option><option value="custom">自定义</option></select></label></div>
+          <label class="operations-form-label">目标 / 服务<input x-model="createForm.target" placeholder="host、URL、数据库或 SPN" class="operations-dark-field"></label>
+          <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">用户名<input x-model="createForm.credentialUsername" class="operations-dark-field"></label><label class="operations-form-label">域<input x-model="createForm.credentialDomain" class="operations-dark-field"></label></div>
+          <label class="operations-form-label">Secret<input type="password" x-model="createForm.credentialSecret" autocomplete="new-password" class="operations-dark-field"><span class="operations-form-hint">仅保存在服务端 secret_json；资源列表、导出和 Worker snapshot 不返回明文。</span></label>
+          <label class="operations-form-label">摘要<textarea x-model="createForm.summary" rows="3" class="operations-dark-field"></textarea></label>
         </div>
 
         <div x-show="createForm.kind === 'plugin'" class="space-y-4">
@@ -2003,7 +2009,7 @@ function redtraceApp() {
 
     handleRoute() {
       const hash = location.hash || '#/';
-      const pageMatch = hash.match(/^#\/(logs|skills|mcp|webshell|plugins|c2-listeners|c2-sessions|c2-tasks|c2-payloads|c2-events|c2-profiles|settings)$/);
+      const pageMatch = hash.match(/^#\/(logs|skills|mcp|webshell|plugins|c2-listeners|c2-sessions|c2-tasks|c2-payloads|c2-events|c2-profiles|c2-credentials|settings)$/);
       if (pageMatch) {
         this.appPage = pageMatch[1];
         if (this.appPage === 'settings') this.loadWorkerConfig();
@@ -2022,7 +2028,7 @@ function redtraceApp() {
     },
 
     setAppPage(page) {
-      if (!['workspace', 'skills', 'mcp', 'webshell', 'plugins', 'c2-listeners', 'c2-sessions', 'c2-tasks', 'c2-payloads', 'c2-events', 'c2-profiles', 'logs', 'settings'].includes(page)) return;
+      if (!['workspace', 'skills', 'mcp', 'webshell', 'plugins', 'c2-listeners', 'c2-sessions', 'c2-tasks', 'c2-payloads', 'c2-events', 'c2-profiles', 'c2-credentials', 'logs', 'settings'].includes(page)) return;
       this.appPage = page;
       const nextHash = page === 'workspace'
         ? (this.selectedProjectId && this.view === 'graph' ? `/projects/${this.selectedProjectId}` : '/')

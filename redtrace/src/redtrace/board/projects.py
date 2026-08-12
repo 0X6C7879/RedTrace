@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
+from redtrace.board.intents import validate_registered_access_claim
 from redtrace.board.models import (
     CompleteRequest,
     CreateProjectRequest,
@@ -223,6 +224,7 @@ def release_reason(project_id: str, worker: str) -> ProjectMeta:
 def complete(project_id: str, request: CompleteRequest) -> Intent:
     with get_conn(immediate=True) as conn:
         check_project_active(conn, project_id)
+        validate_registered_access_claim(conn, request.description)
         expire_reason_leases(conn, project_id)
         validate_facts_exist(conn, project_id, request.from_)
         validate_goal_not_in_sources(request.from_)

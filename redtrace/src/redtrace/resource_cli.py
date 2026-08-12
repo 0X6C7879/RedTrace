@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="redtrace-resource",
         description=(
-            "Discover and use project-scoped WebShell, C2, proxy, file, credential, "
+            "Discover and use globally shared WebShell, C2, proxy, file, credential, "
             "plugin, and result resources without exposing stored secrets."
         ),
     )
@@ -42,7 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--server", default=_env("REDTRACE_SERVER"), help="RedTrace server URL"
     )
     parser.add_argument(
-        "--project", default=_env("REDTRACE_PROJECT_ID"), help="RedTrace project ID"
+        "--project",
+        default=_env("REDTRACE_PROJECT_ID"),
+        help="Current source project for attribution only; resources remain global",
     )
     parser.add_argument(
         "--worker", default=_env("REDTRACE_WORKER", "unknown"), help="Worker identity"
@@ -183,7 +185,7 @@ def build_parser() -> argparse.ArgumentParser:
     listener_create.add_argument(
         "--listener-type",
         default="http_beacon",
-        choices=["http_beacon", "https_beacon", "tcp_reverse", "websocket"],
+        choices=["http_beacon", "https_beacon", "tcp_reverse", "tcp_bind", "websocket", "msf", "sliver", "cobalt_strike", "custom"],
     )
     listener_create.add_argument("--bind-host", default="0.0.0.0")
     listener_create.add_argument(
@@ -194,6 +196,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="1..65535",
     )
     listener_create.add_argument("--callback-host", default="")
+    listener_create.add_argument("--target-host", default="")
+    listener_create.add_argument("--adapter-endpoint", default="")
+    listener_create.add_argument("--token-stdin", action="store_true")
     listener_create.add_argument("--profile")
     listener_create.add_argument("--summary", default="")
     listener_create.add_argument(
@@ -224,6 +229,72 @@ def build_parser() -> argparse.ArgumentParser:
     payload_build.add_argument(
         "--os", default="linux", choices=["linux", "windows", "darwin"]
     )
+
+    payload_external = commands.add_parser(
+        "payload-external",
+        help="Ask an MSF, Sliver, Cobalt Strike, or custom adapter to generate a compatible payload",
+    )
+    payload_external.add_argument("listener_id")
+    payload_external.add_argument("--format", default="default")
+    payload_external.add_argument("--options-json", default="{}")
+
+    session_register = commands.add_parser(
+        "session-register",
+        help="Register any obtained shell (SSH, WinRM, PsExec, WMI, reverse, bind, or custom) in the global C2 session hub",
+    )
+    session_register.add_argument("--name", required=True)
+    session_register.add_argument("--target", required=True)
+    session_register.add_argument(
+        "--shell-type",
+        required=True,
+        choices=[
+            "ssh", "evil_winrm", "psexec", "wmi", "reverse_shell", "bind_shell",
+            "meterpreter", "msf", "sliver", "cobalt_strike", "beacon", "custom",
+        ],
+    )
+    session_register.add_argument(
+        "--connection-type",
+        default="direct",
+        choices=["direct", "reverse", "bind", "external_c2"],
+    )
+    session_register.add_argument("--listener")
+    session_register.add_argument("--credential")
+    session_register.add_argument("--summary", default="")
+    session_register.add_argument("--metadata-json", default="{}")
+    session_register.add_argument("--secret-stdin", action="store_true")
+    session_register.add_argument("--no-fact", action="store_true")
+
+    credential_create = commands.add_parser(
+        "credential-create",
+        help="Store a discovered host, web, database, cloud, or Active Directory credential without echoing its secret",
+    )
+    credential_create.add_argument("--name", required=True)
+    credential_create.add_argument("--target", default="")
+    credential_create.add_argument(
+        "--credential-type",
+        required=True,
+        choices=["host", "web", "database", "active_directory", "cloud", "ssh_key", "token", "certificate", "hash", "ticket", "custom"],
+    )
+    credential_create.add_argument("--username", default="")
+    credential_create.add_argument("--domain", default="")
+    credential_create.add_argument("--summary", default="")
+    credential_create.add_argument("--metadata-json", default="{}")
+    credential_create.add_argument("--secret-stdin", action="store_true")
+    credential_create.add_argument("--no-fact", action="store_true")
+
+    payload_import = commands.add_parser(
+        "payload-import",
+        help="Register a worker-generated or external C2 payload artifact/reference",
+    )
+    payload_import.add_argument("--name", required=True)
+    payload_import.add_argument("--target", required=True)
+    payload_import.add_argument("--format", default="custom")
+    payload_import.add_argument("--framework", default="custom")
+    payload_import.add_argument("--listener")
+    payload_import.add_argument("--summary", default="")
+    payload_import.add_argument("--metadata-json", default="{}")
+    payload_import.add_argument("--secret-stdin", action="store_true")
+    payload_import.add_argument("--no-fact", action="store_true")
     payload_build.add_argument(
         "--arch", default="amd64", choices=["amd64", "arm64", "386"]
     )
@@ -328,7 +399,7 @@ def _perform(args: argparse.Namespace) -> Any:
                     "delete_file",
                 ],
                 "c2_listener": [
-                    "worker create/enable; generate oneline or compiled Payload; receive Sessions"
+                    "worker create/enable reverse, bind, Beacon, external, or custom listeners; receive global Sessions"
                 ],
                 "c2_session": ["command and plugin-defined agent actions"],
                 "c2_payload": [
@@ -338,13 +409,16 @@ def _perform(args: argparse.Namespace) -> Any:
                 "plugin": ["actions declared in resource.metadata.actions"],
                 "proxy": [],
                 "file": [],
-                "credential_ref": [],
+                "credential_ref": ["store host, web, database, cloud, token, certificate, hash, ticket, and Active Directory credentials"],
                 "result": [],
             },
             "workflow": [
-                "snapshot relevant access kinds once and retain its audit_cursor",
+                "snapshot globally shared access kinds once and retain its audit_cursor",
                 "reuse an existing WebShell or C2 Session before creating a duplicate",
                 "if no Session exists, create a Listener and generate a Payload instead of stopping",
+                "register every obtained direct, reverse, bind, or external C2 shell with session-register",
+                "register every discovered credential with credential-create and keep the secret on stdin",
+                "register worker-generated and AV-evasive payloads with payload-import",
                 "create WebShell resources with webshell-create and use them with run --wait",
                 "before declaring no access channel, call changes once with the retained audit_cursor",
                 "get the selected resource to inspect bounded metadata and declared actions",
@@ -446,6 +520,7 @@ def _perform(args: argparse.Namespace) -> Any:
             },
         )
     if args.command == "listener-create":
+        adapter_token = sys.stdin.read().rstrip("\r\n") if args.token_stdin else ""
         return _request(
             args,
             "POST",
@@ -461,8 +536,17 @@ def _perform(args: argparse.Namespace) -> Any:
                     "bind_host": args.bind_host,
                     "bind_port": args.bind_port,
                     "callback_host": args.callback_host,
+                    **({"target_host": args.target_host} if args.target_host else {}),
+                    **({"adapter_endpoint": args.adapter_endpoint} if args.adapter_endpoint else {}),
                     "profile_id": args.profile or "",
                 },
+                **(
+                    {"secret": {
+                        "adapter_endpoint": args.adapter_endpoint,
+                        **({"token": adapter_token} if adapter_token else {}),
+                    }}
+                    if args.adapter_endpoint else {}
+                ),
                 "actor_type": "worker",
                 "actor": args.worker,
                 "worker": args.worker,
@@ -470,6 +554,40 @@ def _perform(args: argparse.Namespace) -> Any:
                 "publish_fact": not args.no_fact,
             },
         )
+    if args.command == "session-register":
+        metadata = _json_object(args.metadata_json, "--metadata-json")
+        metadata.update({"shell_type": args.shell_type, "connection_type": args.connection_type})
+        if args.credential:
+            metadata["credential_id"] = args.credential
+        secret = _json_object(sys.stdin.read(), "stdin secret") if args.secret_stdin else {}
+        return _request(args, "POST", f"{base}/resources", body={
+            "kind": "c2_session", "name": args.name, "target": args.target,
+            "summary": args.summary, "status": "available", "metadata": metadata,
+            "secret": secret, "actor_type": "worker", "actor": args.worker,
+            "worker": args.worker, "intent_id": args.intent or None,
+            "parent_resource_id": args.listener, "publish_fact": not args.no_fact,
+        })
+    if args.command == "credential-create":
+        metadata = _json_object(args.metadata_json, "--metadata-json")
+        metadata.update({"credential_type": args.credential_type, "username": args.username, "domain": args.domain})
+        secret = _json_object(sys.stdin.read(), "stdin secret") if args.secret_stdin else {}
+        return _request(args, "POST", f"{base}/resources", body={
+            "kind": "credential_ref", "name": args.name, "target": args.target,
+            "summary": args.summary, "metadata": metadata, "secret": secret,
+            "actor_type": "worker", "actor": args.worker, "worker": args.worker,
+            "intent_id": args.intent or None, "publish_fact": not args.no_fact,
+        })
+    if args.command == "payload-import":
+        metadata = _json_object(args.metadata_json, "--metadata-json")
+        metadata.update({"format": args.format, "framework": args.framework, "custom": True})
+        secret = _json_object(sys.stdin.read(), "stdin secret") if args.secret_stdin else {}
+        return _request(args, "POST", f"{base}/resources", body={
+            "kind": "c2_payload", "name": args.name, "target": args.target,
+            "summary": args.summary, "metadata": metadata, "secret": secret,
+            "actor_type": "worker", "actor": args.worker, "worker": args.worker,
+            "intent_id": args.intent or None, "parent_resource_id": args.listener,
+            "publish_fact": not args.no_fact,
+        })
     if args.command == "payload-kinds":
         listener = quote(args.listener_id, safe="")
         return _request(args, "GET", f"{base}/c2/listeners/{listener}/oneliner-kinds")
@@ -495,6 +613,18 @@ def _perform(args: argparse.Namespace) -> Any:
                 "os": args.os,
                 "arch": args.arch,
                 "sleep_seconds": args.sleep_seconds,
+                "actor": args.worker,
+            },
+        )
+    if args.command == "payload-external":
+        return _request(
+            args,
+            "POST",
+            f"{base}/c2/payloads/external",
+            body={
+                "listener_id": args.listener_id,
+                "format": args.format,
+                "options": _json_object(args.options_json, "--options-json"),
                 "actor": args.worker,
             },
         )

