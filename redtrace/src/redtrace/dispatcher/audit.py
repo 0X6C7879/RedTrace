@@ -17,7 +17,6 @@ from redtrace.dispatcher.control_plane import ControlPlaneClient
 from redtrace.dispatcher.runtime.process import ProcessResult
 from redtrace.dispatcher.runtime.stream_buffer import TRUNCATED_STREAM_LINE
 
-
 LOG = logging.getLogger(__name__)
 ASSISTANT_MESSAGE_CHUNK = 32 * 1024
 THINKING_MESSAGE_CHUNK = 32 * 1024
@@ -76,7 +75,9 @@ class AuditPublisher:
             "phase": phase,
             "worker": worker.name,
             "provider": worker.type,
-            "workspace_kind": "local" if Path(workspace_ref).is_absolute() else "container",
+            "workspace_kind": "local"
+            if Path(workspace_ref).is_absolute()
+            else "container",
             "workspace_ref": workspace_ref,
             "workspace_root": workspace_ref
             if Path(workspace_ref).is_absolute()
@@ -313,22 +314,30 @@ def _normalize_claude(
 ) -> list[dict[str, Any]]:
     kind = payload.get("type")
     if kind == "system" and payload.get("subtype") == "init":
-        return [_event("session.started", timestamp, session_id=payload.get("session_id"))]
+        return [
+            _event("session.started", timestamp, session_id=payload.get("session_id"))
+        ]
     if kind == "stream_event":
         event = payload.get("event") or {}
         event_type = event.get("type")
         if event_type == "content_block_delta":
             delta = event.get("delta") or {}
             if delta.get("type") == "text_delta":
-                return [_event("assistant.delta", timestamp, content=delta.get("text", ""))]
+                return [
+                    _event("assistant.delta", timestamp, content=delta.get("text", ""))
+                ]
             if delta.get("type") == "thinking_delta":
                 return [
-                    _event("thinking.delta", timestamp, content=delta.get("thinking", ""))
+                    _event(
+                        "thinking.delta", timestamp, content=delta.get("thinking", "")
+                    )
                 ]
             if delta.get("type") == "input_json_delta" and tool_state is not None:
                 index = event.get("index")
                 if isinstance(index, int) and index in tool_state:
-                    tool_state[index]["parts"].append(str(delta.get("partial_json", "")))
+                    tool_state[index]["parts"].append(
+                        str(delta.get("partial_json", ""))
+                    )
                 return []
         if event_type == "content_block_start":
             block = event.get("content_block") or {}
@@ -410,27 +419,48 @@ def _normalize_claude(
 
 
 def _normalize_codex(payload: dict[str, Any], timestamp: str) -> list[dict[str, Any]]:
-    event_type = payload.get("type")
-    item = payload.get("item") or {}
+    event_type = payload.get("method") or payload.get("type")
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    item = params.get("item") or payload.get("item") or {}
     item_type = item.get("type")
-    if event_type == "thread.started":
-        return [_event("session.started", timestamp, session_id=payload.get("thread_id"))]
-    if event_type == "turn.started":
-        return [_event("turn.started", timestamp)]
-    if event_type == "item.delta":
-        return _normalize_codex_delta(item, item_type, timestamp)
-    if event_type == "item.started" and item_type in {"command_execution", "mcp_tool_call"}:
+    if event_type in {"thread.started", "thread/started"}:
+        thread = params.get("thread") if isinstance(params.get("thread"), dict) else {}
         return [
             _event(
-                "command.started" if item_type == "command_execution" else "tool.started",
+                "session.started",
                 timestamp,
-                title="Shell" if item_type == "command_execution" else item.get("tool"),
+                session_id=thread.get("id") or payload.get("thread_id"),
+            )
+        ]
+    if event_type in {"turn.started", "turn/started"}:
+        return [_event("turn.started", timestamp)]
+    if event_type == "item/agentMessage/delta":
+        return [_event("assistant.delta", timestamp, content=params.get("delta", ""))]
+    if event_type in {
+        "item/reasoning/summaryTextDelta",
+        "item/reasoning/textDelta",
+    }:
+        return [_event("thinking.delta", timestamp, content=params.get("delta", ""))]
+    if event_type == "item.delta":
+        return _normalize_codex_delta(item, item_type, timestamp)
+    if event_type in {"item.started", "item/started"} and item_type in {
+        "command_execution",
+        "commandExecution",
+        "mcp_tool_call",
+        "mcpToolCall",
+    }:
+        command_item = item_type in {"command_execution", "commandExecution"}
+        return [
+            _event(
+                "command.started" if command_item else "tool.started",
+                timestamp,
+                title="Shell" if command_item else item.get("tool"),
                 call_id=item.get("id"),
                 command=item.get("command"),
                 arguments=item.get("arguments"),
             )
         ]
-    if event_type == "item.completed":
+    if event_type in {"item.completed", "item/completed"}:
         if item_type == "reasoning":
             content = _codex_reasoning_text(item)
             if not content:
@@ -444,7 +474,7 @@ def _normalize_codex(payload: dict[str, Any], timestamp: str) -> list[dict[str, 
                     message_id=item.get("id"),
                 )
             ]
-        if item_type == "agent_message":
+        if item_type in {"agent_message", "agentMessage"}:
             return [
                 _event(
                     "assistant.message",
@@ -454,7 +484,7 @@ def _normalize_codex(payload: dict[str, Any], timestamp: str) -> list[dict[str, 
                     message_id=item.get("id"),
                 )
             ]
-        if item_type == "command_execution":
+        if item_type in {"command_execution", "commandExecution"}:
             return [
                 _event(
                     "command.completed",
@@ -462,13 +492,15 @@ def _normalize_codex(payload: dict[str, Any], timestamp: str) -> list[dict[str, 
                     title="Shell",
                     call_id=item.get("id"),
                     command=_display_command(item.get("command")),
-                    content=_clean_text(item.get("aggregated_output", "")),
-                    exit_code=item.get("exit_code"),
+                    content=_clean_text(
+                        item.get("aggregatedOutput", item.get("aggregated_output", ""))
+                    ),
+                    exit_code=item.get("exitCode", item.get("exit_code")),
                 )
             ]
-        if item_type == "file_change":
+        if item_type in {"file_change", "fileChange"}:
             return [_event("file.changed", timestamp, changes=item.get("changes", []))]
-        if item_type == "mcp_tool_call":
+        if item_type in {"mcp_tool_call", "mcpToolCall"}:
             return [
                 _event(
                     "tool.completed",
@@ -479,13 +511,15 @@ def _normalize_codex(payload: dict[str, Any], timestamp: str) -> list[dict[str, 
                     error=item.get("status") == "failed",
                 )
             ]
-    if event_type in {"turn.completed", "turn.failed"}:
+    if event_type in {"turn.completed", "turn.failed", "turn/completed"}:
+        turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
+        failed = event_type == "turn.failed" or turn.get("status") == "failed"
         return [
             _event(
-                "turn.completed" if event_type == "turn.completed" else "error",
+                "error" if failed else "turn.completed",
                 timestamp,
                 usage=payload.get("usage"),
-                content=_content_text(payload.get("error")),
+                content=_content_text(turn.get("error") or payload.get("error")),
             )
         ]
     return []
@@ -528,11 +562,15 @@ def _normalize_pi(
         update = payload.get("assistantMessageEvent") or {}
         update_type = update.get("type")
         if update_type == "text_delta":
-            return [_event("assistant.delta", timestamp, content=update.get("delta", ""))]
+            return [
+                _event("assistant.delta", timestamp, content=update.get("delta", ""))
+            ]
         if update_type == "thinking_delta":
             if state is not None:
                 state["thinking_streamed"] = True
-            return [_event("thinking.delta", timestamp, content=update.get("delta", ""))]
+            return [
+                _event("thinking.delta", timestamp, content=update.get("delta", ""))
+            ]
         if update_type in {"thinking_end", "thinking_start"}:
             if update_type == "thinking_end":
                 streamed = bool(state.get("thinking_streamed")) if state else False
@@ -588,6 +626,9 @@ def _codex_reasoning_text(item: dict[str, Any]) -> str:
     summary = item.get("summary")
     if isinstance(summary, list):
         for entry in summary:
+            if isinstance(entry, str) and entry.strip():
+                parts.append(_clean_text(entry).strip())
+                continue
             if not isinstance(entry, dict):
                 continue
             text = entry.get("text")
@@ -617,7 +658,11 @@ def _enrich_tool_event(
         command = _command_from_event(event)
         if command:
             event["command"] = _display_command(command)
-        if kind == "tool.started" and _is_shell_tool(event.get("title")) and event.get("command"):
+        if (
+            kind == "tool.started"
+            and _is_shell_tool(event.get("title"))
+            and event.get("command")
+        ):
             event["kind"] = "command.started"
             event["title"] = "Shell"
         return event
@@ -632,7 +677,11 @@ def _enrich_tool_event(
         skill_name = _skill_name_from_event(event)
         if skill_name:
             return _as_skill_event(event, "skill.completed", skill_name)
-        if kind == "tool.completed" and started and started.get("kind") == "command.started":
+        if (
+            kind == "tool.completed"
+            and started
+            and started.get("kind") == "command.started"
+        ):
             event["kind"] = "command.completed"
             event["title"] = "Shell"
             event["command"] = started.get("command", "")
@@ -662,7 +711,7 @@ def _skill_name_from_event(event: dict[str, Any]) -> str:
     if isinstance(direct_name, str) and direct_name.strip():
         name = direct_name.strip()
         if name.startswith(SKILL_PLUGIN_PREFIX):
-            name = name[len(SKILL_PLUGIN_PREFIX):]
+            name = name[len(SKILL_PLUGIN_PREFIX) :]
         return name
 
     title = str(event.get("title") or "").strip().lower().replace("_", " ")
@@ -681,7 +730,15 @@ def _skill_name_from_event(event: dict[str, Any]) -> str:
     if isinstance(arguments, dict):
         candidates.extend(
             arguments.get(key)
-            for key in ("path", "file", "file_path", "filePath", "command", "input", "raw")
+            for key in (
+                "path",
+                "file",
+                "file_path",
+                "filePath",
+                "command",
+                "input",
+                "raw",
+            )
         )
     elif isinstance(arguments, str):
         candidates.append(arguments)
@@ -713,7 +770,9 @@ def _is_shell_tool(title: Any) -> bool:
     if not isinstance(title, str):
         return False
     normalized = title.strip().lower().replace("_", " ")
-    return normalized in SHELL_TOOL_NAMES or "shell" in normalized or "bash" in normalized
+    return (
+        normalized in SHELL_TOOL_NAMES or "shell" in normalized or "bash" in normalized
+    )
 
 
 def _display_command(value: Any) -> str:
@@ -729,12 +788,7 @@ def _display_command(value: Any) -> str:
     command = match.group(1).strip()
     if len(command) >= 2 and command[0] == command[-1] and command[0] in {'"', "'"}:
         command = command[1:-1]
-    return (
-        command.replace(r'\"', '"')
-        .replace(r"\'", "'")
-        .replace("\\\\", "\\")
-        .strip()
-    )
+    return command.replace(r"\"", '"').replace(r"\'", "'").replace("\\\\", "\\").strip()
 
 
 def _clean_text(value: Any) -> str:
@@ -749,7 +803,11 @@ def _clean_text(value: Any) -> str:
     repaired_cjk = sum("\u4e00" <= char <= "\u9fff" for char in repaired)
     original_markers = sum(char in MOJIBAKE_MARKERS for char in text)
     repaired_markers = sum(char in MOJIBAKE_MARKERS for char in repaired)
-    return repaired if repaired_cjk > original_cjk or repaired_markers < original_markers else text
+    return (
+        repaired
+        if repaired_cjk > original_cjk or repaired_markers < original_markers
+        else text
+    )
 
 
 def _redact(value: Any) -> Any:

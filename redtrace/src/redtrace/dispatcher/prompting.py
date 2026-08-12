@@ -5,7 +5,6 @@ import os
 from importlib import resources
 from typing import Any
 
-
 LANGUAGE_GUIDANCE = """## 输出语言
 
 自然语言及 JSON 自由文本值须用简体中文。
@@ -60,7 +59,11 @@ def add_blackboard_guidance(
             "当 `changed=true` 时，由你根据当前任务和 token 成本自行决定：直接采用文件内增量、运行 "
             "`redtrace-blackboard changes --since <revision>`，或运行 `redtrace-blackboard snapshot` 查看全部内容。"
             "通知文件保留本次 Worker 启动以来的全部增量；在会话内记住已处理的最新 revision，避免重复消费。"
-            "必须把相关 Fact、Intent、Hint 和其他 Worker 占用情况纳入决策，但不得固定频率轮询或重做黑板已确认的工作。"
+            "相关 Fact 会在不中断当前进程的情况下发送一个可选短信号，由你判断是否采用。"
+            "信号不携带完整上下文；需要更多信息时运行 `redtrace-blackboard source <fact_id>` "
+            "查看提交者的有界对话记录，不得继承其他 Worker 的身份或任务。"
+            "自行判断相关 Fact、Intent、Hint 和其他 Worker 占用情况；仅在有助于当前任务时采用，"
+            "不得固定频率轮询或重做黑板已确认的工作。"
             "结论仍通过既有 output contract 返回。"
         )
     ]
@@ -73,6 +76,9 @@ def add_blackboard_guidance(
                     "都能读取和复用其中全部文件。是否新建并进入 `<题目ID>/` 子目录，由你依据当前任务性质自行决定；"
                     "普通非题目任务可以直接使用 Workspace 根目录。所有脚本、PoC/EXP、日志、中间文件和证据都必须写在 "
                     "`$REDTRACE_WORKSPACE` 内，不得写入 `/tmp`、用户主目录或仓库外路径。"
+                    "修改其他 Worker 可能同时使用的既有文件或独占通道前，先在 `redtrace-resource list` 复用对应 `file`/Resource，"
+                    "必要时用 `register --kind file --no-fact` 注册，再执行 `redtrace-resource lock <id>`；HTTP 423 时改读、等待或写独立文件，"
+                    "不得覆盖。完成或放弃修改后 `unlock <id>`。只读分析无需锁，不得用粗粒度目录锁串行化可并行探索。"
                     "每道已处理题目都要创建或更新一个可复用、"
                     "不绑定本次 flag/容器地址的通用解题脚本，供其他 Worker 直接复用。Agent 自身配置和会话状态目录不属于任务产物。"
                 ),

@@ -5,8 +5,13 @@ import os
 
 from redtrace.capabilities import CLAUDE_MCP_PATH
 from redtrace.dispatcher.config import WorkerConfig
-from redtrace.dispatcher.workers.base import DriverResult, SeedSessionDriver
+from redtrace.dispatcher.workers.base import (
+    REDTRACE_OUTPUT_SCHEMA_OBJECT,
+    DriverResult,
+    SeedSessionDriver,
+)
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
+from redtrace.dispatcher.workers.live import ClaudeLiveControl
 
 ANTHROPIC_VERSION = "2023-06-01"
 # Maximum extended-thinking budget for Claude Code workers. Setting
@@ -17,16 +22,7 @@ CLAUDE_MAX_THINKING_TOKENS = "31999"
 if not hasattr(os, "geteuid"):
     os.geteuid = lambda: -1  # type: ignore[attr-defined]
 REDTRACE_OUTPUT_SCHEMA = json.dumps(
-    {
-        "type": "object",
-        "properties": {
-            "accepted": {"type": "boolean"},
-            "data": {"type": "object"},
-        },
-        "required": ["accepted", "data"],
-        "additionalProperties": False,
-    },
-    separators=(",", ":"),
+    REDTRACE_OUTPUT_SCHEMA_OBJECT, separators=(",", ":")
 )
 
 
@@ -87,37 +83,41 @@ class ClaudeCodeDriver(SeedSessionDriver):
     def describe_health(self, worker: WorkerConfig) -> str:
         return f"POST {worker.env['ANTHROPIC_BASE_URL']}/v1/messages (model={worker.env['ANTHROPIC_MODEL']})"
 
-    def build_execute(self, worker: WorkerConfig, prompt: str, session: str | None) -> DriverResult:
+    def build_execute(
+        self, worker: WorkerConfig, prompt: str, session: str | None
+    ) -> DriverResult:
         assert session is not None
+        control = ClaudeLiveControl(prompt, session)
         model_args = (
             ["--model", worker.env["ANTHROPIC_MODEL"]]
             if worker.api_configured()
             else []
         )
         argv = [
-                "claude",
-                "--session-id",
-                session,
-                *self._permission_args(),
-                *model_args,
-                "--mcp-config",
-                self._mcp_config(worker),
-                *self._plugin_args(worker),
-                *self._global_instruction_args(worker),
-                "-p",
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--include-partial-messages",
-                "--json-schema",
-                REDTRACE_OUTPUT_SCHEMA,
-            ]
-        if not self.local:
-            argv.extend(["--", prompt])
+            "claude",
+            "--session-id",
+            session,
+            *self._permission_args(),
+            *model_args,
+            "--mcp-config",
+            self._mcp_config(worker),
+            *self._plugin_args(worker),
+            *self._global_instruction_args(worker),
+            "-p",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--include-partial-messages",
+            "--json-schema",
+            REDTRACE_OUTPUT_SCHEMA,
+        ]
         return DriverResult(
             argv=argv,
             session=session,
-            stdin=prompt if self.local else None,
+            stdin=control.initial_input,
+            live_control=control,
         )
 
     def build_conclude(
@@ -126,6 +126,7 @@ class ClaudeCodeDriver(SeedSessionDriver):
         prompt: str,
         session: str,
     ) -> DriverResult:
+        control = ClaudeLiveControl(prompt, session)
         model_args = (
             ["--model", worker.env["ANTHROPIC_MODEL"]]
             if worker.api_configured()
@@ -142,6 +143,8 @@ class ClaudeCodeDriver(SeedSessionDriver):
             *self._plugin_args(worker),
             *self._global_instruction_args(worker),
             "-p",
+            "--input-format",
+            "stream-json",
             "--output-format",
             "stream-json",
             "--verbose",
@@ -149,12 +152,11 @@ class ClaudeCodeDriver(SeedSessionDriver):
             "--json-schema",
             REDTRACE_OUTPUT_SCHEMA,
         ]
-        if not self.local:
-            argv.extend(["--", prompt])
         return DriverResult(
             argv=argv,
             session=session,
-            stdin=prompt if self.local else None,
+            stdin=control.initial_input,
+            live_control=control,
         )
 
     @classmethod

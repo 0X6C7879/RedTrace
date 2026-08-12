@@ -37,6 +37,7 @@ common_env:
 workers:
   - name: "mock-observer-1"
     type: "mock"
+    task_types: [reason, explore, bootstrap]
     max_running: 1
     priority: 0
     env:
@@ -49,6 +50,7 @@ workers:
 
   - name: "mock-observer-2"
     type: "mock"
+    task_types: [reason, explore, bootstrap]
     max_running: 1
     priority: 0
     env:

@@ -43,6 +43,7 @@ from redtrace.native_cli_config import (
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 EDITABLE_WORKER_TYPES = frozenset({"claudecode", "codex", "pi"})
+TASK_TYPES = frozenset({"bootstrap", "reason", "explore"})
 LOCK_TIMEOUT_SECONDS = 10.0
 STALE_LOCK_SECONDS = 60.0
 TEST_CACHE_SECONDS = 60.0
@@ -199,6 +200,16 @@ def _worker_payload(
     if worker_type not in EDITABLE_WORKER_TYPES:
         raise WorkerConfigError("Agent CLI type must be claudecode, codex, or pi")
     name = _normalize_name(payload.get("name"))
+    task_types = payload.get("task_types")
+    if (
+        not isinstance(task_types, list)
+        or not task_types
+        or len(set(task_types)) != len(task_types)
+        or any(task_type not in TASK_TYPES for task_type in task_types)
+    ):
+        raise WorkerConfigError(
+            "task_types must contain unique bootstrap, reason, or explore values"
+        )
     try:
         priority = int(payload.get("priority"))
         max_running = int(payload.get("max_running"))
@@ -271,6 +282,7 @@ def _worker_payload(
         "name": name,
         "type": worker_type,
         "enabled": bool(payload.get("enabled", True)),
+        "task_types": list(task_types),
         "max_running": max_running,
         "priority": priority,
         **(
@@ -692,6 +704,7 @@ class WorkerConfigService:
                 "api_key_configured": False,
                 "model_id": "",
                 "context_length": worker.context_length,
+                "task_types": worker.task_types,
                 "priority": worker.priority,
                 "max_running": worker.max_running,
                 "editable": False,
@@ -707,6 +720,7 @@ class WorkerConfigService:
             "api_key_configured": bool(worker.env.get(fields.api_key)),
             "model_id": worker.env.get(fields.model, ""),
             "context_length": worker.context_length,
+            "task_types": worker.task_types,
             "priority": worker.priority,
             "max_running": worker.max_running,
             "editable": True,

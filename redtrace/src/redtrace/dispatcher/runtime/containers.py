@@ -249,11 +249,10 @@ class ContainerManager:
         env: dict[str, str],
         command: list[str],
         stdin_text: str | None = None,
+        keep_stdin_open: bool = False,
         timeout_seconds: int | None = None,
         kill_after_seconds: int = 5,
     ) -> ManagedProcess:
-        if stdin_text is not None:
-            raise ValueError("container Worker stdin is not supported")
         container = self._require_container(container_name)
         context_harness = getattr(self, "_context_harness", None)
         if context_harness is None:
@@ -290,6 +289,8 @@ class ContainerManager:
             argv,
             env,
             workdir=self._WORKSPACE,
+            stdin_text=stdin_text,
+            keep_stdin_open=keep_stdin_open,
             max_output_chars=context_harness.worker_output_chars,
         )
 

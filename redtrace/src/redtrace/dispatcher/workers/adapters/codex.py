@@ -6,8 +6,13 @@ from redtrace.dispatcher.config import (
     WorkerConfig,
     model_auto_compact_token_limit,
 )
-from redtrace.dispatcher.workers.base import DriverResult, RegexSessionDriver
+from redtrace.dispatcher.workers.base import (
+    REDTRACE_OUTPUT_SCHEMA_OBJECT,
+    DriverResult,
+    RegexSessionDriver,
+)
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
+from redtrace.dispatcher.workers.live import CodexLiveControl
 
 
 class CodexDriver(RegexSessionDriver):
@@ -61,32 +66,48 @@ class CodexDriver(RegexSessionDriver):
     def describe_health(self, worker: WorkerConfig) -> str:
         return f"POST {worker.env['CODEX_BASE_URL']}/responses (model={worker.env['CODEX_MODEL']})"
 
-    def build_execute(self, worker: WorkerConfig, prompt: str, session: str | None) -> DriverResult:
+    def build_execute(
+        self, worker: WorkerConfig, prompt: str, session: str | None
+    ) -> DriverResult:
+        return self._build_live(worker, prompt, session)
+
+    def build_conclude(
+        self,
+        worker: WorkerConfig,
+        prompt: str,
+        session: str,
+    ) -> DriverResult:
+        return self._build_live(worker, prompt, session)
+
+    def _build_live(
+        self, worker: WorkerConfig, prompt: str, session: str | None
+    ) -> DriverResult:
         capability_args = self._resource_args(worker)
+        model = worker.env.get("CODEX_MODEL") if worker.api_configured() else None
+        control = CodexLiveControl(
+            prompt,
+            session_id=session,
+            model=model,
+            output_schema=REDTRACE_OUTPUT_SCHEMA_OBJECT,
+        )
         if self.local and not worker.api_configured():
             return DriverResult(
                 argv=[
                     "codex",
-                    "exec",
-                    "--json",
-                    "--dangerously-bypass-approvals-and-sandbox",
+                    "app-server",
                     *self._long_task_args(worker),
                     *capability_args,
-                    "--",
-                    "-",
                 ],
-                stdin=prompt,
+                session=session,
+                stdin=control.initial_input,
+                live_control=control,
             )
         env = worker.env
         return DriverResult(
             argv=[
                 "codex",
-                "exec",
-                "--json",
-                "--dangerously-bypass-approvals-and-sandbox",
+                "app-server",
                 *self._long_task_args(worker),
-                "--model",
-                env["CODEX_MODEL"],
                 "-c",
                 'model_provider="redtrace"',
                 "-c",
@@ -104,71 +125,15 @@ class CodexDriver(RegexSessionDriver):
                 "-c",
                 'model_providers.redtrace.env_key="OPENAI_API_KEY"',
                 *capability_args,
-                "--",
-                prompt,
-            ]
-        )
-
-    def build_conclude(
-        self,
-        worker: WorkerConfig,
-        prompt: str,
-        session: str,
-    ) -> DriverResult:
-        capability_args = self._resource_args(worker)
-        if self.local and not worker.api_configured():
-            return DriverResult(
-                argv=[
-                "codex",
-                "exec",
-                "--json",
-                "resume",
-                session,
-                "--dangerously-bypass-approvals-and-sandbox",
-                *self._long_task_args(worker),
-                    *capability_args,
-                    "--",
-                    "-",
-                ],
-                session=session,
-                stdin=prompt,
-            )
-        env = worker.env
-        return DriverResult(
-            argv=[
-            "codex",
-            "exec",
-            "--json",
-            "resume",
-            session,
-            "--dangerously-bypass-approvals-and-sandbox",
-            *self._long_task_args(worker),
-            "--model",
-            env["CODEX_MODEL"],
-            "-c",
-            'model_provider="redtrace"',
-            "-c",
-            'model_providers.redtrace.name="redtrace"',
-            "-c",
-            'model_providers.redtrace.wire_api="responses"',
-            "-c",
-            'model_reasoning_effort="high"',
-            "-c",
-            'model_reasoning_summary="detailed"',
-            "-c",
-            'custom_instructions="请始终使用中文进行思考、分析和回答。"',
-            "-c",
-            f'model_providers.redtrace.base_url="{env["CODEX_BASE_URL"]}"',
-            "-c",
-            'model_providers.redtrace.env_key="OPENAI_API_KEY"',
-            *capability_args,
-            "--",
-            prompt,
             ],
             session=session,
+            stdin=control.initial_input,
+            live_control=control,
         )
 
-    def extract_session(self, session: str | None, stdout: str, stderr: str) -> str | None:
+    def extract_session(
+        self, session: str | None, stdout: str, stderr: str
+    ) -> str | None:
         if session:
             return session
         for event in self._iter_events(stdout):
@@ -176,14 +141,27 @@ class CodexDriver(RegexSessionDriver):
                 thread_id = event.get("thread_id")
                 if isinstance(thread_id, str) and thread_id:
                     return thread_id
+            if event.get("method") == "thread/started":
+                params = event.get("params")
+                thread = params.get("thread") if isinstance(params, dict) else None
+                thread_id = thread.get("id") if isinstance(thread, dict) else None
+                if isinstance(thread_id, str) and thread_id:
+                    return thread_id
         return super().extract_session(session, stdout, stderr)
 
     def extract_response_text(self, stdout: str, stderr: str) -> str:
         for event in reversed(self._iter_events(stdout)):
-            if event.get("type") != "item.completed":
+            if event.get("type") == "item.completed":
+                item = event.get("item")
+            elif event.get("method") == "item/completed":
+                params = event.get("params")
+                item = params.get("item") if isinstance(params, dict) else None
+            else:
                 continue
-            item = event.get("item")
-            if not isinstance(item, dict) or item.get("type") != "agent_message":
+            if not isinstance(item, dict) or item.get("type") not in {
+                "agent_message",
+                "agentMessage",
+            }:
                 continue
             text = item.get("text")
             if isinstance(text, str) and text.strip():
@@ -197,7 +175,9 @@ class CodexDriver(RegexSessionDriver):
             value = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise ValueError("invalid REDTRACE_CODEX_RESOURCE_ARGS") from exc
-        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        if not isinstance(value, list) or any(
+            not isinstance(item, str) for item in value
+        ):
             raise ValueError("REDTRACE_CODEX_RESOURCE_ARGS must be a JSON string array")
         return value
 

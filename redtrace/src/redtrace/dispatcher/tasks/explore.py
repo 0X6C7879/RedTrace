@@ -18,6 +18,7 @@ from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
 from redtrace.dispatcher.tasks.common import (
+    BlackboardInbox,
     best_effort_release,
     cancel_reason,
     did_timeout,
@@ -36,6 +37,8 @@ _ACCESS_CHANNEL = re.compile(
     re.IGNORECASE,
 )
 _RESOURCE_ID = re.compile(r"\b(?:ws|lis|ses|pay)_[0-9a-f]{12}\b", re.IGNORECASE)
+
+
 def run_explore_task(
     config: DispatchConfig,
     client: ControlPlaneClient,
@@ -51,6 +54,7 @@ def run_explore_task(
     lease = HeartbeatLease.for_intent(
         client, project.project.id, intent.id, worker.name, config.runtime.interval
     )
+    inbox: BlackboardInbox | None = None
     lease.start()
     try:
         container_name = container_manager.ensure_running(project.project.id)
@@ -75,6 +79,20 @@ def run_explore_task(
             export_yaml.strip(),
             phase="explore_execute",
         )
+        if worker.type != "mock" and callable(
+            getattr(client, "wait_for_blackboard", None)
+        ):
+            inbox = BlackboardInbox(
+                client,
+                container_manager,
+                container_name,
+                project_id=project.project.id,
+                intent_id=intent.id,
+                intent_description=intent.description,
+                source_fact_ids=intent.from_,
+                worker_name=worker.name,
+                revision=project.blackboard_revision,
+            )
         prompt = render_prompt(
             load_prompt(config.runtime.prompt_group, "explore.md"),
             {
@@ -90,32 +108,31 @@ def run_explore_task(
                 task_type="explore",
                 context_harness_enabled=config.context_harness.enabled,
                 local_execution=config.runtime.execution == "local",
-                hints=format_hints(
-                    [hint.model_dump() for hint in project.hints]
-                ),
+                hints=format_hints([hint.model_dump() for hint in project.hints]),
             )
 
         session = driver.prepare_session()
         execute = driver.build_execute(worker, prompt, session)
         session = execute.session
         execute_started = time.perf_counter()
-        first = _run_process(
+        first, session = _run_with_steering(
+            driver,
             client,
             project.project.id,
             intent.id,
             container_manager,
             container_name,
             worker,
-            execute.argv,
-            stdin_text=execute.stdin,
+            execute,
+            session=session,
             phase="explore_execute",
             timeout=config.tasks.explore.timeout,
             lease=lease,
             cancellation=cancellation,
             blackboard_revision=project.blackboard_revision,
+            inbox=inbox,
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
-        session = driver.extract_session(session, first.stdout, first.stderr)
         cancelled = cancel_reason(first, cancellation)
         if cancelled is not None:
             LOG.info(
@@ -169,6 +186,7 @@ def run_explore_task(
                     session,
                     lease,
                     cancellation,
+                    inbox=inbox,
                 )
             if kind == "rejected":
                 LOG.warning(
@@ -199,6 +217,7 @@ def run_explore_task(
                     session,
                     lease,
                     cancellation,
+                    inbox=inbox,
                     correction_prompt=(
                         "你已声明建立 WebShell/reverse shell/C2 通道，但当前 Intent 没有共享 Resource。"
                         "立即使用 redtrace-resource 注册；失败时查看对应子命令 --help 并修正参数重试一次。"
@@ -240,6 +259,7 @@ def run_explore_task(
                 session,
                 lease,
                 cancellation,
+                inbox=inbox,
             )
         LOG.warning(
             "explore command failed project=%s intent=%s worker=%s code=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -264,6 +284,8 @@ def run_explore_task(
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return "failed"
     finally:
+        if inbox is not None:
+            inbox.stop()
         lease.stop()
 
 
@@ -280,6 +302,7 @@ def _try_conclude_fallback(
     session: str | None,
     lease: HeartbeatLease,
     cancellation: TaskCancellation,
+    inbox: BlackboardInbox | None = None,
     correction_prompt: str | None = None,
 ) -> str:
     if not driver.supports_conclude() or not session:
@@ -340,19 +363,21 @@ def _try_conclude_fallback(
         worker.name,
     )
     conclude_started = time.perf_counter()
-    result = _run_process(
+    result, _ = _run_with_steering(
+        driver,
         client,
         project_id,
         intent.id,
         container_manager,
         container_name,
         worker,
-        conclude.argv,
-        stdin_text=conclude.stdin,
+        conclude,
+        session=session,
         phase="explore_conclude",
         timeout=config.tasks.explore.conclude_timeout,
         lease=lease,
         cancellation=cancellation,
+        inbox=inbox,
     )
     conclude_ms = int((time.perf_counter() - conclude_started) * 1000)
     cancelled = cancel_reason(result, cancellation)
@@ -472,6 +497,8 @@ def _run_process(
     lease: HeartbeatLease,
     cancellation: TaskCancellation,
     blackboard_revision: int = 0,
+    inbox: BlackboardInbox | None = None,
+    live_control=None,
 ):
     return run_worker_process(
         container_manager,
@@ -487,4 +514,48 @@ def _run_process(
         timeout_seconds=timeout,
         lease=lease,
         cancellation=cancellation,
+        blackboard_inbox=inbox,
+        live_control=live_control,
     )
+
+
+def _run_with_steering(
+    driver,
+    client: ControlPlaneClient,
+    project_id: str,
+    intent_id: str,
+    container_manager: ContainerManager,
+    container_name: str,
+    worker: WorkerConfig,
+    invocation,
+    *,
+    session: str | None,
+    phase: str,
+    timeout: int,
+    lease: HeartbeatLease,
+    cancellation: TaskCancellation,
+    blackboard_revision: int = 0,
+    inbox: BlackboardInbox | None = None,
+):
+    result = _run_process(
+        client,
+        project_id,
+        intent_id,
+        container_manager,
+        container_name,
+        worker,
+        invocation.argv,
+        stdin_text=invocation.stdin,
+        phase=phase,
+        timeout=timeout,
+        lease=lease,
+        cancellation=cancellation,
+        blackboard_revision=blackboard_revision,
+        inbox=inbox,
+        live_control=getattr(invocation, "live_control", None),
+    )
+    session = driver.extract_session(session, result.stdout, result.stderr)
+    control = getattr(invocation, "live_control", None)
+    if control is not None and control.session_id:
+        session = control.session_id
+    return result, session

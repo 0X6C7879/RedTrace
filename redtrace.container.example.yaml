@@ -76,6 +76,7 @@ workers:
   # max_running is per-worker concurrency. Slower backends such as Pi usually benefit from lower values.
   - name: "claudecode_deepseek-v4-pro"
     type: "claudecode"
+    task_types: [bootstrap, reason, explore]
     max_running: 2
     priority: 0
     env:
@@ -85,6 +86,7 @@ workers:
 
   # - name: "codex_qwen3.6-plus"
   #   type: "codex"
+  #   task_types: [bootstrap, reason, explore]
   #   max_running: 2
   #   priority: 0
   #   env:
@@ -94,6 +96,7 @@ workers:
 
   # - name: "pi_qwen3.6-plus"
   #   type: "pi"
+  #   task_types: [bootstrap, reason, explore]
   #   max_running: 2
   #   priority: 0
   #   env:

@@ -4,9 +4,20 @@ import re
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any
 
 from redtrace.dispatcher.config import WorkerConfig
 from redtrace.dispatcher.workers.health import HealthResult
+
+REDTRACE_OUTPUT_SCHEMA_OBJECT = {
+    "type": "object",
+    "properties": {
+        "accepted": {"type": "boolean"},
+        "data": {"type": "object"},
+    },
+    "required": ["accepted", "data"],
+    "additionalProperties": False,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,6 +25,7 @@ class DriverResult:
     argv: list[str]
     session: str | None = None
     stdin: str | None = None
+    live_control: Any | None = None
 
 
 class WorkerDriver(ABC):

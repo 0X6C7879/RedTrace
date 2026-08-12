@@ -119,6 +119,7 @@ class LocalBackend:
         env: dict[str, str],
         command: list[str],
         stdin_text: str | None = None,
+        keep_stdin_open: bool = False,
         timeout_seconds: int | None = None,
         kill_after_seconds: int = 5,
     ) -> LocalProcess:
@@ -168,6 +169,7 @@ class LocalBackend:
             cwd=workspace,
             env=merged_env,
             stdin_text=stdin_text,
+            keep_stdin_open=keep_stdin_open,
             timeout_seconds=timeout_seconds,
             term_grace_seconds=kill_after_seconds,
             max_output_chars=self._context_harness.worker_output_chars,

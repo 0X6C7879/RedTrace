@@ -80,6 +80,7 @@ class ControlPlaneClient:
         worker: str,
         task_type: str,
         intent_id: str | None,
+        include_source: bool = False,
     ) -> dict[str, Any]:
         cursor = since
         changes: list[dict[str, Any]] = []
@@ -93,7 +94,11 @@ class ControlPlaneClient:
         while True:
             response = self._session().get(
                 self._url(f"/projects/{project_id}/blackboard/changes"),
-                params={"since": cursor, "limit": 100},
+                params={
+                    "since": cursor,
+                    "limit": 100,
+                    "include_source": include_source,
+                },
                 headers=headers,
                 timeout=self._timeout,
             )
@@ -114,6 +119,21 @@ class ControlPlaneClient:
             "has_more": False,
             "changes": changes,
         }
+
+    def wait_for_blackboard(
+        self,
+        project_id: str,
+        since: int,
+        *,
+        timeout: float,
+    ) -> int:
+        response = self._session().get(
+            self._url(f"/projects/{project_id}/blackboard/wait"),
+            params={"since": since, "timeout": timeout},
+            timeout=(self._timeout, timeout + self._timeout),
+        )
+        response.raise_for_status()
+        return int(response.json()["revision"])
 
     def resource_snapshot(self, project_id: str) -> list[dict[str, Any]]:
         """Return the bounded shared access-resource snapshot for Worker gates."""

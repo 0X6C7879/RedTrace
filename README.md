@@ -1,198 +1,83 @@
 # RedTrace
 
-RedTrace 是一个面向通用问题求解的**状态空间协作引擎**。它把“从当前已知信息走到目标状态”的过程建模为可追溯的事实图，并由 Dispatcher 将探索任务分配给多个 Agent Worker 并行执行。
+RedTrace 是一个面向授权安全研究、代码审计与复杂技术调查的多 Agent 协同平台。它把目标、已验证证据、待验证方向和人工提示组织成持续演进的证据图谱，再由独立 Dispatcher 将工作分配给 Claude Code、Codex、Pi 或 Mock Worker。
 
-项目不要求预先定义固定角色或僵化工作流：用户提供项目目标、初始事实和约束，Agent 通过读取共享状态、声明探索意图、验证结果并写回新事实，逐步扩大可达路径。人类可以随时注入 Hint，系统则保留每次任务、工具调用、产出和状态变化的审计记录。
+RedTrace 关注的不是一次对话能否给出答案，而是一个长任务能否被并行推进、持续校正、失败恢复并完整审计。每次执行都有明确输入、结构化输出、运行记录和 Workspace；新的可靠结论会进入共享证据面，供正在运行的其他 Worker 在关键决策点增量获取。
 
-RedTrace 适合用于：
+> RedTrace 仅用于获得明确授权的安全测试、研究、竞赛和实验环境。项目提供执行与审计基础设施，不代表对任何目标的访问授权。
 
-- 已授权的渗透测试、安全评估和漏洞验证；
-- CTF、靶场和本地沙箱中的逆向工程；
-- 多 Agent 协作的资料研究、故障排查和复杂工程探索；
-- 需要并行尝试、证据沉淀和可恢复执行的长任务。
+## 核心能力
 
-> 安全边界：安全相关能力仅限于明确授权的环境。RedTrace 不为未授权访问、破坏或绕过安全控制提供使用授权。
+- **Trace Loop 任务闭环**：通过 `bootstrap → reason → explore` 循环完成初始突破、全局判断和并行验证，直到目标完成、人工停止或暂时没有可执行方向。
+- **证据图谱**：用 `Project`、`Fact`、`Intent`、`Hint` 区分目标、事实、调查方向和人工输入，避免把模型的临时推测当成结论。
+- **异构 Worker 协同**：统一接入 Claude Code、Codex、Pi 和 Mock，同时保留各 CLI 的会话、模型、Skill、MCP 与原生工具能力。
+- **运行中知识同步**：证据修订会通过增量通知和 Worker 原生双向协议送达正在运行的任务；Worker 也可以通过只读 CLI 按需查询快照、变化、来源和局部上下文。
+- **双运行后端**：Local 模式直接复用宿主机 Agent CLI；Container 模式为每个项目提供独立 Linux 执行环境和持久 Workspace。
+- **上下文预算治理**：Context Harness 对大文件、HTTP 输出和安全工具结果进行有预算的摘要、索引和增量读取，完整原始数据保留在任务工件中。
+- **资源与操作面**：统一管理 WebShell、C2 Listener、Session、Payload、外部插件和操作结果；高风险操作可进入审批流程，结果可选择发布为新证据。
+- **可观测与可恢复**：任务、会话、工具事件、输出、心跳、超时、取消和资源操作均可审计；Server 或 Dispatcher 重启后可以恢复未完成状态。
+- **Web 控制台与插件接入**：内置项目图谱、运行记录、Workspace、Worker 与能力管理界面，并提供浏览器扩展、Burp Suite 和兼容插件 API。
 
-## 项目定位
-
-RedTrace 解决的是“如何让多个异构 Agent 在一个可验证、可恢复、可审计的探索过程中协作”这一基础问题，而不是单一领域的聊天机器人或脚本集合。
-
-核心设计取舍如下：
-
-1. **事实图优先**：把已确认信息、待探索方向和人工判断分开建模，避免把临时对话误当成结论。
-2. **控制面与执行面分离**：Server 维护状态和协议一致性；Dispatcher 负责调度与生命周期；Worker 只专注于完成当前任务。
-3. **异构 Worker 原生接入**：Claude Code、Codex、Pi 和 Mock 通过统一适配器运行，同时保留各自 CLI 的原生能力。
-4. **按需读取、原生回写**：安全能力统一由 route-skills 路由（含白盒代码审计 code-audit 三模块）；Worker 在原任务中直接完成脱敏 field-journal / learned 回写，不经过额外模型、队列或治理线程。
-5. **证据和审计可回放**：任务输出、工具事件、心跳、取消和资源操作均可查询、导出和追踪。
-
-## 完整架构设计
+## 工作方式
 
 ```mermaid
-flowchart TB
-    U["用户 / Web UI / 浏览器插件 / Burp 插件 / CLI"]
-    API["RedTrace Server<br/>FastAPI + SQLite(WAL)"]
-    GRAPH["项目状态图<br/>Project · Fact · Intent · Hint"]
-    OPS["操作与资源域<br/>Task · Resource · Result · C2/Webshell"]
-    AUDIT["审计与事件域<br/>Run · Event · SSE · Workspace"]
-    CAPS["能力管理域<br/>Skills · MCP · Plugins · Worker 配置"]
-    D["Dispatcher<br/>配置热加载 · 调度循环 · 并发配额"]
-    TASK["任务编排<br/>Bootstrap · Reason · Explore"]
-    RT["运行时<br/>Container Backend / Local Process"]
-    W["Worker Adapter<br/>Claude Code · Codex · Pi · Mock"]
-    CLI["只读辅助 CLI<br/>状态面板 · Resource · Context"]
-    REV["route-skills<br/>原生路由 · case · tool-index · code-audit · field-journal"]
-
-    U --> API
-    API --> GRAPH
-    API --> OPS
-    API --> AUDIT
-    API --> CAPS
-    D --> API
-    D --> TASK
-    TASK --> RT
-    RT --> W
-    W --> CLI
-    CLI --> API
-    CAPS --> REV
-    REV --> W
-    W -. "任务内直接经验回写" .-> REV
-    W -. "任务结果 / 心跳 / 事件" .-> D
+flowchart LR
+    U[用户 / Web / CLI / 插件] --> S[RedTrace Server]
+    S --> E[(证据图谱与操作记录)]
+    D[Dispatcher] <--> S
+    D --> B[Bootstrap]
+    D --> R[Reason]
+    D --> X[Explore]
+    B --> RT[Local 或 Container Runtime]
+    R --> RT
+    X --> RT
+    RT --> W[Claude Code / Codex / Pi / Mock]
+    W --> A[审计事件与结构化结果]
+    A --> S
+    S -. 增量证据通知 .-> W
 ```
 
-### 1. Server：状态与协议控制面
+一次典型任务会经历：
 
-Server 是 FastAPI 应用，启动时初始化 SQLite 数据库并恢复未完成任务。它不负责直接运行模型进程，也不参与 Skill 自我进化，只提供一致的读写协议和 Web 控制台。
+1. 用户创建 Project，提供起点、目标、约束和可选 Hint。
+2. `bootstrap` 尝试直接取得关键证据或完成目标。
+3. `reason` 读取当前证据图谱，判断是否已经完成；若未完成，则创建新的 Intent。
+4. 一个或多个 `explore` Worker 认领 Intent，并行执行验证。
+5. 通过验证的结果写为 Fact，Intent 被收束，随后进入下一轮 `reason`。
+6. 目标满足后项目标记为 completed；失败、超时或取消则按任务协议回收或恢复。
 
-- **项目状态图**：保存 Project、Fact、Intent、Hint；Fact 采用追加式记录，Intent 支持声明、认领、heartbeat、release、结论和完成。
-- **项目生命周期**：Project 状态为 `active`、`stopped` 或 `completed`；支持暂停、恢复、标题修改和 Reason 租约。
-- **操作与资源**：管理资源元数据、任务、结果和操作状态；支持插件动作、Webshell 配置/探测/执行，以及 C2 payload 辅助生成。
-- **Worker 配置**：在设置页面创建、编辑、复制、启停和删除 Worker；使用 revision 做乐观并发控制，保存前可执行配置校验和连接测试。
-- **能力管理**：统一管理 Skills、MCP 和外部插件的启用状态、版本、回滚和审计。
-- **审计与事件**：按项目、任务和运行实例组织事件，提供分页查询、SSE 实时流、Workspace 文件浏览和导出。
-- **状态面板只读协议**：提供状态、变更、节点、路径和局部上下文查询；查询本身写入审计，但不会改变事实图。
+详细设计见 [技术架构与调度设计](docs/specs/dispatcher-design.md)。
 
-数据库默认使用 SQLite WAL。事实图写入与修订事件在同一事务内完成，保证多个 Dispatcher/Worker 并发读取时仍能获得单调递增的状态修订。
+## 为什么选择 RedTrace
 
-### 2. Dispatcher：调度与生命周期控制面
+### 从“对话历史”转向“可验证证据”
 
-Dispatcher 是独立运行的客户端执行器，也是协议写入的唯一入口。它按轮次读取项目摘要和 Worker 配额，完成任务选择、认领、执行、回收和重试。
+模型对话适合思考，但不适合作为多人协同的唯一状态。RedTrace 将可复用结论写入证据图谱，把待验证方向单独建模，并保留每条结果的任务、会话和审计来源。后续 Worker 可以从稳定的共享事实继续工作，而不必反复重读完整对话。
 
-- **配置**：读取 `redtrace.yaml`，支持容器模式和本地模式；文件原子替换后增量热加载，新任务使用新快照，运行中任务继续使用旧快照。
-- **调度**：所有 Worker 默认执行 Bootstrap、Reason 与 Explore；按项目状态、Bootstrap 开关、Intent 可用性、空闲状态、优先级、`max_running` 和项目并发上限选择任务。
-- **任务编排**：
-  - `bootstrap`：项目初始阶段的直接推进尝试，可在执行失败或超时后进入 conclude fallback；
-  - `reason`：作为 Dispatcher 临时派发的 replan 微任务读取全图，判断目标是否达成，并产生 Complete、Intent 或“暂无下一步”；
-  - `explore`：认领一个 Intent，执行探索并提交一个 Fact 结论。
-- **运行治理**：启动健康检查、任务超时、进程取消、容器清理、Intent/Reason heartbeat、失联回收和状态变化优先的结构化日志。
-- **输出契约**：Prompt 按组以 Markdown 分发；解析器从 Worker 输出提取 JSON，并对三类任务分别执行 schema 校验。
+### 并行而不失控
 
-### 3. Runtime 与 Worker：隔离执行面
+Dispatcher 同时约束全局并发、活动项目数、单项目并发和单 Worker 配额。任务派发还会考虑 Worker 能力、健康状态、优先级、当前负载和失败冷却窗口，从而让多个模型与多个项目共享资源时保持可预测性。
 
-Runtime 为每个任务提供可控的执行环境：
+### 长任务中的实时协同
 
-- **Container Backend**：适合 Docker/Compose 部署，按项目管理容器、Workspace 和清理流程；
-- **Local Backend**：直接调用宿主机上的 `claude`、`codex`、`pi`，使用 RedTrace 管理的 Worker 级登录、会话和缓存；
-- **进程治理**：统一处理 stdout/stderr 流、心跳、超时、取消、退出码和输出截断。
+正在运行的 Worker 不必等到下一次任务启动才看到新证据。RedTrace 会监视证据修订，通过 Claude Code、Codex 和 Pi 的原生双向协议发送精简更新；完整内容继续按需读取，避免无边界地扩张 Prompt。
 
-Worker Adapter 将不同 Agent CLI 归一为统一接口，同时保留原生配置：
+### 执行面可替换，控制面保持稳定
 
-| Worker | 适配器 | 适用场景 |
-|---|---|---|
-| Claude Code | `claudecode` | 代码库分析、工具调用和长任务执行 |
-| Codex | `codex` | OpenAI 模型驱动的工程任务 |
-| Pi | `pi` | 轻量、可扩展的 Agent CLI |
-| Mock | `mock` | 协议测试、调度测试和端到端回归 |
-
-设置页面中的 Endpoint、API Key 和 Model ID 会同步到运行 RedTrace 的用户级 `~/.claude`、`~/.codex`、`~/.pi` 配置，同时可按 Worker 覆盖运行参数；空值时回退到原生 CLI 配置。Codex 密钥仍由 RedTrace 加密保存，并写入本地 `auth.json` 供原生 CLI 使用。
-
-`redtrace.yaml` 的 `paths` 段统一声明 `root`、`skills`、`mcp`、`plugins`、`managed`、`workspaces` 和 `audit`。相对路径始终以配置文件所在目录及 `paths.root` 为基准解析，不依赖启动命令的当前目录；对应的 `REDTRACE_*_DIR` 环境变量可覆盖单项路径。Agent 配置与登录始终使用用户级目录；任务会话统一写入 `.redtrace/projects/<project_id>/conversations`，删除任务时一并删除。`.redtrace/workers` 不再创建或挂载。只有 `skills/` 作为三个 Agent 的统一 Skill 源注入运行时，任务 Workspace 不生成 Agent 配置副本。
-
-Web 删除项目采用“标记删除 → 取消任务/进程 → 回收 Runtime → 文件清理 → 数据库级联”的服务端流程。删除状态持久化，可在 Server 或 Dispatcher 重启后继续；失败会保留项目和错误状态供重试，重复删除保持幂等。项目 Workspace、Prompt、审计、会话文件和项目关联表会被清理，根目录 Skills/MCP/Plugins 与其他 Worker 状态不受影响。
-
-### 4. 能力与 route-skills 面
-
-仓库根目录的 `skills/` 与 `mcp/` 分别是 Claude Code、Codex 和 Pi 共用的唯一 Skill、MCP 源，并在运行时转换为各 Agent 的原生参数或配置；其他配置继续沿用用户目录。`plugins/manifest.json` 仅作为浏览器、Burp 等 RedTrace 外部插件的注册表。
-
-`CapabilityStore` 只负责共享 Skill 目录的发现、启停、手工编辑和版本回滚。安全领域以 `skills/route-skills/` 为唯一主入口；其本地专家模块使用 `upstream/` 兼容路径，case、scope、timeline、workitems、tool-index、bootstrap、CTF 编排和 field-journal 均保留。白盒代码审计能力位于 `upstream/skills/code-audit/`（七种审计模式 + 四语言规则）、`upstream/skills/code-audit-runtime-verify/`（静态 Finding 授权动态验证）和 `upstream/skills/code-audit-benchmark/`（FP/FN 归因与回归评估）。
-
-Worker 按需读取一个主 Skill，必要时再读取一个互补 Skill。任务产生已验证且可复用的新经验时，当前 Worker 直接向 route-skills 的 `field-journal/` 写一份脱敏记录并更新索引；白盒审计经验写入 `code-audit/learned/`，项目事实只写入任务 Workspace 的 `.redtrace/code-audit/`，不污染全局 Skill；没有新经验则不写。RedTrace 不接收进化提案、不启动后台进化线程、不调用额外模型，也不派发独立验证任务。容器运行时将统一 Skill 目录可写挂载，以便原任务内完成原生回写。
-
-### 5. 辅助 CLI 与上下文面
-
-为避免把完整历史无边界地塞进 Prompt，项目提供三个按需工具：
-
-- `redtrace-blackboard`：状态面板只读 CLI，支持 `status`、`changes`、`node`、`path`、`context`；该入口名为历史兼容名称；
-- `redtrace-resource`：用单次快照和增量游标发现资源，创建/复用 WebShell，完整创建 C2 Listener、生成 Payload 并等待资源操作结果；除生成后的受控 Payload 内容外，持久化敏感值始终留在 Server 侧；
-- `redtrace-context`：对任务 Workspace 中的文件做有预算的摘要、类型识别、信号提取和增量快照。
-
-Context Harness 输出固定的 JSON/JSONL 工件和摘要引用，支持跨任务复用、内存/耗时统计以及大型文件的边界读取。
-
-## 主要功能设计
-
-### 事实图协议
-
-| 对象 | 作用 | 关键约束 |
-|---|---|---|
-| `Project` | 目标、状态和调度边界 | `active` / `stopped` / `completed` |
-| `Fact` | 已验证的客观发现 | 追加式写入，不原地修改 |
-| `Intent` | 从一个或多个 Fact 出发的探索方向 | `open` → `claimed` → `concluded`，支持 heartbeat/release |
-| `Hint` | 人类注入的判断、限制或优先级 | 可随时追加，读取时进入上下文 |
-
-`from` 支持多个 Fact，因此可以表达“多个前置事实共同支撑一次探索”的超边语义。服务端负责认领冲突、幂等校验和状态修订；Worker 只通过 Dispatcher 间接写入。
-
-### 任务状态机
-
-```text
-项目创建
-  └─> bootstrap（可选）
-        └─> reason：判断是否完成 / 生成 Intent
-              └─> explore：并行探索 Intent
-                    └─> 写入 Fact + Intent 结论
-                          └─> 下一轮 reason，直到 completed 或 stopped
-```
-
-每次任务都绑定项目、Worker、运行实例和 Workspace。超时、取消、进程异常和服务重启后，Dispatcher 会根据服务端状态进行恢复或安全回收。
-
-### Web 控制台与外部插件
-
-- 图视图展示 Fact/Intent/Hint 的关系、路径和局部上下文；
-- 操作面板展示任务、运行、事件、工具调用、资源和 Workspace 文件；
-- SSE 让日志和状态更新实时到达浏览器；
-- 能力页面管理 Skill/MCP/Plugin，设置页面管理 Worker；
-- 浏览器扩展和 Burp Suite 扩展可提交流量分析任务，统一连接 `/api/plugins/v1`；
-- 为兼容旧客户端，保留历史 `/api/auth/*`、`/api/projects`、`/api/*-agent/stream` 和取消接口。
-
-外部插件默认连接 `http://127.0.0.1:8000`。若 Server 绑定非回环地址，应配置 `REDTRACE_PLUGIN_TOKEN`，并在插件中使用同一令牌。完整契约见 [`docs/specs/plugin-compatibility.md`](docs/specs/plugin-compatibility.md)。
-
-## 仓库结构
-
-| 路径 | 内容 |
-|---|---|
-| `redtrace/src/redtrace/server/` | FastAPI 应用、SQLite、协议模型、路由、审计和静态 Web UI |
-| `redtrace/src/redtrace/dispatcher/` | 配置、调度循环、任务、Prompt、运行时和 Worker 适配器 |
-| `redtrace/src/redtrace/capabilities.py` | Skill/MCP 能力仓库、版本和审计 |
-| `redtrace/src/redtrace/worker_config.py` | Worker 配置、连接测试和本地 CLI 同步 |
-| `redtrace/src/redtrace/*_cli.py` | 状态面板、资源和上下文命令行工具 |
-| `skills/` | Claude Code、Codex、Pi 共用的 Skill 源；安全能力由 `route-skills` 统一提供 |
-| `mcp/` | 共用 MCP 配置 |
-| `plugins/` | 插件注册表及浏览器/Burp 插件源码 |
-| `docs/specs/` | Server 协议、Dispatcher、上下文和插件兼容规范 |
-| `redtrace*.yaml` | 容器、本地和 Mock 运行配置示例 |
+Server 负责协议与持久状态，Dispatcher 负责调度与生命周期，Runtime 负责进程和隔离，Worker Adapter 负责供应商差异。切换模型、CLI 或执行后端时，项目协议和审计结构无需随之重写。
 
 ## 快速开始
 
 ### 环境要求
 
-- Python ≥ 3.12
-- Docker（仅容器模式需要）
-- `uv`（推荐用于安装和运行 Python 项目）
+- Python 3.12 或更高版本
+- [`uv`](https://docs.astral.sh/uv/) 作为推荐的 Python 包与运行工具
+- Local 模式需要已安装并登录至少一个 Agent CLI：`claude`、`codex` 或 `pi`
+- Container 模式需要 Docker Engine 或 Docker Desktop，并使用 Linux containers
 
-### Windows WSL + Kali root（默认）
+Windows 用户建议在 WSL2 中克隆和运行项目，以获得一致的 Bash、文件权限和路径语义。
 
-默认部署目标是 Windows WSL 中以 root 运行的 Kali。WSL 已作为外层隔离边界，
-因此 Claude Code、Codex 和 Pi 默认不再启用各自的沙盒或交互审批。Claude Code
-和 Codex 优先使用原生 WebFetch/WebSearch，失败或不可用时再使用共享
-`brave-search` Skill；Pi 直接使用该 Skill。
+### 一键部署（Linux / macOS / WSL）
 
 ```bash
 git clone https://github.com/0X6C7879/RedTrace.git
@@ -200,130 +85,172 @@ cd RedTrace
 BRAVE_API_KEY="replace-me" bash deploy.sh
 ```
 
-统一部署脚本会自动识别 Linux/macOS，安装依赖、Claude Code/Codex/Pi、
-Playwright CLI 与 Chromium，并校验仓库内的 `playwright` Skill。Linux 默认加密
-保存 Brave API Key，macOS 本地调试默认使用明文配置。默认模型上下文
-按 1,000,000 tokens 配置，并在约 90% 时进行自动压缩；Bootstrap 和 Explore
-各有 30 分钟主阶段与 5 分钟收尾，Reason 为 5 分钟，健康检查为 60 秒。
+`deploy.sh` 会检测 Linux 或 macOS，准备 Python 环境、Agent CLI、Playwright/Chromium、共享 Skill 和必要工具。Linux 支持 APT、DNF/YUM、Pacman、Zypper 与 APK；也可以只检查安全工具链计划：
 
-### Docker Compose
+```bash
+bash install-security-toolchain.sh --dry-run apt
+```
 
-Docker 模式在 Windows、Linux 和 macOS 上统一运行 Linux 容器。Windows/macOS
-使用 Docker Desktop（Windows 必须切换到 Linux containers），Linux 使用 Docker
-Engine + Compose plugin。控制面与任务 Worker 都以 Kali Linux 为基础；Compose
-会在本地构建 `redtrace-app` 和包含默认 Agent CLI、安全/CTF 工具链的
-`redtrace-worker-container`，不依赖私有远程 Worker 镜像。
+### Local 模式
+
+Local 模式直接调用当前用户已经安装和登录的 Agent CLI，不要求 Docker：
+
+```bash
+cp redtrace.local.example.yaml redtrace.yaml
+
+# 终端 1：控制面
+REDTRACE_DISPATCH_CONFIG="$PWD/redtrace.yaml" \
+  uv run --project redtrace redtrace serve
+
+# 终端 2：调度器
+uv run --project redtrace redtrace dispatch --config redtrace.yaml
+```
+
+也可以用统一启动脚本同时管理两个进程：
+
+```bash
+./start-redtrace.sh
+```
+
+Local Worker 继承启动 Dispatcher 的用户权限和宿主机环境，不额外提供沙箱。请只在已隔离且获得授权的环境中使用。
+
+### Docker Compose 模式
 
 ```bash
 cp redtrace.container.example.yaml redtrace.yaml
 docker compose up --build
 ```
 
-Apple Silicon 与 ARM64 Linux 会原生构建 `linux/arm64` Worker，Intel/AMD 主机
-构建 `linux/amd64`。如果 Docker 配置文件不叫 `redtrace.yaml`，可通过
-`REDTRACE_CONFIG_FILE` 指定宿主机路径；旧的 `REDTRACE_DISPATCH_CONFIG_FILE`
-仍作为兼容别名：
+Compose 会构建 RedTrace 控制面和 Worker 镜像。Container Runtime 默认按项目创建独立容器，并挂载共享能力目录与项目 Workspace。
+
+如需使用其他配置文件：
 
 ```bash
-REDTRACE_CONFIG_FILE=./redtrace.docker.yaml docker compose up --build
+REDTRACE_CONFIG_FILE=./redtrace.container.example.yaml docker compose up --build
 ```
 
-PowerShell 使用：
+启动完成后访问 <http://127.0.0.1:8000>。
 
-```powershell
-$env:REDTRACE_CONFIG_FILE = ".\redtrace.docker.yaml"
-docker compose up --build
-```
+### Mock 模式
 
-启动后访问 `http://127.0.0.1:8000`，在“设置”页面维护 Worker、Skills 和 MCP。Dispatcher 会使用配置快照执行任务。
-
-### 本地模式（无需 Docker）
-
-本地模式直接调用宿主机已安装的 `claude`、`codex` 和 `pi`：
+Mock Worker 用于协议开发、调度回归和确定性端到端测试，不调用外部模型：
 
 ```bash
-cp redtrace.local.example.yaml redtrace.yaml
-REDTRACE_DISPATCH_CONFIG="$PWD/redtrace.yaml" uv run --project redtrace redtrace serve
+cp redtrace.mock.example.yaml redtrace.yaml
+uv run --project redtrace redtrace serve
 uv run --project redtrace redtrace dispatch --config redtrace.yaml
 ```
 
-如果仓库根目录已有 `redtrace.yaml`，macOS 与 Linux 可以用同一个快捷脚本同时启动
-Server 和 Dispatcher；按 `Ctrl+C` 会一起停止本次启动的进程：
+## 配置概览
+
+三个可直接复制的配置模板：
+
+| 文件 | 用途 |
+|---|---|
+| `redtrace.local.example.yaml` | 宿主机直接运行 Claude Code、Codex 或 Pi |
+| `redtrace.container.example.yaml` | Docker/Compose 与项目级容器隔离 |
+| `redtrace.mock.example.yaml` | 无外部模型的开发和自动化测试 |
+
+关键配置域：
+
+| 配置域 | 说明 |
+|---|---|
+| `runtime` | 执行后端、全局/项目并发、调度周期、健康检查和 Prompt 组 |
+| `tasks` | Bootstrap、Reason、Explore 的主阶段与收尾超时，及 Intent 上限 |
+| `context_harness` | 工件目录、内联/可见/查询/解析预算与 Worker 输出上限 |
+| `container` / `local` | 容器镜像、网络、完成策略或本地 Workspace 根目录 |
+| `workers` | 类型、启用状态、任务能力、优先级、并发和供应商环境变量 |
+| `paths` | Skills、MCP、Plugins、托管状态、Workspace 与审计目录 |
+
+Dispatcher 支持配置快照与安全热加载：新任务使用新配置，已经运行的任务继续使用启动时快照。Web 设置页可创建、复制、启停和测试 Worker；写入使用 revision 做乐观并发控制，API Key 不会在查询响应中回显。
+
+## 常用命令
+
+### 主程序
 
 ```bash
-./start-redtrace.sh
+redtrace serve --host 127.0.0.1 --port 8000
+redtrace dispatch --config redtrace.yaml
+redtrace dispatch --config redtrace.yaml --once
+redtrace dispatch --config redtrace.yaml --startup-healthcheck-only
 ```
 
-可通过 `./start-redtrace.sh --help` 查看自定义配置路径、监听地址和端口等选项。
+### 增量证据查询
 
-macOS 和 Linux 共用唯一的 `deploy.sh`。Linux 支持 APT、DNF/YUM、Pacman、
-Zypper 和 APK，覆盖 Debian/Ubuntu/Kali、Fedora/RHEL/Rocky/Alma、Arch、
-openSUSE 与 Alpine；脚本会通过 `install-security-toolchain.sh` 使用对应发行版的包名
-映射准备 CLI、RTK、项目依赖和安全工具。macOS 使用 Homebrew。
+`redtrace-blackboard` 是代码中保留的兼容入口名，实际承担只读证据查询职责：
 
 ```bash
-bash deploy.sh
-```
-
-Linux 分支不会改写 `/etc/apt`、Shell profile、持久 PATH 或其他既有系统环境
-配置；它只使用当前软件源安装依赖，并把用户级 PATH 调整限制在本次部署进程内。
-
-也可以只安装跨发行版 CTF 工具链，或先做无写入干跑：
-
-```bash
-bash install-security-toolchain.sh all
-bash install-security-toolchain.sh --dry-run dnf
-```
-
-### 新建多个任务并行运行
-
-Web 控制台中的一个“项目”就是一个顶层任务。连续点击“新建项目”即可创建多个任务；只需运行一个 Dispatcher，它会按 `runtime.max_workers`、`runtime.max_running_projects`、`runtime.max_project_workers` 和各 Worker 的 `max_running` 自动并行调度。不要复制配置启动多个 Dispatcher 指向同一 Server。
-
-不同项目使用独立 Workspace/容器，适合并行修改文件。同一项目也可以创建多个 Intent 并行探索，但它们共享项目 Workspace：只有在输出路径互不覆盖或通过 Resource 锁协调时才把 `max_project_workers` 设为大于 `1`；会修改同一批文件的任务应拆成不同项目，或将该值设为 `1`。
-
-### 常用 CLI
-
-```bash
-# 只读查询状态面板（入口名保留兼容）
 redtrace-blackboard status
+redtrace-blackboard snapshot
 redtrace-blackboard changes --since 42 --limit 20
+redtrace-blackboard node f003
+redtrace-blackboard source f003
 redtrace-blackboard context f003 --depth 1 --limit 30
+```
 
-# 一次读取当前接入面并保留游标；人工新增资源后只做决策点增量刷新
+### 共享资源与操作
+
+```bash
 redtrace-resource capabilities
-redtrace-resource snapshot \
-  --kind webshell --kind c2_listener --kind c2_session --kind c2_payload
+redtrace-resource snapshot --kind webshell --kind c2_listener --kind c2_session
 redtrace-resource changes --since 42
 
-# Worker 可创建并立即复用 WebShell
 redtrace-resource webshell-create \
   --name primary --target https://target.example/shell.php \
   --command-param cmd --password-stdin
 redtrace-resource run ws_123 command --command-text id --wait
-
-# 无现有 Session 时，Worker 可创建 Listener 并生成最小兼容 Payload
-redtrace-resource listener-create \
-  --name primary-http --bind-port 8443 --callback-host c2.example
-redtrace-resource payload-kinds lis_123
-redtrace-resource payload-oneliner lis_123 curl_beacon
-redtrace-resource payload-build lis_123 --os linux --arch amd64
-
 ```
 
-### 测试
+### Workspace 上下文
 
 ```bash
-uv run --project redtrace --group dev pytest
+redtrace-context --help
 ```
 
-## 设计规范
+Context Harness 会把完整输出保存到 `.redtrace/artifacts/context`，同时向 Worker 提供有界摘要和可追溯引用。
 
-- [`docs/specs/server-protocol.md`](docs/specs/server-protocol.md)：事实图、Project/Fact/Intent/Hint 和 API 协议；
-- [`docs/specs/dispatcher-design.md`](docs/specs/dispatcher-design.md)：调度、任务状态机、Worker 与运行时；
-- [`docs/specs/context-harness.md`](docs/specs/context-harness.md)：有预算的上下文摘要和增量工件；
-- [`docs/specs/plugin-compatibility.md`](docs/specs/plugin-compatibility.md)：外部插件 API 与迁移兼容；
-- [`docs/shared-blackboard-cli.md`](docs/shared-blackboard-cli.md)：状态面板只读 CLI 与服务端查询协议。
+## 仓库结构
+
+| 路径 | 内容 |
+|---|---|
+| `redtrace/src/redtrace/server/` | FastAPI 控制面、SQLite、REST/SSE、静态 Web UI |
+| `redtrace/src/redtrace/dispatcher/` | 配置、调度循环、任务编排、运行时与 Worker Adapter |
+| `redtrace/src/redtrace/board/` | Project、Fact、Intent、Hint 的领域模型与存储访问 |
+| `redtrace/src/redtrace/capabilities.py` | Skill/MCP 能力发现、启停、版本与 Workspace 物化 |
+| `redtrace/src/redtrace/worker_config.py` | Worker 配置服务、连接测试和原生 CLI 配置同步 |
+| `skills/` | 多 Worker 共享 Skill；`route-skills` 提供安全研究能力路由 |
+| `mcp/` | 共享 MCP 配置与服务入口 |
+| `plugins/` | 外部插件清单、浏览器扩展和 Burp Suite 扩展 |
+| `container/` | Worker 容器镜像与运行资产 |
+| `docs/` | 协议、架构、上下文和插件兼容文档 |
+| `benchpacks/` | 可复现评测任务与控制工具 |
+
+## 验证与测试
+
+```bash
+uv sync --project redtrace --locked --group dev
+uv run --project redtrace pytest -q
+docker compose config -q
+```
+
+测试套件覆盖 Server API、数据库迁移、调度策略、任务协议、Worker Adapter、实时控制、本地与容器运行时、项目删除、能力管理、上下文工件、部署脚本和 Mock 端到端流程。
+
+## 安全边界
+
+- Local 模式以当前用户权限运行 Agent CLI，没有额外沙箱。
+- Container 模式提供项目级文件与进程边界，但网络能力和 Linux capabilities 仍应按最小权限配置。
+- 对外监听 Server 或插件 API 时，应配置访问令牌并限制网络暴露。
+- API Key 与其他敏感配置应通过 RedTrace 的密钥存储或环境变量提供，不要提交到仓库。
+- WebShell、C2 和外部插件操作只应指向明确授权的目标；高风险动作建议启用人工审批。
+
+## 进一步阅读
+
+- [技术架构与调度设计](docs/specs/dispatcher-design.md)
+- [Server 协议](docs/specs/server-protocol.md)
+- [Context Harness](docs/specs/context-harness.md)
+- [插件兼容协议](docs/specs/plugin-compatibility.md)
+- [增量证据查询 CLI](docs/shared-blackboard-cli.md)
 
 ## 许可证
 
-本项目基于 **GNU AGPLv3** 许可。商业使用请联系项目维护者获取商业授权。
+本项目基于 **GNU AGPLv3** 许可证发布。商业授权请联系项目维护者。

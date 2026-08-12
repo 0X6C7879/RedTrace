@@ -12,6 +12,7 @@ class WorkerSelection:
     blocked_busy: list[str]
     blocked_unhealthy: list[str]
     blocked_rejected: list[str]
+    blocked_task_type: list[str]
 
 
 def select_worker(
@@ -23,14 +24,19 @@ def select_worker(
     project_id: str,
     work_kind: str,
     now: float,
+    avoid_worker: str | None = None,
 ) -> WorkerSelection:
     candidates: list[WorkerConfig] = []
     blocked_busy: list[str] = []
     blocked_unhealthy: list[str] = []
     blocked_rejected: list[str] = []
+    blocked_task_type: list[str] = []
 
     for worker in workers:
         if not worker.enabled:
+            continue
+        if work_kind not in worker.task_types:
+            blocked_task_type.append(worker.name)
             continue
         running = running_counts.get(worker.name, 0)
         if running >= worker.max_running:
@@ -50,6 +56,7 @@ def select_worker(
         candidates,
         key=lambda worker: (
             running_counts.get(worker.name, 0) != 0,
+            worker.name == avoid_worker,
             worker.priority,
             running_counts.get(worker.name, 0),
             random.random(),
@@ -60,4 +67,5 @@ def select_worker(
         blocked_busy=blocked_busy,
         blocked_unhealthy=blocked_unhealthy,
         blocked_rejected=blocked_rejected,
+        blocked_task_type=blocked_task_type,
     )

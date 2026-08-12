@@ -49,3 +49,7 @@ nul
 benchpacks/__pycache__/
 benchpacks/.runtime/
 benchpacks/results/
+
+# 开发文档与测试脚本不提交到公开仓库
+docs/
+redtrace/tests/

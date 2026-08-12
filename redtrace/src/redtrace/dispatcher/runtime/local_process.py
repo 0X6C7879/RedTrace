@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-import signal
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
-from contextlib import suppress
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 
 from redtrace.dispatcher.runtime.process import ProcessResult
@@ -40,6 +40,7 @@ class LocalProcess:
         cwd: str,
         env: dict[str, str],
         stdin_text: str | None = None,
+        keep_stdin_open: bool = False,
         timeout_seconds: int | None = None,
         term_grace_seconds: int = 5,
         max_output_chars: int = 8 * 1024 * 1024,
@@ -47,6 +48,7 @@ class LocalProcess:
         self.command = command
         self.env = env
         self._stdin_text = stdin_text
+        self._keep_stdin_open = keep_stdin_open
         self._cwd = cwd
         self._timeout_seconds = timeout_seconds
         self._term_grace = max(1.0, float(term_grace_seconds))
@@ -59,6 +61,7 @@ class LocalProcess:
         self._cancel_reason: str | None = None
         self._argument_file: Path | None = None
         self._kill_lock = threading.Lock()
+        self._stdin_lock = threading.Lock()
         self._on_output: OutputHandler | None = None
 
     def set_output_handler(self, handler: OutputHandler | None) -> None:
@@ -76,7 +79,9 @@ class LocalProcess:
                 command,
                 cwd=self._cwd,
                 env=self.env,
-                stdin=subprocess.PIPE if self._stdin_text is not None else None,
+                stdin=subprocess.PIPE
+                if self._stdin_text is not None or self._keep_stdin_open
+                else None,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -87,11 +92,12 @@ class LocalProcess:
             if self._stdin_text is not None and self._process.stdin is not None:
                 try:
                     self._process.stdin.write(self._stdin_text)
+                    self._process.stdin.flush()
                 except BrokenPipeError:
                     pass
                 finally:
-                    with suppress(BrokenPipeError, OSError):
-                        self._process.stdin.close()
+                    if not self._keep_stdin_open:
+                        self.close_stdin()
         except FileNotFoundError as exc:
             self._cleanup_argument_file()
             executable = self.command[0] if self.command else "<empty>"
@@ -176,7 +182,11 @@ class LocalProcess:
 
     def communicate(self, timeout: float | None) -> ProcessResult:
         assert self._process is not None
-        wait_for = float(self._timeout_seconds) if self._timeout_seconds is not None else timeout
+        wait_for = (
+            float(self._timeout_seconds)
+            if self._timeout_seconds is not None
+            else timeout
+        )
         try:
             self._process.wait(timeout=wait_for)
         except subprocess.TimeoutExpired:
@@ -208,6 +218,26 @@ class LocalProcess:
 
     def kill(self) -> None:
         self._terminate()
+
+    def send_stdin(self, text: str) -> bool:
+        with self._stdin_lock:
+            process = self._process
+            if process is None or process.poll() is not None or process.stdin is None:
+                return False
+            try:
+                process.stdin.write(text)
+                process.stdin.flush()
+                return True
+            except (BrokenPipeError, OSError, ValueError):
+                return False
+
+    def close_stdin(self) -> None:
+        with self._stdin_lock:
+            process = self._process
+            if process is None or process.stdin is None or process.stdin.closed:
+                return
+            with suppress(BrokenPipeError, OSError, ValueError):
+                process.stdin.close()
 
     def cancel(self, reason: str) -> None:
         if self._cancel_reason is None:
@@ -267,7 +297,9 @@ class LocalProcess:
     ) -> None:
         callback = self._on_output
         emitter = (
-            BoundedLineEmitter(lambda line: self._notify_output(callback, channel, line))
+            BoundedLineEmitter(
+                lambda line: self._notify_output(callback, channel, line)
+            )
             if callback is not None
             else None
         )

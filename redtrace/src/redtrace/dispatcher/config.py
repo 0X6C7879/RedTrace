@@ -14,6 +14,7 @@ from redtrace.config_secrets import resolve_config_secrets
 from redtrace.paths import RedTracePaths, resolve_portable_path
 
 
+TaskType = Literal["reason", "explore", "bootstrap"]
 WorkerType = Literal["claudecode", "codex", "pi", "mock"]
 CompletedAction = Literal["remove", "stop"]
 WorkerHealthcheckMode = Literal["startup_and_task", "startup_only", "disabled"]
@@ -252,10 +253,22 @@ class WorkerConfig(BaseModel):
     name: str
     type: WorkerType
     enabled: bool = True
+    task_types: list[TaskType] = Field(
+        default_factory=lambda: ["reason", "explore", "bootstrap"]
+    )
     max_running: int = Field(gt=0)
     priority: int = Field(ge=0)
     context_length: int | None = Field(default=None, gt=0)
     env: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("task_types")
+    @classmethod
+    def validate_task_types(cls, value: list[TaskType]) -> list[TaskType]:
+        if not value:
+            raise ValueError("task_types must not be empty")
+        if len(set(value)) != len(value):
+            raise ValueError("task_types must be unique")
+        return value
 
     @model_validator(mode="after")
     def validate_env(self) -> "WorkerConfig":

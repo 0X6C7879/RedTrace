@@ -25,6 +25,7 @@ class WorkerView(BaseModel):
     api_key_configured: bool
     model_id: str
     context_length: int | None
+    task_types: list[str]
     priority: int
     max_running: int
     editable: bool
@@ -50,6 +51,7 @@ class WorkerMutation(BaseModel):
     clear_api_key: bool = False
     model_id: str = ""
     context_length: Literal[MODEL_CONTEXT_1M] | None = None
+    task_types: list[Literal["bootstrap", "reason", "explore"]]
     priority: int
     max_running: int
 

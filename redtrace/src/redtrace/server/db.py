@@ -12,6 +12,9 @@ DEFAULT_DB = Path.home() / ".local" / "share" / "redtrace" / "redtrace.db"
 _db_path: Path | None = None
 _change_condition = threading.Condition()
 _change_generation = 0
+_blackboard_condition = threading.Condition()
+_blackboard_generation = 0
+_last_blackboard_revision = 0
 
 
 def current_change_generation() -> int:
@@ -37,6 +40,32 @@ def _publish_change() -> None:
     with _change_condition:
         _change_generation += 1
         _change_condition.notify_all()
+
+
+def current_blackboard_generation() -> int:
+    with _blackboard_condition:
+        return _blackboard_generation
+
+
+def wait_for_blackboard_change(after: int, timeout: float) -> int:
+    deadline = time.monotonic() + max(0.0, timeout)
+    with _blackboard_condition:
+        while after == _blackboard_generation:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            _blackboard_condition.wait(remaining)
+        return _blackboard_generation
+
+
+def _publish_blackboard_revision(revision: int) -> None:
+    global _blackboard_generation, _last_blackboard_revision
+    with _blackboard_condition:
+        if revision <= _last_blackboard_revision:
+            return
+        _last_blackboard_revision = revision
+        _blackboard_generation += 1
+        _blackboard_condition.notify_all()
 
 
 SCHEMA = """\
@@ -159,6 +188,27 @@ AFTER INSERT ON intents
 BEGIN
     INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
     VALUES (NEW.project_id, 'intent', NEW.id, 'added', NEW.created_at);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_blackboard_intent_state_changed
+AFTER UPDATE OF worker, to_fact_id, concluded_at ON intents
+WHEN OLD.worker IS NOT NEW.worker
+  OR OLD.to_fact_id IS NOT NEW.to_fact_id
+  OR OLD.concluded_at IS NOT NEW.concluded_at
+BEGIN
+    INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
+    VALUES (
+        NEW.project_id,
+        'intent',
+        NEW.id,
+        CASE
+            WHEN NEW.concluded_at IS NOT NULL AND OLD.concluded_at IS NULL THEN 'concluded'
+            WHEN NEW.worker IS NOT NULL AND OLD.worker IS NULL THEN 'claimed'
+            WHEN NEW.worker IS NULL AND OLD.worker IS NOT NULL THEN 'released'
+            ELSE 'updated'
+        END,
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    );
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_blackboard_hint_added
@@ -347,7 +397,7 @@ END;
 
 
 def configure(path: Path) -> None:
-    global _db_path
+    global _db_path, _last_blackboard_revision
     if _db_path is not None:
         return
     _db_path = path
@@ -362,6 +412,11 @@ def configure(path: Path) -> None:
         conn.executescript(BLACKBOARD_DELETE_TRIGGERS)
         _ensure_project_columns(conn)
         _backfill_blackboard_events(conn)
+        _last_blackboard_revision = int(
+            conn.execute(
+                "SELECT COALESCE(MAX(revision), 0) FROM blackboard_events"
+            ).fetchone()[0]
+        )
 
 
 def _ensure_project_columns(conn: sqlite3.Connection) -> None:
@@ -440,6 +495,12 @@ def get_conn(*, immediate: bool = False) -> Generator[sqlite3.Connection, None, 
         conn.commit()
         if conn.total_changes != changes_before:
             _publish_change()
+            latest_blackboard_revision = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(revision), 0) FROM blackboard_events"
+                ).fetchone()[0]
+            )
+            _publish_blackboard_revision(latest_blackboard_revision)
     except Exception:
         conn.rollback()
         raise

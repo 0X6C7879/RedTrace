@@ -79,6 +79,7 @@ class DispatcherLoop:
         self.runtime_project_ids: set[str] = set()
         self.worker_unhealthy_until: dict[str, float] = {}
         self.worker_rejected_until: dict[tuple[str, str, str], float] = {}
+        self.explore_retry_avoid: dict[tuple[str, str], str] = {}
         self._log_state: dict[str, tuple[int, str, tuple[object, ...]]] = {}
         self._cleanup_pending: set[str] = set()
         self._inactive_cleanup_done: dict[str, str] = {}
@@ -385,7 +386,13 @@ class DispatcherLoop:
         if project_policy.is_initial(project):
             if project.project.reason is not None:
                 return False
-            if project_policy.requires_bootstrap(project):
+            if project_policy.requires_bootstrap(project) and (
+                project_policy.bootstrap_intent(project) is not None
+                or any(
+                    worker.enabled and "bootstrap" in worker.task_types
+                    for worker in self.config.workers
+                )
+            ):
                 return self._dispatch_initial_project(project)
             return self._dispatch_reason(
                 project,
@@ -475,11 +482,12 @@ class DispatcherLoop:
             self._log_changed(
                 f"project:{project.project.id}:worker:reason",
                 logging.INFO,
-                "no worker available for reason project=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s",
+                "no worker available for reason project=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s",
                 project.project.id,
                 selection.blocked_busy,
                 selection.blocked_unhealthy,
                 selection.blocked_rejected,
+                selection.blocked_task_type,
             )
             return False
         self._clear_log_state(f"project:{project.project.id}:worker:reason")
@@ -552,12 +560,13 @@ class DispatcherLoop:
             self._log_changed(
                 f"project:{project.project.id}:worker:bootstrap",
                 logging.INFO,
-                "no worker available for bootstrap project=%s intent=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s",
+                "no worker available for bootstrap project=%s intent=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s",
                 project.project.id,
                 intent.id,
                 selection.blocked_busy,
                 selection.blocked_unhealthy,
                 selection.blocked_rejected,
+                selection.blocked_task_type,
             )
             return False
         self._clear_log_state(f"project:{project.project.id}:worker:bootstrap")
@@ -623,18 +632,24 @@ class DispatcherLoop:
     def _dispatch_explore(
         self, project: ProjectDetail, export_yaml: str, intent: Intent
     ) -> bool:
-        selection = self._select_worker(project.project.id, "explore")
+        retry_key = (project.project.id, intent.id)
+        selection = self._select_worker(
+            project.project.id,
+            "explore",
+            avoid_worker=self.explore_retry_avoid.get(retry_key),
+        )
         worker = selection.worker
         if worker is None:
             self._log_changed(
                 f"project:{project.project.id}:worker:explore",
                 logging.INFO,
-                "no worker available for explore project=%s intent=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s",
+                "no worker available for explore project=%s intent=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s",
                 project.project.id,
                 intent.id,
                 selection.blocked_busy,
                 selection.blocked_unhealthy,
                 selection.blocked_rejected,
+                selection.blocked_task_type,
             )
             return False
         self._clear_log_state(f"project:{project.project.id}:worker:explore")
@@ -698,7 +713,13 @@ class DispatcherLoop:
         )
         return True
 
-    def _select_worker(self, project_id: str, work_kind: str) -> WorkerSelection:
+    def _select_worker(
+        self,
+        project_id: str,
+        work_kind: str,
+        *,
+        avoid_worker: str | None = None,
+    ) -> WorkerSelection:
         running_counts = self._worker_counts()
         selection = select_worker(
             self.config.workers,
@@ -708,14 +729,16 @@ class DispatcherLoop:
             project_id=project_id,
             work_kind=work_kind,
             now=time.time(),
+            avoid_worker=avoid_worker,
         )
         LOG.debug(
-            "worker selection project=%s work=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s chosen=%s",
+            "worker selection project=%s work=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s chosen=%s",
             project_id,
             work_kind,
             selection.blocked_busy,
             selection.blocked_unhealthy,
             selection.blocked_rejected,
+            selection.blocked_task_type,
             selection.worker.name if selection.worker else None,
         )
         return selection
@@ -844,14 +867,21 @@ class DispatcherLoop:
                         time.time() + retry_after_seconds
                     )
                     LOG.info(
-                        "worker marked rejected project=%s task=%s worker=%s retry_after=%.0fs",
+                        "worker temporarily excluded project=%s task=%s worker=%s outcome=%s retry_after=%.0fs",
                         task.project_id,
                         task.task_type,
                         task.worker_name,
+                        outcome,
                         retry_after_seconds,
                     )
                 else:
                     self.worker_rejected_until.pop(rejection_key, None)
+                if task.task_type == "explore" and task.intent_id is not None:
+                    retry_key = (task.project_id, task.intent_id)
+                    if outcome in {"failed", "rejected"}:
+                        self.explore_retry_avoid[retry_key] = task.worker_name
+                    elif outcome in {"success", "cancelled"}:
+                        self.explore_retry_avoid.pop(retry_key, None)
                 if outcome == "success" and task.task_type in {"bootstrap", "explore"}:
                     self.reason_request_generations[task.project_id] = (
                         self.reason_request_generations.get(task.project_id, 0) + 1
@@ -995,6 +1025,11 @@ class DispatcherLoop:
     def _refresh_runtime_projects(self, summaries: list[ProjectSummary]) -> None:
         active_ids = {summary.id for summary in summaries if summary.status == "active"}
         self.runtime_project_ids.intersection_update(active_ids)
+        self.explore_retry_avoid = {
+            key: worker
+            for key, worker in self.explore_retry_avoid.items()
+            if key[0] in active_ids
+        }
         inactive_status_by_id = {
             summary.id: summary.status
             for summary in summaries
@@ -1137,6 +1172,11 @@ class DispatcherLoop:
             key: until
             for key, until in self.worker_rejected_until.items()
             if key[2] in active_names
+        }
+        self.explore_retry_avoid = {
+            key: worker
+            for key, worker in self.explore_retry_avoid.items()
+            if worker in active_names
         }
         self._clear_log_state("dispatch/config-reload")
         LOG.info(

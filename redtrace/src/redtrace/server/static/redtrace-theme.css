@@ -1581,6 +1581,23 @@ section[x-show="appPage === 'plugins'"] header {
   color: #d9e3ef !important;
 }
 
+#graphLayout [x-show="sideTab === 'hints'"] button.hint-add-button {
+  border-radius: 9999px !important;
+  border-color: rgba(255, 88, 91, 0.72) !important;
+  background: #ff585b !important;
+  color: #fff !important;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34), 0 0 18px rgba(255, 88, 91, 0.2) !important;
+}
+
+#graphLayout [x-show="sideTab === 'hints'"] button.hint-add-button:hover,
+#graphLayout [x-show="sideTab === 'hints'"] button.hint-add-button:focus-visible {
+  outline: none !important;
+  border-color: #ff7274 !important;
+  background: #ff7274 !important;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4), 0 0 0 3px rgba(255, 88, 91, 0.15) !important;
+  transform: translateY(-1px);
+}
+
 /* Audit events share one command/tool frame regardless of provider. The
    lifecycle is conveyed by the small status label, not by a second bright
    card treatment. */

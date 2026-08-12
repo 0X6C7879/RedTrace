@@ -22,7 +22,9 @@ def _json_object(value: str, label: str) -> dict[str, Any]:
     try:
         parsed = json.loads(value)
     except json.JSONDecodeError as exc:
-        raise argparse.ArgumentTypeError(f"{label} must be valid JSON: {exc.msg}") from exc
+        raise argparse.ArgumentTypeError(
+            f"{label} must be valid JSON: {exc.msg}"
+        ) from exc
     if not isinstance(parsed, dict):
         raise argparse.ArgumentTypeError(f"{label} must be a JSON object")
     return parsed
@@ -36,16 +38,30 @@ def build_parser() -> argparse.ArgumentParser:
             "plugin, and result resources without exposing stored secrets."
         ),
     )
-    parser.add_argument("--server", default=_env("REDTRACE_SERVER"), help="RedTrace server URL")
-    parser.add_argument("--project", default=_env("REDTRACE_PROJECT_ID"), help="RedTrace project ID")
-    parser.add_argument("--worker", default=_env("REDTRACE_WORKER", "unknown"), help="Worker identity")
-    parser.add_argument("--task", default=_env("REDTRACE_TASK_TYPE", "unknown"), help="Worker task type")
-    parser.add_argument("--intent", default=_env("REDTRACE_INTENT_ID"), help="Current Intent ID")
-    parser.add_argument("--timeout", type=float, default=10.0, help="HTTP timeout in seconds")
+    parser.add_argument(
+        "--server", default=_env("REDTRACE_SERVER"), help="RedTrace server URL"
+    )
+    parser.add_argument(
+        "--project", default=_env("REDTRACE_PROJECT_ID"), help="RedTrace project ID"
+    )
+    parser.add_argument(
+        "--worker", default=_env("REDTRACE_WORKER", "unknown"), help="Worker identity"
+    )
+    parser.add_argument(
+        "--task", default=_env("REDTRACE_TASK_TYPE", "unknown"), help="Worker task type"
+    )
+    parser.add_argument(
+        "--intent", default=_env("REDTRACE_INTENT_ID"), help="Current Intent ID"
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=10.0, help="HTTP timeout in seconds"
+    )
     parser.add_argument("--compact", action="store_true", help="Emit compact JSON")
     commands = parser.add_subparsers(dest="command", required=True)
 
-    commands.add_parser("capabilities", help="Show resource kinds and on-demand workflow")
+    commands.add_parser(
+        "capabilities", help="Show resource kinds and on-demand workflow"
+    )
 
     snapshot = commands.add_parser(
         "snapshot",
@@ -68,23 +84,43 @@ def build_parser() -> argparse.ArgumentParser:
         ],
         help="Repeat to select resource kinds; defaults to all kinds",
     )
-    snapshot.add_argument("--limit", type=int, default=100, choices=range(1, 501), metavar="1..500")
+    snapshot.add_argument(
+        "--limit", type=int, default=100, choices=range(1, 501), metavar="1..500"
+    )
 
     changes = commands.add_parser(
         "changes",
         help="Read resource changes after a snapshot audit cursor",
     )
-    changes.add_argument("--since", type=int, required=True, help="Audit cursor returned by snapshot or changes")
-    changes.add_argument("--limit", type=int, default=100, choices=range(1, 501), metavar="1..500")
+    changes.add_argument(
+        "--since",
+        type=int,
+        required=True,
+        help="Audit cursor returned by snapshot or changes",
+    )
+    changes.add_argument(
+        "--limit", type=int, default=100, choices=range(1, 501), metavar="1..500"
+    )
 
     list_cmd = commands.add_parser("list", help="List shared resources")
     list_cmd.add_argument("--kind")
     list_cmd.add_argument("--status")
     list_cmd.add_argument("--query", default="")
-    list_cmd.add_argument("--limit", type=int, default=100, choices=range(1, 501), metavar="1..500")
+    list_cmd.add_argument(
+        "--limit", type=int, default=100, choices=range(1, 501), metavar="1..500"
+    )
 
-    get_cmd = commands.add_parser("get", help="Read one resource, recent tasks, and audit")
+    get_cmd = commands.add_parser(
+        "get", help="Read one resource, recent tasks, and audit"
+    )
     get_cmd.add_argument("resource_id")
+
+    lock = commands.add_parser("lock", help="Exclusively claim a shared resource")
+    lock.add_argument("resource_id")
+    unlock = commands.add_parser(
+        "unlock", help="Release a resource claimed by this Worker"
+    )
+    unlock.add_argument("resource_id")
 
     register = commands.add_parser(
         "register",
@@ -120,13 +156,21 @@ def build_parser() -> argparse.ArgumentParser:
     webshell_create.add_argument("--name", required=True)
     webshell_create.add_argument("--target", required=True)
     webshell_create.add_argument("--summary", default="")
-    webshell_create.add_argument("--shell-type", default="php", choices=["php", "asp", "aspx", "jsp", "custom"])
-    webshell_create.add_argument("--protocol", default="auto", choices=["auto", "eval", "antsword", "raw"])
+    webshell_create.add_argument(
+        "--shell-type", default="php", choices=["php", "asp", "aspx", "jsp", "custom"]
+    )
+    webshell_create.add_argument(
+        "--protocol", default="auto", choices=["auto", "eval", "antsword", "raw"]
+    )
     webshell_create.add_argument("--method", default="POST", choices=["POST", "GET"])
     webshell_create.add_argument("--command-param", default="cmd")
     webshell_create.add_argument("--password-param", default="")
-    webshell_create.add_argument("--target-os", default="auto", choices=["auto", "linux", "windows"])
-    webshell_create.add_argument("--encoding", default="auto", choices=["auto", "utf-8", "gbk", "gb18030"])
+    webshell_create.add_argument(
+        "--target-os", default="auto", choices=["auto", "linux", "windows"]
+    )
+    webshell_create.add_argument(
+        "--encoding", default="auto", choices=["auto", "utf-8", "gbk", "gb18030"]
+    )
     webshell_create.add_argument("--verify-tls", action="store_true")
     webshell_create.add_argument("--password-stdin", action="store_true")
     webshell_create.add_argument("--no-fact", action="store_true")
@@ -142,11 +186,19 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["http_beacon", "https_beacon", "tcp_reverse", "websocket"],
     )
     listener_create.add_argument("--bind-host", default="0.0.0.0")
-    listener_create.add_argument("--bind-port", type=int, required=True, choices=range(1, 65536), metavar="1..65535")
+    listener_create.add_argument(
+        "--bind-port",
+        type=int,
+        required=True,
+        choices=range(1, 65536),
+        metavar="1..65535",
+    )
     listener_create.add_argument("--callback-host", default="")
     listener_create.add_argument("--profile")
     listener_create.add_argument("--summary", default="")
-    listener_create.add_argument("--status", default="available", choices=["available", "offline"])
+    listener_create.add_argument(
+        "--status", default="available", choices=["available", "offline"]
+    )
     listener_create.add_argument("--no-fact", action="store_true")
 
     payload_kinds = commands.add_parser(
@@ -169,28 +221,48 @@ def build_parser() -> argparse.ArgumentParser:
     )
     payload_build.add_argument("listener_id")
     payload_build.add_argument("--callback-url", default="")
-    payload_build.add_argument("--os", default="linux", choices=["linux", "windows", "darwin"])
-    payload_build.add_argument("--arch", default="amd64", choices=["amd64", "arm64", "386"])
-    payload_build.add_argument("--sleep-seconds", type=int, default=5, choices=range(1, 3601), metavar="1..3600")
+    payload_build.add_argument(
+        "--os", default="linux", choices=["linux", "windows", "darwin"]
+    )
+    payload_build.add_argument(
+        "--arch", default="amd64", choices=["amd64", "arm64", "386"]
+    )
+    payload_build.add_argument(
+        "--sleep-seconds",
+        type=int,
+        default=5,
+        choices=range(1, 3601),
+        metavar="1..3600",
+    )
 
     run = commands.add_parser("run", help="Queue an operation against a resource")
     run.add_argument("resource_id")
     run.add_argument("action")
     run.add_argument("--arguments-json", default="{}")
     run.add_argument("--command-text", help="Convenience value for arguments.command")
-    run.add_argument("--risk", default="low", choices=["low", "medium", "high", "critical"])
+    run.add_argument(
+        "--risk", default="low", choices=["low", "medium", "high", "critical"]
+    )
     run.add_argument("--require-approval", action="store_true")
     run.add_argument("--publish-result", action="store_true")
-    run.add_argument("--wait", action="store_true", help="Wait for the operation to reach a terminal state")
+    run.add_argument(
+        "--wait",
+        action="store_true",
+        help="Wait for the operation to reach a terminal state",
+    )
     run.add_argument("--wait-timeout", type=float, default=30.0)
     run.add_argument("--poll-interval", type=float, default=0.2)
 
     tasks = commands.add_parser("tasks", help="List project operation tasks")
     tasks.add_argument("--resource")
     tasks.add_argument("--status")
-    tasks.add_argument("--limit", type=int, default=100, choices=range(1, 501), metavar="1..500")
+    tasks.add_argument(
+        "--limit", type=int, default=100, choices=range(1, 501), metavar="1..500"
+    )
 
-    result = commands.add_parser("result", help="Read a full result by its result reference ID")
+    result = commands.add_parser(
+        "result", help="Read a full result by its result reference ID"
+    )
     result.add_argument("result_id")
     return parser
 
@@ -222,8 +294,17 @@ def _request(
         clean = {key: value for key, value in params.items() if value not in (None, "")}
         if clean:
             url += "?" + urlencode(clean)
-    payload = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
-    request = Request(url, data=payload, headers=_headers(args, json_body=body is not None), method=method)
+    payload = (
+        json.dumps(body, ensure_ascii=False).encode("utf-8")
+        if body is not None
+        else None
+    )
+    request = Request(
+        url,
+        data=payload,
+        headers=_headers(args, json_body=body is not None),
+        method=method,
+    )
     with urlopen(request, timeout=args.timeout) as response:
         raw = response.read()
         content_type = response.headers.get("Content-Type", "")
@@ -238,10 +319,21 @@ def _perform(args: argparse.Namespace) -> Any:
     if args.command == "capabilities":
         return {
             "kinds": {
-                "webshell": ["probe", "command", "list_files", "read_file", "write_file", "delete_file"],
-                "c2_listener": ["worker create/enable; generate oneline or compiled Payload; receive Sessions"],
+                "webshell": [
+                    "probe",
+                    "command",
+                    "list_files",
+                    "read_file",
+                    "write_file",
+                    "delete_file",
+                ],
+                "c2_listener": [
+                    "worker create/enable; generate oneline or compiled Payload; receive Sessions"
+                ],
                 "c2_session": ["command and plugin-defined agent actions"],
-                "c2_payload": ["worker generate from a Listener and deploy through an execution channel"],
+                "c2_payload": [
+                    "worker generate from a Listener and deploy through an execution channel"
+                ],
                 "c2_profile": [],
                 "plugin": ["actions declared in resource.metadata.actions"],
                 "proxy": [],
@@ -280,11 +372,24 @@ def _perform(args: argparse.Namespace) -> Any:
             args,
             "GET",
             f"{base}/resources",
-            params={"kind": args.kind, "status": args.status, "q": args.query, "limit": args.limit},
+            params={
+                "kind": args.kind,
+                "status": args.status,
+                "q": args.query,
+                "limit": args.limit,
+            },
         )
     if args.command == "get":
         rid = quote(args.resource_id, safe="")
         return _request(args, "GET", f"{base}/resources/{rid}")
+    if args.command in {"lock", "unlock"}:
+        rid = quote(args.resource_id, safe="")
+        return _request(
+            args,
+            "POST",
+            f"{base}/resources/{rid}/{args.command}",
+            body={"actor_type": "worker", "actor": args.worker},
+        )
     if args.command == "register":
         metadata = _json_object(args.metadata_json, "--metadata-json")
         secret: dict[str, Any] = {}
@@ -447,7 +552,11 @@ def _perform(args: argparse.Namespace) -> Any:
             args,
             "GET",
             f"{base}/operations/tasks",
-            params={"resource_id": args.resource, "status": args.status, "limit": args.limit},
+            params={
+                "resource_id": args.resource,
+                "status": args.status,
+                "limit": args.limit,
+            },
         )
     if args.command == "result":
         result = quote(args.result_id, safe="")
@@ -460,7 +569,12 @@ def _print(value: Any, compact: bool, stream: Any = sys.stdout) -> None:
         print(value, file=stream)
         return
     print(
-        json.dumps(value, ensure_ascii=False, separators=(",", ":") if compact else None, indent=None if compact else 2),
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":") if compact else None,
+            indent=None if compact else 2,
+        ),
         file=stream,
     )
 
@@ -480,7 +594,11 @@ def main(argv: list[str] | None = None) -> int:
             detail: Any = json.loads(body)
         except json.JSONDecodeError:
             detail = body
-        _print({"error": "http_error", "status": exc.code, "detail": detail}, args.compact, sys.stderr)
+        _print(
+            {"error": "http_error", "status": exc.code, "detail": detail},
+            args.compact,
+            sys.stderr,
+        )
         return 2
     except (URLError, TimeoutError, OSError, ValueError) as exc:
         _print({"error": "request_error", "detail": str(exc)}, args.compact, sys.stderr)

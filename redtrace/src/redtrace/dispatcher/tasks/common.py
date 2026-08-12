@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from redtrace.dispatcher.audit import AuditPublisher
 from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
@@ -19,6 +23,12 @@ PROCESS_COMMUNICATE_GRACE_SECONDS = 15
 GRAPH_SNAPSHOT_ROOT = "/tmp/redtrace-prompts"
 BLACKBOARD_NOTICE_ROOT = ".redtrace/blackboard-notices"
 LOG = logging.getLogger(__name__)
+_COORDINATION_KEY = re.compile(
+    r"https?://[^\s]+|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b|"
+    r"\bCVE-\d{4}-\d+\b|\b(?:ws|lis|ses|pay)_[0-9a-f]{12}\b|"
+    r"(?:/[A-Za-z0-9._~!$&'()*+,;=:@%+-]+){2,}",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True)
@@ -34,10 +44,14 @@ def preview(text: str, limit: int = 2048) -> str:
 
 
 def did_timeout(result: ProcessResult) -> bool:
-    return not result.cancelled and (result.timed_out or result.returncode in (124, 137))
+    return not result.cancelled and (
+        result.timed_out or result.returncode in (124, 137)
+    )
 
 
-def cancel_reason(result: ProcessResult, cancellation: TaskCancellation | None = None) -> str | None:
+def cancel_reason(
+    result: ProcessResult, cancellation: TaskCancellation | None = None
+) -> str | None:
     if result.cancelled:
         return result.cancel_reason or "cancelled"
     if cancellation is not None:
@@ -45,7 +59,9 @@ def cancel_reason(result: ProcessResult, cancellation: TaskCancellation | None =
     return None
 
 
-def communicate_timeout(timeout_seconds: int, grace_seconds: int = PROCESS_COMMUNICATE_GRACE_SECONDS) -> int:
+def communicate_timeout(
+    timeout_seconds: int, grace_seconds: int = PROCESS_COMMUNICATE_GRACE_SECONDS
+) -> int:
     return timeout_seconds + grace_seconds
 
 
@@ -125,6 +141,214 @@ def blackboard_notice_path(container_name: str, identity: str) -> str:
     return f"/home/kali/workspace/{relative}"
 
 
+class BlackboardInbox:
+    """A per-turn, project-scoped inbox that emits short relevant Fact signals."""
+
+    def __init__(
+        self,
+        client: ControlPlaneClient,
+        container_manager: ContainerManager,
+        container_name: str,
+        *,
+        project_id: str,
+        intent_id: str | None,
+        intent_description: str,
+        source_fact_ids: list[str],
+        worker_name: str,
+        revision: int,
+        task_type: str = "explore",
+        all_facts: bool = False,
+    ):
+        self._client = client
+        self._container_manager = container_manager
+        self._container_name = container_name
+        self._project_id = project_id
+        self._intent_id = intent_id
+        self._intent_description = intent_description
+        self._source_fact_ids = set(source_fact_ids) - {"origin", "goal"}
+        self._worker_name = worker_name
+        self._task_type = task_type
+        self._all_facts = all_facts
+        self._cursor = revision
+        self._initial_revision = revision
+        self.notice_path = blackboard_notice_path(
+            container_name, f"{worker_name}:{intent_id or task_type}"
+        )
+        self._changes: list[dict[str, Any]] = []
+        self._pending: list[dict[str, Any]] = []
+        self._signalled_revision = revision
+        self._signal_sender: Callable[[str], bool] | None = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._started = False
+
+    def start(self) -> None:
+        with self._lock:
+            if self._started:
+                return
+            self._started = True
+        self._write_notice()
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._started:
+            # The daemon exits when its bounded long-poll returns; task completion
+            # must not wait on an otherwise idle inbox connection.
+            self._thread.join(timeout=0.05)
+
+    def on_process_attached(
+        self, signal_sender: Callable[[str], bool] | None = None
+    ) -> None:
+        with self._lock:
+            self._signal_sender = signal_sender
+        self.start()
+        self._signal_pending()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                current = self._client.wait_for_blackboard(
+                    self._project_id,
+                    self._cursor,
+                    timeout=2.0,
+                )
+                if self._stop.is_set():
+                    return
+                if current <= self._cursor:
+                    continue
+                payload = self._client.blackboard_changes(
+                    self._project_id,
+                    self._cursor,
+                    worker=self._worker_name,
+                    task_type=self._task_type,
+                    intent_id=self._intent_id,
+                    include_source=True,
+                )
+                self._publish(payload)
+            except Exception as exc:
+                if not self._stop.is_set():
+                    LOG.warning(
+                        "blackboard inbox failed project=%s intent=%s worker=%s error=%s",
+                        self._project_id,
+                        self._intent_id,
+                        self._worker_name,
+                        exc,
+                    )
+                    self._stop.wait(0.5)
+
+    def _publish(self, payload: dict[str, Any]) -> None:
+        revision = int(payload.get("revision", self._cursor))
+        incoming = [
+            change
+            for change in payload.get("changes", [])
+            if isinstance(change, dict)
+            and int(change.get("revision", 0)) > self._cursor
+        ]
+        relevant = [change for change in incoming if self._should_signal(change)]
+        with self._lock:
+            self._cursor = max(self._cursor, revision)
+            self._changes = (self._changes + incoming)[-100:]
+            self._pending = (self._pending + relevant)[-4:]
+            signal_revision = max(
+                (int(change.get("revision", 0)) for change in relevant),
+                default=0,
+            )
+        self._write_notice()
+        if signal_revision:
+            self._signal_pending()
+
+    def _signal_pending(self) -> None:
+        with self._lock:
+            pending = [
+                change
+                for change in self._pending
+                if int(change.get("revision", 0)) > self._signalled_revision
+            ]
+            revision = max(
+                (int(change.get("revision", 0)) for change in pending),
+                default=0,
+            )
+            sender = self._signal_sender
+            if not pending or sender is None:
+                return
+            if sender(format_fact_signal(pending)):
+                self._signalled_revision = max(self._signalled_revision, revision)
+                self._pending = [
+                    change
+                    for change in self._pending
+                    if int(change.get("revision", 0)) > self._signalled_revision
+                ]
+
+    def _write_notice(self) -> None:
+        with self._lock:
+            payload = {
+                "project": self._project_id,
+                "since": self._initial_revision,
+                "revision": self._cursor,
+                "changed": bool(self._changes),
+                "changes": list(self._changes),
+            }
+        self._container_manager.write_text_file(
+            self._container_name,
+            self.notice_path,
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        )
+
+    def _should_signal(self, change: dict[str, Any]) -> bool:
+        if change.get("action") != "added":
+            return False
+        if change.get("kind") == "hint":
+            return True
+        if change.get("kind") != "fact":
+            return False
+        node = change.get("node")
+        if not isinstance(node, dict):
+            return False
+        source = node.get("source")
+        if not isinstance(source, dict) or source.get("intent_id") == self._intent_id:
+            return False
+        if self._all_facts:
+            return True
+        other_sources = set(source.get("from") or []) - {"origin", "goal"}
+        if self._source_fact_ids & other_sources:
+            return True
+        current_keys = {
+            match.group(0).lower()
+            for match in _COORDINATION_KEY.finditer(self._intent_description)
+        }
+        other_text = " ".join(
+            (
+                str(source.get("intent_description") or ""),
+                str(node.get("description") or ""),
+            )
+        )
+        other_keys = {
+            match.group(0).lower() for match in _COORDINATION_KEY.finditer(other_text)
+        }
+        return bool(current_keys & other_keys)
+
+
+def format_fact_signal(changes: list[dict[str, Any]]) -> str:
+    change = max(changes, key=lambda item: int(item.get("revision", 0)))
+    node = change.get("node") if isinstance(change.get("node"), dict) else {}
+    revision = int(change.get("revision", 0))
+    node_id = str(change.get("node_id") or node.get("id") or "")
+    summary = str(node.get("description") or node.get("content") or "").strip()
+    summary = " ".join(summary.split())[:240]
+    kind = "Fact" if change.get("kind") == "fact" else "Hint"
+    inspect = (
+        f"需要时运行 redtrace-blackboard source {node_id} 查看详情和来源对话。"
+        if kind == "Fact" and node_id
+        else "需要时读取 REDTRACE_BLACKBOARD_NOTICE 查看详情。"
+    )
+    return (
+        f"[RedTrace {kind} signal r{revision}] {node_id}: {summary}\n"
+        f"这是可选的新证据，不要求采用，也不要自动改变当前方向；由你判断相关性。{inspect}"
+    )
+
+
 def write_graph_snapshot_reference(
     container_manager: ContainerManager,
     container_name: str,
@@ -157,6 +381,8 @@ def run_worker_process(
     timeout_seconds: int,
     lease: HeartbeatLease | None = None,
     cancellation: TaskCancellation | None = None,
+    blackboard_inbox: BlackboardInbox | None = None,
+    live_control: Any | None = None,
 ) -> ProcessResult:
     LOG.info(
         "starting container exec container=%s worker=%s phase=%s timeout=%ss",
@@ -172,9 +398,7 @@ def run_worker_process(
         )
     if worker.context_length is not None:
         if worker.type == "claudecode":
-            process_env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(
-                worker.context_length
-            )
+            process_env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(worker.context_length)
         elif worker.type == "pi":
             process_env["PI_MODEL_CONTEXT_WINDOW"] = str(worker.context_length)
     if worker.type == "claudecode":
@@ -199,11 +423,15 @@ def run_worker_process(
             process_env["REDTRACE_SERVER"] = server_url
         if intent_id is not None:
             process_env["REDTRACE_INTENT_ID"] = intent_id
-        notice_path = blackboard_notice_path(
-            container_name, f"{worker.name}:{intent_id or phase.split('_', 1)[0]}"
+        notice_path = (
+            blackboard_inbox.notice_path
+            if blackboard_inbox is not None
+            else blackboard_notice_path(
+                container_name, f"{worker.name}:{intent_id or phase.split('_', 1)[0]}"
+            )
         )
         process_env["REDTRACE_BLACKBOARD_NOTICE"] = notice_path
-        if lease is not None:
+        if lease is not None and blackboard_inbox is None:
             task_type = phase.split("_", 1)[0]
 
             def publish_blackboard_notice(previous: int, current: int) -> None:
@@ -221,9 +449,7 @@ def run_worker_process(
                     json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
                 )
 
-            if lease.watch_blackboard(
-                blackboard_revision, publish_blackboard_notice
-            ):
+            if lease.watch_blackboard(blackboard_revision, publish_blackboard_notice):
                 container_manager.write_text_file(
                     container_name,
                     notice_path,
@@ -241,6 +467,8 @@ def run_worker_process(
     process_options: dict[str, object] = {"timeout_seconds": timeout_seconds}
     if stdin_text is not None:
         process_options["stdin_text"] = stdin_text
+    if live_control is not None:
+        process_options["keep_stdin_open"] = True
     process = container_manager.build_exec_process(
         container_name,
         process_env,
@@ -256,17 +484,42 @@ def run_worker_process(
             worker,
             phase,
             container_name,
-            argv[-1] if argv else "",
+            live_control.prompt
+            if live_control is not None
+            else stdin_text
+            if stdin_text is not None
+            else argv[-1]
+            if argv
+            else "",
         )
-        set_output_handler = getattr(process, "set_output_handler", None)
-        if callable(set_output_handler):
-            set_output_handler(publisher.handle_output)
+    output_handlers = [
+        handler
+        for handler in (
+            live_control.handle_output if live_control is not None else None,
+            publisher.handle_output if publisher is not None else None,
+        )
+        if handler is not None
+    ]
+    set_output_handler = getattr(process, "set_output_handler", None)
+    if callable(set_output_handler) and output_handlers:
+
+        def handle_output(channel: str, line: str) -> None:
+            for handler in output_handlers:
+                handler(channel, line)
+
+        set_output_handler(handle_output)
     try:
+        if live_control is not None:
+            live_control.attach(process)
         process.start()
         if lease is not None:
             lease.attach_process(process)
         if cancellation is not None:
             cancellation.attach_process(process)
+        if blackboard_inbox is not None:
+            blackboard_inbox.on_process_attached(
+                live_control.send_signal if live_control is not None else None
+            )
         result = process.communicate(timeout=communicate_timeout(timeout_seconds))
         if publisher is not None:
             publisher.finish(result)
@@ -284,7 +537,9 @@ def run_worker_process(
             publisher.close()
 
 
-def project_allows_conclude_fallback(client: ControlPlaneClient, project_id: str, *, worker_name: str, intent_id: str) -> bool:
+def project_allows_conclude_fallback(
+    client: ControlPlaneClient, project_id: str, *, worker_name: str, intent_id: str
+) -> bool:
     project = client.get_project(project_id)
     if project.project.status == "active":
         return True
@@ -298,7 +553,9 @@ def project_allows_conclude_fallback(client: ControlPlaneClient, project_id: str
     return False
 
 
-def best_effort_release_reason(client: ControlPlaneClient, project_id: str, worker_name: str) -> None:
+def best_effort_release_reason(
+    client: ControlPlaneClient, project_id: str, worker_name: str
+) -> None:
     response = client.release_reason(project_id, worker_name)
     if not response.ok and response.status_code not in (403, 409):
         LOG.warning(
@@ -401,7 +658,9 @@ def write_conclude_result_with_fact_id(
     return ConcludeWriteResult(status="failed", fact_id=None)
 
 
-def best_effort_release(client: ControlPlaneClient, project_id: str, intent_id: str, worker_name: str) -> None:
+def best_effort_release(
+    client: ControlPlaneClient, project_id: str, intent_id: str, worker_name: str
+) -> None:
     response = client.release(project_id, intent_id, worker_name)
     if not response.ok and response.status_code not in (403, 409):
         LOG.warning(
@@ -412,7 +671,12 @@ def best_effort_release(client: ControlPlaneClient, project_id: str, intent_id: 
             response.status_code,
         )
     elif response.ok:
-        LOG.info("released intent project=%s intent=%s worker=%s", project_id, intent_id, worker_name)
+        LOG.info(
+            "released intent project=%s intent=%s worker=%s",
+            project_id,
+            intent_id,
+            worker_name,
+        )
     else:
         LOG.info(
             "release skipped project=%s intent=%s worker=%s status=%s",

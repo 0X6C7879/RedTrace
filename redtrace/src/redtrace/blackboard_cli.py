@@ -30,35 +30,80 @@ def build_parser() -> argparse.ArgumentParser:
         prog="redtrace-blackboard",
         description="Read the current RedTrace blackboard on demand. This client never writes or polls.",
     )
-    parser.add_argument("--server", default=_env("REDTRACE_SERVER"), help="RedTrace server URL")
-    parser.add_argument("--project", default=_env("REDTRACE_PROJECT_ID"), help="RedTrace project ID")
-    parser.add_argument("--worker", default=_env("REDTRACE_WORKER", "unknown"), help="Worker identity for audit")
-    parser.add_argument("--task", default=_env("REDTRACE_TASK_TYPE", "unknown"), help="Task type for audit")
-    parser.add_argument("--intent", default=_env("REDTRACE_INTENT_ID"), help="Current Intent ID for audit")
-    parser.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout in seconds")
+    parser.add_argument(
+        "--server", default=_env("REDTRACE_SERVER"), help="RedTrace server URL"
+    )
+    parser.add_argument(
+        "--project", default=_env("REDTRACE_PROJECT_ID"), help="RedTrace project ID"
+    )
+    parser.add_argument(
+        "--worker",
+        default=_env("REDTRACE_WORKER", "unknown"),
+        help="Worker identity for audit",
+    )
+    parser.add_argument(
+        "--task",
+        default=_env("REDTRACE_TASK_TYPE", "unknown"),
+        help="Task type for audit",
+    )
+    parser.add_argument(
+        "--intent",
+        default=_env("REDTRACE_INTENT_ID"),
+        help="Current Intent ID for audit",
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=5.0, help="HTTP timeout in seconds"
+    )
     parser.add_argument("--compact", action="store_true", help="Emit compact JSON")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    status = subparsers.add_parser("status", help="Check whether the blackboard changed")
-    status.add_argument("--since", type=int, default=_default_revision(), help="Known revision")
+    status = subparsers.add_parser(
+        "status", help="Check whether the blackboard changed"
+    )
+    status.add_argument(
+        "--since", type=int, default=_default_revision(), help="Known revision"
+    )
 
     subparsers.add_parser("snapshot", help="Read the complete current blackboard")
 
-    changes = subparsers.add_parser("changes", help="Read content added after a revision")
-    changes.add_argument("--since", type=int, default=_default_revision(), help="Known revision")
-    changes.add_argument("--limit", type=int, default=20, choices=range(1, 101), metavar="1..100")
+    changes = subparsers.add_parser(
+        "changes", help="Read content added after a revision"
+    )
+    changes.add_argument(
+        "--since", type=int, default=_default_revision(), help="Known revision"
+    )
+    changes.add_argument(
+        "--limit", type=int, default=20, choices=range(1, 101), metavar="1..100"
+    )
 
     node = subparsers.add_parser("node", help="Read one fact, intent, or hint")
     node.add_argument("node_id")
 
-    path = subparsers.add_parser("path", help="Read the directed path between two graph nodes")
+    path = subparsers.add_parser(
+        "path", help="Read the directed path between two graph nodes"
+    )
     path.add_argument("source")
     path.add_argument("target")
 
-    context = subparsers.add_parser("context", help="Read a bounded neighborhood around one node")
+    context = subparsers.add_parser(
+        "context", help="Read a bounded neighborhood around one node"
+    )
     context.add_argument("node_id")
-    context.add_argument("--depth", type=int, default=1, choices=range(0, 4), metavar="0..3")
-    context.add_argument("--limit", type=int, default=30, choices=range(1, 51), metavar="1..50")
+    context.add_argument(
+        "--depth", type=int, default=1, choices=range(4), metavar="0..3"
+    )
+    context.add_argument(
+        "--limit", type=int, default=30, choices=range(1, 51), metavar="1..50"
+    )
+
+    source = subparsers.add_parser(
+        "source", help="Read the Worker conversation that produced a fact"
+    )
+    source.add_argument("fact_id")
+    source.add_argument(
+        "--limit", type=int, default=50, choices=range(1, 201), metavar="1..200"
+    )
+    source.add_argument("--before-id", type=int)
     return parser
 
 
@@ -82,6 +127,11 @@ def _request(args: argparse.Namespace) -> dict[str, Any]:
     elif args.command == "context":
         path = f"context/{quote(args.node_id, safe='')}"
         params = {"depth": args.depth, "limit": args.limit}
+    elif args.command == "source":
+        path = f"facts/{quote(args.fact_id, safe='')}/source"
+        params = {"limit": args.limit}
+        if args.before_id is not None:
+            params["before_id"] = args.before_id
     else:  # pragma: no cover - argparse enforces this
         raise ValueError(f"unsupported command: {args.command}")
 
@@ -101,7 +151,9 @@ def _request(args: argparse.Namespace) -> dict[str, Any]:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _print_json(value: dict[str, Any], *, compact: bool, stream: Any | None = None) -> None:
+def _print_json(
+    value: dict[str, Any], *, compact: bool, stream: Any | None = None
+) -> None:
     if stream is None:
         stream = sys.stdout
     if compact:
@@ -126,10 +178,18 @@ def main(argv: list[str] | None = None) -> int:
             detail: Any = json.loads(body)
         except json.JSONDecodeError:
             detail = body
-        _print_json({"error": "http_error", "status": exc.code, "detail": detail}, compact=args.compact, stream=sys.stderr)
+        _print_json(
+            {"error": "http_error", "status": exc.code, "detail": detail},
+            compact=args.compact,
+            stream=sys.stderr,
+        )
         return 2
     except (URLError, TimeoutError, OSError) as exc:
-        _print_json({"error": "connection_error", "detail": str(exc)}, compact=args.compact, stream=sys.stderr)
+        _print_json(
+            {"error": "connection_error", "detail": str(exc)},
+            compact=args.compact,
+            stream=sys.stderr,
+        )
         return 2
     _print_json(result, compact=args.compact)
     return 0
