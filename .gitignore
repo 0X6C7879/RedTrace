@@ -6,7 +6,7 @@ __pycache__/
 output/playwright/
 output/
 .redtrace/
-dispatch.local.yaml
+redtrace.local.yaml
 .venv/
 venv/
 env/
@@ -15,10 +15,11 @@ env/
 datas/
 workspaces/
 proj_002/
-dispatch.yaml
+redtrace.yaml
 .redtrace-secrets/
 server.log
 dispatcher.log
+logs/
 skills/.redtrace/inbox/
 skills/.redtrace/locks/
 # 白盒私有案例：不进入公开仓库，可用 REDTRACE_CODE_AUDIT_PRIVATE_CASES_DIR 提供

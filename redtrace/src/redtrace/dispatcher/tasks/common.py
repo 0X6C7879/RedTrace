@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
 from redtrace.dispatcher.audit import AuditPublisher
-from redtrace.dispatcher.protocol.client import CairnClient
+from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
+from redtrace.dispatcher.control_plane import ControlPlaneClient
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
@@ -56,6 +55,67 @@ def task_healthcheck_enabled(config: DispatchConfig) -> bool:
     return config.runtime.worker_healthcheck == "startup_and_task"
 
 
+def preflight_worker(
+    config: DispatchConfig,
+    driver,
+    worker: WorkerConfig,
+    cancellation: TaskCancellation,
+    lease: HeartbeatLease,
+    *,
+    project_id: str,
+    task_type: str,
+    intent_id: str | None = None,
+) -> str | None:
+    """Return an early task result when a worker cannot safely start."""
+    if not task_healthcheck_enabled(config):
+        return None
+
+    LOG.info(
+        "checking worker health project=%s intent=%s task=%s worker=%s timeout=%ss",
+        project_id,
+        intent_id,
+        task_type,
+        worker.name,
+        config.runtime.healthcheck_timeout,
+    )
+    health = driver.check_health(
+        worker,
+        timeout=config.runtime.healthcheck_timeout,
+    )
+    if cancellation.is_cancelled:
+        LOG.info(
+            "%s cancelled during healthcheck project=%s intent=%s worker=%s reason=%s",
+            task_type,
+            project_id,
+            intent_id,
+            worker.name,
+            cancellation.reason,
+        )
+        return "cancelled"
+    if lease.failure is not None:
+        LOG.warning(
+            "heartbeat lost during %s healthcheck project=%s intent=%s worker=%s status=%s",
+            task_type,
+            project_id,
+            intent_id,
+            worker.name,
+            lease.failure.status_code,
+        )
+        return "failed"
+    if not health.ok:
+        LOG.warning(
+            "worker unhealthy project=%s intent=%s task=%s worker=%s status=%s detail=%s",
+            project_id,
+            intent_id,
+            task_type,
+            worker.name,
+            health.status,
+            health.detail,
+        )
+        return "unhealthy"
+    return None
+
+
 def blackboard_notice_path(container_name: str, identity: str) -> str:
     notice_id = uuid.uuid5(uuid.NAMESPACE_URL, identity).hex[:16]
     relative = f"{BLACKBOARD_NOTICE_ROOT}/{notice_id}.json"
@@ -89,7 +149,7 @@ def run_worker_process(
     argv: list[str],
     *,
     stdin_text: str | None = None,
-    client: CairnClient | None = None,
+    client: ControlPlaneClient | None = None,
     project_id: str | None = None,
     intent_id: str | None = None,
     blackboard_revision: int = 0,
@@ -119,9 +179,9 @@ def run_worker_process(
             process_env["PI_MODEL_CONTEXT_WINDOW"] = str(worker.context_length)
     if worker.type == "claudecode":
         # Run Claude Code at full extended-thinking strength. A value already
-        # present in dispatch.yaml env wins over this default.
+        # present in redtrace.yaml env wins over this default.
         process_env.setdefault("MAX_THINKING_TOKENS", CLAUDE_MAX_THINKING_TOKENS)
-    # RedTrace workers default to Chinese thinking; override in dispatch.yaml
+    # RedTrace workers default to Chinese thinking; override in redtrace.yaml
     # by setting REDTRACE_LANG to a different value in worker env.
     process_env.setdefault("REDTRACE_LANG", "zh-CN")
     if client is not None and project_id is not None:
@@ -224,7 +284,7 @@ def run_worker_process(
             publisher.close()
 
 
-def project_allows_conclude_fallback(client: CairnClient, project_id: str, *, worker_name: str, intent_id: str) -> bool:
+def project_allows_conclude_fallback(client: ControlPlaneClient, project_id: str, *, worker_name: str, intent_id: str) -> bool:
     project = client.get_project(project_id)
     if project.project.status == "active":
         return True
@@ -238,7 +298,7 @@ def project_allows_conclude_fallback(client: CairnClient, project_id: str, *, wo
     return False
 
 
-def best_effort_release_reason(client: CairnClient, project_id: str, worker_name: str) -> None:
+def best_effort_release_reason(client: ControlPlaneClient, project_id: str, worker_name: str) -> None:
     response = client.release_reason(project_id, worker_name)
     if not response.ok and response.status_code not in (403, 409):
         LOG.warning(
@@ -259,7 +319,7 @@ def best_effort_release_reason(client: CairnClient, project_id: str, worker_name
 
 
 def write_conclude_result(
-    client: CairnClient,
+    client: ControlPlaneClient,
     project_id: str,
     intent_id: str,
     worker_name: str,
@@ -282,7 +342,7 @@ def write_conclude_result(
 
 
 def write_conclude_result_with_fact_id(
-    client: CairnClient,
+    client: ControlPlaneClient,
     project_id: str,
     intent_id: str,
     worker_name: str,
@@ -341,7 +401,7 @@ def write_conclude_result_with_fact_id(
     return ConcludeWriteResult(status="failed", fact_id=None)
 
 
-def best_effort_release(client: CairnClient, project_id: str, intent_id: str, worker_name: str) -> None:
+def best_effort_release(client: ControlPlaneClient, project_id: str, intent_id: str, worker_name: str) -> None:
     response = client.release(project_id, intent_id, worker_name)
     if not response.ok and response.status_code not in (403, 409):
         LOG.warning(

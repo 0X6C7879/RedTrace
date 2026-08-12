@@ -1,10 +1,15 @@
+from datetime import datetime
+
+import yaml
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
-from datetime import datetime
-import yaml
 
+from redtrace.board.storage import (
+    expire_reason_leases,
+    expire_workers,
+    get_project_or_404,
+)
 from redtrace.server.db import get_conn
-from redtrace.server.services import expire_reason_leases, expire_workers, get_project_or_404
 
 router = APIRouter(tags=["export"])
 

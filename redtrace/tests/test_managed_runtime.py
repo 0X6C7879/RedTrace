@@ -77,7 +77,7 @@ def test_config_paths_are_anchored_to_config_file_not_cwd(
     payload["runtime"]["execution"] = "local"
     payload["container"] = None
     payload["local"] = {"completed_action": "keep"}
-    config_path = root / "dispatch.yaml"
+    config_path = root / "redtrace.yaml"
     config_path.write_text(
         yaml.safe_dump(payload, sort_keys=False),
         encoding="utf-8",
@@ -124,7 +124,6 @@ def test_workers_use_native_agent_state_and_shared_capabilities(
         WorkerConfig(
             name=name,
             type="pi",
-            task_types=["explore"],
             max_running=1,
             priority=0,
         )
@@ -225,7 +224,6 @@ def test_runtime_loads_route_skills_rules_as_global_worker_instructions(
     worker = WorkerConfig(
         name="pi",
         type="pi",
-        task_types=["explore"],
         max_running=1,
         priority=0,
     )
@@ -250,7 +248,6 @@ def test_all_native_workers_receive_and_can_invoke_route_skills(tmp_path: Path) 
         WorkerConfig(
             name=worker_type,
             type=worker_type,
-            task_types=["explore"],
             max_running=1,
             priority=0,
         )

@@ -1,8 +1,7 @@
 from fastapi import APIRouter
 
-from redtrace.server.db import get_conn
-from redtrace.server.models import CreateHintRequest, Hint
-from redtrace.server.services import check_project_hint_writable, next_hint_id, utcnow
+from redtrace.board import hints
+from redtrace.board.models import CreateHintRequest, Hint
 
 router = APIRouter(tags=["hints"])
 
@@ -13,13 +12,4 @@ router = APIRouter(tags=["hints"])
     status_code=201,
 )
 def create_hint(project_id: str, body: CreateHintRequest):
-    with get_conn(immediate=True) as conn:
-        check_project_hint_writable(conn, project_id)
-
-        now = utcnow()
-        hid = next_hint_id(conn, project_id)
-        conn.execute(
-            "INSERT INTO hints (id, project_id, content, creator, created_at) VALUES (?, ?, ?, ?, ?)",
-            (hid, project_id, body.content, body.creator, now),
-        )
-        return Hint(id=hid, content=body.content, creator=body.creator, created_at=now)
+    return hints.create(project_id, body)

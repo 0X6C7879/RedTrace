@@ -1,4 +1,1 @@
-{
-  "phase": "explore_execute",
-  "intent_id": "{intent_id}"
-}
+{"phase":"explore_execute","intent_id":"{intent_id}"}

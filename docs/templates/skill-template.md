@@ -4,6 +4,8 @@ description: >-
   <one-paragraph summary of what this skill covers and when to use it>
 ---
 
+# RedTrace Skill Template
+
 # <Skill Title>
 
 > **AUTHORIZED TESTING ONLY.** Use only on assets you own or have explicit permission to test.

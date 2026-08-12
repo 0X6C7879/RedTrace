@@ -58,7 +58,6 @@ def test_pi_worker_rejects_invalid_context_window() -> None:
             {
                 "name": "pi",
                 "type": "pi",
-                "task_types": ["explore"],
                 "max_running": 1,
                 "priority": 0,
                 "env": {
@@ -78,7 +77,6 @@ def test_mock_worker_rejects_unknown_phase_configuration() -> None:
             {
                 "name": "mock",
                 "type": "mock",
-                "task_types": ["explore"],
                 "max_running": 1,
                 "priority": 0,
                 "env": {"MOCK_UNKNOWN": "{}"},
@@ -96,7 +94,6 @@ def test_pi_driver_builds_models_from_environment_without_key_in_argv() -> None:
         {
             "name": "pi-worker",
             "type": "pi",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {
@@ -127,7 +124,6 @@ def test_local_pi_and_codex_use_complete_provider_config_without_exposing_key() 
         {
             "name": "pi-worker",
             "type": "pi",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {
@@ -150,7 +146,6 @@ def test_local_pi_and_codex_use_complete_provider_config_without_exposing_key() 
         {
             "name": "codex-worker",
             "type": "codex",
-            "task_types": ["reason"],
             "max_running": 1,
             "priority": 0,
             "context_length": 1_048_576,
@@ -238,7 +233,6 @@ def test_claude_driver_uses_configured_model_and_native_fallback() -> None:
         {
             "name": "claude-configured",
             "type": "claudecode",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {
@@ -269,7 +263,6 @@ def test_claude_and_pi_receive_redtrace_global_instructions() -> None:
         {
             "name": "claude",
             "type": "claudecode",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {"REDTRACE_GLOBAL_INSTRUCTIONS": instructions},
@@ -296,7 +289,6 @@ def test_claude_driver_root_mode_is_noninteractive_and_allows_native_web(
             {
                 "name": "claude",
                 "type": "claudecode",
-                "task_types": ["explore"],
                 "max_running": 1,
                 "priority": 0,
             }
@@ -335,7 +327,6 @@ def test_codex_driver_execute_argv_passes_model_endpoint_and_prompt() -> None:
         {
             "name": "codex",
             "type": "codex",
-            "task_types": ["reason"],
             "max_running": 1,
             "priority": 0,
             "context_length": 1_048_576,

@@ -13,13 +13,13 @@ from pydantic import TypeAdapter
 import pytest
 
 from redtrace.dispatcher.config import DispatchConfig
-from redtrace.dispatcher.models import ReasonCheckpoint
-from redtrace.dispatcher.protocol.client import ApiResult
+from redtrace.dispatcher.scheduler.state import ReasonCheckpoint
+from redtrace.dispatcher.control_plane import ApiResult
 from redtrace.dispatcher.runtime.process import ProcessResult
 from redtrace.dispatcher.scheduler.loop import DispatcherLoop
 from redtrace.server import db
 from redtrace.server.app import app
-from redtrace.server.models import ProjectDetail, ProjectSummary, Settings
+from redtrace.board.models import ProjectDetail, ProjectSummary, Settings
 
 
 class InProcessClient:
@@ -212,7 +212,6 @@ def _config(
     bootstrap: str,
     reason: str,
     explore: str,
-    task_types: list[str] | None = None,
     worker_healthcheck: str = "startup_only",
     healthcheck: str | None = None,
 ) -> DispatchConfig:
@@ -242,7 +241,6 @@ def _config(
                 {
                     "name": "mock-worker",
                     "type": "mock",
-                    "task_types": task_types or ["bootstrap", "reason", "explore"],
                     "max_running": 1,
                     "priority": 0,
                     "env": {
@@ -296,7 +294,12 @@ def _dispatch_and_wait(loop: DispatcherLoop) -> None:
 def _create_project(http: TestClient) -> str:
     response = http.post(
         "/projects",
-        json={"title": "integration", "origin": "start", "goal": "finish"},
+        json={
+            "title": "integration",
+            "origin": "start",
+            "goal": "finish",
+            "bootstrap_enabled": True,
+        },
     )
     assert response.status_code == 201
     return response.json()["project"]["id"]
@@ -366,7 +369,7 @@ def test_mock_scheduler_runs_reason_explore_reason_complete_chain(http_client: T
     assert any("/explore_execute-" in path and "f001" in content for _, path, content in containers.writes)
 
 
-def test_mock_scheduler_enabled_project_skips_bootstrap_when_worker_does_not_support_it(
+def test_mock_scheduler_enabled_project_runs_bootstrap_with_any_worker(
     http_client: TestClient,
 ) -> None:
     client = InProcessClient(http_client)
@@ -376,7 +379,6 @@ def test_mock_scheduler_enabled_project_skips_bootstrap_when_worker_does_not_sup
             bootstrap=_phase("complete"),
             reason=_phase("complete", zero_outcomes=["intent"]),
             explore=_phase("fact"),
-            task_types=["reason", "explore"],
         ),
         client,
         containers,
@@ -391,7 +393,8 @@ def test_mock_scheduler_enabled_project_skips_bootstrap_when_worker_does_not_sup
 
     assert project.project.status == "completed"
     assert [(intent.description, intent.to) for intent in project.intents] == [
-        ("mock complete from origin", "goal")
+        ("bootstrap", "f001"),
+        ("mock bootstrap complete from fact", "goal"),
     ]
 
 
@@ -453,7 +456,6 @@ def _failover_config() -> DispatchConfig:
         return {
             "name": name,
             "type": "mock",
-            "task_types": ["bootstrap", "reason", "explore"],
             "max_running": 1,
             "priority": priority,
             "env": {

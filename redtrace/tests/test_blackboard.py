@@ -267,7 +267,6 @@ def test_worker_process_receives_read_only_blackboard_context(monkeypatch, worke
         {
             "name": f"{worker_type}-worker",
             "type": worker_type,
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "context_length": 1_048_576,
@@ -374,7 +373,6 @@ def test_running_worker_receives_blackboard_delta_notice(
         {
             "name": "pi-worker",
             "type": "pi",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
         }

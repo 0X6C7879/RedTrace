@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from redtrace.board.storage import utcnow
 from redtrace.dispatcher.config import LocalConfig
 from redtrace.dispatcher.runtime.local_backend import LocalBackend
 from redtrace.server import db
 from redtrace.server.app import app
-from redtrace.server.services import utcnow
 
 
 @pytest.fixture

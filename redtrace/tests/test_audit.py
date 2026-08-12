@@ -133,7 +133,6 @@ def test_claude_streamed_tool_arguments_become_a_command_event(tmp_path: Path) -
         {
             "name": "claude-1",
             "type": "claudecode",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -196,7 +195,6 @@ def test_pi_shell_tool_events_match_codex_command_shape(tmp_path: Path) -> None:
         {
             "name": "pi-1",
             "type": "pi",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -253,7 +251,6 @@ def test_claude_skill_event_keeps_only_the_skill_name(tmp_path: Path) -> None:
         {
             "name": "claude-1",
             "type": "claudecode",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -334,7 +331,6 @@ def test_codex_skill_read_command_keeps_only_the_skill_name(tmp_path: Path) -> N
         {
             "name": "codex-1",
             "type": "codex",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -395,7 +391,6 @@ def test_pi_skill_read_keeps_only_the_skill_name(tmp_path: Path) -> None:
         {
             "name": "pi-1",
             "type": "pi",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -550,7 +545,6 @@ def test_successful_worker_stderr_is_not_rendered_as_worker_error(
             {
                 "name": f"{provider}-1",
                 "type": provider,
-                "task_types": ["explore"],
                 "max_running": 1,
                 "priority": 0,
                 "env": {},
@@ -578,7 +572,6 @@ def test_failed_worker_stderr_is_preserved_as_error(tmp_path: Path) -> None:
         {
             "name": "pi-1",
             "type": "pi",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -609,7 +602,6 @@ def test_audit_publisher_batches_unredacted_run_events(tmp_path: Path) -> None:
         {
             "name": "codex-1",
             "type": "codex",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -661,7 +653,6 @@ def test_audit_publisher_flushes_large_assistant_text_in_bounded_chunks(
         {
             "name": "claude-1",
             "type": "claudecode",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -719,7 +710,6 @@ def test_claude_thinking_blocks_become_thinking_events(tmp_path: Path) -> None:
         {
             "name": "claude-1",
             "type": "claudecode",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -841,7 +831,6 @@ def test_pi_streamed_thinking_flushes_a_single_message(tmp_path: Path) -> None:
         {
             "name": "pi-1",
             "type": "pi",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -951,7 +940,6 @@ def test_worker_drivers_run_at_maximum_thinking_strength() -> None:
         {
             "name": "claude-1",
             "type": "claudecode",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {

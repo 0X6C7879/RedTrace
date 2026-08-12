@@ -13,7 +13,7 @@ task_timeout_seconds = 21600
 [redtrace]
 mode = "docker"
 base_url = "http://127.0.0.1:8000"
-dispatch_config = "dispatch.yaml"
+dispatch_config = "redtrace.yaml"
 worker_language = "zh-CN"
 
 [container]

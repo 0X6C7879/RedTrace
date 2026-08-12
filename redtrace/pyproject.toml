@@ -1,10 +1,7 @@
 [project]
 name = "redtrace"
 version = "0.3.0"
-description = "Fact-graph based collaborative exploration protocol"
-authors = [
-    { name = "leixiao", email = "1729888211@qq.com" }
-]
+description = "Agent-driven security research orchestration and evidence graph runtime"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

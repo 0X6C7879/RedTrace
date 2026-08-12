@@ -1,3 +1,5 @@
+"""Fact-graph domain and transport models."""
+
 from __future__ import annotations
 
 from typing import Literal
@@ -85,7 +87,7 @@ class CreateProjectRequest(BaseModel):
     title: str
     origin: str
     goal: str
-    bootstrap_enabled: bool = True
+    bootstrap_enabled: bool = False
     hints: list[CreateHintInline] | None = None
 
     @field_validator("title", "origin", "goal")

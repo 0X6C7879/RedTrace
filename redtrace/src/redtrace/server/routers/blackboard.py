@@ -11,8 +11,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, Query
 
+from redtrace.board.storage import (
+    get_blackboard_revision,
+    get_project_or_404,
+    intent_to_model,
+    utcnow,
+)
 from redtrace.server.db import get_conn
-from redtrace.server.services import get_blackboard_revision, get_project_or_404, intent_to_model, utcnow
 
 router = APIRouter(prefix="/projects/{project_id}/blackboard", tags=["blackboard"])
 LOG = logging.getLogger(__name__)

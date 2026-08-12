@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 from typing import Any, Literal
@@ -9,9 +8,14 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, 
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
+from redtrace.board.storage import get_project_or_404
 from redtrace.server import db
+from redtrace.server.c2_payloads import (
+    build_beacon,
+    compatible_oneliners,
+    generate_oneliner,
+)
 from redtrace.server.db import get_conn
-from redtrace.server.c2_payloads import build_beacon, compatible_oneliners, generate_oneliner
 from redtrace.server.operations import (
     EXECUTABLE_KINDS,
     RESOURCE_KINDS,
@@ -33,7 +37,6 @@ from redtrace.server.operations import (
     verify_token,
 )
 from redtrace.server.routers.blackboard import QueryContext, query_context
-from redtrace.server.services import get_project_or_404
 
 router = APIRouter(tags=["operations"])
 

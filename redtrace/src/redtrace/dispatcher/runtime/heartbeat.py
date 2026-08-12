@@ -6,9 +6,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from redtrace.dispatcher.protocol.client import ApiResult, CairnClient
+from redtrace.dispatcher.control_plane import ApiResult, ControlPlaneClient
 from redtrace.dispatcher.runtime.process import ExecProcess
-
 
 LOG = logging.getLogger(__name__)
 HEARTBEAT_FAILURE_GRACE_MULTIPLIER = 2
@@ -44,7 +43,7 @@ class HeartbeatLease:
     @classmethod
     def for_intent(
         cls,
-        client: CairnClient,
+        client: ControlPlaneClient,
         project_id: str,
         intent_id: str,
         worker_name: str,
@@ -60,7 +59,7 @@ class HeartbeatLease:
     @classmethod
     def for_reason(
         cls,
-        client: CairnClient,
+        client: ControlPlaneClient,
         project_id: str,
         worker_name: str,
         interval: int,

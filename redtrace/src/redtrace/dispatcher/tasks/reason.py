@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 import time
 
+from redtrace.board.models import ProjectDetail
 from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
 from redtrace.dispatcher.contracts import parse_json_output, validate_reason_payload
+from redtrace.dispatcher.control_plane import ControlPlaneClient
 from redtrace.dispatcher.prompting import (
     add_blackboard_guidance,
     format_fact_ids,
@@ -12,7 +14,6 @@ from redtrace.dispatcher.prompting import (
     load_prompt,
     render_prompt,
 )
-from redtrace.dispatcher.protocol.client import CairnClient
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
@@ -20,13 +21,12 @@ from redtrace.dispatcher.tasks.common import (
     best_effort_release_reason,
     cancel_reason,
     did_timeout,
+    preflight_worker,
     preview,
     run_worker_process,
-    task_healthcheck_enabled,
     write_graph_snapshot_reference,
 )
 from redtrace.dispatcher.workers.registry import get_driver
-from redtrace.server.models import ProjectDetail
 
 LOG = logging.getLogger(__name__)
 FORMAT_REPAIR_TIMEOUT_SECONDS = 60
@@ -39,7 +39,7 @@ def _intent_target(config: DispatchConfig) -> int:
         sum(
             worker.max_running
             for worker in config.workers
-            if worker.enabled and "explore" in worker.task_types
+            if worker.enabled
         ),
     )
     return min(config.tasks.reason.max_intents, max(1, explore_capacity + 1))
@@ -47,7 +47,7 @@ def _intent_target(config: DispatchConfig) -> int:
 
 def run_reason_task(
     config: DispatchConfig,
-    client: CairnClient,
+    client: ControlPlaneClient,
     container_manager: ContainerManager,
     project: ProjectDetail,
     export_yaml: str,
@@ -56,7 +56,6 @@ def run_reason_task(
 ) -> str:
     driver = get_driver(worker.type, config.runtime.execution)
     task_started = time.perf_counter()
-    healthcheck_timeout = config.runtime.healthcheck_timeout
     lease = HeartbeatLease.for_reason(
         client, project.project.id, worker.name, config.runtime.interval
     )
@@ -64,39 +63,17 @@ def run_reason_task(
     try:
         container_name = container_manager.ensure_running(project.project.id)
 
-        if task_healthcheck_enabled(config):
-            LOG.info(
-                "checking worker health project=%s worker=%s timeout=%ss",
-                project.project.id,
-                worker.name,
-                healthcheck_timeout,
-            )
-            health = driver.check_health(worker, timeout=healthcheck_timeout)
-            if cancellation.is_cancelled:
-                LOG.info(
-                    "reason cancelled during healthcheck project=%s worker=%s reason=%s",
-                    project.project.id,
-                    worker.name,
-                    cancellation.reason,
-                )
-                return "cancelled"
-            if lease.failure is not None:
-                LOG.warning(
-                    "heartbeat lost during reason healthcheck project=%s worker=%s status=%s",
-                    project.project.id,
-                    worker.name,
-                    lease.failure.status_code,
-                )
-                return "failed"
-            if not health.ok:
-                LOG.warning(
-                    "worker unhealthy project=%s worker=%s status=%s detail=%s",
-                    project.project.id,
-                    worker.name,
-                    health.status,
-                    health.detail,
-                )
-                return "unhealthy"
+        early_result = preflight_worker(
+            config,
+            driver,
+            worker,
+            cancellation,
+            lease,
+            project_id=project.project.id,
+            task_type="reason",
+        )
+        if early_result is not None:
+            return early_result
         open_intents = [
             {
                 "id": intent.id,

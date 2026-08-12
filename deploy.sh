@@ -4,7 +4,7 @@
 set -Eeuo pipefail
 
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_PATH="${REDTRACE_CONFIG_PATH:-$PROJECT_DIR/dispatch.local.yaml}"
+CONFIG_PATH="${REDTRACE_CONFIG_PATH:-$PROJECT_DIR/redtrace.yaml}"
 RUN_DIR="$PROJECT_DIR/.redtrace/run"
 LOG_DIR="$PROJECT_DIR/.redtrace/log"
 TOOL_VENV="${REDTRACE_TOOL_VENV:-$HOME/.local/share/redtrace-tools}"
@@ -43,7 +43,7 @@ QILING_WRAPPER="$PROJECT_DIR/skills/route-skills/redtrace-tools/qiling/qiling-py
 NUCLEI_VERSION="${REDTRACE_NUCLEI_VERSION:-3.11.0}"
 CODEGRAPH_VERSION="${REDTRACE_CODEGRAPH_VERSION:-1.5.0}"
 RSACTFTOOL_REVISION="${REDTRACE_RSACTFTOOL_REVISION:-7c98848f1945de3e67a420871e8672f5ad9aa5d5}"
-CTF_TOOL_INSTALLER="$PROJECT_DIR/install_ctf_tools.sh"
+CTF_TOOL_INSTALLER="$PROJECT_DIR/install-security-toolchain.sh"
 ROUTE_SKILLS_INITIALIZER="$PROJECT_DIR/skills/route-skills/redtrace-tools/initialize.sh"
 JAVA_INSTALL_DIR="${REDTRACE_JAVA_HOME:-$HOME/.local/share/redtrace-tools/temurin-21}"
 DISTRO_ID=""
@@ -701,8 +701,8 @@ prepare_local_config() {
     log "using existing local config: $CONFIG_PATH"
     return
   fi
-  [[ -f "$PROJECT_DIR/dispatch.local.example.yaml" ]] || die "dispatch.local.example.yaml is missing"
-  cp -- "$PROJECT_DIR/dispatch.local.example.yaml" "$CONFIG_PATH"
+  [[ -f "$PROJECT_DIR/redtrace.local.example.yaml" ]] || die "redtrace.local.example.yaml is missing"
+  cp -- "$PROJECT_DIR/redtrace.local.example.yaml" "$CONFIG_PATH"
   awk -v workspace="$PROJECT_DIR/workspaces" '
     /^  # workspace_root:/ { print "  workspace_root: \"" workspace "\""; next }
     { print }

@@ -29,7 +29,7 @@ def _create_project(client: TestClient) -> str:
         },
     )
     assert response.status_code == 201
-    assert response.json()["project"]["bootstrap_enabled"] is True
+    assert response.json()["project"]["bootstrap_enabled"] is False
     return response.json()["project"]["id"]
 
 

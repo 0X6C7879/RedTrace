@@ -6,12 +6,12 @@ import shutil
 from pathlib import Path
 
 from redtrace.audit import AUDIT_ROOT
+from redtrace.board.storage import utcnow
 from redtrace.capabilities import resolve_capabilities_root
 from redtrace.dispatcher.config import DispatchConfig
 from redtrace.paths import contained_path, resolve_portable_path, safe_project_key
 from redtrace.server import db
 from redtrace.server.operations import operation_executor
-from redtrace.server.services import utcnow
 
 LOG = logging.getLogger(__name__)
 

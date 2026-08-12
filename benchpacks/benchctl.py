@@ -422,7 +422,7 @@ def write_summary(pack: str, state: dict) -> None:
     (rdir / "report.md").write_text("\n".join(lines) + "\n", "utf-8")
 
 
-async def cmd_run(pack: str, resume: bool = False, mode: str = "local", dispatch: str = "dispatch.yaml") -> None:
+async def cmd_run(pack: str, resume: bool = False, mode: str = "local", dispatch: str = "redtrace.yaml") -> None:
     adapter, directory, manifest, config = load_adapter(pack)
     state = load_state(pack) if resume else None
     try:
@@ -571,7 +571,7 @@ def main() -> None:
         p = sub.add_parser(name); p.add_argument("pack")
     run = sub.add_parser("run"); run.add_argument("pack")
     run.add_argument("--mode", default="local", choices=["local", "docker"])
-    run.add_argument("--dispatch", default="dispatch.yaml")
+    run.add_argument("--dispatch", default="redtrace.yaml")
     task = sub.add_parser("task"); task.add_argument("action",
         choices=["list", "start", "context", "submit", "hint", "close"])
     task.add_argument("pack")

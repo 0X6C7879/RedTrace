@@ -16,7 +16,7 @@ uv run --no-project benchpacks/benchctl.py prepare tsec
 uv run --no-project benchpacks/benchctl.py doctor tsec
 
 # 4. 跑分
-uv run --no-project benchpacks/benchctl.py run tsec --mode local --dispatch dispatch.local.yaml
+uv run --no-project benchpacks/benchctl.py run tsec --mode local --dispatch redtrace.yaml
 
 # 状态 / 恢复 / 停止 / 关闭平台容器
 uv run --no-project benchpacks/benchctl.py status tsec

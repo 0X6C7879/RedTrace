@@ -15,9 +15,9 @@ from typing import Any
 
 import requests
 
+from redtrace.board.storage import next_fact_id, utcnow
 from redtrace.server import db
 from redtrace.server.event_hub import event_hub
-from redtrace.server.services import next_fact_id, utcnow
 
 LOG = logging.getLogger(__name__)
 

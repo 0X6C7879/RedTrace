@@ -12,7 +12,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 # Maximum extended-thinking budget for Claude Code workers. Setting
 # MAX_THINKING_TOKENS turns extended thinking on; 31999 is the largest budget
 # Claude Code accepts, so RedTrace workers always run at full thinking
-# strength unless an operator overrides the variable in dispatch.yaml env.
+# strength unless an operator overrides the variable in redtrace.yaml env.
 CLAUDE_MAX_THINKING_TOKENS = "31999"
 if not hasattr(os, "geteuid"):
     os.geteuid = lambda: -1  # type: ignore[attr-defined]

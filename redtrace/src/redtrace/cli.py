@@ -15,7 +15,7 @@ from redtrace.server import db
 
 @click.group()
 def main():
-    """RedTrace - Fact-graph based collaborative exploration protocol."""
+    """RedTrace - agent-driven security research and evidence runtime."""
 
 
 @main.command()

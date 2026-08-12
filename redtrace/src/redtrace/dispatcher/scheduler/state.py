@@ -1,3 +1,5 @@
+"""Mutable scheduler state carried across dispatch cycles."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

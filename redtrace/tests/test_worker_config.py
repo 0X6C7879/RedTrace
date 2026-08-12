@@ -8,7 +8,10 @@ import redtrace.worker_config as worker_config_module
 import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from redtrace.config_secrets import secret_id_from_reference
+from redtrace.config_secrets import (
+    resolve_dispatch_config_path,
+    secret_id_from_reference,
+)
 from redtrace.dispatcher.config import DispatchConfig
 from redtrace.dispatcher.config_reload import DispatchConfigReloader
 from redtrace.dispatcher.scheduler.loop import DispatcherLoop
@@ -72,17 +75,40 @@ def _worker_payload(revision: str, *, name: str = "codex-primary") -> dict:
         "api_key": f"sk-{name}-secret",
         "model_id": "gpt-test",
         "context_length": 1_048_576,
-        "task_types": ["reason", "explore"],
         "priority": 0,
         "max_running": 2,
     }
+
+
+def test_missing_environment_config_falls_back_to_sibling_redtrace_yaml(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    standard = tmp_path / "redtrace.yaml"
+    _write_config(standard, _raw_config())
+    monkeypatch.setenv(
+        "REDTRACE_DISPATCH_CONFIG", str(tmp_path / "legacy.local.yaml")
+    )
+
+    assert resolve_dispatch_config_path() == standard
+    assert WorkerConfigService().path == standard
+
+
+def test_explicit_missing_config_path_does_not_silently_fall_back(
+    tmp_path: Path,
+) -> None:
+    standard = tmp_path / "redtrace.yaml"
+    requested = tmp_path / "missing.yaml"
+    _write_config(standard, _raw_config())
+
+    assert resolve_dispatch_config_path(requested) == requested
 
 
 def test_worker_config_encrypts_keys_and_never_returns_them(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    config_path = tmp_path / "dispatch.yaml"
+    config_path = tmp_path / "redtrace.yaml"
     secrets_dir = tmp_path / "secrets"
     _write_config(config_path, _raw_config())
     monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(secrets_dir))
@@ -110,6 +136,7 @@ def test_worker_config_encrypts_keys_and_never_returns_them(
     assert secret not in persisted
     raw = yaml.safe_load(persisted)
     reference = raw["workers"][0]["env"]["OPENAI_API_KEY"]
+    assert "task_types" not in raw["workers"][0]
     assert raw["workers"][0]["context_length"] == 1_048_576
     assert secret_id_from_reference(reference) is not None
     assert secret.encode() not in (secrets_dir / "worker-config.enc").read_bytes()
@@ -120,7 +147,7 @@ def test_plaintext_debug_mode_skips_encrypted_secret_store(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    config_path = tmp_path / "dispatch.yaml"
+    config_path = tmp_path / "redtrace.yaml"
     secrets_dir = tmp_path / "secrets"
     raw = _raw_config()
     raw["runtime"]["execution"] = "local"
@@ -155,7 +182,7 @@ def test_worker_api_response_contains_api_key_for_local_debugging(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    config_path = tmp_path / "dispatch.yaml"
+    config_path = tmp_path / "redtrace.yaml"
     _write_config(config_path, _raw_config())
     monkeypatch.setenv("REDTRACE_DISPATCH_CONFIG", str(config_path))
     monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(tmp_path / "secrets"))
@@ -189,7 +216,7 @@ def test_explicit_test_and_save_deduplicate_identical_connection_probe(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    config_path = tmp_path / "dispatch.yaml"
+    config_path = tmp_path / "redtrace.yaml"
     _write_config(config_path, _raw_config())
     monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(tmp_path / "secrets"))
     calls = 0
@@ -224,7 +251,6 @@ def test_connection_failure_detail_redacts_api_key(monkeypatch) -> None:
         {
             "name": "redaction-worker",
             "type": "codex",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {
@@ -261,7 +287,7 @@ def test_copy_toggle_delete_and_revision_conflicts_are_atomic(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    config_path = tmp_path / "dispatch.yaml"
+    config_path = tmp_path / "redtrace.yaml"
     _write_config(config_path, _raw_config())
     monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(tmp_path / "secrets"))
     monkeypatch.setattr(
@@ -298,14 +324,13 @@ def test_copy_toggle_delete_and_revision_conflicts_are_atomic(
 def test_dispatch_reloader_applies_only_worker_changes_and_keeps_old_snapshot(
     tmp_path: Path,
 ) -> None:
-    config_path = tmp_path / "dispatch.yaml"
+    config_path = tmp_path / "redtrace.yaml"
     raw = _raw_config()
     raw["workers"] = [
         {
             "name": "disabled-one",
             "type": "codex",
             "enabled": False,
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
         }
@@ -338,7 +363,6 @@ def test_disabled_workers_are_excluded_from_new_task_selection() -> None:
             "name": "disabled",
             "type": "codex",
             "enabled": False,
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
         },
@@ -346,7 +370,6 @@ def test_disabled_workers_are_excluded_from_new_task_selection() -> None:
             "name": "enabled",
             "type": "codex",
             "enabled": True,
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 1,
             "env": {
@@ -374,6 +397,8 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     operations = (static_dir / "operations.js").read_text(encoding="utf-8")
 
     assert "Worker 配置" in index
+    assert "task_types" not in index
+    assert "任务类型" not in index
     assert "/worker-config" in index
     assert "showLocalPrefs" not in index
     assert "服务端超时" not in index

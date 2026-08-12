@@ -2,12 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from redtrace.dispatcher.protocol.client import ApiResult
-from redtrace.dispatcher.runtime.cancellation import TaskCancellation
-from redtrace.dispatcher.runtime.process import ProcessResult
-from redtrace.dispatcher.workers.health import HealthResult
-from redtrace.dispatcher.tasks import bootstrap, explore, reason
-
 from conftest import (
     FakeClient,
     FakeContainerManager,
@@ -17,6 +11,11 @@ from conftest import (
     make_intent,
     make_project,
 )
+from redtrace.dispatcher.control_plane import ApiResult
+from redtrace.dispatcher.runtime.cancellation import TaskCancellation
+from redtrace.dispatcher.runtime.process import ProcessResult
+from redtrace.dispatcher.tasks import bootstrap, explore, reason
+from redtrace.dispatcher.workers.health import HealthResult
 
 
 def _lease_factory(lease: FakeLease):

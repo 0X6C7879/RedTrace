@@ -6,7 +6,7 @@
 #   apt, dnf/yum, pacman, zypper, apk, brew
 #
 # Usage:
-#   bash install_ctf_tools.sh [--dry-run] [--force] MODE
+#   bash install-security-toolchain.sh [--dry-run] [--force] MODE
 #
 # Modes:
 #   system, apt, dnf, yum, pacman, zypper, apk, brew

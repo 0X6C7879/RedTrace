@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
@@ -12,7 +12,7 @@ LOG = logging.getLogger("runtime.startup")
 DETAIL_PREVIEW_LIMIT = 60
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class StartupHealthcheckResult:
     worker_name: str
     ok: bool
@@ -27,23 +27,22 @@ def run_startup_healthchecks(
     *,
     show_commands: bool = False,
 ) -> list[StartupHealthcheckResult]:
-    workers = [worker for worker in config.workers if worker.enabled]
-    parallelism = max(1, min(len(workers), config.runtime.max_workers, 8))
-    LOG.info("[*] Startup healthcheck: workers=%s parallelism=%s", len(workers), parallelism)
-    with ThreadPoolExecutor(max_workers=parallelism) as executor:
-        future_map = {executor.submit(_check_worker, config, worker): worker.name for worker in workers}
-        results: list[StartupHealthcheckResult] = []
-        for future in as_completed(future_map):
-            worker_name = future_map[future]
-            try:
-                results.append(future.result())
-            except Exception:
-                LOG.exception("startup healthcheck crashed worker=%s", worker_name)
-                results.append(
-                    StartupHealthcheckResult(worker_name, False, None, 0, "startup healthcheck crashed", "-")
-                )
-
-    results.sort(key=lambda result: result.worker_name)
+    workers = sorted(
+        (worker for worker in config.workers if worker.enabled),
+        key=lambda worker: worker.name,
+    )
+    parallelism = min(8, config.runtime.max_workers, len(workers)) or 1
+    LOG.info(
+        "[*] Startup healthcheck: workers=%s parallelism=%s",
+        len(workers),
+        parallelism,
+    )
+    with ThreadPoolExecutor(
+        max_workers=parallelism, thread_name_prefix="redtrace-health"
+    ) as executor:
+        results = list(
+            executor.map(lambda worker: _safe_check(config, worker), workers)
+        )
     _log_report(results, show_commands=show_commands)
     return results
 
@@ -52,11 +51,33 @@ def format_failure_summary(results: list[StartupHealthcheckResult]) -> str:
     failed = [result for result in results if not result.ok]
     if not failed:
         return "startup healthchecks failed for all workers"
-    details = [f"{result.worker_name}(http={result.status or '-'}, detail={result.detail or '-'})" for result in failed]
+    details = [
+        f"{result.worker_name}(http={result.status or '-'}, detail={result.detail or '-'})"
+        for result in failed
+    ]
     return f"startup healthchecks failed for all workers: {', '.join(details)}"
 
 
-def _check_worker(config: DispatchConfig, worker: WorkerConfig) -> StartupHealthcheckResult:
+def _safe_check(
+    config: DispatchConfig, worker: WorkerConfig
+) -> StartupHealthcheckResult:
+    try:
+        return _check_worker(config, worker)
+    except Exception:
+        LOG.exception("startup healthcheck crashed worker=%s", worker.name)
+        return StartupHealthcheckResult(
+            worker.name,
+            False,
+            None,
+            0,
+            "startup healthcheck crashed",
+            "-",
+        )
+
+
+def _check_worker(
+    config: DispatchConfig, worker: WorkerConfig
+) -> StartupHealthcheckResult:
     driver = get_driver(worker.type, config.runtime.execution)
     started = time.perf_counter()
     result = driver.check_health(worker, timeout=config.runtime.healthcheck_timeout)
@@ -71,14 +92,18 @@ def _check_worker(config: DispatchConfig, worker: WorkerConfig) -> StartupHealth
     )
 
 
-def _log_report(results: list[StartupHealthcheckResult], *, show_commands: bool) -> None:
+def _log_report(
+    results: list[StartupHealthcheckResult], *, show_commands: bool
+) -> None:
     if not results:
         LOG.warning("[!] Startup healthcheck: no workers configured")
         return
     worker_width = max(len("WORKER"), *(len(result.worker_name) for result in results))
-    lines = ["[=] Startup healthcheck results"]
-    lines.append(f"{'CHK':<5} {'WORKER':<{worker_width}} {'HTTP':<6} {'TIME_S':>8}  DETAIL")
-    lines.append(f"{'-' * 5} {'-' * worker_width} {'-' * 6} {'-' * 8}  {'-' * 60}")
+    lines = [
+        "[=] Startup healthcheck results",
+        f"{'CHK':<5} {'WORKER':<{worker_width}} {'HTTP':<6} {'TIME_S':>8}  DETAIL",
+        f"{'-' * 5} {'-' * worker_width} {'-' * 6} {'-' * 8}  {'-' * 60}",
+    ]
     healthy_count = 0
     for result in results:
         if result.ok:

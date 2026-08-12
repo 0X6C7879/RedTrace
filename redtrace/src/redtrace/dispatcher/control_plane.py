@@ -7,7 +7,7 @@ from typing import Any
 
 import requests
 from pydantic import TypeAdapter
-from redtrace.server.models import ProjectDetail, ProjectSummary, Settings
+from redtrace.board.models import ProjectDetail, ProjectSummary, Settings
 from requests.adapters import HTTPAdapter
 
 LOG = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ class ApiResult:
         return 200 <= self.status_code < 300
 
 
-class CairnClient:
+class ControlPlaneClient:
     def __init__(self, base_url: str, timeout: float = 10.0):
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
@@ -120,7 +120,10 @@ class CairnClient:
         try:
             response = self._session().get(
                 self._url(f"/projects/{project_id}/operations/snapshot"),
-                params={"kinds": "webshell,c2_listener,c2_session,c2_payload", "limit": 100},
+                params={
+                    "kinds": "webshell,c2_listener,c2_session,c2_payload",
+                    "limit": 100,
+                },
                 timeout=self._timeout,
             )
             response.raise_for_status()

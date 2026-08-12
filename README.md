@@ -77,11 +77,11 @@ Server 是 FastAPI 应用，启动时初始化 SQLite 数据库并恢复未完�
 
 Dispatcher 是独立运行的客户端执行器，也是协议写入的唯一入口。它按轮次读取项目摘要和 Worker 配额，完成任务选择、认领、执行、回收和重试。
 
-- **配置**：读取 `dispatch.yaml`，支持容器模式和本地模式；文件原子替换后增量热加载，新任务使用新快照，运行中任务继续使用旧快照。
-- **调度**：按项目状态、Bootstrap 开关、Intent 可用性、Worker 类型、优先级、`max_running` 和项目并发上限选择任务。
+- **配置**：读取 `redtrace.yaml`，支持容器模式和本地模式；文件原子替换后增量热加载，新任务使用新快照，运行中任务继续使用旧快照。
+- **调度**：所有 Worker 默认执行 Bootstrap、Reason 与 Explore；按项目状态、Bootstrap 开关、Intent 可用性、空闲状态、优先级、`max_running` 和项目并发上限选择任务。
 - **任务编排**：
   - `bootstrap`：项目初始阶段的直接推进尝试，可在执行失败或超时后进入 conclude fallback；
-  - `reason`：读取全图，判断目标是否达成，并产生 Complete、Intent 或“暂无下一步”；
+  - `reason`：作为 Dispatcher 临时派发的 replan 微任务读取全图，判断目标是否达成，并产生 Complete、Intent 或“暂无下一步”；
   - `explore`：认领一个 Intent，执行探索并提交一个 Fact 结论。
 - **运行治理**：启动健康检查、任务超时、进程取消、容器清理、Intent/Reason heartbeat、失联回收和状态变化优先的结构化日志。
 - **输出契约**：Prompt 按组以 Markdown 分发；解析器从 Worker 输出提取 JSON，并对三类任务分别执行 schema 校验。
@@ -105,7 +105,7 @@ Worker Adapter 将不同 Agent CLI 归一为统一接口，同时保留原生配
 
 设置页面中的 Endpoint、API Key 和 Model ID 会同步到运行 RedTrace 的用户级 `~/.claude`、`~/.codex`、`~/.pi` 配置，同时可按 Worker 覆盖运行参数；空值时回退到原生 CLI 配置。Codex 密钥仍由 RedTrace 加密保存，并写入本地 `auth.json` 供原生 CLI 使用。
 
-`dispatch.yaml` 的 `paths` 段统一声明 `root`、`skills`、`mcp`、`plugins`、`managed`、`workspaces` 和 `audit`。相对路径始终以配置文件所在目录及 `paths.root` 为基准解析，不依赖启动命令的当前目录；对应的 `REDTRACE_*_DIR` 环境变量可覆盖单项路径。Agent 配置与登录始终使用用户级目录；任务会话统一写入 `.redtrace/projects/<project_id>/conversations`，删除任务时一并删除。`.redtrace/workers` 不再创建或挂载。只有 `skills/` 作为三个 Agent 的统一 Skill 源注入运行时，任务 Workspace 不生成 Agent 配置副本。
+`redtrace.yaml` 的 `paths` 段统一声明 `root`、`skills`、`mcp`、`plugins`、`managed`、`workspaces` 和 `audit`。相对路径始终以配置文件所在目录及 `paths.root` 为基准解析，不依赖启动命令的当前目录；对应的 `REDTRACE_*_DIR` 环境变量可覆盖单项路径。Agent 配置与登录始终使用用户级目录；任务会话统一写入 `.redtrace/projects/<project_id>/conversations`，删除任务时一并删除。`.redtrace/workers` 不再创建或挂载。只有 `skills/` 作为三个 Agent 的统一 Skill 源注入运行时，任务 Workspace 不生成 Agent 配置副本。
 
 Web 删除项目采用“标记删除 → 取消任务/进程 → 回收 Runtime → 文件清理 → 数据库级联”的服务端流程。删除状态持久化，可在 Server 或 Dispatcher 重启后继续；失败会保留项目和错误状态供重试，重复删除保持幂等。项目 Workspace、Prompt、审计、会话文件和项目关联表会被清理，根目录 Skills/MCP/Plugins 与其他 Worker 状态不受影响。
 
@@ -177,7 +177,7 @@ Context Harness 输出固定的 JSON/JSONL 工件和摘要引用，支持跨任�
 | `mcp/` | 共用 MCP 配置 |
 | `plugins/` | 插件注册表及浏览器/Burp 插件源码 |
 | `docs/specs/` | Server 协议、Dispatcher、上下文和插件兼容规范 |
-| `dispatch*.yaml` | 容器、本地和 Mock 调度配置示例 |
+| `redtrace*.yaml` | 容器、本地和 Mock 运行配置示例 |
 
 ## 快速开始
 
@@ -215,22 +215,23 @@ Engine + Compose plugin。控制面与任务 Worker 都以 Kali Linux 为基础�
 `redtrace-worker-container`，不依赖私有远程 Worker 镜像。
 
 ```bash
-cp dispatch.example.yaml dispatch.yaml
+cp redtrace.container.example.yaml redtrace.yaml
 docker compose up --build
 ```
 
 Apple Silicon 与 ARM64 Linux 会原生构建 `linux/arm64` Worker，Intel/AMD 主机
-构建 `linux/amd64`。如果 Docker 配置文件不叫 `dispatch.yaml`，可通过
-`REDTRACE_DISPATCH_CONFIG_FILE` 指定宿主机路径：
+构建 `linux/amd64`。如果 Docker 配置文件不叫 `redtrace.yaml`，可通过
+`REDTRACE_CONFIG_FILE` 指定宿主机路径；旧的 `REDTRACE_DISPATCH_CONFIG_FILE`
+仍作为兼容别名：
 
 ```bash
-REDTRACE_DISPATCH_CONFIG_FILE=./dispatch.docker.yaml docker compose up --build
+REDTRACE_CONFIG_FILE=./redtrace.docker.yaml docker compose up --build
 ```
 
 PowerShell 使用：
 
 ```powershell
-$env:REDTRACE_DISPATCH_CONFIG_FILE = ".\dispatch.docker.yaml"
+$env:REDTRACE_CONFIG_FILE = ".\redtrace.docker.yaml"
 docker compose up --build
 ```
 
@@ -241,12 +242,12 @@ docker compose up --build
 本地模式直接调用宿主机已安装的 `claude`、`codex` 和 `pi`：
 
 ```bash
-cp dispatch.local.example.yaml dispatch.local.yaml
-REDTRACE_DISPATCH_CONFIG="$PWD/dispatch.local.yaml" uv run --project redtrace redtrace serve
-uv run --project redtrace redtrace dispatch --config dispatch.local.yaml
+cp redtrace.local.example.yaml redtrace.yaml
+REDTRACE_DISPATCH_CONFIG="$PWD/redtrace.yaml" uv run --project redtrace redtrace serve
+uv run --project redtrace redtrace dispatch --config redtrace.yaml
 ```
 
-如果仓库根目录已有 `dispatch.yaml`，macOS 与 Linux 可以用同一个快捷脚本同时启动
+如果仓库根目录已有 `redtrace.yaml`，macOS 与 Linux 可以用同一个快捷脚本同时启动
 Server 和 Dispatcher；按 `Ctrl+C` 会一起停止本次启动的进程：
 
 ```bash
@@ -257,7 +258,7 @@ Server 和 Dispatcher；按 `Ctrl+C` 会一起停止本次启动的进程：
 
 macOS 和 Linux 共用唯一的 `deploy.sh`。Linux 支持 APT、DNF/YUM、Pacman、
 Zypper 和 APK，覆盖 Debian/Ubuntu/Kali、Fedora/RHEL/Rocky/Alma、Arch、
-openSUSE 与 Alpine；脚本会通过 `install_ctf_tools.sh` 使用对应发行版的包名
+openSUSE 与 Alpine；脚本会通过 `install-security-toolchain.sh` 使用对应发行版的包名
 映射准备 CLI、RTK、项目依赖和安全工具。macOS 使用 Homebrew。
 
 ```bash
@@ -270,8 +271,8 @@ Linux 分支不会改写 `/etc/apt`、Shell profile、持久 PATH 或其他既�
 也可以只安装跨发行版 CTF 工具链，或先做无写入干跑：
 
 ```bash
-bash install_ctf_tools.sh all
-bash install_ctf_tools.sh --dry-run dnf
+bash install-security-toolchain.sh all
+bash install-security-toolchain.sh --dry-run dnf
 ```
 
 ### 新建多个任务并行运行

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-import threading
 
 from redtrace.dispatcher.config import ContainerConfig
-from redtrace.dispatcher.protocol.client import ApiResult
+from redtrace.dispatcher.control_plane import ApiResult
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease

@@ -1,11 +1,47 @@
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
-from redtrace.dispatcher.output_parser import extract_json_object
+FENCED_JSON_RE = re.compile(
+    r"```(?:json)?\s*\n?(.*?)```",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 def parse_json_output(stdout: str) -> dict[str, Any]:
-    return extract_json_object(stdout)
+    decoder = json.JSONDecoder()
+    seen: set[str] = set()
+
+    candidates = [stdout.strip()]
+    candidates.extend(
+        match.group(1).strip() for match in FENCED_JSON_RE.finditer(stdout)
+    )
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+        else:
+            if isinstance(parsed, dict):
+                return parsed
+
+        for start, char in enumerate(candidate):
+            if char != "{":
+                continue
+            try:
+                parsed, _end = decoder.raw_decode(candidate[start:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+
+    raise ValueError("no JSON object found in output")
 
 
 def _unwrap_wrapped_payload(payload: dict[str, Any]) -> tuple[bool | None, dict[str, Any] | None]:

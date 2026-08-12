@@ -43,6 +43,7 @@ def test_deploy_script_unifies_linux_and_macos_without_legacy_entrypoints() -> N
     assert "--with-deps" not in script
     assert "uv sync --frozen" in script
     assert "REDTRACE_LOCAL_PATH_PREPEND" in script
+    assert 'CONFIG_PATH="${REDTRACE_CONFIG_PATH:-$PROJECT_DIR/redtrace.yaml}"' in script
     assert "pid_is_running" in script
     assert "detected Windows WSL" in script
     assert "ensure_brave_search_skill" in script
@@ -121,7 +122,7 @@ def test_route_skills_dependencies_and_tool_index_are_initialized_by_deploy() ->
 
 
 def test_ctf_tool_installer_supports_all_linux_package_families() -> None:
-    script_path = REPO_ROOT / "install_ctf_tools.sh"
+    script_path = REPO_ROOT / "install-security-toolchain.sh"
     script = script_path.read_text(encoding="utf-8")
 
     mode_patterns = {

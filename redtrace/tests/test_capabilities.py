@@ -42,7 +42,6 @@ def _worker(worker_type: str) -> WorkerConfig:
         {
             "name": worker_type,
             "type": worker_type,
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
         }

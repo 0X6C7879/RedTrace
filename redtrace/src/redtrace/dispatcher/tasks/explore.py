@@ -4,15 +4,16 @@ import logging
 import re
 import time
 
+from redtrace.board.models import Intent, ProjectDetail
 from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
 from redtrace.dispatcher.contracts import parse_json_output, validate_explore_payload
+from redtrace.dispatcher.control_plane import ControlPlaneClient
 from redtrace.dispatcher.prompting import (
     add_blackboard_guidance,
     format_hints,
     load_prompt,
     render_prompt,
 )
-from redtrace.dispatcher.protocol.client import CairnClient
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
@@ -20,15 +21,14 @@ from redtrace.dispatcher.tasks.common import (
     best_effort_release,
     cancel_reason,
     did_timeout,
-    project_allows_conclude_fallback,
+    preflight_worker,
     preview,
+    project_allows_conclude_fallback,
     run_worker_process,
-    task_healthcheck_enabled,
     write_conclude_result,
     write_graph_snapshot_reference,
 )
 from redtrace.dispatcher.workers.registry import get_driver
-from redtrace.server.models import Intent, ProjectDetail
 
 LOG = logging.getLogger(__name__)
 _ACCESS_CHANNEL = re.compile(
@@ -38,7 +38,7 @@ _ACCESS_CHANNEL = re.compile(
 _RESOURCE_ID = re.compile(r"\b(?:ws|lis|ses|pay)_[0-9a-f]{12}\b", re.IGNORECASE)
 def run_explore_task(
     config: DispatchConfig,
-    client: CairnClient,
+    client: ControlPlaneClient,
     container_manager: ContainerManager,
     project: ProjectDetail,
     export_yaml: str,
@@ -48,7 +48,6 @@ def run_explore_task(
 ) -> str:
     driver = get_driver(worker.type, config.runtime.execution)
     task_started = time.perf_counter()
-    healthcheck_timeout = config.runtime.healthcheck_timeout
     lease = HeartbeatLease.for_intent(
         client, project.project.id, intent.id, worker.name, config.runtime.interval
     )
@@ -56,46 +55,19 @@ def run_explore_task(
     try:
         container_name = container_manager.ensure_running(project.project.id)
 
-        if task_healthcheck_enabled(config):
-            LOG.info(
-                "checking worker health project=%s intent=%s worker=%s timeout=%ss",
-                project.project.id,
-                intent.id,
-                worker.name,
-                healthcheck_timeout,
-            )
-            health = driver.check_health(worker, timeout=healthcheck_timeout)
-            if cancellation.is_cancelled:
-                LOG.info(
-                    "explore cancelled during healthcheck project=%s intent=%s worker=%s reason=%s",
-                    project.project.id,
-                    intent.id,
-                    worker.name,
-                    cancellation.reason,
-                )
-                best_effort_release(client, project.project.id, intent.id, worker.name)
-                return "cancelled"
-            if lease.failure is not None:
-                LOG.warning(
-                    "heartbeat lost during explore healthcheck project=%s intent=%s worker=%s status=%s",
-                    project.project.id,
-                    intent.id,
-                    worker.name,
-                    lease.failure.status_code,
-                )
-                best_effort_release(client, project.project.id, intent.id, worker.name)
-                return "failed"
-            if not health.ok:
-                LOG.warning(
-                    "worker unhealthy project=%s intent=%s worker=%s status=%s detail=%s",
-                    project.project.id,
-                    intent.id,
-                    worker.name,
-                    health.status,
-                    health.detail,
-                )
-                best_effort_release(client, project.project.id, intent.id, worker.name)
-                return "unhealthy"
+        early_result = preflight_worker(
+            config,
+            driver,
+            worker,
+            cancellation,
+            lease,
+            project_id=project.project.id,
+            task_type="explore",
+            intent_id=intent.id,
+        )
+        if early_result is not None:
+            best_effort_release(client, project.project.id, intent.id, worker.name)
+            return early_result
 
         graph_reference = write_graph_snapshot_reference(
             container_manager,
@@ -297,7 +269,7 @@ def run_explore_task(
 
 def _try_conclude_fallback(
     config: DispatchConfig,
-    client: CairnClient,
+    client: ControlPlaneClient,
     container_manager: ContainerManager,
     container_name: str,
     worker: WorkerConfig,
@@ -464,7 +436,7 @@ def _try_conclude_fallback(
 
 
 def _attach_access_resource_ids(
-    client: CairnClient,
+    client: ControlPlaneClient,
     project_id: str,
     intent_id: str,
     worker_name: str,
@@ -486,7 +458,7 @@ def _attach_access_resource_ids(
 
 
 def _run_process(
-    client: CairnClient,
+    client: ControlPlaneClient,
     project_id: str,
     intent_id: str,
     container_manager: ContainerManager,

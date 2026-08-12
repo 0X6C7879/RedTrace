@@ -1,13 +1,13 @@
-# Default deployment: Windows WSL, Kali Linux, running as root. Workers directly invoke
+# Default local deployment: Windows WSL, Linux, or macOS. Workers directly invoke
 # the host claude / codex / pi CLIs without adding another agent sandbox.
 # A complete per-Worker Endpoint + API Key + Model override takes precedence for only that
 # process. If all three are omitted, the CLI's existing login and global config are used.
 # HOME and each CLI's user config directory are preserved in both cases.
 #
 # Usage:
-#   cp dispatch.local.example.yaml dispatch.yaml
+#   cp redtrace.local.example.yaml redtrace.yaml
 #   uv run --project redtrace redtrace serve                       # in one shell
-#   uv run --project redtrace redtrace dispatch --config dispatch.yaml
+#   uv run --project redtrace redtrace dispatch --config redtrace.yaml
 #
 # Notes:
 # - Do NOT run the dispatcher via docker-compose in local mode: it must run on the host
@@ -70,7 +70,6 @@ workers:
   - name: "local-claude"
     type: "claudecode"
     enabled: true
-    task_types: [bootstrap, reason, explore]
     max_running: 1
     priority: 0
     # env:
@@ -81,7 +80,6 @@ workers:
   # - name: "local-codex"
   #   type: "codex"
   #   enabled: true
-  #   task_types: [bootstrap, reason, explore]
   #   max_running: 1
   #   priority: 1
   #   env:
@@ -92,7 +90,6 @@ workers:
   # - name: "local-pi"
   #   type: "pi"
   #   enabled: true
-  #   task_types: [bootstrap, reason, explore]
   #   max_running: 1
   #   priority: 2
   #   env:

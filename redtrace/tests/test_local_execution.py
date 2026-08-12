@@ -416,21 +416,18 @@ def _local_payload() -> dict:
             {
                 "name": "local-claude",
                 "type": "claudecode",
-                "task_types": ["explore"],
                 "max_running": 1,
                 "priority": 0,
             },
             {
                 "name": "local-codex",
                 "type": "codex",
-                "task_types": ["explore"],
                 "max_running": 1,
                 "priority": 1,
             },
             {
                 "name": "local-pi",
                 "type": "pi",
-                "task_types": ["reason"],
                 "max_running": 1,
                 "priority": 2,
             },
@@ -491,7 +488,7 @@ def test_local_execution_rejects_partial_worker_api_override() -> None:
 
 
 def test_shipped_local_example_config_is_valid() -> None:
-    config = DispatchConfig.load(REPO_ROOT / "dispatch.local.example.yaml")
+    config = DispatchConfig.load(REPO_ROOT / "redtrace.local.example.yaml")
 
     assert config.runtime.execution == "local"
     assert config.container is None
@@ -525,7 +522,6 @@ def test_local_cli_check_passes_when_cli_present() -> None:
         {
             "name": "m",
             "type": "mock",
-            "task_types": ["reason"],
             "max_running": 1,
             "priority": 0,
         }
@@ -557,7 +553,6 @@ def _bare_worker(
         {
             "name": worker_type,
             "type": worker_type,
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "context_length": context_length,
@@ -676,7 +671,6 @@ def _local_config_for_worker(name: str, worker_type: str) -> DispatchConfig:
                 {
                     "name": name,
                     "type": worker_type,
-                    "task_types": ["explore"],
                     "max_running": 1,
                     "priority": 0,
                 }

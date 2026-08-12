@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from redtrace.dispatcher.config import WorkerConfig
-from redtrace.dispatcher.protocol.client import CairnClient
+from redtrace.dispatcher.control_plane import ControlPlaneClient
 from redtrace.dispatcher.runtime.process import ProcessResult
 from redtrace.dispatcher.runtime.stream_buffer import TRUNCATED_STREAM_LINE
 
@@ -49,7 +49,7 @@ def utcnow() -> str:
 class AuditPublisher:
     def __init__(
         self,
-        client: CairnClient,
+        client: ControlPlaneClient,
         project_id: str,
         intent_id: str | None,
         worker: WorkerConfig,

@@ -19,9 +19,9 @@ Agent 不直接认领 Intent，不直接 heartbeat，不直接调用 RedTrace AP
 1. Agent 的输出任务收敛成三类：`bootstrap`、`reason` 和 `explore`；`bootstrap` 只在项目初始态运行，让 Agent 直接尝试解决整个问题；主阶段只有在已解决时才返回，且必须同时给出关键 Fact 和 `complete`；若主阶段超时，再由 `bootstrap_conclude` 收尾产出 Fact；`reason` 负责读图判断是否完成或是否需要提出一个新 intent；`explore` 只负责执行一个已认领 intent 并产出一个 Fact 结论。
 2. Dispatcher 是唯一的协议写入者和控制面；Agent 不 claim、不 heartbeat、不直接调用 RedTrace API。
 3. 超时策略按任务类型定义；`bootstrap` 和 `explore` 都支持“第一阶段执行 + timeout / parse-fail 后用同一 session 进入 conclude 收尾”的双阶段模式。
-4. Prompt 以 markdown 文件形式随代码分发；支持按 prompt 组切换；Worker 行为由 `claudecode`、`codex`、`mock` 等 driver 实现；`dispatch.yaml` 只描述运行期参数。
-5. 调度上，项目初始态按 `project.bootstrap_enabled` 和 Worker 能力决定优先 `bootstrap` 或直接 `reason`；非初始态出现新 Fact / Hint 等新态势时优先 `reason`，否则优先消费可认领的 `explore` intent；`reason` 的并发约束通过服务端的项目级 `project.reason` lease 表达为“单项目最多一个”，`bootstrap` 的并发约束是“单项目最多一个保留 bootstrap intent 且最多一个 bootstrap 任务”，跨项目允许并行；`runtime.interval` 被刻意复用为主循环节拍和带 claim 任务的 heartbeat 周期。
-6. Worker 按独立的 LLM 并发配额单元建模；同一个 key 不拆成多个 Worker，因此并发控制使用 `workers[].max_running` 即可。
+4. Prompt 以 markdown 文件形式随代码分发；支持按 prompt 组切换；Worker 行为由 `claudecode`、`codex`、`mock` 等 driver 实现；`redtrace.yaml` 只描述运行期参数。
+5. 调度上，项目初始态仅由 `project.bootstrap_enabled` 决定优先 `bootstrap` 或直接 `reason`；非初始态出现新 Fact / Hint 等新态势时，Dispatcher 把 `reason` 作为临时 replan 微任务派给空闲 Worker，否则优先消费可认领的 `explore` intent；`reason` 的并发约束通过服务端的项目级 `project.reason` lease 表达为“单项目最多一个”，`bootstrap` 的并发约束是“单项目最多一个保留 bootstrap intent 且最多一个 bootstrap 任务”，跨项目允许并行；`runtime.interval` 被刻意复用为主循环节拍和带 claim 任务的 heartbeat 周期。
+6. 所有 Worker 默认具备 `bootstrap`、`reason` 和 `explore` 能力；Worker 按独立的 LLM 并发配额单元建模，完全空闲者优先，同层按 `priority` 选择，同一个 key 不拆成多个 Worker。
 7. 运行日志按“状态变化优先”设计：稳定轮询、正常 heartbeat、重复 skip 原则上不刷屏；容器创建、任务派发、容器内新进程启动、健康检查、超时、收尾、释放 intent、worker 进入短暂不可选窗口等事件必须可见。
 8. 项目容器收尾不应阻塞主调度循环；多个已完成项目的容器 cleanup 可以并行进行。
 9. 项目切到非 `active` 后，Dispatcher 必须把它视为硬停止：不再派发新任务；对本地仍在运行的 `bootstrap`、`explore`、`reason` 任务立即发出取消；对已取消任务不再进入 conclude fallback；并在后续轮询中停止该项目容器，杀掉容器内仍在运行的 Agent 进程。
@@ -126,15 +126,14 @@ Worker 不是协议参与者本身，而是 Dispatcher 管理下的执行单元�
 
 ### 执行主链路
 
-Dispatcher 会同时读取两类数据：
-
-- 结构化接口：用于调度、状态判断、intent 选择、协议写回
-- `GET /projects/{project_id}/export?format=yaml`：仅用于构造 prompt 所需的图快照
+Dispatcher 只读取一次结构化 `ProjectDetail`。调度策略直接使用该快照，任务
+Prompt 也从同一份对象生成紧凑 JSON；实时 Resource 由 Worker 按需读取，避免派发
+前重复调用 export 接口和重复执行 SQL/YAML 序列化。
 
 1. Dispatcher 从 Server 读取项目图
 2. Dispatcher 依据调度规则选择任务类型和 Worker
 3. Dispatcher 渲染 prompt 与命令占位符
-4. 如果是 `explore`，Dispatcher 先通过 `POST /projects/{project_id}/intents/{intent_id}/heartbeat` 认领目标 intent；如果是 `reason`，则先通过 `POST /projects/{project_id}/reason/claim` 认领项目级 reason lease
+4. 如果是 `explore`，Dispatcher 先通过 `POST /projects/{project_id}/intents/{intent_id}/claim` 原子认领目标 intent；如果是 `reason`，则先通过 `POST /projects/{project_id}/reason/claim` 认领项目级 reason lease
 5. Dispatcher 在项目容器内启动 Worker 进程
 6. Worker 输出结构化 JSON
 7. Dispatcher 解析结果，并调用 `POST /projects/{project_id}/complete`、`POST /projects/{project_id}/intents`、`POST /projects/{project_id}/intents/{intent_id}/conclude`、`POST /projects/{project_id}/intents/{intent_id}/release` 或 `POST /projects/{project_id}/reason/release`
@@ -158,23 +157,32 @@ Worker 选择规则：
 
 Dispatcher 使用一个运行期配置文件：
 
-- `dispatch.yaml`
+- `redtrace.yaml`
 
 也就是说：
 
-- 使用者只需要提供 `dispatch.yaml`
+- 使用者只需要提供 `redtrace.yaml`
 - 任务 prompt 以 markdown 文件形式随代码分发，并通过 `runtime.prompt_group` 选择目录
 - Worker 的健康检查、命令模板、session 处理、二阶段收尾能力由对应 driver 实现
 - `runtime.execution` 选择执行后端：默认 `container`（每项目一个容器），或 `local`（worker 直接在 dispatcher 宿主机上以子进程运行，复用本机已配置好的 CLI，无需 Docker 与 API key）
 
-代码目录可以采用类似组织：
+核心模型与执行代码按职责组织：
 
 ```text
+board/
+  models.py                 # Fact/Intent/Hint/Project 共享模型
+  projects.py               # Project 与 reason lease 原子事务
+  intents.py                # Intent 生命周期原子事务
+  hints.py / settings.py    # 其余 Board 写路径
+  storage.py                # SQLite 水合、校验、ID 与租约存储规则
 dispatcher/
-  models.py
+  control_plane.py          # Server HTTP control-plane adapter
+  contracts.py              # Worker JSON 提取与输出契约
+  scheduler/
+    project_policy.py       # 无副作用的调度决策
+    worker_select.py        # 无副作用的 Worker 选择
+    loop.py                 # 轮询、网络、进程与容器协调
   prompting.py
-  output_parser.py
-  contracts.py
   prompts/
     default/
       bootstrap.md
@@ -199,7 +207,7 @@ dispatcher/
 
 本文档附录给出：
 
-- `dispatch.example.yaml` 的示例内容
+- `redtrace.container.example.yaml` 的示例内容
 - 上述 markdown prompt 的示例内容
 
 ---
@@ -274,7 +282,8 @@ dispatcher/
 | 接口 | 用途 | 何时使用 |
 | --- | --- | --- |
 | `POST /projects/{project_id}/intents` | 创建保留 `bootstrap` intent | 初始态项目首次进入时，如尚不存在该 intent |
-| `POST /projects/{project_id}/intents/{intent_id}/heartbeat` | claim 并维持 `bootstrap` intent | 派发前先 claim；执行中按 `interval` 周期发送 |
+| `POST /projects/{project_id}/intents/{intent_id}/claim` | 原子认领 `bootstrap` intent | 派发前调用一次 |
+| `POST /projects/{project_id}/intents/{intent_id}/heartbeat` | 维持 `bootstrap` intent | 执行中按 `interval` 周期发送 |
 | `POST /projects/{project_id}/intents/{intent_id}/conclude` | 将 `bootstrap` 产出的关键结果写成 Fact | `bootstrap` 或 `bootstrap_conclude` 返回合法 `fact` 后调用 |
 | `POST /projects/{project_id}/complete` | 基于刚写入的 bootstrap fact 直接完成项目 | 仅当 `bootstrap` 主阶段成功返回 `fact + complete` 时调用 |
 | `POST /projects/{project_id}/intents/{intent_id}/release` | 放弃本次 bootstrap 尝试 | 两阶段都失败，或命令直接失败时调用 |
@@ -605,13 +614,12 @@ if running_project_count < runtime.max_running_projects:
 
 Dispatcher 固定从 `stdout` 取全文作为模型正文输出。
 
-`dispatch.yaml` 中与 Worker 相关的运行期字段如下：
+`redtrace.yaml` 中与 Worker 相关的运行期字段如下：
 
 | 字段 | 含义 | 说明 |
 | --- | --- | --- |
 | `name` | Worker 静态标识 | 协议写回时作为 `creator` 或 `worker` |
-| `type` | Worker driver 名 | 支持 `claudecode`、`codex`、`mock` |
-| `task_types` | 支持的任务类型 | `bootstrap`、`reason`、`explore` |
+| `type` | Worker driver 名 | 支持 `claudecode`、`codex`、`pi`、`mock` |
 | `max_running` | Worker 并发上限 | 达到上限后暂不派发 |
 | `priority` | 选择优先级 | 数字越小越优先 |
 | `env` | 运行时环境变量 | 由对应 driver 使用；`mock` 的 phase 耗时和结果概率也通过这里配置 |
@@ -624,7 +632,7 @@ Dispatcher 固定从 `stdout` 取全文作为模型正文输出。
 
 也就是说：
 
-- `dispatch.yaml` 负责声明“用哪个 driver、能跑什么任务、并发多少、环境变量是什么”；如果是 `mock`，各 phase 的模拟分布也放在 `env`
+- `redtrace.yaml` 负责声明“用哪个 driver、并发多少、环境变量是什么”；所有 Worker 都能执行 bootstrap、reason 与 explore，如果是 `mock`，各 phase 的模拟分布也放在 `env`
 - 具体怎么健康检查、怎么启动命令、怎么提取 session、怎么恢复 `conclude`，都由 driver 代码负责
 
 ### Driver 接口
@@ -825,7 +833,7 @@ codex exec resume "{session}" --dangerously-bypass-approvals-and-sandbox --model
 
 启动 Dispatcher 时，应完成静态校验：
 
-- `dispatch.yaml` 必须存在且可读取
+- `redtrace.yaml` 必须存在且可读取
 - `runtime.max_workers` 必须存在
 - `runtime.max_running_projects` 必须存在
 - `runtime.max_project_workers` 必须存在
@@ -840,7 +848,6 @@ codex exec resume "{session}" --dangerously-bypass-approvals-and-sandbox --model
 - `tasks.explore.conclude_timeout` 必须存在
 - 每个 Worker 都必须有 `type`
 - 每个 Worker 都必须有 `max_running`
-- `task_types` 只允许 `bootstrap`、`reason`、`explore`
 - `type` 只允许 `claudecode`、`codex`、`mock`
 - `max_running` 必须是正整数
 - `claudecode`、`codex`、`mock` 都支持双阶段 `explore`
@@ -859,10 +866,9 @@ codex exec resume "{session}" --dangerously-bypass-approvals-and-sandbox --model
 
 任务真正派发时，还需要做运行时校验：
 
-- driver 必须存在且支持该任务类型
+- driver 必须存在
 - 当 `runtime.worker_healthcheck=startup_and_task` 时，真正启动任务前，driver 的健康检查必须能成功执行；退出码 `0` 才算健康
 - `explore` 进入 timeout / parse-fail 后的 `explore_conclude` fallback，不再重复执行健康检查，而是直接尝试 conclude 并继续走结果校验
-- 只有支持当前任务类型的 Worker 才能被选中
 - 只有当前运行中任务数小于 `max_running` 的 Worker 才能被选中
 - 处于本地 `retry_after` 窗口内的不健康 Worker 不参与派发
 - `bootstrap` 和 `explore` 都必须先完成 claim，成功后才真正启动任务线程
@@ -875,7 +881,7 @@ codex exec resume "{session}" --dangerously-bypass-approvals-and-sandbox --model
 
 ## 配置字段速查
 
-### `dispatch.yaml`
+### `redtrace.yaml`
 
 | 字段 | 必填 | 含义 |
 | --- | --- | --- |
@@ -938,15 +944,14 @@ codex exec resume "{session}" --dangerously-bypass-approvals-and-sandbox --model
 | 字段 | 必填 | 含义 |
 | --- | --- | --- |
 | `name` | 是 | Worker 静态标识；协议写回时使用这个值作为 `creator` 或 `worker` |
-| `type` | 是 | Worker driver 名；支持 `claudecode`、`codex`、`mock` |
-| `task_types` | 是 | 该 Worker 支持的任务类型列表 |
+| `type` | 是 | Worker driver 名；支持 `claudecode`、`codex`、`pi`、`mock` |
 | `max_running` | 是 | 该 Worker 自身的并发上限 |
 | `priority` | 是 | 当前任务类型的候选 Worker 中，数字越小优先级越高 |
 | `env` | 是 | 该 Worker 的变量表；具体必需 key 由对应 driver 决定并在启动时校验 |
 
 补充：
 
-- Worker 选择顺序是：先过滤任务类型、`max_running` 和处于本地 `retry_after` 窗口内的 Worker，再按 `priority`，同优先级优先选当前运行数更少的，最后随机；`bootstrap` 和 `explore` 都会先 claim，再启动任务；当 `runtime.worker_healthcheck=startup_and_task` 时，真正启动前会做一次健康检查，失败的 Worker 会进入短暂不可选窗口；进入 `bootstrap_conclude` / `explore_conclude` fallback 时不再重复健康检查
+- Worker 选择顺序是：先过滤 `max_running` 和处于本地 `retry_after` 窗口内的 Worker；完全空闲的 Worker 优先，其次才使用仍有并发余量的 Worker；每层按 `priority`、当前运行数、随机值排序。`bootstrap` 和 `explore` 都会先 claim 再启动；当 `runtime.worker_healthcheck=startup_and_task` 时，真正启动前会做一次健康检查，失败的 Worker 会进入短暂不可选窗口；进入 `bootstrap_conclude` / `explore_conclude` fallback 时不再重复健康检查
 - 健康检查、执行命令、session 提取、二阶段 `conclude` 都由对应 driver 代码负责
 - prompt 内容从代码工程里的 markdown 资源加载
 
@@ -954,7 +959,7 @@ codex exec resume "{session}" --dangerously-bypass-approvals-and-sandbox --model
 
 ## 附录：示例配置与 Prompt 内容
 
-### `dispatch.example.yaml`
+### `redtrace.container.example.yaml`
 
 ```yaml
 server: "http://127.0.0.1:8000"
@@ -990,9 +995,8 @@ common_env:
 workers:
   # 同一模型拆成多个 Worker 的原因，应是它们使用不同的 API key，
   # 从而拥有彼此独立的并发配额。
-  - name: "claude-sonnet-thinker"
+  - name: "claude-primary"
     type: "claudecode"
-    task_types: [bootstrap, reason]
     max_running: 1
     priority: 0  # lower number wins; ties prefer fewer running tasks, then choose randomly
     env:
@@ -1000,9 +1004,8 @@ workers:
       ANTHROPIC_BASE_URL: "https://api.example.com"
       ANTHROPIC_AUTH_TOKEN: "sk-ant-worker-a"
 
-  - name: "claude-sonnet-doer"
+  - name: "claude-secondary"
     type: "claudecode"
-    task_types: [bootstrap, explore]
     max_running: 1
     priority: 1
     env:
@@ -1012,7 +1015,6 @@ workers:
 
   - name: "codex-gpt54"
     type: "codex"
-    task_types: [bootstrap, reason, explore]
     max_running: 1
     priority: 3
     env:
@@ -1022,7 +1024,6 @@ workers:
 
   - name: "codex-gpt54-alt"
     type: "codex"
-    task_types: [bootstrap, explore]
     max_running: 1
     priority: 4
     env:
@@ -1032,7 +1033,6 @@ workers:
 
   - name: "mock-observer"
     type: "mock"
-    task_types: [bootstrap, reason, explore]
     max_running: 1
     priority: 9
     env:
