@@ -1,0 +1,6 @@
+# 强制 shell/python 脚本以 LF 换行入库与检出
+# 避免 Windows 上 core.autocrlf=true 把工作树转成 CRLF，
+# 导致 WSL/Linux 下 shebang 被 \r 破坏（env: 'bash\r': No such file or directory）
+*.sh text eol=lf
+*.py text eol=lf
+.gitattributes text eol=lf
