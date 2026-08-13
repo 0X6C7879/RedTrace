@@ -556,8 +556,39 @@ def _normalize_pi(
     state: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     event_type = payload.get("type")
+    if event_type == "response" and payload.get("command") == "get_state":
+        data = payload.get("data")
+        if not isinstance(data, dict) or not data.get("sessionId"):
+            return []
+        return [
+            _event(
+                "session.started",
+                timestamp,
+                session_id=data.get("sessionId"),
+                session_file=data.get("sessionFile"),
+            )
+        ]
     if event_type == "session":
         return [_event("session.started", timestamp, session_id=payload.get("id"))]
+    if event_type == "message_end":
+        message = payload.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            return []
+        message_content = message.get("content")
+        content = (
+            "\n".join(
+                str(item["text"])
+                for item in message_content
+                if isinstance(item, dict) and item.get("type") == "text" and item.get("text")
+            )
+            if isinstance(message_content, list)
+            else _content_text(message_content)
+        )
+        return (
+            [_event("assistant.message", timestamp, role="assistant", content=content)]
+            if content
+            else []
+        )
     if event_type == "message_update":
         update = payload.get("assistantMessageEvent") or {}
         update_type = update.get("type")

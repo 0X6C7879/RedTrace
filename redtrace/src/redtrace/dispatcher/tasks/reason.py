@@ -155,8 +155,12 @@ def run_reason_task(
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
         total_ms = int((time.perf_counter() - task_started) * 1000)
         session = driver.extract_session(session, result.stdout, result.stderr)
-        if command.live_control is not None and command.live_control.session_id:
-            session = command.live_control.session_id
+        if command.live_control is not None:
+            session = (
+                getattr(command.live_control, "session_file", None)
+                or getattr(command.live_control, "session_id", None)
+                or session
+            )
         cancelled = cancel_reason(result, cancellation)
         if cancelled is not None:
             LOG.info(
@@ -206,6 +210,7 @@ def run_reason_task(
                 payload,
                 open_intents_empty=not open_intents,
                 max_intents=available_intent_slots,
+                valid_fact_ids=set(allowed_fact_ids),
             )
         except Exception as exc:
             if not driver.supports_conclude() or session is None:
@@ -296,6 +301,7 @@ def run_reason_task(
                     payload,
                     open_intents_empty=not open_intents,
                     max_intents=available_intent_slots,
+                    valid_fact_ids=set(allowed_fact_ids),
                 )
             except Exception as repair_exc:
                 LOG.warning(

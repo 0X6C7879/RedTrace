@@ -92,6 +92,36 @@ def test_normalize_provider_events() -> None:
     ]
 
 
+def test_pi_audit_records_session_file_and_final_message() -> None:
+    session = normalize_event(
+        "pi",
+        json.dumps(
+            {
+                "type": "response",
+                "command": "get_state",
+                "data": {"sessionId": "pi-1", "sessionFile": "/sessions/pi-1.jsonl"},
+            }
+        ),
+    )
+    message = normalize_event(
+        "pi",
+        json.dumps(
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '{"accepted":true}'}],
+                },
+            }
+        ),
+    )
+
+    assert session[0]["session_id"] == "pi-1"
+    assert session[0]["session_file"] == "/sessions/pi-1.jsonl"
+    assert message[0]["kind"] == "assistant.message"
+    assert message[0]["content"] == '{"accepted":true}'
+
+
 def test_codex_command_display_is_compact_and_repairs_mojibake() -> None:
     mojibake = "笛卡".encode("utf-8").decode("latin-1")
 

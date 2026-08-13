@@ -7,10 +7,18 @@ from redtrace.dispatcher.scheduler.state import ReasonCheckpoint
 
 BOOTSTRAP_DESCRIPTION = "bootstrap"
 BOOTSTRAP_CREATOR = "dispatcher.bootstrap"
+FACT_SUMMARY_CHARS = 800
 
 
-def compact_snapshot(project: ProjectDetail) -> str:
-    """Serialize scheduling context already present in a project detail."""
+def compact_snapshot(project: ProjectDetail, intent: Intent | None = None) -> str:
+    """Serialize a bounded graph; full facts remain queryable from Blackboard."""
+    fact_ids = None if intent is None else {"origin", "goal", *intent.from_}
+    facts = [fact for fact in project.facts if fact_ids is None or fact.id in fact_ids]
+    intents = (
+        [item for item in project.intents if item.to is None]
+        if intent is None
+        else [intent]
+    )
     return json.dumps(
         {
             "project": {
@@ -18,16 +26,28 @@ def compact_snapshot(project: ProjectDetail) -> str:
                 "status": project.project.status,
                 "bootstrap_enabled": project.project.bootstrap_enabled,
             },
-            "facts": [fact.model_dump(mode="json") for fact in project.facts],
+            "facts": [_compact_fact(fact.id, fact.description) for fact in facts],
             "hints": [hint.model_dump(mode="json") for hint in project.hints],
             "intents": [
                 intent.model_dump(mode="json", by_alias=True)
-                for intent in project.intents
+                for intent in intents
             ],
         },
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+def _compact_fact(fact_id: str, description: str) -> dict[str, str]:
+    if len(description) <= FACT_SUMMARY_CHARS:
+        return {"id": fact_id, "description": description}
+    return {
+        "id": fact_id,
+        "description": (
+            description[:FACT_SUMMARY_CHARS]
+            + f"… [truncated; run redtrace-blackboard source {fact_id}]"
+        ),
+    }
 
 
 def rotate_projects(

@@ -24,6 +24,9 @@ def _loop() -> DispatcherLoop:
     loop.worker_unhealthy_until = {}
     loop.worker_rejected_until = {}
     loop.explore_retry_avoid = {}
+    loop.task_failures = {}
+    loop.task_retry_until = {}
+    loop.reason_debounce_until = {}
     loop._log_state = {}
     loop.project_cursor = 0
     loop.futures = {}
@@ -54,6 +57,20 @@ def test_compact_project_snapshot_uses_already_loaded_detail() -> None:
     assert payload["facts"][0]["id"] == "origin"
     assert payload["intents"][0]["from"] == project.intents[0].from_
     assert "shared_resources" not in payload
+
+
+def test_explore_snapshot_only_contains_dependencies_and_bounds_large_facts() -> None:
+    intent = make_intent()
+    intent.from_ = ["f001"]
+    project = make_project(intents=[intent])
+    project.facts[2].description = "x" * 2000
+    project.facts.append(Fact(id="f999", description="unrelated"))
+
+    payload = json.loads(project_policy.compact_snapshot(project, intent))
+
+    assert {fact["id"] for fact in payload["facts"]} == {"origin", "goal", "f001"}
+    assert "truncated; run redtrace-blackboard source f001" in payload["facts"][2]["description"]
+    assert [item["id"] for item in payload["intents"]] == [intent.id]
 
 
 def test_reason_trigger_detects_new_facts_and_open_intent_completion() -> None:
@@ -279,6 +296,23 @@ def test_successful_explore_requests_reason() -> None:
     loop._reap_futures()
 
     assert loop.reason_request_generations == {"proj_001": 1}
+    assert loop.reason_debounce_until["proj_001"] > 0
+
+
+def test_failed_task_retries_use_exponential_backoff(monkeypatch) -> None:
+    loop = _loop()
+    monkeypatch.setattr("redtrace.dispatcher.scheduler.loop.time.time", lambda: 100.0)
+    for expected_deadline in (105.0, 115.0, 160.0, 400.0, 400.0):
+        future: Future[str] = Future()
+        future.set_result("failed")
+        loop.futures[future] = RunningTask(
+            "proj_001", "explore", "worker", TaskCancellation(), intent_id="i001"
+        )
+        loop._reap_futures()
+        assert loop.task_retry_until[("proj_001", "explore", "i001")] == expected_deadline
+
+    assert loop._task_retry_blocked(("proj_001", "explore", "i001"), now=399.0)
+    assert not loop._task_retry_blocked(("proj_001", "explore", "i001"), now=400.0)
 
 
 def test_failed_explore_switches_to_different_worker_configuration() -> None:

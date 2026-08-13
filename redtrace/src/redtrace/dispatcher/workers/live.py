@@ -19,6 +19,7 @@ class LiveControl:
     def __init__(self, prompt: str, session_id: str | None = None):
         self.prompt = prompt
         self.session_id = session_id
+        self.session_file: str | None = None
         self._process: Any | None = None
         self._lock = threading.Lock()
 
@@ -113,6 +114,9 @@ class PiLiveControl(LiveControl):
             session_id = data.get("sessionId") if isinstance(data, dict) else None
             if isinstance(session_id, str) and session_id:
                 self.session_id = session_id
+            session_file = data.get("sessionFile") if isinstance(data, dict) else None
+            if isinstance(session_file, str) and session_file:
+                self.session_file = session_file
         elif event.get("type") == "session":
             session_id = event.get("id")
             if isinstance(session_id, str) and session_id:

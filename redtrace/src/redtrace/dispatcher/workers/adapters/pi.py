@@ -161,13 +161,19 @@ class PiDriver(WorkerDriver):
 
     def extract_response_text(self, stdout: str, stderr: str) -> str:
         assistant_message: dict[str, Any] | None = None
+        saw_message_end = False
         for event in self._iter_events(stdout):
             event_type = event.get("type")
-            if event_type == "turn_end":
+            if event_type == "message_end":
                 message = event.get("message")
                 if isinstance(message, dict) and message.get("role") == "assistant":
                     assistant_message = message
-            elif event_type == "agent_end":
+                    saw_message_end = True
+            elif event_type == "turn_end" and not saw_message_end:
+                message = event.get("message")
+                if isinstance(message, dict) and message.get("role") == "assistant":
+                    assistant_message = message
+            elif event_type == "agent_end" and not saw_message_end:
                 messages = event.get("messages")
                 if isinstance(messages, list):
                     for message in reversed(messages):

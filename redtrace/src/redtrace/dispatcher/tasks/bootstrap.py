@@ -103,8 +103,12 @@ def run_bootstrap_task(
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
         session = driver.extract_session(session, first.stdout, first.stderr)
-        if execute.live_control is not None and execute.live_control.session_id:
-            session = execute.live_control.session_id
+        if execute.live_control is not None:
+            session = (
+                getattr(execute.live_control, "session_file", None)
+                or getattr(execute.live_control, "session_id", None)
+                or session
+            )
         cancelled = cancel_reason(first, cancellation)
         if cancelled is not None:
             LOG.info(

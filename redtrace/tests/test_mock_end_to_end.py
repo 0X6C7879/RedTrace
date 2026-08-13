@@ -271,6 +271,9 @@ def _loop(config: DispatchConfig, client: InProcessClient, containers: LocalCont
     loop.worker_unhealthy_until = {}
     loop.worker_rejected_until = {}
     loop.explore_retry_avoid = {}
+    loop.task_failures = {}
+    loop.task_retry_until = {}
+    loop.reason_debounce_until = {}
     loop._log_state = {}
     loop._cleanup_pending = set()
     loop._inactive_cleanup_done = {}
@@ -355,6 +358,7 @@ def test_mock_scheduler_runs_reason_explore_reason_complete_chain(http_client: T
         _dispatch_and_wait(loop)
         assert loop.reason_checkpoints[project_id] == ReasonCheckpoint(3, 0, 0)
         _dispatch_and_wait(loop)
+        loop.reason_debounce_until.clear()
         _dispatch_and_wait(loop)
         project = client.get_project(project_id)
     finally:
@@ -368,7 +372,10 @@ def test_mock_scheduler_runs_reason_explore_reason_complete_chain(http_client: T
         ("i003", "goal"),
     ]
     assert any("/reason_execute-" in path and "f002" in content for _, path, content in containers.writes)
-    assert any("/explore_execute-" in path and "f001" in content for _, path, content in containers.writes)
+    assert any(
+        "/explore_execute-" in path and '"origin"' in content
+        for _, path, content in containers.writes
+    )
 
 
 def test_mock_scheduler_enabled_project_runs_bootstrap_with_any_worker(

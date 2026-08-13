@@ -51,6 +51,21 @@ def test_reason_payload_requires_intent_when_none_are_open() -> None:
         )
 
 
+def test_reason_payload_rejects_goal_as_a_source() -> None:
+    with pytest.raises(ValueError, match="invalid fact IDs: goal"):
+        validate_reason_payload(
+            {
+                "accepted": True,
+                "data": {
+                    "intents": [{"from": ["goal"], "description": "invalid"}]
+                },
+            },
+            open_intents_empty=True,
+            max_intents=1,
+            valid_fact_ids={"origin", "f001"},
+        )
+
+
 def test_explore_payload_rejects_planning_text() -> None:
     with pytest.raises(ValueError):
         validate_explore_payload(
@@ -78,6 +93,21 @@ def test_pi_driver_extracts_session_and_last_assistant_text() -> None:
     )
 
     assert driver.extract_session(None, stdout, "") == "session-123"
+    assert driver.extract_response_text(stdout, "") == '{"accepted":true,"data":{}}'
+
+
+def test_pi_driver_prefers_final_message_end_over_protocol_summaries() -> None:
+    driver = PiDriver()
+    good = {"role": "assistant", "content": [{"type": "text", "text": '{"accepted":true,"data":{}}'}]}
+    bad = {"role": "assistant", "content": [{"type": "text", "text": '{"accepted":"yes"}'}]}
+    stdout = "\n".join(
+        json.dumps(event)
+        for event in (
+            {"type": "message_end", "message": good},
+            {"type": "agent_end", "messages": [bad]},
+        )
+    )
+
     assert driver.extract_response_text(stdout, "") == '{"accepted":true,"data":{}}'
 
 

@@ -98,7 +98,10 @@ def _looks_like_explore_data(payload: dict[str, Any]) -> bool:
 
 
 def validate_reason_payload(
-    payload: dict[str, Any], open_intents_empty: bool, max_intents: int,
+    payload: dict[str, Any],
+    open_intents_empty: bool,
+    max_intents: int,
+    valid_fact_ids: set[str] | None = None,
 ) -> tuple[str, dict[str, Any] | list[dict[str, Any]] | None]:
     accepted, data = _unwrap_wrapped_payload(payload)
     if accepted is False:
@@ -121,6 +124,7 @@ def validate_reason_payload(
             raise ValueError("complete and intents cannot coexist")
         if not isinstance(complete, dict) or "from" not in complete or "description" not in complete:
             raise ValueError("invalid complete payload")
+        _validate_reason_sources(complete["from"], valid_fact_ids)
         return "complete", complete
     if intents is not None:
         if not isinstance(intents, list):
@@ -128,6 +132,7 @@ def validate_reason_payload(
         for i, intent in enumerate(intents):
             if not isinstance(intent, dict) or "from" not in intent or "description" not in intent:
                 raise ValueError(f"invalid intent at index {i}")
+            _validate_reason_sources(intent["from"], valid_fact_ids)
         if not intents and open_intents_empty:
             raise ValueError("intents must not be empty when open_intents is empty")
         intents = intents[:max_intents]
@@ -137,6 +142,18 @@ def validate_reason_payload(
     if open_intents_empty:
         raise ValueError("intents is required when open_intents is empty")
     return "noop", None
+
+
+def _validate_reason_sources(value: Any, valid_fact_ids: set[str] | None) -> None:
+    if not isinstance(value, list) or not value or any(
+        not isinstance(item, str) or not item for item in value
+    ):
+        raise ValueError("from must be a non-empty fact ID array")
+    if valid_fact_ids is None:
+        return
+    invalid = sorted(set(value) - valid_fact_ids)
+    if invalid:
+        raise ValueError(f"from contains invalid fact IDs: {', '.join(invalid)}")
 
 
 def validate_bootstrap_execute_payload(payload: dict[str, Any]) -> tuple[str, dict[str, str] | None]:

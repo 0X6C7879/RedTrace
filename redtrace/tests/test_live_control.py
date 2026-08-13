@@ -40,11 +40,12 @@ def test_pi_uses_native_steer_without_closing_process() -> None:
         {
             "type": "response",
             "command": "get_state",
-            "data": {"sessionId": "pi-session"},
+            "data": {"sessionId": "pi-session", "sessionFile": "/sessions/pi.jsonl"},
         },
     )
     emit(control, {"type": "agent_settled"})
     assert control.session_id == "pi-session"
+    assert control.session_file == "/sessions/pi.jsonl"
     assert process.closed == 1
 
 

@@ -385,6 +385,7 @@ def test_access_channel_fact_gets_registered_resource_id() -> None:
             return [
                 {
                     "id": "ws_123456789abc",
+                    "kind": "webshell",
                     "intent_id": "i001",
                     "worker": "Pi",
                 }
@@ -396,6 +397,27 @@ def test_access_channel_fact_gets_registered_resource_id() -> None:
 
     assert ok
     assert description.endswith("Shared Resource IDs: ws_123456789abc")
+
+
+def test_listener_id_does_not_satisfy_access_channel_gate() -> None:
+    class Client:
+        @staticmethod
+        def resource_snapshot(_project_id: str):
+            return [
+                {
+                    "id": "lis_123456789abc",
+                    "kind": "c2_listener",
+                    "intent_id": "i001",
+                    "worker": "Pi",
+                }
+            ]
+
+    description, ok = explore._attach_access_resource_ids(
+        Client(), "proj_001", "i001", "Pi", "reverse shell via lis_123456789abc"
+    )
+
+    assert not ok
+    assert description == "reverse shell via lis_123456789abc"
 
 
 def test_access_channel_fact_without_registered_resource_is_blocked() -> None:

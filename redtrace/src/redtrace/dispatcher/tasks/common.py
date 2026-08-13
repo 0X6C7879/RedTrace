@@ -360,9 +360,9 @@ def write_graph_snapshot_reference(
     written_path = container_manager.write_text_file(container_name, path, graph_yaml)
     readable_path = written_path or path
     return (
-        "Graph 的 YAML snapshot 位于当前 Workspace 的以下文件：\n\n"
+        "Graph 的有界 YAML snapshot 位于当前 Workspace 的以下文件：\n\n"
         f"{readable_path}\n\n"
-        "使用 Graph 前读取完整文件，并将其内容作为本 Graph section 的 YAML snapshot。"
+        "先读取此文件；需要被截断 Fact 的完整内容时使用 redtrace-blackboard source <fact_id>。"
     )
 
 

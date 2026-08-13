@@ -33,6 +33,8 @@ from redtrace.dispatcher.workers.registry import get_driver
 LOG = logging.getLogger(__name__)
 UNHEALTHY_RETRY_AFTER_SECONDS = 5
 REJECTED_RETRY_AFTER_SECONDS = 5
+REASON_DEBOUNCE_SECONDS = 5
+TASK_RETRY_BACKOFF_SECONDS = (5, 15, 60, 300)
 
 
 def _local_cli_probe_command(path: str, *, platform: str = os.name) -> list[str]:
@@ -80,6 +82,9 @@ class DispatcherLoop:
         self.worker_unhealthy_until: dict[str, float] = {}
         self.worker_rejected_until: dict[tuple[str, str, str], float] = {}
         self.explore_retry_avoid: dict[tuple[str, str], str] = {}
+        self.task_failures: dict[tuple[str, str, str | None], int] = {}
+        self.task_retry_until: dict[tuple[str, str, str | None], float] = {}
+        self.reason_debounce_until: dict[str, float] = {}
         self._log_state: dict[str, tuple[int, str, tuple[object, ...]]] = {}
         self._cleanup_pending: set[str] = set()
         self._inactive_cleanup_done: dict[str, str] = {}
@@ -423,7 +428,7 @@ class DispatcherLoop:
         if newest_intent is not None:
             return self._dispatch_explore(
                 project,
-                project_policy.compact_snapshot(project),
+                project_policy.compact_snapshot(project, newest_intent),
                 newest_intent,
             )
         if project.project.reason is not None:
@@ -476,6 +481,12 @@ class DispatcherLoop:
     def _dispatch_reason(
         self, project: ProjectDetail, export_yaml: str, trigger: str
     ) -> bool:
+        if self._task_retry_blocked((project.project.id, "reason", None)):
+            return False
+        if trigger != "initial" and time.time() < self.reason_debounce_until.get(
+            project.project.id, 0
+        ):
+            return False
         selection = self._select_worker(project.project.id, "reason")
         worker = selection.worker
         if worker is None:
@@ -633,6 +644,8 @@ class DispatcherLoop:
         self, project: ProjectDetail, export_yaml: str, intent: Intent
     ) -> bool:
         retry_key = (project.project.id, intent.id)
+        if self._task_retry_blocked((project.project.id, "explore", intent.id)):
+            return False
         selection = self._select_worker(
             project.project.id,
             "explore",
@@ -876,6 +889,25 @@ class DispatcherLoop:
                     )
                 else:
                     self.worker_rejected_until.pop(rejection_key, None)
+                task_retry_key = (task.project_id, task.task_type, task.intent_id)
+                if outcome in {"success", "cancelled"}:
+                    self.task_failures.pop(task_retry_key, None)
+                    self.task_retry_until.pop(task_retry_key, None)
+                elif outcome not in {"unhealthy", "rejected"}:
+                    failures = self.task_failures.get(task_retry_key, 0) + 1
+                    delay = TASK_RETRY_BACKOFF_SECONDS[
+                        min(failures - 1, len(TASK_RETRY_BACKOFF_SECONDS) - 1)
+                    ]
+                    self.task_failures[task_retry_key] = failures
+                    self.task_retry_until[task_retry_key] = time.time() + delay
+                    LOG.warning(
+                        "task retry backed off project=%s task=%s intent=%s failures=%s retry_after=%ss",
+                        task.project_id,
+                        task.task_type,
+                        task.intent_id,
+                        failures,
+                        delay,
+                    )
                 if task.task_type == "explore" and task.intent_id is not None:
                     retry_key = (task.project_id, task.intent_id)
                     if outcome in {"failed", "rejected"}:
@@ -885,6 +917,9 @@ class DispatcherLoop:
                 if outcome == "success" and task.task_type in {"bootstrap", "explore"}:
                     self.reason_request_generations[task.project_id] = (
                         self.reason_request_generations.get(task.project_id, 0) + 1
+                    )
+                    self.reason_debounce_until[task.project_id] = (
+                        time.time() + REASON_DEBOUNCE_SECONDS
                     )
                 if outcome == "success" and task.task_type == "reason":
                     assert task.fact_count is not None
@@ -1030,6 +1065,21 @@ class DispatcherLoop:
             for key, worker in self.explore_retry_avoid.items()
             if key[0] in active_ids
         }
+        self.task_failures = {
+            key: failures
+            for key, failures in self.task_failures.items()
+            if key[0] in active_ids
+        }
+        self.task_retry_until = {
+            key: deadline
+            for key, deadline in self.task_retry_until.items()
+            if key[0] in active_ids
+        }
+        self.reason_debounce_until = {
+            project_id: deadline
+            for project_id, deadline in self.reason_debounce_until.items()
+            if project_id in active_ids
+        }
         inactive_status_by_id = {
             summary.id: summary.status
             for summary in summaries
@@ -1090,6 +1140,11 @@ class DispatcherLoop:
                 worker_name,
                 response.status_code,
             )
+
+    def _task_retry_blocked(
+        self, key: tuple[str, str, str | None], *, now: float | None = None
+    ) -> bool:
+        return (time.time() if now is None else now) < self.task_retry_until.get(key, 0)
 
     def _best_effort_release_reason(self, project_id: str, worker_name: str) -> None:
         response = self.client.release_reason(project_id, worker_name)

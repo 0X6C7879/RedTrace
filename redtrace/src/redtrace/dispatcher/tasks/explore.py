@@ -36,7 +36,7 @@ _ACCESS_CHANNEL = re.compile(
     r"web\s*shell|reverse\s*shell|c2\s*session|反弹\s*shell|反向\s*shell|持久.{0,8}通道",
     re.IGNORECASE,
 )
-_RESOURCE_ID = re.compile(r"\b(?:ws|lis|ses|pay)_[0-9a-f]{12}\b", re.IGNORECASE)
+_ACCESS_RESOURCE_ID = re.compile(r"\b(?:ws|ses)_[0-9a-f]{12}\b", re.IGNORECASE)
 
 
 def run_explore_task(
@@ -467,7 +467,7 @@ def _attach_access_resource_ids(
     worker_name: str,
     description: str,
 ) -> tuple[str, bool]:
-    if not _ACCESS_CHANNEL.search(description) or _RESOURCE_ID.search(description):
+    if not _ACCESS_CHANNEL.search(description) or _ACCESS_RESOURCE_ID.search(description):
         return description, True
     ids = [
         str(resource["id"])
@@ -475,7 +475,8 @@ def _attach_access_resource_ids(
         if isinstance(resource, dict)
         and resource.get("intent_id") == intent_id
         and resource.get("worker") == worker_name
-        and _RESOURCE_ID.fullmatch(str(resource.get("id", "")))
+        and resource.get("kind") in {"webshell", "c2_session"}
+        and _ACCESS_RESOURCE_ID.fullmatch(str(resource.get("id", "")))
     ]
     if not ids:
         return description, False
@@ -556,6 +557,10 @@ def _run_with_steering(
     )
     session = driver.extract_session(session, result.stdout, result.stderr)
     control = getattr(invocation, "live_control", None)
-    if control is not None and control.session_id:
-        session = control.session_id
+    if control is not None:
+        session = (
+            getattr(control, "session_file", None)
+            or getattr(control, "session_id", None)
+            or session
+        )
     return result, session
