@@ -1,3 +1,0 @@
-# TCP行协议服务的BUILD/DUMP/EXPORT命令在输出内部数据结构时可能泄露未初始化相邻堆内存中的敏感数据，应先检查此类输出区域
-
-TCP行协议响应构造服务的BUILD命令在输出hdrtab内部缓冲区时未初始化该内存区域，导致相邻堆块中预加载的flag被泄露。利用仅需先ADDHEADER再SETBODY后BUILD三步。适用于任何提供BUILD/DUMP/EXPORT/PREVIEW类构造输出命令的行协议服务：先用正常输入观察输出格式，在输出中搜索可打印敏感字符串，变化输入大小观察泄露区域变化。该模式已在 easy PWN 题中验证有效（200分/easy）。

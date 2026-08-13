@@ -1,7 +1,0 @@
-# pack-refs with: peeled fully-peeled sorted 
-5b452712af91ba40ba6f224937999d8594a72066 refs/heads/main
-103b859f9f2c69690aaff7c50cd3c9af883560b6 refs/remotes/origin/agent/add-macos-local-deploy
-103b859f9f2c69690aaff7c50cd3c9af883560b6 refs/remotes/origin/agent/fix-macos-homebrew-mirrors
-2cc32abcdefb246a0cb3646aff24966c5373cd35 refs/remotes/origin/agent/long-task-1m-profile
-da7e226c76fc494745b5d0171ca0edaa98b228f7 refs/remotes/origin/ecc-tools/RedTrace-1785144353229
-2a8aa51ff5ba8327325ec9b696941714bc2fb83f refs/remotes/origin/main

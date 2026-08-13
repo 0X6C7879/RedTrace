@@ -4,7 +4,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_DIR="$SCRIPT_DIR/redtrace"
-CONFIG_PATH="$SCRIPT_DIR/dispatch.yaml"
+CONFIG_PATH="$SCRIPT_DIR/redtrace.yaml"
 HOST="${REDTRACE_HOST:-127.0.0.1}"
 PORT="${REDTRACE_PORT:-8000}"
 START_TIMEOUT="${REDTRACE_START_TIMEOUT:-40}"
@@ -22,7 +22,7 @@ Usage: ./start-redtrace.sh [options]
 Start the RedTrace Server and Dispatcher together.
 
 Options:
-  --config PATH   Dispatcher config (default: ./dispatch.yaml)
+  --config PATH   Dispatcher config (default: ./redtrace.yaml)
   --host HOST     Server bind host (default: 127.0.0.1)
   --port PORT     Server bind port (default: 8000)
   -h, --help      Show this help
