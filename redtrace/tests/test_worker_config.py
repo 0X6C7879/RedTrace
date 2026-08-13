@@ -428,6 +428,8 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     assert "context_length: this.workerForm.context_1m ? 1048576 : null" in index
     assert "return 'admin';" in index
     assert "return 'admin';" in operations
+    assert ':disabled="!selectedOpenIntentRecord()"' in index
+    assert "return intent?.worker ? intent : null;" in index
     assert "webshellSessionLabel()" in operations
     assert "resource.status === 'available'" in operations
     assert 'x-text="webshellSessionLabel()"' in index

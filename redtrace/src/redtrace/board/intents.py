@@ -112,23 +112,23 @@ def heartbeat(project_id: str, intent_id: str, worker: str) -> dict[str, object]
 def release(project_id: str, intent_id: str, worker: str) -> Intent:
     with get_conn(immediate=True) as conn:
         check_project_active(conn, project_id)
-        row = get_releasable_open_intent_or_404(conn, project_id, intent_id, worker)
-        if row["worker"] == worker:
-            conn.execute(
-                "UPDATE intents SET worker = NULL WHERE id = ? AND project_id = ?",
-                (intent_id, project_id),
-            )
-            return _load_intent(conn, project_id, intent_id)
-        return intent_to_model(conn, row, project_id)
+        get_releasable_open_intent_or_404(conn, project_id, intent_id, worker)
+        conn.execute(
+            "UPDATE intents SET worker = NULL WHERE id = ? AND project_id = ?",
+            (intent_id, project_id),
+        )
+        return _load_intent(conn, project_id, intent_id)
 
 
 def conclude(
     project_id: str, intent_id: str, request: ConcludeRequest
 ) -> ConcludeResponse:
-    """Turn an owned intent into a fact in one transaction."""
+    """Turn an open intent into a fact in one transaction."""
     with get_conn(immediate=True) as conn:
         check_project_active(conn, project_id)
-        get_owned_open_intent_or_404(conn, project_id, intent_id, request.worker)
+        get_releasable_open_intent_or_404(
+            conn, project_id, intent_id, request.worker
+        )
         validate_registered_access_claim(conn, request.description)
         now = utcnow()
         fact_id = next_fact_id(conn, project_id)
@@ -137,8 +137,8 @@ def conclude(
             (fact_id, project_id, request.description),
         )
         conn.execute(
-            "UPDATE intents SET to_fact_id = ?, last_heartbeat_at = ?, concluded_at = ? WHERE id = ? AND project_id = ?",
-            (fact_id, now, now, intent_id, project_id),
+            "UPDATE intents SET to_fact_id = ?, worker = ?, last_heartbeat_at = ?, concluded_at = ? WHERE id = ? AND project_id = ?",
+            (fact_id, request.worker, now, now, intent_id, project_id),
         )
         return ConcludeResponse(
             fact=Fact(id=fact_id, description=request.description),

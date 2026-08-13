@@ -518,7 +518,7 @@ Body：
 
 #### POST /projects/{project_id}/intents/{intent_id}/release
 
-当前 `worker` 主动释放一条尚无结论的 Intent，使其回到未认领状态，供其他消费者立即接手。仅当前 `worker` 本人可以释放；若被其他消费者占用且未超时，返回 409。若该 Intent 当前已未认领，则幂等返回当前状态。`last_heartbeat_at` 保留，不清空。Release 属于探索写操作，仅 `active` 项目允许；`stopped` 或 `completed` 返回 403。
+当前 `worker` 主动释放一条尚无结论的 Intent，使其回到未认领状态，供其他消费者立即接手。仅当前 `worker` 本人可以释放；管理员（`worker: "admin"`）可以强制释放任意 Worker 的认领。其他消费者操作被占用且未超时的 Intent 时返回 409。若该 Intent 当前已未认领，则幂等返回当前状态。`last_heartbeat_at` 保留，不清空。Release 属于探索写操作，仅 `active` 项目允许；`stopped` 或 `completed` 返回 403。
 
 Body：
 
@@ -534,7 +534,7 @@ Body：
 
 #### POST /projects/{project_id}/intents/{intent_id}/conclude
 
-探索结束，产出新 Fact 并将 Intent 结论落定。原子操作。仅对尚无结论的 Intent 有效。claim 规则与 heartbeat 相同：未认领可直接 conclude；由当前 `worker` conclude；若被其他消费者占用且未超时，返回 409。Conclude 属于探索写操作，仅 `active` 项目允许；`stopped` 或 `completed` 返回 403。
+探索结束，产出新 Fact 并将 Intent 结论落定。原子操作。仅对尚无结论的 Intent 有效。未认领的 Intent 可直接 conclude，已认领的 Intent 只能由当前 `worker` conclude；管理员（`worker: "admin"`）可以人工接管任意 open Intent 并提交 Fact。其他消费者操作被占用且未超时的 Intent 时返回 409。Conclude 属于探索写操作，仅 `active` 项目允许；`stopped` 或 `completed` 返回 403。
 
 `worker` 写入后永久保留，标识本次结论由谁产出。
 

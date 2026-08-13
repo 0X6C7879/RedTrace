@@ -173,7 +173,7 @@ def get_releasable_open_intent_or_404(
         raise HTTPException(409, "Intent already concluded")
     if row["worker"] is None:
         return row
-    if row["worker"] != worker:
+    if worker != "admin" and row["worker"] != worker:
         raise HTTPException(409, f"Intent is currently claimed by {row['worker']}")
     return row
 
