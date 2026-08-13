@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
@@ -200,6 +201,10 @@ def get_unclaimed_open_intent_or_404(
         raise HTTPException(409, "Intent already concluded")
     if row["worker"] is not None:
         raise HTTPException(409, f"Intent is currently claimed by {row['worker']}")
+    if row["circuit_open"]:
+        raise HTTPException(409, "Intent retry circuit is open")
+    if row["retry_after"] is not None and row["retry_after"] > time.time():
+        raise HTTPException(409, "Intent retry backoff is active")
     return row
 
 
@@ -262,6 +267,10 @@ def intent_to_model(
         last_heartbeat_at=row["last_heartbeat_at"],
         created_at=row["created_at"],
         concluded_at=row["concluded_at"],
+        failure_count=row["failure_count"],
+        failure_signature=row["failure_signature"],
+        retry_after=row["retry_after"],
+        circuit_open=bool(row["circuit_open"]),
     )
 
 
@@ -302,6 +311,10 @@ def project_meta_from_row(row: sqlite3.Row) -> ProjectMeta:
         bootstrap_enabled=bool(row["bootstrap_enabled"]),
         created_at=row["created_at"],
         reason=project_reason_from_row(row),
+        reason_failure_count=row["reason_failure_count"],
+        reason_failure_signature=row["reason_failure_signature"],
+        reason_retry_after=row["reason_retry_after"],
+        reason_circuit_open=bool(row["reason_circuit_open"]),
     )
 
 

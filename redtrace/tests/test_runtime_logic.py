@@ -43,7 +43,7 @@ class FakeContainer:
 
     def exec_run(self, command: list[str]):
         self.exec_calls.append(command)
-        return SimpleNamespace(exit_code=0, output=b"route-skills initialized\n")
+        return SimpleNamespace(exit_code=0, output=b"container ready\n")
 
 
 def _manager(*, completed_action: str = "stop") -> ContainerManager:
@@ -114,25 +114,18 @@ def test_container_manager_build_exec_process_wraps_command_with_timeout() -> No
     assert process.env["TMPDIR"] == process.workdir
 
 
-def test_container_ready_initializes_route_skills_once() -> None:
+def test_container_ready_has_no_skill_bootstrap_side_effect() -> None:
     manager = _manager()
-    manager._route_skills_initialized = False
-    manager._route_skills_init_lock = threading.Lock()
     container = FakeContainer()
     manager._require_container = lambda _name: container
 
     assert manager._ready("container") == "container"
     assert manager._ready("container") == "container"
 
-    assert container.exec_calls == [
-        [
-            "bash",
-            "/opt/redtrace/claude-plugin/skills/route-skills/redtrace-tools/initialize.sh",
-        ]
-    ]
+    assert container.exec_calls == []
 
 
-def test_container_mounts_project_conversations_and_native_agent_config(
+def test_container_mounts_only_current_worker_session_and_native_config(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -156,25 +149,17 @@ def test_container_mounts_project_conversations_and_native_agent_config(
     manager._paths = paths
     manager._host_source = lambda path: path.resolve()
 
-    volumes = manager._shared_volumes("project-1")
+    volumes = manager._shared_volumes("project-1", "worker-a", "codex")
 
     workspace = paths.workspaces / "project-1"
-    conversations = workspace / ".redtrace" / "conversations"
     assert volumes[str(workspace.resolve())] == {
         "bind": "/home/kali/workspace",
         "mode": "rw",
     }
-    assert volumes[str((conversations / "claudecode").resolve())]["bind"] == (
-        "/home/kali/.claude"
-    )
-    assert volumes[str((conversations / "codex").resolve())]["bind"] == (
-        "/home/kali/.codex"
-    )
-    assert volumes[str((conversations / "pi").resolve())]["bind"] == "/home/kali/.pi"
-    assert volumes[str((home / ".claude" / "settings.json").resolve())]["bind"] == (
-        "/home/kali/.claude/settings.json"
-    )
-    assert volumes[str((home / ".claude" / "settings.json").resolve())]["mode"] == "ro"
+    session = paths.managed / "sessions" / "project-1" / "codex" / "worker-a"
+    assert volumes[str(session.resolve())]["bind"] == "/home/kali/.codex"
+    assert str((home / ".pi").resolve()) not in volumes
+    assert str((home / ".claude" / "settings.json").resolve()) not in volumes
     assert volumes[str((home / ".codex" / "config.toml").resolve())]["bind"] == (
         "/home/kali/.codex/config.toml"
     )

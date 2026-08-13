@@ -209,17 +209,13 @@ def test_shared_skill_link_recovers_after_project_move(
     assert (skill_link / "portable" / "SKILL.md").is_file()
 
 
-def test_runtime_loads_route_skills_rules_as_global_worker_instructions(
+def test_runtime_owns_global_skill_instructions(
     tmp_path: Path,
 ) -> None:
     layout = _layout(tmp_path / "redtrace")
-    route_skills = layout.skills / "route-skills"
-    route_skills.mkdir(parents=True)
-    (route_skills / "SKILL.md").write_text("# route-skills\n", encoding="utf-8")
-    (route_skills / "REDTRACE_RULES.md").write_text(
-        "automatic route rules\n",
-        encoding="utf-8",
-    )
+    skill = layout.skills / "api-security"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: api-security\ndescription: API security\n---\n", encoding="utf-8")
     layout.mcp.mkdir()
     layout.plugins.mkdir()
     worker = WorkerConfig(
@@ -232,18 +228,18 @@ def test_runtime_loads_route_skills_rules_as_global_worker_instructions(
 
     AgentRuntimeManager(layout, execution="local").initialize([worker])
 
-    assert worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"] == "automatic route rules\n"
+    assert "不存在总路由 Skill" in worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"]
+    assert "redtrace-skill recall" in worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"]
     assert worker.env["REDTRACE_TOOLS_DIR"] == str(layout.runtime / "tools")
     assert worker.env["REDTRACE_TOOLS_BIN"] == str(layout.runtime / "tools" / "bin")
     assert (layout.runtime / "tools" / "bin").is_dir()
 
 
-def test_all_native_workers_receive_and_can_invoke_route_skills(tmp_path: Path) -> None:
+def test_all_native_workers_receive_and_can_invoke_specialist_skills(tmp_path: Path) -> None:
     layout = _layout(tmp_path / "redtrace")
-    route_skills = layout.skills / "route-skills"
-    route_skills.mkdir(parents=True)
-    (route_skills / "SKILL.md").write_text("# route-skills\n", encoding="utf-8")
-    (route_skills / "REDTRACE_RULES.md").write_text("automatic\n", encoding="utf-8")
+    skill = layout.skills / "api-security"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: api-security\ndescription: API security\n---\n", encoding="utf-8")
     layout.mcp.mkdir()
     layout.plugins.mkdir()
     workers = [
@@ -258,7 +254,7 @@ def test_all_native_workers_receive_and_can_invoke_route_skills(tmp_path: Path) 
     ]
 
     AgentRuntimeManager(layout, execution="local").initialize(workers)
-    expected_path = str(route_skills.resolve())
+    expected_path = str(skill.resolve())
     claude = ClaudeCodeDriver(local=True).build_execute(
         workers[0], "prompt", "session"
     ).argv
@@ -266,9 +262,10 @@ def test_all_native_workers_receive_and_can_invoke_route_skills(tmp_path: Path) 
     pi = PiDriver(local=True).build_execute(workers[2], "prompt", None).argv
 
     assert claude[claude.index("--plugin-dir") + 1].endswith("claude-plugin")
-    assert expected_path in " ".join(codex)
+    assert json.dumps(expected_path) in " ".join(codex)
     assert pi[pi.index("--skill") + 1] == expected_path
-    assert all(worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"] == "automatic\n" for worker in workers)
+    assert all("redtrace-skill recall" in worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"] for worker in workers)
+    assert "redtrace-skill recall" in " ".join(codex)
 
 
 def test_local_runtime_auto_disables_and_recovers_mcp_with_missing_command(

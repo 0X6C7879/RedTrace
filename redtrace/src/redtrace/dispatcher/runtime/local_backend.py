@@ -10,7 +10,10 @@ import time
 from pathlib import Path
 
 from redtrace.dispatcher.config import ContextHarnessConfig, LocalConfig
-from redtrace.dispatcher.runtime.backend import is_agent_runtime_state
+from redtrace.dispatcher.runtime.backend import (
+    is_agent_runtime_state,
+    session_file_checkpoint,
+)
 from redtrace.dispatcher.runtime.local_process import LocalProcess
 from redtrace.paths import RedTracePaths, contained_path, safe_project_key
 
@@ -47,6 +50,12 @@ class LocalBackend:
             else Path(__file__).resolve().parents[5] / ".redtrace" / "runtime" / "bin"
         )
         self._tools_dir = self._runtime_bin.parent / "tools"
+        self._project_state_root = (
+            paths.projects
+            if paths is not None
+            else self._root / ".redtrace-state" / "projects"
+        )
+        self._session_root = self._project_state_root.parent / "sessions"
         self._path_prepend = tuple(
             part
             for part in os.environ.get("REDTRACE_LOCAL_PATH_PREPEND", "").split(
@@ -61,9 +70,23 @@ class LocalBackend:
     def container_name(self, project_id: str) -> str:
         return str(self._project_dir(project_id))
 
-    def ensure_running(self, project_id: str) -> str:
+    def ensure_running(
+        self,
+        project_id: str,
+        worker_name: str | None = None,
+        worker_type: str | None = None,
+    ) -> str:
         project_dir = self._project_dir(project_id)
+        marker = contained_path(
+            self._project_state_root, safe_project_key(project_id), "workspace.created"
+        )
+        if not project_dir.exists() and marker.exists():
+            raise RuntimeError(
+                f"active project workspace integrity failure: {project_dir} disappeared"
+            )
         _ensure_directory(project_dir)
+        _ensure_directory(marker.parent)
+        marker.touch(exist_ok=True)
         pi_mcp = self._runtime_bin.parent / "mcp" / "pi.json"
         if pi_mcp.is_file():
             target = project_dir / ".pi" / "mcp.json"
@@ -83,14 +106,13 @@ class LocalBackend:
         return str(project_dir)
 
     def conversation_environment(
-        self, project_id: str, worker_type: str
+        self, project_id: str, worker_type: str, worker_name: str = "default"
     ) -> dict[str, str]:
         state = contained_path(
-            self._root,
+            self._session_root,
             safe_project_key(project_id),
-            ".redtrace",
-            "conversations",
             worker_type,
+            safe_project_key(worker_name),
         )
         _ensure_directory(state)
         if worker_type == "pi":
@@ -111,6 +133,27 @@ class LocalBackend:
                     continue
                 _copy_config(source, state / source.name)
         return {variable: str(state)}
+
+    def ensure_worker_running(
+        self, project_id: str, worker_name: str, worker_type: str
+    ) -> str:
+        return self.ensure_running(project_id, worker_name, worker_type)
+
+    def worker_conversation_environment(
+        self, project_id: str, worker_type: str, worker_name: str
+    ) -> dict[str, str]:
+        return self.conversation_environment(project_id, worker_type, worker_name)
+
+    def session_checkpoint(
+        self, project_id: str, worker_type: str, worker_name: str, session_id: str
+    ) -> dict[str, object]:
+        root = contained_path(
+            self._session_root,
+            safe_project_key(project_id),
+            worker_type,
+            safe_project_key(worker_name),
+        )
+        return session_file_checkpoint(root, session_id)
 
     def build_exec_process(
         self,
@@ -212,14 +255,18 @@ class LocalBackend:
 
     def cleanup_deleted(self, project_id: str) -> bool:
         project_dir = self._project_dir(project_id)
-        if not project_dir.exists():
-            return True
-        LOG.info(
-            "removing deleted project workdir project=%s dir=%s",
-            project_id,
-            project_dir,
+        if project_dir.exists():
+            LOG.info(
+                "removing deleted project workdir project=%s dir=%s",
+                project_id,
+                project_dir,
+            )
+            shutil.rmtree(project_dir)
+        marker = contained_path(
+            self._project_state_root, safe_project_key(project_id), "workspace.created"
         )
-        shutil.rmtree(project_dir)
+        with contextlib.suppress(FileNotFoundError):
+            marker.unlink()
         return not project_dir.exists()
 
     def managed_container_names(self) -> list[str]:

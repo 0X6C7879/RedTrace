@@ -27,6 +27,10 @@ class Intent(BaseModel):
     last_heartbeat_at: str | None = None
     created_at: str
     concluded_at: str | None = None
+    failure_count: int = 0
+    failure_signature: str | None = None
+    retry_after: float | None = None
+    circuit_open: bool = False
 
     model_config = {"populate_by_name": True}
 
@@ -52,6 +56,10 @@ class ProjectMeta(BaseModel):
     bootstrap_enabled: bool
     created_at: str
     reason: ProjectReason | None = None
+    reason_failure_count: int = 0
+    reason_failure_signature: str | None = None
+    reason_retry_after: float | None = None
+    reason_circuit_open: bool = False
 
 
 class ProjectSummary(ProjectMeta):
@@ -144,6 +152,25 @@ class CreateIntentRequest(BaseModel):
 
 class HeartbeatRequest(BaseModel):
     worker: str
+
+
+class TaskOutcomeRequest(BaseModel):
+    worker: str
+    outcome: Literal[
+        "success",
+        "cancelled",
+        "heartbeat_loss",
+        "timeout",
+        "session_missing",
+        "provider_exit",
+        "contract_error",
+        "api_error",
+        "workspace_integrity",
+        "internal_error",
+        "unhealthy",
+        "rejected",
+    ]
+    detail: str = ""
 
     @field_validator("worker")
     @classmethod

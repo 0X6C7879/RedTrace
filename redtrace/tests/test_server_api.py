@@ -110,7 +110,14 @@ def test_delete_project_cascades_without_blackboard_trigger_failure(
     )
     assert intent.status_code == 201
 
-    response = client.delete(f"/projects/{project_id}")
+    confirmation = client.post(
+        f"/projects/{project_id}/deletion/confirmation"
+    ).json()["confirmationToken"]
+    response = client.request(
+        "DELETE",
+        f"/projects/{project_id}",
+        json={"confirmation_token": confirmation, "actor": "human-ui"},
+    )
 
     assert response.status_code == 202
     finalize = client.post(

@@ -97,6 +97,8 @@ class CodexDriver(RegexSessionDriver):
                     "app-server",
                     *self._long_task_args(worker),
                     *capability_args,
+                    "-c",
+                    self._custom_instructions(worker),
                 ],
                 session=session,
                 stdin=control.initial_input,
@@ -119,7 +121,7 @@ class CodexDriver(RegexSessionDriver):
                 "-c",
                 'model_reasoning_summary="detailed"',
                 "-c",
-                'custom_instructions="请始终使用中文进行思考、分析和回答。"',
+                self._custom_instructions(worker),
                 "-c",
                 f'model_providers.redtrace.base_url="{env["CODEX_BASE_URL"]}"',
                 "-c",
@@ -180,6 +182,14 @@ class CodexDriver(RegexSessionDriver):
         ):
             raise ValueError("REDTRACE_CODEX_RESOURCE_ARGS must be a JSON string array")
         return value
+
+    @staticmethod
+    def _custom_instructions(worker: WorkerConfig) -> str:
+        instructions = "请始终使用中文进行思考、分析和回答。"
+        shared = worker.env.get("REDTRACE_GLOBAL_INSTRUCTIONS", "").strip()
+        if shared:
+            instructions += "\n\n" + shared
+        return f"custom_instructions={json.dumps(instructions, ensure_ascii=False)}"
 
     @staticmethod
     def _iter_events(stdout: str) -> list[dict]:

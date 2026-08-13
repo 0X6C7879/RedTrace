@@ -23,16 +23,7 @@ logs/
 skills/.redtrace/inbox/
 skills/.redtrace/locks/
 # 白盒私有案例：不进入公开仓库，可用 REDTRACE_CODE_AUDIT_PRIVATE_CASES_DIR 提供
-skills/route-skills/upstream/skills/code-audit/references/cases/internal-cases.json
-skills/route-skills/upstream/work/
-skills/route-skills/upstream/skills/tool-index.md
-skills/route-skills/upstream/skills/tool-index.json
-skills/route-skills/upstream/skills/.redtrace-*.lock
-skills/route-skills/upstream/skills/.redtrace-*.lock.d/
-skills/route-skills/upstream/burp-mcp-full/.gradle/
-skills/route-skills/upstream/burp-mcp-full/build/
-skills/route-skills/upstream/burp-mcp-full/lib/
-skills/route-skills/upstream/skills/apk-reverse/debug.keystore
+skills/code-audit/references/cases/internal-cases.json
 data/private/
 # 迁移临时脚本
 tmp_*.ps1

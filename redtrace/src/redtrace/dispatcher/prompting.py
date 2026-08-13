@@ -84,7 +84,7 @@ def add_blackboard_guidance(
                 ),
                 (
                     "## Web 调研顺序\n\n"
-                    "Web 调研能力贯穿整个会话，不限于第一轮。首次实质操作前以及后续出现新 fingerprint、版本、报错或知识缺口时，"
+                    "Web 调研能力贯穿整个会话，不限于第一轮。首次实质操作前以及后续任一对话轮次出现新 fingerprint、版本、报错或知识缺口时，"
                     "Claude/Codex 优先使用原生 Web search/fetch，共享 `brave-search` Skill 作为 fallback；Pi 使用 `brave-search`。"
                     "保留 URL，成功的 query 不得换 provider 重复执行。"
                 ),
@@ -140,22 +140,17 @@ def add_blackboard_guidance(
                 ),
                 (
                     "Skill、MCP 和 plugin 由 RedTrace root 共享。首次实质操作前用 Worker 原生 Skill 机制发现并调用最具体的相关 Skill；"
-                    "安全任务必须先加载 `route-skills`，随后必须继续加载并执行其选出的专业 Skill，不能停在路由结果。"
-                    "优先完成 Skill 路由和必要 Web 调研，再开始通用命令探索。后续任一对话轮次若任务方向或知识缺口变化，可继续发现并加载 Skill，"
-                    "同一会话同时启用最多 5 个：一个主 Skill，按实际缺口补充辅助 Skill；不得重复读取路由规则或已加载 Skill。"
+                    "直接加载专业 Skill，不调用 Router、通配符或目录占位名。优先完成原生 Skill 选择和必要 Web 调研，再开始通用命令探索。"
+                    "后续若任务方向或知识缺口变化，可继续发现并加载 Skill；同时启用最多 5 个且不得重复加载。"
                     "未完成专业 Skill 的规定步骤前，不得退回纯手写 curl/python/bash 流程。"
                 ),
             ]
         )
     sections.append(
-        "## route-skills 原生经验回写\n\n"
-        "安全任务结束前按 `route-skills` 的 field-journal 规则完成一次复盘。只有产生已验证且可复用的新经验时，"
-        "先在 Workspace 写脱敏 draft，再调用 `$REDTRACE_SKILLS_DIR/route-skills/redtrace-tools/field-journal/write.py` 的"
-        " `--slug --summary --keywords --entry-file` 接口事务写入；不得直接修改共享 `_index.md`。"
-        "白盒代码审计产生的可复用经验改为调用 `$REDTRACE_SKILLS_DIR/route-skills/redtrace-tools/code-audit/evolve.py` 写入"
-        " `code-audit/learned/`；项目事实只写当前任务 Workspace 的 `.redtrace/code-audit/`，不进入全局 Skill。"
-        "必须脱敏，不得写 target、credential、flag、secret 或 Workspace 绝对路径。没有可复用经验则不写。"
-        "不得提交 RedTrace evolution proposal、调用额外 model、等待后台治理或启动独立验证任务。"
+        "## Skill 学习闭环\n\n"
+        "加载专业 Skill 后运行一次 `redtrace-skill recall <canonical-id>`。任务结束前只有产生已验证、可复用且非项目事实的新经验时，"
+        "才在 Workspace 写脱敏说明并调用 `redtrace-skill learn <canonical-id> --summary <摘要> --evidence <验证依据> --content-file <文件>`。"
+        "RedTrace Core 负责锁、脱敏、去重、原子写入、索引和审计；没有新经验就不写。"
     )
     guidance = prompt.rstrip() + "\n\n" + "\n\n".join(sections)
     if local_execution and os.name == "nt":

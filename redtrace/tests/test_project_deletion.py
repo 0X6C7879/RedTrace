@@ -33,6 +33,21 @@ def _create_project(client: TestClient) -> str:
     return response.json()["project"]["id"]
 
 
+def _delete(client: TestClient, project_id: str):
+    confirmation = client.post(
+        f"/projects/{project_id}/deletion/confirmation"
+    )
+    assert confirmation.status_code == 200
+    return client.request(
+        "DELETE",
+        f"/projects/{project_id}",
+        json={
+            "confirmation_token": confirmation.json()["confirmationToken"],
+            "actor": "human-ui",
+        },
+    )
+
+
 def test_deletion_failure_is_visible_and_retry_finishes_cleanup(
     client: TestClient,
     tmp_path: Path,
@@ -133,7 +148,8 @@ def test_deletion_failure_is_visible_and_retry_finishes_cleanup(
                 (project_id, resource_id, utcnow()),
             )
 
-    assert client.delete(f"/projects/{project_id}").status_code == 202
+    assert client.delete(f"/projects/{project_id}").status_code == 403
+    assert _delete(client, project_id).status_code == 202
     failed = client.post(
         f"/projects/{project_id}/deletion/runtime-cleaned",
         json={"success": False, "error": "container still running"},
@@ -144,7 +160,7 @@ def test_deletion_failure_is_visible_and_retry_finishes_cleanup(
     assert "container still running" in status["last_error"]
     assert client.get(f"/projects/{project_id}").status_code == 200
 
-    assert client.delete(f"/projects/{project_id}").status_code == 202
+    assert _delete(client, project_id).status_code == 202
     assert client.get(f"/projects/{project_id}/deletion").json()["state"] == "pending"
     completed = client.post(
         f"/projects/{project_id}/deletion/runtime-cleaned",
@@ -176,6 +192,61 @@ def test_deletion_failure_is_visible_and_retry_finishes_cleanup(
             "SELECT 1 FROM resource_audit_events WHERE resource_id = 'file-drop'"
         ).fetchone() is None
     assert conversation_marker.encode() not in (tmp_path / "redtrace.db").read_bytes()
+
+
+def test_delete_confirmation_is_single_use(client: TestClient) -> None:
+    project_id = _create_project(client)
+    confirmation = client.post(
+        f"/projects/{project_id}/deletion/confirmation"
+    ).json()["confirmationToken"]
+    body = {"confirmation_token": confirmation, "actor": "human-ui"}
+
+    assert client.request("DELETE", f"/projects/{project_id}", json=body).status_code == 202
+    assert client.request("DELETE", f"/projects/{project_id}", json=body).status_code == 403
+
+
+def test_intent_retry_budget_persists_and_opens_circuit(client: TestClient) -> None:
+    project_id = _create_project(client)
+    intent = client.post(
+        f"/projects/{project_id}/intents",
+        json={
+            "from": ["origin"],
+            "description": "deterministic failure",
+            "creator": "reasoner",
+            "worker": None,
+        },
+    ).json()
+    path = f"/projects/{project_id}/intents/{intent['id']}/outcome"
+
+    for count in (1, 2):
+        response = client.post(
+            path, json={"worker": "pi", "outcome": "contract_error"}
+        )
+        assert response.json()["failureCount"] == count
+        assert response.json()["circuitOpen"] is False
+    response = client.post(
+        path, json={"worker": "pi", "outcome": "contract_error"}
+    )
+
+    assert response.json()["circuitOpen"] is True
+    detail = client.get(f"/projects/{project_id}").json()
+    failed = next(item for item in detail["intents"] if item["id"] == intent["id"])
+    assert failed["circuit_open"] is True
+    assert failed["to"] is not None
+
+
+def test_reason_retry_budget_stops_project(client: TestClient) -> None:
+    project_id = _create_project(client)
+    path = f"/projects/{project_id}/reason/outcome"
+    for _ in range(3):
+        response = client.post(
+            path, json={"worker": "reasoner", "outcome": "timeout"}
+        )
+
+    assert response.json()["circuitOpen"] is True
+    project = client.get(f"/projects/{project_id}").json()["project"]
+    assert project["status"] == "stopped"
+    assert project["reason_circuit_open"] is True
 
 
 def test_local_workspace_delete_is_idempotent_and_confined(tmp_path: Path) -> None:
@@ -218,7 +289,7 @@ def test_deletion_refuses_linked_project_root(
     monkeypatch.setenv("REDTRACE_WORKSPACE_ROOT", str(root / "workspaces"))
     monkeypatch.setenv("REDTRACE_AUDIT_ROOT", str(managed / "audit"))
 
-    assert client.delete(f"/projects/{project_id}").status_code == 202
+    assert _delete(client, project_id).status_code == 202
     response = client.post(
         f"/projects/{project_id}/deletion/runtime-cleaned",
         json={"success": True},
@@ -242,7 +313,11 @@ def test_repeated_delete_repairs_orphaned_deletion_marker(client: TestClient) ->
             (utcnow(), utcnow()),
         )
 
-    assert client.delete("/projects/proj_missing").status_code == 204
+    assert client.request(
+        "DELETE",
+        "/projects/proj_missing",
+        json={"confirmation_token": "unused", "actor": "human-ui"},
+    ).status_code == 204
     with db.get_conn() as conn:
         assert conn.execute(
             "SELECT 1 FROM project_deletions WHERE project_id = 'proj_missing'"

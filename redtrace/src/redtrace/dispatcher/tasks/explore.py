@@ -23,8 +23,12 @@ from redtrace.dispatcher.tasks.common import (
     cancel_reason,
     did_timeout,
     preflight_worker,
-    preview,
+    exception_failure_outcome,
+    ensure_worker_running,
     project_allows_conclude_fallback,
+    preview,
+    process_failure_outcome,
+    record_session_checkpoint,
     run_worker_process,
     write_conclude_result,
     write_graph_snapshot_reference,
@@ -57,7 +61,9 @@ def run_explore_task(
     inbox: BlackboardInbox | None = None
     lease.start()
     try:
-        container_name = container_manager.ensure_running(project.project.id)
+        container_name = ensure_worker_running(
+            container_manager, project.project.id, worker
+        )
 
         early_result = preflight_worker(
             config,
@@ -133,6 +139,16 @@ def run_explore_task(
             inbox=inbox,
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
+        session = driver.extract_session(session, first.stdout, first.stderr)
+        record_session_checkpoint(
+            client,
+            container_manager,
+            project.project.id,
+            intent.id,
+            worker,
+            session,
+            "execute_end",
+        )
         cancelled = cancel_reason(first, cancellation)
         if cancelled is not None:
             LOG.info(
@@ -155,7 +171,7 @@ def run_explore_task(
                 execute_ms,
             )
             best_effort_release(client, project.project.id, intent.id, worker.name)
-            return "failed"
+            return "heartbeat_loss"
         if not did_timeout(first) and first.returncode == 0:
             try:
                 model_output = driver.extract_response_text(first.stdout, first.stderr)
@@ -224,6 +240,7 @@ def run_explore_task(
                         "确认 snapshot 中出现 Resource ID 后，只返回符合原 explore schema 的 raw JSON，"
                         "description 必须包含该 ID。不要重新利用漏洞。"
                     ),
+                    fallback_description=description,
                 )
             return write_conclude_result(
                 client,
@@ -273,8 +290,8 @@ def run_explore_task(
             preview(first.stderr),
         )
         best_effort_release(client, project.project.id, intent.id, worker.name)
-        return "failed"
-    except Exception:
+        return process_failure_outcome(first)
+    except Exception as exc:
         LOG.exception(
             "explore task crashed project=%s intent=%s worker=%s",
             project.project.id,
@@ -282,7 +299,7 @@ def run_explore_task(
             worker.name,
         )
         best_effort_release(client, project.project.id, intent.id, worker.name)
-        return "failed"
+        return exception_failure_outcome(exc)
     finally:
         if inbox is not None:
             inbox.stop()
@@ -304,6 +321,7 @@ def _try_conclude_fallback(
     cancellation: TaskCancellation,
     inbox: BlackboardInbox | None = None,
     correction_prompt: str | None = None,
+    fallback_description: str | None = None,
 ) -> str:
     if not driver.supports_conclude() or not session:
         LOG.info(
@@ -314,8 +332,18 @@ def _try_conclude_fallback(
             driver.supports_conclude(),
             bool(session),
         )
+        if fallback_description is not None:
+            return write_conclude_result(
+                client,
+                project_id,
+                intent.id,
+                worker.name,
+                _resource_commit_failure(fallback_description),
+                source="explore_resource_commit",
+                phase_ms=0,
+            )
         best_effort_release(client, project_id, intent.id, worker.name)
-        return "failed"
+        return "contract_error"
     if lease.failure is not None:
         LOG.warning(
             "conclude fallback skipped because heartbeat already lost project=%s intent=%s worker=%s",
@@ -324,7 +352,7 @@ def _try_conclude_fallback(
             worker.name,
         )
         best_effort_release(client, project_id, intent.id, worker.name)
-        return "failed"
+        return "heartbeat_loss"
     if cancellation.is_cancelled:
         LOG.info(
             "conclude fallback skipped because task was cancelled project=%s intent=%s worker=%s reason=%s",
@@ -343,9 +371,18 @@ def _try_conclude_fallback(
         intent_id=intent.id,
     ):
         best_effort_release(client, project_id, intent.id, worker.name)
-        return "failed"
+        return "cancelled"
 
-    container_name = container_manager.ensure_running(project_id)
+    container_name = ensure_worker_running(container_manager, project_id, worker)
+    record_session_checkpoint(
+        client,
+        container_manager,
+        project_id,
+        intent.id,
+        worker,
+        session,
+        "resume_start",
+    )
 
     prompt = correction_prompt or render_prompt(
         load_prompt(config.runtime.prompt_group, "explore_conclude.md"),
@@ -394,7 +431,7 @@ def _try_conclude_fallback(
         return "cancelled"
     if lease.failure is not None:
         best_effort_release(client, project_id, intent.id, worker.name)
-        return "failed"
+        return "heartbeat_loss"
     if result.timed_out or result.returncode != 0:
         LOG.warning(
             "conclude failed project=%s intent=%s worker=%s code=%s timed_out=%s conclude_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -408,7 +445,7 @@ def _try_conclude_fallback(
             preview(result.stderr),
         )
         best_effort_release(client, project_id, intent.id, worker.name)
-        return "failed"
+        return process_failure_outcome(result)
     try:
         model_output = driver.extract_response_text(result.stdout, result.stderr)
         payload = parse_json_output(model_output)
@@ -425,7 +462,7 @@ def _try_conclude_fallback(
             preview(result.stderr),
         )
         best_effort_release(client, project_id, intent.id, worker.name)
-        return "failed"
+        return "contract_error"
     if kind == "rejected":
         LOG.warning(
             "conclude rejected project=%s intent=%s worker=%s conclude_ms=%s stdout_preview=%s",
@@ -447,8 +484,15 @@ def _try_conclude_fallback(
             intent.id,
             worker.name,
         )
-        best_effort_release(client, project_id, intent.id, worker.name)
-        return "failed"
+        return write_conclude_result(
+            client,
+            project_id,
+            intent.id,
+            worker.name,
+            _resource_commit_failure(fallback_description or description),
+            source="explore_resource_commit",
+            phase_ms=conclude_ms,
+        )
     return write_conclude_result(
         client,
         project_id,
@@ -467,20 +511,32 @@ def _attach_access_resource_ids(
     worker_name: str,
     description: str,
 ) -> tuple[str, bool]:
-    if not _ACCESS_CHANNEL.search(description) or _ACCESS_RESOURCE_ID.search(description):
+    if not _ACCESS_CHANNEL.search(description):
         return description, True
-    ids = [
-        str(resource["id"])
+    ids = {
+        str(resource["id"]).lower(): str(resource["id"])
         for resource in client.resource_snapshot(project_id)
         if isinstance(resource, dict)
-        and resource.get("intent_id") == intent_id
-        and resource.get("worker") == worker_name
         and resource.get("kind") in {"webshell", "c2_session"}
         and _ACCESS_RESOURCE_ID.fullmatch(str(resource.get("id", "")))
-    ]
+        and resource.get("status", "available") not in {"closed", "deleted"}
+    }
+    cited = {
+        resource_id.lower() for resource_id in _ACCESS_RESOURCE_ID.findall(description)
+    }
+    if cited:
+        return description, bool(cited & ids.keys())
     if not ids:
         return description, False
-    return f"{description.rstrip()}\nShared Resource IDs: {', '.join(ids)}", True
+    return f"{description.rstrip()}\nShared Resource IDs: {', '.join(sorted(ids.values()))}", True
+
+
+def _resource_commit_failure(description: str) -> str:
+    return (
+        "Execution result preserved; shared access Resource registration failed. "
+        "Do not repeat exploitation—repair only the Resource record.\n"
+        + description.strip()
+    )
 
 
 def _run_process(

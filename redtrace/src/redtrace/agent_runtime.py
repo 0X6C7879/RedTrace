@@ -20,11 +20,13 @@ from redtrace.capabilities import (
 from redtrace.config_secrets import atomic_write_text
 from redtrace.dispatcher.config import WorkerConfig
 from redtrace.paths import RedTracePaths
+from redtrace.skill_runtime import SKILL_RUNTIME_INSTRUCTIONS
 
 _CLI_SOURCES = {
     "redtrace-blackboard": "blackboard_cli.py",
     "redtrace-resource": "resource_cli.py",
     "redtrace-context": "context_cli.py",
+    "redtrace-skill": "skill_cli.py",
 }
 
 LOG = logging.getLogger(__name__)
@@ -48,12 +50,13 @@ class AgentRuntimeManager:
         self._shared_initialized = False
         self._skill_paths_cache: list[Path] = []
         self._mcp_args_cache: list[str] = []
-        self._global_instructions_cache = ""
+        self._global_instructions_cache = SKILL_RUNTIME_INSTRUCTIONS
         self._capability_signature_cache: tuple[int, ...] | None = None
 
     def initialize(self, workers: list[WorkerConfig]) -> None:
         if not self._shared_initialized:
             self._store.ensure()
+            self._ensure_skill_memory()
             for directory in (
                 self.runtime / "bin",
                 self.runtime / "tools" / "bin",
@@ -87,11 +90,14 @@ class AgentRuntimeManager:
         self._write_shared_runtime(mcp_records)
         self._mcp_args_cache = codex_mcp_overrides(mcp_records)
         self._skill_paths_cache = self._enabled_skill_paths()
-        self._global_instructions_cache = self._load_global_instructions(
-            self._skill_paths_cache
-        )
         self._capability_signature_cache = self._capability_signature()
         return True
+
+    def _ensure_skill_memory(self) -> None:
+        target = self.paths.skills / ".redtrace" / "learning" / "legacy"
+        source = self.paths.root / "redtrace" / "skill-memory" / "legacy"
+        if not target.exists() and source.is_dir():
+            shutil.copytree(source, target)
 
     def _sync_mcp_command_availability(
         self, records: list[McpRecord]
@@ -147,7 +153,6 @@ class AgentRuntimeManager:
         watched = (
             self.paths.skills,
             self.paths.skills / ".redtrace" / "audit.jsonl",
-            self.paths.skills / "route-skills" / "REDTRACE_RULES.md",
             self.paths.mcp,
         )
         return tuple(
@@ -191,14 +196,6 @@ class AgentRuntimeManager:
                     pass
             paths.append(directory.resolve())
         return paths
-
-    @staticmethod
-    def _load_global_instructions(skill_paths: list[Path]) -> str:
-        for skill_path in skill_paths:
-            rules = skill_path / "REDTRACE_RULES.md"
-            if rules.is_file():
-                return rules.read_text(encoding="utf-8")
-        return ""
 
     def _initialize_worker(
         self,
@@ -252,6 +249,11 @@ class AgentRuntimeManager:
                     runtime / "pi" / "redtrace-provider.js"
                 ),
                 "REDTRACE_SKILL_PATHS": json.dumps(skills),
+                "REDTRACE_SKILL_MEMORY_DIR": (
+                    str(self.paths.skills / ".redtrace" / "learning")
+                    if self.execution == "local"
+                    else "/opt/redtrace/claude-plugin/skills/.redtrace/learning"
+                ),
                 "REDTRACE_CODEX_RESOURCE_ARGS": json.dumps(resource_args),
             }
         )

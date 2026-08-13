@@ -49,6 +49,74 @@ def did_timeout(result: ProcessResult) -> bool:
     )
 
 
+def process_failure_outcome(result: ProcessResult) -> str:
+    if did_timeout(result):
+        return "timeout"
+    text = f"{result.stdout}\n{result.stderr}".lower()
+    if "no session found" in text or "session not found" in text:
+        return "session_missing"
+    return "provider_exit"
+
+
+def exception_failure_outcome(exc: Exception) -> str:
+    text = str(exc).lower()
+    if "workspace integrity failure" in text:
+        return "workspace_integrity"
+    if "session" in text and ("missing" in text or "not found" in text):
+        return "session_missing"
+    return "internal_error"
+
+
+def record_session_checkpoint(
+    client: CairnClient,
+    container_manager: ContainerManager,
+    project_id: str,
+    intent_id: str | None,
+    worker: WorkerConfig,
+    session_id: str | None,
+    stage: str,
+) -> dict[str, object] | None:
+    if worker.type != "pi" or not session_id:
+        return None
+    inspect = getattr(container_manager, "session_checkpoint", None)
+    publish = getattr(client, "record_session_checkpoint", None)
+    if not callable(inspect) or not callable(publish):
+        return None
+    try:
+        checkpoint = inspect(project_id, worker.type, worker.name, session_id)
+        publish(
+            {
+                "project_id": project_id,
+                "intent_id": intent_id,
+                "worker": worker.name,
+                "provider": worker.type,
+                "session_id": session_id,
+                "stage": stage,
+                **checkpoint,
+            }
+        )
+        return checkpoint
+    except Exception:
+        LOG.warning(
+            "session checkpoint publish failed project=%s worker=%s session=%s stage=%s",
+            project_id,
+            worker.name,
+            session_id,
+            stage,
+            exc_info=True,
+        )
+        return None
+
+
+def ensure_worker_running(
+    container_manager: ContainerManager, project_id: str, worker: WorkerConfig
+) -> str:
+    ensure = getattr(container_manager, "ensure_worker_running", None)
+    if callable(ensure):
+        return ensure(project_id, worker.name, worker.type)
+    return container_manager.ensure_running(project_id)
+
+
 def cancel_reason(
     result: ProcessResult, cancellation: TaskCancellation | None = None
 ) -> str | None:
@@ -393,8 +461,13 @@ def run_worker_process(
     )
     process_env = dict(worker.env)
     if project_id is not None:
+        environment = getattr(
+            container_manager, "worker_conversation_environment", None
+        )
         process_env.update(
-            container_manager.conversation_environment(project_id, worker.type)
+            environment(project_id, worker.type, worker.name)
+            if callable(environment)
+            else container_manager.conversation_environment(project_id, worker.type)
         )
     if worker.context_length is not None:
         if worker.type == "claudecode":
@@ -655,7 +728,7 @@ def write_conclude_result_with_fact_id(
             response.text,
         )
     best_effort_release(client, project_id, intent_id, worker_name)
-    return ConcludeWriteResult(status="failed", fact_id=None)
+    return ConcludeWriteResult(status="api_error", fact_id=None)
 
 
 def best_effort_release(

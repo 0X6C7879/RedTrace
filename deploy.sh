@@ -31,18 +31,17 @@ fi
 REDTRACE_PLAINTEXT_SECRETS="${REDTRACE_PLAINTEXT_SECRETS:-$DEFAULT_PLAINTEXT_SECRETS}"
 export REDTRACE_PLAINTEXT_SECRETS
 BRAVE_SKILL_DIR="$PROJECT_DIR/skills/brave-search"
-GHIDRA_SKILL_DIR="$PROJECT_DIR/skills/route-skills/redtrace-tools/ghidra-headless"
+GHIDRA_SKILL_DIR="$PROJECT_DIR/skills/ghidra-reverse"
 PLAYWRIGHT_SKILL_DIR="$PROJECT_DIR/skills/playwright"
 GHIDRA_INSTALL_DIR="${REDTRACE_GHIDRA_HOME:-$PROJECT_DIR/.redtrace/runtime/ghidra}"
 RSACTFTOOL_VENV="${REDTRACE_RSACTFTOOL_VENV:-$PROJECT_DIR/.redtrace/runtime/rsactftool}"
 QILING_VENV="${REDTRACE_QILING_VENV:-$PROJECT_DIR/.redtrace/runtime/qiling}"
-QILING_WRAPPER="$PROJECT_DIR/skills/route-skills/redtrace-tools/qiling/qiling-python"
+QILING_WRAPPER="$PROJECT_DIR/skills/reverse-engineering/scripts/qiling-python"
 export REDTRACE_QILING_VENV="$QILING_VENV"
 NUCLEI_VERSION="${REDTRACE_NUCLEI_VERSION:-3.11.0}"
 CODEGRAPH_VERSION="${REDTRACE_CODEGRAPH_VERSION:-1.5.0}"
 RSACTFTOOL_REVISION="${REDTRACE_RSACTFTOOL_REVISION:-7c98848f1945de3e67a420871e8672f5ad9aa5d5}"
 CTF_TOOL_INSTALLER="$PROJECT_DIR/install-security-toolchain.sh"
-ROUTE_SKILLS_INITIALIZER="$PROJECT_DIR/skills/route-skills/redtrace-tools/initialize.sh"
 JAVA_INSTALL_DIR="${REDTRACE_JAVA_HOME:-$PROJECT_DIR/.redtrace/runtime/temurin-21}"
 DISTRO_ID=""
 PACKAGE_MANAGER=""
@@ -542,15 +541,15 @@ PY
 
 ensure_ghidra_headless_skill() {
   local java_home java_major analyze_headless
-  [[ -f "$PROJECT_DIR/skills/route-skills/SKILL.md" ]] \
-    || die "route-skills SKILL.md is missing"
-  [[ -f "$GHIDRA_SKILL_DIR/scripts/ghidra-analyze.sh" ]] \
+  [[ -f "$GHIDRA_SKILL_DIR/SKILL.md" ]] \
+    || die "ghidra-reverse SKILL.md is missing"
+  [[ -f "$GHIDRA_SKILL_DIR/scripts/headless/ghidra-analyze.sh" ]] \
     || die "ghidra-headless wrapper is missing"
-  [[ -f "$GHIDRA_SKILL_DIR/scripts/ghidra_scripts/ExportAll.java" ]] \
+  [[ -f "$GHIDRA_SKILL_DIR/scripts/headless/ghidra_scripts/ExportAll.java" ]] \
     || die "ghidra-headless export scripts are missing"
   chmod +x \
-    "$GHIDRA_SKILL_DIR/scripts/find-ghidra.sh" \
-    "$GHIDRA_SKILL_DIR/scripts/ghidra-analyze.sh"
+    "$GHIDRA_SKILL_DIR/scripts/headless/find-ghidra.sh" \
+    "$GHIDRA_SKILL_DIR/scripts/headless/ghidra-analyze.sh"
 
   if [[ "$OS" == "Darwin" ]]; then
     java_home="$(brew --prefix openjdk@21)/libexec/openjdk.jdk/Contents/Home"
@@ -562,11 +561,11 @@ ensure_ghidra_headless_skill() {
   [[ "$java_major" =~ ^[0-9]+$ ]] && ((java_major >= 21)) \
     || die "Ghidra requires OpenJDK 21 or newer; detected: ${java_major:-unknown}"
 
-  if ! analyze_headless="$("$GHIDRA_SKILL_DIR/scripts/find-ghidra.sh" 2>/dev/null)"; then
+  if ! analyze_headless="$("$GHIDRA_SKILL_DIR/scripts/headless/find-ghidra.sh" 2>/dev/null)"; then
     [[ "$OS" == "Linux" ]] || die "Homebrew Ghidra installation is missing"
     install_ghidra_release
     export GHIDRA_HOME="$GHIDRA_INSTALL_DIR"
-    analyze_headless="$("$GHIDRA_SKILL_DIR/scripts/find-ghidra.sh")"
+    analyze_headless="$("$GHIDRA_SKILL_DIR/scripts/headless/find-ghidra.sh")"
   fi
   [[ -x "$analyze_headless" ]] || die "Ghidra analyzeHeadless is not executable"
   export GHIDRA_HOME
@@ -1091,10 +1090,6 @@ if [[ "${REDTRACE_SKIP_OPTIONAL_TOOLS:-0}" != "1" ]]; then
 else
   log "skipping optional Python and Ruby security tools"
 fi
-
-[[ -x "$ROUTE_SKILLS_INITIALIZER" ]] || die "route-skills initializer is missing or not executable"
-log "installing route-skills runtime dependencies and generating tool index"
-bash "$ROUTE_SKILLS_INITIALIZER"
 
 log "syncing RedTrace Python environment"
 if ! UV_INDEX_URL="$PYPI_INDEX" uv sync --frozen --project "$PROJECT_DIR/redtrace"; then

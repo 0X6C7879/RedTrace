@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import logging
 import os
+import hashlib
+import secrets
 import shutil
+import time
 from pathlib import Path
 
 from redtrace.audit import AUDIT_ROOT
@@ -22,12 +25,45 @@ DURABLE_RESOURCE_KINDS = {
     "c2_profile",
     "credential_ref",
 }
+DELETE_CONFIRMATION_TTL_SECONDS = 60
 
 
-def request_deletion(project_id: str) -> str:
+def issue_deletion_confirmation(project_id: str, actor: str = "human-ui") -> str:
+    safe_project_key(project_id)
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    now = utcnow()
+    with db.get_conn(immediate=True) as conn:
+        if conn.execute(
+            "SELECT 1 FROM projects WHERE id = ?", (project_id,)
+        ).fetchone() is None:
+            return ""
+        conn.execute(
+            "DELETE FROM project_delete_authorizations WHERE expires_at < ? OR used_at IS NOT NULL",
+            (time.time(),),
+        )
+        conn.execute(
+            """
+            INSERT INTO project_delete_authorizations (
+                token_hash, project_id, actor, expires_at, created_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (token_hash, project_id, actor, time.time() + DELETE_CONFIRMATION_TTL_SECONDS, now),
+        )
+    return token
+
+
+def request_deletion(
+    project_id: str,
+    *,
+    confirmation_token: str,
+    actor: str = "human-ui",
+    source: str = "web-ui",
+) -> str:
     safe_project_key(project_id)
     now = utcnow()
-    with db.get_conn() as conn:
+    token_hash = hashlib.sha256(confirmation_token.encode()).hexdigest()
+    with db.get_conn(immediate=True) as conn:
         project = conn.execute(
             "SELECT status FROM projects WHERE id = ?",
             (project_id,),
@@ -43,18 +79,42 @@ def request_deletion(project_id: str) -> str:
                     (project_id,),
                 )
             return "missing"
+        authorization = conn.execute(
+            """
+            SELECT actor FROM project_delete_authorizations
+            WHERE token_hash = ? AND project_id = ? AND used_at IS NULL AND expires_at >= ?
+            """,
+            (token_hash, project_id, time.time()),
+        ).fetchone()
+        if authorization is None or authorization["actor"] != actor:
+            return "unauthorized"
+        conn.execute(
+            "UPDATE project_delete_authorizations SET used_at = ? WHERE token_hash = ?",
+            (now, token_hash),
+        )
         conn.execute(
             """
             INSERT INTO project_deletions (
-                project_id, state, attempts, requested_at, updated_at, last_error
-            ) VALUES (?, 'pending', 1, ?, ?, NULL)
+                project_id, state, attempts, requested_at, updated_at, last_error,
+                actor, source
+            ) VALUES (?, 'pending', 1, ?, ?, NULL, ?, ?)
             ON CONFLICT(project_id) DO UPDATE SET
                 state = 'pending',
                 attempts = project_deletions.attempts + 1,
                 updated_at = excluded.updated_at,
-                last_error = NULL
+                last_error = NULL,
+                actor = excluded.actor,
+                source = excluded.source
             """,
-            (project_id, now, now),
+            (project_id, now, now, actor, source),
+        )
+        conn.execute(
+            """
+            INSERT INTO project_lifecycle_events (
+                project_id, action, actor, source, created_at
+            ) VALUES (?, 'delete.requested', ?, ?, ?)
+            """,
+            (project_id, actor, source, now),
         )
         conn.execute(
             """
@@ -175,6 +235,7 @@ def _cleanup_project_files(project_id: str) -> None:
     targets = {
         contained_path(managed, "projects", project_id),
         contained_path(managed, "log", "projects", project_id),
+        contained_path(managed, "sessions", project_id),
         contained_path(workspaces, project_id),
         contained_path(audit, project_id),
         contained_path(AUDIT_ROOT, project_id),

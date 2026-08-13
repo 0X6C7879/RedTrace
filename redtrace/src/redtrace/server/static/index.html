@@ -2479,7 +2479,11 @@ function redtraceApp() {
       if (!projectId || this.isDeletingProject) return;
       try {
         this.isDeletingProject = true;
-        await this.api('DELETE', `/projects/${projectId}`);
+        const confirmation = await this.api('POST', `/projects/${projectId}/deletion/confirmation`);
+        await this.api('DELETE', `/projects/${projectId}`, {
+          confirmation_token: confirmation.confirmationToken,
+          actor: 'human-ui',
+        });
         let deletionComplete = false;
         for (let attempt = 0; attempt < 240; attempt += 1) {
           await new Promise(resolve => setTimeout(resolve, 500));

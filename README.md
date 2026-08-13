@@ -237,7 +237,7 @@ Context Harness 会把完整输出保存到 `.redtrace/artifacts/context`，同�
 | `redtrace/src/redtrace/board/` | Project、Fact、Intent、Hint 的领域模型与存储访问 |
 | `redtrace/src/redtrace/capabilities.py` | Skill/MCP 能力发现、启停、版本与 Workspace 物化 |
 | `redtrace/src/redtrace/worker_config.py` | Worker 配置服务、连接测试和原生 CLI 配置同步 |
-| `skills/` | 多 Worker 共享 Skill；`route-skills` 提供安全研究能力路由 |
+| `skills/` | 多 Worker 共享的一级原生 Skill；由 Claude/Codex/Pi 按需直接加载 |
 | `mcp/` | 共享 MCP 配置与服务入口 |
 | `plugins/` | 外部插件清单、浏览器扩展和 Burp Suite 扩展 |
 | `container/` | Worker 容器镜像与运行资产 |

@@ -17,7 +17,7 @@ set -Eeuo pipefail
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="$PROJECT_DIR/.redtrace/runtime"
 BIN_DIR="$RUNTIME_DIR/bin"
-QILING_WRAPPER="$PROJECT_DIR/skills/route-skills/redtrace-tools/qiling/qiling-python"
+QILING_WRAPPER="$PROJECT_DIR/skills/reverse-engineering/scripts/qiling-python"
 DRY_RUN=false
 FORCE=false
 MODE=""

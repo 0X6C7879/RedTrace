@@ -7,6 +7,7 @@ from redtrace.dispatcher.audit import (
     AUDIT_BATCH_SIZE,
     AUDIT_FLUSH_INTERVAL_SECONDS,
     AuditPublisher,
+    _enrich_tool_event,
     normalize_event,
 )
 from redtrace.dispatcher.config import WorkerConfig
@@ -313,7 +314,7 @@ def test_claude_skill_event_keeps_only_the_skill_name(tmp_path: Path) -> None:
                 "index": 0,
                 "delta": {
                     "type": "input_json_delta",
-                    "partial_json": '{"skill":"route-skills"}',
+                    "partial_json": '{"skill":"api-security"}',
                 },
             },
         },
@@ -348,7 +349,7 @@ def test_claude_skill_event_keeps_only_the_skill_name(tmp_path: Path) -> None:
         "skill.started",
         "skill.completed",
     ]
-    assert all(event["skill_name"] == "route-skills" for event in skill_events)
+    assert all(event["skill_name"] == "api-security" for event in skill_events)
     assert all("arguments" not in event for event in skill_events)
     assert all("content" not in event for event in skill_events)
 
@@ -373,7 +374,7 @@ def test_codex_skill_read_command_keeps_only_the_skill_name(tmp_path: Path) -> N
         str(tmp_path),
         "prompt",
     )
-    command = "rtk read /workspace/.codex/skills/route-skills/SKILL.md"
+    command = "rtk read /workspace/.codex/skills/api-security/SKILL.md"
     for payload in (
         {
             "type": "item.started",
@@ -408,7 +409,7 @@ def test_codex_skill_read_command_keeps_only_the_skill_name(tmp_path: Path) -> N
         "skill.started",
         "skill.completed",
     ]
-    assert all(event["skill_name"] == "route-skills" for event in skill_events)
+    assert all(event["skill_name"] == "api-security" for event in skill_events)
     assert all("command" not in event for event in skill_events)
     assert all("content" not in event for event in skill_events)
 
@@ -438,7 +439,9 @@ def test_pi_skill_read_keeps_only_the_skill_name(tmp_path: Path) -> None:
             "type": "tool_execution_start",
             "toolName": "read",
             "toolCallId": "skill-1",
-            "args": {"path": "/workspace/.agents/skills/route-skills/SKILL.md"},
+            "args": {
+                "path": "/workspace/.agents/skills/api-security/SKILL.md"
+            },
         },
         {
             "type": "tool_execution_end",
@@ -462,7 +465,7 @@ def test_pi_skill_read_keeps_only_the_skill_name(tmp_path: Path) -> None:
         "skill.started",
         "skill.completed",
     ]
-    assert all(event["skill_name"] == "route-skills" for event in skill_events)
+    assert all(event["skill_name"] == "api-security" for event in skill_events)
     assert all("arguments" not in event for event in skill_events)
     assert all("content" not in event for event in skill_events)
 
@@ -538,6 +541,29 @@ def test_static_audit_hides_claude_skill_plugin_namespace() -> None:
     assert "['tool.started', 'tool.completed'].includes(event.kind)" in audit
     assert "(?:launching|loading)\\s+skill:" in audit
     assert "/static/audit.js?v=20260813-infinite-scroll-1" in index
+
+
+def test_invalid_skill_placeholders_are_not_rendered_as_skill_events() -> None:
+    for value in ("", "*", "all", "skills", "未知技能"):
+        event = {
+            "kind": "tool.started",
+            "title": "Skill",
+            "arguments": {"skill": value},
+        }
+        enriched = _enrich_tool_event(event, {})
+        assert enriched["kind"] == "tool.started"
+        assert "skill_name" not in enriched
+
+
+def test_plugin_skill_ids_are_canonicalized() -> None:
+    event = {
+        "kind": "tool.started",
+        "title": "Skill",
+        "arguments": {"skill": "redtrace-capabilities:api-security"},
+    }
+    enriched = _enrich_tool_event(event, {})
+    assert enriched["kind"] == "skill.started"
+    assert enriched["skill_name"] == "api-security"
 
 
 def test_static_audit_batches_frames_and_bounds_live_history() -> None:

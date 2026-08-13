@@ -22,17 +22,19 @@ MANIFEST_PATH = ".redtrace/capabilities.json"
 BLACKBOARD_CLI_PATH = ".redtrace/bin/redtrace-blackboard"
 RESOURCE_CLI_PATH = ".redtrace/bin/redtrace-resource"
 CONTEXT_CLI_PATH = ".redtrace/bin/redtrace-context"
+SKILL_CLI_PATH = ".redtrace/bin/redtrace-skill"
 WORKSPACE_CLI_PATHS = {
     BLACKBOARD_CLI_PATH,
     RESOURCE_CLI_PATH,
     CONTEXT_CLI_PATH,
+    SKILL_CLI_PATH,
 }
 PLUGIN_CATALOG_PATH = ".redtrace/plugins.json"
 CLAUDE_MCP_PATH = ".redtrace/mcp/claude.json"
 PI_MCP_PATH = ".pi/mcp.json"
 PI_MCP_EXTENSION = "npm:pi-mcp-extension@1.5.0"
 PI_PROVIDER_EXTENSION_PATH = ".redtrace/pi/redtrace-provider.js"
-DEFAULT_MAX_SKILLS = 40
+DEFAULT_MAX_SKILLS = 256
 DEFAULT_MAX_SKILL_CHARS = 65_536
 DEFAULT_HISTORY_LIMIT = 12
 SKILL_TRUST_STATES = frozenset({"provisional", "trusted", "retired"})
@@ -912,6 +914,8 @@ def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
     files[RESOURCE_CLI_PATH] = _workspace_cli_bytes("resource_cli.py")
     context_cli = _workspace_cli_bytes("context_cli.py")
     files[CONTEXT_CLI_PATH] = context_cli
+    skill_cli = _workspace_cli_bytes("skill_cli.py")
+    files[SKILL_CLI_PATH] = skill_cli
     digest_builder = hashlib.sha256()
     for relative, content in sorted(files.items()):
         digest_builder.update(relative.encode())
@@ -938,6 +942,7 @@ def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
         "snapshotFrozen": True,
         "runtimeFiles": {
             CONTEXT_CLI_PATH: hashlib.sha256(context_cli).hexdigest(),
+            SKILL_CLI_PATH: hashlib.sha256(skill_cli).hexdigest(),
             PI_PROVIDER_EXTENSION_PATH: hashlib.sha256(
                 pi_provider_extension
             ).hexdigest(),
@@ -946,6 +951,7 @@ def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
             BLACKBOARD_CLI_PATH,
             RESOURCE_CLI_PATH,
             CONTEXT_CLI_PATH,
+            SKILL_CLI_PATH,
             PLUGIN_CATALOG_PATH,
             CLAUDE_MCP_PATH,
             PI_MCP_PATH,
@@ -967,6 +973,7 @@ def runtime_workspace_patch(
         BLACKBOARD_CLI_PATH: _workspace_cli_bytes("blackboard_cli.py"),
         RESOURCE_CLI_PATH: _workspace_cli_bytes("resource_cli.py"),
         CONTEXT_CLI_PATH: _workspace_cli_bytes("context_cli.py"),
+        SKILL_CLI_PATH: _workspace_cli_bytes("skill_cli.py"),
         PI_PROVIDER_EXTENSION_PATH: PI_PROVIDER_EXTENSION.encode(),
     }
     runtime_digests = {

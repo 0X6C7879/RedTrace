@@ -25,8 +25,12 @@ from redtrace.dispatcher.tasks.common import (
     cancel_reason,
     did_timeout,
     preflight_worker,
-    preview,
+    ensure_worker_running,
+    exception_failure_outcome,
     project_allows_conclude_fallback,
+    preview,
+    process_failure_outcome,
+    record_session_checkpoint,
     run_worker_process,
     write_conclude_result,
     write_conclude_result_with_fact_id,
@@ -52,7 +56,9 @@ def run_bootstrap_task(
     )
     lease.start()
     try:
-        container_name = container_manager.ensure_running(project.project.id)
+        container_name = ensure_worker_running(
+            container_manager, project.project.id, worker
+        )
 
         early_result = preflight_worker(
             config,
@@ -109,6 +115,15 @@ def run_bootstrap_task(
                 or getattr(execute.live_control, "session_id", None)
                 or session
             )
+        record_session_checkpoint(
+            client,
+            container_manager,
+            project.project.id,
+            intent.id,
+            worker,
+            session,
+            "execute_end",
+        )
         cancelled = cancel_reason(first, cancellation)
         if cancelled is not None:
             LOG.info(
@@ -131,7 +146,7 @@ def run_bootstrap_task(
                 execute_ms,
             )
             best_effort_release(client, project.project.id, intent.id, worker.name)
-            return "failed"
+            return "heartbeat_loss"
         if not did_timeout(first) and first.returncode == 0:
             try:
                 model_output = driver.extract_response_text(first.stdout, first.stderr)
@@ -232,8 +247,8 @@ def run_bootstrap_task(
             preview(first.stderr),
         )
         best_effort_release(client, project.project.id, intent.id, worker.name)
-        return "failed"
-    except Exception:
+        return process_failure_outcome(first)
+    except Exception as exc:
         LOG.exception(
             "bootstrap task crashed project=%s intent=%s worker=%s",
             project.project.id,
@@ -241,7 +256,7 @@ def run_bootstrap_task(
             worker.name,
         )
         best_effort_release(client, project.project.id, intent.id, worker.name)
-        return "failed"
+        return exception_failure_outcome(exc)
     finally:
         lease.stop()
 
@@ -269,7 +284,7 @@ def _try_conclude_fallback(
             bool(session),
         )
         best_effort_release(client, project.project.id, intent.id, worker.name)
-        return "failed"
+        return "contract_error"
     if lease.failure is not None:
         LOG.warning(
             "bootstrap conclude fallback skipped because heartbeat already lost project=%s intent=%s worker=%s",
@@ -278,7 +293,7 @@ def _try_conclude_fallback(
             worker.name,
         )
         best_effort_release(client, project.project.id, intent.id, worker.name)
-        return "failed"
+        return "heartbeat_loss"
     if cancellation.is_cancelled:
         LOG.info(
             "bootstrap conclude fallback skipped because task was cancelled project=%s intent=%s worker=%s reason=%s",
@@ -297,9 +312,20 @@ def _try_conclude_fallback(
         intent_id=intent.id,
     ):
         best_effort_release(client, project.project.id, intent.id, worker.name)
-        return "failed"
+        return "cancelled"
 
-    container_name = container_manager.ensure_running(project.project.id)
+    container_name = ensure_worker_running(
+        container_manager, project.project.id, worker
+    )
+    record_session_checkpoint(
+        client,
+        container_manager,
+        project.project.id,
+        intent.id,
+        worker,
+        session,
+        "resume_start",
+    )
 
     prompt = render_prompt(
         load_prompt(config.runtime.prompt_group, "bootstrap_conclude.md"),
@@ -344,7 +370,7 @@ def _try_conclude_fallback(
         return "cancelled"
     if lease.failure is not None:
         best_effort_release(client, project.project.id, intent.id, worker.name)
-        return "failed"
+        return "heartbeat_loss"
     if result.timed_out or result.returncode != 0:
         LOG.warning(
             "bootstrap conclude failed project=%s intent=%s worker=%s code=%s timed_out=%s conclude_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -358,7 +384,7 @@ def _try_conclude_fallback(
             preview(result.stderr),
         )
         best_effort_release(client, project.project.id, intent.id, worker.name)
-        return "failed"
+        return process_failure_outcome(result)
     try:
         model_output = driver.extract_response_text(result.stdout, result.stderr)
         payload = parse_json_output(model_output)
@@ -388,7 +414,7 @@ def _try_conclude_fallback(
             preview(result.stderr),
         )
         best_effort_release(client, project.project.id, intent.id, worker.name)
-        return "failed"
+        return "contract_error"
     if kind == "rejected":
         LOG.warning(
             "bootstrap conclude rejected project=%s intent=%s worker=%s conclude_ms=%s stdout_preview=%s",
@@ -452,7 +478,7 @@ def _write_bootstrap_complete_result(
         total_ms=total_ms,
     )
     if conclude.status != "success":
-        return "failed"
+        return conclude.status
     if conclude.fact_id is None:
         LOG.warning(
             "bootstrap complete deferred because conclude response omitted fact id project=%s intent=%s worker=%s source=%s",

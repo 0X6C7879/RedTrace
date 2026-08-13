@@ -93,7 +93,11 @@ CREATE TABLE IF NOT EXISTS projects (
     reason_worker TEXT,
     reason_trigger TEXT,
     reason_started_at TEXT,
-    reason_last_heartbeat_at TEXT
+    reason_last_heartbeat_at TEXT,
+    reason_failure_count INTEGER NOT NULL DEFAULT 0,
+    reason_failure_signature TEXT,
+    reason_retry_after REAL,
+    reason_circuit_open INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS facts (
@@ -113,6 +117,10 @@ CREATE TABLE IF NOT EXISTS intents (
     last_heartbeat_at TEXT,
     created_at TEXT NOT NULL,
     concluded_at TEXT,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    failure_signature TEXT,
+    retry_after REAL,
+    circuit_open INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (id, project_id)
 );
 
@@ -249,6 +257,24 @@ CREATE TABLE IF NOT EXISTS audit_runs (
 CREATE INDEX IF NOT EXISTS idx_audit_runs_project
 ON audit_runs(project_id, started_at);
 
+CREATE TABLE IF NOT EXISTS session_checkpoints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    intent_id TEXT,
+    worker TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    path TEXT NOT NULL,
+    exists_flag INTEGER NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    mtime_ns INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_checkpoints_session
+ON session_checkpoints(project_id, session_id, id);
+
 CREATE TABLE IF NOT EXISTS audit_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_uid TEXT NOT NULL UNIQUE,
@@ -302,7 +328,31 @@ CREATE TABLE IF NOT EXISTS project_deletions (
     attempts INTEGER NOT NULL DEFAULT 0,
     requested_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    last_error TEXT
+    last_error TEXT,
+    actor TEXT NOT NULL DEFAULT 'unknown',
+    source TEXT NOT NULL DEFAULT 'unknown'
+);
+
+CREATE TABLE IF NOT EXISTS project_delete_authorizations (
+    token_hash TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    actor TEXT NOT NULL,
+    expires_at REAL NOT NULL,
+    used_at TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_delete_authorizations_project
+ON project_delete_authorizations(project_id, expires_at);
+
+CREATE TABLE IF NOT EXISTS project_lifecycle_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    source TEXT NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_shared_resources_project
@@ -423,6 +473,7 @@ def configure(path: Path) -> None:
         _ensure_global_resource_schema(conn)
         conn.executescript(BLACKBOARD_DELETE_TRIGGERS)
         _ensure_project_columns(conn)
+        _ensure_deletion_columns(conn)
         _backfill_blackboard_events(conn)
         conn.commit()
         _last_blackboard_revision = int(
@@ -659,6 +710,37 @@ def _ensure_project_columns(conn: sqlite3.Connection) -> None:
         if "bootstrap_mode" in columns:
             conn.execute(
                 "UPDATE projects SET bootstrap_enabled = CASE WHEN bootstrap_mode = 'disabled' THEN 0 ELSE 1 END"
+            )
+    additions = {
+        "reason_failure_count": "INTEGER NOT NULL DEFAULT 0",
+        "reason_failure_signature": "TEXT",
+        "reason_retry_after": "REAL",
+        "reason_circuit_open": "INTEGER NOT NULL DEFAULT 0",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE projects ADD COLUMN {name} {definition}")
+    intent_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(intents)")
+    }
+    for name, definition in {
+        "failure_count": "INTEGER NOT NULL DEFAULT 0",
+        "failure_signature": "TEXT",
+        "retry_after": "REAL",
+        "circuit_open": "INTEGER NOT NULL DEFAULT 0",
+    }.items():
+        if name not in intent_columns:
+            conn.execute(f"ALTER TABLE intents ADD COLUMN {name} {definition}")
+
+
+def _ensure_deletion_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(project_deletions)")
+    }
+    for name in ("actor", "source"):
+        if name not in columns:
+            conn.execute(
+                f"ALTER TABLE project_deletions ADD COLUMN {name} TEXT NOT NULL DEFAULT 'unknown'"
             )
 
 

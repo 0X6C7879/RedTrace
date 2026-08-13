@@ -23,7 +23,10 @@ from redtrace.dispatcher.tasks.common import (
     cancel_reason,
     did_timeout,
     preflight_worker,
+    ensure_worker_running,
     preview,
+    process_failure_outcome,
+    record_session_checkpoint,
     run_worker_process,
     write_graph_snapshot_reference,
 )
@@ -59,7 +62,9 @@ def run_reason_task(
     inbox: BlackboardInbox | None = None
     lease.start()
     try:
-        container_name = container_manager.ensure_running(project.project.id)
+        container_name = ensure_worker_running(
+            container_manager, project.project.id, worker
+        )
 
         early_result = preflight_worker(
             config,
@@ -161,6 +166,15 @@ def run_reason_task(
                 or getattr(command.live_control, "session_id", None)
                 or session
             )
+        execute_checkpoint = record_session_checkpoint(
+            client,
+            container_manager,
+            project.project.id,
+            None,
+            worker,
+            session,
+            "execute_end",
+        )
         cancelled = cancel_reason(result, cancellation)
         if cancelled is not None:
             LOG.info(
@@ -179,7 +193,7 @@ def run_reason_task(
                 lease.failure.status_code,
                 execute_ms,
             )
-            return "failed"
+            return "heartbeat_loss"
         if did_timeout(result):
             LOG.warning(
                 "reason timed out project=%s worker=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -190,7 +204,58 @@ def run_reason_task(
                 preview(result.stdout),
                 preview(result.stderr),
             )
-            return "failed"
+            if not driver.supports_conclude() or session is None:
+                return "timeout"
+            if worker.type == "pi" and execute_checkpoint is not None:
+                if not execute_checkpoint.get("exists"):
+                    return "session_missing"
+                if int(execute_checkpoint.get("size_bytes", 0)) == 0:
+                    return "timeout"
+            recovery_prompt = (
+                "The planning time budget ended. Stop all tools and further analysis. "
+                "Using only work already completed in this session, immediately return the "
+                "best valid raw reason JSON object. Do not emit Markdown or commentary."
+            )
+            recovery_command = driver.build_conclude(
+                worker, recovery_prompt, session
+            )
+            record_session_checkpoint(
+                client,
+                container_manager,
+                project.project.id,
+                None,
+                worker,
+                session,
+                "resume_start",
+            )
+            result = run_worker_process(
+                container_manager,
+                container_name,
+                worker,
+                recovery_command.argv,
+                stdin_text=recovery_command.stdin,
+                client=client,
+                project_id=project.project.id,
+                blackboard_revision=project.blackboard_revision,
+                phase="reason_timeout_recovery",
+                timeout_seconds=min(
+                    config.tasks.reason.timeout, FORMAT_REPAIR_TIMEOUT_SECONDS
+                ),
+                lease=lease,
+                cancellation=cancellation,
+            )
+            cancelled = cancel_reason(result, cancellation)
+            if cancelled is not None:
+                return "cancelled"
+            if lease.failure is not None or did_timeout(result) or result.returncode != 0:
+                LOG.warning(
+                    "reason timeout recovery failed project=%s worker=%s code=%s timed_out=%s",
+                    project.project.id,
+                    worker.name,
+                    result.returncode,
+                    result.timed_out,
+                )
+                return "timeout"
         if result.returncode != 0:
             LOG.warning(
                 "reason command failed project=%s worker=%s code=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -202,7 +267,7 @@ def run_reason_task(
                 preview(result.stdout),
                 preview(result.stderr),
             )
-            return "failed"
+            return process_failure_outcome(result)
         try:
             model_output = driver.extract_response_text(result.stdout, result.stderr)
             payload = parse_json_output(model_output)
@@ -224,7 +289,7 @@ def run_reason_task(
                     preview(result.stdout),
                     preview(result.stderr),
                 )
-                return "failed"
+                return "contract_error"
             LOG.info(
                 "reason output invalid; requesting format-only repair project=%s worker=%s error=%s",
                 project.project.id,
@@ -267,7 +332,7 @@ def run_reason_task(
                     worker.name,
                     repair_exc,
                 )
-                return "failed"
+                return "provider_exit"
             cancelled = cancel_reason(repair, cancellation)
             if cancelled is not None:
                 LOG.info(
@@ -291,7 +356,7 @@ def run_reason_task(
                     preview(repair.stdout),
                     preview(repair.stderr),
                 )
-                return "failed"
+                return process_failure_outcome(repair)
             try:
                 model_output = driver.extract_response_text(
                     repair.stdout, repair.stderr
@@ -312,7 +377,7 @@ def run_reason_task(
                     preview(repair.stdout),
                     preview(repair.stderr),
                 )
-                return "failed"
+                return "contract_error"
             result = repair
         if kind == "rejected":
             LOG.warning(
@@ -343,7 +408,7 @@ def run_reason_task(
                     response.status_code,
                     response.text,
                 )
-                return "failed"
+                return "api_error"
             LOG.info(
                 "project completed project=%s worker=%s from=%s execute_ms=%s total_ms=%s",
                 project.project.id,
@@ -413,7 +478,7 @@ def run_reason_task(
                     execute_ms,
                     total_ms,
                 )
-                return "failed"
+                return "api_error"
             return "success"
         LOG.info(
             "reason finished without graph change project=%s worker=%s execute_ms=%s total_ms=%s",

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from fastapi import HTTPException
 
 from redtrace.board.intents import validate_registered_access_claim
@@ -50,7 +52,7 @@ def list_all() -> list[ProjectSummary]:
                 (SELECT COUNT(*) FROM facts WHERE project_id = p.id) AS fact_count,
                 (SELECT COUNT(*) FROM intents WHERE project_id = p.id) AS intent_count,
                 (SELECT COUNT(*) FROM intents WHERE project_id = p.id AND concluded_at IS NULL AND worker IS NOT NULL) AS working_intent_count,
-                (SELECT COUNT(*) FROM intents WHERE project_id = p.id AND concluded_at IS NULL AND worker IS NULL) AS unclaimed_intent_count,
+                (SELECT COUNT(*) FROM intents WHERE project_id = p.id AND concluded_at IS NULL AND worker IS NULL AND circuit_open = 0 AND (retry_after IS NULL OR retry_after <= unixepoch('now'))) AS unclaimed_intent_count,
                 (SELECT COUNT(*) FROM hints WHERE project_id = p.id) AS hint_count
             FROM projects p
             ORDER BY p.created_at
@@ -169,6 +171,23 @@ def transition_status(project_id: str, status: str) -> ProjectMeta:
                 (project_id,),
             )
             clear_project_reason(conn, project_id)
+        elif status == "active":
+            conn.execute(
+                """
+                UPDATE intents SET failure_count = 0, failure_signature = NULL,
+                    retry_after = NULL, circuit_open = 0
+                WHERE project_id = ? AND concluded_at IS NULL
+                """,
+                (project_id,),
+            )
+            conn.execute(
+                """
+                UPDATE projects SET reason_failure_count = 0,
+                    reason_failure_signature = NULL, reason_retry_after = NULL,
+                    reason_circuit_open = 0 WHERE id = ?
+                """,
+                (project_id,),
+            )
         return _load_project(conn, project_id)
 
 
@@ -177,6 +196,12 @@ def claim_reason(project_id: str, request: ReasonClaimRequest) -> ProjectMeta:
         check_project_active(conn, project_id)
         expire_reason_leases(conn, project_id)
         current = get_project_or_404(conn, project_id)
+        if current["reason_circuit_open"]:
+            raise HTTPException(409, "Reason retry circuit is open")
+        if current["reason_retry_after"] is not None and current[
+            "reason_retry_after"
+        ] > time.time():
+            raise HTTPException(409, "Reason retry backoff is active")
         if current["reason_worker"] is not None:
             raise HTTPException(
                 409,

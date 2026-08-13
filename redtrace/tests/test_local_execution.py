@@ -18,6 +18,7 @@ from redtrace.capabilities import (
 from redtrace.dispatcher.config import DispatchConfig, LocalConfig, WorkerConfig
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.local_backend import LocalBackend
+from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.local_process import LocalProcess
 from redtrace.dispatcher.scheduler import loop as loop_module
 from redtrace.dispatcher.tasks import common, explore
@@ -203,7 +204,17 @@ def test_local_backend_retries_transient_workspace_create_race(
     backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path)))
 
     assert Path(backend.ensure_running("proj_001")) == project_dir
-    assert project_dir.is_dir()
+
+
+def test_local_backend_refuses_to_recreate_missing_active_workspace(
+    tmp_path: Path,
+) -> None:
+    backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path)))
+    workspace = Path(backend.ensure_running("proj_001"))
+    shutil.rmtree(workspace)
+
+    with pytest.raises(RuntimeError, match="workspace integrity failure"):
+        backend.ensure_running("proj_001")
 
 
 def test_local_backend_does_not_replace_workspace_file(tmp_path: Path) -> None:
@@ -238,7 +249,7 @@ def test_local_backend_reports_wsl_ghost_directory_with_guidance(
     assert not project_dir.exists()
 
 
-def test_local_backend_keeps_agent_config_linked_and_conversations_in_project(
+def test_local_backend_keeps_agent_config_linked_and_sessions_outside_workspace(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -267,7 +278,7 @@ def test_local_backend_keeps_agent_config_linked_and_conversations_in_project(
 
     workspace = Path(backend.ensure_running("proj_001"))
     env = backend.conversation_environment("proj_001", "codex")
-    state = paths.workspaces / "proj_001" / ".redtrace" / "conversations" / "codex"
+    state = paths.managed / "sessions" / "proj_001" / "codex" / "default"
 
     assert env == {"CODEX_HOME": str(state)}
     assert (state / "config.toml").read_text(encoding="utf-8") == config.read_text(
@@ -277,9 +288,58 @@ def test_local_backend_keeps_agent_config_linked_and_conversations_in_project(
     assert (workspace / ".pi" / "mcp.json").resolve() == pi_mcp.resolve()
     assert backend.conversation_environment("proj_001", "pi") == {
         "PI_CODING_AGENT_SESSION_DIR": str(
-            paths.workspaces / "proj_001" / ".redtrace" / "conversations" / "pi"
+            paths.managed / "sessions" / "proj_001" / "pi" / "default"
         )
     }
+    worker_a = backend.conversation_environment("proj_001", "pi", "worker-a")
+    worker_b = backend.conversation_environment("proj_001", "pi", "worker-b")
+    assert worker_a != worker_b
+    assert not Path(worker_a["PI_CODING_AGENT_SESSION_DIR"]).is_relative_to(workspace)
+    session = Path(worker_a["PI_CODING_AGENT_SESSION_DIR"]) / "session-checkpoint.jsonl"
+    session.write_text("progress", encoding="utf-8")
+    checkpoint = backend.session_checkpoint(
+        "proj_001", "pi", "worker-a", "session-checkpoint"
+    )
+    assert checkpoint["exists"] is True
+    assert checkpoint["size_bytes"] == len("progress")
+    assert checkpoint["mtime_ns"] > 0
+
+
+def test_container_worker_mounts_only_its_session_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    home = tmp_path / "home"
+    (home / ".pi").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    paths = RedTracePaths(
+        root=tmp_path,
+        skills=tmp_path / "skills",
+        mcp=tmp_path / "mcp",
+        plugins=tmp_path / "plugins",
+        managed=tmp_path / ".redtrace",
+        workspaces=tmp_path / "workspaces",
+        audit=tmp_path / ".redtrace" / "audit",
+    )
+    manager = ContainerManager.__new__(ContainerManager)
+    manager._paths = paths
+    manager._host_source = lambda path: path
+    paths.workspaces.mkdir()
+
+    first = manager._shared_volumes("proj_001", "worker-a", "pi")
+    second = manager._shared_volumes("proj_001", "worker-b", "pi")
+    first_sessions = [
+        source
+        for source, spec in first.items()
+        if spec["bind"] == "/home/kali/.pi/sessions"
+    ]
+    second_sessions = [
+        source
+        for source, spec in second.items()
+        if spec["bind"] == "/home/kali/.pi/sessions"
+    ]
+
+    assert first_sessions != second_sessions
+    assert all("worker-b" not in source for source in first_sessions)
 
 
 def test_local_graph_snapshot_uses_managed_project_path(tmp_path: Path) -> None:
@@ -336,7 +396,10 @@ def test_local_backend_merges_host_env_with_worker_env(
     result = process.communicate(timeout=20)
 
     workspace = str((tmp_path / "proj_001").resolve())
-    assert result.stdout == f"host-worker|{workspace}|{workspace}|{workspace}"
+    assert process.env["PWD"] == workspace
+    assert process.env["TMPDIR"] == workspace
+    assert result.stdout.split("|")[0] == "host-worker"
+    assert result.stdout.split("|")[2] == workspace
 
 
 def test_local_common_env_reaches_worker_subprocess(

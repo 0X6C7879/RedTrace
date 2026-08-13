@@ -215,6 +215,24 @@ class ControlPlaneClient:
             json={"worker": worker},
         )
 
+    def report_intent_outcome(
+        self, project_id: str, intent_id: str, worker: str, outcome: str
+    ) -> ApiResult:
+        return self._request_json(
+            "POST",
+            f"/projects/{project_id}/intents/{intent_id}/outcome",
+            json={"worker": worker, "outcome": outcome},
+        )
+
+    def report_reason_outcome(
+        self, project_id: str, worker: str, outcome: str
+    ) -> ApiResult:
+        return self._request_json(
+            "POST",
+            f"/projects/{project_id}/reason/outcome",
+            json={"worker": worker, "outcome": outcome},
+        )
+
     def conclude(
         self, project_id: str, intent_id: str, worker: str, description: str
     ) -> ApiResult:
@@ -256,6 +274,14 @@ class ControlPlaneClient:
             self._url("/audit/events"),
             json={"run": run, "events": events},
             timeout=(0.2, 0.8),
+        )
+        response.raise_for_status()
+
+    def record_session_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+        response = self._session().post(
+            self._url("/audit/session-checkpoints"),
+            json=checkpoint,
+            timeout=self._timeout,
         )
         response.raise_for_status()
 

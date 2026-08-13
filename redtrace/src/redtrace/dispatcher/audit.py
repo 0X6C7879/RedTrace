@@ -735,14 +735,26 @@ def _as_skill_event(
 
 
 SKILL_PLUGIN_PREFIX = "redtrace-capabilities:"
+INVALID_SKILL_NAMES = frozenset({"", "*", "all", "skill", "skills", "unknown", "未知技能"})
+CANONICAL_SKILL_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+def _canonical_skill_name(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    name = value.strip().lower()
+    if name.startswith(SKILL_PLUGIN_PREFIX):
+        name = name[len(SKILL_PLUGIN_PREFIX) :]
+    elif ":" in name:
+        name = name.rsplit(":", 1)[-1]
+    if name in INVALID_SKILL_NAMES or not CANONICAL_SKILL_NAME.fullmatch(name):
+        return ""
+    return name
 
 
 def _skill_name_from_event(event: dict[str, Any]) -> str:
     direct_name = event.get("skill_name") or event.get("skillName")
-    if isinstance(direct_name, str) and direct_name.strip():
-        name = direct_name.strip()
-        if name.startswith(SKILL_PLUGIN_PREFIX):
-            name = name[len(SKILL_PLUGIN_PREFIX) :]
+    if name := _canonical_skill_name(direct_name):
         return name
 
     title = str(event.get("title") or "").strip().lower().replace("_", " ")
@@ -751,11 +763,11 @@ def _skill_name_from_event(event: dict[str, Any]) -> str:
         if isinstance(arguments, dict):
             for key in ("skill", "name", "skill_name", "skillName"):
                 value = arguments.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-        elif isinstance(arguments, str) and arguments.strip():
-            return arguments.strip()
-        return "未知技能"
+                if name := _canonical_skill_name(value):
+                    return name
+        elif name := _canonical_skill_name(arguments):
+            return name
+        return ""
 
     candidates: list[Any] = [event.get("command")]
     if isinstance(arguments, dict):
@@ -778,7 +790,7 @@ def _skill_name_from_event(event: dict[str, Any]) -> str:
             continue
         match = SKILL_PATH_PATTERN.search(candidate)
         if match:
-            return match.group("name")
+            return _canonical_skill_name(match.group("name"))
     return ""
 
 

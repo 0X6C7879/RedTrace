@@ -11,7 +11,10 @@ import docker
 from docker.errors import APIError, DockerException, NotFound
 from docker.models.containers import Container
 from redtrace.dispatcher.config import ContainerConfig, ContextHarnessConfig
-from redtrace.dispatcher.runtime.backend import is_agent_runtime_state
+from redtrace.dispatcher.runtime.backend import (
+    is_agent_runtime_state,
+    session_file_checkpoint,
+)
 from redtrace.dispatcher.runtime.process import ManagedProcess
 from redtrace.paths import RedTracePaths, contained_path, safe_project_key
 
@@ -33,24 +36,40 @@ class ContainerManager:
         self._client = docker.from_env()
         self._ensure_running_locks: dict[str, threading.Lock] = {}
         self._ensure_running_locks_guard = threading.Lock()
-        self._route_skills_init_lock = threading.Lock()
-        self._route_skills_initialized = False
         self._paths = paths
         self._host_mounts: list[tuple[Path, Path]] | None = None
 
     def close(self) -> None:
         self._client.close()
 
-    def container_name(self, project_id: str) -> str:
+    def container_name(self, project_id: str, worker_name: str | None = None) -> str:
         sanitized = safe_project_key(project_id)
-        return f"{self._PREFIX}{sanitized}"
+        base = f"{self._PREFIX}{sanitized}"
+        return f"{base}--{safe_project_key(worker_name)}" if worker_name else base
 
-    def ensure_running(self, project_id: str) -> str:
-        name = self.container_name(project_id)
+    def ensure_running(
+        self,
+        project_id: str,
+        worker_name: str | None = None,
+        worker_type: str | None = None,
+    ) -> str:
+        if worker_name is None or worker_type is None:
+            raise ValueError("container execution requires worker identity")
+        self._ensure_workspace(project_id)
+        name = self.container_name(project_id, worker_name)
         with self._ensure_running_lock(name):
-            return self._ensure_running_locked(project_id, name)
+            return self._ensure_running_locked(
+                project_id, name, worker_name, worker_type
+            )
 
-    def _ensure_running_locked(self, project_id: str, name: str) -> str:
+    def ensure_worker_running(
+        self, project_id: str, worker_name: str, worker_type: str
+    ) -> str:
+        return self.ensure_running(project_id, worker_name, worker_type)
+
+    def _ensure_running_locked(
+        self, project_id: str, name: str, worker_name: str, worker_type: str
+    ) -> str:
         state = self.inspect_state(name)
         if state == "running":
             LOG.debug(
@@ -80,7 +99,7 @@ class ContainerManager:
                 name=name,
                 network_mode=self._config.network_mode,
                 cap_add=self._config.cap_add or None,
-                volumes=self._shared_volumes(project_id),
+                volumes=self._shared_volumes(project_id, worker_name, worker_type),
             )
             LOG.info("created container project=%s container=%s", project_id, name)
             return self._ready(name)
@@ -107,35 +126,7 @@ class ContainerManager:
         raise RuntimeError(f"failed to create container {name}")
 
     def _ready(self, name: str) -> str:
-        self._ensure_route_skills_initialized(name)
         return name
-
-    def _ensure_route_skills_initialized(self, name: str) -> None:
-        if self._route_skills_initialized:
-            return
-        with self._route_skills_init_lock:
-            if self._route_skills_initialized:
-                return
-            container = self._require_container(name)
-            initializer = (
-                "/opt/redtrace/claude-plugin/skills/route-skills/"
-                "redtrace-tools/initialize.sh"
-            )
-            try:
-                result = container.exec_run(["bash", initializer])
-            except DockerException as exc:
-                raise RuntimeError(
-                    f"failed to initialize route-skills in container {name}: {exc}"
-                ) from exc
-            exit_code = int(result.exit_code)
-            output = result.output.decode("utf-8", errors="replace").strip()
-            if exit_code != 0:
-                raise RuntimeError(
-                    "failed to initialize route-skills in container "
-                    f"{name} (exit={exit_code}): {output}"
-                )
-            self._route_skills_initialized = True
-            LOG.info("route-skills initialized container=%s output=%s", name, output)
 
     def _ensure_running_lock(self, name: str) -> threading.Lock:
         with self._ensure_running_locks_guard:
@@ -157,51 +148,36 @@ class ContainerManager:
         return str(state) if state else None
 
     def cleanup_completed(self, project_id: str) -> bool:
-        name = self.container_name(project_id)
-        state = self.inspect_state(name)
-        if state is None:
-            return True
-        container = self._require_container(name)
-        if state == "running":
-            LOG.info(
-                "stopping completed project container project=%s container=%s",
-                project_id,
-                name,
-            )
-            try:
-                container.stop(timeout=1)
-            except NotFound:
-                return True
-            except DockerException as exc:
-                LOG.warning("failed to stop container=%s error=%s", name, exc)
-                return False
-            return self.inspect_state(name) != "running"
-        return True
+        return all([self._stop_container(name) for name in self._project_containers(project_id)])
 
     def cleanup_stopped(self, project_id: str) -> bool:
-        name = self.container_name(project_id)
-        state = self.inspect_state(name)
-        if state != "running":
+        return all([self._stop_container(name) for name in self._project_containers(project_id)])
+
+    def cleanup_deleted(self, project_id: str) -> bool:
+        return all([self.cleanup_orphan(name) for name in self._project_containers(project_id)])
+
+    def _stop_container(self, name: str) -> bool:
+        if self.inspect_state(name) != "running":
             return True
-        LOG.info(
-            "stopping stopped project container project=%s container=%s",
-            project_id,
-            name,
-        )
-        container = self._require_container(name)
         try:
-            container.stop(timeout=1)
+            self._require_container(name).stop(timeout=1)
         except NotFound:
             return True
         except DockerException as exc:
-            LOG.warning(
-                "failed to stop stopped project container=%s error=%s", name, exc
-            )
+            LOG.warning("failed to stop container=%s error=%s", name, exc)
             return False
         return self.inspect_state(name) != "running"
 
-    def cleanup_deleted(self, project_id: str) -> bool:
-        return self.cleanup_orphan(self.container_name(project_id))
+    def _project_containers(self, project_id: str) -> list[str]:
+        base = self.container_name(project_id)
+        names = {base}
+        if hasattr(self, "_client"):
+            names.update(
+                name
+                for name in self.managed_container_names()
+                if name.startswith(f"{base}--")
+            )
+        return sorted(names)
 
     def cleanup_orphan(self, name: str) -> bool:
         state = self.inspect_state(name)
@@ -231,17 +207,16 @@ class ContainerManager:
         )
 
     def needs_completed_cleanup(self, project_id: str) -> bool:
-        name = self.container_name(project_id)
-        state = self.inspect_state(name)
-        if state is None:
-            return False
-        return state == "running"
+        return any(
+            self.inspect_state(name) == "running"
+            for name in self._project_containers(project_id)
+        )
 
     def needs_orphan_cleanup(self, name: str) -> bool:
         return self.inspect_state(name) is not None
 
     def needs_stopped_cleanup(self, project_id: str) -> bool:
-        return self.inspect_state(self.container_name(project_id)) == "running"
+        return self.needs_completed_cleanup(project_id)
 
     def build_exec_process(
         self,
@@ -295,7 +270,7 @@ class ContainerManager:
         )
 
     def conversation_environment(
-        self, project_id: str, worker_type: str
+        self, project_id: str, worker_type: str, worker_name: str = "default"
     ) -> dict[str, str]:
         safe_project_key(project_id)
         if worker_type == "claudecode":
@@ -306,38 +281,50 @@ class ContainerManager:
             return {"PI_CODING_AGENT_SESSION_DIR": "/home/kali/.pi/sessions"}
         return {}
 
-    def _shared_volumes(self, project_id: str) -> dict[str, dict[str, str]]:
+    def worker_conversation_environment(
+        self, project_id: str, worker_type: str, worker_name: str
+    ) -> dict[str, str]:
+        return self.conversation_environment(project_id, worker_type, worker_name)
+
+    def session_checkpoint(
+        self, project_id: str, worker_type: str, worker_name: str, session_id: str
+    ) -> dict[str, object]:
+        if self._paths is None:
+            return {"path": "", "exists": False, "size_bytes": 0, "mtime_ns": 0}
+        root = contained_path(
+            self._paths.managed,
+            "sessions",
+            safe_project_key(project_id),
+            worker_type,
+            safe_project_key(worker_name),
+        )
+        return session_file_checkpoint(root, session_id)
+
+    def _shared_volumes(
+        self, project_id: str, worker_name: str, worker_type: str
+    ) -> dict[str, dict[str, str]]:
         if self._paths is None:
             return {}
-        workspace = contained_path(
-            self._paths.workspaces, safe_project_key(project_id)
-        )
-        project = contained_path(
-            workspace, ".redtrace", "conversations"
+        workspace = contained_path(self._paths.workspaces, safe_project_key(project_id))
+        session = contained_path(
+            self._paths.managed,
+            "sessions",
+            safe_project_key(project_id),
+            worker_type,
+            safe_project_key(worker_name),
         )
         agent_homes = {
             "claudecode": (Path.home() / ".claude", "/home/kali/.claude"),
             "codex": (Path.home() / ".codex", "/home/kali/.codex"),
-            "pi": (Path.home() / ".pi", "/home/kali/.pi"),
         }
-        workspace.mkdir(parents=True, exist_ok=True)
-        for worker_type in agent_homes:
-            (project / worker_type).mkdir(parents=True, exist_ok=True)
+        for directory, _ in agent_homes.values():
+            directory.mkdir(parents=True, exist_ok=True)
+        pi_home = Path.home() / ".pi"
+        pi_home.mkdir(parents=True, exist_ok=True)
+        session.mkdir(parents=True, exist_ok=True)
         bindings = {
             self._host_source(workspace): {
                 "bind": self._WORKSPACE,
-                "mode": "rw",
-            },
-            self._host_source(project / "claudecode"): {
-                "bind": "/home/kali/.claude",
-                "mode": "rw",
-            },
-            self._host_source(project / "codex"): {
-                "bind": "/home/kali/.codex",
-                "mode": "rw",
-            },
-            self._host_source(project / "pi"): {
-                "bind": "/home/kali/.pi",
                 "mode": "rw",
             },
             self._host_source(self._paths.skills): {
@@ -365,15 +352,32 @@ class ContainerManager:
                 "mode": "ro",
             },
         }
-        for worker_type, (user_home, container_home) in agent_homes.items():
-            if not user_home.is_dir():
-                continue
+        if worker_type in agent_homes:
+            bindings[self._host_source(session)] = {
+                "bind": agent_homes[worker_type][1],
+                "mode": "rw",
+            }
+        elif worker_type == "pi":
+            bindings[self._host_source(session)] = {
+                "bind": "/home/kali/.pi/sessions",
+                "mode": "rw",
+            }
+        selected_home = agent_homes.get(worker_type)
+        for user_home, container_home in ((selected_home,) if selected_home else ()):
             for source in user_home.iterdir():
                 if is_agent_runtime_state(worker_type, source.name):
                     continue
                 bindings[self._host_source(source)] = {
                     "bind": f"{container_home}/{source.name}",
                     "mode": "ro",
+                }
+        if worker_type == "pi":
+            for source in pi_home.iterdir():
+                if is_agent_runtime_state("pi", source.name):
+                    continue
+                bindings[self._host_source(source)] = {
+                    "bind": f"/home/kali/.pi/{source.name}",
+                    "mode": "rw",
                 }
         private_cases = os.environ.get("REDTRACE_CODE_AUDIT_PRIVATE_CASES_DIR")
         if private_cases and Path(private_cases).is_dir():
@@ -382,6 +386,20 @@ class ContainerManager:
                 "mode": "ro",
             }
         return {str(source): spec for source, spec in bindings.items()}
+
+    def _ensure_workspace(self, project_id: str) -> None:
+        if self._paths is None:
+            return
+        project_id = safe_project_key(project_id)
+        workspace = contained_path(self._paths.workspaces, project_id)
+        marker = contained_path(self._paths.projects, project_id, "workspace.created")
+        if not workspace.exists() and marker.exists():
+            raise RuntimeError(
+                f"active project workspace integrity failure: {workspace} disappeared"
+            )
+        workspace.mkdir(parents=True, exist_ok=True)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch(exist_ok=True)
 
     def _host_source(self, path: Path) -> Path:
         """Translate a dispatcher-container path to the Docker host mount source."""

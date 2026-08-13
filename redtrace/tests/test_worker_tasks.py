@@ -117,6 +117,44 @@ def test_reason_repairs_invalid_format_once(monkeypatch) -> None:
     assert "不得调用工具" in driver.conclude_prompts[0]
 
 
+def test_reason_timeout_recovers_with_same_session(monkeypatch) -> None:
+    config = make_config()
+    project = make_project()
+    client = FakeClient(project)
+    containers = FakeContainerManager()
+    driver = FakeDriver()
+    lease = FakeLease()
+    results: Iterator[ProcessResult] = iter(
+        [
+            ProcessResult(124, "partial planning", "", timed_out=True),
+            ProcessResult(
+                0,
+                '{"accepted":true,"data":{"intents":[{"from":["f001"],"description":"recovered"}]}}',
+                "",
+            ),
+        ]
+    )
+    monkeypatch.setattr(reason, "get_driver", lambda *_a, **_k: driver)
+    monkeypatch.setattr(reason.HeartbeatLease, "for_reason", _lease_factory(lease))
+    monkeypatch.setattr(
+        reason, "run_worker_process", lambda *_args, **_kwargs: next(results)
+    )
+
+    outcome = reason.run_reason_task(
+        config,
+        client,
+        containers,
+        project,
+        "graph",
+        config.workers[0],
+        TaskCancellation(),
+    )
+
+    assert outcome == "success"
+    assert client.created_intents[-1][2] == "recovered"
+    assert len(driver.conclude_prompts) == 1
+
+
 def test_reason_only_fills_available_open_intent_slots(monkeypatch) -> None:
     config = make_config()
     project = make_project(intents=[make_intent("i001")])
@@ -386,8 +424,9 @@ def test_access_channel_fact_gets_registered_resource_id() -> None:
                 {
                     "id": "ws_123456789abc",
                     "kind": "webshell",
-                    "intent_id": "i001",
-                    "worker": "Pi",
+                    "intent_id": "other-intent",
+                    "worker": "other-worker",
+                    "status": "available",
                 }
             ]
 
@@ -432,3 +471,42 @@ def test_access_channel_fact_without_registered_resource_is_blocked() -> None:
 
     assert not ok
     assert description == "reverse shell connected"
+
+
+def test_resource_commit_failure_preserves_result_without_reexecution(monkeypatch) -> None:
+    config = make_config()
+    intent = make_intent()
+    project = make_project(intents=[intent])
+    client = FakeClient(project)
+    client.resource_snapshot = lambda _project_id: []  # type: ignore[attr-defined]
+    containers = FakeContainerManager()
+    driver = FakeDriver()
+    lease = FakeLease()
+    monkeypatch.setattr(
+        explore,
+        "_run_process",
+        lambda *_args, **_kwargs: ProcessResult(
+            0,
+            '{"accepted":true,"data":{"description":"reverse shell connected"}}',
+            "",
+        ),
+    )
+
+    outcome = explore._try_conclude_fallback(
+        config,
+        client,
+        containers,
+        "container-proj_001",
+        config.workers[0],
+        driver,
+        "proj_001",
+        intent,
+        "graph",
+        "session-001",
+        lease,
+        TaskCancellation(),
+        fallback_description="reverse shell connected",
+    )
+
+    assert outcome == "success"
+    assert "Do not repeat exploitation" in client.concluded[-1][3]

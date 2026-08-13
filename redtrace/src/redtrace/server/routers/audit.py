@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from redtrace.audit import archived_workspace
-from redtrace.board.storage import get_project_or_404
+from redtrace.board.storage import get_project_or_404, utcnow
 from redtrace.server import db
 from redtrace.server.event_hub import event_hub
 
@@ -28,6 +28,47 @@ TRANSIENT_EVENT_KINDS = {"assistant.delta", "thinking.delta", "thinking.complete
 class AuditBatch(BaseModel):
     run: dict[str, Any]
     events: list[dict[str, Any]] = Field(max_length=128)
+
+
+class SessionCheckpoint(BaseModel):
+    project_id: str
+    intent_id: str | None = None
+    worker: str
+    provider: str
+    session_id: str
+    stage: str
+    path: str = ""
+    exists: bool
+    size_bytes: int = 0
+    mtime_ns: int = 0
+
+
+@router.post("/session-checkpoints")
+def append_session_checkpoint(body: SessionCheckpoint) -> dict[str, bool]:
+    with db.get_conn() as conn:
+        get_project_or_404(conn, body.project_id)
+        conn.execute(
+            """
+            INSERT INTO session_checkpoints (
+                project_id, intent_id, worker, provider, session_id, stage,
+                path, exists_flag, size_bytes, mtime_ns, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                body.project_id,
+                body.intent_id,
+                body.worker,
+                body.provider,
+                body.session_id,
+                body.stage,
+                body.path,
+                int(body.exists),
+                body.size_bytes,
+                body.mtime_ns,
+                utcnow(),
+            ),
+        )
+    return {"recorded": True}
 
 
 @router.post("/events")

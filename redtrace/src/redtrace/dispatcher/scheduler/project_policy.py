@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 from redtrace.board.models import Intent, ProjectDetail, ProjectSummary
 from redtrace.dispatcher.scheduler.state import ReasonCheckpoint
@@ -8,6 +9,7 @@ from redtrace.dispatcher.scheduler.state import ReasonCheckpoint
 BOOTSTRAP_DESCRIPTION = "bootstrap"
 BOOTSTRAP_CREATOR = "dispatcher.bootstrap"
 FACT_SUMMARY_CHARS = 800
+MAX_SNAPSHOT_BYTES = 64 * 1024
 
 
 def compact_snapshot(project: ProjectDetail, intent: Intent | None = None) -> str:
@@ -19,23 +21,33 @@ def compact_snapshot(project: ProjectDetail, intent: Intent | None = None) -> st
         if intent is None
         else [intent]
     )
-    return json.dumps(
-        {
-            "project": {
-                "title": project.project.title,
-                "status": project.project.status,
-                "bootstrap_enabled": project.project.bootstrap_enabled,
-            },
-            "facts": [_compact_fact(fact.id, fact.description) for fact in facts],
-            "hints": [hint.model_dump(mode="json") for hint in project.hints],
-            "intents": [
-                intent.model_dump(mode="json", by_alias=True)
-                for intent in intents
-            ],
+    payload = {
+        "project": {
+            "title": project.project.title,
+            "status": project.project.status,
+            "bootstrap_enabled": project.project.bootstrap_enabled,
         },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+        "facts": [_compact_fact(fact.id, fact.description) for fact in facts],
+        "hints": [hint.model_dump(mode="json") for hint in project.hints],
+        "intents": [item.model_dump(mode="json", by_alias=True) for item in intents],
+    }
+    serialized = _serialize(payload)
+    if len(serialized.encode()) <= MAX_SNAPSHOT_BYTES:
+        return serialized
+
+    bounded = {"project": payload["project"], "facts": [], "hints": [], "intents": []}
+    for section in ("facts", "hints", "intents"):
+        for item in payload[section]:
+            bounded[section].append(item)
+            candidate = _serialize(bounded)
+            if len(candidate.encode()) > MAX_SNAPSHOT_BYTES:
+                bounded[section].pop()
+                break
+    return _serialize(bounded)
+
+
+def _serialize(payload: object) -> str:
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _compact_fact(fact_id: str, description: str) -> dict[str, str]:
@@ -130,6 +142,8 @@ def newest_unclaimed_intent(
         for intent in project.intents
         if intent.to is None
         and intent.worker is None
+        and not intent.circuit_open
+        and (intent.retry_after is None or intent.retry_after <= time.time())
         and intent.id not in running_intent_ids
         and not is_bootstrap_intent(intent)
     ]

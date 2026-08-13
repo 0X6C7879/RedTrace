@@ -73,6 +73,22 @@ def test_explore_snapshot_only_contains_dependencies_and_bounds_large_facts() ->
     assert [item["id"] for item in payload["intents"]] == [intent.id]
 
 
+def test_reason_snapshot_has_hard_total_budget() -> None:
+    project = make_project()
+    project.facts.extend(
+        Fact(id=f"f{index:03}", description="x" * 5_000)
+        for index in range(100)
+    )
+
+    snapshot = project_policy.compact_snapshot(project)
+
+    assert len(snapshot.encode()) <= 64 * 1024
+    assert {fact["id"] for fact in json.loads(snapshot)["facts"]} >= {
+        "origin",
+        "goal",
+    }
+
+
 def test_reason_trigger_detects_new_facts_and_open_intent_completion() -> None:
     loop = _loop()
     project = make_project(intents=[make_intent()])
@@ -202,7 +218,7 @@ def test_select_worker_only_uses_workers_configured_for_task() -> None:
     assert selection.blocked_task_type == ["reason"]
 
 
-def test_new_fact_dispatches_reason_before_unclaimed_explore_intent() -> None:
+def test_new_fact_coalesces_reason_without_blocking_explore() -> None:
     loop = _loop()
     loop.config = make_config()
     loop.futures = {}
@@ -232,7 +248,9 @@ def test_new_fact_dispatches_reason_before_unclaimed_explore_intent() -> None:
     loop._dispatch_explore = lambda *_args: dispatched.append(("explore", "")) or True
 
     assert loop._try_dispatch_project(_summary("proj_001", "active"))
-    assert dispatched == [("reason", "facts:3->4")]
+    loop.reason_dirty_since["proj_001"] -= 10
+    assert loop._try_dispatch_project(_summary("proj_001", "active"))
+    assert dispatched == [("explore", ""), ("reason", "facts:3->4")]
 
 
 def test_ready_intent_dispatches_when_reason_worker_is_busy() -> None:
@@ -249,6 +267,8 @@ def test_ready_intent_dispatches_when_reason_worker_is_busy() -> None:
     dispatched: list[str] = []
     loop._dispatch_reason = lambda *_args: dispatched.append("reason") or False
     loop._dispatch_explore = lambda *_args: dispatched.append("explore") or True
+    assert not loop._reason_coalesce_ready("proj_001")
+    loop.reason_dirty_since["proj_001"] -= 10
 
     assert loop._try_dispatch_project(_summary("proj_001", "active"))
     assert dispatched == ["reason", "explore"]

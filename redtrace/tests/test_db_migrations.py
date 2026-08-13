@@ -17,6 +17,7 @@ def test_default_database_migrates_legacy_storage_without_leaving_user_files(
         conn.execute(
             "INSERT INTO projects (id, title, created_at) VALUES ('proj_legacy', 'legacy', '2026-01-01T00:00:00Z')"
         )
+    conn.close()
     (legacy / "audit" / "proj_legacy").mkdir(parents=True)
     (legacy / "audit" / "proj_legacy" / "report.txt").write_text("audit")
     (legacy / "payloads").mkdir()

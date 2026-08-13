@@ -35,6 +35,7 @@ UNHEALTHY_RETRY_AFTER_SECONDS = 5
 REJECTED_RETRY_AFTER_SECONDS = 5
 REASON_DEBOUNCE_SECONDS = 5
 TASK_RETRY_BACKOFF_SECONDS = (5, 15, 60, 300)
+REASON_COALESCE_SECONDS = 10
 
 
 def _local_cli_probe_command(path: str, *, platform: str = os.name) -> list[str]:
@@ -78,6 +79,7 @@ class DispatcherLoop:
         ] = {}
         self.reason_checkpoints: dict[str, ReasonCheckpoint] = {}
         self.reason_request_generations: dict[str, int] = {}
+        self.reason_dirty_since: dict[str, float] = {}
         self.runtime_project_ids: set[str] = set()
         self.worker_unhealthy_until: dict[str, float] = {}
         self.worker_rejected_until: dict[tuple[str, str, str], float] = {}
@@ -373,6 +375,10 @@ class DispatcherLoop:
             ),
             request_generation=self.reason_request_generations.get(summary.id, 0),
         )
+        reason_coalescing = (
+            summary_trigger not in (None, "initial")
+            and not self._reason_coalesce_ready(summary.id)
+        )
         if summary.unclaimed_intent_count == 0 and (
             summary.reason is not None or summary_trigger is None
         ):
@@ -404,15 +410,22 @@ class DispatcherLoop:
                 project_policy.compact_snapshot(project),
                 "initial",
             )
-        reason_trigger = (
-            self._reason_trigger(project) if project.project.reason is None else None
-        )
-        if reason_trigger is not None and self._dispatch_reason(
-            project,
-            project_policy.compact_snapshot(project),
-            reason_trigger,
-        ):
-            return True
+        if project.project.reason is None:
+            reason_blocked = project.project.reason_circuit_open or (
+                project.project.reason_retry_after is not None
+                and project.project.reason_retry_after > time.time()
+            )
+            reason_trigger = None if reason_blocked else self._reason_trigger(project)
+            if (
+                reason_trigger is not None
+                and not reason_coalescing
+                and self._dispatch_reason(
+                    project,
+                    project_policy.compact_snapshot(project),
+                    reason_trigger,
+                )
+            ):
+                return True
         running_intent_ids = self._project_running_explore_intents(summary.id)
         newest_intent = project_policy.newest_unclaimed_intent(
             project, running_intent_ids
@@ -839,10 +852,17 @@ class DispatcherLoop:
             request_generation=self.reason_request_generations.get(project_id, 0),
         )
 
+    def _reason_coalesce_ready(self, project_id: str) -> bool:
+        dirty = getattr(self, "reason_dirty_since", None)
+        if dirty is None:
+            dirty = self.reason_dirty_since = {}
+        started = dirty.setdefault(project_id, time.monotonic())
+        return time.monotonic() - started >= REASON_COALESCE_SECONDS
     def _reap_futures(self) -> None:
         done = [future for future in self.futures if future.done()]
         for future in done:
             task = self.futures.pop(future)
+            outcome_reported = False
             try:
                 outcome = future.result()
                 if outcome == "cancelled":
@@ -861,6 +881,32 @@ class DispatcherLoop:
                         outcome,
                     )
                 self._clear_project_log_state(task.project_id)
+                try:
+                    if task.task_type == "reason":
+                        reporter = getattr(self.client, "report_reason_outcome", None)
+                        if callable(reporter):
+                            reporter(task.project_id, task.worker_name, outcome)
+                    elif task.intent_id is not None and outcome not in {
+                        "success",
+                        "cancelled",
+                    }:
+                        reporter = getattr(self.client, "report_intent_outcome", None)
+                        if callable(reporter):
+                            reporter(
+                                task.project_id,
+                                task.intent_id,
+                                task.worker_name,
+                                outcome,
+                            )
+                except Exception:
+                    LOG.exception(
+                        "task outcome report failed project=%s task=%s worker=%s outcome=%s",
+                        task.project_id,
+                        task.task_type,
+                        task.worker_name,
+                        outcome,
+                    )
+                outcome_reported = True
                 if outcome == "unhealthy":
                     retry_after_seconds = UNHEALTHY_RETRY_AFTER_SECONDS
                     self.worker_unhealthy_until[task.worker_name] = (
@@ -932,6 +978,7 @@ class DispatcherLoop:
                         open_intent_count=task.open_intent_count,
                         request_generation=task.reason_request_generation,
                     )
+                    getattr(self, "reason_dirty_since", {}).pop(task.project_id, None)
                     LOG.debug(
                         "reason checkpoint updated project=%s facts=%s hints=%s open_intents=%s",
                         task.project_id,
@@ -946,6 +993,27 @@ class DispatcherLoop:
                     task.task_type,
                     task.worker_name,
                 )
+                if outcome_reported:
+                    continue
+                try:
+                    if task.task_type == "reason":
+                        self.client.report_reason_outcome(
+                            task.project_id, task.worker_name, "internal_error"
+                        )
+                    elif task.intent_id is not None:
+                        self.client.report_intent_outcome(
+                            task.project_id,
+                            task.intent_id,
+                            task.worker_name,
+                            "internal_error",
+                        )
+                except Exception:
+                    LOG.exception(
+                        "crashed task outcome report failed project=%s task=%s worker=%s",
+                        task.project_id,
+                        task.task_type,
+                        task.worker_name,
+                    )
 
     def _cleanup_completed_containers(self, summaries: list[ProjectSummary]) -> None:
         for summary in summaries:

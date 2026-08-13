@@ -282,13 +282,19 @@ def _loop(config: DispatchConfig, client: InProcessClient, containers: LocalCont
     return loop
 
 
-def _dispatch_and_wait(loop: DispatcherLoop) -> None:
+def _dispatch_and_wait(
+    loop: DispatcherLoop, *, allow_coalesced_reason: bool = False
+) -> None:
     loop._reap_futures()
     summaries = loop.client.list_projects()
     loop._initialize_reason_checkpoints(summaries)
     loop._refresh_runtime_projects(summaries)
     loop._cancel_inactive_tasks(summaries)
     loop._queue_container_cleanups(summaries)
+    if allow_coalesced_reason:
+        loop.reason_dirty_since = getattr(loop, "reason_dirty_since", {})
+        for summary in summaries:
+            loop.reason_dirty_since[summary.id] = 0.0
     loop._dispatch_available(summaries)
     assert loop.futures
     for future in list(loop.futures):
@@ -359,7 +365,7 @@ def test_mock_scheduler_runs_reason_explore_reason_complete_chain(http_client: T
         assert loop.reason_checkpoints[project_id] == ReasonCheckpoint(3, 0, 0)
         _dispatch_and_wait(loop)
         loop.reason_debounce_until.clear()
-        _dispatch_and_wait(loop)
+        _dispatch_and_wait(loop, allow_coalesced_reason=True)
         project = client.get_project(project_id)
     finally:
         loop.close()
