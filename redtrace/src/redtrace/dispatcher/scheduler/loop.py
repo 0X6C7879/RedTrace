@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
@@ -8,15 +7,14 @@ import subprocess
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
 
 import requests
 from redtrace.agent_runtime import AgentRuntimeManager
-from redtrace.dispatcher.config import LocalConfig, WorkerConfig
+from redtrace.board.models import Intent, ProjectDetail, ProjectSummary
+from redtrace.dispatcher.config import LocalConfig
 from redtrace.dispatcher.config_reload import DispatchConfigReloader
-from redtrace.dispatcher.models import ReasonCheckpoint, RunningTask
-from redtrace.dispatcher.protocol.client import CairnClient
+from redtrace.dispatcher.control_plane import ControlPlaneClient
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.local_backend import LocalBackend
@@ -24,16 +22,19 @@ from redtrace.dispatcher.runtime.startup_healthcheck import (
     format_failure_summary,
     run_startup_healthchecks,
 )
-from redtrace.dispatcher.scheduler.worker_select import choose_worker
+from redtrace.dispatcher.scheduler import project_policy
+from redtrace.dispatcher.scheduler.state import ReasonCheckpoint, RunningTask
+from redtrace.dispatcher.scheduler.worker_select import WorkerSelection, select_worker
 from redtrace.dispatcher.tasks.bootstrap import run_bootstrap_task
 from redtrace.dispatcher.tasks.explore import run_explore_task
 from redtrace.dispatcher.tasks.reason import run_reason_task
 from redtrace.dispatcher.workers.registry import get_driver
-from redtrace.server.models import Intent, ProjectDetail, ProjectSummary
 
 LOG = logging.getLogger(__name__)
 UNHEALTHY_RETRY_AFTER_SECONDS = 5
 REJECTED_RETRY_AFTER_SECONDS = 5
+REASON_DEBOUNCE_SECONDS = 5
+TASK_RETRY_BACKOFF_SECONDS = (5, 15, 60, 300)
 
 
 def _local_cli_probe_command(path: str, *, platform: str = os.name) -> list[str]:
@@ -41,44 +42,6 @@ def _local_cli_probe_command(path: str, *, platform: str = os.name) -> list[str]
         comspec = os.environ.get("COMSPEC", "cmd.exe")
         return [comspec, "/d", "/s", "/c", subprocess.list2cmdline([path, "--help"])]
     return [path, "--help"]
-
-
-BOOTSTRAP_INTENT_DESCRIPTION = "bootstrap"
-BOOTSTRAP_INTENT_CREATOR = "dispatcher.bootstrap"
-
-
-def _compact_project_snapshot(project: ProjectDetail) -> str:
-    """Serialize only scheduling context already fetched with ProjectDetail.
-
-    Live resources remain available on demand through redtrace-resource, so a
-    dispatch never needs a second HTTP export or its extra SQL/YAML work.
-    """
-    return json.dumps(
-        {
-            "project": {
-                "title": project.project.title,
-                "status": project.project.status,
-                "bootstrap_enabled": project.project.bootstrap_enabled,
-            },
-            "facts": [fact.model_dump(mode="json") for fact in project.facts],
-            "hints": [hint.model_dump(mode="json") for hint in project.hints],
-            "intents": [
-                intent.model_dump(mode="json", by_alias=True)
-                for intent in project.intents
-            ],
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-@dataclass(slots=True)
-class WorkerSelection:
-    worker: WorkerConfig | None
-    blocked_busy: list[str]
-    blocked_unhealthy: list[str]
-    blocked_rejected: list[str]
-    blocked_task_type: list[str]
 
 
 class DispatcherLoop:
@@ -91,7 +54,7 @@ class DispatcherLoop:
             execution=self.config.runtime.execution,
         )
         self.agent_runtime.initialize(self.config.workers)
-        self.client = CairnClient(self.config.server)
+        self.client = ControlPlaneClient(self.config.server)
         if self.config.runtime.execution == "local":
             self.container_manager = LocalBackend(
                 self.config.local or LocalConfig(),
@@ -114,9 +77,14 @@ class DispatcherLoop:
             Future[bool], tuple[str, str | None, str | None]
         ] = {}
         self.reason_checkpoints: dict[str, ReasonCheckpoint] = {}
+        self.reason_request_generations: dict[str, int] = {}
         self.runtime_project_ids: set[str] = set()
         self.worker_unhealthy_until: dict[str, float] = {}
         self.worker_rejected_until: dict[tuple[str, str, str], float] = {}
+        self.explore_retry_avoid: dict[tuple[str, str], str] = {}
+        self.task_failures: dict[tuple[str, str, str | None], int] = {}
+        self.task_retry_until: dict[tuple[str, str, str | None], float] = {}
+        self.reason_debounce_until: dict[str, float] = {}
         self._log_state: dict[str, tuple[int, str, tuple[object, ...]]] = {}
         self._cleanup_pending: set[str] = set()
         self._inactive_cleanup_done: dict[str, str] = {}
@@ -366,15 +334,10 @@ class DispatcherLoop:
     def _ordered_projects(
         self, summaries: list[ProjectSummary]
     ) -> list[ProjectSummary]:
-        if not summaries:
-            return []
-        ids = [summary.id for summary in summaries]
-        ids.sort()
-        offset = self.project_cursor % len(ids)
-        ordered_ids = ids[offset:] + ids[:offset]
-        by_id = {summary.id: summary for summary in summaries}
-        self.project_cursor += 1
-        return [by_id[project_id] for project_id in ordered_ids]
+        ordered, self.project_cursor = project_policy.rotate_projects(
+            summaries, self.project_cursor
+        )
+        return ordered
 
     def _try_dispatch_project(self, summary: ProjectSummary) -> bool:
         skip_scope = f"project:{summary.id}:skip"
@@ -401,11 +364,14 @@ class DispatcherLoop:
             )
             return False
 
-        summary_trigger = self._reason_trigger_counts(
-            summary.id,
-            summary.fact_count,
-            summary.hint_count,
-            summary.working_intent_count + summary.unclaimed_intent_count,
+        summary_trigger = project_policy.reason_trigger(
+            self.reason_checkpoints.get(summary.id),
+            fact_count=summary.fact_count,
+            hint_count=summary.hint_count,
+            open_intents=(
+                summary.working_intent_count + summary.unclaimed_intent_count
+            ),
+            request_generation=self.reason_request_generations.get(summary.id, 0),
         )
         if summary.unclaimed_intent_count == 0 and (
             summary.reason is not None or summary_trigger is None
@@ -422,34 +388,36 @@ class DispatcherLoop:
                 project.project.status,
             )
             return False
-        if self._is_initial_project(project):
+        if project_policy.is_initial(project):
             if project.project.reason is not None:
                 return False
-            if self._project_requires_bootstrap(project):
+            if project_policy.requires_bootstrap(project) and (
+                project_policy.bootstrap_intent(project) is not None
+                or any(
+                    worker.enabled and "bootstrap" in worker.task_types
+                    for worker in self.config.workers
+                )
+            ):
                 return self._dispatch_initial_project(project)
             return self._dispatch_reason(
                 project,
-                _compact_project_snapshot(project),
+                project_policy.compact_snapshot(project),
                 "initial",
             )
-        if project.project.reason is None:
-            reason_trigger = self._reason_trigger(project)
-            if reason_trigger is not None:
-                return self._dispatch_reason(
-                    project,
-                    _compact_project_snapshot(project),
-                    reason_trigger,
-                )
+        reason_trigger = (
+            self._reason_trigger(project) if project.project.reason is None else None
+        )
+        if reason_trigger is not None and self._dispatch_reason(
+            project,
+            project_policy.compact_snapshot(project),
+            reason_trigger,
+        ):
+            return True
         running_intent_ids = self._project_running_explore_intents(summary.id)
-        unclaimed_intents = [
-            intent
-            for intent in project.intents
-            if intent.to is None
-            and intent.worker is None
-            and intent.id not in running_intent_ids
-            and not self._is_bootstrap_intent(intent)
-        ]
-        if running_intent_ids and not unclaimed_intents:
+        newest_intent = project_policy.newest_unclaimed_intent(
+            project, running_intent_ids
+        )
+        if running_intent_ids and newest_intent is None:
             self._log_changed(
                 f"{skip_scope}:explore_running",
                 logging.DEBUG,
@@ -457,12 +425,11 @@ class DispatcherLoop:
                 summary.id,
                 sorted(running_intent_ids),
             )
-        if unclaimed_intents:
-            newest = max(unclaimed_intents, key=lambda i: i.created_at)
+        if newest_intent is not None:
             return self._dispatch_explore(
                 project,
-                _compact_project_snapshot(project),
-                newest,
+                project_policy.compact_snapshot(project, newest_intent),
+                newest_intent,
             )
         if project.project.reason is not None:
             self._log_changed(
@@ -476,17 +443,17 @@ class DispatcherLoop:
         self._log_changed(
             f"{skip_scope}:graph_unchanged",
             logging.DEBUG,
-            "skip reason project=%s because reason state unchanged facts=%s hints=%s open_intents=%s intents=%s",
+            "skip reason project=%s because planning state is unchanged facts=%s hints=%s open_intents=%s intents=%s",
             summary.id,
             len(project.facts),
             len(project.hints),
-            self._project_open_intent_count(project),
+            project_policy.open_intent_count(project),
             len(project.intents),
         )
         return False
 
     def _dispatch_initial_project(self, project: ProjectDetail) -> bool:
-        intent = self._get_bootstrap_intent(project)
+        intent = project_policy.bootstrap_intent(project)
         if intent is None:
             intent = self._create_bootstrap_intent(project.project.id)
             if intent is None:
@@ -514,17 +481,24 @@ class DispatcherLoop:
     def _dispatch_reason(
         self, project: ProjectDetail, export_yaml: str, trigger: str
     ) -> bool:
+        if self._task_retry_blocked((project.project.id, "reason", None)):
+            return False
+        if trigger != "initial" and time.time() < self.reason_debounce_until.get(
+            project.project.id, 0
+        ):
+            return False
         selection = self._select_worker(project.project.id, "reason")
         worker = selection.worker
         if worker is None:
             self._log_changed(
                 f"project:{project.project.id}:worker:reason",
                 logging.INFO,
-                "no worker available for reason project=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s",
+                "no worker available for reason project=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s",
                 project.project.id,
                 selection.blocked_busy,
                 selection.blocked_unhealthy,
                 selection.blocked_rejected,
+                selection.blocked_task_type,
             )
             return False
         self._clear_log_state(f"project:{project.project.id}:worker:reason")
@@ -560,7 +534,7 @@ class DispatcherLoop:
             )
         except Exception:
             LOG.exception(
-                "failed to submit reason task project=%s worker=%s",
+                "failed to submit reason project=%s worker=%s",
                 project.project.id,
                 worker.name,
             )
@@ -574,7 +548,10 @@ class DispatcherLoop:
             intent_id=None,
             fact_count=len(project.facts),
             hint_count=len(project.hints),
-            open_intent_count=self._project_open_intent_count(project),
+            open_intent_count=project_policy.open_intent_count(project),
+            reason_request_generation=self.reason_request_generations.get(
+                project.project.id, 0
+            ),
         )
         future.add_done_callback(lambda _future: self._wakeup.set())
         self.runtime_project_ids.add(project.project.id)
@@ -594,12 +571,13 @@ class DispatcherLoop:
             self._log_changed(
                 f"project:{project.project.id}:worker:bootstrap",
                 logging.INFO,
-                "no worker available for bootstrap project=%s intent=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s",
+                "no worker available for bootstrap project=%s intent=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s",
                 project.project.id,
                 intent.id,
                 selection.blocked_busy,
                 selection.blocked_unhealthy,
                 selection.blocked_rejected,
+                selection.blocked_task_type,
             )
             return False
         self._clear_log_state(f"project:{project.project.id}:worker:bootstrap")
@@ -665,18 +643,26 @@ class DispatcherLoop:
     def _dispatch_explore(
         self, project: ProjectDetail, export_yaml: str, intent: Intent
     ) -> bool:
-        selection = self._select_worker(project.project.id, "explore")
+        retry_key = (project.project.id, intent.id)
+        if self._task_retry_blocked((project.project.id, "explore", intent.id)):
+            return False
+        selection = self._select_worker(
+            project.project.id,
+            "explore",
+            avoid_worker=self.explore_retry_avoid.get(retry_key),
+        )
         worker = selection.worker
         if worker is None:
             self._log_changed(
                 f"project:{project.project.id}:worker:explore",
                 logging.INFO,
-                "no worker available for explore project=%s intent=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s",
+                "no worker available for explore project=%s intent=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s",
                 project.project.id,
                 intent.id,
                 selection.blocked_busy,
                 selection.blocked_unhealthy,
                 selection.blocked_rejected,
+                selection.blocked_task_type,
             )
             return False
         self._clear_log_state(f"project:{project.project.id}:worker:explore")
@@ -740,74 +726,35 @@ class DispatcherLoop:
         )
         return True
 
-    def _select_worker(self, project_id: str, task_type: str) -> WorkerSelection:
-        now = time.time()
-        candidates: list[WorkerConfig] = []
-        blocked_busy: list[str] = []
-        blocked_unhealthy: list[str] = []
-        blocked_rejected: list[str] = []
-        blocked_task_type: list[str] = []
+    def _select_worker(
+        self,
+        project_id: str,
+        work_kind: str,
+        *,
+        avoid_worker: str | None = None,
+    ) -> WorkerSelection:
         running_counts = self._worker_counts()
-        for worker in self.config.workers:
-            if not worker.enabled:
-                continue
-            if task_type not in worker.task_types:
-                blocked_task_type.append(worker.name)
-                continue
-            running = running_counts.get(worker.name, 0)
-            if running >= worker.max_running:
-                blocked_busy.append(f"{worker.name}({running}/{worker.max_running})")
-                continue
-            unhealthy_until = self.worker_unhealthy_until.get(worker.name, 0)
-            if unhealthy_until > now:
-                blocked_unhealthy.append(f"{worker.name}({unhealthy_until - now:.1f}s)")
-                continue
-            rejected_until = self.worker_rejected_until.get(
-                (project_id, task_type, worker.name), 0
-            )
-            if rejected_until > now:
-                blocked_rejected.append(f"{worker.name}({rejected_until - now:.1f}s)")
-                continue
-            candidates.append(worker)
-        if not candidates:
-            LOG.debug(
-                "worker selection project=%s task=%s no candidates blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s",
-                project_id,
-                task_type,
-                blocked_busy,
-                blocked_unhealthy,
-                blocked_rejected,
-                blocked_task_type,
-            )
-            return WorkerSelection(
-                worker=None,
-                blocked_busy=blocked_busy,
-                blocked_unhealthy=blocked_unhealthy,
-                blocked_rejected=blocked_rejected,
-                blocked_task_type=blocked_task_type,
-            )
-        ordered = choose_worker(candidates, running_counts)
+        selection = select_worker(
+            self.config.workers,
+            running_counts,
+            self.worker_unhealthy_until,
+            self.worker_rejected_until,
+            project_id=project_id,
+            work_kind=work_kind,
+            now=time.time(),
+            avoid_worker=avoid_worker,
+        )
         LOG.debug(
-            "worker selection project=%s task=%s candidates=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s chosen=%s",
+            "worker selection project=%s work=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s chosen=%s",
             project_id,
-            task_type,
-            [
-                f"{worker.name}({running_counts.get(worker.name, 0)}/{worker.max_running},p{worker.priority})"
-                for worker in candidates
-            ],
-            blocked_busy,
-            blocked_unhealthy,
-            blocked_rejected,
-            blocked_task_type,
-            ordered[0].name if ordered else None,
+            work_kind,
+            selection.blocked_busy,
+            selection.blocked_unhealthy,
+            selection.blocked_rejected,
+            selection.blocked_task_type,
+            selection.worker.name if selection.worker else None,
         )
-        return WorkerSelection(
-            worker=ordered[0] if ordered else None,
-            blocked_busy=blocked_busy,
-            blocked_unhealthy=blocked_unhealthy,
-            blocked_rejected=blocked_rejected,
-            blocked_task_type=blocked_task_type,
-        )
+        return selection
 
     def _worker_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -852,58 +799,12 @@ class DispatcherLoop:
         active_ids = {summary.id for summary in summaries if summary.status == "active"}
         return len(self.runtime_project_ids & active_ids)
 
-    def _project_open_intent_count(self, project: ProjectDetail) -> int:
-        return sum(1 for intent in project.intents if intent.to is None)
-
-    def _is_bootstrap_intent(self, intent: Intent) -> bool:
-        return (
-            intent.description == BOOTSTRAP_INTENT_DESCRIPTION
-            and intent.creator == BOOTSTRAP_INTENT_CREATOR
-            and intent.from_ == ["origin"]
-            and intent.to is None
-        )
-
-    def _get_bootstrap_intent(self, project: ProjectDetail) -> Intent | None:
-        intents = [
-            intent for intent in project.intents if self._is_bootstrap_intent(intent)
-        ]
-        if not intents:
-            return None
-        if len(intents) > 1:
-            LOG.warning(
-                "project has multiple bootstrap intents project=%s intents=%s",
-                project.project.id,
-                [intent.id for intent in intents],
-            )
-        intents.sort(
-            key=lambda intent: (intent.worker is not None, intent.created_at, intent.id)
-        )
-        return intents[0]
-
-    def _is_initial_project(self, project: ProjectDetail) -> bool:
-        fact_ids = {fact.id for fact in project.facts}
-        if fact_ids != {"origin", "goal"} or len(project.facts) != 2:
-            return False
-        if not project.intents:
-            return True
-        return all(self._is_bootstrap_intent(intent) for intent in project.intents)
-
-    def _project_requires_bootstrap(self, project: ProjectDetail) -> bool:
-        if not project.project.bootstrap_enabled:
-            return False
-        if self._get_bootstrap_intent(project) is not None:
-            return True
-        return any(
-            worker.enabled and "bootstrap" in worker.task_types
-            for worker in self.config.workers
-        )
-
     def _create_bootstrap_intent(self, project_id: str) -> Intent | None:
         response = self.client.create_intent(
             project_id,
             ["origin"],
-            BOOTSTRAP_INTENT_DESCRIPTION,
-            BOOTSTRAP_INTENT_CREATOR,
+            project_policy.BOOTSTRAP_DESCRIPTION,
+            project_policy.BOOTSTRAP_CREATOR,
         )
         if response.status_code == 403:
             LOG.info(
@@ -929,33 +830,14 @@ class DispatcherLoop:
         return intent
 
     def _reason_trigger(self, project: ProjectDetail) -> str | None:
-        return self._reason_trigger_counts(
-            project.project.id,
-            len(project.facts),
-            len(project.hints),
-            self._project_open_intent_count(project),
+        project_id = project.project.id
+        return project_policy.reason_trigger(
+            self.reason_checkpoints.get(project_id),
+            fact_count=len(project.facts),
+            hint_count=len(project.hints),
+            open_intents=project_policy.open_intent_count(project),
+            request_generation=self.reason_request_generations.get(project_id, 0),
         )
-
-    def _reason_trigger_counts(
-        self,
-        project_id: str,
-        fact_count: int,
-        hint_count: int,
-        open_intent_count: int,
-    ) -> str | None:
-        checkpoint = self.reason_checkpoints.get(project_id)
-        if checkpoint is None:
-            return "initial"
-        changes: list[str] = []
-        if fact_count > checkpoint.fact_count:
-            changes.append(f"facts:{checkpoint.fact_count}->{fact_count}")
-        if hint_count > checkpoint.hint_count:
-            changes.append(f"hints:{checkpoint.hint_count}->{hint_count}")
-        if checkpoint.open_intent_count > 0 and open_intent_count == 0:
-            changes.append(f"open_intents:{checkpoint.open_intent_count}->0")
-        if not changes:
-            return None
-        return ",".join(changes)
 
     def _reap_futures(self) -> None:
         done = [future for future in self.futures if future.done()]
@@ -998,22 +880,57 @@ class DispatcherLoop:
                         time.time() + retry_after_seconds
                     )
                     LOG.info(
-                        "worker marked rejected project=%s task=%s worker=%s retry_after=%.0fs",
+                        "worker temporarily excluded project=%s task=%s worker=%s outcome=%s retry_after=%.0fs",
                         task.project_id,
                         task.task_type,
                         task.worker_name,
+                        outcome,
                         retry_after_seconds,
                     )
                 else:
                     self.worker_rejected_until.pop(rejection_key, None)
+                task_retry_key = (task.project_id, task.task_type, task.intent_id)
+                if outcome in {"success", "cancelled"}:
+                    self.task_failures.pop(task_retry_key, None)
+                    self.task_retry_until.pop(task_retry_key, None)
+                elif outcome not in {"unhealthy", "rejected"}:
+                    failures = self.task_failures.get(task_retry_key, 0) + 1
+                    delay = TASK_RETRY_BACKOFF_SECONDS[
+                        min(failures - 1, len(TASK_RETRY_BACKOFF_SECONDS) - 1)
+                    ]
+                    self.task_failures[task_retry_key] = failures
+                    self.task_retry_until[task_retry_key] = time.time() + delay
+                    LOG.warning(
+                        "task retry backed off project=%s task=%s intent=%s failures=%s retry_after=%ss",
+                        task.project_id,
+                        task.task_type,
+                        task.intent_id,
+                        failures,
+                        delay,
+                    )
+                if task.task_type == "explore" and task.intent_id is not None:
+                    retry_key = (task.project_id, task.intent_id)
+                    if outcome in {"failed", "rejected"}:
+                        self.explore_retry_avoid[retry_key] = task.worker_name
+                    elif outcome in {"success", "cancelled"}:
+                        self.explore_retry_avoid.pop(retry_key, None)
+                if outcome == "success" and task.task_type in {"bootstrap", "explore"}:
+                    self.reason_request_generations[task.project_id] = (
+                        self.reason_request_generations.get(task.project_id, 0) + 1
+                    )
+                    self.reason_debounce_until[task.project_id] = (
+                        time.time() + REASON_DEBOUNCE_SECONDS
+                    )
                 if outcome == "success" and task.task_type == "reason":
                     assert task.fact_count is not None
                     assert task.hint_count is not None
                     assert task.open_intent_count is not None
+                    assert task.reason_request_generation is not None
                     self.reason_checkpoints[task.project_id] = ReasonCheckpoint(
                         fact_count=task.fact_count,
                         hint_count=task.hint_count,
                         open_intent_count=task.open_intent_count,
+                        request_generation=task.reason_request_generation,
                     )
                     LOG.debug(
                         "reason checkpoint updated project=%s facts=%s hints=%s open_intents=%s",
@@ -1143,6 +1060,26 @@ class DispatcherLoop:
     def _refresh_runtime_projects(self, summaries: list[ProjectSummary]) -> None:
         active_ids = {summary.id for summary in summaries if summary.status == "active"}
         self.runtime_project_ids.intersection_update(active_ids)
+        self.explore_retry_avoid = {
+            key: worker
+            for key, worker in self.explore_retry_avoid.items()
+            if key[0] in active_ids
+        }
+        self.task_failures = {
+            key: failures
+            for key, failures in self.task_failures.items()
+            if key[0] in active_ids
+        }
+        self.task_retry_until = {
+            key: deadline
+            for key, deadline in self.task_retry_until.items()
+            if key[0] in active_ids
+        }
+        self.reason_debounce_until = {
+            project_id: deadline
+            for project_id, deadline in self.reason_debounce_until.items()
+            if project_id in active_ids
+        }
         inactive_status_by_id = {
             summary.id: summary.status
             for summary in summaries
@@ -1181,6 +1118,7 @@ class DispatcherLoop:
                 fact_count=summary.fact_count,
                 hint_count=summary.hint_count,
                 open_intent_count=open_intent_count,
+                request_generation=self.reason_request_generations.get(summary.id, 0),
             )
             LOG.debug(
                 "reason checkpoint initialized project=%s facts=%s hints=%s open_intents=%s",
@@ -1202,6 +1140,11 @@ class DispatcherLoop:
                 worker_name,
                 response.status_code,
             )
+
+    def _task_retry_blocked(
+        self, key: tuple[str, str, str | None], *, now: float | None = None
+    ) -> bool:
+        return (time.time() if now is None else now) < self.task_retry_until.get(key, 0)
 
     def _best_effort_release_reason(self, project_id: str, worker_name: str) -> None:
         response = self.client.release_reason(project_id, worker_name)
@@ -1284,6 +1227,11 @@ class DispatcherLoop:
             key: until
             for key, until in self.worker_rejected_until.items()
             if key[2] in active_names
+        }
+        self.explore_retry_avoid = {
+            key: worker
+            for key, worker in self.explore_retry_avoid.items()
+            if worker in active_names
         }
         self._clear_log_state("dispatch/config-reload")
         LOG.info(

@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 import time
 
+from redtrace.board.models import ProjectDetail
 from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
 from redtrace.dispatcher.contracts import parse_json_output, validate_reason_payload
+from redtrace.dispatcher.control_plane import ControlPlaneClient
 from redtrace.dispatcher.prompting import (
     add_blackboard_guidance,
     format_fact_ids,
@@ -12,29 +14,37 @@ from redtrace.dispatcher.prompting import (
     load_prompt,
     render_prompt,
 )
-from redtrace.dispatcher.protocol.client import CairnClient
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
 from redtrace.dispatcher.tasks.common import (
+    BlackboardInbox,
     best_effort_release_reason,
     cancel_reason,
     did_timeout,
+    preflight_worker,
     preview,
     run_worker_process,
-    task_healthcheck_enabled,
     write_graph_snapshot_reference,
 )
 from redtrace.dispatcher.workers.registry import get_driver
-from redtrace.server.models import ProjectDetail
 
 LOG = logging.getLogger(__name__)
 FORMAT_REPAIR_TIMEOUT_SECONDS = 60
 
 
+def _intent_target(config: DispatchConfig) -> int:
+    explore_capacity = min(
+        config.runtime.max_workers,
+        config.runtime.max_project_workers,
+        sum(worker.max_running for worker in config.workers if worker.enabled),
+    )
+    return min(config.tasks.reason.max_intents, max(1, explore_capacity + 1))
+
+
 def run_reason_task(
     config: DispatchConfig,
-    client: CairnClient,
+    client: ControlPlaneClient,
     container_manager: ContainerManager,
     project: ProjectDetail,
     export_yaml: str,
@@ -43,47 +53,41 @@ def run_reason_task(
 ) -> str:
     driver = get_driver(worker.type, config.runtime.execution)
     task_started = time.perf_counter()
-    healthcheck_timeout = config.runtime.healthcheck_timeout
     lease = HeartbeatLease.for_reason(
         client, project.project.id, worker.name, config.runtime.interval
     )
+    inbox: BlackboardInbox | None = None
     lease.start()
     try:
         container_name = container_manager.ensure_running(project.project.id)
 
-        if task_healthcheck_enabled(config):
-            LOG.info(
-                "checking worker health project=%s worker=%s timeout=%ss",
-                project.project.id,
-                worker.name,
-                healthcheck_timeout,
+        early_result = preflight_worker(
+            config,
+            driver,
+            worker,
+            cancellation,
+            lease,
+            project_id=project.project.id,
+            task_type="reason",
+        )
+        if early_result is not None:
+            return early_result
+        if worker.type != "mock" and callable(
+            getattr(client, "wait_for_blackboard", None)
+        ):
+            inbox = BlackboardInbox(
+                client,
+                container_manager,
+                container_name,
+                project_id=project.project.id,
+                intent_id=None,
+                intent_description="",
+                source_fact_ids=[],
+                worker_name=worker.name,
+                revision=project.blackboard_revision,
+                task_type="reason",
+                all_facts=True,
             )
-            health = driver.check_health(worker, timeout=healthcheck_timeout)
-            if cancellation.is_cancelled:
-                LOG.info(
-                    "reason cancelled during healthcheck project=%s worker=%s reason=%s",
-                    project.project.id,
-                    worker.name,
-                    cancellation.reason,
-                )
-                return "cancelled"
-            if lease.failure is not None:
-                LOG.warning(
-                    "heartbeat lost during reason healthcheck project=%s worker=%s status=%s",
-                    project.project.id,
-                    worker.name,
-                    lease.failure.status_code,
-                )
-                return "failed"
-            if not health.ok:
-                LOG.warning(
-                    "worker unhealthy project=%s worker=%s status=%s detail=%s",
-                    project.project.id,
-                    worker.name,
-                    health.status,
-                    health.detail,
-                )
-                return "unhealthy"
         open_intents = [
             {
                 "id": intent.id,
@@ -94,9 +98,8 @@ def run_reason_task(
             for intent in project.intents
             if intent.to is None
         ]
-        available_intent_slots = max(
-            0, config.tasks.reason.max_intents - len(open_intents)
-        )
+        intent_target = _intent_target(config)
+        available_intent_slots = max(0, intent_target - len(open_intents))
         allowed_fact_ids = [fact.id for fact in project.facts if fact.id != "goal"]
         LOG.debug(
             "reason context prepared project=%s worker=%s facts=%s allowed_fact_ids=%s hints=%s open_intents=%s",
@@ -118,7 +121,7 @@ def run_reason_task(
                 ),
                 "fact_ids": format_fact_ids(allowed_fact_ids),
                 "open_intents": format_open_intents(open_intents),
-                "max_intents": str(config.tasks.reason.max_intents),
+                "max_intents": str(intent_target),
             },
         )
         if worker.type != "mock":
@@ -146,10 +149,18 @@ def run_reason_task(
             timeout_seconds=config.tasks.reason.timeout,
             lease=lease,
             cancellation=cancellation,
+            blackboard_inbox=inbox,
+            live_control=command.live_control,
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
         total_ms = int((time.perf_counter() - task_started) * 1000)
         session = driver.extract_session(session, result.stdout, result.stderr)
+        if command.live_control is not None:
+            session = (
+                getattr(command.live_control, "session_file", None)
+                or getattr(command.live_control, "session_id", None)
+                or session
+            )
         cancelled = cancel_reason(result, cancellation)
         if cancelled is not None:
             LOG.info(
@@ -199,6 +210,7 @@ def run_reason_task(
                 payload,
                 open_intents_empty=not open_intents,
                 max_intents=available_intent_slots,
+                valid_fact_ids=set(allowed_fact_ids),
             )
         except Exception as exc:
             if not driver.supports_conclude() or session is None:
@@ -245,6 +257,8 @@ def run_reason_task(
                     ),
                     lease=lease,
                     cancellation=cancellation,
+                    blackboard_inbox=inbox,
+                    live_control=repair_command.live_control,
                 )
             except Exception as repair_exc:
                 LOG.warning(
@@ -263,7 +277,11 @@ def run_reason_task(
                     cancelled,
                 )
                 return "cancelled"
-            if lease.failure is not None or did_timeout(repair) or repair.returncode != 0:
+            if (
+                lease.failure is not None
+                or did_timeout(repair)
+                or repair.returncode != 0
+            ):
                 LOG.warning(
                     "reason format repair failed project=%s worker=%s code=%s timed_out=%s stdout_preview=%s stderr_preview=%s",
                     project.project.id,
@@ -283,6 +301,7 @@ def run_reason_task(
                     payload,
                     open_intents_empty=not open_intents,
                     max_intents=available_intent_slots,
+                    valid_fact_ids=set(allowed_fact_ids),
                 )
             except Exception as repair_exc:
                 LOG.warning(
@@ -405,5 +424,7 @@ def run_reason_task(
         )
         return "success"
     finally:
+        if inbox is not None:
+            inbox.stop()
         lease.stop()
         best_effort_release_reason(client, project.project.id, worker.name)

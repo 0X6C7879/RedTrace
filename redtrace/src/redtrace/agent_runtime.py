@@ -59,7 +59,6 @@ class AgentRuntimeManager:
                 self.runtime / "tools" / "bin",
                 self.runtime / "mcp",
                 self.runtime / "pi",
-                self.paths.projects,
                 self.paths.workspaces,
                 self.paths.audit,
             ):

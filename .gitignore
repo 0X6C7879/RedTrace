@@ -6,7 +6,7 @@ __pycache__/
 output/playwright/
 output/
 .redtrace/
-dispatch.local.yaml
+redtrace.local.yaml
 .venv/
 venv/
 env/
@@ -15,14 +15,24 @@ env/
 datas/
 workspaces/
 proj_002/
-dispatch.yaml
+redtrace.yaml
 .redtrace-secrets/
 server.log
 dispatcher.log
+logs/
 skills/.redtrace/inbox/
 skills/.redtrace/locks/
 # 白盒私有案例：不进入公开仓库，可用 REDTRACE_CODE_AUDIT_PRIVATE_CASES_DIR 提供
 skills/route-skills/upstream/skills/code-audit/references/cases/internal-cases.json
+skills/route-skills/upstream/work/
+skills/route-skills/upstream/skills/tool-index.md
+skills/route-skills/upstream/skills/tool-index.json
+skills/route-skills/upstream/skills/.redtrace-*.lock
+skills/route-skills/upstream/skills/.redtrace-*.lock.d/
+skills/route-skills/upstream/burp-mcp-full/.gradle/
+skills/route-skills/upstream/burp-mcp-full/build/
+skills/route-skills/upstream/burp-mcp-full/lib/
+skills/route-skills/upstream/skills/apk-reverse/debug.keystore
 data/private/
 # 迁移临时脚本
 tmp_*.ps1
@@ -39,3 +49,7 @@ nul
 benchpacks/__pycache__/
 benchpacks/.runtime/
 benchpacks/results/
+
+# 顶层设计文档不提交到公开仓库（docs/ 与 redtrace/tests/ 随代码推送）
+design-qa.md
+design-qa-*.png

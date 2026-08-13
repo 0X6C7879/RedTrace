@@ -4,41 +4,44 @@ import logging
 import re
 import time
 
+from redtrace.board.models import Intent, ProjectDetail
 from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
 from redtrace.dispatcher.contracts import parse_json_output, validate_explore_payload
+from redtrace.dispatcher.control_plane import ControlPlaneClient
 from redtrace.dispatcher.prompting import (
     add_blackboard_guidance,
     format_hints,
     load_prompt,
     render_prompt,
 )
-from redtrace.dispatcher.protocol.client import CairnClient
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
 from redtrace.dispatcher.tasks.common import (
+    BlackboardInbox,
     best_effort_release,
     cancel_reason,
     did_timeout,
-    project_allows_conclude_fallback,
+    preflight_worker,
     preview,
+    project_allows_conclude_fallback,
     run_worker_process,
-    task_healthcheck_enabled,
     write_conclude_result,
     write_graph_snapshot_reference,
 )
 from redtrace.dispatcher.workers.registry import get_driver
-from redtrace.server.models import Intent, ProjectDetail
 
 LOG = logging.getLogger(__name__)
 _ACCESS_CHANNEL = re.compile(
     r"web\s*shell|reverse\s*shell|c2\s*session|反弹\s*shell|反向\s*shell|持久.{0,8}通道",
     re.IGNORECASE,
 )
-_RESOURCE_ID = re.compile(r"\b(?:ws|lis|ses|pay)_[0-9a-f]{12}\b", re.IGNORECASE)
+_ACCESS_RESOURCE_ID = re.compile(r"\b(?:ws|ses)_[0-9a-f]{12}\b", re.IGNORECASE)
+
+
 def run_explore_task(
     config: DispatchConfig,
-    client: CairnClient,
+    client: ControlPlaneClient,
     container_manager: ContainerManager,
     project: ProjectDetail,
     export_yaml: str,
@@ -48,54 +51,27 @@ def run_explore_task(
 ) -> str:
     driver = get_driver(worker.type, config.runtime.execution)
     task_started = time.perf_counter()
-    healthcheck_timeout = config.runtime.healthcheck_timeout
     lease = HeartbeatLease.for_intent(
         client, project.project.id, intent.id, worker.name, config.runtime.interval
     )
+    inbox: BlackboardInbox | None = None
     lease.start()
     try:
         container_name = container_manager.ensure_running(project.project.id)
 
-        if task_healthcheck_enabled(config):
-            LOG.info(
-                "checking worker health project=%s intent=%s worker=%s timeout=%ss",
-                project.project.id,
-                intent.id,
-                worker.name,
-                healthcheck_timeout,
-            )
-            health = driver.check_health(worker, timeout=healthcheck_timeout)
-            if cancellation.is_cancelled:
-                LOG.info(
-                    "explore cancelled during healthcheck project=%s intent=%s worker=%s reason=%s",
-                    project.project.id,
-                    intent.id,
-                    worker.name,
-                    cancellation.reason,
-                )
-                best_effort_release(client, project.project.id, intent.id, worker.name)
-                return "cancelled"
-            if lease.failure is not None:
-                LOG.warning(
-                    "heartbeat lost during explore healthcheck project=%s intent=%s worker=%s status=%s",
-                    project.project.id,
-                    intent.id,
-                    worker.name,
-                    lease.failure.status_code,
-                )
-                best_effort_release(client, project.project.id, intent.id, worker.name)
-                return "failed"
-            if not health.ok:
-                LOG.warning(
-                    "worker unhealthy project=%s intent=%s worker=%s status=%s detail=%s",
-                    project.project.id,
-                    intent.id,
-                    worker.name,
-                    health.status,
-                    health.detail,
-                )
-                best_effort_release(client, project.project.id, intent.id, worker.name)
-                return "unhealthy"
+        early_result = preflight_worker(
+            config,
+            driver,
+            worker,
+            cancellation,
+            lease,
+            project_id=project.project.id,
+            task_type="explore",
+            intent_id=intent.id,
+        )
+        if early_result is not None:
+            best_effort_release(client, project.project.id, intent.id, worker.name)
+            return early_result
 
         graph_reference = write_graph_snapshot_reference(
             container_manager,
@@ -103,6 +79,20 @@ def run_explore_task(
             export_yaml.strip(),
             phase="explore_execute",
         )
+        if worker.type != "mock" and callable(
+            getattr(client, "wait_for_blackboard", None)
+        ):
+            inbox = BlackboardInbox(
+                client,
+                container_manager,
+                container_name,
+                project_id=project.project.id,
+                intent_id=intent.id,
+                intent_description=intent.description,
+                source_fact_ids=intent.from_,
+                worker_name=worker.name,
+                revision=project.blackboard_revision,
+            )
         prompt = render_prompt(
             load_prompt(config.runtime.prompt_group, "explore.md"),
             {
@@ -118,32 +108,31 @@ def run_explore_task(
                 task_type="explore",
                 context_harness_enabled=config.context_harness.enabled,
                 local_execution=config.runtime.execution == "local",
-                hints=format_hints(
-                    [hint.model_dump() for hint in project.hints]
-                ),
+                hints=format_hints([hint.model_dump() for hint in project.hints]),
             )
 
         session = driver.prepare_session()
         execute = driver.build_execute(worker, prompt, session)
         session = execute.session
         execute_started = time.perf_counter()
-        first = _run_process(
+        first, session = _run_with_steering(
+            driver,
             client,
             project.project.id,
             intent.id,
             container_manager,
             container_name,
             worker,
-            execute.argv,
-            stdin_text=execute.stdin,
+            execute,
+            session=session,
             phase="explore_execute",
             timeout=config.tasks.explore.timeout,
             lease=lease,
             cancellation=cancellation,
             blackboard_revision=project.blackboard_revision,
+            inbox=inbox,
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
-        session = driver.extract_session(session, first.stdout, first.stderr)
         cancelled = cancel_reason(first, cancellation)
         if cancelled is not None:
             LOG.info(
@@ -197,6 +186,7 @@ def run_explore_task(
                     session,
                     lease,
                     cancellation,
+                    inbox=inbox,
                 )
             if kind == "rejected":
                 LOG.warning(
@@ -227,6 +217,7 @@ def run_explore_task(
                     session,
                     lease,
                     cancellation,
+                    inbox=inbox,
                     correction_prompt=(
                         "你已声明建立 WebShell/reverse shell/C2 通道，但当前 Intent 没有共享 Resource。"
                         "立即使用 redtrace-resource 注册；失败时查看对应子命令 --help 并修正参数重试一次。"
@@ -268,6 +259,7 @@ def run_explore_task(
                 session,
                 lease,
                 cancellation,
+                inbox=inbox,
             )
         LOG.warning(
             "explore command failed project=%s intent=%s worker=%s code=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -292,12 +284,14 @@ def run_explore_task(
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return "failed"
     finally:
+        if inbox is not None:
+            inbox.stop()
         lease.stop()
 
 
 def _try_conclude_fallback(
     config: DispatchConfig,
-    client: CairnClient,
+    client: ControlPlaneClient,
     container_manager: ContainerManager,
     container_name: str,
     worker: WorkerConfig,
@@ -308,6 +302,7 @@ def _try_conclude_fallback(
     session: str | None,
     lease: HeartbeatLease,
     cancellation: TaskCancellation,
+    inbox: BlackboardInbox | None = None,
     correction_prompt: str | None = None,
 ) -> str:
     if not driver.supports_conclude() or not session:
@@ -368,19 +363,21 @@ def _try_conclude_fallback(
         worker.name,
     )
     conclude_started = time.perf_counter()
-    result = _run_process(
+    result, _ = _run_with_steering(
+        driver,
         client,
         project_id,
         intent.id,
         container_manager,
         container_name,
         worker,
-        conclude.argv,
-        stdin_text=conclude.stdin,
+        conclude,
+        session=session,
         phase="explore_conclude",
         timeout=config.tasks.explore.conclude_timeout,
         lease=lease,
         cancellation=cancellation,
+        inbox=inbox,
     )
     conclude_ms = int((time.perf_counter() - conclude_started) * 1000)
     cancelled = cancel_reason(result, cancellation)
@@ -464,13 +461,13 @@ def _try_conclude_fallback(
 
 
 def _attach_access_resource_ids(
-    client: CairnClient,
+    client: ControlPlaneClient,
     project_id: str,
     intent_id: str,
     worker_name: str,
     description: str,
 ) -> tuple[str, bool]:
-    if not _ACCESS_CHANNEL.search(description) or _RESOURCE_ID.search(description):
+    if not _ACCESS_CHANNEL.search(description) or _ACCESS_RESOURCE_ID.search(description):
         return description, True
     ids = [
         str(resource["id"])
@@ -478,7 +475,8 @@ def _attach_access_resource_ids(
         if isinstance(resource, dict)
         and resource.get("intent_id") == intent_id
         and resource.get("worker") == worker_name
-        and _RESOURCE_ID.fullmatch(str(resource.get("id", "")))
+        and resource.get("kind") in {"webshell", "c2_session"}
+        and _ACCESS_RESOURCE_ID.fullmatch(str(resource.get("id", "")))
     ]
     if not ids:
         return description, False
@@ -486,7 +484,7 @@ def _attach_access_resource_ids(
 
 
 def _run_process(
-    client: CairnClient,
+    client: ControlPlaneClient,
     project_id: str,
     intent_id: str,
     container_manager: ContainerManager,
@@ -500,6 +498,8 @@ def _run_process(
     lease: HeartbeatLease,
     cancellation: TaskCancellation,
     blackboard_revision: int = 0,
+    inbox: BlackboardInbox | None = None,
+    live_control=None,
 ):
     return run_worker_process(
         container_manager,
@@ -515,4 +515,52 @@ def _run_process(
         timeout_seconds=timeout,
         lease=lease,
         cancellation=cancellation,
+        blackboard_inbox=inbox,
+        live_control=live_control,
     )
+
+
+def _run_with_steering(
+    driver,
+    client: ControlPlaneClient,
+    project_id: str,
+    intent_id: str,
+    container_manager: ContainerManager,
+    container_name: str,
+    worker: WorkerConfig,
+    invocation,
+    *,
+    session: str | None,
+    phase: str,
+    timeout: int,
+    lease: HeartbeatLease,
+    cancellation: TaskCancellation,
+    blackboard_revision: int = 0,
+    inbox: BlackboardInbox | None = None,
+):
+    result = _run_process(
+        client,
+        project_id,
+        intent_id,
+        container_manager,
+        container_name,
+        worker,
+        invocation.argv,
+        stdin_text=invocation.stdin,
+        phase=phase,
+        timeout=timeout,
+        lease=lease,
+        cancellation=cancellation,
+        blackboard_revision=blackboard_revision,
+        inbox=inbox,
+        live_control=getattr(invocation, "live_control", None),
+    )
+    session = driver.extract_session(session, result.stdout, result.stderr)
+    control = getattr(invocation, "live_control", None)
+    if control is not None:
+        session = (
+            getattr(control, "session_file", None)
+            or getattr(control, "session_id", None)
+            or session
+        )
+    return result, session

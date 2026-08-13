@@ -10,7 +10,7 @@ This project uses a layered platform model:
 
 | Platform | Status | Primary entry | Notes |
 |---|---|---|---|
-| Windows | Full primary path | `README.md`, PowerShell scripts | Original mainline. Uses `.ps1`, Windows paths, `winget` / GitHub release ZIPs. |
+| Windows | Full primary path | `RULES.md`, PowerShell scripts | Uses `.ps1`, Windows paths, `winget` / GitHub release ZIPs. |
 | Kali Linux | Full specialized path | `kali/README-kali.md` | Dedicated Kali layer with `apt`, bash scripts, and Kali-native security tooling. |
 | Ubuntu / Debian Linux | Supported generic path | `docs/platforms/linux.md`, `skills/scripts/bootstrap-reverse.sh`, `skills/scripts/refresh-tool-index.sh` | Uses `apt`, `pipx` / venv, `npm`, GitHub releases, and optional Kali scripts as reference. |
 | macOS | Supported generic path | `docs/platforms/macos.md`, `skills/scripts/bootstrap-reverse.sh`, `skills/scripts/refresh-tool-index.sh` | Uses Homebrew, `pipx` / venv, `npm`, app bundle paths, and manual IDA / Burp setup. |
@@ -66,7 +66,7 @@ The following must be adapted per OS:
 
 ## Recommended routing for setup docs
 
-- Windows users: start from `README.md`.
+- Windows users: start from `RULES.md` and `skills/scripts/refresh-tool-index.ps1`.
 - Kali users: start from `kali/README-kali.md`.
 - Ubuntu / Debian users: start from `docs/platforms/linux.md`.
 - macOS users: start from `docs/platforms/macos.md`.

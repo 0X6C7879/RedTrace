@@ -15,7 +15,7 @@ from redtrace.server import db
 
 @click.group()
 def main():
-    """RedTrace - Fact-graph based collaborative exploration protocol."""
+    """RedTrace - agent-driven security research and evidence runtime."""
 
 
 @main.command()
@@ -63,11 +63,15 @@ def dispatch(config_path: Path, once: bool, startup_healthcheck_only: bool, log_
     """Run the RedTrace dispatcher."""
     configure_logging(log_level, bare=startup_healthcheck_only)
     try:
+        config = DispatchConfig.load(config_path)
         if startup_healthcheck_only:
             loop = DispatcherLoop(config_path)
             loop.run_startup_healthchecks_only()
             return
-        with DispatcherInstanceLock(DispatchConfig.load(config_path).server):
+        with DispatcherInstanceLock(
+            config.server,
+            config.paths.layout().runtime / "locks",
+        ):
             loop = DispatcherLoop(config_path)
             loop.run(once=once)
     except (DispatcherAlreadyRunning, RuntimeError) as exc:

@@ -10,12 +10,12 @@ from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
+from redtrace.board.models import CreateProjectRequest
+from redtrace.board.storage import clear_project_reason, get_project_or_404
 from redtrace.plugin_registry import PluginRegistry
 from redtrace.server.db import get_conn
 from redtrace.server.event_hub import event_hub
-from redtrace.server.models import CreateProjectRequest
 from redtrace.server.routers.projects import create_project
-from redtrace.server.services import clear_project_reason, get_project_or_404
 
 router = APIRouter(tags=["plugins"])
 

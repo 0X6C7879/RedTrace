@@ -32,7 +32,7 @@
 - 若 Goal 未满足，分析未实现的原因、任务是否偏离正确方向，以及是否应提出正确的 Intent 纠偏。
 - 判断是否存在 `Open Intents`，即已声明但尚无结论的 Intent。若存在，对照 Hint 和 Fact 中的已知线索，判断现有 Intent 是否已覆盖所有线索，以及是否仍需新 Intent。
 - 若 `Open Intents` 为空，必须提出新 Intent。
-- Goal 未满足且 `Open Intents` 少于 {max_intents} 时，立即补充不重叠的新 Intent，直到开放 Intent 数达到 {max_intents} 或已无安全、有效的新方向；不得等待其余 Open Intent 全部结束后再补位。新 Intent 必须避开其他 Worker 已占用的题目。
+- Goal 未满足且 `Open Intents` 少于 {max_intents} 时，立即补充不重叠的新 Intent，直到开放 Intent 数达到 {max_intents} 或已无安全、有效的新方向；该水位包含一个供下一位完成任务的 Worker 立即领取的 ready Intent，不得等待其余 Open Intent 全部结束后再补位。新 Intent 必须避开其他 Worker 已占用的题目。
 - 提出新 Intent 时，最多返回 {max_intents} 个高价值且不重叠的探索方向。每个 Intent 都应是可独立并行的探索路径。
 - Intent 应聚焦核心 insight 和清晰方向，无需过度详细；不得过宽、过细或包含无助于推进 Goal 的冗余内容。每个 Intent 必须独立、定义清楚且价值高。
 - 一个 Intent 可以源自多个 Fact。

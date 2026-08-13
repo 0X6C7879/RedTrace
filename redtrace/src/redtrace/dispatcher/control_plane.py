@@ -7,7 +7,7 @@ from typing import Any
 
 import requests
 from pydantic import TypeAdapter
-from redtrace.server.models import ProjectDetail, ProjectSummary, Settings
+from redtrace.board.models import ProjectDetail, ProjectSummary, Settings
 from requests.adapters import HTTPAdapter
 
 LOG = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ class ApiResult:
         return 200 <= self.status_code < 300
 
 
-class CairnClient:
+class ControlPlaneClient:
     def __init__(self, base_url: str, timeout: float = 10.0):
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
@@ -80,6 +80,7 @@ class CairnClient:
         worker: str,
         task_type: str,
         intent_id: str | None,
+        include_source: bool = False,
     ) -> dict[str, Any]:
         cursor = since
         changes: list[dict[str, Any]] = []
@@ -93,7 +94,11 @@ class CairnClient:
         while True:
             response = self._session().get(
                 self._url(f"/projects/{project_id}/blackboard/changes"),
-                params={"since": cursor, "limit": 100},
+                params={
+                    "since": cursor,
+                    "limit": 100,
+                    "include_source": include_source,
+                },
                 headers=headers,
                 timeout=self._timeout,
             )
@@ -115,12 +120,30 @@ class CairnClient:
             "changes": changes,
         }
 
+    def wait_for_blackboard(
+        self,
+        project_id: str,
+        since: int,
+        *,
+        timeout: float,
+    ) -> int:
+        response = self._session().get(
+            self._url(f"/projects/{project_id}/blackboard/wait"),
+            params={"since": since, "timeout": timeout},
+            timeout=(self._timeout, timeout + self._timeout),
+        )
+        response.raise_for_status()
+        return int(response.json()["revision"])
+
     def resource_snapshot(self, project_id: str) -> list[dict[str, Any]]:
         """Return the bounded shared access-resource snapshot for Worker gates."""
         try:
             response = self._session().get(
                 self._url(f"/projects/{project_id}/operations/snapshot"),
-                params={"kinds": "webshell,c2_listener,c2_session,c2_payload", "limit": 100},
+                params={
+                    "kinds": "webshell,c2_listener,c2_session,c2_payload",
+                    "limit": 100,
+                },
                 timeout=self._timeout,
             )
             response.raise_for_status()

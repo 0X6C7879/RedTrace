@@ -1,6 +1,1 @@
-{
-  "phase": "bootstrap",
-  "origin": "{origin}",
-  "goal": "{goal}",
-  "hints": {hints}
-}
+{"phase":"bootstrap","goal":"{goal}","origin":"{origin}","hints":{hints}}

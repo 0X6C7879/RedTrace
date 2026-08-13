@@ -1,17 +1,24 @@
 from __future__ import annotations
 
-import json
+import hashlib
+import secrets
 import sqlite3
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+import requests
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
+from redtrace.board.storage import get_project_or_404, release_fact
 from redtrace.server import db
+from redtrace.server.c2_payloads import (
+    build_beacon,
+    compatible_oneliners,
+    generate_oneliner,
+)
 from redtrace.server.db import get_conn
-from redtrace.server.c2_payloads import build_beacon, compatible_oneliners, generate_oneliner
 from redtrace.server.operations import (
     EXECUTABLE_KINDS,
     RESOURCE_KINDS,
@@ -27,13 +34,13 @@ from redtrace.server.operations import (
     public_audit,
     public_resource,
     public_task,
+    shell_broker,
     store_result,
     task_id,
     utcnow,
     verify_token,
 )
 from redtrace.server.routers.blackboard import QueryContext, query_context
-from redtrace.server.services import get_project_or_404
 
 router = APIRouter(tags=["operations"])
 
@@ -58,7 +65,7 @@ class ResourceCreate(BaseModel):
     @field_validator("kind")
     @classmethod
     def validate_kind(cls, value: str) -> str:
-        if value not in RESOURCE_KINDS - {"c2_session", "result"}:
+        if value not in RESOURCE_KINDS - {"result"}:
             raise ValueError("unsupported resource kind")
         return value
 
@@ -154,17 +161,43 @@ class C2BuildRequest(BaseModel):
     actor: str = Field(default="admin", min_length=1, max_length=128)
 
 
+class C2ExternalPayloadRequest(BaseModel):
+    listener_id: str = Field(min_length=1, max_length=64)
+    format: str = Field(default="default", min_length=1, max_length=128)
+    options: dict[str, Any] = Field(default_factory=dict)
+    actor: str = Field(default="admin", min_length=1, max_length=128)
+
+
+MAX_PAYLOAD_UPLOAD_BYTES = 64 * 1024 * 1024
+
+
 def _actor(body_actor_type: str, body_actor: str, context: QueryContext) -> tuple[str, str, str | None]:
     if context.worker != "unknown":
         return "worker", context.worker, context.intent_id
     return body_actor_type, body_actor.strip() or "admin", context.intent_id
 
 
-def _resource_or_404(conn: sqlite3.Connection, project_id: str, resource_id: str):
+GLOBAL_SCOPE = "_global"
+
+
+def _resolve_global_project(conn: sqlite3.Connection, project_id: str) -> bool:
+    """Allow the synthetic ``_global`` placeholder to bypass project existence checks.
+
+    Resources live in a shared, project-agnostic pool; ``project_id`` is at most a
+    provenance tag. Read endpoints and resource registration must therefore stay
+    available even when no RedTrace task is selected.
+    """
+    if project_id == GLOBAL_SCOPE:
+        return True
     get_project_or_404(conn, project_id)
+    return False
+
+
+def _resource_or_404(conn: sqlite3.Connection, project_id: str, resource_id: str):
+    _resolve_global_project(conn, project_id)
     row = conn.execute(
-        "SELECT * FROM shared_resources WHERE id = ? AND project_id = ?",
-        (resource_id, project_id),
+        "SELECT * FROM shared_resources WHERE id = ?",
+        (resource_id,),
     ).fetchone()
     if row is None:
         raise HTTPException(404, "Shared resource not found")
@@ -172,10 +205,10 @@ def _resource_or_404(conn: sqlite3.Connection, project_id: str, resource_id: str
 
 
 def _task_or_404(conn: sqlite3.Connection, project_id: str, operation_id: str):
-    get_project_or_404(conn, project_id)
+    _resolve_global_project(conn, project_id)
     row = conn.execute(
-        "SELECT * FROM operation_tasks WHERE id = ? AND project_id = ?",
-        (operation_id, project_id),
+        "SELECT * FROM operation_tasks WHERE id = ?",
+        (operation_id,),
     ).fetchone()
     if row is None:
         raise HTTPException(404, "Operation task not found")
@@ -196,29 +229,33 @@ def _ensure_resource_available_for_actor(resource: Any, actor_type: str, actor: 
 
 
 def _submit_if_executable(resource: Any, operation_id: str, operation_status: str) -> None:
-    if operation_status == "queued" and resource["kind"] in EXECUTABLE_KINDS:
+    session_metadata = json_load(resource["metadata_json"], {}) if resource["kind"] == "c2_session" else {}
+    connection_type = str(session_metadata.get("connection_type") or "beacon").lower()
+    executable_session = resource["kind"] == "c2_session" and (
+        shell_broker.has_session(resource["id"]) or connection_type in {"direct", "external_c2"}
+    )
+    if operation_status == "queued" and (resource["kind"] in EXECUTABLE_KINDS or executable_session):
         operation_executor.submit(operation_id)
 
 
 @router.get("/projects/{project_id}/operations/summary")
 def operation_summary(project_id: str):
     with get_conn() as conn:
-        get_project_or_404(conn, project_id)
-        expire_stale_c2_sessions(conn, project_id)
+        _resolve_global_project(conn, project_id)
+        expire_stale_c2_sessions(conn)
         resource_counts = conn.execute(
             """
             SELECT kind, COUNT(*) AS count,
                    SUM(CASE WHEN status = 'available' THEN 1 ELSE 0 END) AS available
-            FROM shared_resources WHERE project_id = ? GROUP BY kind
-            """,
-            (project_id,),
+            FROM shared_resources GROUP BY kind
+            """
         ).fetchall()
         task_counts = conn.execute(
-            "SELECT status, COUNT(*) AS count FROM operation_tasks WHERE project_id = ? GROUP BY status",
-            (project_id,),
+            "SELECT status, COUNT(*) AS count FROM operation_tasks GROUP BY status",
         ).fetchall()
         return {
             "project_id": project_id,
+            "scope": "global",
             "resources": {row["kind"]: {"count": row["count"], "available": row["available"] or 0} for row in resource_counts},
             "tasks": {row["status"]: row["count"] for row in task_counts},
         }
@@ -236,10 +273,10 @@ def operation_snapshot(
     if unsupported:
         raise HTTPException(400, f"Unsupported resource kinds: {', '.join(unsupported)}")
     with get_conn() as conn:
-        get_project_or_404(conn, project_id)
-        expire_stale_c2_sessions(conn, project_id)
-        clauses = ["project_id = ?"]
-        params: list[Any] = [project_id]
+        _resolve_global_project(conn, project_id)
+        expire_stale_c2_sessions(conn)
+        clauses: list[str] = []
+        params: list[Any] = []
         if selected_kinds:
             placeholders = ",".join("?" for _ in selected_kinds)
             clauses.append(f"kind IN ({placeholders})")
@@ -248,7 +285,7 @@ def operation_snapshot(
         rows = conn.execute(
             f"""
             SELECT * FROM shared_resources
-            WHERE {' AND '.join(clauses)}
+            {"WHERE " + " AND ".join(clauses) if clauses else ""}
             ORDER BY updated_at DESC LIMIT ?
             """,
             params,
@@ -270,14 +307,14 @@ def operation_snapshot(
                 },
             )
         cursor = conn.execute(
-            "SELECT COALESCE(MAX(id), 0) FROM resource_audit_events WHERE project_id = ?",
-            (project_id,),
+            "SELECT COALESCE(MAX(id), 0) FROM resource_audit_events",
         ).fetchone()[0]
         counts: dict[str, int] = {}
         for row in rows:
             counts[row["kind"]] = counts.get(row["kind"], 0) + 1
         return {
             "project_id": project_id,
+            "scope": "global",
             "audit_cursor": cursor,
             "counts": counts,
             "resources": [public_resource(row) for row in rows],
@@ -294,10 +331,10 @@ def list_resources(
     context: QueryContext = Depends(query_context),
 ):
     with get_conn() as conn:
-        get_project_or_404(conn, project_id)
-        expire_stale_c2_sessions(conn, project_id)
-        clauses = ["project_id = ?"]
-        params: list[Any] = [project_id]
+        _resolve_global_project(conn, project_id)
+        expire_stale_c2_sessions(conn)
+        clauses: list[str] = []
+        params: list[Any] = []
         if kind:
             clauses.append("kind = ?")
             params.append(kind)
@@ -310,7 +347,7 @@ def list_resources(
             params.extend([needle, needle, needle])
         params.append(limit)
         rows = conn.execute(
-            f"SELECT * FROM shared_resources WHERE {' AND '.join(clauses)} ORDER BY updated_at DESC LIMIT ?",
+            f"SELECT * FROM shared_resources {'WHERE ' + ' AND '.join(clauses) if clauses else ''} ORDER BY updated_at DESC LIMIT ?",
             params,
         ).fetchall()
         if context.worker != "unknown":
@@ -325,30 +362,41 @@ def list_resources(
                 status="succeeded",
                 detail={"kind": kind, "count": len(rows), "intent_id": context.intent_id},
             )
-        return {"project_id": project_id, "resources": [public_resource(row) for row in rows]}
+        return {"project_id": project_id, "scope": "global", "resources": [public_resource(row) for row in rows]}
 
 
 @router.post("/projects/{project_id}/resources", status_code=201)
 def register_resource(
     project_id: str,
     body: ResourceCreate,
+    request: Request,
     context: QueryContext = Depends(query_context),
 ):
     actor_type, actor, context_intent = _actor(body.actor_type, body.actor, context)
+    resource_metadata = dict(body.metadata)
+    if body.kind == "c2_listener":
+        listener_type = str(resource_metadata.get("listener_type") or "").lower()
+        if listener_type in {"http_beacon", "https_beacon", "websocket"}:
+            resource_metadata.setdefault("callback_url", str(request.base_url).rstrip("/"))
     with get_conn() as conn:
-        project = get_project_or_404(conn, project_id)
-        if project["status"] == "completed" and body.kind not in {"file", "result"}:
-            raise HTTPException(409, "Completed projects only accept evidence and result resources")
+        project = None
+        if project_id == GLOBAL_SCOPE:
+            target_project_id = None
+        else:
+            project = get_project_or_404(conn, project_id)
+            if project["status"] == "completed" and body.kind not in {"file", "result"}:
+                raise HTTPException(409, "Completed projects only accept evidence and result resources")
+            target_project_id = project_id
         try:
             resource, secret_once = create_resource(
                 conn,
-                project_id=project_id,
+                project_id=target_project_id,
                 kind=body.kind,
                 name=body.name,
                 target=body.target,
                 summary=body.summary,
                 status=body.status,
-                metadata=body.metadata,
+                metadata=resource_metadata,
                 secret=body.secret,
                 actor_type=actor_type,
                 actor=actor,
@@ -362,15 +410,18 @@ def register_resource(
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         response = {"resource": resource}
-        if secret_once is not None and actor_type == "human":
+        if secret_once is not None and (actor_type == "human" or body.kind == "c2_session"):
             response["secret_once"] = secret_once
-        return response
+    if body.kind == "c2_listener" and resource["status"] == "available":
+        with get_conn() as conn:
+            shell_broker.start_listener(conn.execute("SELECT * FROM shared_resources WHERE id = ?", (resource["id"],)).fetchone())
+    return response
 
 
 @router.post("/projects/{project_id}/webshell/test")
 def test_webshell_connection(project_id: str, body: WebShellTestRequest):
     with get_conn() as conn:
-        get_project_or_404(conn, project_id)
+        _resolve_global_project(conn, project_id)
     metadata = {
         "shell_type": body.shell_type,
         "protocol": body.protocol,
@@ -394,8 +445,7 @@ def test_webshell_connection(project_id: str, body: WebShellTestRequest):
 
 
 def _payload_root() -> Path:
-    configured = db._db_path or db.DEFAULT_DB
-    root = Path(configured).parent / "payloads"
+    root = db.output_root("c2") / "payloads"
     root.mkdir(parents=True, exist_ok=True)
     return root.resolve()
 
@@ -450,6 +500,29 @@ def create_c2_oneliner(
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        resource, _ = create_resource(
+            conn,
+            project_id=None if project_id == GLOBAL_SCOPE else project_id,
+            kind="c2_payload",
+            name=f"{body.kind}-{listener['name']}",
+            target="",
+            summary=f"{body.kind} 单行命令，绑定 {listener['name']}",
+            metadata={
+                "listener_id": listener["id"],
+                "payload_type": "command",
+                "source_type": "worker" if actor_type == "worker" else "generator",
+                "format": body.kind,
+                "size_bytes": len(oneliner.encode()),
+                "sha256": hashlib.sha256(oneliner.encode()).hexdigest(),
+            },
+            secret={"command": oneliner},
+            actor_type=actor_type,
+            actor=actor,
+            worker=context.worker if actor_type == "worker" else None,
+            intent_id=context.intent_id,
+            parent_resource_id=listener["id"],
+            publish_fact=True,
+        )
         audit_event(
             conn,
             project_id=project_id,
@@ -461,7 +534,12 @@ def create_c2_oneliner(
             status="succeeded",
             detail={"kind": body.kind, "intent_id": context.intent_id},
         )
-        return {"oneliner": oneliner, "kind": body.kind, "listener_id": listener["id"]}
+        return {
+            "oneliner": oneliner,
+            "kind": body.kind,
+            "listener_id": listener["id"],
+            "payload": resource,
+        }
 
 
 @router.post("/projects/{project_id}/c2/payloads/build", status_code=201)
@@ -504,10 +582,13 @@ def build_c2_payload(
             summary=f"{body.os}/{body.arch} Beacon，绑定 {listener['name']}",
             metadata={
                 "listener_id": body.listener_id,
+                "payload_type": "file",
+                "source_type": "worker" if actor_type == "worker" else "generator",
                 "platform": body.os,
                 "arch": body.arch,
                 "size_bytes": artifact.stat().st_size,
                 "filename": artifact.name,
+                "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
             },
             secret={"artifact_path": str(artifact)},
             actor_type=actor_type,
@@ -536,15 +617,154 @@ def build_c2_payload(
         return {"payload": resource}
 
 
+@router.post("/projects/{project_id}/c2/payloads/external", status_code=201)
+def build_external_c2_payload(
+    project_id: str,
+    body: C2ExternalPayloadRequest,
+    context: QueryContext = Depends(query_context),
+):
+    actor_type = "worker" if context.worker != "unknown" else "human"
+    actor = context.worker if actor_type == "worker" else body.actor
+    with get_conn() as conn:
+        listener = _resource_or_404(conn, project_id, body.listener_id)
+        if listener["kind"] != "c2_listener":
+            raise HTTPException(400, "Resource is not a C2 listener")
+        metadata = json_load(listener["metadata_json"], {})
+        secret = json_load(listener["secret_json"], {})
+    framework = str(metadata.get("listener_type") or "custom")
+    endpoint = str(secret.get("adapter_endpoint") or metadata.get("adapter_endpoint") or "").rstrip("/")
+    if not endpoint:
+        raise HTTPException(409, "External C2 listener has no adapter endpoint")
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if secret.get("token"):
+        headers["Authorization"] = f"Bearer {secret['token']}"
+    try:
+        response = requests.post(
+            f"{endpoint}/payloads",
+            json={"framework": framework, "format": body.format, "options": body.options},
+            headers=headers,
+            timeout=180,
+        )
+        response.raise_for_status()
+        generated = response.json()
+    except Exception as exc:
+        raise HTTPException(502, f"External C2 payload adapter failed: {exc}") from exc
+    if not isinstance(generated, dict) or not generated.get("target"):
+        raise HTTPException(502, "External C2 payload adapter did not return a target")
+    with get_conn() as conn:
+        resource, _ = create_resource(
+            conn,
+            project_id=project_id,
+            kind="c2_payload",
+            name=str(generated.get("name") or f"{framework}-{body.format}"),
+            target=str(generated["target"]),
+            summary=str(generated.get("summary") or f"{framework} {body.format} payload"),
+            metadata={
+                **dict(generated.get("metadata") or {}),
+                "listener_id": body.listener_id,
+                "payload_type": "external",
+                "source_type": "worker" if actor_type == "worker" else "generator",
+                "framework": framework,
+                "format": body.format,
+                "external": True,
+            },
+            actor_type=actor_type,
+            actor=actor,
+            worker=context.worker if actor_type == "worker" else None,
+            intent_id=context.intent_id,
+            parent_resource_id=body.listener_id,
+            publish_fact=True,
+        )
+        return {"payload": resource}
+
+
+@router.post("/projects/{project_id}/c2/payloads/upload", status_code=201)
+async def upload_c2_payload(
+    project_id: str,
+    request: Request,
+    filename: str = Query(min_length=1, max_length=255),
+    name: str = Query(default="", max_length=160),
+    platform: str = Query(default="unknown", max_length=32),
+    arch: str = Query(default="unknown", max_length=32),
+    listener_id: str = Query(default="", max_length=64),
+    summary: str = Query(default="", max_length=2000),
+    context: QueryContext = Depends(query_context),
+):
+    original_name = Path(filename).name
+    if original_name != filename or filename in {".", ".."} or "\\" in filename:
+        raise HTTPException(400, "Invalid payload filename")
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > MAX_PAYLOAD_UPLOAD_BYTES:
+            raise HTTPException(413, "Payload file exceeds 64 MB")
+        content.extend(chunk)
+    if not content:
+        raise HTTPException(400, "Payload file is empty")
+    payload_bytes = bytes(content)
+    actor_type = "worker" if context.worker != "unknown" else "human"
+    actor = context.worker if actor_type == "worker" else "admin"
+    suffix = Path(filename).suffix[:16]
+    stored_name = f"upload-{secrets.token_hex(8)}{suffix}"
+    artifact = _payload_root() / stored_name
+    artifact.write_bytes(payload_bytes)
+    try:
+        with get_conn() as conn:
+            _resolve_global_project(conn, project_id)
+            if listener_id:
+                listener = _resource_or_404(conn, project_id, listener_id)
+                if listener["kind"] != "c2_listener":
+                    raise HTTPException(400, "Resource is not a C2 listener")
+            resource, _ = create_resource(
+                conn,
+                project_id=None if project_id == GLOBAL_SCOPE else project_id,
+                kind="c2_payload",
+                name=name.strip() or original_name,
+                target=f"/projects/{project_id}/c2/payloads/download/{stored_name}",
+                summary=summary.strip() or "人工上传的 Payload 文件",
+                metadata={
+                    "listener_id": listener_id or None,
+                    "payload_type": "file",
+                    "source_type": "worker" if actor_type == "worker" else "upload",
+                    "platform": platform,
+                    "arch": arch,
+                    "filename": stored_name,
+                    "original_filename": original_name,
+                    "size_bytes": len(payload_bytes),
+                    "sha256": hashlib.sha256(payload_bytes).hexdigest(),
+                },
+                secret={"artifact_path": str(artifact)},
+                actor_type=actor_type,
+                actor=actor,
+                worker=context.worker if actor_type == "worker" else None,
+                intent_id=context.intent_id,
+                parent_resource_id=listener_id or None,
+                publish_fact=True,
+            )
+            audit_event(
+                conn,
+                project_id=project_id,
+                resource_id_value=resource["id"],
+                task_id_value=None,
+                actor_type=actor_type,
+                actor=actor,
+                action="c2.payload_upload",
+                status="succeeded",
+                detail={"filename": original_name, "intent_id": context.intent_id},
+            )
+            return {"payload": resource}
+    except Exception:
+        artifact.unlink(missing_ok=True)
+        raise
+
+
 @router.get("/projects/{project_id}/c2/payloads/download/{filename}")
 def download_c2_payload(project_id: str, filename: str):
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(400, "Invalid payload filename")
     with get_conn() as conn:
-        get_project_or_404(conn, project_id)
+        _resolve_global_project(conn, project_id)
         rows = conn.execute(
-            "SELECT * FROM shared_resources WHERE project_id = ? AND kind = 'c2_payload'",
-            (project_id,),
+            "SELECT * FROM shared_resources WHERE kind = 'c2_payload'",
         ).fetchall()
         row = next(
             (
@@ -565,21 +785,26 @@ def download_c2_payload(project_id: str, filename: str):
         raise HTTPException(404, "Payload not found") from exc
     if not artifact.is_file():
         raise HTTPException(404, "Payload not found")
-    return FileResponse(artifact, filename=filename, media_type="application/octet-stream")
+    metadata = json_load(row["metadata_json"], {})
+    return FileResponse(
+        artifact,
+        filename=str(metadata.get("original_filename") or filename),
+        media_type="application/octet-stream",
+    )
 
 
 @router.get("/projects/{project_id}/resources/{resource_id}")
 def get_resource(project_id: str, resource_id: str):
     with get_conn() as conn:
-        expire_stale_c2_sessions(conn, project_id)
+        expire_stale_c2_sessions(conn)
         row = _resource_or_404(conn, project_id, resource_id)
         tasks = conn.execute(
             "SELECT * FROM operation_tasks WHERE resource_id = ? ORDER BY created_at DESC LIMIT 50",
             (resource_id,),
         ).fetchall()
         audit = conn.execute(
-            "SELECT * FROM resource_audit_events WHERE project_id = ? AND resource_id = ? ORDER BY id DESC LIMIT 100",
-            (project_id, resource_id),
+            "SELECT * FROM resource_audit_events WHERE resource_id = ? ORDER BY id DESC LIMIT 100",
+            (resource_id,),
         ).fetchall()
         return {
             "resource": public_resource(row),
@@ -605,7 +830,7 @@ def update_resource(project_id: str, resource_id: str, body: ResourceUpdate):
             UPDATE shared_resources
             SET name = ?, target = ?, summary = ?, status = ?, metadata_json = ?,
                 secret_json = ?, updated_at = ?
-            WHERE id = ? AND project_id = ?
+            WHERE id = ?
             """,
             (
                 values["name"],
@@ -616,7 +841,6 @@ def update_resource(project_id: str, resource_id: str, body: ResourceUpdate):
                 values["secret_json"],
                 utcnow(),
                 resource_id,
-                project_id,
             ),
         )
         audit_event(
@@ -639,14 +863,29 @@ def delete_resource(
     resource_id: str,
     actor: str = Query(default="admin", min_length=1, max_length=128),
 ):
+    artifact: Path | None = None
     with get_conn() as conn:
         row = _resource_or_404(conn, project_id, resource_id)
+        if row["kind"] == "c2_payload":
+            candidate = Path(str(json_load(row["secret_json"], {}).get("artifact_path") or "")).resolve()
+            try:
+                candidate.relative_to(_payload_root())
+                artifact = candidate
+            except ValueError:
+                pass
         running = conn.execute(
             "SELECT COUNT(*) AS count FROM operation_tasks WHERE resource_id = ? AND status IN ('queued', 'running', 'awaiting_approval')",
             (resource_id,),
         ).fetchone()["count"]
         if running:
             raise HTTPException(409, "Cancel active tasks before deleting this resource")
+        if row["project_id"] and row["fact_id"]:
+            release_fact(
+                conn,
+                row["project_id"],
+                row["fact_id"],
+                detach_references=True,
+            )
         audit_event(
             conn,
             project_id=project_id,
@@ -659,6 +898,10 @@ def delete_resource(
             detail={"kind": row["kind"], "name": row["name"]},
         )
         conn.execute("DELETE FROM shared_resources WHERE id = ?", (resource_id,))
+    if row["kind"] == "c2_listener":
+        shell_broker.stop_listener(resource_id)
+    if artifact:
+        artifact.unlink(missing_ok=True)
     return Response(status_code=204)
 
 
@@ -759,7 +1002,14 @@ def set_resource_state(project_id: str, resource_id: str, body: ResourceStateReq
             detail={"from": row["status"], "to": body.status},
         )
         updated = conn.execute("SELECT * FROM shared_resources WHERE id = ?", (resource_id,)).fetchone()
-        return {"resource": public_resource(updated)}
+        result = {"resource": public_resource(updated)}
+        resource_snapshot = dict(updated)
+    if resource_snapshot["kind"] == "c2_listener":
+        if body.status == "available":
+            shell_broker.start_listener(resource_snapshot)
+        else:
+            shell_broker.stop_listener(resource_id)
+    return result
 
 
 @router.post("/projects/{project_id}/resources/{resource_id}/tasks", status_code=202)
@@ -772,6 +1022,7 @@ def create_operation(
     actor_type, actor, context_intent = _actor(body.actor_type, body.actor, context)
     with get_conn() as conn:
         resource = _resource_or_404(conn, project_id, resource_id)
+        target_project_id = None if project_id == GLOBAL_SCOPE else project_id
         _ensure_resource_available_for_actor(resource, actor_type, actor)
         if resource["kind"] not in EXECUTABLE_KINDS | {"c2_session"}:
             raise HTTPException(409, "This resource type does not accept operation tasks")
@@ -784,33 +1035,36 @@ def create_operation(
         op_id = task_id()
         op_status = "awaiting_approval" if requires_approval else "queued"
         now = utcnow()
-        conn.execute(
-            """
-            INSERT INTO operation_tasks (
-                id, project_id, resource_id, intent_id, fact_id, action,
-                actor_type, actor, risk, status, input_json, requires_approval,
-                created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                op_id,
-                project_id,
-                resource_id,
-                context_intent or body.intent_id,
-                body.fact_id,
-                body.action,
-                actor_type,
-                actor,
-                risk,
-                op_status,
-                json_dump(body.arguments),
-                int(requires_approval),
-                now,
-            ),
-        )
+        try:
+            conn.execute(
+                """
+                INSERT INTO operation_tasks (
+                    id, project_id, resource_id, intent_id, fact_id, action,
+                    actor_type, actor, risk, status, input_json, requires_approval,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    op_id,
+                    target_project_id,
+                    resource_id,
+                    context_intent or body.intent_id,
+                    body.fact_id,
+                    body.action,
+                    actor_type,
+                    actor,
+                    risk,
+                    op_status,
+                    json_dump(body.arguments),
+                    int(requires_approval),
+                    now,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(409, "Operation task could not be saved") from exc
         audit_event(
             conn,
-            project_id=project_id,
+            project_id=target_project_id,
             resource_id_value=resource_id,
             task_id_value=op_id,
             actor_type=actor_type,
@@ -834,9 +1088,9 @@ def list_operation_tasks(
     limit: int = Query(default=200, ge=1, le=500),
 ):
     with get_conn() as conn:
-        get_project_or_404(conn, project_id)
-        clauses = ["project_id = ?"]
-        params: list[Any] = [project_id]
+        _resolve_global_project(conn, project_id)
+        clauses: list[str] = []
+        params: list[Any] = []
         if resource_id:
             clauses.append("resource_id = ?")
             params.append(resource_id)
@@ -845,10 +1099,10 @@ def list_operation_tasks(
             params.append(task_status)
         params.append(limit)
         rows = conn.execute(
-            f"SELECT * FROM operation_tasks WHERE {' AND '.join(clauses)} ORDER BY created_at DESC LIMIT ?",
+            f"SELECT * FROM operation_tasks {'WHERE ' + ' AND '.join(clauses) if clauses else ''} ORDER BY created_at DESC LIMIT ?",
             params,
         ).fetchall()
-        return {"project_id": project_id, "tasks": [public_task(row) for row in rows]}
+        return {"project_id": project_id, "scope": "global", "tasks": [public_task(row) for row in rows]}
 
 
 @router.get("/projects/{project_id}/operations/tasks/{operation_id}")
@@ -884,7 +1138,7 @@ def decide_operation(project_id: str, operation_id: str, body: ApprovalRequest):
             next_status = "queued"
         audit_event(
             conn,
-            project_id=project_id,
+            project_id=task["project_id"],
             resource_id_value=task["resource_id"],
             task_id_value=operation_id,
             actor_type="human",
@@ -931,10 +1185,12 @@ def cancel_operation(project_id: str, operation_id: str, body: CancelRequest):
 @router.get("/projects/{project_id}/operations/results/{result_id}")
 def get_operation_result(project_id: str, result_id: str):
     with get_conn() as conn:
-        get_project_or_404(conn, project_id)
+        _resolve_global_project(conn, project_id)
         row = conn.execute(
-            "SELECT * FROM operation_results WHERE id = ? AND project_id = ?",
-            (result_id, project_id),
+            "SELECT * FROM operation_results WHERE id = ? AND project_id IS NULL"
+            if project_id == GLOBAL_SCOPE
+            else "SELECT * FROM operation_results WHERE id = ? AND project_id = ?",
+            (result_id,) if project_id == GLOBAL_SCOPE else (result_id, project_id),
         ).fetchone()
         if row is None:
             raise HTTPException(404, "Operation result not found")
@@ -957,9 +1213,9 @@ def list_operation_audit(
     order: Literal["asc", "desc"] = "desc",
 ):
     with get_conn() as conn:
-        get_project_or_404(conn, project_id)
-        clauses = ["project_id = ?", "id > ?"]
-        params: list[Any] = [project_id, since]
+        _resolve_global_project(conn, project_id)
+        clauses = ["id > ?"]
+        params: list[Any] = [since]
         if resource_id:
             clauses.append("resource_id = ?")
             params.append(resource_id)
@@ -974,12 +1230,12 @@ def list_operation_audit(
             params,
         ).fetchall()
         latest_cursor = conn.execute(
-            "SELECT COALESCE(MAX(id), 0) FROM resource_audit_events WHERE project_id = ?",
-            (project_id,),
+            "SELECT COALESCE(MAX(id), 0) FROM resource_audit_events",
         ).fetchone()[0]
         cursor = max((row["id"] for row in rows), default=since)
         return {
             "project_id": project_id,
+            "scope": "global",
             "audit_cursor": cursor,
             "latest_cursor": latest_cursor,
             "has_more": cursor < latest_cursor,
@@ -1021,7 +1277,11 @@ def c2_checkin(
 ):
     with get_conn() as conn:
         listener = _listener_for_token(conn, listener_id, listener_token)
+        listener_metadata = json_load(listener["metadata_json"], {})
         metadata = {
+            "source_project_id": listener["project_id"] or listener_metadata.get("source_project_id"),
+            "connection_type": "beacon",
+            "shell_type": "redtrace_beacon",
             "external_id": body.external_id,
             "hostname": body.hostname,
             "username": body.username,
@@ -1034,10 +1294,9 @@ def c2_checkin(
         row = conn.execute(
             """
             SELECT * FROM shared_resources
-            WHERE project_id = ? AND kind = 'c2_session'
-              AND parent_resource_id = ? AND target = ?
+            WHERE kind = 'c2_session' AND parent_resource_id = ? AND target = ?
             """,
-            (listener["project_id"], listener_id, body.external_id),
+            (listener_id, body.external_id),
         ).fetchone()
         session_token = __import__("secrets").token_urlsafe(32)
         session_secret = {"session_token_sha256": __import__("hashlib").sha256(session_token.encode()).hexdigest()}
@@ -1123,7 +1382,7 @@ def c2_poll(
             )
             audit_event(
                 conn,
-                project_id=session["project_id"],
+                project_id=task["project_id"],
                 resource_id_value=session_id,
                 task_id_value=task["id"],
                 actor_type="system",

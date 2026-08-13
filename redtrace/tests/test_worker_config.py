@@ -8,7 +8,10 @@ import redtrace.worker_config as worker_config_module
 import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from redtrace.config_secrets import secret_id_from_reference
+from redtrace.config_secrets import (
+    resolve_dispatch_config_path,
+    secret_id_from_reference,
+)
 from redtrace.dispatcher.config import DispatchConfig
 from redtrace.dispatcher.config_reload import DispatchConfigReloader
 from redtrace.dispatcher.scheduler.loop import DispatcherLoop
@@ -78,11 +81,35 @@ def _worker_payload(revision: str, *, name: str = "codex-primary") -> dict:
     }
 
 
+def test_missing_environment_config_falls_back_to_sibling_redtrace_yaml(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    standard = tmp_path / "redtrace.yaml"
+    _write_config(standard, _raw_config())
+    monkeypatch.setenv(
+        "REDTRACE_DISPATCH_CONFIG", str(tmp_path / "legacy.local.yaml")
+    )
+
+    assert resolve_dispatch_config_path() == standard
+    assert WorkerConfigService().path == standard
+
+
+def test_explicit_missing_config_path_does_not_silently_fall_back(
+    tmp_path: Path,
+) -> None:
+    standard = tmp_path / "redtrace.yaml"
+    requested = tmp_path / "missing.yaml"
+    _write_config(standard, _raw_config())
+
+    assert resolve_dispatch_config_path(requested) == requested
+
+
 def test_worker_config_encrypts_keys_and_never_returns_them(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    config_path = tmp_path / "dispatch.yaml"
+    config_path = tmp_path / "redtrace.yaml"
     secrets_dir = tmp_path / "secrets"
     _write_config(config_path, _raw_config())
     monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(secrets_dir))
@@ -110,6 +137,7 @@ def test_worker_config_encrypts_keys_and_never_returns_them(
     assert secret not in persisted
     raw = yaml.safe_load(persisted)
     reference = raw["workers"][0]["env"]["OPENAI_API_KEY"]
+    assert raw["workers"][0]["task_types"] == ["reason", "explore"]
     assert raw["workers"][0]["context_length"] == 1_048_576
     assert secret_id_from_reference(reference) is not None
     assert secret.encode() not in (secrets_dir / "worker-config.enc").read_bytes()
@@ -120,7 +148,7 @@ def test_plaintext_debug_mode_skips_encrypted_secret_store(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    config_path = tmp_path / "dispatch.yaml"
+    config_path = tmp_path / "redtrace.yaml"
     secrets_dir = tmp_path / "secrets"
     raw = _raw_config()
     raw["runtime"]["execution"] = "local"
@@ -155,7 +183,7 @@ def test_worker_api_response_contains_api_key_for_local_debugging(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    config_path = tmp_path / "dispatch.yaml"
+    config_path = tmp_path / "redtrace.yaml"
     _write_config(config_path, _raw_config())
     monkeypatch.setenv("REDTRACE_DISPATCH_CONFIG", str(config_path))
     monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(tmp_path / "secrets"))
@@ -189,7 +217,7 @@ def test_explicit_test_and_save_deduplicate_identical_connection_probe(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    config_path = tmp_path / "dispatch.yaml"
+    config_path = tmp_path / "redtrace.yaml"
     _write_config(config_path, _raw_config())
     monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(tmp_path / "secrets"))
     calls = 0
@@ -261,7 +289,7 @@ def test_copy_toggle_delete_and_revision_conflicts_are_atomic(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    config_path = tmp_path / "dispatch.yaml"
+    config_path = tmp_path / "redtrace.yaml"
     _write_config(config_path, _raw_config())
     monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(tmp_path / "secrets"))
     monkeypatch.setattr(
@@ -298,7 +326,7 @@ def test_copy_toggle_delete_and_revision_conflicts_are_atomic(
 def test_dispatch_reloader_applies_only_worker_changes_and_keeps_old_snapshot(
     tmp_path: Path,
 ) -> None:
-    config_path = tmp_path / "dispatch.yaml"
+    config_path = tmp_path / "redtrace.yaml"
     raw = _raw_config()
     raw["workers"] = [
         {
@@ -374,6 +402,8 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     operations = (static_dir / "operations.js").read_text(encoding="utf-8")
 
     assert "Worker 配置" in index
+    assert "task_types" in index
+    assert "任务类型" in index
     assert "/worker-config" in index
     assert "showLocalPrefs" not in index
     assert "服务端超时" not in index
@@ -383,7 +413,9 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     assert "rankDir: 'TB'" in index
     assert 'class="max-h-72 overflow-auto whitespace-pre-wrap break-words' in index
     assert "c2Expanded: false" in index
-    assert 'operations.js?v=20260810-performance-1' in index
+    assert 'operations.js?v=20260813-payload-library-1' in index
+    assert "window.redtraceConfirm" in index
+    assert "window.confirm" not in operations
     assert '@click="setAppPage(\'c2-listeners\')" aria-label="打开 C2"' in index
     assert '@click="c2Expanded = !c2Expanded"' in index
     assert "setAppPage('c2-listeners'); c2Expanded" not in index
@@ -398,6 +430,8 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     assert "context_length: this.workerForm.context_1m ? 1048576 : null" in index
     assert "return 'admin';" in index
     assert "return 'admin';" in operations
+    assert ':disabled="!selectedOpenIntentRecord()"' in index
+    assert "return intent?.worker ? intent : null;" in index
     assert "webshellSessionLabel()" in operations
     assert "resource.status === 'available'" in operations
     assert 'x-text="webshellSessionLabel()"' in index

@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from redtrace.dispatcher.config import DispatchConfig
-from redtrace.dispatcher.protocol.client import ApiResult
+from redtrace.dispatcher.control_plane import ApiResult
 from redtrace.dispatcher.workers.base import DriverResult
 from redtrace.dispatcher.workers.health import HealthResult
-from redtrace.server.models import Fact, Hint, Intent, ProjectDetail, ProjectMeta
+from redtrace.board.models import Fact, Hint, Intent, ProjectDetail, ProjectMeta
 
 
 def make_config() -> DispatchConfig:

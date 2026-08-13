@@ -33,7 +33,8 @@ def test_compose_builds_local_kali_worker_on_portable_bridge() -> None:
     for service_name in ("redtrace-server", "redtrace-dispatcher"):
         volumes = services[service_name]["volumes"]
         assert any(
-            "${REDTRACE_DISPATCH_CONFIG_FILE:-./dispatch.yaml}" in volume
+            "${REDTRACE_CONFIG_FILE:-${REDTRACE_DISPATCH_CONFIG_FILE:-./redtrace.yaml}}"
+            in volume
             for volume in volumes
         )
         assert services[service_name]["depends_on"]["redtrace-route-skills-init"][
@@ -70,7 +71,7 @@ def test_dockerfiles_are_kali_based_and_architecture_neutral() -> None:
 
 def test_shipped_docker_config_uses_local_image_and_named_network() -> None:
     config = yaml.safe_load(
-        (REPO_ROOT / "dispatch.example.yaml").read_text(encoding="utf-8")
+        (REPO_ROOT / "redtrace.container.example.yaml").read_text(encoding="utf-8")
     )
 
     assert config["runtime"]["execution"] == "container"

@@ -14,10 +14,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from redtrace.audit import archived_workspace
+from redtrace.board.storage import get_project_or_404
 from redtrace.server import db
 from redtrace.server.event_hub import event_hub
-from redtrace.server.services import get_project_or_404
-
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 MAX_FILE_BYTES = 256 * 1024

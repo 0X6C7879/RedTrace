@@ -28,4 +28,4 @@ agent-specific fields remain available without narrowing any runtime's MCP
 feature set.
 
 Prefer environment-variable references over literal credentials. MCP files can
-be created, edited, enabled, disabled, and deleted from Cairn's MCP page.
+be created, edited, enabled, disabled, and deleted from RedTrace's MCP page.

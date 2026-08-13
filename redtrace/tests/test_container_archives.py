@@ -10,20 +10,24 @@ from redtrace.dispatcher.runtime.containers import ContainerManager
 
 def test_text_file_archive_extracts_below_existing_top_level_directory() -> None:
     archive_path, payload = ContainerManager._text_file_archive(
-        "/tmp/redtrace-prompts/reason_execute-123/graph.yaml",
+        "/home/kali/workspace/.redtrace/prompts/reason_execute-123/graph.yaml",
         "facts:\n- id: f001\n",
     )
 
-    assert archive_path == "/tmp"
+    assert archive_path == "/home"
     with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
         names = archive.getnames()
         assert names == [
-            "redtrace-prompts",
-            "redtrace-prompts/reason_execute-123",
-            "redtrace-prompts/reason_execute-123/graph.yaml",
+            "kali",
+            "kali/workspace",
+            "kali/workspace/.redtrace",
+            "kali/workspace/.redtrace/prompts",
+            "kali/workspace/.redtrace/prompts/reason_execute-123",
+            "kali/workspace/.redtrace/prompts/reason_execute-123/graph.yaml",
         ]
-        assert "tmp" not in names
-        graph = archive.extractfile("redtrace-prompts/reason_execute-123/graph.yaml")
+        graph = archive.extractfile(
+            "kali/workspace/.redtrace/prompts/reason_execute-123/graph.yaml"
+        )
         assert graph is not None
         assert graph.read() == b"facts:\n- id: f001\n"
 
@@ -32,4 +36,3 @@ def test_text_file_archive_extracts_below_existing_top_level_directory() -> None
 def test_text_file_archive_rejects_unsafe_paths(path: str) -> None:
     with pytest.raises(ValueError):
         ContainerManager._text_file_archive(path, "content")
-

@@ -33,14 +33,19 @@ def test_dispatch_config_defaults_worker_healthcheck_and_rejects_unknown_mode() 
     payload = make_config().model_dump()
     payload["runtime"].pop("worker_healthcheck")
 
-    assert DispatchConfig.model_validate(payload).runtime.worker_healthcheck == "startup_only"
+    assert (
+        DispatchConfig.model_validate(payload).runtime.worker_healthcheck
+        == "startup_only"
+    )
 
     payload["runtime"]["worker_healthcheck"] = "sometimes"
     with pytest.raises(ValidationError):
         DispatchConfig.model_validate(payload)
 
 
-def test_dispatch_config_rejects_duplicate_workers_and_excess_project_parallelism() -> None:
+def test_dispatch_config_rejects_duplicate_workers_and_excess_project_parallelism() -> (
+    None
+):
     payload = make_config().model_dump()
     payload["workers"].append(dict(payload["workers"][0]))
     with pytest.raises(ValidationError, match="worker names must be unique"):
@@ -48,17 +53,21 @@ def test_dispatch_config_rejects_duplicate_workers_and_excess_project_parallelis
 
     payload = make_config().model_dump()
     payload["runtime"]["max_project_workers"] = 3
-    with pytest.raises(ValidationError, match="max_project_workers cannot exceed max_workers"):
+    with pytest.raises(
+        ValidationError, match="max_project_workers cannot exceed max_workers"
+    ):
         DispatchConfig.model_validate(payload)
 
 
 def test_pi_worker_rejects_invalid_context_window() -> None:
-    with pytest.raises(ValidationError, match="PI_MODEL_CONTEXT_WINDOW must be greater than 0"):
+    with pytest.raises(
+        ValidationError, match="PI_MODEL_CONTEXT_WINDOW must be greater than 0"
+    ):
         WorkerConfig.model_validate(
             {
                 "name": "pi",
                 "type": "pi",
-                "task_types": ["explore"],
+                "task_types": ["bootstrap", "reason", "explore"],
                 "max_running": 1,
                 "priority": 0,
                 "env": {
@@ -78,7 +87,7 @@ def test_mock_worker_rejects_unknown_phase_configuration() -> None:
             {
                 "name": "mock",
                 "type": "mock",
-                "task_types": ["explore"],
+                "task_types": ["bootstrap", "reason", "explore"],
                 "max_running": 1,
                 "priority": 0,
                 "env": {"MOCK_UNKNOWN": "{}"},
@@ -96,7 +105,7 @@ def test_pi_driver_builds_models_from_environment_without_key_in_argv() -> None:
         {
             "name": "pi-worker",
             "type": "pi",
-            "task_types": ["explore"],
+            "task_types": ["bootstrap", "reason", "explore"],
             "max_running": 1,
             "priority": 0,
             "env": {
@@ -119,7 +128,9 @@ def test_pi_driver_builds_models_from_environment_without_key_in_argv() -> None:
     assert "--approve" in result.argv
     assert "--tools" not in result.argv
     assert "--no-skills" not in result.argv
-    assert result.argv[-2:] == ["-p", "prompt"]
+    assert result.argv[-2:] == ["--mode", "rpc"]
+    assert '"type":"prompt","message":"prompt"' in result.stdin
+    assert result.live_control is not None
 
 
 def test_local_pi_and_codex_use_complete_provider_config_without_exposing_key() -> None:
@@ -127,7 +138,7 @@ def test_local_pi_and_codex_use_complete_provider_config_without_exposing_key() 
         {
             "name": "pi-worker",
             "type": "pi",
-            "task_types": ["explore"],
+            "task_types": ["bootstrap", "reason", "explore"],
             "max_running": 1,
             "priority": 0,
             "env": {
@@ -150,7 +161,7 @@ def test_local_pi_and_codex_use_complete_provider_config_without_exposing_key() 
         {
             "name": "codex-worker",
             "type": "codex",
-            "task_types": ["reason"],
+            "task_types": ["bootstrap", "reason", "explore"],
             "max_running": 1,
             "priority": 0,
             "context_length": 1_048_576,
@@ -161,11 +172,17 @@ def test_local_pi_and_codex_use_complete_provider_config_without_exposing_key() 
             },
         }
     )
-    codex_argv = CodexDriver(local=True).build_execute(
-        codex_worker, "prompt", None
-    ).argv
+    codex_argv = (
+        CodexDriver(local=True).build_execute(codex_worker, "prompt", None).argv
+    )
 
-    assert "--model" in codex_argv
+    assert codex_argv[:2] == ["codex", "app-server"]
+    assert (
+        CodexDriver(local=True)
+        .build_execute(codex_worker, "prompt", None)
+        .live_control.model
+        == "gpt-test"
+    )
     assert 'model_provider="redtrace"' in codex_argv
     assert 'web_search="live"' in codex_argv
     assert "model_context_window=1048576" in codex_argv
@@ -238,7 +255,7 @@ def test_claude_driver_uses_configured_model_and_native_fallback() -> None:
         {
             "name": "claude-configured",
             "type": "claudecode",
-            "task_types": ["explore"],
+            "task_types": ["bootstrap", "reason", "explore"],
             "max_running": 1,
             "priority": 0,
             "env": {
@@ -250,12 +267,10 @@ def test_claude_driver_uses_configured_model_and_native_fallback() -> None:
     )
     native = configured.model_copy(update={"env": {}})
 
-    configured_argv = ClaudeCodeDriver().build_execute(
-        configured, "prompt", "session"
-    ).argv
-    native_argv = ClaudeCodeDriver().build_execute(
-        native, "prompt", "session"
-    ).argv
+    configured_argv = (
+        ClaudeCodeDriver().build_execute(configured, "prompt", "session").argv
+    )
+    native_argv = ClaudeCodeDriver().build_execute(native, "prompt", "session").argv
 
     assert configured_argv[configured_argv.index("--model") + 1] == "claude-test"
     assert "--model" not in native_argv
@@ -269,7 +284,7 @@ def test_claude_and_pi_receive_redtrace_global_instructions() -> None:
         {
             "name": "claude",
             "type": "claudecode",
-            "task_types": ["explore"],
+            "task_types": ["bootstrap", "reason", "explore"],
             "max_running": 1,
             "priority": 0,
             "env": {"REDTRACE_GLOBAL_INSTRUCTIONS": instructions},
@@ -291,19 +306,23 @@ def test_claude_driver_root_mode_is_noninteractive_and_allows_native_web(
         "redtrace.dispatcher.workers.adapters.claudecode.os.geteuid",
         lambda: 0,
     )
-    argv = ClaudeCodeDriver().build_execute(
-        WorkerConfig.model_validate(
-            {
-                "name": "claude",
-                "type": "claudecode",
-                "task_types": ["explore"],
-                "max_running": 1,
-                "priority": 0,
-            }
-        ),
-        "prompt",
-        "session",
-    ).argv
+    argv = (
+        ClaudeCodeDriver()
+        .build_execute(
+            WorkerConfig.model_validate(
+                {
+                    "name": "claude",
+                    "type": "claudecode",
+                    "task_types": ["bootstrap", "reason", "explore"],
+                    "max_running": 1,
+                    "priority": 0,
+                }
+            ),
+            "prompt",
+            "session",
+        )
+        .argv
+    )
 
     assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
     allowed_index = argv.index("--allowedTools")
@@ -335,7 +354,7 @@ def test_codex_driver_execute_argv_passes_model_endpoint_and_prompt() -> None:
         {
             "name": "codex",
             "type": "codex",
-            "task_types": ["reason"],
+            "task_types": ["bootstrap", "reason", "explore"],
             "max_running": 1,
             "priority": 0,
             "context_length": 1_048_576,
@@ -347,12 +366,14 @@ def test_codex_driver_execute_argv_passes_model_endpoint_and_prompt() -> None:
         }
     )
 
-    argv = CodexDriver().build_execute(worker, "prompt", None).argv
+    result = CodexDriver().build_execute(worker, "prompt", None)
+    argv = result.argv
 
-    assert "--model" in argv
-    assert "gpt-test" in argv
+    assert argv[:2] == ["codex", "app-server"]
+    assert result.live_control.model == "gpt-test"
     assert 'model_providers.redtrace.base_url="http://api/v1"' in argv
     assert 'web_search="live"' in argv
     assert "model_context_window=1048576" in argv
     assert "model_auto_compact_token_limit=943718" in argv
-    assert argv[-2:] == ["--", "prompt"]
+    assert result.live_control.prompt == "prompt"
+    assert '"method":"initialize"' in result.stdin

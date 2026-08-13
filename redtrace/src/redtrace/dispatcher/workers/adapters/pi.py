@@ -11,6 +11,7 @@ from redtrace.capabilities import (
 from redtrace.dispatcher.config import WorkerConfig
 from redtrace.dispatcher.workers.base import DriverResult, WorkerDriver
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
+from redtrace.dispatcher.workers.live import PiLiveControl
 
 
 class PiDriver(WorkerDriver):
@@ -42,12 +43,19 @@ class PiDriver(WorkerDriver):
         model = env["PI_MODEL"]
         api = env["PI_PROVIDER_API"]
         proxies = proxies_from_env(env)
-        headers = {"Authorization": f"Bearer {env['PI_API_KEY']}", "content-type": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {env['PI_API_KEY']}",
+            "content-type": "application/json",
+        }
         if "anthropic" in api:
             return http_ping(
                 f"{base}/v1/messages",
                 headers={**headers, "anthropic-version": "2023-06-01"},
-                json_body={"model": model, "max_tokens": 10, "messages": [{"role": "user", "content": "ping"}]},
+                json_body={
+                    "model": model,
+                    "max_tokens": 10,
+                    "messages": [{"role": "user", "content": "ping"}],
+                },
                 timeout=timeout,
                 proxies=proxies,
             )
@@ -55,7 +63,11 @@ class PiDriver(WorkerDriver):
             return http_ping(
                 f"{base}/responses",
                 headers=headers,
-                json_body={"model": model, "input": [{"role": "user", "content": "ping"}], "stream": False},
+                json_body={
+                    "model": model,
+                    "input": [{"role": "user", "content": "ping"}],
+                    "stream": False,
+                },
                 timeout=timeout,
                 proxies=proxies,
             )
@@ -63,7 +75,11 @@ class PiDriver(WorkerDriver):
         return http_ping(
             f"{base}/chat/completions",
             headers=headers,
-            json_body={"model": model, "max_tokens": 10, "messages": [{"role": "user", "content": "ping"}]},
+            json_body={
+                "model": model,
+                "max_tokens": 10,
+                "messages": [{"role": "user", "content": "ping"}],
+            },
             timeout=timeout,
             proxies=proxies,
         )
@@ -72,28 +88,10 @@ class PiDriver(WorkerDriver):
         env = worker.env
         return f"POST {env['PI_BASE_URL']} (api={env['PI_PROVIDER_API']}, model={env['PI_MODEL']})"
 
-    def build_execute(self, worker: WorkerConfig, prompt: str, session: str | None) -> DriverResult:
-        if self.local and not worker.api_configured():
-            return DriverResult(
-                argv=self._local_argv(worker, prompt, session),
-                session=session,
-                stdin=prompt,
-            )
-        env = worker.env
-        argv = [
-            "--provider",
-            "redtrace",
-            "--model",
-            env["PI_MODEL"],
-            "--approve",
-            *self._thinking_args(worker),
-            "--mode",
-            "json",
-        ]
-        if session:
-            argv.extend(["--session", session])
-        argv.extend(["-p", prompt])
-        return DriverResult(argv=self._configured_argv(worker, argv), session=session)
+    def build_execute(
+        self, worker: WorkerConfig, prompt: str, session: str | None
+    ) -> DriverResult:
+        return self._build_live(worker, prompt, session)
 
     def build_conclude(
         self,
@@ -101,40 +99,44 @@ class PiDriver(WorkerDriver):
         prompt: str,
         session: str,
     ) -> DriverResult:
+        return self._build_live(worker, prompt, session)
+
+    def _build_live(
+        self, worker: WorkerConfig, prompt: str, session: str | None
+    ) -> DriverResult:
+        control = PiLiveControl(prompt, session)
         if self.local and not worker.api_configured():
-            return DriverResult(
-                argv=self._local_argv(worker, prompt, session),
-                session=session,
-                stdin=prompt,
-            )
-        env = worker.env
-        argv = [
-            "--provider",
-            "redtrace",
-            "--model",
-            env["PI_MODEL"],
-            "--approve",
-            *self._thinking_args(worker),
-            "--mode",
-            "json",
-            "--session",
-            session,
-            "-p",
-            prompt,
-        ]
+            argv = self._local_argv(worker, session)
+        else:
+            env = worker.env
+            pi_argv = [
+                "--provider",
+                "redtrace",
+                "--model",
+                env["PI_MODEL"],
+                "--approve",
+                *self._thinking_args(worker),
+                "--mode",
+                "rpc",
+            ]
+            if session:
+                pi_argv.extend(["--session", session])
+            argv = self._configured_argv(worker, pi_argv)
         return DriverResult(
-            argv=self._configured_argv(worker, argv),
+            argv=argv,
             session=session,
+            stdin=control.initial_input,
+            live_control=control,
         )
 
-    def _local_argv(self, worker: WorkerConfig, prompt: str, session: str | None) -> list[str]:
+    def _local_argv(self, worker: WorkerConfig, session: str | None) -> list[str]:
         # Native pi: no provider/model overrides, so the host login and global config win.
         argv = [
             "pi",
             "--approve",
             *self._thinking_args(worker),
             "--mode",
-            "json",
+            "rpc",
             "--extension",
             worker.env.get("REDTRACE_PI_MCP_EXTENSION", PI_MCP_EXTENSION),
             *self._skill_args(worker),
@@ -142,10 +144,11 @@ class PiDriver(WorkerDriver):
         ]
         if session:
             argv.extend(["--session", session])
-        argv.append("-p")
         return argv
 
-    def extract_session(self, session: str | None, stdout: str, stderr: str) -> str | None:
+    def extract_session(
+        self, session: str | None, stdout: str, stderr: str
+    ) -> str | None:
         if session:
             return session
         for event in self._iter_events(stdout):
@@ -158,17 +161,26 @@ class PiDriver(WorkerDriver):
 
     def extract_response_text(self, stdout: str, stderr: str) -> str:
         assistant_message: dict[str, Any] | None = None
+        saw_message_end = False
         for event in self._iter_events(stdout):
             event_type = event.get("type")
-            if event_type == "turn_end":
+            if event_type == "message_end":
                 message = event.get("message")
                 if isinstance(message, dict) and message.get("role") == "assistant":
                     assistant_message = message
-            elif event_type == "agent_end":
+                    saw_message_end = True
+            elif event_type == "turn_end" and not saw_message_end:
+                message = event.get("message")
+                if isinstance(message, dict) and message.get("role") == "assistant":
+                    assistant_message = message
+            elif event_type == "agent_end" and not saw_message_end:
                 messages = event.get("messages")
                 if isinstance(messages, list):
                     for message in reversed(messages):
-                        if isinstance(message, dict) and message.get("role") == "assistant":
+                        if (
+                            isinstance(message, dict)
+                            and message.get("role") == "assistant"
+                        ):
                             assistant_message = message
                             break
         if assistant_message is None:
@@ -213,7 +225,9 @@ class PiDriver(WorkerDriver):
             paths = json.loads(worker.env.get("REDTRACE_SKILL_PATHS", "[]"))
         except json.JSONDecodeError as exc:
             raise ValueError("invalid REDTRACE_SKILL_PATHS") from exc
-        if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+        if not isinstance(paths, list) or any(
+            not isinstance(path, str) for path in paths
+        ):
             raise ValueError("REDTRACE_SKILL_PATHS must be a JSON string array")
         return [argument for path in paths for argument in ("--skill", path)]
 

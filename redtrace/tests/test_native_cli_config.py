@@ -41,7 +41,7 @@ def _worker(worker_type: str) -> WorkerConfig:
         {
             "name": f"{worker_type}-primary",
             "type": worker_type,
-            "task_types": ["explore"],
+            "task_types": ["bootstrap", "reason", "explore"],
             "max_running": 1,
             "priority": 0,
             "context_length": MODEL_CONTEXT_1M,
@@ -115,7 +115,6 @@ def test_unconfigured_local_worker_uses_version_for_cli_probe(monkeypatch) -> No
         {
             "name": "claude-native",
             "type": "claudecode",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
         }
@@ -226,6 +225,7 @@ base_url = "https://old.example/v1"
     assert value["approval_policy"] == "never"
     assert value["sandbox_mode"] == "danger-full-access"
     assert value["web_search"] == "live"
+    assert value["model_reasoning_summary"] == "detailed"
     assert value["model_context_window"] == MODEL_CONTEXT_1M
     assert value["model_auto_compact_token_limit"] == model_auto_compact_token_limit(
         MODEL_CONTEXT_1M
@@ -292,7 +292,7 @@ def test_container_worker_save_syncs_native_config_and_reports_paths(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    config_path = tmp_path / "dispatch.yaml"
+    config_path = tmp_path / "redtrace.yaml"
     raw = _local_config(_worker("claudecode")).model_dump(mode="json")
     raw["runtime"]["execution"] = "container"
     raw["container"] = {
@@ -329,7 +329,7 @@ def test_container_worker_save_syncs_native_config_and_reports_paths(
         "api_endpoint": "https://gateway.example/anthropic",
         "api_key": "claude-secret",
         "model_id": "claude-test",
-        "task_types": ["explore"],
+        "task_types": ["bootstrap", "reason", "explore"],
         "priority": 0,
         "max_running": 1,
     }

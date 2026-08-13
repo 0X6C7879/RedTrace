@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import shutil
 import socket
+import sqlite3
 import subprocess
 import time
 import urllib.request
@@ -49,6 +51,448 @@ def create_project(client: TestClient) -> str:
     )
     assert response.status_code == 201
     return response.json()["project"]["id"]
+
+
+def test_legacy_project_scoped_resources_migrate_without_losing_source(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "legacy.db"
+    legacy_schema = db.SCHEMA.replace(
+        "project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,\n    kind TEXT",
+        "project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,\n    kind TEXT",
+    ).replace(
+        "project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,\n    resource_id TEXT",
+        "project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,\n    resource_id TEXT",
+    )
+    conn = sqlite3.connect(path)
+    conn.executescript(legacy_schema)
+    conn.execute(
+        "INSERT INTO projects (id, title, created_at) VALUES ('proj_old', 'old', '2026-01-01T00:00:00Z')"
+    )
+    conn.execute(
+        """
+        INSERT INTO shared_resources (
+            id, project_id, kind, name, created_by_type, created_by, created_at, updated_at
+        ) VALUES ('ws_old', 'proj_old', 'webshell', 'old shell', 'worker', 'legacy',
+                  '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO operation_tasks (
+            id, project_id, resource_id, action, actor_type, actor, created_at
+        ) VALUES ('op_old', 'proj_old', 'ws_old', 'command', 'human', 'legacy',
+                  '2026-01-01T00:00:00Z')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO operation_results (
+            id, project_id, task_id, content, size_bytes, sha256, created_at
+        ) VALUES ('out_old', 'proj_old', 'op_old', 'ok', 2, 'hash',
+                  '2026-01-01T00:00:00Z')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(db, "_db_path", None)
+    db.configure(path)
+    with db.get_conn() as migrated:
+        project_column = next(
+            row for row in migrated.execute("PRAGMA table_info(shared_resources)")
+            if row["name"] == "project_id"
+        )
+        assert project_column["notnull"] == 0
+        assert {
+            row["table"] for row in migrated.execute("PRAGMA foreign_key_list(operation_tasks)")
+        } == {"shared_resources", "projects"}
+        assert next(
+            row for row in migrated.execute("PRAGMA table_info(operation_tasks)")
+            if row["name"] == "project_id"
+        )["notnull"] == 0
+        assert migrated.execute(
+            "SELECT content FROM operation_results WHERE id = 'out_old'"
+        ).fetchone()["content"] == "ok"
+        metadata = json.loads(
+            migrated.execute(
+                "SELECT metadata_json FROM shared_resources WHERE id = 'ws_old'"
+            ).fetchone()["metadata_json"]
+        )
+        assert metadata["source_project_id"] == "proj_old"
+        migrated.execute("DELETE FROM projects WHERE id = 'proj_old'")
+        persisted = migrated.execute(
+            "SELECT project_id FROM shared_resources WHERE id = 'ws_old'"
+        ).fetchone()
+        assert persisted is not None
+        assert persisted["project_id"] is None
+
+
+def test_webshell_sessions_and_credentials_are_global_with_source_attribution(
+    client: TestClient,
+) -> None:
+    first = create_project(client)
+    second = create_project(client)
+    webshell = client.post(
+        f"/projects/{first}/resources",
+        headers={"X-RedTrace-Worker": "codex-1", "X-RedTrace-Task": "explore", "X-RedTrace-Intent": "i001"},
+        json={
+            "kind": "webshell",
+            "name": "global shell",
+            "target": "https://target.test/shell.php",
+            "secret": {"password": "hidden"},
+            "actor_type": "worker",
+            "actor": "codex-1",
+            "worker": "codex-1",
+            "intent_id": "i001",
+        },
+    )
+    credential = client.post(
+        f"/projects/{first}/resources",
+        headers={"X-RedTrace-Worker": "codex-1", "X-RedTrace-Task": "explore", "X-RedTrace-Intent": "i001"},
+        json={
+            "kind": "credential_ref",
+            "name": "DOMAIN\\alice",
+            "target": "dc01.test",
+            "metadata": {"credential_type": "active_directory", "username": "alice"},
+            "secret": {"value": "Passw0rd!"},
+            "actor_type": "worker",
+            "actor": "codex-1",
+        },
+    )
+    assert webshell.status_code == credential.status_code == 201
+
+    listed = client.get(f"/projects/{second}/resources?limit=500")
+    assert listed.status_code == 200
+    items = {item["id"]: item for item in listed.json()["resources"]}
+    shell = items[webshell.json()["resource"]["id"]]
+    saved_credential = items[credential.json()["resource"]["id"]]
+    assert listed.json()["scope"] == "global"
+    assert shell["source_project_id"] == first
+    assert shell["source"]["worker"] == "codex-1"
+    assert saved_credential["metadata"]["credential_type"] == "active_directory"
+    assert saved_credential["has_secret"] is True
+    assert saved_credential["secret"] == {"value": "Passw0rd!"}
+
+    snapshot = client.get(
+        f"/projects/{second}/operations/snapshot",
+        headers={"X-RedTrace-Worker": "codex-2"},
+        params={"kinds": "credential_ref"},
+    ).json()["resources"]
+    assert snapshot[0]["secret"] == {"value": "Passw0rd!"}
+
+    exported = client.get(f"/projects/{first}/export?format=yaml").text
+    assert "Passw0rd!" in exported
+
+
+def test_reverse_listener_creates_global_interactive_session(client: TestClient) -> None:
+    project_id = create_project(client)
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    listener = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "c2_listener",
+            "name": "reverse-test",
+            "target": f"127.0.0.1:{port}",
+            "status": "available",
+            "metadata": {
+                "listener_type": "tcp_reverse",
+                "bind_host": "127.0.0.1",
+                "bind_port": port,
+                "callback_host": "127.0.0.1",
+            },
+            "actor": "tester",
+        },
+    )
+    assert listener.status_code == 201
+    listener_id = listener.json()["resource"]["id"]
+
+    channel = socket.socket()
+    deadline = time.monotonic() + 3
+    while True:
+        try:
+            channel.connect(("127.0.0.1", port))
+            break
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+
+    session = None
+    while time.monotonic() < deadline:
+        resources = client.get(f"/projects/{project_id}/resources?kind=c2_session").json()["resources"]
+        session = next((item for item in resources if item["parent_resource_id"] == listener_id), None)
+        if session:
+            break
+        time.sleep(0.05)
+    assert session is not None
+    assert session["metadata"]["connection_type"] == "reverse"
+    assert session["metadata"]["shell_type"] == "raw_tcp"
+
+    def respond() -> None:
+        assert channel.recv(1024).decode().strip() == "whoami"
+        channel.sendall(b"root\n")
+
+    import threading
+
+    responder = threading.Thread(target=respond)
+    responder.start()
+    operation = client.post(
+        f"/projects/{project_id}/resources/{session['id']}/tasks",
+        json={"action": "command", "arguments": {"command": "whoami"}, "actor": "tester"},
+    )
+    assert operation.status_code == 202
+    operation_id = operation.json()["task"]["id"]
+    result = None
+    for _ in range(60):
+        result = client.get(f"/projects/{project_id}/operations/tasks/{operation_id}").json()["task"]
+        if result["status"] in {"succeeded", "failed"}:
+            break
+        time.sleep(0.05)
+    responder.join(timeout=2)
+    channel.close()
+    assert result is not None and result["status"] == "succeeded"
+    assert "root" in result["output_summary"]
+
+
+def test_listener_types_are_real_transports_and_http_payload_uses_server_url(
+    client: TestClient,
+) -> None:
+    project_id = create_project(client)
+    rejected = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "c2_listener",
+            "name": "not-a-transport",
+            "metadata": {"listener_type": "sliver"},
+        },
+    )
+    assert rejected.status_code == 400
+
+    listener_response = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "c2_listener",
+            "name": "worker-http",
+            "metadata": {"listener_type": "http_beacon"},
+        },
+    )
+    listener = listener_response.json()["resource"]
+    payload = client.post(
+        f"/projects/{project_id}/c2/payloads/oneliner",
+        json={"listener_id": listener["id"], "kind": "curl_beacon"},
+    )
+    assert payload.status_code == 200
+    assert f"http://testserver/c2/checkin/{listener['id']}" in payload.json()["oneliner"]
+
+
+def test_bind_listener_connects_and_exposes_an_interactive_session(
+    client: TestClient,
+) -> None:
+    project_id = create_project(client)
+    bind_shell = socket.socket()
+    bind_shell.bind(("127.0.0.1", 0))
+    bind_shell.listen(1)
+    bind_shell.settimeout(3)
+    port = bind_shell.getsockname()[1]
+
+    listener = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "c2_listener",
+            "name": "bind-test",
+            "status": "available",
+            "metadata": {
+                "listener_type": "tcp_bind",
+                "target_host": "127.0.0.1",
+                "bind_port": port,
+            },
+            "actor": "tester",
+        },
+    )
+    assert listener.status_code == 201
+    listener_id = listener.json()["resource"]["id"]
+    channel, _ = bind_shell.accept()
+    channel.settimeout(3)
+
+    deadline = time.monotonic() + 3
+    session = None
+    while time.monotonic() < deadline:
+        resources = client.get(
+            f"/projects/{project_id}/resources?kind=c2_session"
+        ).json()["resources"]
+        session = next(
+            (item for item in resources if item["parent_resource_id"] == listener_id),
+            None,
+        )
+        if session:
+            break
+        time.sleep(0.05)
+    assert session is not None
+    assert session["metadata"]["connection_type"] == "bind"
+
+    def respond() -> None:
+        assert channel.recv(1024).decode().strip() == "hostname"
+        channel.sendall(b"bind-target\n")
+
+    import threading
+
+    responder = threading.Thread(target=respond)
+    responder.start()
+    operation = client.post(
+        f"/projects/{project_id}/resources/{session['id']}/tasks",
+        json={"action": "command", "arguments": {"command": "hostname"}, "actor": "tester"},
+    )
+    assert operation.status_code == 202
+    operation_id = operation.json()["task"]["id"]
+    result = None
+    for _ in range(60):
+        result = client.get(
+            f"/projects/{project_id}/operations/tasks/{operation_id}"
+        ).json()["task"]
+        if result["status"] in {"succeeded", "failed"}:
+            break
+        time.sleep(0.05)
+    responder.join(timeout=2)
+    channel.close()
+    bind_shell.close()
+    assert result is not None and result["status"] == "succeeded"
+    assert "bind-target" in result["output_summary"]
+
+
+@pytest.mark.parametrize(
+    ("shell_type", "expected_executable"),
+    [("ssh", "ssh"), ("evil_winrm", "evil-winrm"), ("psexec", "psexec.py"), ("wmi", "wmiexec.py")],
+)
+def test_direct_session_transports_execute_through_the_session_hub(
+    monkeypatch, shell_type: str, expected_executable: str
+) -> None:
+    captured: dict = {}
+
+    def run(argv, **kwargs):
+        captured.update({"argv": argv, **kwargs})
+        return SimpleNamespace(stdout="transport-ok\n", stderr="", returncode=0)
+
+    monkeypatch.setattr(operations.subprocess, "run", run)
+    output = operations.execute_direct_session(
+        {
+            "target": "10.0.0.8",
+            "metadata_json": json.dumps(
+                {"shell_type": shell_type, "connection_type": "direct", "username": "alice", "domain": "DOMAIN"}
+            ),
+            "secret_json": json.dumps({"password": "secret"} if shell_type == "evil_winrm" else {}),
+        },
+        {"input_json": json.dumps({"command": "whoami"}), "action": "command"},
+    )
+    assert output == "transport-ok\n"
+    assert captured["argv"][0] == expected_executable
+    if shell_type == "evil_winrm":
+        assert "-c" not in captured["argv"]
+        assert captured["input"] == "whoami\nexit\n"
+
+
+def test_external_c2_session_executes_through_adapter(monkeypatch) -> None:
+    captured: dict = {}
+
+    class Response:
+        text = "sliver-ok"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def post(url, **kwargs):
+        captured.update({"url": url, **kwargs})
+        return Response()
+
+    monkeypatch.setattr(operations.requests, "post", post)
+    output = operations.execute_direct_session(
+        {
+            "target": "sliver-session-7",
+            "metadata_json": json.dumps(
+                {
+                    "shell_type": "sliver",
+                    "connection_type": "external_c2",
+                    "framework": "sliver",
+                    "external_session_id": "session-7",
+                }
+            ),
+            "secret_json": json.dumps(
+                {"endpoint": "http://adapter.test/execute", "token": "adapter-token"}
+            ),
+        },
+        {"input_json": json.dumps({"command": "whoami"}), "action": "command"},
+    )
+    assert output == "sliver-ok"
+    assert captured["url"] == "http://adapter.test/execute"
+    assert captured["headers"]["Authorization"] == "Bearer adapter-token"
+    assert captured["json"]["session_id"] == "session-7"
+
+
+def test_direct_sessions_do_not_expire_like_polling_beacons(client: TestClient) -> None:
+    project_id = create_project(client)
+    created = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "c2_session",
+            "name": "persistent-ssh",
+            "target": "10.0.0.8",
+            "metadata": {"shell_type": "ssh", "connection_type": "direct"},
+            "actor": "tester",
+        },
+    )
+    session_id = created.json()["resource"]["id"]
+    with db.get_conn() as conn:
+        conn.execute(
+            "UPDATE shared_resources SET last_seen_at = '2020-01-01T00:00:00Z' WHERE id = ?",
+            (session_id,),
+        )
+    listed = client.get(f"/projects/{project_id}/resources?kind=c2_session").json()["resources"]
+    session = next(item for item in listed if item["id"] == session_id)
+    assert session["status"] == "available"
+
+
+def test_global_direct_session_can_open_shell_without_selected_project(
+    client: TestClient, monkeypatch
+) -> None:
+    captured: dict = {}
+
+    def run(argv, **kwargs):
+        captured["argv"] = argv
+        return SimpleNamespace(stdout="global-shell-ok\n", stderr="", returncode=0)
+
+    monkeypatch.setattr(operations.subprocess, "run", run)
+    session = client.post(
+        "/projects/_global/resources",
+        json={
+            "kind": "c2_session",
+            "name": "manual-ssh",
+            "target": "10.0.0.8",
+            "metadata": {
+                "shell_type": "ssh",
+                "connection_type": "direct",
+                "username": "alice",
+            },
+            "secret": {"private_key_path": "/tmp/test-key"},
+        },
+    ).json()["resource"]
+    queued = client.post(
+        f"/projects/_global/resources/{session['id']}/tasks",
+        json={"action": "command", "arguments": {"command": "whoami"}},
+    )
+    assert queued.status_code == 202
+    task_id = queued.json()["task"]["id"]
+    task = None
+    for _ in range(60):
+        task = client.get(f"/projects/_global/operations/tasks/{task_id}").json()["task"]
+        if task["status"] in {"succeeded", "failed"}:
+            break
+        time.sleep(0.05)
+    assert task is not None and task["status"] == "succeeded"
+    assert "global-shell-ok" in client.get(task["result_ref"]).text
+    assert captured["argv"][-1] == "whoami"
 
 
 def test_worker_registers_webshell_without_exposing_secret_and_reuses_it(
@@ -126,29 +570,43 @@ def test_worker_registers_webshell_without_exposing_secret_and_reuses_it(
     assert "never-return-this" not in json.dumps(captured)
     result_id = task["result_ref"].rsplit("/", 1)[-1]
     assert client.get(f"/projects/{project_id}/operations/results/{result_id}").text == "uid=33(www-data)"
+    assert next((db.output_root("webshell") / "results").glob(f"*-{result_id}.txt")).read_text() == "uid=33(www-data)"
 
     detail = client.get(f"/projects/{project_id}").json()
     resource_fact = next(fact for fact in detail["facts"] if resource["id"] in fact["description"])
     assert "never-return-this" not in resource_fact["description"]
 
 
-def test_human_can_delete_webshell_resource(client: TestClient) -> None:
+@pytest.mark.parametrize(
+    ("kind", "metadata", "secret"),
+    [
+        ("webshell", {"method": "POST", "command_param": "cmd"}, {"password": "test-only"}),
+        ("c2_listener", {"listener_type": "http_beacon"}, {}),
+        ("c2_session", {"shell_type": "ssh", "connection_type": "direct"}, {}),
+        ("credential_ref", {"credential_type": "host"}, {"value": "test-only"}),
+    ],
+)
+def test_human_resource_delete_removes_its_graph_fact(
+    client: TestClient, kind: str, metadata: dict, secret: dict
+) -> None:
     project_id = create_project(client)
     created = client.post(
         f"/projects/{project_id}/resources",
         json={
-            "kind": "webshell",
-            "name": "待删除 WebShell",
+            "kind": kind,
+            "name": "待删除资源",
             "target": "https://delete.invalid/shell.php",
             "summary": "删除回归测试",
-            "metadata": {"method": "POST", "command_param": "cmd"},
-            "secret": {"password": "test-only"},
+            "metadata": metadata,
+            "secret": secret,
             "actor_type": "human",
             "actor": "测试员",
         },
     )
     assert created.status_code == 201
-    resource_id = created.json()["resource"]["id"]
+    resource = created.json()["resource"]
+    resource_id = resource["id"]
+    fact_id = resource["fact_id"]
 
     deleted = client.delete(
         f"/projects/{project_id}/resources/{resource_id}?actor=测试员"
@@ -158,11 +616,89 @@ def test_human_can_delete_webshell_resource(client: TestClient) -> None:
     assert client.get(f"/projects/{project_id}/resources/{resource_id}").status_code == 404
     listed = client.get(f"/projects/{project_id}/resources").json()["resources"]
     assert resource_id not in {resource["id"] for resource in listed}
+    facts = client.get(f"/projects/{project_id}").json()["facts"]
+    assert fact_id not in {fact["id"] for fact in facts}
+    changes = client.get(
+        f"/projects/{project_id}/blackboard/changes", params={"since": 0, "limit": 100}
+    ).json()["changes"]
+    assert any(
+        change["kind"] == "fact"
+        and change["node_id"] == fact_id
+        and change["action"] == "removed"
+        for change in changes
+    )
     audit = client.get(f"/projects/{project_id}/operations/audit").json()["events"]
     assert any(
         event["action"] == "resource.delete" and event["resource_id"] == resource_id
         for event in audit
     )
+
+
+def test_releasing_resource_fact_keeps_resource_and_blocks_used_facts(
+    client: TestClient,
+) -> None:
+    project_id = create_project(client)
+    resource = client.post(
+        f"/projects/{project_id}/resources",
+        json={"kind": "credential_ref", "name": "keep-me", "secret": {"value": "secret"}},
+    ).json()["resource"]
+    fact_id = resource["fact_id"]
+
+    released = client.delete(f"/projects/{project_id}/blackboard/facts/{fact_id}")
+    assert released.status_code == 204
+    kept = client.get(f"/projects/{project_id}/resources/{resource['id']}").json()["resource"]
+    assert kept["fact_id"] is None
+    assert client.get(f"/projects/{project_id}/blackboard/nodes/{fact_id}").json()["found"] is False
+
+    leaf_intent = client.post(
+        f"/projects/{project_id}/intents",
+        json={"from": ["origin"], "description": "leaf", "creator": "admin", "worker": "admin"},
+    ).json()
+    leaf = client.post(
+        f"/projects/{project_id}/intents/{leaf_intent['id']}/conclude",
+        json={"worker": "admin", "description": "leaf result"},
+    ).json()["fact"]
+    assert client.delete(f"/projects/{project_id}/blackboard/facts/{leaf['id']}").status_code == 204
+    intents = client.get(f"/projects/{project_id}").json()["intents"]
+    assert leaf_intent["id"] not in {intent["id"] for intent in intents}
+
+    parent_intent = client.post(
+        f"/projects/{project_id}/intents",
+        json={"from": ["origin"], "description": "parent", "creator": "admin", "worker": "admin"},
+    ).json()
+    parent = client.post(
+        f"/projects/{project_id}/intents/{parent_intent['id']}/conclude",
+        json={"worker": "admin", "description": "parent result"},
+    ).json()["fact"]
+    client.post(
+        f"/projects/{project_id}/intents",
+        json={"from": [parent["id"]], "description": "child", "creator": "admin"},
+    )
+    assert client.delete(f"/projects/{project_id}/blackboard/facts/{parent['id']}").status_code == 409
+
+
+def test_resource_delete_detaches_its_fact_from_graph_intents(client: TestClient) -> None:
+    project_id = create_project(client)
+    resource = client.post(
+        f"/projects/{project_id}/resources",
+        json={"kind": "webshell", "name": "used-resource"},
+    ).json()["resource"]
+    intent = client.post(
+        f"/projects/{project_id}/intents",
+        json={
+            "from": [resource["fact_id"]],
+            "description": "depends on resource",
+            "creator": "admin",
+            "worker": "admin",
+        },
+    ).json()
+
+    assert client.delete(
+        f"/projects/{project_id}/resources/{resource['id']}"
+    ).status_code == 204
+    project = client.get(f"/projects/{project_id}").json()
+    assert resource["fact_id"] not in {fact["id"] for fact in project["facts"]}
+    assert intent["id"] not in {item["id"] for item in project["intents"]}
 
 
 @pytest.mark.skipif(
@@ -507,6 +1043,70 @@ def test_c2_payload_and_profile_are_project_scoped_references(client: TestClient
     facts = client.get(f"/projects/{project_id}").json()["facts"]
     assert any("C2 载荷" in fact["description"] for fact in facts)
     assert any("C2 流量伪装" in fact["description"] for fact in facts)
+
+
+def test_payload_oneliner_and_worker_upload_are_retained_and_shareable(client: TestClient) -> None:
+    project_id = create_project(client)
+    listener = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "c2_listener",
+            "name": "Worker HTTP",
+            "target": "127.0.0.1:8443",
+            "metadata": {"listener_type": "http_beacon", "bind_port": 8443},
+        },
+    ).json()["resource"]
+    worker_headers = {
+        "X-RedTrace-Worker": "worker-payload",
+        "X-RedTrace-Task": "payload-build",
+        "X-RedTrace-Intent": "i-payload",
+    }
+
+    generated = client.post(
+        f"/projects/{project_id}/c2/payloads/oneliner",
+        headers=worker_headers,
+        json={"listener_id": listener["id"], "kind": "curl_beacon"},
+    )
+    assert generated.status_code == 200
+    command_payload = generated.json()["payload"]
+    assert command_payload["metadata"]["command"] == generated.json()["oneliner"]
+    assert command_payload["metadata"]["source_type"] == "worker"
+
+    content = b"redtrace-payload-evidence"
+    uploaded = client.post(
+        f"/projects/{project_id}/c2/payloads/upload",
+        headers={**worker_headers, "Content-Type": "application/octet-stream"},
+        params={
+            "filename": "operator-tool.bin",
+            "name": "Operator Tool",
+            "platform": "linux",
+            "arch": "amd64",
+            "listener_id": listener["id"],
+        },
+        content=content,
+    )
+    assert uploaded.status_code == 201
+    file_payload = uploaded.json()["payload"]
+    assert file_payload["metadata"]["original_filename"] == "operator-tool.bin"
+    assert file_payload["metadata"]["sha256"] == hashlib.sha256(content).hexdigest()
+    assert (
+        db.output_root("c2") / "payloads" / file_payload["metadata"]["filename"]
+    ).read_bytes() == content
+    assert db.output_root("webshell").is_dir()
+    assert client.get(file_payload["target"]).content == content
+
+    snapshot = client.get(
+        f"/projects/{project_id}/operations/snapshot",
+        headers=worker_headers,
+        params={"kinds": "c2_payload"},
+    ).json()["resources"]
+    assert {item["id"] for item in snapshot} == {command_payload["id"], file_payload["id"]}
+    assert next(item for item in snapshot if item["id"] == command_payload["id"])["metadata"]["command"]
+
+    assert client.delete(
+        f"/projects/{project_id}/resources/{file_payload['id']}"
+    ).status_code == 204
+    assert client.get(file_payload["target"]).status_code == 404
 
 
 def test_worker_snapshot_and_changes_reveal_human_webshell_and_c2_session(

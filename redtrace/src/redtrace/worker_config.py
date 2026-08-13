@@ -42,8 +42,8 @@ from redtrace.native_cli_config import (
 )
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-TASK_TYPES = frozenset({"bootstrap", "reason", "explore"})
 EDITABLE_WORKER_TYPES = frozenset({"claudecode", "codex", "pi"})
+TASK_TYPES = frozenset({"bootstrap", "reason", "explore"})
 LOCK_TIMEOUT_SECONDS = 10.0
 STALE_LOCK_SECONDS = 60.0
 TEST_CACHE_SECONDS = 60.0

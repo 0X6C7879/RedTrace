@@ -1,353 +1,298 @@
-# Dispatcher
+# RedTrace 技术架构与调度设计
 
----
+本文档描述 RedTrace 0.3.x 当前代码的系统设计、运行链路、可靠性机制和技术优势。字段级 API 契约见 [Server 协议](server-protocol.md)，上下文处理细节见 [Context Harness](context-harness.md)，外部插件兼容层见 [插件兼容协议](plugin-compatibility.md)。
 
-## 本质
+## 1. 设计目标
 
-Dispatcher 是 RedTrace 的客户端执行器。它负责：
+RedTrace 面向持续时间长、分支多、需要工具执行和证据复核的任务。系统设计围绕五个目标展开：
 
-1. 协调项目容器生命周期
-2. 给 Agent 下发明确任务
-3. 代 Agent 调用 RedTrace API 写回图
+1. **结论可验证**：把目标、证据、调查方向和人工输入分开存储，每个结论都能追溯到执行任务与会话。
+2. **协作可并行**：不同模型、不同 CLI 和不同项目共享一套调度协议，同时受全局与局部配额约束。
+3. **执行可替换**：控制面不绑定某个模型供应商，也不绑定容器或本地进程。
+4. **长任务可恢复**：认领、心跳、超时、取消、失败冷却和项目清理均有显式状态。
+5. **过程可审计**：任务元数据、模型事件、工具调用、输出摘要、资源操作和 Workspace 均可查询与导出。
 
-Agent 不直接认领 Intent，不直接 heartbeat，不直接调用 RedTrace API。Agent 只接收 Dispatcher 下发的任务，返回结构化结果；Dispatcher 再决定如何请求 Server。
+RedTrace 的核心抽象不是聊天线程，而是“证据驱动的执行闭环”。对话和工具输出是过程材料，只有通过任务契约提交的结果才进入共享证据面。
 
----
+## 2. RedTrace 概念模型
 
-## 设计要点
+### 2.1 证据图谱
 
-1. Agent 的输出任务收敛成三类：`bootstrap`、`reason` 和 `explore`；`bootstrap` 只在项目初始态运行，让 Agent 直接尝试解决整个问题；主阶段只有在已解决时才返回，且必须同时给出关键 Fact 和 `complete`；若主阶段超时，再由 `bootstrap_conclude` 收尾产出 Fact；`reason` 负责读图判断是否完成或是否需要提出一个新 intent；`explore` 只负责执行一个已认领 intent 并产出一个 Fact 结论。
-2. Dispatcher 是唯一的协议写入者和控制面；Agent 不 claim、不 heartbeat、不直接调用 RedTrace API。
-3. 超时策略按任务类型定义；`bootstrap` 和 `explore` 都支持“第一阶段执行 + timeout / parse-fail 后用同一 session 进入 conclude 收尾”的双阶段模式。
-4. Prompt 以 markdown 文件形式随代码分发；支持按 prompt 组切换；Worker 行为由 `claudecode`、`codex`、`mock` 等 driver 实现；`dispatch.yaml` 只描述运行期参数。
-5. 调度上，项目初始态按 `project.bootstrap_enabled` 和 Worker 能力决定优先 `bootstrap` 或直接 `reason`；非初始态出现新 Fact / Hint 等新态势时优先 `reason`，否则优先消费可认领的 `explore` intent；`reason` 的并发约束通过服务端的项目级 `project.reason` lease 表达为“单项目最多一个”，`bootstrap` 的并发约束是“单项目最多一个保留 bootstrap intent 且最多一个 bootstrap 任务”，跨项目允许并行；`runtime.interval` 被刻意复用为主循环节拍和带 claim 任务的 heartbeat 周期。
-6. Worker 按独立的 LLM 并发配额单元建模；同一个 key 不拆成多个 Worker，因此并发控制使用 `workers[].max_running` 即可。
-7. 运行日志按“状态变化优先”设计：稳定轮询、正常 heartbeat、重复 skip 原则上不刷屏；容器创建、任务派发、容器内新进程启动、健康检查、超时、收尾、释放 intent、worker 进入短暂不可选窗口等事件必须可见。
-8. 项目容器收尾不应阻塞主调度循环；多个已完成项目的容器 cleanup 可以并行进行。
-9. 项目切到非 `active` 后，Dispatcher 必须把它视为硬停止：不再派发新任务；对本地仍在运行的 `bootstrap`、`explore`、`reason` 任务立即发出取消；对已取消任务不再进入 conclude fallback；并在后续轮询中停止该项目容器，杀掉容器内仍在运行的 Agent 进程。
-10. 当前实现按“单 Dispatcher 实例”设计和测试；CLI 会按 Server 地址加进程锁，拒绝本机第二个 Dispatcher 连接同一服务端共同调度。
-11. 若项目曾 `completed` 后又被服务端显式 `reopen` 为 `active`，Dispatcher 不做特殊分支：它会把这视为普通 active 项目继续调度；同时若该项目容器仍处于已排队 cleanup 状态，Dispatcher 会先等待 cleanup 完成，避免与旧的 completed/stopped cleanup 竞态。
-12. 已知限制：当前协议只记录当前 claim 持有者，不保留 Intent 的 worker 历史；因此项目被 `stopped` 后，随着 open intent 的 `worker` 被服务端清空，Dispatcher/UI/API 都无法直接展示“停止前最后是谁在推进这个 intent”。后续若要补这部分可观测性，较合理的方向是在 Intent 上增加类似 `worker_history` 的历史字段，而不是改变当前 claim 语义。
+| 对象 | 语义 | 主要约束 |
+|---|---|---|
+| `Project` | 顶层目标、起点、状态和调度边界 | `active`、`stopped`、`completed`，删除使用独立生命周期 |
+| `Fact` | 已验证、可供后续任务复用的结论 | 追加式写入，带来源与创建者 |
+| `Intent` | 从一个或多个 Fact 出发的待验证方向 | `open → claimed → concluded`，支持 heartbeat 与 release |
+| `Hint` | 人工注入的约束、优先级或背景 | 不作为因果证据，但进入任务上下文 |
 
-补充：
+`Intent.from` 可以引用多个 Fact，因此图谱可以表达“多项证据共同支持下一步调查”的关系。Server 维护合法状态转换和单调递增的图谱修订号；Worker 不直接修改数据库，而是通过 Dispatcher 和控制面协议提交结果。
 
-- 项目被删除后，Dispatcher 会把它视为 `deleted`。这和 `stopped` 一样会先取消本地运行中的任务，但容器收尾语义不同：`deleted` 对应的 orphan 容器会被直接删除，而不是仅停止后保留。
+### 2.2 执行记录
 
----
+证据图谱回答“目前知道什么”，执行记录回答“这些结论如何产生”。主要对象包括：
 
-## 架构概览
+- `audit_runs`：项目、任务类型、阶段、Worker、Provider、Session、Workspace、开始/结束时间和终态。
+- `audit_events`：模型消息、推理事件、工具调用、结果、错误和生命周期事件。
+- `shared_resources`：WebShell、C2 Listener、C2 Session、Payload、插件和结果资源。
+- `operation_tasks`：面向资源的异步操作、风险等级、审批、输入、结果引用和状态。
+- Workspace 与 Context Artifact：完整执行现场、大输出原文、摘要索引和可增量读取工件。
 
-这个项目在架构上可以分成 4 个部分：
+证据与执行记录互相引用，但职责不同。这样既能给 Worker 一个精简、稳定的决策输入，也能给人类保留足够的复盘材料。
 
-1. RedTrace Server
-2. Dispatcher
-3. 项目容器
-4. Worker / Agent CLI
+## 3. 总体架构
 
-### 1. RedTrace Server
+```mermaid
+flowchart TB
+    subgraph Entry[接入层]
+        UI[Web Console]
+        CLI[RedTrace CLI]
+        EXT[Browser / Burp / External Plugin]
+    end
 
-Server 是协议真相源。
+    subgraph Control[控制与持久化]
+        API[FastAPI Server]
+        DB[(SQLite WAL)]
+        EV[REST / Long Poll / SSE]
+    end
 
-它负责：
+    subgraph Orchestration[编排层]
+        DIS[Dispatcher]
+        SEL[Worker Selection]
+        TL[Trace Loop]
+    end
 
-- 保存 Project / Fact / Intent / Hint
-- 提供协议接口
-- 维护 Intent 的认领、心跳、结论状态
-- 维护项目级 `reason` lease 的认领、心跳与释放状态
+    subgraph Execution[执行层]
+        LOCAL[Local Backend]
+        CONT[Container Backend]
+        ADP[Worker Adapters]
+        AGENT[Claude Code / Codex / Pi / Mock]
+    end
 
-### 2. Dispatcher
+    subgraph Capability[能力与上下文]
+        SK[Skills / route-skills]
+        MCP[MCP]
+        CH[Context Harness]
+        RES[Resource CLI]
+    end
 
-Dispatcher 是这个工程要实现的核心。
+    UI --> API
+    CLI --> API
+    EXT --> API
+    API <--> DB
+    API --> EV
+    DIS <--> API
+    DIS --> SEL
+    SEL --> TL
+    TL --> LOCAL
+    TL --> CONT
+    LOCAL --> ADP
+    CONT --> ADP
+    ADP --> AGENT
+    SK --> AGENT
+    MCP --> AGENT
+    CH --> AGENT
+    RES --> API
+    AGENT --> API
+    EV -. 证据修订与实时事件 .-> AGENT
+```
 
-它负责：
+### 3.1 控制面：Server
 
-- 拉取项目图状态
-- 决定当前该派发哪一种任务
-- 选择哪个 Worker 来执行
-- 管理项目容器和 Worker 进程
-- 维护 session、超时、健康检查、收尾
-- 把结果写回 RedTrace Server
+`redtrace.server.app` 创建 FastAPI 应用并注册 Project、Intent、Hint、Evidence Query、Audit、Operation、Capability、Worker 和 Plugin 路由。启动阶段会：
 
-### 3. 项目容器
+1. 配置并迁移 SQLite 数据库；
+2. 启用 WAL 与连接级约束；
+3. 恢复仍处于 queued 的可恢复操作任务；
+4. 挂载静态 Web 控制台。
 
-每个项目对应一个运行容器。
+Server 不启动 Agent 进程，也不承担任务选择。它负责：
 
-这个容器是该项目的执行环境，通常负责：
+- 领域状态与状态转换；
+- Intent/Reason 的互斥认领和租约；
+- 证据修订、增量变化和等待通知；
+- Worker 配置的验证、版本冲突检测与密钥处理；
+- 审计事件持久化与 SSE 分发；
+- 共享资源、审批和异步操作；
+- 项目停止、恢复、完成和删除流程。
 
-- 提供工具链
-- 提供网络环境
-- 承载该项目下的 Worker 进程
+这种边界让 Web、CLI、插件和 Dispatcher 共享同一套一致性协议。
 
-### 4. Worker / Agent CLI
+### 3.2 编排面：Dispatcher
 
-Worker 不是协议参与者本身，而是 Dispatcher 管理下的执行单元。
+Dispatcher 是长运行的控制面客户端，核心实现位于 `redtrace.dispatcher.scheduler.loop.Dispatcher`。它持有：
 
-例如：
+- Server API 客户端与线程本地 HTTP Session；
+- Worker 与 Runtime 配置快照；
+- 全局线程池和运行任务表；
+- 每个 Worker、每个项目的并发计数；
+- 不健康、拒绝和失败后的本地冷却窗口；
+- 容器或本地 Workspace 生命周期；
+- 配置热加载器和结构化日志状态。
 
-- Claude Code CLI
-- Codex CLI
+Dispatcher 使用“变化通知 + 周期节拍”的混合循环。Server 有状态变化时可提前唤醒，固定 `runtime.interval` 则提供心跳、回收和容错节拍。这样既避免高频空轮询，也不会把系统正确性依赖在单次通知上。
 
-它们负责：
+### 3.3 执行面：Runtime
 
-- 接收 Dispatcher 渲染好的 prompt
-- 在当前容器内执行任务
-- 输出结构化 JSON
-
-### 组件关系
+Runtime 对任务编排暴露统一进程接口：
 
 ```text
-                         +----------------------+
-                         |     RedTrace Server     |
-                         |----------------------|
-                         | Projects / Facts     |
-                         | Intents / Hints      |
-                         | Protocol API         |
-                         +----------^-----------+
-                                    |
-                           read / write API
-                                    |
-+-----------------------------------------------------------+
-|                         Dispatcher                        |
-|-----------------------------------------------------------|
-| Scheduling / Task Dispatch / Session / Timeout / Health   |
-| Container Lifecycle / Protocol Writeback                  |
-+----------------------+----------------------+-------------+
-                       |                      |
-             manage container        manage container
-                       |                      |
-          +------------v-----------+  +------v-------------+
-          |   Project Container A  |  | Project Container B|
-          |------------------------|  |--------------------|
-          | Worker / Agent CLI     |  | Worker / Agent CLI |
-          | - Claude Code          |  | - Codex            |
-          | - Codex                |  | - ...              |
-          +------------------------+  +--------------------+
+start → stream output / send stdin → communicate → cancel or finish
 ```
 
-### 执行主链路
+两种实现共享超时、取消、输出边界和审计语义：
 
-Dispatcher 会同时读取两类数据：
+- **Local Backend**：在宿主机项目 Workspace 内启动 Agent CLI，继承宿主环境，再用 `common_env` 和 `worker.env` 覆盖；适合已有本地登录态和工具链的开发环境。
+- **Container Backend**：按 Project 管理 `redtrace-dispatch-*` 容器，提供统一 Linux Workspace、共享能力挂载和完成/删除清理策略；适合隔离要求更高或工具依赖复杂的任务。
 
-- 结构化接口：用于调度、状态判断、intent 选择、协议写回
-- `GET /projects/{project_id}/export?format=yaml`：仅用于构造 prompt 所需的图快照
+Runtime 会保留 stdout/stderr 总字节数、截断状态、退出码、超时和取消原因。大输出由有界缓冲与 Context Harness 共同治理，避免单个工具输出耗尽内存或 Prompt 预算。
 
-1. Dispatcher 从 Server 读取项目图
-2. Dispatcher 依据调度规则选择任务类型和 Worker
-3. Dispatcher 渲染 prompt 与命令占位符
-4. 如果是 `explore`，Dispatcher 先通过 `POST /projects/{project_id}/intents/{intent_id}/heartbeat` 认领目标 intent；如果是 `reason`，则先通过 `POST /projects/{project_id}/reason/claim` 认领项目级 reason lease
-5. Dispatcher 在项目容器内启动 Worker 进程
-6. Worker 输出结构化 JSON
-7. Dispatcher 解析结果，并调用 `POST /projects/{project_id}/complete`、`POST /projects/{project_id}/intents`、`POST /projects/{project_id}/intents/{intent_id}/conclude`、`POST /projects/{project_id}/intents/{intent_id}/release` 或 `POST /projects/{project_id}/reason/release`
+### 3.4 适配面：Worker Driver
 
-项目若被切到 `stopped`，这条主链路会在下一轮短路：Dispatcher 不再把该项目纳入 active 调度集合，会先取消本地仍在运行的任务，再转入容器 cleanup 流程并停止项目容器。对 `bootstrap` / `explore` 来说，被 `stopped` 取消后不会再进入 conclude fallback，因此不会再额外落 Fact。项目恢复为 `active` 后，Dispatcher 会重新读取图状态，再决定是继续 `explore`、进入 `reason`，还是在初始态依据 `project.bootstrap_enabled` 和 Worker 能力重新选择 `bootstrap` 或 `reason`。项目若在 `completed` 后被服务端 `reopen`，对 Dispatcher 来说也等价于“重新变成 active 且图上多了一个新 fact”；下一轮会按普通 active 项目继续调度。
+每种 Worker 通过 `WorkerDriver` 实现以下能力：
 
-Worker 选择规则：
+- 健康检查与可读诊断；
+- 构造主阶段命令；
+- 构造同会话 `conclude` 收尾命令；
+- 准备、提取和恢复 Session；
+- 从供应商输出中提取最终响应；
+- 可选的原生实时控制协议。
 
-1. 先按任务类型筛选
-2. 再过滤掉已达到 `max_running` 的 Worker
-3. 再过滤掉处于短暂不可选窗口内的不健康 Worker
-4. 在剩余 Worker 中，优先选择 `priority` 更小的
-5. 如果 `priority` 相同，则优先选择当前运行中任务数更少的
-6. 如果仍然相同，则随机选择
-7. 如果是 `explore`，Dispatcher 先通过 `POST /projects/{project_id}/intents/{intent_id}/claim` 原子认领成功，再真正启动任务；`heartbeat` 只续租，不能认领
-8. 如果是 `reason`，claim 成功后由 `POST /projects/{project_id}/reason/heartbeat` 维持 lease；当 `runtime.worker_healthcheck=startup_and_task` 时，真正启动前再对选中的 Worker 执行一次健康检查；如果失败，则本次任务作废；该 Worker 会进入一个短暂不可选窗口，等待后续轮次再尝试
+当前类型：
 
----
+| `type` | 执行入口 | 特点 |
+|---|---|---|
+| `claudecode` | Claude Code CLI | stream-json 会话、原生 Skill/Plugin 能力、可实时追加用户消息 |
+| `codex` | Codex app-server | JSON-RPC 风格线程/Turn 协议、输出 Schema、运行中 `turn/steer` |
+| `pi` | Pi RPC | 轻量会话、`steer` 控制与共享 Skill |
+| `mock` | 内置测试 Driver | 可配置延迟与结果分布，用于协议和调度回归 |
 
-## 配置模型
+Provider 差异被限制在 Adapter 层，任务编排只依赖统一的 `DriverResult`、`ProcessResult` 与结构化输出契约。
 
-Dispatcher 使用一个运行期配置文件：
+## 4. Trace Loop
 
-- `dispatch.yaml`
+Trace Loop 是 RedTrace 的任务推进算法，由三类任务组成。
 
-也就是说：
-
-- 使用者只需要提供 `dispatch.yaml`
-- 任务 prompt 以 markdown 文件形式随代码分发，并通过 `runtime.prompt_group` 选择目录
-- Worker 的健康检查、命令模板、session 处理、二阶段收尾能力由对应 driver 实现
-- `runtime.execution` 选择执行后端：默认 `container`（每项目一个容器），或 `local`（worker 直接在 dispatcher 宿主机上以子进程运行，复用本机已配置好的 CLI，无需 Docker 与 API key）
-
-代码目录可以采用类似组织：
-
-```text
-dispatcher/
-  models.py
-  prompting.py
-  output_parser.py
-  contracts.py
-  prompts/
-    default/
-      bootstrap.md
-      bootstrap_conclude.md
-      reason.md
-      explore.md
-      explore_conclude.md
-    mock/
-      bootstrap.md
-      bootstrap_conclude.md
-      reason.md
-      explore.md
-      explore_conclude.md
-  workers/
-    base.py
-    registry.py
-    adapters/
-      claudecode.py
-      codex.py
-      mock.py
+```mermaid
+stateDiagram-v2
+    [*] --> Bootstrap: Project 创建且启用 bootstrap
+    Bootstrap --> Reason: 写入关键 Fact 或主阶段结束
+    [*] --> Reason: 未启用 bootstrap
+    Reason --> Completed: 证据已满足目标
+    Reason --> Explore: 创建或复用 open Intent
+    Reason --> Reason: 已有可执行 Intent / 暂无新方向
+    Explore --> Reason: Fact 写入并收束 Intent
+    Explore --> Explore: 其他 Intent 可并行执行
+    Completed --> [*]
 ```
 
-本文档附录给出：
+### 4.1 Bootstrap
 
-- `dispatch.example.yaml` 的示例内容
-- 上述 markdown prompt 的示例内容
+Bootstrap 是项目级初始推进任务，适合从 Origin 与 Goal 直接获得首个关键结论。
 
----
+- 输入：Origin、Goal、Hints、初始证据快照、共享能力说明。
+- 输出：Fact，可选 Complete；也可以明确拒绝。
+- 运行：先完成项目级 claim，再启动 Worker。
+- 容错：主阶段超时、输出不可解析或结果不完整但已有 Session 时，可进入有界 `bootstrap_conclude`，只总结已确认内容。
 
-## 任务模型
+Bootstrap 不负责长期规划。其价值是降低简单任务的启动开销，并为复杂任务尽快建立第一批可靠证据。
 
-### 三类任务一览
+### 4.2 Reason
 
-| 任务 | 触发条件 | 输入 | 输出 | 超时策略 |
-| --- | --- | --- | --- | --- |
-| `bootstrap` | 项目 `active`；`project.bootstrap_enabled=true`，且配置中存在支持 `bootstrap` 的 Worker 或项目已经存在保留 bootstrap intent；facts 只有 `origin` 和 `goal`；当前没有普通 intent；允许不存在 bootstrap intent，或只存在保留的 open `bootstrap` intent | `{origin}`、`{goal}`、`{hints}` | 主阶段成功时固定返回 `fact + complete`；收尾阶段只返回 `fact` | 双阶段：`timeout` 后可进入 `conclude_timeout` 收尾；两阶段都失败则 release 保留 intent，下轮仍按新项目重试 |
-| `reason` | 项目 `active`；当前项目无未认领 intent；当前项目内无其他 `reason`；首次触发或满足“新态势”重触发条件 | `{graph_yaml}`、`{fact_ids}`、`{open_intents}` | `complete` 对象；或 `intent` 对象；或空 `data` | 仅 `timeout`；超时或非法结果直接作废，不写图 |
-| `explore` | 项目 `active`；存在一个当前可认领的未结论 intent | `{graph_yaml}`、`{intent_id}`、`{intent_description}` | 一个 Fact 结论描述 | 单阶段：超时直接作废；双阶段：超时或输出解析失败时可进入 `conclude` 收尾 |
+Reason 是短时全局判断任务，负责：
 
-### `bootstrap`
+1. 判断当前 Fact 是否已经满足 Goal；
+2. 若未满足，判断是否需要创建新 Intent；
+3. 控制 open Intent 数量不超过 `tasks.reason.max_intents`；
+4. 在已有足够工作时返回空操作，避免重复分支。
 
-#### 触发条件
+Reason 使用项目级租约，避免多个 Reason 同时产生冲突方向。其输出只能是 Complete、Intent、No-op 或拒绝，不能直接伪造探索结果。
 
-- 当前项目仍然是 `active`
-- `project.bootstrap_enabled = true`，且配置中存在支持 `bootstrap` 的 Worker 或项目已经存在保留 bootstrap intent
-- facts 恰好只有 `origin` 和 `goal`
-- intents 为空，或只存在保留的 open `bootstrap` intent
-- 保留 `bootstrap` intent 的约定固定为：
-  - `description = "bootstrap"`
-  - `creator = "dispatcher.bootstrap"`
-  - `from = ["origin"]`
+### 4.3 Explore
 
-#### 输入
+Explore 认领一个具体 Intent，执行工具调用、代码分析或环境验证，并提交客观结论。
 
-- `{origin}`
-- `{goal}`
-- `{hints}`
+- claim 成功后才占用 Worker 执行槽；
+- 运行期间维持 Intent heartbeat；
+- 可读取增量证据和共享资源；
+- 成功结果成为 Fact，并收束当前 Intent；
+- 主阶段失效但 Session 可继续时，进入 `explore_conclude`；
+- 取消、项目停止或租约丢失时终止进程并安全释放状态。
 
-其中：
+同一项目可以并行执行多个 Explore，但它们共享项目 Workspace。会写同一批文件时，应把 `runtime.max_project_workers` 设为 `1`，或在任务设计中保证输出路径互不覆盖。
 
-- `{hints}` 是 JSON 数组文本，便于 Worker 在项目起始阶段快速吸收策略信息
-- `bootstrap` 不读取图 YAML，不依赖普通 intent 图结构
+## 5. 调度算法
 
-#### 输出契约
+### 5.1 分层配额
 
-`bootstrap` 使用独立输出契约：
+Dispatcher 同时应用四层限制：
 
-- 主阶段只有在已经解决问题时才返回
-- 主阶段返回时必须同时包含 `fact` 和 `complete`
-- 如果主阶段没有在超时前解决问题，就不会返回合法结果；Dispatcher 会终止它并进入 `bootstrap_conclude`
-- `bootstrap_conclude` 只负责收尾总结，因此只返回 `fact`
+| 限制 | 配置 | 作用 |
+|---|---|---|
+| 全局任务数 | `runtime.max_workers` | 控制 Dispatcher 线程池和总执行量 |
+| 活动项目数 | `runtime.max_running_projects` | 防止过多项目同时占用运行资源 |
+| 单项目任务数 | `runtime.max_project_workers` | 防止单个项目垄断 Worker |
+| 单 Worker 任务数 | `workers[].max_running` | 适配供应商配额和 CLI 并发能力 |
 
-```json
-{
-  "accepted": true,
-  "data": {
-    "fact": {
-      "description": "拿到两个 flag，分别为 flag{...} 与 flag{...}；同时获得管理员 shell，权限证明见 /tmp/proofs/root.txt"
-    },
-    "complete": {
-      "description": "已拿到并验证完成 Goal 所需的全部关键结果，Goal 达成"
-    }
-  }
-}
-```
+### 5.2 Worker 选择
 
-约束：
+`select_worker` 先过滤：
 
-- 主阶段返回时，`data.fact.description` 和 `data.complete.description` 都必须存在
-- 主阶段不允许只返回 `fact`
-- `bootstrap_conclude` 只允许返回 `fact`，不允许返回 `complete`
+- `enabled: false`；
+- `task_types` 不包含当前任务；
+- 已达到 `max_running`；
+- 仍处于健康检查失败冷却期；
+- 当前项目/任务/Worker 组合仍处于拒绝冷却期。
 
-#### 接口映射
+剩余候选按以下顺序排序：
 
-`bootstrap` 复用普通 intent 协议，但使用保留 intent：
+1. 完全空闲的 Worker 优先；
+2. Explore 尽量避开上次未完成该方向的 Worker；
+3. `priority` 数值更小者优先；
+4. 当前运行数更少者优先；
+5. 同层候选随机打散，避免固定热点。
 
-| 接口 | 用途 | 何时使用 |
-| --- | --- | --- |
-| `POST /projects/{project_id}/intents` | 创建保留 `bootstrap` intent | 初始态项目首次进入时，如尚不存在该 intent |
-| `POST /projects/{project_id}/intents/{intent_id}/heartbeat` | claim 并维持 `bootstrap` intent | 派发前先 claim；执行中按 `interval` 周期发送 |
-| `POST /projects/{project_id}/intents/{intent_id}/conclude` | 将 `bootstrap` 产出的关键结果写成 Fact | `bootstrap` 或 `bootstrap_conclude` 返回合法 `fact` 后调用 |
-| `POST /projects/{project_id}/complete` | 基于刚写入的 bootstrap fact 直接完成项目 | 仅当 `bootstrap` 主阶段成功返回 `fact + complete` 时调用 |
-| `POST /projects/{project_id}/intents/{intent_id}/release` | 放弃本次 bootstrap 尝试 | 两阶段都失败，或命令直接失败时调用 |
+选择结果同时记录 busy、unhealthy、rejected 和 task-type 不匹配的阻塞原因，便于日志诊断。
 
-#### 超时与失败
+### 5.3 先认领、后提交
 
-- `bootstrap` 第一阶段使用 `timeout`
-- `bootstrap_conclude` 第二阶段使用 `conclude_timeout`
-- 主阶段如果在 `timeout` 内解决问题，就返回 `fact + complete`
-- 第一阶段超时、输出解析失败或返回了不满足契约的结果时，如果 Worker 支持 session / conclude，则进入 `bootstrap_conclude`
-- `bootstrap_conclude` 的 prompt 必须明确要求“不继续推进，不等待未完成任务，只总结当前最关键事实”，因此它只产出 `fact`
-- 如果 `bootstrap` 主阶段成功返回合法 JSON，则 Dispatcher 会先 conclude 写入 fact，再立即 complete
-- 如果 `bootstrap_conclude` 成功返回合法 JSON 且 conclude 写回成功，则保留 intent 被结论落定，项目不再视为初始态
-- 如果主阶段的 `complete` 写回失败，已写入的 fact 仍然保留，后续可由下一轮 `reason` 再完成项目
-- 如果两阶段都失败，或 conclude 写回失败，则 release 当前 `bootstrap` intent，不写 Fact；项目下轮仍然按新项目处理
+Bootstrap、Reason 和 Explore 都先通过 Server 完成原子认领，再向线程池提交任务。这样可以避免多个调度循环或意外启动的多个 Dispatcher 对同一工作重复执行。
 
-### `reason`
+项目并发与 Worker 并发只在认领成功后计数；任务结束、拒绝、取消或异常时统一释放。
 
-#### 触发条件
+## 6. 实时证据协同
 
-- 当前项目仍然是 `active`
-- 当前项目没有未认领 intent
-- 当前项目的 `project.reason` 为空，也就是当前没有其他 `reason` lease 正在运行
-- 首次触发只发生在“当前没有任何 open intent”时
-- 之后只有出现新的态势才重新触发；这里的“新态势”限定为：
-  - Fact 数量增加
-  - Hint 数量增加
-  - 项目从“存在 open intents”进入“没有 open intents”
-- 单次 `explore` 失败、掉心跳、释放但 intent 仍保持 open，不构成新的态势，不应触发新的 `reason`
+### 6.1 修订与增量读取
 
-#### 输入
+SQLite 触发器为 Fact、Intent 和 Hint 的变化写入递增的 `blackboard_events.revision`。这里的 `blackboard` 是现有代码和兼容 API 的历史入口名；在 RedTrace 架构中，它对应只读的增量证据查询面。
 
-- `{graph_yaml}`
-- `{fact_ids}`
-- `{open_intents}`
+Worker 可通过以下方式读取：
 
-其中：
+- `snapshot`：完整当前图谱；
+- `changes --since <revision>`：分页增量变化；
+- `node` / `source`：节点与证据来源；
+- `path`：节点之间的有向路径；
+- `context`：有深度和数量上限的局部上下文；
+- `wait`：等待修订发生变化。
 
-- `{fact_ids}` 是 JSON 数组文本，用于显式列出当前合法的 Fact id
-- `{open_intents}` 是 JSON 数组文本，用于显式列出当前所有未结论的 intent；因此即使有别的 intent 正在 `explore`，只要出现了新的 Fact / Hint，`reason` 仍可能再次被触发
-- 这两个占位符都是 prompt 层辅助，不替代 server 的最终校验
+每次成功查询写入独立审计表，但查询不会改变证据内容。
 
-#### 输出契约
+### 6.2 运行中通知
 
-已完成：
+任务启动时会记录当前图谱 revision，并在 Workspace 中准备精简通知文件。Heartbeat/Inbox 监视后续变化并生成差异摘要。
 
-```json
-{
-  "accepted": true,
-  "data": {
-    "complete": {
-      "from": ["f008"],
-      "description": "flag{abc} 满足 goal 要求"
-    }
-  }
-}
-```
+若 Worker 支持原生双向控制，Dispatcher 直接向当前会话发送更新：
 
-未完成，提出新 intent：
+- Claude Code：向 stream-json 会话追加 user message；
+- Codex：等待 thread/turn 就绪后发送 `turn/steer`，就绪前最多保留最近的有限消息；
+- Pi：通过 RPC `steer` 消息注入更新。
 
-```json
-{
-  "accepted": true,
-  "data": {
-    "intent": {
-      "from": ["f003"],
-      "description": "尝试 SQL 注入"
-    }
-  }
-}
-```
+通知只携带决策所需的精简信息和引用，完整证据继续通过只读 CLI 按需读取。实时控制不可用时，通知文件与 CLI 仍构成稳定降级路径。
 
-未完成，不提新 intent：
+这一机制让并行 Worker 能及时利用新发现，同时避免把全量图谱反复拼接到 Prompt。
+
+## 7. 输出契约与失败收束
+
+所有 Agent 任务必须返回 JSON 对象，并包含：
 
 ```json
 {
@@ -356,841 +301,222 @@ dispatcher/
 }
 ```
 
-约束：
+Dispatcher 会执行两层验证：
 
-- `data.complete` 存在时，它必须是对象，且 `complete.from` 和 `complete.description` 都必须存在
-- `data.complete` 存在时，不应再带 `intent`
-- 如果 `intent` 存在，则 `intent.from` 和 `intent.description` 都必须存在
-- 如果 `{open_intents}` 为空，说明当前图里没有任何进行中的探索；此时若没有 `data.complete`，则必须返回 `intent`
-- 如果 `{open_intents}` 非空，且没有 `data.complete`，则允许不返回 `intent`
+1. 通用层：输出必须是可解析 JSON，`accepted` 与 `data` 类型正确；
+2. 任务层：Bootstrap、Reason、Explore 只接受各自允许的字段、ID 和状态组合。
 
-#### 接口映射
+`accepted: false` 表示 Worker 明确拒绝当前任务，不会被当作系统异常。非法 JSON、Schema 不匹配、命令失败、超时和接口写回失败会记录结构化原因，并通过冷却策略避免立即热循环。
 
-`reason` 启动前，Dispatcher 必须先 claim 项目级 reason lease，并在执行期间持续 heartbeat；这一状态会直接出现在 `GET /projects` 和 `GET /projects/{project_id}` 的 `project.reason` 字段中，供前端和其他消费者观察。
+Bootstrap 与 Explore 支持同会话 conclude 阶段。Conclude 不是第二次完整尝试，而是在更短预算内停止继续探索，只提取已经确认的事实。该设计能在模型超时或主输出损坏时保留有价值结果，同时限制额外成本。
 
-| `reason` 输出 | Dispatcher 动作 | 备注 |
-| --- | --- | --- |
-| `data.complete` 存在 | 调用 `POST /projects/{project_id}/complete` | `worker` 使用当前执行该任务的 `workers[].name` |
-| `data.complete` 不存在，且带 `intent` | 调用 `POST /projects/{project_id}/intents` | `creator` 使用当前 Worker 名；`worker` 固定写 `null` |
-| `data` 为空对象 | 不写图 | 不写 Fact / Intent / Complete |
+## 8. 配置与热加载
 
-写回失败的日志语义：
+Dispatcher 配置由 `LocalConfig` 解析，主要域包括：
 
-- 如果 `POST /projects/{project_id}/complete` 或 `POST /projects/{project_id}/intents` 返回 `403`，通常表示项目已不再是 `active`，本次任务直接作废，记 `info`
-- 其他写入失败也直接作废，不做立即重试，只记日志
-- 无论本轮是否写图，只要项目仍是 `active` 且 reason lease 仍在自己手里，Dispatcher 都会在收尾时调用 `POST /projects/{project_id}/reason/release`；如果项目已 `completed` 或 `stopped`，则由服务端直接清空该 lease
+- `server`：控制面地址；
+- `runtime`：执行模式、并发、节拍、健康检查和 Prompt 组；
+- `tasks`：三类任务超时与 Intent 上限；
+- `context_harness`：上下文与输出预算；
+- `container` 或 `local`：运行后端参数；
+- `common_env`：所有 Worker 的公共环境；
+- `workers`：能力、优先级、并发、模型和供应商配置；
+- `paths`：能力、托管状态、Workspace 与审计路径。
 
-#### 超时与失败
-
-- `reason` 只使用 `timeout`
-- 超时直接作废
-- `accepted: false` 直接作废，记 `warn`
-- 其他执行错误也直接作废，例如：
-  - 命令退出码非 `0`
-  - 输出不是合法 JSON
-  - JSON 缺少必要字段
-- 以上情况都不写 Fact / Intent / Complete，只记日志
-
-### `explore`
-
-#### 触发条件
-
-- 当前项目仍然是 `active`
-- 存在一个当前可认领的、尚无结论的 intent
-
-#### 输入
-
-- `{graph_yaml}`
-- `{intent_id}`
-- `{intent_description}`
-
-#### 输出契约
-
-正常返回：
-
-```json
-{
-  "accepted": true,
-  "data": {
-    "description": "发现 /search 参数存在报错注入"
-  }
-}
-```
-
-即使没有打出漏洞，也应返回一个客观探索结论，而不是空响应。例如：
-
-```json
-{
-  "accepted": true,
-  "data": {
-    "description": "对 /search 参数测试常见 SQL 注入 payload，未发现可利用注入迹象"
-  }
-}
-```
-
-约束：
-
-- `data.description` 必须存在，且必须是客观事实结论
-- 不允许输出“我拒绝帮助渗透”“这不安全”等文本作为 `description`
-
-#### 接口映射
-
-`explore` 会涉及三类协议接口：
-
-| 接口 | 用途 | 何时使用 |
-| --- | --- | --- |
-| `POST /projects/{project_id}/intents/{intent_id}/heartbeat` | claim 并维持持有 | 派发前先 claim；执行中按 `interval` 周期发送 |
-| `POST /projects/{project_id}/intents/{intent_id}/conclude` | 产出 Fact 并结论落定 Intent | `execute` 或 `conclude` 返回合法结论后调用 |
-| `POST /projects/{project_id}/intents/{intent_id}/release` | 放弃当前尝试 | 失败路径使用 |
-
-派发顺序要求固定为：
-
-1. Dispatcher 先选中一个可认领 intent
-2. Dispatcher 先调用一次 `POST /projects/{project_id}/intents/{intent_id}/heartbeat` 作为 claim
-3. 只有 heartbeat 成功后，才真正启动 `explore` 对应的 Worker
-
-#### 超时与失败
-
-`explore` 要兼容两种模式：
-
-1. 单阶段模式：只有 `execute`
-2. 双阶段模式：`execute + session + conclude`
-
-其中 `conclude` 是附加收尾阶段，不是主流程必经阶段。
-
-第一阶段使用 `timeout`。
-如果是双阶段模式，第二阶段使用 `conclude_timeout`。
-
-正常完成：
-
-- 如果 `execute` 在 `timeout` 内正常返回合法 JSON，且 `accepted: true`
-- Dispatcher 直接调用 `POST /projects/{project_id}/intents/{intent_id}/conclude`
-- `POST /projects/{project_id}/intents/{intent_id}/conclude` 成功即完成结论落定，无需额外 `release`
-- 如果 `POST /projects/{project_id}/intents/{intent_id}/conclude` 写入失败，本次任务直接作废，不做立即重试，释放当前 intent，只记日志
-
-可进入二阶段收尾的异常：
-
-- 这类异常只在“双阶段 Worker”上进入 `conclude`
-- 适用异常只有两种：
-  - 执行超时
-  - Dispatcher 无法从第一阶段输出里正确提取并解析结果，例如：
-    - 输出不是合法 JSON
-    - JSON 缺少必要字段
-    - `accepted: true` 但 `data` 结构不符合当前任务要求
-- 这类异常在“单阶段 Worker”上不进入 `conclude`
-
-双阶段收尾流程固定为：
-
-1. Dispatcher 杀掉当前进程
-2. 保留这次任务对应的 session id
-3. 在保持 heartbeat 的前提下，用同一个 session 直接进入 `conclude`
-4. `conclude` 的 prompt 必须明确要求“不要继续探索，只总结截至目前已经完成的探索与结论”
-5. 如果 `conclude` 在 `conclude_timeout` 内返回合法 JSON，且 `accepted: true`：
-   - Dispatcher 调用 `POST /projects/{project_id}/intents/{intent_id}/conclude`
-   - 成功则结束
-6. 如果 `conclude` 再次超时，或输出不合法，或返回 `accepted: false`，或 `POST /projects/{project_id}/intents/{intent_id}/conclude` 写入失败：
-   - 整次探索作废
-   - 不写任何图数据
-   - 释放当前 intent
-   - 只记日志
-
-单阶段 Worker 的异常处理：
-
-- 如果当前 Worker 不支持 `session` 或 `conclude`，则它属于单阶段模式
-- 这时第一阶段一旦出现“超时”或“输出解析 / 结构校验失败”，直接按失败处理
-- 处理方式是：杀进程、整次探索作废、不写任何图数据、释放当前 intent、记 `warn`
-
-直接失败，不进入 `conclude`：
-
-- 第一阶段返回 `accepted: false`
-- 命令退出码非 `0`
-- Worker 进程根本没有产生可读取结果
-- Dispatcher 在进入结果解析前就已经确定本次执行失败
-
-以上情况都：
-
-- 不进入 `conclude`
-- 不写任何图数据
-- 释放当前 intent
-- 清理本地任务状态
-- 只记日志
-
----
-
-## 调度策略
-
-### 全局调度
-
-核心规则：
-
-1. 已运行项目优先，但只优先可立即派发的任务
-2. 如果某个运行中项目处于初始态且可执行 `bootstrap`，优先继续它
-3. 否则如果某个运行中项目存在可执行的 `explore`，优先继续探索它
-4. 如果所有运行中项目都暂时没有可派发任务，且 `runtime.max_running_projects` 还有余量，就启动一个未开始的新项目
-
-`runtime.interval` 的设计约定：
-
-- `runtime.interval` 不只是一个普通轮询间隔
-- 它被刻意复用为两个地方的统一节拍：
-  - Dispatcher 主循环间隔
-  - 带 claim 任务（`bootstrap` / `explore`）的 heartbeat 周期
-- 这样做的目标是减少额外时序参数，先保持实现简单
-- 这是一项明确设计决策，不是偶然耦合
-
-调度伪代码可以保持成下面这种粒度：
+路径相对于配置文件和 `paths.root` 解析，不依赖启动命令的当前目录。环境合并顺序为：
 
 ```text
-for project in running_projects_round_robin:
-  if has_dispatchable_bootstrap(project):
-    dispatch_bootstrap(project)
-    continue
-  if has_dispatchable_reason(project):
-    dispatch_reason(project)
-    continue
-  if has_dispatchable_explore(project):
-    dispatch_explore(project)
-    continue
-
-if running_project_count < runtime.max_running_projects:
-  maybe_start_one_new_project()
+宿主环境 < common_env < worker.env
 ```
 
-### 项目内调度
+配置文件发生原子替换后，Dispatcher 会校验并加载新快照。新任务使用新快照，运行中的任务保留旧快照，从而避免半途改变模型、超时或执行后端。
 
-对于单个项目，Dispatcher 读完整项目状态后，按下面顺序调度：
+Web Worker 配置服务使用 SHA-256 revision 做乐观并发控制，支持创建、修改、复制、启停、删除与连接测试。Claude Code、Codex 和 Pi 的 Endpoint、API Key、Model ID 可同步到用户级原生 CLI 配置；查询 API 只返回密钥是否已配置，不返回明文。
 
-1. 如果项目仍处于初始态，先按 `project.bootstrap_enabled` 和 Worker 能力决定路径：未开启或没有支持 `bootstrap` 的 Worker 时直接 `reason`，否则执行 `bootstrap`；若已经存在保留 bootstrap intent，则继续该阶段
-2. 如果满足“新态势”重触发条件，优先派发 `reason`
-3. 否则如果存在未认领 intent，派发 `explore`
-4. `reason` 的去重按“态势”做，而不是按总图变化做：首次只有在当前没有任何 open intent 时才触发；之后只有当前 Fact / Hint 数量增加，或项目从“存在 open intents”进入“没有 open intents”时，才重新触发
-5. 如果 `reason` 返回 `data.complete`，Dispatcher 调用 `POST /projects/{project_id}/complete`
-6. 如果 `reason` 没有返回 `data.complete` 且带 `intent`，Dispatcher 调用 `POST /projects/{project_id}/intents`
-7. 如果 `reason` 既没有返回 `data.complete`，也没有返回 `intent`，则本轮不写图
+## 9. 能力注入与 Context Harness
 
-另外：
+### 9.1 统一能力源
 
-- 初始态项目里，如果选择了 `bootstrap` 路径且 bootstrap intent 已被 claim，则这一轮不再派发 `reason` 或普通 `explore`
-- 即使同一项目里已经有进行中的 `explore`，也允许继续派发一个 `reason` 任务
-- 但前提不是“刚新增了 intent”，而是“确实出现了新的 Fact / Hint 等新态势”；仅仅因为上一个 `reason` 刚创建了新的 intent，不应该立刻再次 `reason`
-- 仍然要求当前没有未认领 intent、当前项目内没有其他 `reason` 任务在运行、且没有超过 `runtime.max_project_workers`
+`paths.skills`、`paths.mcp` 和 `paths.plugins` 是 RedTrace 的能力目录：
 
-`reason` 的去重规则建议保持简单：
+- Skill 目录由 `CapabilityStore` 发现、启停、编辑和版本化；
+- `route-skills` 作为安全研究能力入口，按任务按需选择专家模块；
+- MCP 配置转换为各 Agent CLI 的原生参数或配置；
+- 外部插件清单服务于浏览器、Burp 和其他接入端，不与 Agent Skill 混为一层。
 
-- 记录该项目上次成功完成 `reason` 时的 Fact 数量、Hint 数量，以及当时是否仍存在 open intents
-- Dispatcher 对“当前已观察到、且已有 open intents、但尚无 checkpoint 的 active 项目”建立基线 checkpoint；启动时已有项目和运行中晚到项目都适用，不应吞掉运行过程中第一次新增的 Fact / Hint
-- 首次没有历史记录且当前没有 open intents 时，直接触发
-- 之后只有 Fact / Hint 数量增加，或项目从“有 open intents”变为“无 open intents”时，才再次触发 `reason`
-- 不把“总 intent 数量增加”当作重触发条件；因为这通常只是上一次 `reason` 刚创建了新 intent，并不代表出现了新的态势
-- `explore` 的执行失败、掉心跳、临时 release 只会让 intent 重新等待被探索，不会额外触发 `reason`
+`AgentRuntimeManager` 在 Dispatcher 启动和配置变化时准备运行资产。Claude Code 使用插件目录，Codex 使用 `skills.config`，Pi 使用原生扩展/Skill 参数。能力源保持统一，但适配结果符合各 CLI 的原生格式。
 
-### 并发约束
+### 9.2 有预算上下文
 
-- 当前设计下，只支持一个 Dispatcher 实例连接同一服务端执行调度；CLI 按规范化 Server 地址加进程锁，重复启动会立即失败
-- 多任务并行由单个 Dispatcher 的线程池完成，不应通过复制配置并启动多个 Dispatcher 扩容；本地维护的 admission、Worker 健康状态、并发计数、容器清理和 bootstrap 去重不会跨进程协调
-- 单个项目内，同一时刻最多只能有一个 `bootstrap` 任务在运行
-- Dispatcher 会尽力让单个项目在初始态时只保留一个 open `bootstrap` intent
-- 单个项目内，同一时刻最多只能有一个 `reason` 任务在运行
-- 跨项目允许并行运行多个 `reason`
-- `reason` 也计入对应项目的 `runtime.max_project_workers`
-- `runtime.max_workers`：Dispatcher 同时运行中的任务总数上限
-- `runtime.max_running_projects`：当前 dispatcher 运行期内已接手且仍为 `active` 的项目 admission 上限；项目即使暂时没有可派发任务，只要仍为 `active`，也继续占用该名额，直到其退出 active
-- `runtime.max_project_workers`：单个项目内同时运行的任务上限，统一计入 `bootstrap`、`reason` 和 `explore`
-- `workers[].max_running`：单个 Worker 自身的并发上限；达到上限后，这个 Worker 暂时不再参与派发
+Context Harness 在工具完整输出和模型可见上下文之间增加一层可追溯压缩：
 
----
+- 小文本可直接内联；
+- 结构化 Web/安全数据生成摘要与信号；
+- 大文件先识别类型，再按预算解析；
+- 完整原文写入 Workspace 工件；
+- 后续任务通过引用、查询和增量快照复用；
+- Worker stdout/stderr 使用前缀 + 尾部的有界保留策略。
 
-## Worker 配置
+这不是删除原始证据，而是把“保存完整现场”和“给模型多少内容”分开决策。
 
-### 字段定义
+## 10. 资源与操作面
 
-Dispatcher 固定从 `stdout` 取全文作为模型正文输出。
+共享资源面让 Worker 不必在 Prompt 中传递敏感连接细节。典型流程：
 
-`dispatch.yaml` 中与 Worker 相关的运行期字段如下：
+1. 创建或发现资源元数据；
+2. 敏感字段留在 Server 侧；
+3. Worker 通过 `redtrace-resource` 请求一次操作；
+4. Server 根据风险与审批状态排队；
+5. `OperationExecutor` 执行 WebShell 或外部插件动作；
+6. 完整结果写入结果资源，摘要进入任务记录；
+7. 只有显式 `publish_result` 时，结果才转换为证据 Fact。
 
-| 字段 | 含义 | 说明 |
-| --- | --- | --- |
-| `name` | Worker 静态标识 | 协议写回时作为 `creator` 或 `worker` |
-| `type` | Worker driver 名 | 支持 `claudecode`、`codex`、`mock` |
-| `task_types` | 支持的任务类型 | `bootstrap`、`reason`、`explore` |
-| `max_running` | Worker 并发上限 | 达到上限后暂不派发 |
-| `priority` | 选择优先级 | 数字越小越优先 |
-| `env` | 运行时环境变量 | 由对应 driver 使用；`mock` 的 phase 耗时和结果概率也通过这里配置 |
+操作状态包含 queued、running、succeeded、failed、cancelled 和 rejected。Server 重启后可恢复仍可执行的 queued 任务，项目取消会传播到未完成操作。
 
-系统提供三类 Worker driver：
+## 11. 审计与可观测性
 
-- `claudecode`
-- `codex`
-- `mock`
+每次 Worker 运行都会创建稳定的 Run ID，并记录：
 
-也就是说：
+- Project、Intent、任务类型和阶段；
+- Worker、Provider、Session ID；
+- Workspace 类型、引用和根目录；
+- 开始/结束时间、退出码、超时与取消标记；
+- 模型消息、思考事件、工具事件和生命周期事件；
+- 输出字节数、截断状态与结果解析情况。
 
-- `dispatch.yaml` 负责声明“用哪个 driver、能跑什么任务、并发多少、环境变量是什么”；如果是 `mock`，各 phase 的模拟分布也放在 `env`
-- 具体怎么健康检查、怎么启动命令、怎么提取 session、怎么恢复 `conclude`，都由 driver 代码负责
+高频 delta 事件可以只通过实时 Event Hub/SSE 分发，重要终态和消息持久化到 SQLite。这样控制台能显示实时进度，又不会让数据库被字符级流式事件淹没。
 
-### Driver 接口
+审计导出与 Workspace 浏览把“模型说了什么”“实际执行了什么”“最终写入了什么证据”串联起来，适合安全评估复盘和回归分析。
 
-每个 Agent / CLI 工具在代码里对应一个独立 driver 文件，并实现统一接口。
+## 12. 恢复、取消与清理
 
-统一接口至少应覆盖这些能力：
+### 12.1 租约与心跳
 
-- `check_health(worker, *, timeout)`：进程内发起一次 HTTP 探活，返回 `HealthResult`
-- `prepare_session()`：需要时预先生成 session id
-- `build_execute(worker, prompt, session)`：构造第一阶段执行命令
-- `extract_session(session, stderr)`：需要时从 `stderr` 提取 session id，或继续使用预生成 session
-- `build_conclude(worker, prompt, session)`：在双阶段 `explore` 中恢复同一 session 做收尾
-- `supports_conclude()`：声明该 driver 是否支持双阶段 `explore`
+Intent 和 Reason 认领都带 Worker 身份与 heartbeat。Dispatcher 定期续租；Server 拒绝续租、项目状态变化或本地取消信号都会触发进程取消。
 
-这些 driver 的能力约定是：
+失联任务不会永久占用图谱状态。后续调度循环可以根据租约和 Server 当前状态进行释放或重新认领。
 
-- `claudecode` 支持双阶段 `explore`
-- `codex` 支持双阶段 `explore`
-- `mock` 支持双阶段 `explore`
+### 12.2 项目删除
 
-并发建模约定：
+删除采用持久化多阶段流程：
 
-- 一个 Worker 应代表一个独立的 LLM 并发配额单元
-- 不考虑“多个 Worker 共用同一个 key”的情况
-- 并发控制使用 `workers[].max_running`
+```text
+标记 deleting
+  → 取消调度任务与资源操作
+  → 停止/删除项目 Runtime
+  → 清理 Workspace、Prompt、会话与审计文件
+  → 删除数据库关联记录
+```
 
-### 健康检查
+流程可在 Server 或 Dispatcher 重启后继续。某一阶段失败会保留错误状态供重试，重复删除保持幂等。共享 Skills、MCP、Plugins 和其他项目不受影响。
 
-健康检查由 driver 的 `check_health` 实现，Dispatcher 在自己进程内直接发起（用 `requests`），而不是在容器里执行 curl。
+### 12.3 完成策略
 
-目标不是验证“容器活着”，而是验证某个具体 Worker 的 LLM 配置真的可用：
+- Container：`completed_action` 可为 `stop` 或 `remove`；
+- Local：`completed_action` 可为 `keep` 或 `remove`；
+- 删除与完成使用不同流程，避免“任务完成”意外销毁需要复盘的现场。
 
-- base URL 可达
-- API key 有效
-- model 可调用
+## 13. 安全设计
 
-driver 按各自 provider 的协议构造请求：`claudecode` 打 `{base}/v1/messages`，`codex` 打 `{base}/responses`，`pi` 按 `PI_PROVIDER_API` 选择 `/chat/completions`、`/responses` 或 `/v1/messages`。请求会带上 worker 环境里的 `http(s)_proxy`，从而与 worker 实际出网路径一致。
+RedTrace 提供执行治理能力，但不会替代环境授权和网络边界。
 
-执行规则：
+### 13.1 最小暴露
 
-- 每次准备启动某个 Worker 进程前，都先执行一次健康检查
-- `explore` 进入 timeout / parse-fail 后的 `explore_conclude` fallback 不再重复执行健康检查，而是直接尝试 conclude，并继续依赖 JSON / schema 校验决定是否写回
-- HTTP 2xx 视为健康
-- 非 2xx / 连接失败 / 超时（`requests` 超时由 `runtime.healthcheck_timeout` 控制）视为不健康
-- 如果这次失败，本次任务直接作废，并将这个 Worker 放入一个短暂不可选窗口
-- 窗口结束后，后续轮次再次选择到这个 Worker 时重新检查
-- Dispatcher 内部会为最近失败的 Worker 记录一个本地 `retry_after`，在这之前不再派发给它
+- Server 默认绑定 `127.0.0.1`；
+- 外部插件可使用 `REDTRACE_PLUGIN_TOKEN`；
+- API Key 查询只返回配置状态；
+- 敏感资源字段保存在 Server 侧，不写入 Worker Prompt；
+- 操作可标记风险并要求人工审批。
 
-Dispatcher 只看 HTTP 状态码，不解析响应体。`local` 模式下不打 API（本机 CLI 自带鉴权），改为启动时对各 CLI 执行 `--help` 探测。
+### 13.2 运行权限
 
-### CLI 接入约定
+- Local 模式直接继承当前用户权限，没有额外沙箱；
+- Container 模式隔离项目文件与进程，但 `network_mode`、挂载和 `cap_add` 必须按任务最小化；
+- Codex/Claude/Pi 的本地执行参数可能关闭交互审批，以便无人值守运行，因此外层 WSL、容器或实验主机应承担明确隔离边界。
 
-#### `claudecode` driver
+### 13.3 审计优先
 
-依赖环境变量：
+任何自动化操作都应能回答：由哪个项目、哪个 Worker、哪个 Intent、哪次运行触发，使用了什么资源，产生了什么结果。RedTrace 的协议和数据表围绕这一追踪链设计。
 
-- `ANTHROPIC_MODEL`
-- `ANTHROPIC_BASE_URL`
-- `ANTHROPIC_AUTH_TOKEN`
+## 14. 技术栈
 
-健康检查等价于下面这条请求（实现为 Dispatcher 进程内的 HTTP 调用，不再在容器里执行 curl）：
+| 层 | 技术 | 用途 |
+|---|---|---|
+| 语言与包管理 | Python 3.12+、uv | 控制面、调度器、CLI、可复现依赖 |
+| Web/API | FastAPI、Pydantic、Uvicorn | REST、OpenAPI、SSE、请求/响应校验 |
+| 持久化 | SQLite WAL | 单机可靠状态、事务、迁移和增量修订 |
+| 并发 | ThreadPoolExecutor、threading | 调度任务、操作执行、心跳和流读取 |
+| HTTP | requests、httpx（测试） | Dispatcher 控制面客户端与 API 测试 |
+| 容器 | Docker SDK、Docker Compose | 项目级执行单元与部署 |
+| 配置 | YAML、环境变量、原子替换 | 运行配置、Worker 配额和热加载 |
+| 密钥 | cryptography | 本地敏感配置保护 |
+| 前端 | FastAPI StaticFiles + 原生 Web 资产 | 轻量控制台，无独立前端构建链 |
+| 测试 | pytest、Mock Worker | 单元、协议、运行时和端到端回归 |
+
+## 15. RedTrace 的技术优势
+
+### 15.1 决策状态与执行噪声解耦
+
+共享决策输入只包含经过任务契约确认的 Fact、Intent 与 Hint；完整模型输出和工具噪声留在审计与工件层。图谱保持精简，现场仍可完整回放。
+
+### 15.2 实时协同不是全量上下文广播
+
+修订通知、原生会话 steer、通知文件和按需 CLI 形成分层同步机制。新证据能快速到达正在运行的 Worker，同时不会重复注入整份历史。
+
+### 15.3 异构模型保持原生能力
+
+统一的是任务协议和生命周期，不是把所有 Agent 降级成相同的文本接口。Claude Code、Codex 和 Pi 仍使用各自的 Session、Skill、MCP 和双向协议。
+
+### 15.4 调度策略面向真实配额
+
+全局、项目、Worker 三层并发加上能力过滤、健康冷却和负载排序，可以直接表达不同供应商 Key、模型吞吐和任务类型的现实限制。
+
+### 15.5 失败有界，结果尽量保留
+
+主阶段失败不会立即无限重试。系统优先用同会话 conclude 提取已经确认的内容，再通过冷却和下一轮 Reason 决定是否继续，降低成本和重复副作用。
+
+### 15.6 Local 与 Container 共用同一协议
+
+开发者可以先用本地 CLI 快速调试，再迁移到项目级容器；任务模型、证据写回、审计和调度配置无需重构。
+
+### 15.7 控制面轻量且易于部署
+
+FastAPI + SQLite WAL 足以支持单机多 Worker 调度，不要求额外数据库、消息队列或编排平台。需要更强隔离时再引入 Docker，而不是把基础开发流程绑定到复杂基础设施。
+
+## 16. 测试策略
+
+当前测试套件覆盖：
+
+- 数据库初始化、迁移、WAL 和项目协议；
+- Intent/Reason 认领、心跳、释放与冲突；
+- Worker 选择、并发配额、冷却和调度边界；
+- Bootstrap、Reason、Explore 与 conclude 输出契约；
+- Claude Code、Codex、Pi、Mock Adapter 和实时控制；
+- Local Process、Managed Process、容器生命周期与归档；
+- Worker 配置、原生 CLI 配置同步和密钥脱敏；
+- 增量证据查询、通知、来源和审计；
+- Context Harness、Capability、Skill、MCP 与插件兼容；
+- 资源操作、项目删除、部署脚本和 Mock 端到端流程。
+
+推荐验证命令：
 
 ```bash
-curl -sS --fail -o /dev/null \
-  "$ANTHROPIC_BASE_URL/v1/messages" \
-  -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
-  -H "content-type: application/json" \
-  -d "{\"model\":\"$ANTHROPIC_MODEL\",\"max_tokens\":10,\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}"
+uv sync --project redtrace --locked --group dev
+uv run --project redtrace pytest -q
+python -m compileall -q redtrace/src
+bash -n start-redtrace.sh deploy.sh install-security-toolchain.sh
+docker compose config -q
 ```
 
-已知行为：
+Windows 上应在 WSL 中执行涉及 Bash、POSIX 可执行位和 Unix 路径的测试。
 
-- driver 预先生成 session id
-- 首轮可以预先指定 session id
-- 如果该 id 已存在，命令会报错，不会复用旧会话
-- Dispatcher 固定从 `stdout` 取全文作为结果正文
+## 17. 已知边界与演进方向
 
-第一阶段执行：
+- SQLite 架构针对单机控制面优化，不等同于分布式数据库或跨地域一致性方案。
+- 多个 Explore 共享同一 Project Workspace，文件写冲突需要通过并发配置或任务约定规避。
+- Container 模式的隔离强度取决于 Docker 网络、capabilities、挂载和宿主配置。
+- 不同 Agent CLI 的实时协议可能随上游版本变化，Adapter 与健康检查需要持续回归。
+- 增量证据面保留 `blackboard` 兼容路径；产品与文档层统一将其描述为证据查询与协同接口。
+- 对外暴露 Server 时仍需要反向代理、TLS、网络 ACL 和更完整的身份体系。
 
-```bash
-claude --session-id "{session}" --permission-mode dontAsk \
-  --allowedTools "Bash(*)" Read Edit Write Glob Grep NotebookEdit Agent Task Skill WebFetch WebSearch "mcp__*" \
-  -p -- "{prompt}"
-```
-
-二阶段收尾：
-
-```bash
-claude -r "{session}" --permission-mode dontAsk \
-  --allowedTools "Bash(*)" Read Edit Write Glob Grep NotebookEdit Agent Task Skill WebFetch WebSearch "mcp__*" \
-  -p -- "{prompt}"
-```
-
-以上为默认 WSL root 路径；Claude Code 禁止 root 使用
-`--dangerously-skip-permissions`。非 root 本地模式仍使用该原生 bypass 参数。
-
-#### `codex` driver
-
-依赖环境变量：
-
-- `CODEX_MODEL`
-- `CODEX_BASE_URL`
-- `OPENAI_API_KEY`
-
-健康检查等价于下面这条请求（实现为 Dispatcher 进程内的 HTTP 调用，不再在容器里执行 curl）：
-
-```bash
-curl -sS --fail -o /dev/null \
-  "$CODEX_BASE_URL/v1/chat/completions" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "content-type: application/json" \
-  -d "{\"model\":\"$CODEX_MODEL\",\"max_tokens\":10,\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}"
-```
-
-已知行为：
-
-- 首轮 session id 会打印在 `stderr`
-- 可以用正则 `session id:\s*([0-9a-fA-F-]+)` 提取
-- Dispatcher 固定从 `stdout` 取全文作为结果正文
-
-第一阶段执行：
-
-```bash
-codex exec --dangerously-bypass-approvals-and-sandbox --model "{env.CODEX_MODEL}" \
-  -c 'web_search="live"' \
-  -c 'model_context_window=1000000' \
-  -c 'model_auto_compact_token_limit=900000' \
-  -c 'model_auto_compact_token_limit_scope="total"' \
-  -c 'model_provider="redtrace"' \
-  -c 'model_providers.redtrace.name="redtrace"' \
-  -c 'model_providers.redtrace.wire_api="responses"' \
-  -c 'model_reasoning_effort="high"' \
-  -c 'model_providers.redtrace.base_url="{env.CODEX_BASE_URL}"' \
-  -c 'model_providers.redtrace.env_key="OPENAI_API_KEY"' \
-  -- "{prompt}"
-```
-
-二阶段收尾：
-
-```bash
-codex exec resume "{session}" --dangerously-bypass-approvals-and-sandbox --model "{env.CODEX_MODEL}" \
-  -c 'web_search="live"' \
-  -c 'model_context_window=1000000' \
-  -c 'model_auto_compact_token_limit=900000' \
-  -c 'model_auto_compact_token_limit_scope="total"' \
-  -c 'model_provider="redtrace"' \
-  -c 'model_providers.redtrace.name="redtrace"' \
-  -c 'model_providers.redtrace.wire_api="responses"' \
-  -c 'model_reasoning_effort="high"' \
-  -c 'model_providers.redtrace.base_url="{env.CODEX_BASE_URL}"' \
-  -c 'model_providers.redtrace.env_key="OPENAI_API_KEY"' \
-  -- "{prompt}"
-```
-
-#### `mock` driver
-
-`mock` driver 用于本地观察 dispatcher 的成功、失败和超时路径。
-
-行为约定：
-
-- `runtime.prompt_group: "mock"` 时，prompt 本身是结构化 JSON，不再依赖自然语言说明
-- `reason` prompt 最少包含 `phase`、`fact_ids`、`open_intents`
-- `explore` / `conclude` prompt 最少包含 `phase`、`intent_id`
-- `bootstrap` / `bootstrap_conclude` prompt 最少包含 `phase`、`origin`、`goal`、`hints`
-- driver 会先解析 prompt 里的 `phase` 字段，再读取对应的 `MOCK_<PHASE>` JSON 环境变量选择当前 phase 的模拟结果
-- 每个 phase 都在自己的 JSON 里配置 `delay: [min, max]`；单位是秒，支持小数；随机耗时超过 Dispatcher 外层 timeout 时，就会自然表现为超时
-- `reason.noop` 只会在 `open_intents` 非空时参与抽样；mock 会自动避开当前上下文下不合法的结果
-
-`mock` 支持六个 phase：
-
-- `healthcheck`
-- `bootstrap`
-- `bootstrap_conclude`
-- `reason`
-- `explore_execute`
-- `explore_conclude`
-
-支持的结果如下：
-
-- `healthcheck.outcomes`: `ok`、`fail`
-- `bootstrap.outcomes`: `fact`、`rejected`、`invalid_json`、`invalid_payload`、`command_fail`
-- `bootstrap_conclude.outcomes`: `fact`、`rejected`、`invalid_json`、`invalid_payload`、`command_fail`
-- `reason.outcomes`: `complete`、`intent`、`noop`、`rejected`、`invalid_json`、`invalid_payload`、`command_fail`
-- `explore_execute.outcomes`: `fact`、`rejected`、`invalid_json`、`invalid_payload`、`command_fail`
-- `explore_conclude.outcomes`: `fact`、`rejected`、`invalid_json`、`invalid_payload`、`command_fail`
-
-命名约定：
-
-- 每个 phase 一个变量：`MOCK_<PHASE>`，例如 `MOCK_REASON`
-- 变量值必须是 JSON 对象，结构为：`{"delay":[min,max],"outcomes":{...}}`
-- `delay` 必须是两个非负数字，单位是秒
-- 每个 phase 的所有结果概率都使用 `0` 到 `1` 的小数，并且总和必须严格等于 `1.0`
-
-### 配置校验规则
-
-#### 加载时校验
-
-启动 Dispatcher 时，应完成静态校验：
-
-- `dispatch.yaml` 必须存在且可读取
-- `runtime.max_workers` 必须存在
-- `runtime.max_running_projects` 必须存在
-- `runtime.max_project_workers` 必须存在
-- `runtime.interval` 必须存在
-- `runtime.healthcheck_timeout` 必须存在
-- `runtime.worker_healthcheck` 如果存在，只允许 `startup_and_task`、`startup_only`、`disabled`
-- `runtime.prompt_group` 必须存在
-- `tasks.bootstrap.timeout` 必须存在
-- `tasks.bootstrap.conclude_timeout` 必须存在
-- `tasks.reason.timeout` 必须存在
-- `tasks.explore.timeout` 必须存在
-- `tasks.explore.conclude_timeout` 必须存在
-- 每个 Worker 都必须有 `type`
-- 每个 Worker 都必须有 `max_running`
-- `task_types` 只允许 `bootstrap`、`reason`、`explore`
-- `type` 只允许 `claudecode`、`codex`、`mock`
-- `max_running` 必须是正整数
-- `claudecode`、`codex`、`mock` 都支持双阶段 `explore`
-- `runtime.prompt_group` 对应的 prompt 目录必须存在
-- 代码工程中的 prompt 资源必须存在
-- 默认 prompt 组下，`reason.md` 必须至少覆盖 `{graph_yaml}`、`{fact_ids}`、`{open_intents}`
-- 默认 prompt 组下，`explore.md` 必须至少覆盖 `{graph_yaml}`、`{intent_id}`、`{intent_description}`
-- 默认 prompt 组下，`bootstrap.md` 和 `bootstrap_conclude.md` 必须至少覆盖 `{origin}`、`{goal}`、`{hints}`
-- `mock` prompt 组下，`reason.md` 必须至少覆盖 `{fact_ids}`、`{open_intents}`
-- `mock` prompt 组下，`explore.md` 和 `explore_conclude.md` 必须至少覆盖 `{intent_id}`
-- `mock` prompt 组下，`bootstrap.md` 和 `bootstrap_conclude.md` 必须至少覆盖 `{origin}`、`{goal}`、`{hints}`
-- `mock` worker 的 `MOCK_*` 变量名只能使用系统支持的 phase
-- `mock` worker 每个 phase 的概率都必须在 `0` 到 `1` 之间，且总和必须严格等于 `1.0`
-
-#### 运行时校验
-
-任务真正派发时，还需要做运行时校验：
-
-- driver 必须存在且支持该任务类型
-- 当 `runtime.worker_healthcheck=startup_and_task` 时，真正启动任务前，driver 的健康检查必须能成功执行；退出码 `0` 才算健康
-- `explore` 进入 timeout / parse-fail 后的 `explore_conclude` fallback，不再重复执行健康检查，而是直接尝试 conclude 并继续走结果校验
-- 只有支持当前任务类型的 Worker 才能被选中
-- 只有当前运行中任务数小于 `max_running` 的 Worker 才能被选中
-- 处于本地 `retry_after` 窗口内的不健康 Worker 不参与派发
-- `bootstrap` 和 `explore` 都必须先完成 claim，成功后才真正启动任务线程
-- 如果要走双阶段 `explore`，则第一阶段必须成功拿到 session id，才能进入 `conclude`
-- 如果要走双阶段 `bootstrap`，则第一阶段必须成功拿到 session id，才能进入 `bootstrap_conclude`
-- Dispatcher 必须对 `stdout` 全文做 JSON 解析和任务级结构校验
-- `accepted: false`、JSON 非法、字段缺失、接口写回失败等情况都必须记日志，且不做立即重试
-
----
-
-## 配置字段速查
-
-### `dispatch.yaml`
-
-| 字段 | 必填 | 含义 |
-| --- | --- | --- |
-| `server` | 是 | RedTrace Server 的 base URL |
-
-### `runtime.*`
-
-| 字段 | 必填 | 含义 |
-| --- | --- | --- |
-| `runtime.max_workers` | 是 | Dispatcher 同时运行中的任务总数上限 |
-| `runtime.max_running_projects` | 是 | 当前 dispatcher 运行期内已接手且仍为 `active` 的项目上限，不受历史遗留容器影响 |
-| `runtime.max_project_workers` | 是 | 单个项目内同时运行的任务上限，统一计入 `bootstrap`、`reason` 和 `explore` |
-| `runtime.interval` | 是 | 统一节拍配置；既是 Dispatcher 主循环间隔，也是带 claim 任务的 heartbeat 周期 |
-| `runtime.healthcheck_timeout` | 是 | Worker 健康检查的统一外层 watchdog 超时 |
-| `runtime.worker_healthcheck` | 否 | Worker 健康检查模式：`startup_and_task`、`startup_only` 或 `disabled`；默认 `startup_only` |
-| `runtime.execution` | 否 | 执行后端：`container`（默认）或 `local`；`local` 时 worker 在 dispatcher 宿主机上以子进程运行，复用本机 CLI，启动时校验各 CLI 是否已安装可用 |
-| `runtime.prompt_group` | 是 | 当前使用的 prompt 组目录名 |
-
-### `container.*`
-
-仅 `runtime.execution: container`（默认）时必填。
-
-| 字段 | 必填 | 含义 |
-| --- | --- | --- |
-| `container.image` | 是 | 项目容器镜像 |
-| `container.network_mode` | 是 | 项目容器网络模式 |
-| `container.completed_action` | 是 | 项目 completed 后对容器的处理方式 |
-
-`container.completed_action` 可选值：
-
-- `remove`：项目 completed 后删除容器
-- `stop`：项目 completed 后只停止容器，保留现场
-
-实现约定：
-
-- completed project 的容器 cleanup 可以异步并行进行，不要求阻塞主调度循环
-- 如果项目已从 Server 删除，Dispatcher 会把找不到对应项目的 `redtrace-dispatch-*` 容器视为 orphan，并执行 stop 清理
-
-### `local.*`
-
-仅 `runtime.execution: local` 时生效，`container` 模式下忽略。此时无需 `container.*`，worker 也不需要任何 LLM 环境变量；启动时 Dispatcher 会对每个已配置 worker 的 CLI 执行 `--help` 探测，全部缺失则报错退出。
-
-| 字段 | 必填 | 含义 |
-| --- | --- | --- |
-| `local.workspace_root` | 否 | 每项目工作目录的根；不填则取 dispatcher 启动时的当前目录，每项目分到隔离子目录 `<root>/<project_id>/` 作为 worker 进程的工作目录 |
-| `local.completed_action` | 否 | 项目 completed 后对工作目录的处理：`keep`（默认，保留现场）或 `remove` |
-
-### `tasks.*`
-
-| 字段 | 必填 | 含义 |
-| --- | --- | --- |
-| `tasks.bootstrap.timeout` | 是 | `bootstrap` 第一阶段超时 |
-| `tasks.bootstrap.conclude_timeout` | 是 | `bootstrap` 双阶段收尾超时 |
-| `tasks.reason.timeout` | 是 | `reason` 的超时 |
-| `tasks.explore.timeout` | 是 | `explore` 第一阶段超时 |
-| `tasks.explore.conclude_timeout` | 是 | `explore` 双阶段收尾超时 |
-
-### `workers.*`
-
-| 字段 | 必填 | 含义 |
-| --- | --- | --- |
-| `name` | 是 | Worker 静态标识；协议写回时使用这个值作为 `creator` 或 `worker` |
-| `type` | 是 | Worker driver 名；支持 `claudecode`、`codex`、`mock` |
-| `task_types` | 是 | 该 Worker 支持的任务类型列表 |
-| `max_running` | 是 | 该 Worker 自身的并发上限 |
-| `priority` | 是 | 当前任务类型的候选 Worker 中，数字越小优先级越高 |
-| `env` | 是 | 该 Worker 的变量表；具体必需 key 由对应 driver 决定并在启动时校验 |
-
-补充：
-
-- Worker 选择顺序是：先过滤任务类型、`max_running` 和处于本地 `retry_after` 窗口内的 Worker，再按 `priority`，同优先级优先选当前运行数更少的，最后随机；`bootstrap` 和 `explore` 都会先 claim，再启动任务；当 `runtime.worker_healthcheck=startup_and_task` 时，真正启动前会做一次健康检查，失败的 Worker 会进入短暂不可选窗口；进入 `bootstrap_conclude` / `explore_conclude` fallback 时不再重复健康检查
-- 健康检查、执行命令、session 提取、二阶段 `conclude` 都由对应 driver 代码负责
-- prompt 内容从代码工程里的 markdown 资源加载
-
----
-
-## 附录：示例配置与 Prompt 内容
-
-### `dispatch.example.yaml`
-
-```yaml
-server: "http://127.0.0.1:8000"
-
-runtime:
-  max_workers: 5  # total running tasks
-  max_running_projects: 3  # total active projects admitted by this dispatcher runtime
-  max_project_workers: 2  # per-project running tasks, including bootstrap + reason + explore
-  interval: 3  # intentional shared cadence: scheduler loop interval + claim-task heartbeat interval, in seconds
-  healthcheck_timeout: 60  # shared watchdog for all worker healthchecks, in seconds
-  worker_healthcheck: "startup_only"  # startup_and_task | startup_only | disabled
-  prompt_group: "default"  # selects prompts/<group>/
-
-tasks:
-  bootstrap:
-    timeout: 1800
-    conclude_timeout: 300
-  reason:
-    timeout: 300
-  explore:
-    timeout: 1800
-    conclude_timeout: 300
-
-container:
-  image: "tmp:latest"
-  network_mode: "host"
-  completed_action: "stop"  # options: "remove" | "stop"
-
-common_env:
-  TSEC_BASE_URL: "http://<SERVER_HOST>/api"
-  TSEC_AGENT_TOKEN: "..."
-
-workers:
-  # 同一模型拆成多个 Worker 的原因，应是它们使用不同的 API key，
-  # 从而拥有彼此独立的并发配额。
-  - name: "claude-sonnet-thinker"
-    type: "claudecode"
-    task_types: [bootstrap, reason]
-    max_running: 1
-    priority: 0  # lower number wins; ties prefer fewer running tasks, then choose randomly
-    env:
-      ANTHROPIC_MODEL: "claude-sonnet-4-6"
-      ANTHROPIC_BASE_URL: "https://api.example.com"
-      ANTHROPIC_AUTH_TOKEN: "sk-ant-worker-a"
-
-  - name: "claude-sonnet-doer"
-    type: "claudecode"
-    task_types: [bootstrap, explore]
-    max_running: 1
-    priority: 1
-    env:
-      ANTHROPIC_MODEL: "claude-sonnet-4-6"
-      ANTHROPIC_BASE_URL: "https://api.example.com"
-      ANTHROPIC_AUTH_TOKEN: "sk-ant-worker-b"
-
-  - name: "codex-gpt54"
-    type: "codex"
-    task_types: [bootstrap, reason, explore]
-    max_running: 1
-    priority: 3
-    env:
-      CODEX_MODEL: "gpt-5.4"
-      CODEX_BASE_URL: "https://api.example.com/v1"
-      OPENAI_API_KEY: "sk-worker-c"
-
-  - name: "codex-gpt54-alt"
-    type: "codex"
-    task_types: [bootstrap, explore]
-    max_running: 1
-    priority: 4
-    env:
-      CODEX_MODEL: "gpt-5.4"
-      CODEX_BASE_URL: "https://api.example.com/v1"
-      OPENAI_API_KEY: "sk-worker-d"
-
-  - name: "mock-observer"
-    type: "mock"
-    task_types: [bootstrap, reason, explore]
-    max_running: 1
-    priority: 9
-    env:
-      MOCK_HEALTHCHECK: '{"delay":[0.05,0.15],"outcomes":{"ok":0.9,"fail":0.1}}'
-      MOCK_BOOTSTRAP: '{"delay":[0.1,12.0],"outcomes":{"fact":0.6,"rejected":0.1,"invalid_json":0.1,"invalid_payload":0.1,"command_fail":0.1}}'
-      MOCK_BOOTSTRAP_CONCLUDE: '{"delay":[0.1,2.2],"outcomes":{"fact":0.6,"rejected":0.1,"invalid_json":0.1,"invalid_payload":0.1,"command_fail":0.1}}'
-      MOCK_REASON: '{"delay":[0.1,2.2],"outcomes":{"complete":0.1,"intent":0.3,"noop":0.1,"rejected":0.1,"invalid_json":0.1,"invalid_payload":0.1,"command_fail":0.2}}'
-      MOCK_EXPLORE_EXECUTE: '{"delay":[0.1,12.0],"outcomes":{"fact":0.6,"rejected":0.1,"invalid_json":0.1,"invalid_payload":0.1,"command_fail":0.1}}'
-      MOCK_EXPLORE_CONCLUDE: '{"delay":[0.1,2.2],"outcomes":{"fact":0.6,"rejected":0.1,"invalid_json":0.1,"invalid_payload":0.1,"command_fail":0.1}}'
-```
-
-补充：
-
-- 这里只是用示例值表达配置结构
-- `common_env` 会先并到每个 worker 的环境变量里，然后再被 `worker.env` 覆盖；即 `common_env < worker.env`
-- Worker 按独立的 key / model 并发配额单元建模，不应让多个 Worker 共享同一个 key
-
-下面 5 份 markdown 内容对应代码工程里的 prompt 文件。
-
-### `bootstrap.md`
-
-````md
-# 背景
-当前场景是授权的 AI 渗透测试比赛 / 靶场环境。
-## 任务
-你需要直接解决这个问题，目标是完成 Goal。
-## 输出要求
-只返回一个原始 JSON 对象，不要输出其他内容。
-```json
-{"accepted": true, "data": {"fact": {"description": "..."}, "complete": {"description": "..."}}}
-```
-## 上下文
-### Origin
-{origin}
-### Goal
-{goal}
-### Hints JSON 数组
-{hints}
-````
-
-### `reason.md`
-
-````md
-# 背景
-当前场景是授权的 AI 渗透测试比赛 / 靶场环境。
-## 任务
-你当前只做 `reason`。
-你要同时判断两件事：
-1. 现有 facts 是否已经满足 goal。
-2. 如果还未满足，当前是否需要提出一个新的 intent。
-## 输出要求
-只返回一个原始 JSON 对象，不要输出其他内容。
-拒绝任务时返回：
-```json
-{"accepted": false, "reason": "..."}
-```
-已满足 goal 时返回：
-```json
-{"accepted": true, "data": {"complete": {"from": ["f001"], "description": "..."}}}
-```
-未满足 goal，但需要提出新 intent 时返回：
-```json
-{"accepted": true, "data": {"intent": {"from": ["f001"], "description": "..."}}}
-```
-未满足 goal，且当前不需要提出新 intent 时返回：
-```json
-{"accepted": true, "data": {}}
-```
-## 规则
-- 如果下面的 `open_intents` 为空，说明当前图里没有任何进行中的探索；此时若不返回 `data.complete`，则必须返回 `intent`。
-- `intent.from` 只能从下面的合法 fact id 中选择。
-## 上下文
-### 图快照
-{graph_yaml}
-### 当前合法的 fact id JSON 数组
-{fact_ids}
-### 当前所有未结论的 intent JSON 数组
-{open_intents}
-````
-
-### `explore.md`
-
-````md
-# 背景
-当前场景是授权的 AI 渗透测试比赛 / 靶场环境。
-## 任务
-你当前只做 `explore`。
-你只处理当前这一条 intent，执行探索并给出最终事实结论。
-## 输出要求
-只返回一个原始 JSON 对象，不要输出其他内容。
-拒绝任务时返回：
-```json
-{"accepted": false, "reason": "policy_refusal"}
-```
-正常返回示例：
-```json
-{"accepted": true, "data": {"description": "..."}}
-```
-## 规则
-- `description` 必须是客观探索结论，不要输出解释性废话。
-## 上下文
-### 图快照
-{graph_yaml}
-### 当前 intent id
-{intent_id}
-### 当前 intent 描述
-{intent_description}
-````
-
-### `explore_conclude.md`
-
-````md
-# 背景
-当前场景是授权的 AI 渗透测试比赛 / 靶场环境。
-## 任务
-你当前正在对同一个 `explore` 做收尾总结。
-- 不要继续探索。
-- 只总结截至目前已经完成的探索和结论。
-## 输出要求
-只返回一个原始 JSON 对象，不要输出其他内容。
-拒绝任务时返回：
-```json
-{"accepted": false, "reason": "policy_refusal"}
-```
-正常返回示例：
-```json
-{"accepted": true, "data": {"description": "..."}}
-```
-## 规则
-- `description` 必须是客观探索结论，不要输出解释性废话。
-## 上下文
-### 图快照
-{graph_yaml}
-### 当前 intent id
-{intent_id}
-### 当前 intent 描述
-{intent_description}
-````
-
-### `bootstrap_conclude.md`
-
-````md
-# 背景
-当前场景是授权的 AI 渗透测试比赛 / 靶场环境。
-## 任务
-- 不要继续推进。
-- 不要等待未完成的任务。
-- 只总结截至目前已经确认、且对达到 goal 最有帮助的关键事实。
-## 输出要求
-只返回一个原始 JSON 对象，不要输出其他内容。
-```json
-{"accepted": true, "data": {"fact": {"description": "..."}}}
-```
-## 上下文
-### Origin
-{origin}
-### Goal
-{goal}
-### Hints JSON 数组
-{hints}
-````
+这些边界被明确留在部署与适配层，不改变 RedTrace 的核心协议：证据可追溯、任务可认领、执行可替换、失败可恢复。

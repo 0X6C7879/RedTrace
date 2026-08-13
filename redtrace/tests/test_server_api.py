@@ -29,7 +29,7 @@ def _create_project(client: TestClient) -> str:
         },
     )
     assert response.status_code == 201
-    assert response.json()["project"]["bootstrap_enabled"] is True
+    assert response.json()["project"]["bootstrap_enabled"] is False
     return response.json()["project"]["id"]
 
 
@@ -304,6 +304,46 @@ def test_project_workflow_create_conclude_complete_and_reopen(
     assert payload["fact"] == {"id": "f002", "description": "human correction"}
     assert payload["intent"]["from"] == ["f001"]
     assert payload["intent"]["to"] == "f002"
+
+
+def test_admin_can_force_release_and_conclude_owned_intents(
+    client: TestClient,
+) -> None:
+    project_id = _create_project(client)
+    created = client.post(
+        f"/projects/{project_id}/intents",
+        json={
+            "from": ["origin"],
+            "description": "investigate",
+            "creator": "worker-a",
+            "worker": "worker-a",
+        },
+    ).json()
+    path = f"/projects/{project_id}/intents/{created['id']}"
+
+    assert (
+        client.post(f"{path}/release", json={"worker": "worker-b"}).status_code
+        == 409
+    )
+    released = client.post(f"{path}/release", json={"worker": "admin"})
+    assert released.status_code == 200
+    assert released.json()["worker"] is None
+
+    assert (
+        client.post(f"{path}/claim", json={"worker": "worker-a"}).status_code
+        == 200
+    )
+    assert client.post(
+        f"{path}/conclude",
+        json={"worker": "worker-b", "description": "wrong owner"},
+    ).status_code == 409
+    concluded = client.post(
+        f"{path}/conclude",
+        json={"worker": "admin", "description": "manual fact"},
+    )
+    assert concluded.status_code == 200
+    assert concluded.json()["fact"]["description"] == "manual fact"
+    assert concluded.json()["intent"]["worker"] == "admin"
 
 
 def test_stopping_project_releases_claims_and_reason_but_keeps_hints_writable(

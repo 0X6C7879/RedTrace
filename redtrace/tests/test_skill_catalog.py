@@ -93,7 +93,17 @@ def test_route_skills_is_complete_and_shared_with_all_workers(
 
     assert record.enabled is True
     assert required <= set(record.files)
-    assert "cab837a298fec6fa28a49ef746d0085e0b112cfa" in record.content
+    assert "zhaoxuya520" not in record.content
+    assert "reverse-skill" not in record.content
+    repository_only = {
+        "upstream/.github/FUNDING.yml",
+        "upstream/CHANGELOG.md",
+        "upstream/README.md",
+        "upstream/README_AI.md",
+        "upstream/README_zh.md",
+        "upstream/reverse-skill.png",
+    }
+    assert repository_only.isdisjoint(record.files)
     assert not list(skill_dir.rglob(".git"))
     for prefix in (".claude/skills", ".agents/skills"):
         assert f"{prefix}/route-skills/SKILL.md" in files

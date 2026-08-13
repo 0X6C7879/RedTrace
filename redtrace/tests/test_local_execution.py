@@ -8,26 +8,23 @@ import time
 from pathlib import Path
 
 import pytest
+from conftest import FakeClient, make_config, make_intent, make_project
 from pydantic import ValidationError
-
 from redtrace.capabilities import (
     PI_PROVIDER_EXTENSION_PATH,
     CapabilityStore,
     materialize_local_workspace,
 )
 from redtrace.dispatcher.config import DispatchConfig, LocalConfig, WorkerConfig
+from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.local_backend import LocalBackend
 from redtrace.dispatcher.runtime.local_process import LocalProcess
 from redtrace.dispatcher.scheduler import loop as loop_module
 from redtrace.dispatcher.tasks import common, explore
-from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.workers.adapters.codex import CodexDriver
 from redtrace.dispatcher.workers.adapters.pi import PiDriver
 from redtrace.dispatcher.workers.registry import get_driver
 from redtrace.paths import RedTracePaths
-
-from conftest import FakeClient, make_config, make_intent, make_project
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PI_TEST_BINARY = shutil.which("pi.cmd" if os.name == "nt" else "pi")
@@ -152,6 +149,28 @@ def test_local_process_cancel_records_reason() -> None:
     assert result.cancel_reason == "project stopped"
 
 
+def test_local_process_accepts_live_stdin_without_restart() -> None:
+    process = LocalProcess(
+        [
+            sys.executable,
+            "-c",
+            "import sys; [print(line.strip(), flush=True) for line in sys.stdin]",
+        ],
+        cwd=os.getcwd(),
+        env=dict(os.environ),
+        stdin_text="first\n",
+        keep_stdin_open=True,
+        timeout_seconds=10,
+    )
+    process.start()
+    assert process.send_stdin("second\n")
+    process.close_stdin()
+    result = process.communicate(timeout=20)
+
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["first", "second"]
+
+
 # --------------------------------------------------------------------------- LocalBackend
 
 
@@ -242,11 +261,13 @@ def test_local_backend_keeps_agent_config_linked_and_conversations_in_project(
     pi_mcp = paths.runtime / "mcp" / "pi.json"
     pi_mcp.parent.mkdir(parents=True)
     pi_mcp.write_text('{"mcpServers":{}}\n', encoding="utf-8")
-    backend = LocalBackend(LocalConfig(workspace_root=str(paths.workspaces)), paths=paths)
+    backend = LocalBackend(
+        LocalConfig(workspace_root=str(paths.workspaces)), paths=paths
+    )
 
     workspace = Path(backend.ensure_running("proj_001"))
     env = backend.conversation_environment("proj_001", "codex")
-    state = paths.projects / "proj_001" / "conversations" / "codex"
+    state = paths.workspaces / "proj_001" / ".redtrace" / "conversations" / "codex"
 
     assert env == {"CODEX_HOME": str(state)}
     assert (state / "config.toml").read_text(encoding="utf-8") == config.read_text(
@@ -256,7 +277,7 @@ def test_local_backend_keeps_agent_config_linked_and_conversations_in_project(
     assert (workspace / ".pi" / "mcp.json").resolve() == pi_mcp.resolve()
     assert backend.conversation_environment("proj_001", "pi") == {
         "PI_CODING_AGENT_SESSION_DIR": str(
-            paths.projects / "proj_001" / "conversations" / "pi"
+            paths.workspaces / "proj_001" / ".redtrace" / "conversations" / "pi"
         )
     }
 
@@ -286,7 +307,9 @@ def test_local_graph_snapshot_uses_managed_project_path(tmp_path: Path) -> None:
     )
 
     snapshot = next(
-        (paths.projects / "proj_001" / "prompts").glob("reason_execute-*/graph.yaml")
+        (paths.workspaces / "proj_001" / ".redtrace" / "prompts").glob(
+            "reason_execute-*/graph.yaml"
+        )
     )
     assert snapshot.read_text(encoding="utf-8") == "facts:\n- id: f001\n"
     assert str(snapshot) in reference
@@ -350,11 +373,14 @@ def test_local_common_env_reaches_worker_subprocess(
 
 def test_local_backend_write_text_file_writes_to_host(tmp_path: Path) -> None:
     backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path)))
-    target = tmp_path / "snapshots" / "graph.yaml"
+    handle = backend.ensure_running("proj_001")
+    target = Path(handle) / "snapshots" / "graph.yaml"
 
-    backend.write_text_file("ignored", str(target), "facts: []\n")
+    backend.write_text_file(handle, str(target), "facts: []\n")
 
     assert target.read_text() == "facts: []\n"
+    with pytest.raises(ValueError, match="outside workspace"):
+        backend.write_text_file(handle, str(tmp_path / "outside.yaml"), "nope")
 
 
 def test_local_backend_keep_leaves_dir_and_reports_no_cleanup(tmp_path: Path) -> None:
@@ -416,21 +442,21 @@ def _local_payload() -> dict:
             {
                 "name": "local-claude",
                 "type": "claudecode",
-                "task_types": ["explore"],
+                "task_types": ["bootstrap", "reason", "explore"],
                 "max_running": 1,
                 "priority": 0,
             },
             {
                 "name": "local-codex",
                 "type": "codex",
-                "task_types": ["explore"],
+                "task_types": ["bootstrap", "reason", "explore"],
                 "max_running": 1,
                 "priority": 1,
             },
             {
                 "name": "local-pi",
                 "type": "pi",
-                "task_types": ["reason"],
+                "task_types": ["bootstrap", "reason", "explore"],
                 "max_running": 1,
                 "priority": 2,
             },
@@ -491,7 +517,7 @@ def test_local_execution_rejects_partial_worker_api_override() -> None:
 
 
 def test_shipped_local_example_config_is_valid() -> None:
-    config = DispatchConfig.load(REPO_ROOT / "dispatch.local.example.yaml")
+    config = DispatchConfig.load(REPO_ROOT / "redtrace.local.example.yaml")
 
     assert config.runtime.execution == "local"
     assert config.container is None
@@ -525,7 +551,6 @@ def test_local_cli_check_passes_when_cli_present() -> None:
         {
             "name": "m",
             "type": "mock",
-            "task_types": ["reason"],
             "max_running": 1,
             "priority": 0,
         }
@@ -557,7 +582,7 @@ def _bare_worker(
         {
             "name": worker_type,
             "type": worker_type,
-            "task_types": ["explore"],
+            "task_types": ["bootstrap", "reason", "explore"],
             "max_running": 1,
             "priority": 0,
             "context_length": context_length,
@@ -570,24 +595,20 @@ def test_codex_local_driver_omits_provider_injection() -> None:
     execute = CodexDriver(local=True).build_execute(worker, "PROMPT", None)
     argv = execute.argv
 
-    assert argv[:4] == [
-        "codex",
-        "exec",
-        "--json",
-        "--dangerously-bypass-approvals-and-sandbox",
-    ]
+    assert argv[:2] == ["codex", "app-server"]
     assert 'web_search="live"' in argv
     assert "model_context_window=1048576" in argv
     assert "model_auto_compact_token_limit=943718" in argv
-    assert argv[-2:] == ["--", "-"]
-    assert execute.stdin == "PROMPT"
+    assert execute.live_control.prompt == "PROMPT"
+    assert '"method":"initialize"' in execute.stdin
     assert not any("model_providers" in part for part in argv)
     assert "--model" not in argv
 
     conclude = CodexDriver(local=True).build_conclude(worker, "PROMPT", "sess-1")
-    assert conclude.argv[:5] == ["codex", "exec", "--json", "resume", "sess-1"]
-    assert conclude.argv[-2:] == ["--", "-"]
-    assert conclude.stdin == "PROMPT"
+    assert conclude.argv[:2] == ["codex", "app-server"]
+    assert conclude.live_control.session_id == "sess-1"
+    assert conclude.live_control.prompt == "PROMPT"
+    assert '"method":"initialize"' in conclude.stdin
     assert not any("model_providers" in part for part in conclude.argv)
 
 
@@ -600,8 +621,9 @@ def test_pi_local_driver_omits_models_json_and_provider() -> None:
     assert "--approve" in argv
     assert "--provider" not in argv
     assert "--model" not in argv
-    assert argv[-1] == "-p"
-    assert execute.stdin == "PROMPT"
+    assert argv[argv.index("--mode") + 1] == "rpc"
+    assert '"type":"prompt","message":"PROMPT"' in execute.stdin
+    assert execute.live_control is not None
 
 
 @pytest.mark.skipif(PI_TEST_BINARY is None, reason="pi CLI is not installed")
@@ -676,7 +698,7 @@ def _local_config_for_worker(name: str, worker_type: str) -> DispatchConfig:
                 {
                     "name": name,
                     "type": worker_type,
-                    "task_types": ["explore"],
+                    "task_types": ["bootstrap", "reason", "explore"],
                     "max_running": 1,
                     "priority": 0,
                 }
@@ -710,8 +732,6 @@ def test_explore_runs_real_local_cli_end_to_end(tmp_path: Path, monkeypatch) -> 
         "claude",
         'echo \'{"accepted":true,"data":{"description":"local fake fact"}}\'',
     )
-    monkeypatch.setattr(common, "GRAPH_SNAPSHOT_ROOT", str(tmp_path / "prompts"))
-
     config = _local_config_for_worker("test-worker", "claudecode")
     backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path / "work")))
     intent = make_intent()
@@ -732,7 +752,7 @@ def test_explore_runs_real_local_cli_end_to_end(tmp_path: Path, monkeypatch) -> 
     assert outcome == "success"
     assert client.concluded == [("proj_001", "i001", "test-worker", "local fake fact")]
     # graph snapshot was materialised on the host under the patched root
-    snapshot_root = tmp_path / "prompts"
+    snapshot_root = tmp_path / "work" / "proj_001" / ".redtrace" / "prompts"
     assert any(p.name == "graph.yaml" for p in snapshot_root.rglob("*"))
 
 
@@ -745,8 +765,6 @@ def test_explore_local_cli_rejection_releases_intent(
         "claude",
         'echo \'{"accepted":false,"reason":"policy_refusal"}\'',
     )
-    monkeypatch.setattr(common, "GRAPH_SNAPSHOT_ROOT", str(tmp_path / "prompts"))
-
     config = _local_config_for_worker("test-worker", "claudecode")
     backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path / "work")))
     intent = make_intent()

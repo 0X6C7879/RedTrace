@@ -1,3 +1,4 @@
+# Deterministic mock deployment for development and automated tests.
 server: "http://127.0.0.1:8000"
 
 runtime:
@@ -16,7 +17,7 @@ tasks:
     conclude_timeout: 5
   reason:
     timeout: 5
-    max_intents: 3
+    max_intents: 5
   explore:
     timeout: 9
     conclude_timeout: 5

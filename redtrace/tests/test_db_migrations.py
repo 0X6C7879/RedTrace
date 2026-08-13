@@ -1,8 +1,41 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 from redtrace.server import db
+
+
+def test_default_database_migrates_legacy_storage_without_leaving_user_files(
+    tmp_path: Path, monkeypatch
+) -> None:
+    legacy = tmp_path / "home" / ".local" / "share" / "redtrace"
+    destination = tmp_path / "repo" / ".redtrace" / "redtrace.db"
+    legacy.mkdir(parents=True)
+    with sqlite3.connect(legacy / "redtrace.db") as conn:
+        conn.executescript(db.SCHEMA)
+        conn.execute(
+            "INSERT INTO projects (id, title, created_at) VALUES ('proj_legacy', 'legacy', '2026-01-01T00:00:00Z')"
+        )
+    (legacy / "audit" / "proj_legacy").mkdir(parents=True)
+    (legacy / "audit" / "proj_legacy" / "report.txt").write_text("audit")
+    (legacy / "payloads").mkdir()
+    (legacy / "payloads" / "beacon.bin").write_bytes(b"payload")
+
+    monkeypatch.setattr(db, "DEFAULT_DB", destination)
+    monkeypatch.setattr(db, "LEGACY_ROOT", legacy)
+    monkeypatch.setattr(db, "_db_path", None)
+    db.configure(destination)
+
+    with db.get_conn() as conn:
+        assert conn.execute(
+            "SELECT title FROM projects WHERE id = 'proj_legacy'"
+        ).fetchone()["title"] == "legacy"
+    assert (destination.parent / "audit" / "proj_legacy" / "report.txt").read_text() == "audit"
+    assert (
+        destination.parents[1] / "output" / "c2" / "payloads" / "beacon.bin"
+    ).read_bytes() == b"payload"
+    assert not legacy.exists()
 
 
 def test_configure_adds_bootstrap_enabled_to_legacy_projects_table(tmp_path, monkeypatch) -> None:

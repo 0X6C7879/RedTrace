@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-from contextlib import suppress
-from dataclasses import dataclass
 import logging
+import os
+import socket
 import threading
 import time
-from typing import Any, Protocol, runtime_checkable
 from collections.abc import Callable
+from contextlib import suppress
+from dataclasses import dataclass
+from typing import Any, Protocol, runtime_checkable
 
 from docker.errors import APIError, DockerException
 from docker.models.containers import Container
-
+from docker.utils.socket import STDERR, frames_iter
 from redtrace.dispatcher.runtime.stream_buffer import (
     BoundedLineEmitter,
     BoundedTextBuffer,
@@ -51,6 +53,10 @@ class ExecProcess(Protocol):
 
     def cancel(self, reason: str) -> None: ...
 
+    def send_stdin(self, text: str) -> bool: ...
+
+    def close_stdin(self) -> None: ...
+
 
 class ManagedProcess:
     def __init__(
@@ -59,11 +65,15 @@ class ManagedProcess:
         command: list[str],
         env: dict[str, str],
         workdir: str | None = None,
+        stdin_text: str | None = None,
+        keep_stdin_open: bool = False,
         max_output_chars: int = 8 * 1024 * 1024,
     ):
         self.command = command
         self.env = env
         self.workdir = workdir
+        self._stdin_text = stdin_text
+        self._keep_stdin_open = keep_stdin_open
         self._container = container
         self._api = container.client.api
         self._exec_id: str | None = None
@@ -76,6 +86,9 @@ class ManagedProcess:
         self._read_error: str | None = None
         self._done = threading.Event()
         self._on_output: OutputHandler | None = None
+        self._socket: Any | None = None
+        self._stdin_lock = threading.Lock()
+        self._stdin_closed = False
 
     def set_output_handler(self, handler: OutputHandler | None) -> None:
         self._on_output = handler
@@ -86,14 +99,27 @@ class ManagedProcess:
             self.command,
             stdout=True,
             stderr=True,
-            stdin=False,
+            stdin=self._keep_stdin_open or self._stdin_text is not None,
             tty=False,
             environment=self.env,
             workdir=self.workdir,
         )
         self._exec_id = exec_info["Id"]
-        self._reader = threading.Thread(target=self._read_stream, daemon=True)
+        if self._keep_stdin_open or self._stdin_text is not None:
+            self._socket = self._api.exec_start(
+                self._exec_id,
+                detach=False,
+                tty=False,
+                socket=True,
+            )
+            self._reader = threading.Thread(target=self._read_socket, daemon=True)
+        else:
+            self._reader = threading.Thread(target=self._read_stream, daemon=True)
         self._reader.start()
+        if self._stdin_text is not None:
+            self.send_stdin(self._stdin_text)
+            if not self._keep_stdin_open:
+                self.close_stdin()
 
     def communicate(self, timeout: float | None) -> ProcessResult:
         assert self._reader is not None
@@ -128,7 +154,11 @@ class ManagedProcess:
         try:
             details = self._api.exec_inspect(self._exec_id)
         except DockerException as exc:
-            LOG.warning("failed to inspect exec before kill exec_id=%s error=%s", self._exec_id, exc)
+            LOG.warning(
+                "failed to inspect exec before kill exec_id=%s error=%s",
+                self._exec_id,
+                exc,
+            )
             return
         if not details.get("Running"):
             return
@@ -142,6 +172,72 @@ class ManagedProcess:
         if self._cancel_reason is None:
             self._cancel_reason = reason
         self.kill()
+
+    def send_stdin(self, text: str) -> bool:
+        data = text.encode("utf-8")
+        with self._stdin_lock:
+            stream = self._socket
+            if stream is None or self._stdin_closed:
+                return False
+            target = getattr(stream, "_sock", stream)
+            try:
+                if hasattr(target, "sendall"):
+                    target.sendall(data)
+                elif hasattr(target, "write"):
+                    target.write(data)
+                    flush = getattr(target, "flush", None)
+                    if callable(flush):
+                        flush()
+                else:
+                    os.write(target.fileno(), data)
+                return True
+            except (OSError, ValueError):
+                return False
+
+    def close_stdin(self) -> None:
+        with self._stdin_lock:
+            stream = self._socket
+            if stream is None or self._stdin_closed:
+                return
+            self._stdin_closed = True
+            target = getattr(stream, "_sock", stream)
+            shutdown = getattr(target, "shutdown", None)
+            if callable(shutdown):
+                try:
+                    shutdown(socket.SHUT_WR)
+                    return
+                except OSError:
+                    pass
+            self._close_stream(stream)
+
+    def _read_socket(self) -> None:
+        stream = self._socket
+        emitters = (
+            {
+                channel: BoundedLineEmitter(
+                    lambda line, channel=channel: self._notify_output(channel, line)
+                )
+                for channel in ("stdout", "stderr")
+            }
+            if self._on_output is not None
+            else {}
+        )
+        try:
+            for stream_type, chunk in frames_iter(stream, tty=False):
+                channel = "stderr" if stream_type == STDERR else "stdout"
+                text = self._decode(chunk)
+                sink = self._stderr if channel == "stderr" else self._stdout
+                sink.append(text)
+                if channel in emitters:
+                    emitters[channel].feed(text)
+        except (DockerException, OSError, ValueError) as exc:
+            self._read_error = str(exc)
+        finally:
+            for emitter in emitters.values():
+                emitter.flush()
+            self._close_stream(stream)
+            self._returncode = self._resolve_exit_code()
+            self._done.set()
 
     def _read_stream(self) -> None:
         assert self._exec_id is not None
@@ -239,7 +335,12 @@ class ManagedProcess:
             if exit_code in (None, 0, 1):
                 return
         if last_error is not None:
-            LOG.warning("failed to kill container exec pid=%s container=%s error=%s", pid, self._container.name, last_error)
+            LOG.warning(
+                "failed to kill container exec pid=%s container=%s error=%s",
+                pid,
+                self._container.name,
+                last_error,
+            )
 
     @staticmethod
     def _split_chunk(chunk: Any) -> tuple[str, str]:

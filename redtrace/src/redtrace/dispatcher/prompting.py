@@ -5,7 +5,6 @@ import os
 from importlib import resources
 from typing import Any
 
-
 LANGUAGE_GUIDANCE = """## 输出语言
 
 自然语言及 JSON 自由文本值须用简体中文。
@@ -60,7 +59,11 @@ def add_blackboard_guidance(
             "当 `changed=true` 时，由你根据当前任务和 token 成本自行决定：直接采用文件内增量、运行 "
             "`redtrace-blackboard changes --since <revision>`，或运行 `redtrace-blackboard snapshot` 查看全部内容。"
             "通知文件保留本次 Worker 启动以来的全部增量；在会话内记住已处理的最新 revision，避免重复消费。"
-            "必须把相关 Fact、Intent、Hint 和其他 Worker 占用情况纳入决策，但不得固定频率轮询或重做黑板已确认的工作。"
+            "相关 Fact 会在不中断当前进程的情况下发送一个可选短信号，由你判断是否采用。"
+            "信号不携带完整上下文；需要更多信息时运行 `redtrace-blackboard source <fact_id>` "
+            "查看提交者的有界对话记录，不得继承其他 Worker 的身份或任务。"
+            "自行判断相关 Fact、Intent、Hint 和其他 Worker 占用情况；仅在有助于当前任务时采用，"
+            "不得固定频率轮询或重做黑板已确认的工作。"
             "结论仍通过既有 output contract 返回。"
         )
     ]
@@ -73,6 +76,9 @@ def add_blackboard_guidance(
                     "都能读取和复用其中全部文件。是否新建并进入 `<题目ID>/` 子目录，由你依据当前任务性质自行决定；"
                     "普通非题目任务可以直接使用 Workspace 根目录。所有脚本、PoC/EXP、日志、中间文件和证据都必须写在 "
                     "`$REDTRACE_WORKSPACE` 内，不得写入 `/tmp`、用户主目录或仓库外路径。"
+                    "修改其他 Worker 可能同时使用的既有文件或独占通道前，先在 `redtrace-resource list` 复用对应 `file`/Resource，"
+                    "必要时用 `register --kind file --no-fact` 注册，再执行 `redtrace-resource lock <id>`；HTTP 423 时改读、等待或写独立文件，"
+                    "不得覆盖。完成或放弃修改后 `unlock <id>`。只读分析无需锁，不得用粗粒度目录锁串行化可并行探索。"
                     "每道已处理题目都要创建或更新一个可复用、"
                     "不绑定本次 flag/容器地址的通用解题脚本，供其他 Worker 直接复用。Agent 自身配置和会话状态目录不属于任务产物。"
                 ),
@@ -107,16 +113,21 @@ def add_blackboard_guidance(
     if task_type == "explore":
         sections.append(
             "## Active WebShell 与 C2 工作流\n\n"
-            "任何直接 HTTP RCE、WebShell、reverse shell 或 socket 通道都只是入口，注册为共享 Resource 后才算建立成功。先运行 "
+            "WebShell、Listener、Session、Payload 与 Credential 是 RedTrace 全局资源，所有项目和任务均可复用；project/intent/worker 仅用于来源追踪。"
+            "任何直接 HTTP RCE、WebShell、reverse/bind shell、SSH、Evil-WinRM、PsExec、WMI、Meterpreter、Beacon 或 socket 通道都只是入口，注册为共享 Resource 后才算建立成功。先运行 "
             "`redtrace-resource snapshot --kind webshell --kind c2_listener --kind c2_session "
-            "--kind c2_payload`，复用匹配资源并按 ID 检查。用 `redtrace-resource webshell-create` 注册 shell，"
+            "--kind c2_payload --kind credential_ref`，跨任务复用匹配资源并按 ID 检查。用 `redtrace-resource webshell-create` 注册 WebShell，"
             "注册失败必须查看该子命令 `--help`、修正参数并重试一次；注册成功后必须改用 `redtrace-resource run --wait` 执行，"
-            "不得继续手写 `curl ...?c=...` 绕过管理层。若无 session，不要止步：运行 `redtrace-resource listener-create`，"
-            "再用 `payload-oneliner`，或通过 `payload-build` 构建 Beacon，部署后 refresh 一次。重复建立 channel 前，"
+            "不得继续手写 `curl ...?c=...` 绕过管理层。任何已获得的直接、reverse、bind 或外部 C2 shell 必须立刻用 `session-register` 登记到 C2 会话中心；"
+            "reverse shell 的 `session-register --connection-type reverse` 必须提供由 `redtrace-resource listener-create` 创建的 `--listener`，不能用裸 nc 临时监听。"
+            "Bind Shell 使用 `redtrace-resource listener-create --listener-type tcp_bind --target-host <target>` 作为主动 Connector。若无 session，不要止步：运行 `redtrace-resource listener-create`，"
+            "再用 `payload-oneliner`，或通过 `payload-build` 构建 Beacon；也可通过 `payload-external` 让 MSF/Sliver/Cobalt Strike Adapter 生成匹配 Beacon，或让 Worker 自行生成兼容/免杀 payload 后用 `payload-import` 登记。"
+            "MSF、Sliver、Cobalt Strike 等外部 C2 的 implant/session 用 `session-register --connection-type external_c2` 同步回来；普通 shell 可作为投递通道启动匹配 implant，不能伪装成另一种 C2 协议。"
+            "发现主机、Web、数据库、云或 AD 凭证时必须用 `credential-create --secret-stdin` 登记，禁止把 secret 放在命令行、Fact 或最终描述里；需要复用时从 credential_ref 资源的 secret 字段读取。部署后 refresh 一次。重复建立 channel 前，"
             "调用一次 `redtrace-resource changes --since <audit_cursor>`；这是 decision-point refresh，不是 timer。"
-            "最终结论提到已获得 shell/RCE/session 时，必须包含对应 Resource ID；没有 ID 就继续注册而不是结束。"
+            "最终结论提到已获得 shell/RCE/session/credential 时，必须包含对应 Resource ID；没有 ID 就继续注册而不是结束。"
             "`protocol` 只能填写实际 WebShell 协议，`method` 只能是 GET/POST，不得把漏洞利用链名称填入任一字段。"
-            "不得索取已存储的 secret。"
+            "已存储的 credential_ref secret 可直接复用。"
         )
     if task_type != "reason":
         sections.extend(

@@ -5,25 +5,28 @@ from concurrent.futures import Future
 from types import SimpleNamespace
 
 from conftest import make_config, make_intent, make_project
-from redtrace.dispatcher.models import ReasonCheckpoint, RunningTask
+from redtrace.board.models import Fact, ProjectSummary
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
-from redtrace.dispatcher.scheduler.loop import (
-    DispatcherLoop,
-    _compact_project_snapshot,
-)
-from redtrace.dispatcher.scheduler.worker_select import choose_worker
-from redtrace.server.models import Fact, ProjectSummary
+from redtrace.dispatcher.scheduler import project_policy
+from redtrace.dispatcher.scheduler.loop import DispatcherLoop
+from redtrace.dispatcher.scheduler.state import ReasonCheckpoint, RunningTask
+from redtrace.dispatcher.scheduler.worker_select import select_worker
 
 
 def _loop() -> DispatcherLoop:
     loop = DispatcherLoop.__new__(DispatcherLoop)
     loop.reason_checkpoints = {}
+    loop.reason_request_generations = {}
     loop.runtime_project_ids = set()
     loop.cleanup_futures = {}
     loop._cleanup_pending = set()
     loop._inactive_cleanup_done = {}
     loop.worker_unhealthy_until = {}
     loop.worker_rejected_until = {}
+    loop.explore_retry_avoid = {}
+    loop.task_failures = {}
+    loop.task_retry_until = {}
+    loop.reason_debounce_until = {}
     loop._log_state = {}
     loop.project_cursor = 0
     loop.futures = {}
@@ -48,12 +51,26 @@ def _summary(project_id: str, status: str) -> ProjectSummary:
 def test_compact_project_snapshot_uses_already_loaded_detail() -> None:
     project = make_project(intents=[make_intent()])
 
-    payload = json.loads(_compact_project_snapshot(project))
+    payload = json.loads(project_policy.compact_snapshot(project))
 
     assert payload["project"]["title"] == project.project.title
     assert payload["facts"][0]["id"] == "origin"
     assert payload["intents"][0]["from"] == project.intents[0].from_
     assert "shared_resources" not in payload
+
+
+def test_explore_snapshot_only_contains_dependencies_and_bounds_large_facts() -> None:
+    intent = make_intent()
+    intent.from_ = ["f001"]
+    project = make_project(intents=[intent])
+    project.facts[2].description = "x" * 2000
+    project.facts.append(Fact(id="f999", description="unrelated"))
+
+    payload = json.loads(project_policy.compact_snapshot(project, intent))
+
+    assert {fact["id"] for fact in payload["facts"]} == {"origin", "goal", "f001"}
+    assert "truncated; run redtrace-blackboard source f001" in payload["facts"][2]["description"]
+    assert [item["id"] for item in payload["intents"]] == [intent.id]
 
 
 def test_reason_trigger_detects_new_facts_and_open_intent_completion() -> None:
@@ -124,18 +141,65 @@ def test_reap_cleanup_future_records_only_successful_inactive_cleanup() -> None:
     assert loop._inactive_cleanup_done == {"proj-success": "completed"}
 
 
-def test_choose_worker_prefers_priority_then_lower_running_count() -> None:
+def test_select_worker_prefers_idle_before_priority() -> None:
     workers = make_config().workers
-    first = workers[0].model_copy(update={"name": "first", "priority": 0})
-    busy = workers[0].model_copy(update={"name": "busy", "priority": 0})
     lower_priority = workers[0].model_copy(update={"name": "lower", "priority": 1})
-
-    ordered = choose_worker(
-        [lower_priority, busy, first],
-        {"busy": 2, "first": 0, "lower": 0},
+    busy_high_priority = workers[0].model_copy(
+        update={"name": "busy-high", "priority": 0, "max_running": 3}
     )
 
-    assert [worker.name for worker in ordered] == ["first", "busy", "lower"]
+    selection = select_worker(
+        [busy_high_priority, lower_priority],
+        {"busy-high": 1, "lower": 0},
+        {},
+        {},
+        project_id="proj_001",
+        work_kind="reason",
+        now=0,
+    )
+
+    assert selection.worker is lower_priority
+
+
+def test_select_worker_prefers_priority_within_idle_tier() -> None:
+    worker = make_config().workers[0]
+    high_priority = worker.model_copy(update={"name": "high", "priority": 0})
+    low_priority = worker.model_copy(update={"name": "low", "priority": 1})
+
+    selection = select_worker(
+        [low_priority, high_priority],
+        {},
+        {},
+        {},
+        project_id="proj_001",
+        work_kind="reason",
+        now=0,
+    )
+
+    assert selection.worker is high_priority
+
+
+def test_select_worker_only_uses_workers_configured_for_task() -> None:
+    worker = make_config().workers[0]
+    reason_only = worker.model_copy(
+        update={"name": "reason", "task_types": ["reason"], "priority": 0}
+    )
+    explore = worker.model_copy(
+        update={"name": "explore", "task_types": ["explore"], "priority": 1}
+    )
+
+    selection = select_worker(
+        [reason_only, explore],
+        {},
+        {},
+        {},
+        project_id="proj_001",
+        work_kind="explore",
+        now=0,
+    )
+
+    assert selection.worker is explore
+    assert selection.blocked_task_type == ["reason"]
 
 
 def test_new_fact_dispatches_reason_before_unclaimed_explore_intent() -> None:
@@ -171,18 +235,129 @@ def test_new_fact_dispatches_reason_before_unclaimed_explore_intent() -> None:
     assert dispatched == [("reason", "facts:3->4")]
 
 
-def test_initial_enabled_project_without_bootstrap_worker_dispatches_reason() -> None:
+def test_ready_intent_dispatches_when_reason_worker_is_busy() -> None:
     loop = _loop()
-    config = make_config()
-    loop.config = config.model_copy(
-        update={
-            "workers": [
-                config.workers[0].model_copy(
-                    update={"task_types": ["reason", "explore"]}
-                )
-            ]
-        }
+    loop.config = make_config()
+    project = make_project(intents=[make_intent()])
+    project.intents[0].worker = None
+    project.facts.append(Fact(id="f002", description="new"))
+    loop.reason_checkpoints["proj_001"] = ReasonCheckpoint(3, 1, 1)
+    loop.container_manager = SimpleNamespace(
+        container_name=lambda project_id: project_id
     )
+    loop.client = SimpleNamespace(get_project=lambda _project_id: project)
+    dispatched: list[str] = []
+    loop._dispatch_reason = lambda *_args: dispatched.append("reason") or False
+    loop._dispatch_explore = lambda *_args: dispatched.append("explore") or True
+
+    assert loop._try_dispatch_project(_summary("proj_001", "active"))
+    assert dispatched == ["reason", "explore"]
+
+
+def test_intent_completion_during_reason_requests_follow_up_reason() -> None:
+    loop = _loop()
+    loop.reason_request_generations["proj_001"] = 2
+    future: Future[str] = Future()
+    future.set_result("success")
+    loop.futures[future] = RunningTask(
+        "proj_001",
+        "reason",
+        "worker",
+        TaskCancellation(),
+        fact_count=4,
+        hint_count=1,
+        open_intent_count=1,
+        reason_request_generation=1,
+    )
+
+    loop._reap_futures()
+
+    assert loop.reason_checkpoints["proj_001"].request_generation == 1
+    assert (
+        project_policy.reason_trigger(
+            loop.reason_checkpoints["proj_001"],
+            fact_count=4,
+            hint_count=1,
+            open_intents=1,
+            request_generation=2,
+        )
+        == "intent_results:1->2"
+    )
+
+
+def test_successful_explore_requests_reason() -> None:
+    loop = _loop()
+    future: Future[str] = Future()
+    future.set_result("success")
+    loop.futures[future] = RunningTask(
+        "proj_001", "explore", "worker", TaskCancellation(), intent_id="i001"
+    )
+
+    loop._reap_futures()
+
+    assert loop.reason_request_generations == {"proj_001": 1}
+    assert loop.reason_debounce_until["proj_001"] > 0
+
+
+def test_failed_task_retries_use_exponential_backoff(monkeypatch) -> None:
+    loop = _loop()
+    monkeypatch.setattr("redtrace.dispatcher.scheduler.loop.time.time", lambda: 100.0)
+    for expected_deadline in (105.0, 115.0, 160.0, 400.0, 400.0):
+        future: Future[str] = Future()
+        future.set_result("failed")
+        loop.futures[future] = RunningTask(
+            "proj_001", "explore", "worker", TaskCancellation(), intent_id="i001"
+        )
+        loop._reap_futures()
+        assert loop.task_retry_until[("proj_001", "explore", "i001")] == expected_deadline
+
+    assert loop._task_retry_blocked(("proj_001", "explore", "i001"), now=399.0)
+    assert not loop._task_retry_blocked(("proj_001", "explore", "i001"), now=400.0)
+
+
+def test_failed_explore_switches_to_different_worker_configuration() -> None:
+    loop = _loop()
+    worker = make_config().workers[0]
+    failed = worker.model_copy(update={"name": "failed", "priority": 0})
+    alternate = worker.model_copy(update={"name": "alternate", "priority": 1})
+    loop.config = make_config().model_copy(update={"workers": [failed, alternate]})
+    future: Future[str] = Future()
+    future.set_result("failed")
+    loop.futures[future] = RunningTask(
+        "proj_001", "explore", "failed", TaskCancellation(), intent_id="i001"
+    )
+
+    loop._reap_futures()
+    avoid_worker = loop.explore_retry_avoid[("proj_001", "i001")]
+    selection = loop._select_worker(
+        "proj_001", "explore", avoid_worker=avoid_worker
+    )
+
+    assert selection.worker is alternate
+    assert avoid_worker == "failed"
+
+
+def test_failed_explore_reuses_same_worker_when_no_other_is_idle() -> None:
+    worker = make_config().workers[0]
+    busy_alternate = worker.model_copy(update={"name": "busy"})
+
+    selection = select_worker(
+        [worker, busy_alternate],
+        {"busy": 1},
+        {},
+        {},
+        project_id="proj_001",
+        work_kind="explore",
+        now=0,
+        avoid_worker=worker.name,
+    )
+
+    assert selection.worker is worker
+
+
+def test_initial_enabled_project_dispatches_bootstrap_with_any_worker() -> None:
+    loop = _loop()
+    loop.config = make_config()
     loop.futures = {}
     project = make_project()
     project.facts = project.facts[:2]
@@ -206,7 +381,35 @@ def test_initial_enabled_project_without_bootstrap_worker_dispatches_reason() ->
     )
 
     assert loop._try_dispatch_project(_summary("proj_001", "active"))
-    assert dispatched == [("reason", "initial")]
+    assert dispatched == [("bootstrap", "")]
+
+
+def test_initial_project_without_bootstrap_worker_dispatches_reason() -> None:
+    loop = _loop()
+    config = make_config()
+    loop.config = config.model_copy(
+        update={
+            "workers": [
+                config.workers[0].model_copy(
+                    update={"task_types": ["reason", "explore"]}
+                )
+            ]
+        }
+    )
+    project = make_project()
+    project.facts = project.facts[:2]
+    loop.container_manager = SimpleNamespace(
+        container_name=lambda project_id: project_id
+    )
+    loop.client = SimpleNamespace(get_project=lambda _project_id: project)
+    dispatched: list[str] = []
+    loop._dispatch_initial_project = (
+        lambda _project: dispatched.append("bootstrap") or True
+    )
+    loop._dispatch_reason = lambda *_args: dispatched.append("reason") or True
+
+    assert loop._try_dispatch_project(_summary("proj_001", "active"))
+    assert dispatched == ["reason"]
 
 
 def test_initial_disabled_project_skips_configured_bootstrap_worker() -> None:
@@ -239,39 +442,21 @@ def test_initial_disabled_project_skips_configured_bootstrap_worker() -> None:
     assert dispatched == [("reason", "initial")]
 
 
-def test_initial_enabled_project_without_bootstrap_worker_skips_bootstrap() -> None:
+def test_initial_enabled_project_requires_bootstrap() -> None:
     loop = _loop()
-    config = make_config()
-    loop.config = config.model_copy(
-        update={
-            "workers": [
-                config.workers[0].model_copy(
-                    update={"task_types": ["reason", "explore"]}
-                )
-            ]
-        }
-    )
+    loop.config = make_config()
     project = make_project()
     project.project.bootstrap_enabled = True
     project.facts = project.facts[:2]
 
-    assert not loop._project_requires_bootstrap(project)
+    assert project_policy.requires_bootstrap(project)
 
 
 def test_initial_enabled_project_keeps_existing_bootstrap_intent_when_workers_change() -> (
     None
 ):
     loop = _loop()
-    config = make_config()
-    loop.config = config.model_copy(
-        update={
-            "workers": [
-                config.workers[0].model_copy(
-                    update={"task_types": ["reason", "explore"]}
-                )
-            ]
-        }
-    )
+    loop.config = make_config()
     project = make_project(intents=[make_intent()])
     project.project.bootstrap_enabled = True
     project.facts = project.facts[:2]
@@ -279,7 +464,7 @@ def test_initial_enabled_project_keeps_existing_bootstrap_intent_when_workers_ch
     project.intents[0].creator = "dispatcher.bootstrap"
     project.intents[0].from_ = ["origin"]
 
-    assert loop._project_requires_bootstrap(project)
+    assert project_policy.requires_bootstrap(project)
 
 
 def test_cancel_inactive_tasks_marks_stopped_and_deleted_projects() -> None:
@@ -325,23 +510,16 @@ def test_initialize_reason_checkpoint_only_for_active_projects_with_open_intents
     }
 
 
-def test_select_worker_reports_busy_unhealthy_rejected_and_unsupported_workers(
+def test_select_worker_reports_busy_unhealthy_and_rejected_workers(
     monkeypatch,
 ) -> None:
     loop = _loop()
     base = make_config()
-    busy = base.workers[0].model_copy(update={"name": "busy", "task_types": ["reason"]})
-    unhealthy = base.workers[0].model_copy(
-        update={"name": "unhealthy", "task_types": ["reason"]}
-    )
-    rejected = base.workers[0].model_copy(
-        update={"name": "rejected", "task_types": ["reason"]}
-    )
-    unsupported = base.workers[0].model_copy(
-        update={"name": "unsupported", "task_types": ["explore"]}
-    )
+    busy = base.workers[0].model_copy(update={"name": "busy"})
+    unhealthy = base.workers[0].model_copy(update={"name": "unhealthy"})
+    rejected = base.workers[0].model_copy(update={"name": "rejected"})
     loop.config = base.model_copy(
-        update={"workers": [busy, unhealthy, rejected, unsupported]}
+        update={"workers": [busy, unhealthy, rejected]}
     )
     loop.futures = {Future(): RunningTask("proj", "reason", "busy", TaskCancellation())}
     loop.worker_unhealthy_until = {"unhealthy": 110.0}
@@ -354,7 +532,6 @@ def test_select_worker_reports_busy_unhealthy_rejected_and_unsupported_workers(
     assert selection.blocked_busy == ["busy(1/1)"]
     assert selection.blocked_unhealthy == ["unhealthy(10.0s)"]
     assert selection.blocked_rejected == ["rejected(20.0s)"]
-    assert selection.blocked_task_type == ["unsupported"]
 
 
 def test_stable_summary_skips_project_detail_request() -> None:

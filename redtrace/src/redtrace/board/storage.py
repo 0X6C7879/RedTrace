@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
-from redtrace.server.models import Intent, ProjectMeta, ProjectReason
+from redtrace.board.models import Intent, ProjectMeta, ProjectReason
+
+PROJECT_ID_PREFIX = "proj_"
+
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -13,11 +16,13 @@ def utcnow() -> str:
 
 def next_project_id(conn: sqlite3.Connection) -> str:
     """Allocate the first available proj_XXX id, reusing numbers freed by deletions."""
-    rows = conn.execute("SELECT id FROM projects WHERE id LIKE 'proj_%'").fetchall()
+    rows = conn.execute(
+        "SELECT id FROM projects WHERE id LIKE ?", (f"{PROJECT_ID_PREFIX}%",)
+    ).fetchall()
     used: set[int] = set()
     for row in rows:
         try:
-            used.add(int(row["id"][5:]))
+            used.add(int(row["id"][len(PROJECT_ID_PREFIX) :]))
         except (ValueError, IndexError):
             continue
     candidate = 1
@@ -28,7 +33,7 @@ def next_project_id(conn: sqlite3.Connection) -> str:
         "UPDATE counters SET value = MAX(value, ?) WHERE name = 'project'",
         (candidate,),
     )
-    return f"proj_{candidate:03d}"
+    return f"{PROJECT_ID_PREFIX}{candidate:03d}"
 
 
 def _next_scoped_id(
@@ -84,7 +89,9 @@ def check_project_active(conn: sqlite3.Connection, project_id: str) -> sqlite3.R
     return row
 
 
-def check_project_hint_writable(conn: sqlite3.Connection, project_id: str) -> sqlite3.Row:
+def check_project_hint_writable(
+    conn: sqlite3.Connection, project_id: str
+) -> sqlite3.Row:
     row = get_project_or_404(conn, project_id)
     if row["status"] not in ("active", "stopped", "completed"):
         raise HTTPException(403, f"Project is {row['status']}")
@@ -112,6 +119,59 @@ def validate_facts_exist(
 def validate_goal_not_in_sources(fact_ids: list[str]) -> None:
     if "goal" in fact_ids:
         raise HTTPException(400, "goal cannot be used in from")
+
+
+def release_fact(
+    conn: sqlite3.Connection,
+    project_id: str,
+    fact_id: str,
+    *,
+    detach_references: bool = False,
+) -> bool:
+    if fact_id in {"origin", "goal"}:
+        raise HTTPException(409, f"{fact_id} cannot be released")
+    consumed = conn.execute(
+        "SELECT 1 FROM intent_sources WHERE project_id = ? AND fact_id = ? LIMIT 1",
+        (project_id, fact_id),
+    ).fetchone()
+    if consumed and not detach_references:
+        raise HTTPException(409, "Fact is still used by an Intent")
+    conn.execute(
+        "DELETE FROM intents WHERE project_id = ? AND to_fact_id = ?",
+        (project_id, fact_id),
+    )
+    if consumed:
+        conn.execute(
+            """
+            DELETE FROM intents
+            WHERE project_id = ? AND id IN (
+                SELECT intent_id FROM intent_sources
+                WHERE project_id = ? AND fact_id = ?
+                EXCEPT
+                SELECT intent_id FROM intent_sources
+                WHERE project_id = ? AND fact_id <> ?
+            )
+            """,
+            (project_id, project_id, fact_id, project_id, fact_id),
+        )
+        conn.execute(
+            "DELETE FROM intent_sources WHERE project_id = ? AND fact_id = ?",
+            (project_id, fact_id),
+        )
+    deleted = conn.execute(
+        "DELETE FROM facts WHERE project_id = ? AND id = ?",
+        (project_id, fact_id),
+    ).rowcount
+    if deleted:
+        conn.execute(
+            "UPDATE shared_resources SET fact_id = NULL WHERE project_id = ? AND fact_id = ?",
+            (project_id, fact_id),
+        )
+        conn.execute(
+            "UPDATE operation_tasks SET fact_id = NULL WHERE project_id = ? AND fact_id = ?",
+            (project_id, fact_id),
+        )
+    return bool(deleted)
 
 
 def validate_intent_creator_worker(creator: str, worker: str | None) -> None:
@@ -166,12 +226,14 @@ def get_releasable_open_intent_or_404(
         raise HTTPException(409, "Intent already concluded")
     if row["worker"] is None:
         return row
-    if row["worker"] != worker:
+    if worker != "admin" and row["worker"] != worker:
         raise HTTPException(409, f"Intent is currently claimed by {row['worker']}")
     return row
 
 
-def get_completion_intent_or_409(conn: sqlite3.Connection, project_id: str) -> sqlite3.Row:
+def get_completion_intent_or_409(
+    conn: sqlite3.Connection, project_id: str
+) -> sqlite3.Row:
     rows = conn.execute(
         "SELECT * FROM intents WHERE project_id = ? AND to_fact_id = 'goal'",
         (project_id,),
@@ -183,7 +245,9 @@ def get_completion_intent_or_409(conn: sqlite3.Connection, project_id: str) -> s
     return rows[0]
 
 
-def intent_to_model(conn: sqlite3.Connection, row: sqlite3.Row, project_id: str) -> Intent:
+def intent_to_model(
+    conn: sqlite3.Connection, row: sqlite3.Row, project_id: str
+) -> Intent:
     sources = conn.execute(
         "SELECT fact_id FROM intent_sources WHERE intent_id = ? AND project_id = ? ORDER BY rowid",
         (row["id"], project_id),
@@ -273,7 +337,9 @@ def expire_workers(conn: sqlite3.Connection, project_id: str | None = None) -> N
     conn.execute(query, params)
 
 
-def expire_reason_leases(conn: sqlite3.Connection, project_id: str | None = None) -> None:
+def expire_reason_leases(
+    conn: sqlite3.Connection, project_id: str | None = None
+) -> None:
     timeout = get_reason_timeout(conn)
     now = utcnow()
     query = """

@@ -50,7 +50,7 @@ additional query count, parse time, task duration, and peak harness memory.
 
 ## Configuration
 
-`context_harness` is a top-level `dispatch.yaml` section:
+`context_harness` is a top-level `redtrace.yaml` section:
 
 ```yaml
 context_harness:

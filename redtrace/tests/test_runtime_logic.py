@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-import threading
 
 from redtrace.dispatcher.config import ContainerConfig
-from redtrace.dispatcher.protocol.client import ApiResult
+from redtrace.dispatcher.control_plane import ApiResult
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
@@ -158,20 +158,23 @@ def test_container_mounts_project_conversations_and_native_agent_config(
 
     volumes = manager._shared_volumes("project-1")
 
-    conversations = paths.projects / "project-1" / "conversations"
+    workspace = paths.workspaces / "project-1"
+    conversations = workspace / ".redtrace" / "conversations"
+    assert volumes[str(workspace.resolve())] == {
+        "bind": "/home/kali/workspace",
+        "mode": "rw",
+    }
     assert volumes[str((conversations / "claudecode").resolve())]["bind"] == (
         "/home/kali/.claude"
     )
     assert volumes[str((conversations / "codex").resolve())]["bind"] == (
         "/home/kali/.codex"
     )
-    assert volumes[str((home / ".pi").resolve())]["bind"] == "/home/kali/.pi"
-    assert volumes[str((conversations / "pi").resolve())]["bind"] == (
-        "/home/kali/.pi/sessions"
-    )
+    assert volumes[str((conversations / "pi").resolve())]["bind"] == "/home/kali/.pi"
     assert volumes[str((home / ".claude" / "settings.json").resolve())]["bind"] == (
         "/home/kali/.claude/settings.json"
     )
+    assert volumes[str((home / ".claude" / "settings.json").resolve())]["mode"] == "ro"
     assert volumes[str((home / ".codex" / "config.toml").resolve())]["bind"] == (
         "/home/kali/.codex/config.toml"
     )

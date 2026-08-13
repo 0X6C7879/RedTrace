@@ -1,13 +1,14 @@
-# Default deployment: Windows WSL, Kali Linux, running as root. Workers directly invoke
+# Default local deployment: Windows WSL, Linux, or macOS. Workers directly invoke
 # the host claude / codex / pi CLIs without adding another agent sandbox.
 # A complete per-Worker Endpoint + API Key + Model override takes precedence for only that
 # process. If all three are omitted, the CLI's existing login and global config are used.
-# HOME and each CLI's user config directory are preserved in both cases.
+# Login/config inputs are copied into each task Workspace; runtime state never writes back
+# to the user's CLI directories.
 #
 # Usage:
-#   cp dispatch.local.example.yaml dispatch.yaml
+#   cp redtrace.local.example.yaml redtrace.yaml
 #   uv run --project redtrace redtrace serve                       # in one shell
-#   uv run --project redtrace redtrace dispatch --config dispatch.yaml
+#   uv run --project redtrace redtrace dispatch --config redtrace.yaml
 #
 # Notes:
 # - Do NOT run the dispatcher via docker-compose in local mode: it must run on the host
@@ -33,6 +34,8 @@ tasks:
     conclude_timeout: 300
   reason:
     timeout: 300
+    # Keep one ready Intent beyond the three active Worker slots.
+    max_intents: 4
   explore:
     timeout: 1800
     conclude_timeout: 300
@@ -46,7 +49,7 @@ context_harness:
   parse_bytes: 67108864
   worker_output_chars: 8388608
 
-# Optional. If omitted: workspace_root defaults to the dispatcher's current directory,
+# Optional. If omitted: workspace_root defaults to <paths.root>/workspaces,
 # completed_action defaults to keep. Each project gets an isolated <workspace_root>/<project_id>/.
 local:
   # workspace_root: "/data/redtrace-runs"

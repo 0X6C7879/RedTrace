@@ -2,12 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from redtrace.dispatcher.protocol.client import ApiResult
-from redtrace.dispatcher.runtime.cancellation import TaskCancellation
-from redtrace.dispatcher.runtime.process import ProcessResult
-from redtrace.dispatcher.workers.health import HealthResult
-from redtrace.dispatcher.tasks import bootstrap, explore, reason
-
 from conftest import (
     FakeClient,
     FakeContainerManager,
@@ -17,10 +11,24 @@ from conftest import (
     make_intent,
     make_project,
 )
+from redtrace.dispatcher.control_plane import ApiResult
+from redtrace.dispatcher.runtime.cancellation import TaskCancellation
+from redtrace.dispatcher.runtime.process import ProcessResult
+from redtrace.dispatcher.tasks import bootstrap, explore, reason
+from redtrace.dispatcher.workers.health import HealthResult
 
 
 def _lease_factory(lease: FakeLease):
     return lambda *_args, **_kwargs: lease
+
+
+def test_reason_keeps_one_ready_intent_within_configured_cap() -> None:
+    config = make_config()
+
+    assert reason._intent_target(config) == 2
+
+    config.tasks.reason.max_intents = 1
+    assert reason._intent_target(config) == 1
 
 
 def test_reason_writes_graph_snapshot_and_creates_intent(monkeypatch) -> None:
@@ -61,7 +69,7 @@ def test_reason_writes_graph_snapshot_and_creates_intent(monkeypatch) -> None:
     assert len(containers.writes) == 1
     container_name, path, content = containers.writes[0]
     assert container_name == "container-proj_001"
-    assert path.startswith("/tmp/redtrace-prompts/reason_execute-")
+    assert path.startswith("/home/kali/workspace/.redtrace/prompts/reason_execute-")
     assert path.endswith("/graph.yaml")
     assert content == graph_yaml
     assert graph_yaml not in driver.execute_prompts[0]
@@ -111,7 +119,7 @@ def test_reason_repairs_invalid_format_once(monkeypatch) -> None:
 
 def test_reason_only_fills_available_open_intent_slots(monkeypatch) -> None:
     config = make_config()
-    project = make_project(intents=[make_intent("i001"), make_intent("i002")])
+    project = make_project(intents=[make_intent("i001")])
     client = FakeClient(project)
     containers = FakeContainerManager()
     driver = FakeDriver()
@@ -377,6 +385,7 @@ def test_access_channel_fact_gets_registered_resource_id() -> None:
             return [
                 {
                     "id": "ws_123456789abc",
+                    "kind": "webshell",
                     "intent_id": "i001",
                     "worker": "Pi",
                 }
@@ -388,6 +397,27 @@ def test_access_channel_fact_gets_registered_resource_id() -> None:
 
     assert ok
     assert description.endswith("Shared Resource IDs: ws_123456789abc")
+
+
+def test_listener_id_does_not_satisfy_access_channel_gate() -> None:
+    class Client:
+        @staticmethod
+        def resource_snapshot(_project_id: str):
+            return [
+                {
+                    "id": "lis_123456789abc",
+                    "kind": "c2_listener",
+                    "intent_id": "i001",
+                    "worker": "Pi",
+                }
+            ]
+
+    description, ok = explore._attach_access_resource_ids(
+        Client(), "proj_001", "i001", "Pi", "reverse shell via lis_123456789abc"
+    )
+
+    assert not ok
+    assert description == "reverse shell via lis_123456789abc"
 
 
 def test_access_channel_fact_without_registered_resource_is_blocked() -> None:

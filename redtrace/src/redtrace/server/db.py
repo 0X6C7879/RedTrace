@@ -1,17 +1,28 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import shutil
 import sqlite3
+import tempfile
 import threading
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-DEFAULT_DB = Path.home() / ".local" / "share" / "redtrace" / "redtrace.db"
+from redtrace.paths import redtrace_root
+
+DEFAULT_DB = redtrace_root() / ".redtrace" / "redtrace.db"
+LEGACY_ROOT = Path.home() / ".local" / "share" / "redtrace"
 
 _db_path: Path | None = None
 _change_condition = threading.Condition()
 _change_generation = 0
+_blackboard_condition = threading.Condition()
+_blackboard_generation = 0
+_last_blackboard_revision = 0
 
 
 def current_change_generation() -> int:
@@ -37,6 +48,32 @@ def _publish_change() -> None:
     with _change_condition:
         _change_generation += 1
         _change_condition.notify_all()
+
+
+def current_blackboard_generation() -> int:
+    with _blackboard_condition:
+        return _blackboard_generation
+
+
+def wait_for_blackboard_change(after: int, timeout: float) -> int:
+    deadline = time.monotonic() + max(0.0, timeout)
+    with _blackboard_condition:
+        while after == _blackboard_generation:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            _blackboard_condition.wait(remaining)
+        return _blackboard_generation
+
+
+def _publish_blackboard_revision(revision: int) -> None:
+    global _blackboard_generation, _last_blackboard_revision
+    with _blackboard_condition:
+        if revision <= _last_blackboard_revision:
+            return
+        _last_blackboard_revision = revision
+        _blackboard_generation += 1
+        _blackboard_condition.notify_all()
 
 
 SCHEMA = """\
@@ -161,6 +198,27 @@ BEGIN
     VALUES (NEW.project_id, 'intent', NEW.id, 'added', NEW.created_at);
 END;
 
+CREATE TRIGGER IF NOT EXISTS trg_blackboard_intent_state_changed
+AFTER UPDATE OF worker, to_fact_id, concluded_at ON intents
+WHEN OLD.worker IS NOT NEW.worker
+  OR OLD.to_fact_id IS NOT NEW.to_fact_id
+  OR OLD.concluded_at IS NOT NEW.concluded_at
+BEGIN
+    INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
+    VALUES (
+        NEW.project_id,
+        'intent',
+        NEW.id,
+        CASE
+            WHEN NEW.concluded_at IS NOT NULL AND OLD.concluded_at IS NULL THEN 'concluded'
+            WHEN NEW.worker IS NOT NULL AND OLD.worker IS NULL THEN 'claimed'
+            WHEN NEW.worker IS NULL AND OLD.worker IS NOT NULL THEN 'released'
+            ELSE 'updated'
+        END,
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    );
+END;
+
 CREATE TRIGGER IF NOT EXISTS trg_blackboard_hint_added
 AFTER INSERT ON hints
 BEGIN
@@ -214,7 +272,7 @@ ON audit_events(run_id, run_sequence);
 
 CREATE TABLE IF NOT EXISTS shared_resources (
     id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
     kind TEXT NOT NULL,
     name TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'available',
@@ -255,7 +313,7 @@ ON shared_resources(parent_resource_id);
 
 CREATE TABLE IF NOT EXISTS operation_tasks (
     id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
     resource_id TEXT NOT NULL REFERENCES shared_resources(id) ON DELETE CASCADE,
     intent_id TEXT,
     fact_id TEXT,
@@ -287,7 +345,7 @@ ON operation_tasks(status, created_at);
 
 CREATE TABLE IF NOT EXISTS operation_results (
     id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
     task_id TEXT NOT NULL UNIQUE REFERENCES operation_tasks(id) ON DELETE CASCADE,
     content_type TEXT NOT NULL DEFAULT 'text/plain',
     content TEXT NOT NULL,
@@ -298,7 +356,7 @@ CREATE TABLE IF NOT EXISTS operation_results (
 
 CREATE TABLE IF NOT EXISTS resource_audit_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
     resource_id TEXT,
     task_id TEXT,
     actor_type TEXT NOT NULL,
@@ -347,21 +405,249 @@ END;
 
 
 def configure(path: Path) -> None:
-    global _db_path
+    global _db_path, _last_blackboard_revision
     if _db_path is not None:
         return
     _db_path = path
     _db_path.parent.mkdir(parents=True, exist_ok=True)
+    _migrate_legacy_storage(_db_path)
     conn = sqlite3.connect(str(_db_path))
+    conn.row_factory = sqlite3.Row
     try:
+        conn.execute("PRAGMA secure_delete=ON")
+        conn.execute("PRAGMA temp_store=MEMORY")
         conn.execute("PRAGMA journal_mode=WAL")
-    finally:
-        conn.close()
-    with get_conn() as conn:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("PRAGMA legacy_alter_table=ON")
         conn.executescript(SCHEMA)
+        _ensure_global_resource_schema(conn)
         conn.executescript(BLACKBOARD_DELETE_TRIGGERS)
         _ensure_project_columns(conn)
         _backfill_blackboard_events(conn)
+        conn.commit()
+        _last_blackboard_revision = int(
+            conn.execute(
+                "SELECT COALESCE(MAX(revision), 0) FROM blackboard_events"
+            ).fetchone()[0]
+        )
+    finally:
+        conn.close()
+
+
+def _migrate_legacy_storage(path: Path) -> None:
+    if (
+        path.resolve() != DEFAULT_DB.resolve()
+        or LEGACY_ROOT.resolve() == path.parent.resolve()
+    ):
+        return
+    legacy_db = LEGACY_ROOT / "redtrace.db"
+    if not path.exists() and legacy_db.is_file():
+        fd, temporary = tempfile.mkstemp(prefix=".redtrace-migrate-", dir=path.parent)
+        os.close(fd)
+        target = Path(temporary)
+        try:
+            source_conn = sqlite3.connect(f"file:{legacy_db}?mode=ro", uri=True)
+            target_conn = sqlite3.connect(str(target))
+            try:
+                source_conn.backup(target_conn)
+                target_conn.execute("PRAGMA secure_delete=ON")
+                target_conn.execute("PRAGMA temp_store=MEMORY")
+                target_conn.execute("VACUUM")
+                if target_conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise RuntimeError("migrated RedTrace database failed integrity check")
+            finally:
+                target_conn.close()
+                source_conn.close()
+            os.replace(target, path)
+            legacy_db.unlink()
+            for suffix in ("-wal", "-shm"):
+                legacy_db.with_name(legacy_db.name + suffix).unlink(missing_ok=True)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+    for source, destination in (
+        (LEGACY_ROOT / "audit", path.parent / "audit"),
+        (LEGACY_ROOT / "payloads", project_root() / "output" / "c2" / "payloads"),
+    ):
+        _move_tree_verified(source, destination)
+    (LEGACY_ROOT / ".DS_Store").unlink(missing_ok=True)
+    try:
+        LEGACY_ROOT.rmdir()
+    except OSError:
+        pass
+
+
+def _move_tree_verified(source: Path, destination: Path) -> None:
+    if not source.is_dir():
+        return
+    entries = list(source.rglob("*"))
+    unsafe = [path for path in entries if path.is_symlink() or not (path.is_file() or path.is_dir())]
+    if unsafe:
+        raise RuntimeError(f"legacy RedTrace migration contains unsupported entry: {unsafe[0]}")
+    files = [path for path in entries if path.is_file()]
+    for old in files:
+        new = destination / old.relative_to(source)
+        new.parent.mkdir(parents=True, exist_ok=True)
+        digest = _file_digest(old)
+        if new.exists():
+            if digest != _file_digest(new):
+                raise RuntimeError(f"legacy RedTrace migration collision: {new}")
+        else:
+            shutil.copy2(old, new)
+        if digest != _file_digest(new):
+            raise RuntimeError(f"legacy RedTrace migration verification failed: {old}")
+    shutil.rmtree(source)
+
+
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _needs_nullable_project(conn: sqlite3.Connection, table: str) -> bool:
+    columns = {row["name"]: row for row in conn.execute(f"PRAGMA table_info({table})")}
+    project = columns.get("project_id")
+    if project is None or bool(project["notnull"]):
+        return True
+    return any(
+        row["from"] == "project_id" and str(row["on_delete"]).upper() != "SET NULL"
+        for row in conn.execute(f"PRAGMA foreign_key_list({table})")
+    )
+
+
+def _ensure_global_resource_schema(conn: sqlite3.Connection) -> None:
+    """Detach durable resources and their audit trail from project lifecycle."""
+    if _needs_nullable_project(conn, "shared_resources"):
+        conn.executescript(
+            """
+            ALTER TABLE shared_resources RENAME TO shared_resources_project_scoped;
+            CREATE TABLE shared_resources (
+                id TEXT PRIMARY KEY,
+                project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+                kind TEXT NOT NULL,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'available',
+                target TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL DEFAULT '',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                secret_json TEXT NOT NULL DEFAULT '{}',
+                created_by_type TEXT NOT NULL DEFAULT 'human',
+                created_by TEXT NOT NULL,
+                worker TEXT,
+                intent_id TEXT,
+                fact_id TEXT,
+                parent_resource_id TEXT REFERENCES shared_resources(id) ON DELETE SET NULL,
+                source_task_id TEXT,
+                locked_by_type TEXT,
+                locked_by TEXT,
+                locked_at TEXT,
+                worker_paused INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_seen_at TEXT
+            );
+            INSERT INTO shared_resources SELECT * FROM shared_resources_project_scoped;
+            DROP TABLE shared_resources_project_scoped;
+            CREATE INDEX IF NOT EXISTS idx_shared_resources_project
+            ON shared_resources(project_id, kind, updated_at);
+            CREATE INDEX IF NOT EXISTS idx_shared_resources_parent
+            ON shared_resources(parent_resource_id);
+            """
+        )
+    if _needs_nullable_project(conn, "resource_audit_events"):
+        conn.executescript(
+            """
+            ALTER TABLE resource_audit_events RENAME TO resource_audit_events_project_scoped;
+            CREATE TABLE resource_audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+                resource_id TEXT,
+                task_id TEXT,
+                actor_type TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                action TEXT NOT NULL,
+                status TEXT NOT NULL,
+                detail_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+            INSERT INTO resource_audit_events SELECT * FROM resource_audit_events_project_scoped;
+            DROP TABLE resource_audit_events_project_scoped;
+            CREATE INDEX IF NOT EXISTS idx_resource_audit_project
+            ON resource_audit_events(project_id, id);
+            CREATE INDEX IF NOT EXISTS idx_resource_audit_resource
+            ON resource_audit_events(resource_id, id);
+            """
+        )
+
+    if _needs_nullable_project(conn, "operation_tasks") or _needs_nullable_project(conn, "operation_results"):
+        conn.executescript(
+            """
+            ALTER TABLE operation_results RENAME TO operation_results_project_scoped;
+            ALTER TABLE operation_tasks RENAME TO operation_tasks_project_scoped;
+            CREATE TABLE operation_tasks (
+                id TEXT PRIMARY KEY,
+                project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+                resource_id TEXT NOT NULL REFERENCES shared_resources(id) ON DELETE CASCADE,
+                intent_id TEXT,
+                fact_id TEXT,
+                action TEXT NOT NULL,
+                actor_type TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                risk TEXT NOT NULL DEFAULT 'low',
+                status TEXT NOT NULL DEFAULT 'queued',
+                input_json TEXT NOT NULL DEFAULT '{}',
+                output_summary TEXT NOT NULL DEFAULT '',
+                result_ref TEXT,
+                requires_approval INTEGER NOT NULL DEFAULT 0,
+                approved_by TEXT,
+                approved_at TEXT,
+                cancel_requested INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT
+            );
+            INSERT INTO operation_tasks SELECT * FROM operation_tasks_project_scoped;
+            CREATE TABLE operation_results (
+                id TEXT PRIMARY KEY,
+                project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+                task_id TEXT NOT NULL UNIQUE REFERENCES operation_tasks(id) ON DELETE CASCADE,
+                content_type TEXT NOT NULL DEFAULT 'text/plain',
+                content TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            INSERT INTO operation_results SELECT * FROM operation_results_project_scoped;
+            DROP TABLE operation_results_project_scoped;
+            DROP TABLE operation_tasks_project_scoped;
+            CREATE INDEX IF NOT EXISTS idx_operation_tasks_project
+            ON operation_tasks(project_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_operation_tasks_resource
+            ON operation_tasks(resource_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_operation_tasks_status
+            ON operation_tasks(status, created_at);
+            """
+        )
+
+    # Preserve provenance before a legacy source project can later be deleted.
+    # New writes already include this value in metadata_json.
+    for row in conn.execute(
+        "SELECT id, project_id, metadata_json FROM shared_resources WHERE project_id IS NOT NULL"
+    ):
+        try:
+            metadata = json.loads(row["metadata_json"] or "{}")
+        except (TypeError, ValueError):
+            metadata = {}
+        if metadata.get("source_project_id"):
+            continue
+        metadata["source_project_id"] = row["project_id"]
+        conn.execute(
+            "UPDATE shared_resources SET metadata_json = ? WHERE id = ?",
+            (json.dumps(metadata, ensure_ascii=False), row["id"]),
+        )
 
 
 def _ensure_project_columns(conn: sqlite3.Connection) -> None:
@@ -432,6 +718,8 @@ def get_conn(*, immediate: bool = False) -> Generator[sqlite3.Connection, None, 
     conn = sqlite3.connect(str(_db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA secure_delete=ON")
+    conn.execute("PRAGMA temp_store=MEMORY")
     if immediate:
         conn.execute("BEGIN IMMEDIATE")
     changes_before = conn.total_changes
@@ -440,8 +728,42 @@ def get_conn(*, immediate: bool = False) -> Generator[sqlite3.Connection, None, 
         conn.commit()
         if conn.total_changes != changes_before:
             _publish_change()
+            latest_blackboard_revision = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(revision), 0) FROM blackboard_events"
+                ).fetchone()[0]
+            )
+            _publish_blackboard_revision(latest_blackboard_revision)
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+def project_root() -> Path:
+    """Resolve the root that owns the configured database and output tree."""
+    path = (_db_path or DEFAULT_DB).resolve()
+    return path.parent.parent if path.parent.name == ".redtrace" else path.parent
+
+
+def output_root(category: str) -> Path:
+    if category not in {"webshell", "c2"}:
+        raise ValueError(f"unsupported output category: {category}")
+    root = project_root() / "output" / category
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def compact() -> None:
+    """Physically release deleted task pages without using the system temp dir."""
+    assert _db_path is not None
+    conn = sqlite3.connect(str(_db_path), timeout=30)
+    try:
+        conn.execute("PRAGMA secure_delete=ON")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("VACUUM")
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     finally:
         conn.close()

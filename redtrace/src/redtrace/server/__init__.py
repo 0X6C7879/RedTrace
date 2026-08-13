@@ -1,1 +1,1 @@
-"""RedTrace API server package."""
+"""FastAPI transport and persistence bootstrap for the RedTrace control plane."""

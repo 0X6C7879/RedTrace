@@ -5,6 +5,8 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_DIR="$SCRIPT_DIR/redtrace"
 CONFIG_PATH="$SCRIPT_DIR/redtrace.yaml"
+DATA_DIR="$SCRIPT_DIR/.redtrace"
+DB_PATH="$DATA_DIR/redtrace.db"
 HOST="${REDTRACE_HOST:-127.0.0.1}"
 PORT="${REDTRACE_PORT:-8000}"
 START_TIMEOUT="${REDTRACE_START_TIMEOUT:-40}"
@@ -22,7 +24,7 @@ Usage: ./start-redtrace.sh [options]
 Start the RedTrace Server and Dispatcher together.
 
 Options:
-  --config PATH   Dispatcher config (default: ./redtrace.yaml)
+  --config PATH   Runtime config (default: ./redtrace.yaml)
   --host HOST     Server bind host (default: 127.0.0.1)
   --port PORT     Server bind port (default: 8000)
   -h, --help      Show this help
@@ -32,6 +34,7 @@ Environment:
   REDTRACE_PORT
   REDTRACE_START_TIMEOUT
   REDTRACE_SHUTDOWN_TIMEOUT
+  REDTRACE_PYTHON            Healthy Python >= 3.12 used to repair a broken .venv
 
 Press Ctrl+C to stop the components started by this script.
 If a healthy Server is already listening, the script starts only the Dispatcher
@@ -49,6 +52,51 @@ is_positive_integer() {
     ''|*[!0-9]*|0) return 1 ;;
     *) return 0 ;;
   esac
+}
+
+python_is_healthy() {
+  local interpreter="$1"
+  local identity
+
+  [[ -x "$interpreter" ]] || return 1
+  identity="$("$interpreter" -c 'import sys; print(f"redtrace-python:{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)" || return 1
+  case "$identity" in
+    redtrace-python:3.1[2-9]|redtrace-python:3.[2-9][0-9]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+find_healthy_python() {
+  local requested="${REDTRACE_PYTHON:-}"
+  local name
+  local candidate
+
+  if [[ -n "$requested" ]]; then
+    python_is_healthy "$requested" || die "REDTRACE_PYTHON is not a working Python >= 3.12: $requested"
+    printf '%s\n' "$requested"
+    return 0
+  fi
+  for name in python3.13 python3.12 python3; do
+    candidate="$(command -v "$name" 2>/dev/null || true)"
+    if [[ -n "$candidate" ]] && python_is_healthy "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ensure_project_environment() {
+  local environment="$PROJECT_DIR/.venv"
+  local project_python="$environment/bin/python3"
+  local healthy_python
+
+  [[ -d "$environment" ]] || return 0
+  python_is_healthy "$project_python" && return 0
+  healthy_python="$(find_healthy_python)" || die "project .venv is broken and no healthy Python >= 3.12 was found"
+  printf 'RedTrace project Python environment is damaged; rebuilding it with %s ...\n' "$healthy_python"
+  uv venv --clear --python "$healthy_python" "$environment" >/dev/null
+  python_is_healthy "$project_python" || die "project .venv rebuild did not produce a working Python"
 }
 
 absolute_file_path() {
@@ -176,6 +224,12 @@ is_positive_integer "$START_TIMEOUT" || die "REDTRACE_START_TIMEOUT must be a po
 is_positive_integer "$SHUTDOWN_TIMEOUT" || die "REDTRACE_SHUTDOWN_TIMEOUT must be a positive integer"
 
 CONFIG_PATH="$(absolute_file_path "$CONFIG_PATH")"
+mkdir -p "$DATA_DIR/tmp" "$SCRIPT_DIR/output/webshell" "$SCRIPT_DIR/output/c2"
+export REDTRACE_ROOT="$SCRIPT_DIR"
+export TMPDIR="$DATA_DIR/tmp"
+export TMP="$TMPDIR"
+export TEMP="$TMPDIR"
+ensure_project_environment
 trap cleanup EXIT
 trap 'handle_signal 130' INT
 trap 'handle_signal 143' TERM
@@ -186,7 +240,7 @@ if server_is_ready; then
 else
   printf 'Starting RedTrace Server at http://%s:%s ...\n' "$HOST" "$PORT"
   REDTRACE_DISPATCH_CONFIG="$CONFIG_PATH" \
-    uv run --project "$PROJECT_DIR" redtrace serve --host "$HOST" --port "$PORT" &
+    uv run --project "$PROJECT_DIR" redtrace serve --db-path "$DB_PATH" --host "$HOST" --port "$PORT" &
   SERVER_PID=$!
   OWNS_SERVER=1
 

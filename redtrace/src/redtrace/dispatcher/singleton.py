@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import os
-import tempfile
 from pathlib import Path
 from types import TracebackType
+
+from redtrace.paths import redtrace_root
 
 
 class DispatcherAlreadyRunning(RuntimeError):
@@ -14,10 +15,11 @@ class DispatcherAlreadyRunning(RuntimeError):
 class DispatcherInstanceLock:
     """Cross-platform process lock scoped to one RedTrace server."""
 
-    def __init__(self, server: str):
+    def __init__(self, server: str, lock_root: Path | None = None):
         self.server = server.rstrip("/")
         digest = hashlib.sha256(self.server.encode("utf-8")).hexdigest()[:20]
-        self.path = Path(tempfile.gettempdir()) / "redtrace-dispatch" / f"{digest}.lock"
+        root = lock_root or redtrace_root() / ".redtrace" / "runtime" / "locks"
+        self.path = root / f"{digest}.lock"
         self._handle = None
 
     def acquire(self) -> DispatcherInstanceLock:

@@ -11,9 +11,10 @@
 <script src="/static/vendor/dagre.min.js"></script>
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/vendor/cytoscape-dagre.js"></script>
-<script defer src="/static/audit.js?v=20260810-performance-1"></script>
+<script defer src="/static/audit.js?v=20260813-infinite-scroll-1"></script>
 <script defer src="/static/capabilities.js?v=20260811-unified-entries-1"></script>
-<script defer src="/static/operations.js?v=20260810-performance-1"></script>
+<!-- Previous cache key: operations.js?v=20260810-performance-1 -->
+<script defer src="/static/operations.js?v=20260813-payload-library-1"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
 <style>
   [x-cloak] { display: none !important; }
@@ -239,7 +240,7 @@
     }
   }
 </script>
-<link rel="stylesheet" href="/static/redtrace-theme.css?v=20260810-log-cards-3">
+<link rel="stylesheet" href="/static/redtrace-theme.css?v=20260813-payload-library-1">
 </head>
 <body class="bg-slate-50 text-slate-800 h-screen overflow-hidden" :class="{ 'select-none cursor-col-resize': isResizingPanel }" x-data="redtraceApp()">
 <div class="app-shell flex h-full min-h-0" :class="{ 'app-shell-operations': appPage === 'webshell' || appPage === 'plugins' || appPage.startsWith('c2-') }">
@@ -280,6 +281,7 @@
           <button type="button" @click="setAppPage('c2-payloads')" class="app-subnav-item" :class="{ 'app-subnav-item-active': appPage === 'c2-payloads' }">Payload</button>
           <button type="button" @click="setAppPage('c2-events')" class="app-subnav-item" :class="{ 'app-subnav-item-active': appPage === 'c2-events' }">事件</button>
           <button type="button" @click="setAppPage('c2-profiles')" class="app-subnav-item" :class="{ 'app-subnav-item-active': appPage === 'c2-profiles' }">流量伪装</button>
+          <button type="button" @click="setAppPage('c2-credentials')" class="app-subnav-item" :class="{ 'app-subnav-item-active': appPage === 'c2-credentials' }">凭证</button>
         </div>
       </div>
       <button type="button" @click="setAppPage('plugins')" aria-label="插件" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'plugins' }">
@@ -576,19 +578,12 @@
           <button @click="openCreateIntent()" :disabled="!canActOnSelectedFacts()"
             class="px-3 py-1.5 bg-white/90 backdrop-blur border border-brand-200 text-brand-600 rounded-lg shadow-sm text-xs font-medium hover:bg-brand-50 transition disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
-            Intent
+            探索
           </button>
           <button @click="openCompleteProject()" :disabled="!canActOnSelectedFacts()"
             class="px-3 py-1.5 bg-white/90 backdrop-blur border border-teal-200 text-teal-600 rounded-lg shadow-sm text-xs font-medium hover:bg-teal-50 transition disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
-            Complete
-          </button>
-        </div>
-        <div class="flex gap-1.5" x-show="projectCanWriteHints()">
-          <button @click="openHintModal()"
-            class="px-3 py-1.5 bg-white/90 backdrop-blur border border-amber-200 text-amber-600 rounded-lg shadow-sm text-xs font-medium hover:bg-amber-50 transition flex items-center gap-1">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 1 1 7.072 0l-.548.547A3.374 3.374 0 0 0 14 18.469V19a2 2 0 1 1-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547Z"/></svg>
-            Hint
+            完成
           </button>
         </div>
         <div class="flex gap-1.5" x-show="projectIsActive()">
@@ -597,15 +592,15 @@
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 12h3.5l2.75-6 3.5 12 2.75-7H21"/></svg>
             <span x-text="selectedIntentPrimaryActionLabel()"></span>
           </button>
-          <button @click="releaseSelectedIntent()" :disabled="!selectedReleasableOpenIntentRecord()"
+          <button @click="releaseSelectedGraphNode()" :disabled="!selectedReleasableOpenIntentRecord() && !selectedReleasableFactId()"
             class="px-3 py-1.5 bg-white/90 backdrop-blur border border-amber-200 text-amber-700 rounded-lg shadow-sm text-xs font-medium hover:bg-amber-50 transition disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 10V7.75A3.75 3.75 0 1 1 16.5 7"/><path d="M7.5 10.5h9A1.5 1.5 0 0 1 18 12v6A1.5 1.5 0 0 1 16.5 19.5h-9A1.5 1.5 0 0 1 6 18v-6A1.5 1.5 0 0 1 7.5 10.5Z"/><path d="M12 14.25v1.5"/></svg>
-            Release
+            释放
           </button>
-          <button @click="selectedActionableOpenIntentRecord() && openConclude(selectedActionableOpenIntentRecord())" :disabled="!selectedActionableOpenIntentRecord()"
+          <button @click="selectedOpenIntentRecord() && openConclude(selectedOpenIntentRecord())" :disabled="!selectedOpenIntentRecord()"
             class="px-3 py-1.5 bg-white/90 backdrop-blur border border-teal-200 text-teal-600 rounded-lg shadow-sm text-xs font-medium hover:bg-teal-50 transition disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.25 3H7.5A2.25 2.25 0 0 0 5.25 5.25v13.5A2.25 2.25 0 0 0 7.5 21h9a2.25 2.25 0 0 0 2.25-2.25V8.25L14.25 3Z"/><path d="M14.25 3v5.25h4.5"/><path d="M9 13.5 10.875 15.375 15 11.25"/></svg>
-            Conclude
+            结论
           </button>
         </div>
       </div>
@@ -624,7 +619,7 @@
           :class="sideTab === 'detail' ? 'text-brand-600 border-b-2 border-brand-500' : 'text-slate-400 hover:text-slate-600'">详情</button>
         <button @click="sideTab = 'hints'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
           :class="sideTab === 'hints' ? 'text-brand-600 border-b-2 border-brand-500' : 'text-slate-400 hover:text-slate-600'">
-          Hints <span class="ml-0.5 text-[10px] opacity-60" x-text="project.hints.length"></span>
+          提示 <span class="ml-0.5 text-[10px] opacity-60" x-text="project.hints.length"></span>
         </button>
         <button @click="sideTab = 'log'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
           :class="sideTab === 'log' ? 'text-brand-600 border-b-2 border-brand-500' : 'text-slate-400 hover:text-slate-600'">日志</button>
@@ -650,7 +645,7 @@
                           'bg-teal-50 text-teal-700': fact.id === 'origin',
                           'bg-rose-50 text-rose-600': fact.id === 'goal',
                           'bg-brand-50 text-brand-700': fact.id !== 'origin' && fact.id !== 'goal'
-                        }" x-text="fact.id"></span>
+                        }" x-text="factDisplayId(fact.id)"></span>
                       <span class="text-[11px] text-slate-400 uppercase tracking-wider">Fact</span>
                     </div>
                     <button type="button" @click="removeFactSelection(fact.id)"
@@ -661,13 +656,13 @@
                   <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="fact.description"></p>
                   <div class="text-xs text-slate-400 space-y-1.5">
                     <template x-if="fact.id === 'origin'">
-                      <p>项目起点</p>
+                      <p>项目范围</p>
                     </template>
                     <template x-if="fact.id === 'goal'">
                       <p>项目目标</p>
                     </template>
                     <template x-if="fact.id !== 'origin' && fact.id !== 'goal' && getProducingIntent(fact.id)">
-                      <p x-text="`由 ${getProducingIntent(fact.id).id} 产出，源自 ${getProducingIntent(fact.id).from.join(', ')}`"></p>
+                      <p x-text="`由 ${getProducingIntent(fact.id).id} 产出，源自 ${factDisplayList(getProducingIntent(fact.id).from)}`"></p>
                     </template>
                   </div>
                 </div>
@@ -684,7 +679,7 @@
                     'bg-teal-50 text-teal-700': selectedFactId() === 'origin',
                     'bg-rose-50 text-rose-600': selectedFactId() === 'goal',
                     'bg-brand-50 text-brand-700': selectedFactId() !== 'origin' && selectedFactId() !== 'goal'
-                  }" x-text="selectedFactId()"></span>
+                  }" x-text="factDisplayId(selectedFactId())"></span>
                 <span class="text-[11px] text-slate-400 font-medium uppercase tracking-wider">Fact</span>
               </div>
             </div>
@@ -693,8 +688,8 @@
               <div class="space-y-3 text-xs">
                 <template x-if="selectedFactId() === 'origin'">
                   <div class="pt-4 border-t border-slate-100">
-                    <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-3">起点</p>
-                    <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">角色</span><span class="text-slate-600 text-right break-words">项目起点</span></div>
+                    <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-3">范围</p>
+                    <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">角色</span><span class="text-slate-600 text-right break-words">项目范围</span></div>
                   </div>
                 </template>
                 <template x-if="selectedFactId() === 'goal'">
@@ -714,7 +709,7 @@
                   <div class="pt-4 border-t border-slate-100 space-y-3">
                     <p class="text-[10px] font-semibold text-brand-500 uppercase tracking-widest">产出方</p>
                     <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Intent</span><span class="font-mono text-slate-600 text-right break-all" x-text="selectedFactProducingIntent().id"></span></div>
-                    <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">From</span><span class="font-mono text-slate-600 text-right break-all" x-text="selectedFactProducingIntent().from.join(', ')"></span></div>
+                    <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">From</span><span class="font-mono text-slate-600 text-right break-all" x-text="factDisplayList(selectedFactProducingIntent().from)"></span></div>
                     <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Creator</span><span class="text-slate-600 text-right break-all" x-text="selectedFactProducingIntent().creator"></span></div>
                     <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Worker</span><span class="text-slate-600 text-right break-all" x-text="selectedFactProducingIntent().worker || '—'"></span></div>
                     <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">完成时间</span><span class="text-slate-600 text-right break-words" x-text="formatTime(selectedFactProducingIntent().concluded_at || selectedFactProducingIntent().created_at)"></span></div>
@@ -735,7 +730,7 @@
             <div class="p-4 space-y-4">
               <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="selectedIntentRecord().description"></p>
               <div class="pt-4 border-t border-slate-100 space-y-3 text-xs">
-                <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">From</span><span class="font-mono text-slate-600 text-right break-all" x-text="selectedIntentRecord().from.join(', ')"></span></div>
+                <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">From</span><span class="font-mono text-slate-600 text-right break-all" x-text="factDisplayList(selectedIntentRecord().from)"></span></div>
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">To</span><span class="font-mono text-slate-600 text-right break-all" x-text="selectedIntentRecord().to || '—'"></span></div>
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Creator</span><span class="text-slate-600 text-right break-all" x-text="selectedIntentRecord().creator"></span></div>
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Worker</span><span class="text-slate-600 text-right break-all" x-text="selectedIntentRecord().worker || '—'"></span></div>
@@ -751,29 +746,34 @@
       </div>
 
       <!-- Hints -->
-      <div x-show="sideTab === 'hints'" class="flex-1 overflow-y-auto p-4 space-y-3 bg-amber-50/25">
-        <template x-if="project.hints.length === 0">
-          <div class="rounded-2xl border border-dashed border-amber-200 bg-white/80 px-5 py-10 text-center shadow-sm">
-            <p class="text-sm text-slate-300">暂无 Hint</p>
-          </div>
-        </template>
-        <template x-for="h in project.hints" :key="h.id">
-          <button type="button" @click="openHintTimelineEntry(h.id)"
-            class="hint-card w-full text-left rounded-2xl border border-amber-200/80 bg-white shadow-sm overflow-hidden transition hover:bg-amber-50/40">
-            <div class="hint-card-header px-4 py-3 border-b border-amber-100 bg-amber-50/80">
-              <div class="flex items-center justify-between gap-3 text-[11px]">
-                <div class="flex items-center gap-2 min-w-0">
-                  <span class="w-2 h-2 rounded-full bg-amber-400 shrink-0"></span>
-                  <span class="font-medium text-amber-800 truncate" x-text="h.creator"></span>
+      <div x-show="sideTab === 'hints'" class="relative flex-1 min-h-0 bg-amber-50/25">
+        <div class="h-full overflow-y-auto p-4 pb-20 space-y-3">
+          <template x-if="project.hints.length === 0">
+            <div class="rounded-2xl border border-dashed border-amber-200 bg-white/80 px-5 py-10 text-center shadow-sm">
+              <p class="text-sm text-slate-300">暂无提示</p>
+            </div>
+          </template>
+          <template x-for="h in project.hints" :key="h.id">
+            <button type="button" @click="openHintTimelineEntry(h.id)"
+              class="hint-card w-full text-left rounded-2xl border border-amber-200/80 bg-white shadow-sm overflow-hidden transition hover:bg-amber-50/40">
+              <div class="hint-card-header px-4 py-3 border-b border-amber-100 bg-amber-50/80">
+                <div class="flex items-center justify-between gap-3 text-[11px]">
+                  <div class="flex items-center gap-2 min-w-0">
+                    <span class="w-2 h-2 rounded-full bg-amber-400 shrink-0"></span>
+                    <span class="font-medium text-amber-800 truncate" x-text="h.creator"></span>
+                  </div>
+                  <span class="text-amber-600/80 shrink-0 tabular-nums" x-text="formatTime(h.created_at)"></span>
                 </div>
-                <span class="text-amber-600/80 shrink-0 tabular-nums" x-text="formatTime(h.created_at)"></span>
               </div>
-            </div>
-            <div class="hint-card-body p-4">
-              <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="h.content"></p>
-            </div>
-          </button>
-        </template>
+              <div class="hint-card-body p-4">
+                <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="h.content"></p>
+              </div>
+            </button>
+          </template>
+        </div>
+        <button x-show="projectCanWriteHints()" type="button" @click="openHintModal()"
+          class="hint-add-button absolute bottom-5 right-5 z-10 inline-flex h-11 w-11 items-center justify-center rounded-full border text-2xl font-light transition"
+          title="添加提示" aria-label="添加提示">+</button>
       </div>
 
       <!-- Log -->
@@ -848,12 +848,7 @@
         </div>
         <p class="operations-page-description mt-0.5 truncate text-[10px]" x-text="pageDescription()"></p>
       </div>
-      <select x-model="selectedProjectId" class="operations-field h-8 min-w-0 max-w-52 rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-600 outline-none" aria-label="选择项目">
-        <option value="">选择项目</option>
-        <template x-for="item in projects" :key="item.id">
-          <option :value="item.id" x-text="item.title || item.name || item.id"></option>
-        </template>
-      </select>
+      <div class="operations-field flex h-8 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600">全局资源中心</div>
       <div class="hidden items-center gap-3 border-l border-slate-200 pl-3 lg:flex">
         <div class="text-right"><div class="text-[10px] text-slate-400">可用资源</div><div class="text-xs font-semibold text-slate-700" x-text="`${availableResources()}/${filteredResources().length}`"></div></div>
         <div class="text-right"><div class="text-[10px] text-slate-400">执行中</div><div class="text-xs font-semibold text-slate-700" x-text="activeTasks()"></div></div>
@@ -865,6 +860,15 @@
       <button x-show="canCreateForPage()" type="button" @click="openCreate(defaultCreateKind())" :disabled="!projectId()" class="operations-primary-button operations-button inline-flex h-10 items-center gap-1.5 rounded-lg px-4 text-xs font-semibold text-white disabled:opacity-40">
         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span class="hidden sm:inline" x-text="createButtonLabel()"></span>
       </button>
+      <div x-show="pageMode === 'c2-payloads'" class="operations-payload-create" @click.outside="payloadMenuOpen = false">
+        <button type="button" @click="payloadMenuOpen = !payloadMenuOpen" :aria-expanded="payloadMenuOpen" class="operations-primary-button operations-payload-create-button">创建 Payload <span>⌄</span></button>
+        <div x-show="payloadMenuOpen" x-transition.opacity.duration.120ms class="operations-payload-menu" role="menu">
+          <button @click="openPayloadCreate('oneliner')"><strong>单行命令</strong><span>生成可直接执行的回连命令</span></button>
+          <button @click="openPayloadCreate('beacon')"><strong>编译 Beacon</strong><span>生成跨平台 Beacon 文件</span></button>
+          <button @click="openPayloadCreate('external')"><strong>外部 C2</strong><span>调用监听器 Adapter 生成</span></button>
+          <button @click="openPayloadCreate('upload')"><strong>上传文件</strong><span>登记人工已有的 Payload</span></button>
+        </div>
+      </div>
     </header>
 
     <div x-show="error" class="flex shrink-0 items-center gap-2 border-b border-red-100 bg-red-50 px-5 py-2 text-xs text-red-700">
@@ -873,38 +877,66 @@
       <button @click="error = ''" class="rounded p-1 hover:bg-red-100" aria-label="关闭错误">×</button>
     </div>
 
-    <div x-show="!projectId()" class="flex min-h-0 flex-1 items-center justify-center p-8 text-center">
-      <div>
-        <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-300 shadow-sm">
-          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M12 3v4m0 10v4M3 12h4m10 0h4"/><circle cx="12" cy="12" r="4"/></svg>
+    <div x-show="pageMode === 'c2-payloads'" class="operations-payload-page min-h-0 flex-1 overflow-y-auto">
+      <div class="operations-payload-library">
+        <div class="operations-payload-toolbar">
+          <div><strong>Payload 库</strong><span>可供人工和 Worker 复用的载荷证据</span></div>
+          <label><span class="sr-only">搜索 Payload</span><input x-model="query" placeholder="搜索名称、格式、目标或引用"></label>
         </div>
-        <p class="mt-4 text-sm font-medium text-slate-600">先选择一个 RedTrace 项目</p>
-        <p class="mt-1 text-xs text-slate-400">资源隔离在项目范围内，Worker 只能看到当前项目已授权的引用。</p>
+        <div class="operations-payload-summary">
+          <span><strong x-text="payloads().length"></strong>全部资产</span>
+          <span><strong x-text="availableResources()"></strong>Worker 可用</span>
+          <span><strong x-text="payloadFiles()"></strong>可下载文件</span>
+          <span><strong x-text="payloadCommands()"></strong>单行命令</span>
+          <span :class="{ 'is-busy': payloadBusy() }"><strong x-text="payloadBusy() ? 1 : 0"></strong>正在生成 / 校验</span>
+        </div>
+        <div class="operations-payload-table-head"><span>资产</span><span>格式 / 平台</span><span>监听器</span><span>来源</span><span>更新时间</span><span></span></div>
+        <div class="operations-payload-list">
+          <template x-for="item in payloads()" :key="item.id">
+            <article class="operations-payload-row" :class="{ 'is-selected': selectedResourceId === item.id }">
+              <div class="operations-payload-row-main" @click="selectResource(item.id)">
+                <div class="operations-payload-name"><span class="operations-payload-kind" x-text="item.metadata?.payload_type === 'command' ? 'CMD' : (item.metadata?.platform || 'FILE').slice(0, 4).toUpperCase()"></span><div><strong x-text="item.name"></strong><span class="font-mono" x-text="item.id"></span></div></div>
+                <span x-text="payloadFormat(item)"></span>
+                <span x-text="payloadListenerName(item)"></span>
+                <span x-text="payloadSourceLabel(item)"></span>
+                <span x-text="relativeTime(item.updated_at)"></span>
+                <button type="button" @click.stop="selectResource(item.id)" :aria-label="`展开 ${item.name}`" x-text="selectedResourceId === item.id ? '−' : '+'"></button>
+              </div>
+              <div x-show="selectedResourceId === item.id" x-transition.opacity.duration.120ms class="operations-payload-evidence">
+                <div><label>资产来源</label><p x-text="`${payloadSourceLabel(item)} · ${item.source_project_id || '全局资源池'}`"></p></div>
+                <div><label>绑定监听器</label><p x-text="payloadListenerName(item)"></p></div>
+                <div><label>证据校验</label><p class="font-mono" x-text="item.metadata?.sha256 ? `SHA-256 ${item.metadata.sha256}` : '来源已记录，未提供文件校验值'"></p></div>
+                <div class="operations-payload-actions">
+                  <a x-show="item.target" :href="item.target" download>下载</a>
+                  <button x-show="item.metadata?.command" @click="copyPayload(item)" x-text="payloadCopiedId === item.id ? '已复制' : '复制命令'"></button>
+                  <span>Worker 可用</span>
+                  <button class="is-danger" @click="removePayload(item)">删除</button>
+                </div>
+                <pre x-show="item.metadata?.command" x-text="item.metadata?.command"></pre>
+              </div>
+            </article>
+          </template>
+          <div x-show="initialized && payloads().length === 0" class="operations-payload-empty">还没有 Payload。可由 Worker 创建，也可从右上角生成或上传。</div>
+          <div x-show="payloadBusy()" class="operations-payload-progress"><span></span><div><strong>正在生成 / 校验</strong><p>完成后会自动进入 Payload 库并共享给 Worker。</p></div></div>
+        </div>
+      </div>
+
+      <div x-show="payloadDialogMode" x-transition.opacity.duration.120ms class="operations-payload-overlay" @keydown.escape.window="closePayloadCreate()">
+        <section class="operations-payload-dialog" role="dialog" aria-modal="true" :aria-label="createButtonLabel()" @click.outside="closePayloadCreate()">
+          <header><div><strong x-text="({oneliner:'生成单行命令', beacon:'编译 Beacon', external:'外部 C2 Payload', upload:'上传 Payload 文件'})[payloadDialogMode]"></strong><p>完成后自动留存为共享资产和审计证据</p></div><button @click="closePayloadCreate()" aria-label="关闭">×</button></header>
+          <div class="operations-payload-form">
+            <label x-show="payloadDialogMode !== 'upload' || c2Listeners().length">监听器<select x-model="payloadListenerId"><option value="">选择监听器</option><template x-for="listener in c2Listeners()" :key="listener.id"><option :value="listener.id" x-text="`${listener.name} · ${listener.target}`"></option></template></select></label>
+            <template x-if="payloadDialogMode === 'oneliner'"><div class="contents"><label>命令类型<select x-model="payloadKind"><option value="curl_beacon">Curl Beacon</option><option value="bash">Bash TCP</option><option value="python">Python</option><option value="powershell">PowerShell</option><option value="php">PHP</option><option value="perl">Perl</option><option value="ruby">Ruby</option><option value="node">Node.js</option><option value="nc">Netcat</option><option value="ncat">Ncat</option><option value="socat">Socat</option><option value="nc_bind">Netcat Bind</option><option value="powershell_bind">PowerShell Bind</option></select></label><label>回连地址（可选）<input x-model="payloadCallback" placeholder="留空使用监听器地址"></label></div></template>
+            <template x-if="payloadDialogMode === 'beacon'"><div class="contents"><label>回连地址（可选）<input x-model="payloadCallback" placeholder="https://c2.example.com:8443"></label><div class="grid grid-cols-2 gap-3"><label>目标系统<select x-model="payloadOs"><option value="linux">Linux</option><option value="windows">Windows</option><option value="darwin">macOS</option></select></label><label>架构<select x-model="payloadArch"><option value="amd64">AMD64</option><option value="arm64">ARM64</option><option value="386">386</option></select></label></div></div></template>
+            <template x-if="payloadDialogMode === 'external'"><div class="contents"><label>格式<input x-model="externalPayloadFormat" placeholder="windows/x64/reverse_https"></label><label>Adapter 参数 JSON<textarea x-model="externalPayloadOptions" rows="5"></textarea></label></div></template>
+            <template x-if="payloadDialogMode === 'upload'"><div class="contents"><label class="operations-payload-drop"><input type="file" @change="choosePayloadFile($event)"><strong x-text="payloadUploadFile?.name || '选择 Payload 文件'"></strong><span x-text="payloadUploadFile ? formatFileSize(payloadUploadFile.size) : '最大 64 MB；原始文件名和 SHA-256 会作为证据保留'"></span></label><label>资产名称<input x-model="payloadUploadName" placeholder="默认使用文件名"></label><div class="grid grid-cols-2 gap-3"><label>目标系统<select x-model="payloadOs"><option value="linux">Linux</option><option value="windows">Windows</option><option value="darwin">macOS</option></select></label><label>架构<select x-model="payloadArch"><option value="amd64">AMD64</option><option value="arm64">ARM64</option><option value="386">386</option></select></label></div><label>证据说明<textarea x-model="payloadUploadSummary" rows="3" placeholder="来源、用途或交接说明"></textarea></label></div></template>
+          </div>
+          <footer><button @click="closePayloadCreate()">取消</button><button x-show="payloadDialogMode === 'oneliner'" @click="generateOneliner()" :disabled="payloadGenerating || !payloadListenerId" x-text="payloadGenerating ? '生成中…' : '生成并保存'"></button><button x-show="payloadDialogMode === 'beacon'" @click="buildBeacon()" :disabled="payloadBuilding || !payloadListenerId" x-text="payloadBuilding ? '构建中…' : '构建并保存'"></button><button x-show="payloadDialogMode === 'external'" @click="buildExternalPayload()" :disabled="externalPayloadBuilding || !payloadListenerId" x-text="externalPayloadBuilding ? '生成中…' : '生成并保存'"></button><button x-show="payloadDialogMode === 'upload'" @click="uploadPayload()" :disabled="payloadUploadBusy || !payloadUploadFile" x-text="payloadUploadBusy ? '上传校验中…' : '上传并保存'"></button></footer>
+        </section>
       </div>
     </div>
 
-    <div x-show="projectId() && pageMode === 'c2-payloads'" class="operations-payload-page min-h-0 flex-1 overflow-y-auto p-6">
-      <div class="grid gap-7 xl:grid-cols-2">
-        <section class="operations-dark-card">
-          <div class="operations-card-title"><div><h2>单行 Payload</h2><p>快速生成目标机可直接执行的回连命令</p></div></div>
-          <label class="operations-form-label">监听器<select x-model="payloadListenerId" class="operations-dark-field"><option value="">选择监听器</option><template x-for="listener in c2Listeners()" :key="listener.id"><option :value="listener.id" x-text="`${listener.name} (${listener.metadata?.listener_type || 'http_beacon'} ${listener.target})`"></option></template></select></label>
-          <label class="operations-form-label">类型<select x-model="payloadKind" class="operations-dark-field"><option value="curl_beacon">Curl Beacon (HTTP)</option><option value="bash">Bash Reverse</option><option value="python">Python Reverse</option><option value="powershell">PowerShell Reverse</option></select></label>
-          <label class="operations-form-label">回连地址（可选）<input x-model="payloadCallback" class="operations-dark-field" placeholder="留空使用监听器回连地址"></label>
-          <button @click="generateOneliner()" class="operations-primary-button h-12 w-full rounded-lg text-sm font-semibold text-white">生成 Oneliner</button>
-          <div x-show="payloadOneliner" class="operations-generated-output"><pre x-text="payloadOneliner"></pre><button @click="navigator.clipboard.writeText(payloadOneliner)">复制</button></div>
-        </section>
-        <section class="operations-dark-card">
-          <div class="operations-card-title"><div><h2>编译 Beacon</h2><p>交叉编译多平台 Beacon 可执行文件</p></div></div>
-          <label class="operations-form-label">监听器<select x-model="payloadListenerId" class="operations-dark-field"><option value="">选择监听器</option><template x-for="listener in c2Listeners()" :key="listener.id"><option :value="listener.id" x-text="`${listener.name} (${listener.metadata?.listener_type || 'http_beacon'} ${listener.target})`"></option></template></select></label>
-          <label class="operations-form-label">回连地址（可选）<input x-model="payloadCallback" class="operations-dark-field" placeholder="https://c2.example.com:8443"></label>
-          <div class="grid grid-cols-2 gap-4"><label class="operations-form-label">目标系统<select x-model="payloadOs" class="operations-dark-field"><option value="linux">Linux</option><option value="windows">Windows</option><option value="darwin">macOS</option></select></label><label class="operations-form-label">目标架构<select x-model="payloadArch" class="operations-dark-field"><option value="amd64">AMD64</option><option value="arm64">ARM64</option><option value="386">386</option></select></label></div>
-          <button @click="buildBeacon()" :disabled="payloadBuilding || !payloadListenerId" class="operations-primary-button h-12 w-full rounded-lg text-sm font-semibold text-white disabled:opacity-40" x-text="payloadBuilding ? '正在构建…' : '构建 Beacon'"></button>
-          <a x-show="builtPayload" :href="builtPayload?.target" class="operations-download-result"><span x-text="builtPayload?.name"></span><strong>下载</strong></a>
-        </section>
-      </div>
-    </div>
-
-    <div x-show="projectId() && pageMode !== 'c2-payloads'" class="operations-grid" :class="{ 'operations-grid-webshell': pageMode === 'webshell' }">
+    <div x-show="pageMode !== 'c2-payloads'" class="operations-grid" :class="{ 'operations-grid-webshell': pageMode === 'webshell' }">
       <aside class="operations-resource-list flex min-h-0 flex-col border-r border-slate-200 bg-white">
         <div class="operations-list-heading shrink-0 p-4">
           <div class="mb-4 text-sm font-semibold" x-text="listLabel()"></div>
@@ -922,6 +954,7 @@
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-2"><span class="truncate text-xs font-semibold text-slate-700" x-text="item.name"></span><span x-show="item.locked" class="shrink-0 text-[9px] font-medium text-amber-600">已锁定</span></div>
                   <p class="mt-1 truncate text-[10px] text-slate-400" x-text="kindLabel(item.kind) + (item.target ? ` · ${item.target}` : '')"></p>
+                  <p class="mt-1 truncate text-[9px] text-slate-400" x-text="`来源 ${item.source_project_id || '全局'}${item.worker ? ` · ${item.worker}` : ''}${item.intent_id ? ` · ${item.intent_id}` : ''}`"></p>
                   <div class="mt-1.5 flex items-center gap-2 text-[9px] text-slate-400"><span class="font-mono" x-text="item.id"></span><span class="ml-auto" x-text="relativeTime(item.last_seen_at || item.updated_at)"></span></div>
                 </div>
               </div>
@@ -950,6 +983,7 @@
                     <span class="font-mono" x-text="currentResource().id"></span>
                     <span x-show="currentResource().fact_id" x-text="`黑板 ${currentResource().fact_id}`"></span>
                     <span x-show="currentResource().created_by" x-text="`${currentResource().created_by_type}: ${currentResource().created_by}`"></span>
+                    <span x-text="`来源 ${currentResource().source_project_id || '全局'}${currentResource().intent_id ? ` · ${currentResource().intent_id}` : ''}`"></span>
                   </div>
                 </div>
                 <div class="flex shrink-0 items-center gap-1.5">
@@ -1004,7 +1038,7 @@
                             <pre :class="{ 'is-error': item.failed }" x-text="item.output"></pre>
                           </div>
                         </template>
-                        <div x-show="terminalHistory.length === 0 && webshellUsable()" class="operations-terminal-welcome">共享终端已就绪。命令结果和审计记录对当前项目可见。</div>
+                        <div x-show="terminalHistory.length === 0 && webshellUsable()" class="operations-terminal-welcome">全局共享终端已就绪。命令结果保留当前任务来源并对所有任务可见。</div>
                         <div x-show="!webshellUsable()" class="operations-terminal-welcome text-red-300">当前 WebShell 不可用；请先重新探测连接。</div>
                         <form x-show="webshellUsable()" @submit.prevent="runCommand()" class="operations-terminal-input">
                           <span>(</span><span class="operations-prompt-user" x-text="terminalIdentity.user"></span><span>:</span><span class="operations-prompt-path" x-text="terminalIdentity.cwd"></span><span>) $</span>
@@ -1117,12 +1151,13 @@
                       <div><div class="text-[9px] uppercase tracking-wide text-slate-400">主机</div><div class="mt-1 truncate text-xs font-medium text-slate-600" x-text="currentResource().metadata?.hostname || currentResource().target"></div></div>
                       <div><div class="text-[9px] uppercase tracking-wide text-slate-400">身份</div><div class="mt-1 truncate text-xs font-medium text-slate-600" x-text="currentResource().metadata?.username || '未知'"></div></div>
                       <div><div class="text-[9px] uppercase tracking-wide text-slate-400">平台</div><div class="mt-1 truncate text-xs font-medium text-slate-600" x-text="[currentResource().metadata?.os, currentResource().metadata?.arch].filter(Boolean).join(' · ') || '未知'"></div></div>
+                      <div><div class="text-[9px] uppercase tracking-wide text-slate-400">Shell 类型</div><div class="mt-1 truncate text-xs font-medium text-slate-600" x-text="currentResource().metadata?.shell_type || currentResource().metadata?.connection_type || '未知'"></div></div>
                     </div>
                   </div>
                   <div class="operations-terminal mt-4 overflow-hidden rounded-2xl border border-slate-700">
-                    <div class="flex items-center border-b border-white/10 px-4 py-2.5 text-[10px] text-slate-400"><span>C2 共享任务队列</span><span class="ml-auto" x-text="relativeTime(currentResource().last_seen_at)"></span></div>
+                    <div class="flex items-center border-b border-white/10 px-4 py-2.5 text-[10px] text-slate-400"><span x-text="['beacon','agent'].includes(currentResource().metadata?.connection_type) ? 'C2 共享任务队列' : '交互 Shell'"></span><span class="ml-auto" x-text="relativeTime(currentResource().last_seen_at)"></span></div>
                     <div class="operations-terminal-output h-52 overflow-y-auto px-4 py-3 text-[11px] leading-5" x-text="terminalOutput"></div>
-                    <form @submit.prevent="runCommand()" class="flex items-center gap-2 border-t border-white/10 px-4 py-2.5"><span class="text-xs text-indigo-300">›</span><input x-model="command" placeholder="命令会由 Session 下次轮询领取" class="operations-command-input min-w-0 flex-1 bg-transparent font-mono text-xs text-slate-100 outline-none placeholder:text-slate-600"><button :disabled="!command.trim()" class="operations-button rounded-lg bg-indigo-500 px-3 py-1.5 text-[10px] font-semibold text-white disabled:opacity-40">入队</button></form>
+                    <form @submit.prevent="runCommand()" class="flex items-center gap-2 border-t border-white/10 px-4 py-2.5"><span class="text-xs text-indigo-300">›</span><input x-model="command" :placeholder="['beacon','agent'].includes(currentResource().metadata?.connection_type) ? '命令会由 Session 下次轮询领取' : '输入命令并执行'" class="operations-command-input min-w-0 flex-1 bg-transparent font-mono text-xs text-slate-100 outline-none placeholder:text-slate-600"><button :disabled="!command.trim()" x-text="['beacon','agent'].includes(currentResource().metadata?.connection_type) ? '入队' : '执行'" class="operations-button rounded-lg bg-indigo-500 px-3 py-1.5 text-[10px] font-semibold text-white disabled:opacity-40"></button></form>
                   </div>
                 </div>
               </template>
@@ -1142,8 +1177,9 @@
               <template x-if="!['webshell','c2_listener','c2_session','plugin'].includes(currentResource().kind)">
                 <div class="mt-4 rounded-2xl border border-slate-200 p-4">
                   <h3 class="text-xs font-semibold text-slate-700">资源引用</h3>
-                  <p class="mt-1 text-[10px] leading-relaxed text-slate-400">此类型只在项目内共享引用和必要摘要，不向 Worker 暴露服务端密钥。</p>
+                  <p class="mt-1 text-[10px] leading-relaxed text-slate-400" x-text="currentResource().kind === 'credential_ref' ? '凭证明文对人工操作和 Worker 共享。' : '此类型只共享引用和必要摘要。'"></p>
                   <pre class="operations-json mt-3 overflow-x-auto rounded-xl bg-slate-950 p-3 text-[10px] leading-5 text-slate-300" x-text="JSON.stringify(currentResource().metadata || {}, null, 2)"></pre>
+                  <pre x-show="currentResource().kind === 'credential_ref'" class="operations-json mt-3 overflow-x-auto rounded-xl bg-slate-950 p-3 text-[10px] leading-5 text-slate-300" x-text="JSON.stringify(currentResource().secret || {}, null, 2)"></pre>
                 </div>
               </template>
             </div>
@@ -1195,16 +1231,25 @@
           <label class="operations-form-label">命令参数名<input x-model="createForm.commandParam" placeholder="不填默认为 cmd；简单 PHP demo 使用 cmd" class="operations-dark-field"></label>
           <label class="operations-form-label">目标系统<select x-model="createForm.targetOs" class="operations-dark-field"><option value="auto">自动（按 Shell 类型推断）</option><option value="linux">Linux</option><option value="windows">Windows</option></select><span class="operations-form-hint">决定文件管理与上传使用 Linux 还是 Windows 命令。</span></label>
           <label class="operations-form-label">响应编码<select x-model="createForm.encoding" class="operations-dark-field"><option value="auto">自动检测</option><option value="utf-8">UTF-8</option><option value="gbk">GBK</option><option value="gb18030">GB18030</option></select></label>
-          <label class="operations-form-label">所属项目<div class="operations-dark-field flex items-center" x-text="projectName()"></div></label>
+          <label class="operations-form-label">来源任务<div class="operations-dark-field flex items-center" x-text="projectName()"></div><span class="operations-form-hint">仅记录来源；保存后所有任务都能复用。</span></label>
           <label class="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" x-model="createForm.verifyTls">校验 HTTPS 证书</label>
         </div>
 
         <div x-show="createForm.kind === 'c2_listener'" class="space-y-4">
-          <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">名称<input x-model="createForm.name" placeholder="例如 http-beacon-01" class="operations-dark-field"></label><label class="operations-form-label">类型<select x-model="createForm.listenerType" class="operations-dark-field"><option value="http_beacon">HTTP Beacon</option><option value="https_beacon">HTTPS Beacon</option><option value="tcp_reverse">TCP Reverse</option><option value="websocket">WebSocket</option></select></label></div>
-          <label class="operations-form-label">所属项目<div class="operations-dark-field flex items-center" x-text="projectName()"></div></label>
+          <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">名称<input x-model="createForm.name" placeholder="例如 http-beacon-01" class="operations-dark-field"></label><label class="operations-form-label">类型<select x-model="createForm.listenerType" class="operations-dark-field"><option value="http_beacon">HTTP Beacon</option><option value="https_beacon">HTTPS Beacon</option><option value="tcp_reverse">TCP Reverse Shell</option><option value="tcp_bind">TCP Bind Shell</option><option value="external_c2">外部 C2 Adapter（DNS / SMB / mTLS / WireGuard 等）</option></select><span class="operations-form-hint">按实际传输协议选择；不再按 MSF、Sliver、Cobalt Strike 等产品区分。</span></label></div>
           <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">绑定地址<input x-model="createForm.bindHost" class="operations-dark-field"><span class="operations-form-hint">使用 0.0.0.0 允许外部访问</span></label><label class="operations-form-label">绑定端口<input type="number" x-model="createForm.bindPort" placeholder="8443" class="operations-dark-field"></label></div>
           <label class="operations-form-label">Malleable Profile<select x-model="createForm.profileId" class="operations-dark-field"><option value="">不使用</option><template x-for="profile in c2Profiles()" :key="profile.id"><option :value="profile.id" x-text="profile.name"></option></template></select><span class="operations-form-hint">用于 HTTP/HTTPS Beacon 的 User-Agent、URI、Jitter 与响应头配置。</span></label>
           <label class="operations-form-label">回连地址<input x-model="createForm.callbackHost" placeholder="目标可访问的 IP 或域名" class="operations-dark-field"></label>
+          <label x-show="createForm.listenerType === 'tcp_bind'" class="operations-form-label">Bind Shell 目标<input x-model="createForm.targetHost" placeholder="目标主机 IP 或域名" class="operations-dark-field"><span class="operations-form-hint">RedTrace 主动连接目标上已打开的 Bind Shell。</span></label>
+          <div x-show="createForm.listenerType === 'external_c2'" class="space-y-4"><label class="operations-form-label">Adapter Endpoint<input x-model="createForm.endpoint" placeholder="http://adapter.internal:9000" class="operations-dark-field"><span class="operations-form-hint">统一实现 GET /sessions、POST /execute 和 POST /payloads；Worker 可同步并使用任意主流 C2 的原生会话。</span></label><label class="operations-form-label">Adapter Token<input type="password" x-model="createForm.token" autocomplete="new-password" class="operations-dark-field"></label></div>
+        </div>
+
+        <div x-show="createForm.kind === 'c2_session'" class="space-y-4">
+          <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">名称<input x-model="createForm.name" placeholder="例如 dc01-winrm" class="operations-dark-field"></label><label class="operations-form-label">直连类型<select x-model="createForm.shellType" class="operations-dark-field"><option value="ssh">SSH</option><option value="evil_winrm">Evil-WinRM</option><option value="psexec">PsExec</option><option value="wmi">WMI</option><option value="custom">自定义命令客户端</option></select></label></div>
+          <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">目标主机<input x-model="createForm.target" placeholder="IP 或域名" class="operations-dark-field"></label><label class="operations-form-label">端口<input type="number" x-model="createForm.sessionPort" :placeholder="createForm.shellType === 'ssh' ? '22' : (createForm.shellType === 'evil_winrm' ? '5985' : '可选')" class="operations-dark-field"></label></div>
+          <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">用户名<input x-model="createForm.sessionUsername" class="operations-dark-field"></label><label class="operations-form-label">域<input x-model="createForm.sessionDomain" class="operations-dark-field"></label></div>
+          <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">认证材料<select x-model="createForm.sessionSecretType" class="operations-dark-field"><option value="password">密码</option><option value="hash">NTLM Hash</option><option value="private_key_path">SSH 私钥路径</option></select></label><label class="operations-form-label">Secret<input type="text" x-model="createForm.sessionSecret" autocomplete="off" class="operations-dark-field"><span class="operations-form-hint">保存后可由人工终端和 Worker 复用。</span></label></div>
+          <label class="operations-form-label">摘要<textarea x-model="createForm.summary" rows="3" class="operations-dark-field"></textarea></label>
         </div>
 
         <div x-show="createForm.kind === 'c2_profile'" class="space-y-4">
@@ -1213,6 +1258,14 @@
           <label class="operations-form-label">Beacon URI（每行一个）<textarea x-model="createForm.beaconUris" rows="4" class="operations-dark-field min-h-24"></textarea></label>
           <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">Jitter 最小值 (ms)<input type="number" x-model="createForm.jitterMin" class="operations-dark-field"></label><label class="operations-form-label">Jitter 最大值 (ms)<input type="number" x-model="createForm.jitterMax" class="operations-dark-field"></label></div>
           <label class="operations-form-label">响应头 JSON<textarea x-model="createForm.responseHeaders" rows="3" class="operations-dark-field font-mono"></textarea></label>
+        </div>
+
+        <div x-show="createForm.kind === 'credential_ref'" class="space-y-4">
+          <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">名称<input x-model="createForm.name" placeholder="例如 DOMAIN\\alice" class="operations-dark-field"></label><label class="operations-form-label">类型<select x-model="createForm.credentialType" class="operations-dark-field"><option value="host">主机</option><option value="web">Web</option><option value="database">数据库</option><option value="active_directory">Active Directory</option><option value="cloud">云</option><option value="ssh_key">SSH Key</option><option value="token">Token</option><option value="certificate">证书</option><option value="hash">Hash</option><option value="ticket">Kerberos Ticket</option><option value="custom">自定义</option></select></label></div>
+          <label class="operations-form-label">目标 / 服务<input x-model="createForm.target" placeholder="host、URL、数据库或 SPN" class="operations-dark-field"></label>
+          <div class="grid gap-4 sm:grid-cols-2"><label class="operations-form-label">用户名<input x-model="createForm.credentialUsername" class="operations-dark-field"></label><label class="operations-form-label">域<input x-model="createForm.credentialDomain" class="operations-dark-field"></label></div>
+          <label class="operations-form-label">Secret<input type="text" x-model="createForm.credentialSecret" autocomplete="off" class="operations-dark-field"><span class="operations-form-hint">明文共享给人工操作和 Worker，并包含在资源列表、导出和 Worker snapshot 中。</span></label>
+          <label class="operations-form-label">摘要<textarea x-model="createForm.summary" rows="3" class="operations-dark-field"></textarea></label>
         </div>
 
         <div x-show="createForm.kind === 'plugin'" class="space-y-4">
@@ -1299,7 +1352,7 @@
         </div>
       </header>
 
-      <div x-ref="auditTimeline" class="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+      <div x-ref="auditTimeline" @scroll.passive="loadMoreOnScroll()" class="min-h-0 flex-1 overflow-y-auto px-5 py-5">
         <div x-show="loading" class="flex h-full items-center justify-center text-xs text-slate-400">正在载入审计上下文…</div>
         <div x-show="!loading && selectedTaskId && events.length === 0" class="flex h-full flex-col items-center justify-center text-center">
           <div class="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-400">
@@ -1309,9 +1362,6 @@
           <p class="mt-1 max-w-xs text-xs leading-relaxed text-slate-400">下一次 Claude Code、Codex 或 Pi 执行会实时出现在这里。</p>
         </div>
         <div class="mx-auto max-w-4xl space-y-4">
-          <button x-show="hasMoreEvents()" @click="loadMoreEvents()" type="button" class="mx-auto block rounded-lg border border-slate-200 bg-white px-4 py-1.5 text-[11px] text-slate-500 shadow-sm hover:bg-slate-50 hover:text-slate-700">
-            加载更早的日志
-          </button>
           <template x-for="event in visibleEvents()" :key="event.event_uid || event.id">
             <article x-show="eventVisible(event)" class="audit-event min-h-10">
               <time class="absolute left-0 top-0.5 w-16 text-right text-[10px] tabular-nums text-slate-400" x-text="formatTime(event.timestamp)"></time>
@@ -1607,7 +1657,6 @@
     <div class="flex flex-col items-start justify-between gap-4 sm:flex-row sm:gap-5">
       <div>
         <h1 class="text-xl font-semibold tracking-tight text-slate-800">Worker 配置</h1>
-        <p class="mt-1 max-w-2xl text-sm leading-6 text-slate-400">集中管理 Claude Code、Codex 与 Pi。保存前会校验网关连接，并同步到运行 RedTrace 的用户级 CLI 配置；本地与容器 Worker 共用该配置。</p>
       </div>
       <button type="button" @click="openWorkerEditor()" class="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl bg-slate-800 px-4 text-xs font-medium text-white shadow-sm transition hover:bg-slate-900">
         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
@@ -1626,7 +1675,6 @@
     <div x-show="workerConfigLoading && !workerConfig.workers.length" class="py-16 text-center text-sm text-slate-400">正在读取 Worker 配置…</div>
     <div x-show="!workerConfigLoading && !workerConfig.workers.length" class="mt-8 rounded-2xl border border-dashed border-slate-200 px-6 py-14 text-center">
       <div class="text-sm font-medium text-slate-600">尚未配置 Worker</div>
-      <p class="mt-1 text-xs text-slate-400">新增后，Dispatcher 会在下一个调度周期自动使用。</p>
     </div>
 
     <div class="mt-5 grid gap-3">
@@ -1673,7 +1721,7 @@
     <h3 class="text-base font-semibold text-slate-700 mb-4">新建项目</h3>
     <div class="space-y-3">
       <input x-model="newProject.title" placeholder="项目标题" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-100 focus:border-brand-400 transition placeholder:text-slate-300">
-      <textarea x-model="newProject.origin" placeholder="起点 — 已知信息" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-100 focus:border-brand-400 transition placeholder:text-slate-300"></textarea>
+      <textarea x-model="newProject.origin" placeholder="范围 — 已知信息" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-100 focus:border-brand-400 transition placeholder:text-slate-300"></textarea>
       <textarea x-model="newProject.goal" placeholder="目标 — 待达成" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-100 focus:border-brand-400 transition placeholder:text-slate-300"></textarea>
       <label class="flex items-center gap-2 px-1 text-sm text-slate-600">
         <input type="checkbox" x-model="newProject.bootstrap" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200">
@@ -1682,7 +1730,7 @@
 
       <div>
         <div class="flex items-center justify-between mb-2">
-          <span class="text-[11px] text-slate-400 font-medium uppercase tracking-wider">Hints（可选）</span>
+          <span class="text-[11px] text-slate-400 font-medium uppercase tracking-wider">提示（可选）</span>
           <button type="button" @click="newProject.hints.push({ content: '' })" class="text-[11px] text-brand-500 hover:text-brand-600 font-medium">+ 添加</button>
         </div>
         <template x-for="(hint, idx) in newProject.hints" :key="idx">
@@ -1710,7 +1758,7 @@
       <label class="text-[11px] text-slate-400 mb-1 block font-medium">From facts</label>
       <div class="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 min-h-[42px] flex flex-wrap gap-1.5 items-center">
         <template x-for="fid in selectedFacts" :key="`intent-from-${fid}`">
-          <span class="px-2 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-mono text-slate-600" x-text="fid"></span>
+          <span class="px-2 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-mono text-slate-600" x-text="factDisplayId(fid)"></span>
         </template>
       </div>
     </div>
@@ -1759,7 +1807,7 @@
         <label class="text-[11px] text-slate-400 mb-1 block font-medium">From facts</label>
         <div class="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 min-h-[42px] flex flex-wrap gap-1.5 items-center">
           <template x-for="fid in selectedFacts" :key="`complete-from-${fid}`">
-            <span class="px-2 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-mono text-slate-600" x-text="fid"></span>
+            <span class="px-2 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-mono text-slate-600" x-text="factDisplayId(fid)"></span>
           </template>
         </div>
       </div>
@@ -1779,9 +1827,9 @@
 <!-- Hint -->
 <div x-show="showHintModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center overlay" @click.self="showHintModal = false">
   <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 border border-slate-200/60" @click.stop>
-    <h3 class="text-base font-semibold text-slate-700 mb-4">添加 Hint</h3>
+    <h3 class="text-base font-semibold text-slate-700 mb-4">添加提示</h3>
     <div class="space-y-3">
-      <textarea x-model="hintForm.content" placeholder="策略建议或备注..." rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-100 focus:border-brand-400 transition placeholder:text-slate-300"></textarea>
+      <textarea x-model="hintForm.content" placeholder="策略建议或备注" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-100 focus:border-brand-400 transition placeholder:text-slate-300"></textarea>
       <div class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-500">
         Actor: <span class="font-medium text-slate-700" x-text="actorName()"></span>
       </div>
@@ -1834,7 +1882,7 @@
 <div x-show="showWorkerEditor" x-cloak class="fixed inset-0 z-50 flex items-center justify-center overlay px-4" @click.self="closeWorkerEditor()">
   <form @submit.prevent="saveWorker()" class="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-200/60 bg-white shadow-2xl" @click.stop>
     <div class="flex items-start justify-between border-b border-slate-100 px-6 py-5">
-      <div><h3 class="text-base font-semibold text-slate-700" x-text="workerEditingName ? '编辑 Worker' : '新增 Worker'"></h3><p class="mt-1 text-xs text-slate-400">保存会自动执行严格校验和一次连接测试。</p></div>
+      <h3 class="text-base font-semibold text-slate-700" x-text="workerEditingName ? '编辑 Worker' : '新增 Worker'"></h3>
       <button type="button" @click="closeWorkerEditor()" class="rounded-lg p-1.5 text-slate-300 transition hover:bg-slate-100 hover:text-slate-600" aria-label="关闭">
         <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
       </button>
@@ -1844,12 +1892,11 @@
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">Agent CLI</span><select x-model="workerForm.type" class="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><option value="claudecode">Claude Code</option><option value="codex">Codex</option><option value="pi">Pi</option></select></label>
       <label class="block sm:col-span-2"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">API 端点</span><input x-model.trim="workerForm.api_endpoint" type="url" autocomplete="off" placeholder="https://api.example.com/v1" class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">API Key</span><input x-model="workerForm.api_key" type="text" autocomplete="off" placeholder="输入 API Key" class="h-10 w-full rounded-xl border border-slate-200 px-3 font-mono text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><span class="mt-1.5 block text-[10px] text-slate-400">本地部署调试模式：当前密钥会以明文显示。</span></label>
-      <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">模型 ID</span><span class="flex items-center gap-2"><input x-model.trim="workerForm.model_id" maxlength="256" autocomplete="off" placeholder="模型标识" class="h-10 min-w-0 flex-1 rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><span class="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-600"><input type="checkbox" x-model="workerForm.context_1m" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span>1M</span></span></span><span class="mt-1.5 block text-[10px] text-slate-400">勾选后写入 context_length: 1048576。</span></label>
+      <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">模型 ID</span><span class="flex items-center gap-2"><input x-model.trim="workerForm.model_id" maxlength="256" autocomplete="off" placeholder="模型标识" class="h-10 min-w-0 flex-1 rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><span class="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-600"><input type="checkbox" x-model="workerForm.context_1m" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span>1M</span></span></span></label>
+      <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">优先级</span><input x-model.number="workerForm.priority" type="number" min="0" max="1000" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
+      <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">最大并发数</span><input x-model.number="workerForm.max_running" type="number" min="1" :max="workerConfig.runtime_max_workers || 1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
       <div class="sm:col-span-2"><span class="mb-2 block text-[11px] font-medium text-slate-500">任务类型</span><div class="flex flex-wrap gap-4"><template x-for="taskType in ['bootstrap','reason','explore']" :key="taskType"><label class="inline-flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" :value="taskType" x-model="workerForm.task_types" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span x-text="workerTaskLabel(taskType)"></span></label></template></div></div>
-      <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">优先级</span><input x-model.number="workerForm.priority" type="number" min="0" max="1000" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><span class="mt-1.5 block text-[10px] text-slate-400">数字越小优先级越高。</span></label>
-      <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">最大并发数</span><input x-model.number="workerForm.max_running" type="number" min="1" :max="workerConfig.runtime_max_workers || 1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><span class="mt-1.5 block text-[10px] text-slate-400" x-text="`全局上限 ${workerConfig.runtime_max_workers || 1}`"></span></label>
       <label class="inline-flex items-center gap-2 sm:col-span-2"><input type="checkbox" x-model="workerForm.enabled" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span class="text-xs text-slate-600">启用并允许接收新任务</span></label>
-      <p x-show="workerConfig.execution === 'local'" class="sm:col-span-2 rounded-xl bg-sky-50 px-3 py-2 text-[11px] leading-5 text-sky-700"><span>三项留空时使用主机上已有的 CLI 登录；三项均填写时测试网关，并同步模型配置到 </span><span class="break-all font-mono" x-text="workerNativeConfigPaths(workerForm.type).join(' · ')"></span><span>。</span></p>
       <div x-show="workerTestResult" class="sm:col-span-2 rounded-xl px-3 py-2 text-xs" :class="workerTestResult?.ok ? 'bg-teal-50 text-teal-700' : 'bg-rose-50 text-rose-700'"><span x-text="workerTestResult?.detail"></span><span x-show="workerTestResult?.duration_ms != null" class="ml-2 opacity-70" x-text="`${workerTestResult?.duration_ms} ms`"></span></div>
     </div>
     <div class="flex items-center justify-end gap-2 border-t border-slate-100 px-6 py-4">
@@ -1911,6 +1958,27 @@
   </div>
 </div>
 
+<!-- Shared destructive-action confirmation -->
+<div x-show="dangerConfirm.open" x-cloak class="fixed inset-0 z-[60] flex items-center justify-center p-4 overlay"
+  @click.self="settleDangerConfirm(false)" @keydown.escape.window="dangerConfirm.open && settleDangerConfirm(false)">
+  <section class="danger-confirm-modal snapshot-modal w-full max-w-md overflow-hidden border shadow-2xl" role="alertdialog" aria-modal="true" aria-labelledby="danger-confirm-title" aria-describedby="danger-confirm-description">
+    <div class="border-b border-slate-200/80 px-6 py-5">
+      <p class="text-[10px] font-semibold uppercase tracking-[0.18em]" :class="dangerConfirm.tone === 'warning' ? 'text-amber-500' : 'text-rose-500'" x-text="dangerConfirm.tone === 'warning' ? 'RELEASE NODE' : 'DANGER ZONE'"></p>
+      <h2 id="danger-confirm-title" class="mt-2 text-lg font-semibold text-slate-100" x-text="dangerConfirm.title"></h2>
+      <p id="danger-confirm-description" class="mt-2 text-xs leading-5 text-slate-400" x-text="dangerConfirm.description"></p>
+    </div>
+    <div class="px-6 py-5">
+      <p class="text-[10px] uppercase tracking-widest text-slate-500">操作对象</p>
+      <div class="mt-2 break-all rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2.5 font-mono text-xs text-slate-200" x-text="dangerConfirm.subject"></div>
+      <p class="mt-4 text-[11px] leading-5" :class="dangerConfirm.tone === 'warning' ? 'text-amber-500' : 'text-rose-500'" x-text="dangerConfirm.note"></p>
+    </div>
+    <div class="flex justify-end gap-3 border-t border-slate-200/80 px-6 py-4">
+      <button id="danger-confirm-cancel" type="button" @click="settleDangerConfirm(false)" class="operations-secondary-button h-9 px-4 text-xs font-medium">取消</button>
+      <button type="button" @click="settleDangerConfirm(true)" class="danger-confirm-action h-9 border px-5 text-xs font-semibold" :class="dangerConfirm.tone === 'warning' ? 'is-warning' : 'is-danger'" x-text="dangerConfirm.confirmLabel"></button>
+    </div>
+  </section>
+</div>
+
 <!-- Toast -->
 <div x-show="toast.show" x-cloak
   x-transition:enter="transition ease-out duration-300"
@@ -1955,8 +2023,10 @@ function redtraceApp() {
     exportTab: 'yaml',
     exportProjectId: '',
     showDeleteModal: false,
+    dangerConfirm: { open: false, tone: 'danger', title: '', description: '', subject: '', note: '', confirmLabel: '' },
+    _dangerConfirmResolve: null,
 
-    newProject: { title: '', origin: '', goal: '', bootstrap: true, hints: [{ content: '' }] },
+    newProject: { title: '', origin: '', goal: '', bootstrap: false, hints: [{ content: '' }] },
     intentForm: { description: '' },
     concludeForm: { description: '', intentId: '' },
     completeForm: { description: '' },
@@ -1970,7 +2040,7 @@ function redtraceApp() {
     workerSaveBusy: false,
     workerTestBusy: false,
     workerTestResult: null,
-    workerForm: { name: '', type: 'codex', enabled: true, api_endpoint: '', api_key: '', model_id: '', context_1m: false, task_types: ['explore'], priority: 0, max_running: 1 },
+    workerForm: { name: '', type: 'codex', enabled: true, api_endpoint: '', api_key: '', model_id: '', context_1m: false, task_types: ['bootstrap', 'reason', 'explore'], priority: 0, max_running: 1 },
     deleteConfirm: { id: '', title: '' },
     isDeletingProject: false,
     yamlPreviewTitle: '',
@@ -1995,6 +2065,7 @@ function redtraceApp() {
     isStoppingAllProjects: false,
 
     async init() {
+      window.redtraceConfirm = (options) => this.requestDangerConfirm(options);
       this._panelResizeMove = (e) => this.onPanelResize(e);
       this._panelResizeStop = () => this.stopPanelResize();
       window.addEventListener('pointermove', this._panelResizeMove);
@@ -2008,7 +2079,7 @@ function redtraceApp() {
 
     handleRoute() {
       const hash = location.hash || '#/';
-      const pageMatch = hash.match(/^#\/(logs|skills|mcp|webshell|plugins|c2-listeners|c2-sessions|c2-tasks|c2-payloads|c2-events|c2-profiles|settings)$/);
+      const pageMatch = hash.match(/^#\/(logs|skills|mcp|webshell|plugins|c2-listeners|c2-sessions|c2-tasks|c2-payloads|c2-events|c2-profiles|c2-credentials|settings)$/);
       if (pageMatch) {
         this.appPage = pageMatch[1];
         if (this.appPage === 'settings') this.loadWorkerConfig();
@@ -2027,7 +2098,7 @@ function redtraceApp() {
     },
 
     setAppPage(page) {
-      if (!['workspace', 'skills', 'mcp', 'webshell', 'plugins', 'c2-listeners', 'c2-sessions', 'c2-tasks', 'c2-payloads', 'c2-events', 'c2-profiles', 'logs', 'settings'].includes(page)) return;
+      if (!['workspace', 'skills', 'mcp', 'webshell', 'plugins', 'c2-listeners', 'c2-sessions', 'c2-tasks', 'c2-payloads', 'c2-events', 'c2-profiles', 'c2-credentials', 'logs', 'settings'].includes(page)) return;
       this.appPage = page;
       const nextHash = page === 'workspace'
         ? (this.selectedProjectId && this.view === 'graph' ? `/projects/${this.selectedProjectId}` : '/')
@@ -2148,7 +2219,7 @@ function redtraceApp() {
     },
 
     openIntentNodeLabel(intent) {
-      return this.isBootstrapIntent(intent) ? 'Bootstrap' : '?';
+      return this.isBootstrapIntent(intent) ? 'bootstrap' : '?';
     },
 
     openIntentNodeSize(intent) {
@@ -2469,16 +2540,16 @@ function redtraceApp() {
       return { claudecode: 'CC', codex: 'CX', pi: 'PI', mock: 'MK' }[type] || 'WK';
     },
 
-    workerTaskLabel(taskType) {
-      return { bootstrap: 'Bootstrap', reason: 'Reason', explore: 'Explore' }[taskType] || taskType;
-    },
-
     workerNativeConfigPaths(type) {
       const home = this.workerConfig.cli_config_home || '~';
       if (type === 'claudecode') return [`${home}/.claude/settings.json`];
       if (type === 'codex') return [`${home}/.codex/config.toml`, `${home}/.codex/auth.json`];
       if (type === 'pi') return [`${home}/.pi/agent/settings.json`, `${home}/.pi/agent/models.json`];
       return [];
+    },
+
+    workerTaskLabel(taskType) {
+      return { bootstrap: 'Bootstrap', reason: 'Reason', explore: 'Explore' }[taskType] || taskType;
     },
 
     openWorkerEditor(worker = null) {
@@ -2493,7 +2564,7 @@ function redtraceApp() {
         api_key: worker.api_key || '',
         model_id: worker.model_id || '',
         context_1m: Number(worker.context_length) === 1048576,
-        task_types: [...worker.task_types],
+        task_types: [...(worker.task_types || [])],
         priority: worker.priority,
         max_running: worker.max_running,
       } : {
@@ -2504,7 +2575,7 @@ function redtraceApp() {
         api_key: '',
         model_id: '',
         context_1m: false,
-        task_types: ['explore'],
+        task_types: ['bootstrap', 'reason', 'explore'],
         priority: 0,
         max_running: 1,
       };
@@ -2599,7 +2670,13 @@ function redtraceApp() {
     },
 
     async deleteWorker(worker) {
-      if (!confirm(`删除 Worker “${worker.name}”？运行中的任务会继续完成。`)) return;
+      if (!await this.requestDangerConfirm({
+        title: '删除 Worker',
+        description: 'Worker 配置会被移除，当前运行中的任务仍会继续完成。',
+        subject: worker.name,
+        note: '此操作不可撤销。',
+        confirmLabel: '删除 Worker',
+      })) return;
       this.workerActionBusy = worker.name;
       try {
         const revision = encodeURIComponent(this.workerConfig.revision);
@@ -3455,7 +3532,7 @@ function redtraceApp() {
     },
 
     summarizeFactLabel(fact) {
-      if (fact.id === 'origin') return 'Origin';
+      if (fact.id === 'origin') return 'scope';
       if (fact.id === 'goal') return 'Goal';
       const normalized = fact.description.replace(/\s+/g, ' ').trim();
       const chars = Array.from(normalized);
@@ -3833,15 +3910,26 @@ function redtraceApp() {
 
     selectedReleasableOpenIntentRecord() {
       const intent = this.selectedOpenIntentRecord();
-      if (!intent?.worker) return null;
-      return intent.worker === this.actorName() ? intent : null;
+      return intent?.worker ? intent : null;
+    },
+
+    selectedReleasableFactId() {
+      const factId = this.selectedFactId();
+      return this.selectedFacts.length === 1 && !['origin', 'goal'].includes(factId) ? factId : null;
     },
 
     selectedIntentPrimaryActionLabel() {
       const intent = this.selectedOpenIntentRecord();
-      if (!intent) return 'Claim';
-      if (!intent.worker) return 'Claim';
-      return intent.worker === this.actorName() ? 'Heartbeat' : 'Claimed';
+      if (!intent?.worker) return '认领';
+      return intent.worker === this.actorName() ? '心跳' : '已认领';
+    },
+
+    factDisplayId(factId) {
+      return factId === 'origin' ? 'scope' : factId;
+    },
+
+    factDisplayList(factIds) {
+      return (factIds || []).map(factId => this.factDisplayId(factId)).join(', ');
     },
 
     getFactRecord(fid) {
@@ -3860,7 +3948,7 @@ function redtraceApp() {
     },
     intentStatusLabel(i) {
       if (i.to) return 'Concluded';
-      if (this.isBootstrapIntent(i)) return i.worker ? 'Bootstrap Running' : 'Bootstrap Pending';
+      if (this.isBootstrapIntent(i)) return i.worker ? 'Bootstrap 运行中' : 'Bootstrap 待认领';
       return i.worker ? 'In Progress' : 'Unclaimed';
     },
 
@@ -4253,7 +4341,7 @@ function redtraceApp() {
         if (hints.length > 0) body.hints = hints;
         const data = await this.api('POST', '/projects', body);
         this.showNewProject = false;
-        this.newProject = { title:'', origin:'', goal:'', bootstrap: true, hints: [{ content:'' }] };
+        this.newProject = { title:'', origin:'', goal:'', bootstrap: false, hints: [{ content:'' }] };
         await this.loadProjects();
         await this.openProject(data.project.id);
         this.showToast('项目已创建');
@@ -4305,6 +4393,54 @@ function redtraceApp() {
         this.updateGraph();
         this.showToast('Intent 已释放');
       } catch(e) { this.showToast(e.message, 'error'); }
+    },
+
+    releaseSelectedGraphNode() {
+      return this.selectedReleasableFactId()
+        ? this.releaseSelectedFact()
+        : this.releaseSelectedIntent();
+    },
+
+    async releaseSelectedFact() {
+      const factId = this.selectedReleasableFactId();
+      const fact = this.selectedFactRecord();
+      if (!factId || !await this.requestDangerConfirm({
+        tone: 'warning',
+        title: '释放图谱节点',
+        description: '仅从工作台图谱移除此节点；对应的 WebShell、C2 或凭证资源仍会保留。',
+        subject: `${this.factDisplayId(factId)} · ${fact?.description || '无描述'}`,
+        note: '若节点仍被下游 Intent 使用，将不会执行释放。',
+        confirmLabel: '释放节点',
+      })) return;
+      try {
+        await this.api('DELETE', `/projects/${this.selectedProjectId}/blackboard/facts/${encodeURIComponent(factId)}`);
+        this.clearSelection();
+        await this.loadProject(this.selectedProjectId);
+        this.updateGraph();
+        this.showToast('节点已释放；对应资源仍保留');
+      } catch(e) { this.showToast(e.message, 'error'); }
+    },
+
+    requestDangerConfirm(options = {}) {
+      if (this._dangerConfirmResolve) this._dangerConfirmResolve(false);
+      this.dangerConfirm = {
+        open: true,
+        tone: options.tone === 'warning' ? 'warning' : 'danger',
+        title: options.title || '确认操作',
+        description: options.description || '',
+        subject: options.subject || '—',
+        note: options.note || '此操作不可撤销。',
+        confirmLabel: options.confirmLabel || '确认',
+      };
+      setTimeout(() => document.getElementById('danger-confirm-cancel')?.focus());
+      return new Promise(resolve => { this._dangerConfirmResolve = resolve; });
+    },
+
+    settleDangerConfirm(confirmed) {
+      const resolve = this._dangerConfirmResolve;
+      this._dangerConfirmResolve = null;
+      this.dangerConfirm.open = false;
+      if (resolve) resolve(Boolean(confirmed));
     },
 
     openConclude(intent) { this.concludeForm = { description:'', intentId: intent.id }; this.showConcludeModal = true; },

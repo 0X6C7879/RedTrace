@@ -21,7 +21,8 @@ def is_agent_runtime_state(worker_type: str, name: str) -> bool:
             "todos",
         }
     return (
-        name in {
+        name
+        in {
             "archived_sessions",
             "history.jsonl",
             "log",
@@ -60,6 +61,7 @@ class ExecutionBackend(Protocol):
         env: dict[str, str],
         command: list[str],
         stdin_text: str | None = None,
+        keep_stdin_open: bool = False,
         timeout_seconds: int | None = None,
         kill_after_seconds: int = 5,
     ) -> ExecProcess: ...

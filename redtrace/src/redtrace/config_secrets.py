@@ -14,8 +14,18 @@ SECRET_REF_PATTERN = re.compile(r"^\$\{REDTRACE_SECRET:([a-f0-9]{32})\}$")
 
 
 def resolve_dispatch_config_path(path: str | Path | None = None) -> Path:
-    configured = path or os.environ.get("REDTRACE_DISPATCH_CONFIG") or "dispatch.yaml"
-    return Path(configured).expanduser().resolve()
+    if path is not None:
+        return Path(path).expanduser().resolve()
+
+    configured = os.environ.get("REDTRACE_DISPATCH_CONFIG")
+    if not configured:
+        return Path("redtrace.yaml").resolve()
+
+    candidate = Path(configured).expanduser().resolve()
+    if candidate.exists() or candidate.name == "redtrace.yaml":
+        return candidate
+    standard = candidate.with_name("redtrace.yaml")
+    return standard if standard.is_file() else candidate
 
 
 def resolve_secrets_dir(config_path: Path) -> Path:

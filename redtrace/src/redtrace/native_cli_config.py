@@ -188,7 +188,7 @@ def _write_codex(home: Path, worker: WorkerConfig) -> None:
         'web_search = "live"',
         # Full reasoning strength for native Codex runs.
         'model_reasoning_effort = "high"',
-        'model_reasoning_summary = "always"',
+        'model_reasoning_summary = "detailed"',
         'custom_instructions = "请始终使用中文进行思考、分析和回答。"',
         *(
             [

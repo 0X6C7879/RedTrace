@@ -7,8 +7,20 @@ from fastapi.staticfiles import StaticFiles
 
 from redtrace import __version__
 from redtrace.server import db
-from redtrace.server.operations import resume_pending_tasks
-from redtrace.server.routers import audit, blackboard, capabilities, export, hints, intents, operations, plugins, projects, settings, workers
+from redtrace.server.operations import resume_c2_listeners, resume_pending_tasks, shell_broker
+from redtrace.server.routers import (
+    audit,
+    blackboard,
+    capabilities,
+    export,
+    hints,
+    intents,
+    operations,
+    plugins,
+    projects,
+    settings,
+    workers,
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -16,13 +28,19 @@ STATIC_DIR = Path(__file__).parent / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.configure(db.DEFAULT_DB)
+    db.output_root("webshell")
+    db.output_root("c2")
+    resume_c2_listeners()
     resume_pending_tasks()
-    yield
+    try:
+        yield
+    finally:
+        shell_broker.shutdown()
 
 
 app = FastAPI(
     title="RedTrace",
-    description="Fact-graph based collaborative exploration protocol",
+    description="Agent-driven security research orchestration and evidence graph runtime",
     version=__version__,
     lifespan=lifespan,
 )

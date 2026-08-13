@@ -8,11 +8,13 @@ import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from redtrace.paths import redtrace_root
+
 
 AUDIT_ROOT = Path(
     os.environ.get(
         "REDTRACE_AUDIT_ROOT",
-        Path.home() / ".local" / "share" / "redtrace" / "audit",
+        redtrace_root() / ".redtrace" / "audit",
     )
 ).expanduser().resolve()
 MAX_ARCHIVE_BYTES = 100 * 1024 * 1024

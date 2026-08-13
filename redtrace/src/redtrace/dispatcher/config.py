@@ -142,7 +142,7 @@ MOCK_ALLOWED_ENV_KEYS = frozenset(
 
 class ReasonTaskConfig(BaseModel):
     timeout: int = Field(gt=0)
-    max_intents: int = Field(gt=0, default=3)
+    max_intents: int = Field(gt=0, default=4)
 
 
 class ExploreTaskConfig(BaseModel):
@@ -253,7 +253,9 @@ class WorkerConfig(BaseModel):
     name: str
     type: WorkerType
     enabled: bool = True
-    task_types: list[TaskType]
+    task_types: list[TaskType] = Field(
+        default_factory=lambda: ["reason", "explore", "bootstrap"]
+    )
     max_running: int = Field(gt=0)
     priority: int = Field(ge=0)
     context_length: int | None = Field(default=None, gt=0)

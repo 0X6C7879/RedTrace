@@ -92,6 +92,36 @@ def test_normalize_provider_events() -> None:
     ]
 
 
+def test_pi_audit_records_session_file_and_final_message() -> None:
+    session = normalize_event(
+        "pi",
+        json.dumps(
+            {
+                "type": "response",
+                "command": "get_state",
+                "data": {"sessionId": "pi-1", "sessionFile": "/sessions/pi-1.jsonl"},
+            }
+        ),
+    )
+    message = normalize_event(
+        "pi",
+        json.dumps(
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '{"accepted":true}'}],
+                },
+            }
+        ),
+    )
+
+    assert session[0]["session_id"] == "pi-1"
+    assert session[0]["session_file"] == "/sessions/pi-1.jsonl"
+    assert message[0]["kind"] == "assistant.message"
+    assert message[0]["content"] == '{"accepted":true}'
+
+
 def test_codex_command_display_is_compact_and_repairs_mojibake() -> None:
     mojibake = "笛卡".encode("utf-8").decode("latin-1")
 
@@ -133,7 +163,6 @@ def test_claude_streamed_tool_arguments_become_a_command_event(tmp_path: Path) -
         {
             "name": "claude-1",
             "type": "claudecode",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -185,9 +214,7 @@ def test_claude_streamed_tool_arguments_become_a_command_event(tmp_path: Path) -
         for event in events
         if event["kind"].startswith("command.")
     ]
-    assert commands == [
-        ("command.started", "Shell", "echo 中文")
-    ]
+    assert commands == [("command.started", "Shell", "echo 中文")]
 
 
 def test_pi_shell_tool_events_match_codex_command_shape(tmp_path: Path) -> None:
@@ -196,7 +223,6 @@ def test_pi_shell_tool_events_match_codex_command_shape(tmp_path: Path) -> None:
         {
             "name": "pi-1",
             "type": "pi",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -253,7 +279,6 @@ def test_claude_skill_event_keeps_only_the_skill_name(tmp_path: Path) -> None:
         {
             "name": "claude-1",
             "type": "claudecode",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -334,7 +359,6 @@ def test_codex_skill_read_command_keeps_only_the_skill_name(tmp_path: Path) -> N
         {
             "name": "codex-1",
             "type": "codex",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -395,7 +419,6 @@ def test_pi_skill_read_keeps_only_the_skill_name(tmp_path: Path) -> None:
         {
             "name": "pi-1",
             "type": "pi",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -415,9 +438,7 @@ def test_pi_skill_read_keeps_only_the_skill_name(tmp_path: Path) -> None:
             "type": "tool_execution_start",
             "toolName": "read",
             "toolCallId": "skill-1",
-            "args": {
-                "path": "/workspace/.agents/skills/route-skills/SKILL.md"
-            },
+            "args": {"path": "/workspace/.agents/skills/route-skills/SKILL.md"},
         },
         {
             "type": "tool_execution_end",
@@ -516,17 +537,21 @@ def test_static_audit_hides_claude_skill_plugin_namespace() -> None:
     assert "replace(/^redtrace-capabilities:/, '')" in audit
     assert "['tool.started', 'tool.completed'].includes(event.kind)" in audit
     assert "(?:launching|loading)\\s+skill:" in audit
-    assert "/static/audit.js?v=20260810-performance-1" in index
+    assert "/static/audit.js?v=20260813-infinite-scroll-1" in index
 
 
 def test_static_audit_batches_frames_and_bounds_live_history() -> None:
     static_dir = Path(__file__).parents[1] / "src" / "redtrace" / "server" / "static"
+    index = (static_dir / "index.html").read_text(encoding="utf-8")
     audit = (static_dir / "audit.js").read_text(encoding="utf-8")
 
     assert "EVENT_BUFFER_LIMIT: 2000" in audit
     assert "requestAnimationFrame(() =>" in audit
     assert "this.trimEventBuffer()" in audit
     assert "this.events.splice(0, this.events.length - limit)" in audit
+    assert '@scroll.passive="loadMoreOnScroll()"' in index
+    assert "加载更早的日志" not in index
+    assert "scroller.scrollTop = previousTop + scroller.scrollHeight - previousHeight" in audit
 
 
 def test_successful_worker_stderr_is_not_rendered_as_worker_error(
@@ -550,7 +575,6 @@ def test_successful_worker_stderr_is_not_rendered_as_worker_error(
             {
                 "name": f"{provider}-1",
                 "type": provider,
-                "task_types": ["explore"],
                 "max_running": 1,
                 "priority": 0,
                 "env": {},
@@ -578,7 +602,6 @@ def test_failed_worker_stderr_is_preserved_as_error(tmp_path: Path) -> None:
         {
             "name": "pi-1",
             "type": "pi",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -609,7 +632,6 @@ def test_audit_publisher_batches_unredacted_run_events(tmp_path: Path) -> None:
         {
             "name": "codex-1",
             "type": "codex",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -661,7 +683,6 @@ def test_audit_publisher_flushes_large_assistant_text_in_bounded_chunks(
         {
             "name": "claude-1",
             "type": "claudecode",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -719,7 +740,6 @@ def test_claude_thinking_blocks_become_thinking_events(tmp_path: Path) -> None:
         {
             "name": "claude-1",
             "type": "claudecode",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -835,13 +855,53 @@ def test_codex_reasoning_without_summary_is_ignored() -> None:
     assert events == []
 
 
+def test_codex_app_server_events_are_normalized() -> None:
+    message = normalize_event(
+        "codex",
+        json.dumps(
+            {
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "id": "msg-1",
+                        "type": "agentMessage",
+                        "text": "done",
+                    }
+                },
+            }
+        ),
+    )
+    command = normalize_event(
+        "codex",
+        json.dumps(
+            {
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "id": "cmd-1",
+                        "type": "commandExecution",
+                        "command": "id",
+                        "aggregatedOutput": "uid=1000",
+                        "exitCode": 0,
+                    }
+                },
+            }
+        ),
+    )
+
+    assert message[0]["kind"] == "assistant.message"
+    assert message[0]["content"] == "done"
+    assert command[0]["kind"] == "command.completed"
+    assert command[0]["content"] == "uid=1000"
+    assert command[0]["exit_code"] == 0
+
+
 def test_pi_streamed_thinking_flushes_a_single_message(tmp_path: Path) -> None:
     client = RecordingClient()
     worker = WorkerConfig.model_validate(
         {
             "name": "pi-1",
             "type": "pi",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {},
@@ -928,15 +988,18 @@ def test_static_audit_renders_thinking_cards() -> None:
     assert '@click.prevent="toggleThinking(event)"' in index
     assert ':aria-expanded="isThinkingOpen(event)"' in index
     assert "展开/收起" not in index
-    assert "<span class=\"audit-command-text min-w-0 flex-1\">思考</span>" in index
-    assert "<details class=\"audit-terminal audit-thinking overflow-hidden\" open>" not in index
+    assert '<span class="audit-command-text min-w-0 flex-1">思考</span>' in index
+    assert (
+        '<details class="audit-terminal audit-thinking overflow-hidden" open>'
+        not in index
+    )
     assert "isThinking(event)" in audit
     assert "toggleThinking(event)" in audit
     assert "'thinking.message': '思考'" in audit
     assert "'thinking.delta': '思考'" in audit
     assert ".audit-thinking" in styles
     assert ".audit-thinking" in theme
-    assert "/static/audit.js?v=20260810-performance-1" in index
+    assert "/static/audit.js?v=20260813-infinite-scroll-1" in index
 
 
 def test_worker_drivers_run_at_maximum_thinking_strength() -> None:
@@ -951,7 +1014,6 @@ def test_worker_drivers_run_at_maximum_thinking_strength() -> None:
         {
             "name": "claude-1",
             "type": "claudecode",
-            "task_types": ["explore"],
             "max_running": 1,
             "priority": 0,
             "env": {
@@ -963,7 +1025,9 @@ def test_worker_drivers_run_at_maximum_thinking_strength() -> None:
     )
     # Claude thinking is injected into the process environment, not argv.
     assert CLAUDE_MAX_THINKING_TOKENS == "31999"
-    claude_argv = ClaudeCodeDriver().build_execute(claude_worker, "prompt", "session").argv
+    claude_argv = (
+        ClaudeCodeDriver().build_execute(claude_worker, "prompt", "session").argv
+    )
     assert "MAX_THINKING_TOKENS" not in claude_argv
 
     codex_worker = claude_worker.model_copy(
@@ -982,7 +1046,7 @@ def test_worker_drivers_run_at_maximum_thinking_strength() -> None:
         CodexDriver().build_conclude(codex_worker, "prompt", "thread-1").argv,
     ):
         assert 'model_reasoning_effort="high"' in argv
-        assert 'model_reasoning_summary="always"' in argv
+        assert 'model_reasoning_summary="detailed"' in argv
 
     pi_worker = claude_worker.model_copy(
         update={
@@ -999,7 +1063,7 @@ def test_worker_drivers_run_at_maximum_thinking_strength() -> None:
     for argv in (
         PiDriver().build_execute(pi_worker, "prompt", None).argv,
         PiDriver().build_conclude(pi_worker, "prompt", "session-1").argv,
-        PiDriver(local=True)._local_argv(pi_worker, "prompt", None),
+        PiDriver(local=True)._local_argv(pi_worker, None),
     ):
         assert argv[argv.index("--thinking") + 1] == "max"
 

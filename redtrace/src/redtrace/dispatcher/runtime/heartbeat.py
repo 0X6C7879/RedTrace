@@ -6,9 +6,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from redtrace.dispatcher.protocol.client import ApiResult, CairnClient
+from redtrace.dispatcher.control_plane import ApiResult, ControlPlaneClient
 from redtrace.dispatcher.runtime.process import ExecProcess
-
 
 LOG = logging.getLogger(__name__)
 HEARTBEAT_FAILURE_GRACE_MULTIPLIER = 2
@@ -44,12 +43,12 @@ class HeartbeatLease:
     @classmethod
     def for_intent(
         cls,
-        client: CairnClient,
+        client: ControlPlaneClient,
         project_id: str,
         intent_id: str,
         worker_name: str,
         interval: int,
-    ) -> "HeartbeatLease":
+    ) -> HeartbeatLease:
         return cls(
             heartbeat=lambda: client.heartbeat(project_id, intent_id, worker_name),
             scope=f"project={project_id} intent={intent_id}",
@@ -60,11 +59,11 @@ class HeartbeatLease:
     @classmethod
     def for_reason(
         cls,
-        client: CairnClient,
+        client: ControlPlaneClient,
         project_id: str,
         worker_name: str,
         interval: int,
-    ) -> "HeartbeatLease":
+    ) -> HeartbeatLease:
         return cls(
             heartbeat=lambda: client.reason_heartbeat(project_id, worker_name),
             scope=f"project={project_id} reason",
@@ -110,7 +109,10 @@ class HeartbeatLease:
                 self._fail(result.status_code, result.text)
                 return
             elapsed = time.monotonic() - self._last_success_at
-            grace_seconds = max(float(self._interval), float(self._interval * HEARTBEAT_FAILURE_GRACE_MULTIPLIER))
+            grace_seconds = max(
+                float(self._interval),
+                float(self._interval * HEARTBEAT_FAILURE_GRACE_MULTIPLIER),
+            )
             LOG.warning(
                 "heartbeat transient failure scope=%s worker=%s status=%s elapsed=%.1fs grace=%.1fs",
                 self._scope,
