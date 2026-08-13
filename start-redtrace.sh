@@ -5,6 +5,8 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_DIR="$SCRIPT_DIR/redtrace"
 CONFIG_PATH="$SCRIPT_DIR/redtrace.yaml"
+DATA_DIR="$SCRIPT_DIR/.redtrace"
+DB_PATH="$DATA_DIR/redtrace.db"
 HOST="${REDTRACE_HOST:-127.0.0.1}"
 PORT="${REDTRACE_PORT:-8000}"
 START_TIMEOUT="${REDTRACE_START_TIMEOUT:-40}"
@@ -222,6 +224,11 @@ is_positive_integer "$START_TIMEOUT" || die "REDTRACE_START_TIMEOUT must be a po
 is_positive_integer "$SHUTDOWN_TIMEOUT" || die "REDTRACE_SHUTDOWN_TIMEOUT must be a positive integer"
 
 CONFIG_PATH="$(absolute_file_path "$CONFIG_PATH")"
+mkdir -p "$DATA_DIR/tmp" "$SCRIPT_DIR/output/webshell" "$SCRIPT_DIR/output/c2"
+export REDTRACE_ROOT="$SCRIPT_DIR"
+export TMPDIR="$DATA_DIR/tmp"
+export TMP="$TMPDIR"
+export TEMP="$TMPDIR"
 ensure_project_environment
 trap cleanup EXIT
 trap 'handle_signal 130' INT
@@ -233,7 +240,7 @@ if server_is_ready; then
 else
   printf 'Starting RedTrace Server at http://%s:%s ...\n' "$HOST" "$PORT"
   REDTRACE_DISPATCH_CONFIG="$CONFIG_PATH" \
-    uv run --project "$PROJECT_DIR" redtrace serve --host "$HOST" --port "$PORT" &
+    uv run --project "$PROJECT_DIR" redtrace serve --db-path "$DB_PATH" --host "$HOST" --port "$PORT" &
   SERVER_PID=$!
   OWNS_SERVER=1
 

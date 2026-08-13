@@ -79,10 +79,12 @@ def test_deploy_script_unifies_linux_and_macos_without_legacy_entrypoints() -> N
     assert "configure_brave_search_key" in script
     assert "REDTRACE_PLAINTEXT_SECRETS" in script
     assert "skipping optional Python and Ruby security tools" in script
-    assert "start_launch_agents" in script
-    assert "launchctl bootstrap" in script
-    assert "KeepAlive" in script
-    assert "DEFAULT_USE_LAUNCHD" in script
+    assert 'REDTRACE_USE_LAUNCHD="${REDTRACE_USE_LAUNCHD:-0}"' in script
+    assert "LaunchAgents write outside the project" in script
+    assert 'TMP_DIR="$PROJECT_DIR/.redtrace/tmp"' in script
+    assert 'BIN_DIR="$RUNTIME_DIR/bin"' in script
+    assert 'NPM_CONFIG_PREFIX="$RUNTIME_DIR/npm"' in script
+    assert 'mkdir -p "$RUN_DIR" "$LOG_DIR" "$PROJECT_DIR/workspaces" "$PROJECT_DIR/output/webshell" "$PROJECT_DIR/output/c2"' in script
     assert "os.setsid()" in script
     assert 'chmod 600 "$CONFIG_PATH"' in script
 

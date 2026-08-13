@@ -69,7 +69,7 @@ def test_reason_writes_graph_snapshot_and_creates_intent(monkeypatch) -> None:
     assert len(containers.writes) == 1
     container_name, path, content = containers.writes[0]
     assert container_name == "container-proj_001"
-    assert path.startswith("/tmp/redtrace-prompts/reason_execute-")
+    assert path.startswith("/home/kali/workspace/.redtrace/prompts/reason_execute-")
     assert path.endswith("/graph.yaml")
     assert content == graph_yaml
     assert graph_yaml not in driver.execute_prompts[0]

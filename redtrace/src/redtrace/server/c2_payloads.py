@@ -299,7 +299,7 @@ def build_beacon(
     source = GO_BEACON_TEMPLATE
     for needle, value in replacements.items():
         source = source.replace(needle, value)
-    with tempfile.TemporaryDirectory(prefix="redtrace-beacon-") as work:
+    with tempfile.TemporaryDirectory(prefix=".build-", dir=output_dir) as work:
         work_dir = Path(work)
         (work_dir / "main.go").write_text(source, encoding="utf-8")
         env = dict(os.environ)

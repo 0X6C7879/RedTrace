@@ -121,6 +121,59 @@ def validate_goal_not_in_sources(fact_ids: list[str]) -> None:
         raise HTTPException(400, "goal cannot be used in from")
 
 
+def release_fact(
+    conn: sqlite3.Connection,
+    project_id: str,
+    fact_id: str,
+    *,
+    detach_references: bool = False,
+) -> bool:
+    if fact_id in {"origin", "goal"}:
+        raise HTTPException(409, f"{fact_id} cannot be released")
+    consumed = conn.execute(
+        "SELECT 1 FROM intent_sources WHERE project_id = ? AND fact_id = ? LIMIT 1",
+        (project_id, fact_id),
+    ).fetchone()
+    if consumed and not detach_references:
+        raise HTTPException(409, "Fact is still used by an Intent")
+    conn.execute(
+        "DELETE FROM intents WHERE project_id = ? AND to_fact_id = ?",
+        (project_id, fact_id),
+    )
+    if consumed:
+        conn.execute(
+            """
+            DELETE FROM intents
+            WHERE project_id = ? AND id IN (
+                SELECT intent_id FROM intent_sources
+                WHERE project_id = ? AND fact_id = ?
+                EXCEPT
+                SELECT intent_id FROM intent_sources
+                WHERE project_id = ? AND fact_id <> ?
+            )
+            """,
+            (project_id, project_id, fact_id, project_id, fact_id),
+        )
+        conn.execute(
+            "DELETE FROM intent_sources WHERE project_id = ? AND fact_id = ?",
+            (project_id, fact_id),
+        )
+    deleted = conn.execute(
+        "DELETE FROM facts WHERE project_id = ? AND id = ?",
+        (project_id, fact_id),
+    ).rowcount
+    if deleted:
+        conn.execute(
+            "UPDATE shared_resources SET fact_id = NULL WHERE project_id = ? AND fact_id = ?",
+            (project_id, fact_id),
+        )
+        conn.execute(
+            "UPDATE operation_tasks SET fact_id = NULL WHERE project_id = ? AND fact_id = ?",
+            (project_id, fact_id),
+        )
+    return bool(deleted)
+
+
 def validate_intent_creator_worker(creator: str, worker: str | None) -> None:
     if worker is not None and worker != creator:
         raise HTTPException(400, "worker must be null or equal to creator")

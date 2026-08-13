@@ -18,6 +18,21 @@ class PathResolutionError(ValueError):
     pass
 
 
+def redtrace_root(environ: Mapping[str, str] | None = None) -> Path:
+    """Return the checkout root that owns all RedTrace runtime data."""
+    env = environ or os.environ
+    configured = env.get("REDTRACE_ROOT")
+    if configured:
+        return Path(expand_path_variables(configured, env)).resolve()
+    config = env.get("REDTRACE_DISPATCH_CONFIG")
+    if config:
+        return Path(expand_path_variables(config, env)).resolve().parent
+    source_root = Path(__file__).resolve().parents[3]
+    if (source_root / "redtrace" / "pyproject.toml").is_file():
+        return source_root
+    return Path.cwd().resolve()
+
+
 def is_windows_absolute(value: str) -> bool:
     return bool(WINDOWS_DRIVE_PATH.match(value) or WINDOWS_UNC_PATH.match(value))
 
@@ -151,3 +166,7 @@ class RedTracePaths:
     @property
     def projects(self) -> Path:
         return self.managed / "projects"
+
+    @property
+    def output(self) -> Path:
+        return self.root / "output"

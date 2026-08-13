@@ -164,6 +164,8 @@ uv run --project redtrace redtrace dispatch --config redtrace.yaml
 
 Dispatcher 支持配置快照与安全热加载：新任务使用新配置，已经运行的任务继续使用启动时快照。Web 设置页可创建、复制、启停和测试 Worker；写入使用 revision 做乐观并发控制，API Key 不会在查询响应中回显。
 
+运行数据只写当前项目：`.redtrace/` 保存数据库、日志、锁和共享运行时，`workspaces/<project_id>/` 保存 Worker 会话、提示与工件，`output/webshell/` 和 `output/c2/` 保存人工审计需要长期保留的落地结果。删除工作台任务会删除对应 Workspace 和任务对话，并物理压缩数据库；WebShell/C2 资产及其操作记录继续保留。
+
 ## 常用命令
 
 ### 主程序
@@ -239,6 +241,9 @@ Context Harness 会把完整输出保存到 `.redtrace/artifacts/context`，同�
 | `mcp/` | 共享 MCP 配置与服务入口 |
 | `plugins/` | 外部插件清单、浏览器扩展和 Burp Suite 扩展 |
 | `container/` | Worker 容器镜像与运行资产 |
+| `.redtrace/` | 项目级数据库、日志、锁和内部运行状态（不提交） |
+| `workspaces/` | 按任务隔离的 Worker 会话、提示、临时文件和工件（不提交） |
+| `output/webshell/`、`output/c2/` | 供人工审计的 WebShell/C2 落地文件（不提交） |
 | `docs/` | 协议、架构、上下文和插件兼容文档 |
 | `benchpacks/` | 可复现评测任务与控制工具 |
 

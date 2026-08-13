@@ -10,12 +10,13 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
 from redtrace.board.storage import (
     get_blackboard_revision,
     get_project_or_404,
     intent_to_model,
+    release_fact,
     utcnow,
 )
 from redtrace.server.db import (
@@ -475,6 +476,15 @@ def blackboard_fact_source(
             result,
             result_count=len(source["events"]) if source else 0,
         )
+
+
+@router.delete("/facts/{fact_id}", status_code=204)
+def release_blackboard_fact(project_id: str, fact_id: str) -> Response:
+    with get_conn() as conn:
+        get_project_or_404(conn, project_id)
+        if not release_fact(conn, project_id, fact_id):
+            raise HTTPException(404, "Fact not found")
+    return Response(status_code=204)
 
 
 @router.get("/nodes/{node_id}")

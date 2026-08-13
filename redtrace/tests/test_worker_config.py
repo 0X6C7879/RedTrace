@@ -413,7 +413,9 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     assert "rankDir: 'TB'" in index
     assert 'class="max-h-72 overflow-auto whitespace-pre-wrap break-words' in index
     assert "c2Expanded: false" in index
-    assert 'operations.js?v=20260810-performance-1' in index
+    assert 'operations.js?v=20260813-payload-library-1' in index
+    assert "window.redtraceConfirm" in index
+    assert "window.confirm" not in operations
     assert '@click="setAppPage(\'c2-listeners\')" aria-label="打开 C2"' in index
     assert '@click="c2Expanded = !c2Expanded"' in index
     assert "setAppPage('c2-listeners'); c2Expanded" not in index

@@ -15,6 +15,8 @@
 set -Eeuo pipefail
 
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+RUNTIME_DIR="$PROJECT_DIR/.redtrace/runtime"
+BIN_DIR="$RUNTIME_DIR/bin"
 QILING_WRAPPER="$PROJECT_DIR/skills/route-skills/redtrace-tools/qiling/qiling-python"
 DRY_RUN=false
 FORCE=false
@@ -23,13 +25,26 @@ FAILED=()
 SUCCEEDED=()
 SKIPPED=()
 SYSTEM_PACKAGES=()
-LOG_DIR="${CTF_LOG_DIR:-$HOME/.ctf-tools}"
+LOG_DIR="${CTF_LOG_DIR:-$PROJECT_DIR/.redtrace/log/toolchain}"
 LOG_FILE=""
-CTF_VENV="${CTF_VENV:-$HOME/.ctf-tools/venv}"
-RSACTFTOOL_VENV="${RSACTFTOOL_VENV:-$HOME/.ctf-tools/rsactftool-venv}"
-QILING_VENV="${QILING_VENV:-$HOME/.ctf-tools/qiling-venv}"
+CTF_VENV="${CTF_VENV:-$RUNTIME_DIR/ctf-tools}"
+RSACTFTOOL_VENV="${RSACTFTOOL_VENV:-$RUNTIME_DIR/rsactftool}"
+QILING_VENV="${QILING_VENV:-$RUNTIME_DIR/qiling}"
+export REDTRACE_QILING_VENV="$QILING_VENV"
 RSACTFTOOL_REVISION="${RSACTFTOOL_REVISION:-7c98848f1945de3e67a420871e8672f5ad9aa5d5}"
 NUCLEI_VERSION="${NUCLEI_VERSION:-3.11.0}"
+mkdir -p "$PROJECT_DIR/.redtrace/tmp" "$BIN_DIR"
+export TMPDIR="$PROJECT_DIR/.redtrace/tmp"
+export TMP="$TMPDIR"
+export TEMP="$TMPDIR"
+export XDG_CACHE_HOME="$PROJECT_DIR/.redtrace/cache"
+export XDG_CONFIG_HOME="$PROJECT_DIR/.redtrace/config"
+export XDG_DATA_HOME="$PROJECT_DIR/.redtrace/data"
+export UV_CACHE_DIR="$PROJECT_DIR/.redtrace/cache/uv"
+export GOPATH="$RUNTIME_DIR/go"
+export GOBIN="$BIN_DIR"
+export GEM_HOME="$RUNTIME_DIR/gems"
+export PATH="$BIN_DIR:$GEM_HOME/bin:$PATH"
 
 while (($#)); do
   case "$1" in
@@ -350,13 +365,13 @@ install_gems() {
   for package in "${packages[@]}"; do
     if [[ "$FORCE" == false ]] && gem list -i "^${package}$" >/dev/null 2>&1; then
       SKIPPED+=("gem:$package")
-    elif gem install --user-install "$package" >>"$LOG_FILE" 2>&1; then
+    elif gem install "$package" >>"$LOG_FILE" 2>&1; then
       SUCCEEDED+=("gem:$package")
     else
       FAILED+=("gem:$package")
     fi
   done
-  gem_bin="$(ruby -e 'print Gem.user_dir')/bin"
+  gem_bin="$GEM_HOME/bin"
   log_info "Ruby executables: $gem_bin"
 }
 
@@ -371,12 +386,12 @@ install_go() {
     return
   fi
   has go || { log_error "go is required for ffuf and Nuclei"; return 1; }
-  mkdir -p "$HOME/go/bin"
+  mkdir -p "$GOBIN"
   for spec in "${tools[@]}"; do
     command="${spec%%:*}"
     if [[ "$FORCE" == false ]] && has "$command"; then
       SKIPPED+=("go:$command")
-    elif GOBIN="$HOME/go/bin" go install "${spec#*:}" >>"$LOG_FILE" 2>&1; then
+    elif GOBIN="$GOBIN" go install "${spec#*:}" >>"$LOG_FILE" 2>&1; then
       SUCCEEDED+=("go:$command")
     else
       FAILED+=("go:$command")
@@ -387,11 +402,7 @@ install_go() {
 
 configure_nuclei_engine() {
   local config_path
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    config_path="$HOME/Library/Application Support/nuclei/config.yaml"
-  else
-    config_path="$HOME/.config/nuclei/config.yaml"
-  fi
+  config_path="$XDG_CONFIG_HOME/nuclei/config.yaml"
   if [[ "$DRY_RUN" == true ]]; then
     log_info "Would disable Nuclei template update checks in $config_path"
     return
@@ -423,8 +434,8 @@ install_rsactftool() {
   if "$RSACTFTOOL_VENV/bin/python" -m pip install --upgrade \
     "git+https://github.com/RsaCtfTool/RsaCtfTool.git@$RSACTFTOOL_REVISION" \
     >>"$LOG_FILE" 2>&1; then
-    mkdir -p "$HOME/.local/bin"
-    ln -sfn "$RSACTFTOOL_VENV/bin/RsaCtfTool" "$HOME/.local/bin/RsaCtfTool"
+    mkdir -p "$BIN_DIR"
+    ln -sfn "$RSACTFTOOL_VENV/bin/RsaCtfTool" "$BIN_DIR/RsaCtfTool"
     SUCCEEDED+=("python:RsaCtfTool")
   else
     FAILED+=("python:RsaCtfTool")
@@ -437,8 +448,8 @@ ensure_uv() {
     log_info "Would install uv for the Qiling Python 3.11 environment"
     return
   fi
-  curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh
-  export PATH="$HOME/.local/bin:$PATH"
+  curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="$BIN_DIR" sh
+  export PATH="$BIN_DIR:$PATH"
   has uv || { log_error "uv installation failed"; return 1; }
 }
 
@@ -461,10 +472,10 @@ install_qiling() {
       return
     fi
   fi
-  mkdir -p "$HOME/.local/bin"
-  ln -sfn "$QILING_VENV/bin/qltool" "$HOME/.local/bin/qltool"
+  mkdir -p "$BIN_DIR"
+  ln -sfn "$QILING_VENV/bin/qltool" "$BIN_DIR/qltool"
   [[ -x "$QILING_WRAPPER" ]] || { log_error "Qiling Python wrapper is missing"; return 1; }
-  ln -sfn "$QILING_WRAPPER" "$HOME/.local/bin/qiling-python"
+  ln -sfn "$QILING_WRAPPER" "$BIN_DIR/qiling-python"
 }
 
 verify() {
@@ -479,8 +490,8 @@ verify() {
   if [[ "$(uname -s)" == "Linux" ]]; then
     checks+=(gdb steghide strace ltrace)
   fi
-  export PATH="$CTF_VENV/bin:$HOME/.local/bin:$HOME/go/bin:$PATH"
-  has ruby && export PATH="$(ruby -e 'print Gem.user_dir')/bin:$PATH"
+  export PATH="$CTF_VENV/bin:$BIN_DIR:$GOBIN:$PATH"
+  has ruby && export PATH="$GEM_HOME/bin:$PATH"
 
   for command in "${checks[@]}"; do
     if has "$command"; then found+=("$command"); else missing+=("$command"); fi

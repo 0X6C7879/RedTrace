@@ -20,7 +20,7 @@ from redtrace.dispatcher.runtime.process import ProcessResult
 from redtrace.dispatcher.workers.adapters.claudecode import CLAUDE_MAX_THINKING_TOKENS
 
 PROCESS_COMMUNICATE_GRACE_SECONDS = 15
-GRAPH_SNAPSHOT_ROOT = "/tmp/redtrace-prompts"
+GRAPH_SNAPSHOT_ROOT = "/home/kali/workspace/.redtrace/prompts"
 BLACKBOARD_NOTICE_ROOT = ".redtrace/blackboard-notices"
 LOG = logging.getLogger(__name__)
 _COORDINATION_KEY = re.compile(

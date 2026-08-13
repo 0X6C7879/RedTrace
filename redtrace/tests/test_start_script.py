@@ -35,6 +35,8 @@ def test_start_script_uses_portable_project_relative_defaults() -> None:
     assert '#!/usr/bin/env bash' in script
     assert 'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"' in script
     assert 'CONFIG_PATH="$SCRIPT_DIR/redtrace.yaml"' in script
+    assert 'DB_PATH="$DATA_DIR/redtrace.db"' in script
+    assert 'export TMPDIR="$DATA_DIR/tmp"' in script
     assert 'uv run --project "$PROJECT_DIR" redtrace serve' in script
     assert 'uv run --project "$PROJECT_DIR" redtrace dispatch' in script
     assert "launchctl" not in script

@@ -7,7 +7,11 @@ PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_PATH="${REDTRACE_CONFIG_PATH:-$PROJECT_DIR/redtrace.yaml}"
 RUN_DIR="$PROJECT_DIR/.redtrace/run"
 LOG_DIR="$PROJECT_DIR/.redtrace/log"
-TOOL_VENV="${REDTRACE_TOOL_VENV:-$HOME/.local/share/redtrace-tools}"
+TMP_DIR="$PROJECT_DIR/.redtrace/tmp"
+RUNTIME_DIR="$PROJECT_DIR/.redtrace/runtime"
+BIN_DIR="$RUNTIME_DIR/bin"
+LIB_DIR="$RUNTIME_DIR/lib"
+TOOL_VENV="${REDTRACE_TOOL_VENV:-$PROJECT_DIR/.redtrace/runtime/tools}"
 NPM_REGISTRY="${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}"
 PYPI_INDEX="${UV_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
 OS="$(uname -s)"
@@ -18,14 +22,7 @@ case "$OS" in
 esac
 REDTRACE_HOST="${REDTRACE_HOST:-$DEFAULT_HOST}"
 REDTRACE_PORT="${REDTRACE_PORT:-8000}"
-DEFAULT_USE_LAUNCHD=0
-if [[ "$OS" == "Darwin" ]]; then
-  case "$PROJECT_DIR" in
-    "$HOME/Downloads/"*|"$HOME/Desktop/"*|"$HOME/Documents/"*) ;;
-    *) DEFAULT_USE_LAUNCHD=1 ;;
-  esac
-fi
-REDTRACE_USE_LAUNCHD="${REDTRACE_USE_LAUNCHD:-$DEFAULT_USE_LAUNCHD}"
+REDTRACE_USE_LAUNCHD="${REDTRACE_USE_LAUNCHD:-0}"
 if [[ "$OS" == "Darwin" ]]; then
   DEFAULT_PLAINTEXT_SECRETS=1
 else
@@ -36,16 +33,17 @@ export REDTRACE_PLAINTEXT_SECRETS
 BRAVE_SKILL_DIR="$PROJECT_DIR/skills/brave-search"
 GHIDRA_SKILL_DIR="$PROJECT_DIR/skills/route-skills/redtrace-tools/ghidra-headless"
 PLAYWRIGHT_SKILL_DIR="$PROJECT_DIR/skills/playwright"
-GHIDRA_INSTALL_DIR="${REDTRACE_GHIDRA_HOME:-$HOME/.local/share/redtrace-tools/ghidra}"
-RSACTFTOOL_VENV="${REDTRACE_RSACTFTOOL_VENV:-$HOME/.local/share/redtrace-rsactftool}"
-QILING_VENV="${REDTRACE_QILING_VENV:-$HOME/.local/share/redtrace-qiling}"
+GHIDRA_INSTALL_DIR="${REDTRACE_GHIDRA_HOME:-$PROJECT_DIR/.redtrace/runtime/ghidra}"
+RSACTFTOOL_VENV="${REDTRACE_RSACTFTOOL_VENV:-$PROJECT_DIR/.redtrace/runtime/rsactftool}"
+QILING_VENV="${REDTRACE_QILING_VENV:-$PROJECT_DIR/.redtrace/runtime/qiling}"
 QILING_WRAPPER="$PROJECT_DIR/skills/route-skills/redtrace-tools/qiling/qiling-python"
+export REDTRACE_QILING_VENV="$QILING_VENV"
 NUCLEI_VERSION="${REDTRACE_NUCLEI_VERSION:-3.11.0}"
 CODEGRAPH_VERSION="${REDTRACE_CODEGRAPH_VERSION:-1.5.0}"
 RSACTFTOOL_REVISION="${REDTRACE_RSACTFTOOL_REVISION:-7c98848f1945de3e67a420871e8672f5ad9aa5d5}"
 CTF_TOOL_INSTALLER="$PROJECT_DIR/install-security-toolchain.sh"
 ROUTE_SKILLS_INITIALIZER="$PROJECT_DIR/skills/route-skills/redtrace-tools/initialize.sh"
-JAVA_INSTALL_DIR="${REDTRACE_JAVA_HOME:-$HOME/.local/share/redtrace-tools/temurin-21}"
+JAVA_INSTALL_DIR="${REDTRACE_JAVA_HOME:-$PROJECT_DIR/.redtrace/runtime/temurin-21}"
 DISTRO_ID=""
 PACKAGE_MANAGER=""
 
@@ -53,6 +51,24 @@ log() { printf '[RedTrace] %s\n' "$*"; }
 warn() { printf '[RedTrace] WARNING: %s\n' "$*" >&2; }
 die() { printf '[RedTrace] ERROR: %s\n' "$*" >&2; exit 1; }
 has() { command -v "$1" >/dev/null 2>&1; }
+
+mkdir -p "$TMP_DIR"
+export REDTRACE_ROOT="$PROJECT_DIR"
+export TMPDIR="$TMP_DIR"
+export TMP="$TMP_DIR"
+export TEMP="$TMP_DIR"
+export XDG_CACHE_HOME="$PROJECT_DIR/.redtrace/cache"
+export XDG_CONFIG_HOME="$PROJECT_DIR/.redtrace/config"
+export XDG_DATA_HOME="$PROJECT_DIR/.redtrace/data"
+export UV_CACHE_DIR="$PROJECT_DIR/.redtrace/cache/uv"
+export NPM_CONFIG_CACHE="$PROJECT_DIR/.redtrace/cache/npm"
+export NPM_CONFIG_PREFIX="$RUNTIME_DIR/npm"
+export PLAYWRIGHT_BROWSERS_PATH="$RUNTIME_DIR/playwright"
+export GOPATH="$RUNTIME_DIR/go"
+export GOBIN="$BIN_DIR"
+export CARGO_HOME="$RUNTIME_DIR/cargo"
+export GEM_HOME="$RUNTIME_DIR/gems"
+export PATH="$BIN_DIR:$NPM_CONFIG_PREFIX/bin:$GOBIN:$GEM_HOME/bin:$TOOL_VENV/bin:$PATH"
 
 if [[ "$OS" == "Darwin" ]]; then
   case "$(uname -m)" in
@@ -96,7 +112,7 @@ initialize_linux() {
 }
 
 configure_linux_paths() {
-  export PATH="$TOOL_VENV/bin:$HOME/.local/bin:$HOME/go/bin:$HOME/.cargo/bin:$PATH"
+  export PATH="$BIN_DIR:$NPM_CONFIG_PREFIX/bin:$GOBIN:$GEM_HOME/bin:$TOOL_VENV/bin:$PATH"
 }
 
 ensure_command_line_tools() {
@@ -124,18 +140,11 @@ ensure_homebrew() {
 }
 
 configure_paths() {
-  local brew_bin brew_prefix shellenv_line path_line profile
+  local brew_bin brew_prefix
   brew_bin="$(command -v brew)"
   brew_prefix="$(brew --prefix)"
   eval "$("$brew_bin" shellenv)"
-  shellenv_line="eval \"\$($brew_bin shellenv)\""
-  path_line='export PATH="$HOME/.local/share/redtrace-tools/bin:$HOME/.local/bin:$HOME/go/bin:$PATH"'
-  for profile in "$HOME/.zprofile" "$HOME/.zshrc"; do
-    touch "$profile"
-    grep -Fqx "$shellenv_line" "$profile" || printf '\n%s\n' "$shellenv_line" >>"$profile"
-    grep -Fqx "$path_line" "$profile" || printf '%s\n' "$path_line" >>"$profile"
-  done
-  export PATH="$TOOL_VENV/bin:$HOME/.local/bin:$HOME/go/bin:$brew_prefix/bin:$brew_prefix/sbin:$PATH"
+  export PATH="$BIN_DIR:$NPM_CONFIG_PREFIX/bin:$GOBIN:$GEM_HOME/bin:$TOOL_VENV/bin:$brew_prefix/bin:$brew_prefix/sbin:$PATH"
 }
 
 repair_homebrew_remotes() {
@@ -246,8 +255,8 @@ ensure_brew_formula_cli_path() {
     warn "$formula is installed but $command is unavailable"
     return
   }
-  mkdir -p "$HOME/.local/bin"
-  ln -sfn "$candidate" "$HOME/.local/bin/$command"
+  mkdir -p "$BIN_DIR"
+  ln -sfn "$candidate" "$BIN_DIR/$command"
   hash -r
   has "$command" || die "failed to expose $command from $formula"
 }
@@ -289,12 +298,12 @@ ensure_node() {
       cd "$temp_dir"
       grep "  $archive\$" SHASUMS256.txt | sha256sum -c -
     )
-    mkdir -p "$HOME/.local/lib" "$HOME/.local/bin"
-    tar -xJf "$temp_dir/$archive" -C "$HOME/.local/lib"
-    node_dir="$HOME/.local/lib/node-${version}-linux-${node_arch}"
-    ln -sfn "$node_dir/bin/node" "$HOME/.local/bin/node"
-    ln -sfn "$node_dir/bin/npm" "$HOME/.local/bin/npm"
-    ln -sfn "$node_dir/bin/npx" "$HOME/.local/bin/npx"
+    mkdir -p "$LIB_DIR" "$BIN_DIR"
+    tar -xJf "$temp_dir/$archive" -C "$LIB_DIR"
+    node_dir="$LIB_DIR/node-${version}-linux-${node_arch}"
+    ln -sfn "$node_dir/bin/node" "$BIN_DIR/node"
+    ln -sfn "$node_dir/bin/npm" "$BIN_DIR/npm"
+    ln -sfn "$node_dir/bin/npx" "$BIN_DIR/npx"
     rm -rf -- "$temp_dir"
   fi
   hash -r
@@ -351,11 +360,11 @@ PY
   [[ -n "$extracted_dir" ]] || die "Temurin archive has an unexpected layout"
   [[ ! -e "$JAVA_INSTALL_DIR" ]] || die "Java fallback path exists but is unusable: $JAVA_INSTALL_DIR"
   mv -- "$extracted_dir" "$JAVA_INSTALL_DIR"
-  mkdir -p "$HOME/.local/bin"
+  mkdir -p "$BIN_DIR"
   local command
   for command in java javac jar keytool; do
     [[ -x "$JAVA_INSTALL_DIR/bin/$command" ]] \
-      && ln -sfn "$JAVA_INSTALL_DIR/bin/$command" "$HOME/.local/bin/$command"
+      && ln -sfn "$JAVA_INSTALL_DIR/bin/$command" "$BIN_DIR/$command"
   done
   rm -rf -- "$temp_dir"
   hash -r
@@ -372,7 +381,7 @@ ensure_npm_cli() {
     return
   fi
   log "installing missing CLI $command ($package)"
-  NPM_CONFIG_PREFIX="$HOME/.local" npm install -g --registry="$NPM_REGISTRY" "$@" "$package"
+  npm install -g --registry="$NPM_REGISTRY" "$@" "$package"
   hash -r
   has "$command" || die "$command installation completed but command is not on PATH"
 }
@@ -394,7 +403,7 @@ ensure_uv() {
     return
   fi
   log "installing missing uv"
-  curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh
+  curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="$BIN_DIR" sh
   hash -r
   has uv || die "uv installation failed"
 }
@@ -570,18 +579,18 @@ ensure_nuclei() {
   if [[ "$OS" == "Darwin" ]]; then
     nuclei_bin="$(brew --prefix nuclei)/bin/nuclei"
     [[ -x "$nuclei_bin" ]] || die "Homebrew Nuclei binary is missing"
-    mkdir -p "$HOME/.local/bin"
-    ln -sfn "$nuclei_bin" "$HOME/.local/bin/nuclei"
+    mkdir -p "$BIN_DIR"
+    ln -sfn "$nuclei_bin" "$BIN_DIR/nuclei"
     hash -r
-    config_path="$HOME/Library/Application Support/nuclei/config.yaml"
+    config_path="$XDG_CONFIG_HOME/nuclei/config.yaml"
   else
     if ! has nuclei || ! nuclei -version >/dev/null 2>&1; then
       log "installing Nuclei $NUCLEI_VERSION"
-      GOBIN="$HOME/go/bin" go install \
+      GOBIN="$GOBIN" go install \
         "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v$NUCLEI_VERSION"
       hash -r
     fi
-    config_path="$HOME/.config/nuclei/config.yaml"
+    config_path="$XDG_CONFIG_HOME/nuclei/config.yaml"
   fi
   nuclei -version >/dev/null 2>&1 || die "Nuclei smoke test failed"
   mkdir -p "$(dirname "$config_path")"
@@ -607,8 +616,8 @@ ensure_rsactftool() {
     || uv venv --python 3.12 "$RSACTFTOOL_VENV"
   uv pip install --python "$RSACTFTOOL_VENV/bin/python" --upgrade \
     "git+https://github.com/RsaCtfTool/RsaCtfTool.git@$RSACTFTOOL_REVISION"
-  mkdir -p "$HOME/.local/bin"
-  ln -sfn "$RSACTFTOOL_VENV/bin/RsaCtfTool" "$HOME/.local/bin/RsaCtfTool"
+  mkdir -p "$BIN_DIR"
+  ln -sfn "$RSACTFTOOL_VENV/bin/RsaCtfTool" "$BIN_DIR/RsaCtfTool"
   hash -r
   RsaCtfTool --help >/dev/null 2>&1 || die "RsaCtfTool smoke test failed"
 }
@@ -623,10 +632,10 @@ ensure_qiling() {
     "$QILING_VENV/bin/python" -m ensurepip --upgrade
     "$QILING_VENV/bin/python" -m pip install qiling==1.4.6
   fi
-  mkdir -p "$HOME/.local/bin"
-  ln -sfn "$QILING_VENV/bin/qltool" "$HOME/.local/bin/qltool"
+  mkdir -p "$BIN_DIR"
+  ln -sfn "$QILING_VENV/bin/qltool" "$BIN_DIR/qltool"
   [[ -x "$QILING_WRAPPER" ]] || die "Qiling Python wrapper is missing"
-  ln -sfn "$QILING_WRAPPER" "$HOME/.local/bin/qiling-python"
+  ln -sfn "$QILING_WRAPPER" "$BIN_DIR/qiling-python"
   qiling-python -c "import qiling; print(qiling.__version__)" >/dev/null \
     || die "Qiling verification failed"
 }
@@ -635,19 +644,19 @@ install_optional_language_tools() {
   local gem_name
   if ! has ffuf; then
     log "installing missing ffuf"
-    GOBIN="$HOME/go/bin" GOPROXY=https://goproxy.cn,direct \
+    GOBIN="$GOBIN" GOPROXY=https://goproxy.cn,direct \
       go install github.com/ffuf/ffuf/v2@latest
   fi
   for gem_name in one_gadget seccomp-tools zsteg; do
     gem list -i "^${gem_name}$" >/dev/null 2>&1 && continue
-    gem install --user-install "$gem_name" || warn "optional Ruby gem failed and was skipped: $gem_name"
+    gem install "$gem_name" || warn "optional Ruby gem failed and was skipped: $gem_name"
   done
 }
 
 verify_security_toolchain() {
   local python="$TOOL_VENV/bin/python"
   local gem_bin
-  gem_bin="$(ruby -e 'print Gem.user_dir')/bin"
+  gem_bin="$GEM_HOME/bin"
   nuclei -version >/dev/null 2>&1 || die "Nuclei verification failed"
   RsaCtfTool --help >/dev/null 2>&1 || die "RsaCtfTool verification failed"
   qiling-python -c "import qiling" >/dev/null 2>&1 || die "Qiling verification failed"
@@ -919,10 +928,14 @@ payload = {
     "EnvironmentVariables": {
         "PATH": process_path,
         "HOME": home_directory,
+        "REDTRACE_ROOT": working_directory,
         "REDTRACE_DISPATCH_CONFIG": config_path,
         "REDTRACE_CONFIG_SECRETS_DIR": secrets_directory,
         "REDTRACE_PLAINTEXT_SECRETS": "1",
         "REDTRACE_LOCAL_PATH_PREPEND": worker_path,
+        "TMPDIR": str(Path(working_directory) / ".redtrace" / "tmp"),
+        "TMP": str(Path(working_directory) / ".redtrace" / "tmp"),
+        "TEMP": str(Path(working_directory) / ".redtrace" / "tmp"),
         "DYLD_FALLBACK_LIBRARY_PATH": dyld_fallback_library_path,
         "PYTHONUNBUFFERED": "1",
     },
@@ -970,6 +983,7 @@ start_launch_agents() {
   write_launch_agent \
     "$server_label" "$LOG_DIR/server.log" "$server_plist" \
     "$uv_path" run --project "$PROJECT_DIR/redtrace" redtrace serve \
+    --db-path "$PROJECT_DIR/.redtrace/redtrace.db" \
     --host "$REDTRACE_HOST" --port "$REDTRACE_PORT"
   write_launch_agent \
     "$dispatcher_label" "$LOG_DIR/dispatcher.log" "$dispatcher_plist" \
@@ -1058,7 +1072,6 @@ ensure_uv
 ensure_npm_cli claude '@anthropic-ai/claude-code@latest'
 ensure_npm_cli codex '@openai/codex@latest'
 ensure_npm_cli pi '@earendil-works/pi-coding-agent@latest' --ignore-scripts
-ensure_pi_mcp_extension
 ensure_npm_cli codegraph "@colbymchenry/codegraph@${CODEGRAPH_VERSION}"
 log "verifying codegraph installation"
 codegraph --version >/dev/null 2>&1 || die "codegraph failed verification"
@@ -1096,23 +1109,23 @@ else
 fi
 test_brave_search_skill
 
-mkdir -p "$RUN_DIR" "$LOG_DIR" "$PROJECT_DIR/workspaces"
-GEM_BIN="$(ruby -e 'print Gem.user_dir')/bin"
+mkdir -p "$RUN_DIR" "$LOG_DIR" "$PROJECT_DIR/workspaces" "$PROJECT_DIR/output/webshell" "$PROJECT_DIR/output/c2"
+GEM_BIN="$GEM_HOME/bin"
 if [[ "$OS" == "Darwin" ]]; then
-  WORKER_PATH="$JAVA_HOME/bin:$TOOL_VENV/bin:$HOME/.local/bin:$HOME/go/bin:$GEM_BIN:$(brew --prefix)/bin:$(brew --prefix)/sbin"
+  WORKER_PATH="$JAVA_HOME/bin:$BIN_DIR:$NPM_CONFIG_PREFIX/bin:$TOOL_VENV/bin:$GOBIN:$GEM_BIN:$(brew --prefix)/bin:$(brew --prefix)/sbin"
 else
-  WORKER_PATH="$TOOL_VENV/bin:$HOME/.local/bin:$HOME/go/bin:$GEM_BIN"
+  WORKER_PATH="$BIN_DIR:$NPM_CONFIG_PREFIX/bin:$TOOL_VENV/bin:$GOBIN:$GEM_BIN"
 fi
 export REDTRACE_LOCAL_PATH_PREPEND="$WORKER_PATH"
 export REDTRACE_DISPATCH_CONFIG="$CONFIG_PATH"
 
 if [[ "$REDTRACE_USE_LAUNCHD" == "1" ]]; then
-  [[ "$OS" == "Darwin" ]] || die "REDTRACE_USE_LAUNCHD=1 is supported on macOS only"
-  start_launch_agents
+  die "REDTRACE_USE_LAUNCHD=1 is disabled because LaunchAgents write outside the project"
 else
-  [[ "$OS" == "Linux" ]] || stop_launch_agents
   start_component server \
-    uv run --project "$PROJECT_DIR/redtrace" redtrace serve --host "$REDTRACE_HOST" --port "$REDTRACE_PORT"
+    uv run --project "$PROJECT_DIR/redtrace" redtrace serve \
+      --db-path "$PROJECT_DIR/.redtrace/redtrace.db" \
+      --host "$REDTRACE_HOST" --port "$REDTRACE_PORT"
 
   log "waiting for RedTrace server"
   server_ready=0
@@ -1148,7 +1161,6 @@ Optional controls:
   REDTRACE_SKIP_OPTIONAL_TOOLS=1  Skip the large security-tool set
   REDTRACE_SKIP_BRAVE_TEST=1      Skip the brave-search API smoke test
   REDTRACE_PLAINTEXT_SECRETS=1    Keep local API settings as plaintext
-  REDTRACE_USE_LAUNCHD=0          Use detached processes instead of launchd
   REDTRACE_NO_OPEN=1              Do not open the browser automatically
 $(
   if [[ "$OS" == "Darwin" ]]; then

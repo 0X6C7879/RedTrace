@@ -19,6 +19,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 PAGE = (
     "<!doctype html><html><head><title>RedTrace Harness Target</title></head>"
@@ -98,7 +100,9 @@ def _harness_run(
     source: str,
     cli: Path,
 ) -> dict[str, Any]:
-    with tempfile.TemporaryDirectory(prefix="redtrace-context-bench-") as directory:
+    temporary_root = REPO_ROOT / ".redtrace" / "tmp"
+    temporary_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="context-bench-", dir=temporary_root) as directory:
         root = Path(directory)
         env = {
             **os.environ,

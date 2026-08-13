@@ -21,6 +21,7 @@ from typing import Any
 import requests
 
 from redtrace.board.storage import next_fact_id, utcnow
+from redtrace.config_secrets import atomic_write_bytes
 from redtrace.server import db
 from redtrace.server.event_hub import event_hub
 
@@ -98,6 +99,8 @@ def public_resource(row: Any) -> dict[str, Any]:
     item["has_secret"] = bool(secret)
     if item["kind"] == "credential_ref":
         item["secret"] = secret
+    if item["kind"] == "c2_payload" and secret.get("command"):
+        item["metadata"]["command"] = secret["command"]
     item["worker_paused"] = bool(item.get("worker_paused"))
     item["locked"] = bool(item.get("locked_by"))
     item["source_project_id"] = item.get("project_id") or item["metadata"].get("source_project_id")
@@ -396,6 +399,23 @@ def store_result(conn, project_id: str | None, task_id_value: str, content: str)
         encoded = content.encode("utf-8")
     rid = result_id()
     digest = hashlib.sha256(encoded).hexdigest()
+    resource = conn.execute(
+        """
+        SELECT r.kind FROM operation_tasks t
+        JOIN shared_resources r ON r.id = t.resource_id
+        WHERE t.id = ?
+        """,
+        (task_id_value,),
+    ).fetchone()
+    category = (
+        "webshell"
+        if resource is not None and resource["kind"] == "webshell"
+        else "c2"
+        if resource is not None
+        and resource["kind"]
+        in {"c2_listener", "c2_session", "c2_payload", "c2_profile"}
+        else None
+    )
     conn.execute(
         """
         INSERT INTO operation_results (
@@ -404,6 +424,11 @@ def store_result(conn, project_id: str | None, task_id_value: str, content: str)
         """,
         (rid, project_id, task_id_value, content, len(encoded), digest, utcnow()),
     )
+    if category:
+        atomic_write_bytes(
+            db.output_root(category) / "results" / f"{task_id_value}-{rid}.txt",
+            encoded,
+        )
     return rid, f"/projects/{project_id or '_global'}/operations/results/{rid}"
 
 

@@ -55,6 +55,7 @@ function operationsPage() {
     payloadKind: 'curl_beacon',
     payloadCallback: '',
     payloadOneliner: '',
+    payloadGenerating: false,
     payloadOs: 'linux',
     payloadArch: 'amd64',
     payloadBuilding: false,
@@ -62,6 +63,13 @@ function operationsPage() {
     externalPayloadFormat: 'default',
     externalPayloadOptions: '{}',
     externalPayloadBuilding: false,
+    payloadMenuOpen: false,
+    payloadDialogMode: '',
+    payloadUploadFile: null,
+    payloadUploadName: '',
+    payloadUploadSummary: '',
+    payloadUploadBusy: false,
+    payloadCopiedId: '',
     pollTimer: null,
     lastProjectId: '',
     kindOptions: [
@@ -106,7 +114,7 @@ function operationsPage() {
         'c2-listeners': '监听器管理',
         'c2-sessions': '会话管理',
         'c2-tasks': 'C2 任务',
-        'c2-payloads': 'Payload 生成',
+        'c2-payloads': 'Payload 管理',
         'c2-events': 'C2 事件',
         'c2-profiles': '流量伪装 / Malleable Profile',
         'c2-credentials': '凭证',
@@ -124,7 +132,7 @@ function operationsPage() {
         'c2-listeners': '全局 reverse / bind / Beacon / 外部 C2 Listener，独立于 Worker 生命周期',
         'c2-sessions': '所有任务共享 reverse、bind、SSH、WinRM、PsExec、WMI 与 Beacon 会话',
         'c2-tasks': '跨 Worker 的异步任务队列、审批、取消与结果引用',
-        'c2-payloads': '生成单行命令或交叉编译 Beacon；构建结果独立保存',
+        'c2-payloads': 'Worker、生成器与人工上传的载荷统一留存、共享和下载',
         'c2-events': '统一查看 C2 Session、任务和人工接管事件',
         'c2-profiles': '配置 User-Agent、Beacon URI、Jitter 和响应头',
         'c2-credentials': '集中保存主机、Web、数据库、云与 Active Directory 凭证',
@@ -213,9 +221,10 @@ function operationsPage() {
     },
 
     async api(path, options = {}) {
+      const contentType = options.body instanceof Blob ? 'application/octet-stream' : 'application/json';
       const response = await fetch(path, {
         ...options,
-        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+        headers: { 'Content-Type': contentType, ...(options.headers || {}) },
       });
       if (!response.ok) {
         let message = `${response.status} ${response.statusText}`;
@@ -226,8 +235,8 @@ function operationsPage() {
         throw new Error(message);
       }
       if (response.status === 204) return null;
-      const contentType = response.headers.get('content-type') || '';
-      return contentType.includes('application/json') ? response.json() : response.text();
+      const responseType = response.headers.get('content-type') || '';
+      return responseType.includes('application/json') ? response.json() : response.text();
     },
 
     async refresh(showLoading = true) {
@@ -1057,11 +1066,77 @@ function operationsPage() {
       return this.resources.filter((item) => item.kind === 'c2_profile');
     },
 
+    payloads() {
+      return this.filteredResources();
+    },
+
+    payloadFiles() {
+      return this.payloads().filter((item) => item.metadata?.payload_type !== 'command').length;
+    },
+
+    payloadCommands() {
+      return this.payloads().filter((item) => item.metadata?.payload_type === 'command').length;
+    },
+
+    payloadSourceLabel(item) {
+      if (item.metadata?.source_type === 'worker' || item.created_by_type === 'worker') return `Worker · ${item.worker || item.created_by || 'unknown'}`;
+      if (item.metadata?.source_type === 'upload') return '人工上传';
+      return item.metadata?.external ? '外部 C2' : 'Payload 生成器';
+    },
+
+    payloadListenerName(item) {
+      const id = item.metadata?.listener_id;
+      return this.c2Listeners().find((listener) => listener.id === id)?.name || (id ? id : '未绑定');
+    },
+
+    payloadFormat(item) {
+      return [item.metadata?.platform, item.metadata?.arch, item.metadata?.format]
+        .filter((value) => value && value !== 'unknown').join(' · ') || (item.metadata?.payload_type === 'command' ? '单行命令' : '文件');
+    },
+
+    payloadBusy() {
+      return this.payloadGenerating || this.payloadBuilding || this.externalPayloadBuilding || this.payloadUploadBusy;
+    },
+
+    openPayloadCreate(mode) {
+      this.payloadMenuOpen = false;
+      this.payloadDialogMode = mode;
+      this.error = '';
+      if (mode === 'upload') {
+        this.payloadUploadFile = null;
+        this.payloadUploadName = '';
+        this.payloadUploadSummary = '';
+      }
+    },
+
+    closePayloadCreate() {
+      if (!this.payloadBusy()) this.payloadDialogMode = '';
+    },
+
+    choosePayloadFile(event) {
+      this.payloadUploadFile = event.target.files?.[0] || null;
+      if (this.payloadUploadFile && !this.payloadUploadName) this.payloadUploadName = this.payloadUploadFile.name;
+    },
+
+    async copyPayload(item) {
+      const command = item.metadata?.command || '';
+      if (!command) return;
+      await navigator.clipboard.writeText(command);
+      this.payloadCopiedId = item.id;
+      window.setTimeout(() => { if (this.payloadCopiedId === item.id) this.payloadCopiedId = ''; }, 1400);
+    },
+
+    async removePayload(item) {
+      await this.selectResource(item.id);
+      await this.removeResource();
+    },
+
     async generateOneliner() {
-      if (!this.payloadListenerId) {
+      if (!this.payloadListenerId || this.payloadGenerating) {
         this.error = '请先选择监听器';
         return;
       }
+      this.payloadGenerating = true;
       try {
         const data = await this.api(`/projects/${encodeURIComponent(this.projectId())}/c2/payloads/oneliner`, {
           method: 'POST',
@@ -1072,8 +1147,13 @@ function operationsPage() {
           }),
         });
         this.payloadOneliner = data.oneliner;
+        this.payloadDialogMode = '';
+        this.selectedResourceId = data.payload.id;
+        await this.refresh(false);
       } catch (error) {
         this.error = error.message;
+      } finally {
+        this.payloadGenerating = false;
       }
     },
 
@@ -1094,6 +1174,8 @@ function operationsPage() {
           }),
         });
         this.builtPayload = data.payload;
+        this.payloadDialogMode = '';
+        this.selectedResourceId = data.payload.id;
         await this.refresh(false);
       } catch (error) {
         this.error = error.message;
@@ -1120,9 +1202,39 @@ function operationsPage() {
           }),
         });
         this.builtPayload = data.payload;
+        this.payloadDialogMode = '';
+        this.selectedResourceId = data.payload.id;
         await this.refresh(false);
       } catch (error) { this.error = error.message; }
       finally { this.externalPayloadBuilding = false; }
+    },
+
+    async uploadPayload() {
+      const file = this.payloadUploadFile;
+      if (!file || this.payloadUploadBusy) return;
+      this.payloadUploadBusy = true;
+      try {
+        const params = new URLSearchParams({
+          filename: file.name,
+          name: this.payloadUploadName || file.name,
+          platform: this.payloadOs,
+          arch: this.payloadArch,
+          listener_id: this.payloadListenerId || '',
+          summary: this.payloadUploadSummary || '',
+        });
+        const data = await this.api(`/projects/${encodeURIComponent(this.projectId())}/c2/payloads/upload?${params}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: file,
+        });
+        this.payloadDialogMode = '';
+        this.selectedResourceId = data.payload.id;
+        await this.refresh(false);
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.payloadUploadBusy = false;
+      }
     },
 
     async runPlugin() {
@@ -1217,7 +1329,13 @@ function operationsPage() {
 
     async removeResource() {
       const resource = this.currentResource();
-      if (!resource || !window.confirm(`删除共享资源“${resource.name}”？`)) return;
+      if (!resource || !await window.redtraceConfirm?.({
+        title: `删除 ${this.kindLabel(resource.kind)}`,
+        description: '对象将从管理页面移除，工作台图谱中的对应节点也会同步清理。',
+        subject: resource.name,
+        note: '此操作不可撤销。',
+        confirmLabel: '删除对象',
+      })) return;
       await this.api(
         `/projects/${encodeURIComponent(this.projectId())}/resources/${encodeURIComponent(resource.id)}?actor=${encodeURIComponent(this.actorName())}`,
         { method: 'DELETE' }

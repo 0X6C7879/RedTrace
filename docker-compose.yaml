@@ -30,7 +30,6 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./datas/redtrace/:/root/.local/share/redtrace/
       - ${REDTRACE_CONFIG_FILE:-${REDTRACE_DISPATCH_CONFIG_FILE:-./redtrace.yaml}}:/redtrace/redtrace.yaml:ro
       - ./.redtrace-secrets:/redtrace/.redtrace-secrets
       - ./skills:/redtrace/skills
@@ -38,15 +37,6 @@ services:
       - ./plugins:/redtrace/plugins
       - ./.redtrace:/redtrace/.redtrace
       - ./workspaces:/redtrace/workspaces
-      - type: bind
-        source: ${REDTRACE_USER_HOME:-${HOME:-${USERPROFILE}}}/.claude
-        target: /root/.claude
-      - type: bind
-        source: ${REDTRACE_USER_HOME:-${HOME:-${USERPROFILE}}}/.codex
-        target: /root/.codex
-      - type: bind
-        source: ${REDTRACE_USER_HOME:-${HOME:-${USERPROFILE}}}/.pi
-        target: /root/.pi
     environment:
       REDTRACE_DISPATCH_CONFIG: /redtrace/redtrace.yaml
       REDTRACE_CONFIG_SECRETS_DIR: /redtrace/.redtrace-secrets
@@ -88,12 +78,21 @@ services:
       - type: bind
         source: ${REDTRACE_USER_HOME:-${HOME:-${USERPROFILE}}}/.claude
         target: /root/.claude
+        read_only: true
+        bind:
+          create_host_path: false
       - type: bind
         source: ${REDTRACE_USER_HOME:-${HOME:-${USERPROFILE}}}/.codex
         target: /root/.codex
+        read_only: true
+        bind:
+          create_host_path: false
       - type: bind
         source: ${REDTRACE_USER_HOME:-${HOME:-${USERPROFILE}}}/.pi
         target: /root/.pi
+        read_only: true
+        bind:
+          create_host_path: false
     environment:
       REDTRACE_CONFIG_SECRETS_DIR: /redtrace/.redtrace-secrets
       REDTRACE_ROOT: /redtrace

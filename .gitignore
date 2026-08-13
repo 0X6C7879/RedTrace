@@ -52,3 +52,4 @@ benchpacks/results/
 
 # 顶层设计文档不提交到公开仓库（docs/ 与 redtrace/tests/ 随代码推送）
 design-qa.md
+design-qa-*.png

@@ -11,10 +11,10 @@
 <script src="/static/vendor/dagre.min.js"></script>
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/vendor/cytoscape-dagre.js"></script>
-<script defer src="/static/audit.js?v=20260810-performance-1"></script>
+<script defer src="/static/audit.js?v=20260813-infinite-scroll-1"></script>
 <script defer src="/static/capabilities.js?v=20260811-unified-entries-1"></script>
 <!-- Previous cache key: operations.js?v=20260810-performance-1 -->
-<script defer src="/static/operations.js?v=20260813-global-c2-2"></script>
+<script defer src="/static/operations.js?v=20260813-payload-library-1"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
 <style>
   [x-cloak] { display: none !important; }
@@ -240,7 +240,7 @@
     }
   }
 </script>
-<link rel="stylesheet" href="/static/redtrace-theme.css?v=20260812-workspace-actions-1">
+<link rel="stylesheet" href="/static/redtrace-theme.css?v=20260813-payload-library-1">
 </head>
 <body class="bg-slate-50 text-slate-800 h-screen overflow-hidden" :class="{ 'select-none cursor-col-resize': isResizingPanel }" x-data="redtraceApp()">
 <div class="app-shell flex h-full min-h-0" :class="{ 'app-shell-operations': appPage === 'webshell' || appPage === 'plugins' || appPage.startsWith('c2-') }">
@@ -592,7 +592,7 @@
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 12h3.5l2.75-6 3.5 12 2.75-7H21"/></svg>
             <span x-text="selectedIntentPrimaryActionLabel()"></span>
           </button>
-          <button @click="releaseSelectedIntent()" :disabled="!selectedReleasableOpenIntentRecord()"
+          <button @click="releaseSelectedGraphNode()" :disabled="!selectedReleasableOpenIntentRecord() && !selectedReleasableFactId()"
             class="px-3 py-1.5 bg-white/90 backdrop-blur border border-amber-200 text-amber-700 rounded-lg shadow-sm text-xs font-medium hover:bg-amber-50 transition disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 10V7.75A3.75 3.75 0 1 1 16.5 7"/><path d="M7.5 10.5h9A1.5 1.5 0 0 1 18 12v6A1.5 1.5 0 0 1 16.5 19.5h-9A1.5 1.5 0 0 1 6 18v-6A1.5 1.5 0 0 1 7.5 10.5Z"/><path d="M12 14.25v1.5"/></svg>
             释放
@@ -860,6 +860,15 @@
       <button x-show="canCreateForPage()" type="button" @click="openCreate(defaultCreateKind())" :disabled="!projectId()" class="operations-primary-button operations-button inline-flex h-10 items-center gap-1.5 rounded-lg px-4 text-xs font-semibold text-white disabled:opacity-40">
         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span class="hidden sm:inline" x-text="createButtonLabel()"></span>
       </button>
+      <div x-show="pageMode === 'c2-payloads'" class="operations-payload-create" @click.outside="payloadMenuOpen = false">
+        <button type="button" @click="payloadMenuOpen = !payloadMenuOpen" :aria-expanded="payloadMenuOpen" class="operations-primary-button operations-payload-create-button">创建 Payload <span>⌄</span></button>
+        <div x-show="payloadMenuOpen" x-transition.opacity.duration.120ms class="operations-payload-menu" role="menu">
+          <button @click="openPayloadCreate('oneliner')"><strong>单行命令</strong><span>生成可直接执行的回连命令</span></button>
+          <button @click="openPayloadCreate('beacon')"><strong>编译 Beacon</strong><span>生成跨平台 Beacon 文件</span></button>
+          <button @click="openPayloadCreate('external')"><strong>外部 C2</strong><span>调用监听器 Adapter 生成</span></button>
+          <button @click="openPayloadCreate('upload')"><strong>上传文件</strong><span>登记人工已有的 Payload</span></button>
+        </div>
+      </div>
     </header>
 
     <div x-show="error" class="flex shrink-0 items-center gap-2 border-b border-red-100 bg-red-50 px-5 py-2 text-xs text-red-700">
@@ -868,30 +877,61 @@
       <button @click="error = ''" class="rounded p-1 hover:bg-red-100" aria-label="关闭错误">×</button>
     </div>
 
-    <div x-show="pageMode === 'c2-payloads'" class="operations-payload-page min-h-0 flex-1 overflow-y-auto p-6">
-      <div class="grid gap-7 xl:grid-cols-2">
-        <section class="operations-dark-card">
-          <div class="operations-card-title"><div><h2>单行 Payload</h2><p>快速生成目标机可直接执行的回连命令</p></div></div>
-          <label class="operations-form-label">监听器<select x-model="payloadListenerId" class="operations-dark-field"><option value="">选择监听器</option><template x-for="listener in c2Listeners()" :key="listener.id"><option :value="listener.id" x-text="`${listener.name} (${listener.metadata?.listener_type || 'http_beacon'} ${listener.target})`"></option></template></select></label>
-          <label class="operations-form-label">类型<select x-model="payloadKind" class="operations-dark-field"><optgroup label="Beacon"><option value="curl_beacon">Curl Beacon (HTTP)</option></optgroup><optgroup label="Reverse Shell"><option value="bash">Bash TCP</option><option value="bash_udp">Bash UDP</option><option value="python">Python</option><option value="powershell">PowerShell</option><option value="php">PHP</option><option value="perl">Perl</option><option value="ruby">Ruby</option><option value="node">Node.js</option><option value="java">Java</option><option value="lua">Lua</option><option value="awk">Awk</option><option value="nc">Netcat</option><option value="ncat">Ncat</option><option value="socat">Socat</option><option value="openssl">OpenSSL</option></optgroup><optgroup label="Bind Shell"><option value="nc_bind">Netcat Bind</option><option value="ncat_bind">Ncat Bind</option><option value="socat_bind">Socat Bind</option><option value="python_bind">Python Bind</option><option value="powershell_bind">PowerShell Bind</option></optgroup></select></label>
-          <label class="operations-form-label">回连地址（可选）<input x-model="payloadCallback" class="operations-dark-field" placeholder="留空使用监听器回连地址"></label>
-          <button @click="generateOneliner()" class="operations-primary-button h-12 w-full rounded-lg text-sm font-semibold text-white">生成 Oneliner</button>
-          <div x-show="payloadOneliner" class="operations-generated-output"><pre x-text="payloadOneliner"></pre><button @click="navigator.clipboard.writeText(payloadOneliner)">复制</button></div>
-        </section>
-        <section class="operations-dark-card">
-          <div class="operations-card-title"><div><h2>编译 Beacon</h2><p>交叉编译多平台 Beacon 可执行文件</p></div></div>
-          <label class="operations-form-label">监听器<select x-model="payloadListenerId" class="operations-dark-field"><option value="">选择监听器</option><template x-for="listener in c2Listeners()" :key="listener.id"><option :value="listener.id" x-text="`${listener.name} (${listener.metadata?.listener_type || 'http_beacon'} ${listener.target})`"></option></template></select></label>
-          <label class="operations-form-label">回连地址（可选）<input x-model="payloadCallback" class="operations-dark-field" placeholder="https://c2.example.com:8443"></label>
-          <div class="grid grid-cols-2 gap-4"><label class="operations-form-label">目标系统<select x-model="payloadOs" class="operations-dark-field"><option value="linux">Linux</option><option value="windows">Windows</option><option value="darwin">macOS</option></select></label><label class="operations-form-label">目标架构<select x-model="payloadArch" class="operations-dark-field"><option value="amd64">AMD64</option><option value="arm64">ARM64</option><option value="386">386</option></select></label></div>
-          <button @click="buildBeacon()" :disabled="payloadBuilding || !payloadListenerId" class="operations-primary-button h-12 w-full rounded-lg text-sm font-semibold text-white disabled:opacity-40" x-text="payloadBuilding ? '正在构建…' : '构建 Beacon'"></button>
-          <a x-show="builtPayload" :href="builtPayload?.target" class="operations-download-result"><span x-text="builtPayload?.name"></span><strong>下载</strong></a>
-        </section>
-        <section class="operations-dark-card">
-          <div class="operations-card-title"><div><h2>外部 C2 / 自定义 Payload</h2><p>由 MSF、Sliver、Cobalt Strike 或自定义 Adapter 生成匹配载荷</p></div></div>
-          <label class="operations-form-label">监听器<select x-model="payloadListenerId" class="operations-dark-field"><option value="">选择监听器</option><template x-for="listener in c2Listeners()" :key="listener.id"><option :value="listener.id" x-text="`${listener.name} (${listener.metadata?.listener_type || 'custom'})`"></option></template></select></label>
-          <label class="operations-form-label">格式<input x-model="externalPayloadFormat" class="operations-dark-field" placeholder="windows/x64/meterpreter_reverse_https"></label>
-          <label class="operations-form-label">Adapter 参数 JSON<textarea x-model="externalPayloadOptions" rows="6" class="operations-dark-field font-mono"></textarea></label>
-          <button @click="buildExternalPayload()" :disabled="externalPayloadBuilding || !payloadListenerId" class="operations-primary-button h-12 w-full rounded-lg text-sm font-semibold text-white disabled:opacity-40" x-text="externalPayloadBuilding ? '正在生成…' : '生成外部 Payload'"></button>
+    <div x-show="pageMode === 'c2-payloads'" class="operations-payload-page min-h-0 flex-1 overflow-y-auto">
+      <div class="operations-payload-library">
+        <div class="operations-payload-toolbar">
+          <div><strong>Payload 库</strong><span>可供人工和 Worker 复用的载荷证据</span></div>
+          <label><span class="sr-only">搜索 Payload</span><input x-model="query" placeholder="搜索名称、格式、目标或引用"></label>
+        </div>
+        <div class="operations-payload-summary">
+          <span><strong x-text="payloads().length"></strong>全部资产</span>
+          <span><strong x-text="availableResources()"></strong>Worker 可用</span>
+          <span><strong x-text="payloadFiles()"></strong>可下载文件</span>
+          <span><strong x-text="payloadCommands()"></strong>单行命令</span>
+          <span :class="{ 'is-busy': payloadBusy() }"><strong x-text="payloadBusy() ? 1 : 0"></strong>正在生成 / 校验</span>
+        </div>
+        <div class="operations-payload-table-head"><span>资产</span><span>格式 / 平台</span><span>监听器</span><span>来源</span><span>更新时间</span><span></span></div>
+        <div class="operations-payload-list">
+          <template x-for="item in payloads()" :key="item.id">
+            <article class="operations-payload-row" :class="{ 'is-selected': selectedResourceId === item.id }">
+              <div class="operations-payload-row-main" @click="selectResource(item.id)">
+                <div class="operations-payload-name"><span class="operations-payload-kind" x-text="item.metadata?.payload_type === 'command' ? 'CMD' : (item.metadata?.platform || 'FILE').slice(0, 4).toUpperCase()"></span><div><strong x-text="item.name"></strong><span class="font-mono" x-text="item.id"></span></div></div>
+                <span x-text="payloadFormat(item)"></span>
+                <span x-text="payloadListenerName(item)"></span>
+                <span x-text="payloadSourceLabel(item)"></span>
+                <span x-text="relativeTime(item.updated_at)"></span>
+                <button type="button" @click.stop="selectResource(item.id)" :aria-label="`展开 ${item.name}`" x-text="selectedResourceId === item.id ? '−' : '+'"></button>
+              </div>
+              <div x-show="selectedResourceId === item.id" x-transition.opacity.duration.120ms class="operations-payload-evidence">
+                <div><label>资产来源</label><p x-text="`${payloadSourceLabel(item)} · ${item.source_project_id || '全局资源池'}`"></p></div>
+                <div><label>绑定监听器</label><p x-text="payloadListenerName(item)"></p></div>
+                <div><label>证据校验</label><p class="font-mono" x-text="item.metadata?.sha256 ? `SHA-256 ${item.metadata.sha256}` : '来源已记录，未提供文件校验值'"></p></div>
+                <div class="operations-payload-actions">
+                  <a x-show="item.target" :href="item.target" download>下载</a>
+                  <button x-show="item.metadata?.command" @click="copyPayload(item)" x-text="payloadCopiedId === item.id ? '已复制' : '复制命令'"></button>
+                  <span>Worker 可用</span>
+                  <button class="is-danger" @click="removePayload(item)">删除</button>
+                </div>
+                <pre x-show="item.metadata?.command" x-text="item.metadata?.command"></pre>
+              </div>
+            </article>
+          </template>
+          <div x-show="initialized && payloads().length === 0" class="operations-payload-empty">还没有 Payload。可由 Worker 创建，也可从右上角生成或上传。</div>
+          <div x-show="payloadBusy()" class="operations-payload-progress"><span></span><div><strong>正在生成 / 校验</strong><p>完成后会自动进入 Payload 库并共享给 Worker。</p></div></div>
+        </div>
+      </div>
+
+      <div x-show="payloadDialogMode" x-transition.opacity.duration.120ms class="operations-payload-overlay" @keydown.escape.window="closePayloadCreate()">
+        <section class="operations-payload-dialog" role="dialog" aria-modal="true" :aria-label="createButtonLabel()" @click.outside="closePayloadCreate()">
+          <header><div><strong x-text="({oneliner:'生成单行命令', beacon:'编译 Beacon', external:'外部 C2 Payload', upload:'上传 Payload 文件'})[payloadDialogMode]"></strong><p>完成后自动留存为共享资产和审计证据</p></div><button @click="closePayloadCreate()" aria-label="关闭">×</button></header>
+          <div class="operations-payload-form">
+            <label x-show="payloadDialogMode !== 'upload' || c2Listeners().length">监听器<select x-model="payloadListenerId"><option value="">选择监听器</option><template x-for="listener in c2Listeners()" :key="listener.id"><option :value="listener.id" x-text="`${listener.name} · ${listener.target}`"></option></template></select></label>
+            <template x-if="payloadDialogMode === 'oneliner'"><div class="contents"><label>命令类型<select x-model="payloadKind"><option value="curl_beacon">Curl Beacon</option><option value="bash">Bash TCP</option><option value="python">Python</option><option value="powershell">PowerShell</option><option value="php">PHP</option><option value="perl">Perl</option><option value="ruby">Ruby</option><option value="node">Node.js</option><option value="nc">Netcat</option><option value="ncat">Ncat</option><option value="socat">Socat</option><option value="nc_bind">Netcat Bind</option><option value="powershell_bind">PowerShell Bind</option></select></label><label>回连地址（可选）<input x-model="payloadCallback" placeholder="留空使用监听器地址"></label></div></template>
+            <template x-if="payloadDialogMode === 'beacon'"><div class="contents"><label>回连地址（可选）<input x-model="payloadCallback" placeholder="https://c2.example.com:8443"></label><div class="grid grid-cols-2 gap-3"><label>目标系统<select x-model="payloadOs"><option value="linux">Linux</option><option value="windows">Windows</option><option value="darwin">macOS</option></select></label><label>架构<select x-model="payloadArch"><option value="amd64">AMD64</option><option value="arm64">ARM64</option><option value="386">386</option></select></label></div></div></template>
+            <template x-if="payloadDialogMode === 'external'"><div class="contents"><label>格式<input x-model="externalPayloadFormat" placeholder="windows/x64/reverse_https"></label><label>Adapter 参数 JSON<textarea x-model="externalPayloadOptions" rows="5"></textarea></label></div></template>
+            <template x-if="payloadDialogMode === 'upload'"><div class="contents"><label class="operations-payload-drop"><input type="file" @change="choosePayloadFile($event)"><strong x-text="payloadUploadFile?.name || '选择 Payload 文件'"></strong><span x-text="payloadUploadFile ? formatFileSize(payloadUploadFile.size) : '最大 64 MB；原始文件名和 SHA-256 会作为证据保留'"></span></label><label>资产名称<input x-model="payloadUploadName" placeholder="默认使用文件名"></label><div class="grid grid-cols-2 gap-3"><label>目标系统<select x-model="payloadOs"><option value="linux">Linux</option><option value="windows">Windows</option><option value="darwin">macOS</option></select></label><label>架构<select x-model="payloadArch"><option value="amd64">AMD64</option><option value="arm64">ARM64</option><option value="386">386</option></select></label></div><label>证据说明<textarea x-model="payloadUploadSummary" rows="3" placeholder="来源、用途或交接说明"></textarea></label></div></template>
+          </div>
+          <footer><button @click="closePayloadCreate()">取消</button><button x-show="payloadDialogMode === 'oneliner'" @click="generateOneliner()" :disabled="payloadGenerating || !payloadListenerId" x-text="payloadGenerating ? '生成中…' : '生成并保存'"></button><button x-show="payloadDialogMode === 'beacon'" @click="buildBeacon()" :disabled="payloadBuilding || !payloadListenerId" x-text="payloadBuilding ? '构建中…' : '构建并保存'"></button><button x-show="payloadDialogMode === 'external'" @click="buildExternalPayload()" :disabled="externalPayloadBuilding || !payloadListenerId" x-text="externalPayloadBuilding ? '生成中…' : '生成并保存'"></button><button x-show="payloadDialogMode === 'upload'" @click="uploadPayload()" :disabled="payloadUploadBusy || !payloadUploadFile" x-text="payloadUploadBusy ? '上传校验中…' : '上传并保存'"></button></footer>
         </section>
       </div>
     </div>
@@ -1312,7 +1352,7 @@
         </div>
       </header>
 
-      <div x-ref="auditTimeline" class="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+      <div x-ref="auditTimeline" @scroll.passive="loadMoreOnScroll()" class="min-h-0 flex-1 overflow-y-auto px-5 py-5">
         <div x-show="loading" class="flex h-full items-center justify-center text-xs text-slate-400">正在载入审计上下文…</div>
         <div x-show="!loading && selectedTaskId && events.length === 0" class="flex h-full flex-col items-center justify-center text-center">
           <div class="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-400">
@@ -1322,9 +1362,6 @@
           <p class="mt-1 max-w-xs text-xs leading-relaxed text-slate-400">下一次 Claude Code、Codex 或 Pi 执行会实时出现在这里。</p>
         </div>
         <div class="mx-auto max-w-4xl space-y-4">
-          <button x-show="hasMoreEvents()" @click="loadMoreEvents()" type="button" class="mx-auto block rounded-lg border border-slate-200 bg-white px-4 py-1.5 text-[11px] text-slate-500 shadow-sm hover:bg-slate-50 hover:text-slate-700">
-            加载更早的日志
-          </button>
           <template x-for="event in visibleEvents()" :key="event.event_uid || event.id">
             <article x-show="eventVisible(event)" class="audit-event min-h-10">
               <time class="absolute left-0 top-0.5 w-16 text-right text-[10px] tabular-nums text-slate-400" x-text="formatTime(event.timestamp)"></time>
@@ -1921,6 +1958,27 @@
   </div>
 </div>
 
+<!-- Shared destructive-action confirmation -->
+<div x-show="dangerConfirm.open" x-cloak class="fixed inset-0 z-[60] flex items-center justify-center p-4 overlay"
+  @click.self="settleDangerConfirm(false)" @keydown.escape.window="dangerConfirm.open && settleDangerConfirm(false)">
+  <section class="danger-confirm-modal snapshot-modal w-full max-w-md overflow-hidden border shadow-2xl" role="alertdialog" aria-modal="true" aria-labelledby="danger-confirm-title" aria-describedby="danger-confirm-description">
+    <div class="border-b border-slate-200/80 px-6 py-5">
+      <p class="text-[10px] font-semibold uppercase tracking-[0.18em]" :class="dangerConfirm.tone === 'warning' ? 'text-amber-500' : 'text-rose-500'" x-text="dangerConfirm.tone === 'warning' ? 'RELEASE NODE' : 'DANGER ZONE'"></p>
+      <h2 id="danger-confirm-title" class="mt-2 text-lg font-semibold text-slate-100" x-text="dangerConfirm.title"></h2>
+      <p id="danger-confirm-description" class="mt-2 text-xs leading-5 text-slate-400" x-text="dangerConfirm.description"></p>
+    </div>
+    <div class="px-6 py-5">
+      <p class="text-[10px] uppercase tracking-widest text-slate-500">操作对象</p>
+      <div class="mt-2 break-all rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2.5 font-mono text-xs text-slate-200" x-text="dangerConfirm.subject"></div>
+      <p class="mt-4 text-[11px] leading-5" :class="dangerConfirm.tone === 'warning' ? 'text-amber-500' : 'text-rose-500'" x-text="dangerConfirm.note"></p>
+    </div>
+    <div class="flex justify-end gap-3 border-t border-slate-200/80 px-6 py-4">
+      <button id="danger-confirm-cancel" type="button" @click="settleDangerConfirm(false)" class="operations-secondary-button h-9 px-4 text-xs font-medium">取消</button>
+      <button type="button" @click="settleDangerConfirm(true)" class="danger-confirm-action h-9 border px-5 text-xs font-semibold" :class="dangerConfirm.tone === 'warning' ? 'is-warning' : 'is-danger'" x-text="dangerConfirm.confirmLabel"></button>
+    </div>
+  </section>
+</div>
+
 <!-- Toast -->
 <div x-show="toast.show" x-cloak
   x-transition:enter="transition ease-out duration-300"
@@ -1965,6 +2023,8 @@ function redtraceApp() {
     exportTab: 'yaml',
     exportProjectId: '',
     showDeleteModal: false,
+    dangerConfirm: { open: false, tone: 'danger', title: '', description: '', subject: '', note: '', confirmLabel: '' },
+    _dangerConfirmResolve: null,
 
     newProject: { title: '', origin: '', goal: '', bootstrap: false, hints: [{ content: '' }] },
     intentForm: { description: '' },
@@ -2005,6 +2065,7 @@ function redtraceApp() {
     isStoppingAllProjects: false,
 
     async init() {
+      window.redtraceConfirm = (options) => this.requestDangerConfirm(options);
       this._panelResizeMove = (e) => this.onPanelResize(e);
       this._panelResizeStop = () => this.stopPanelResize();
       window.addEventListener('pointermove', this._panelResizeMove);
@@ -2609,7 +2670,13 @@ function redtraceApp() {
     },
 
     async deleteWorker(worker) {
-      if (!confirm(`删除 Worker “${worker.name}”？运行中的任务会继续完成。`)) return;
+      if (!await this.requestDangerConfirm({
+        title: '删除 Worker',
+        description: 'Worker 配置会被移除，当前运行中的任务仍会继续完成。',
+        subject: worker.name,
+        note: '此操作不可撤销。',
+        confirmLabel: '删除 Worker',
+      })) return;
       this.workerActionBusy = worker.name;
       try {
         const revision = encodeURIComponent(this.workerConfig.revision);
@@ -3846,6 +3913,11 @@ function redtraceApp() {
       return intent?.worker ? intent : null;
     },
 
+    selectedReleasableFactId() {
+      const factId = this.selectedFactId();
+      return this.selectedFacts.length === 1 && !['origin', 'goal'].includes(factId) ? factId : null;
+    },
+
     selectedIntentPrimaryActionLabel() {
       const intent = this.selectedOpenIntentRecord();
       if (!intent?.worker) return '认领';
@@ -4321,6 +4393,54 @@ function redtraceApp() {
         this.updateGraph();
         this.showToast('Intent 已释放');
       } catch(e) { this.showToast(e.message, 'error'); }
+    },
+
+    releaseSelectedGraphNode() {
+      return this.selectedReleasableFactId()
+        ? this.releaseSelectedFact()
+        : this.releaseSelectedIntent();
+    },
+
+    async releaseSelectedFact() {
+      const factId = this.selectedReleasableFactId();
+      const fact = this.selectedFactRecord();
+      if (!factId || !await this.requestDangerConfirm({
+        tone: 'warning',
+        title: '释放图谱节点',
+        description: '仅从工作台图谱移除此节点；对应的 WebShell、C2 或凭证资源仍会保留。',
+        subject: `${this.factDisplayId(factId)} · ${fact?.description || '无描述'}`,
+        note: '若节点仍被下游 Intent 使用，将不会执行释放。',
+        confirmLabel: '释放节点',
+      })) return;
+      try {
+        await this.api('DELETE', `/projects/${this.selectedProjectId}/blackboard/facts/${encodeURIComponent(factId)}`);
+        this.clearSelection();
+        await this.loadProject(this.selectedProjectId);
+        this.updateGraph();
+        this.showToast('节点已释放；对应资源仍保留');
+      } catch(e) { this.showToast(e.message, 'error'); }
+    },
+
+    requestDangerConfirm(options = {}) {
+      if (this._dangerConfirmResolve) this._dangerConfirmResolve(false);
+      this.dangerConfirm = {
+        open: true,
+        tone: options.tone === 'warning' ? 'warning' : 'danger',
+        title: options.title || '确认操作',
+        description: options.description || '',
+        subject: options.subject || '—',
+        note: options.note || '此操作不可撤销。',
+        confirmLabel: options.confirmLabel || '确认',
+      };
+      setTimeout(() => document.getElementById('danger-confirm-cancel')?.focus());
+      return new Promise(resolve => { this._dangerConfirmResolve = resolve; });
+    },
+
+    settleDangerConfirm(confirmed) {
+      const resolve = this._dangerConfirmResolve;
+      this._dangerConfirmResolve = null;
+      this.dangerConfirm.open = false;
+      if (resolve) resolve(Boolean(confirmed));
     },
 
     openConclude(intent) { this.concludeForm = { description:'', intentId: intent.id }; this.showConcludeModal = true; },

@@ -163,7 +163,8 @@ class LocalProcess:
             mode="w",
             encoding="utf-8",
             suffix=".json",
-            prefix="redtrace-args-",
+            prefix=".redtrace-args-",
+            dir=self._cwd,
             delete=False,
         ) as arguments:
             json.dump(self.command[1:], arguments, ensure_ascii=False)

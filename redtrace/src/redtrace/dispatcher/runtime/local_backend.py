@@ -47,11 +47,6 @@ class LocalBackend:
             else Path(__file__).resolve().parents[5] / ".redtrace" / "runtime" / "bin"
         )
         self._tools_dir = self._runtime_bin.parent / "tools"
-        self._project_state_root = (
-            paths.projects
-            if paths is not None
-            else Path(__file__).resolve().parents[5] / ".redtrace" / "projects"
-        )
         self._path_prepend = tuple(
             part
             for part in os.environ.get("REDTRACE_LOCAL_PATH_PREPEND", "").split(
@@ -91,8 +86,9 @@ class LocalBackend:
         self, project_id: str, worker_type: str
     ) -> dict[str, str]:
         state = contained_path(
-            self._project_state_root,
+            self._root,
             safe_project_key(project_id),
+            ".redtrace",
             "conversations",
             worker_type,
         )
@@ -106,11 +102,14 @@ class LocalBackend:
         if worker_type not in homes:
             return {}
         variable, user_home = homes[worker_type]
-        _ensure_directory(user_home)
-        for source in user_home.iterdir():
-            if is_agent_runtime_state(worker_type, source.name):
-                continue
-            _ensure_link(state / source.name, source)
+        if user_home.is_dir():
+            for source in user_home.iterdir():
+                if (
+                    is_agent_runtime_state(worker_type, source.name)
+                    or not source.is_file()
+                ):
+                    continue
+                _copy_config(source, state / source.name)
         return {variable: str(state)}
 
     def build_exec_process(
@@ -176,26 +175,23 @@ class LocalBackend:
         )
 
     def write_text_file(self, container_name: str, path: str, content: str) -> str:
-        if path.startswith("/tmp/redtrace-prompts/"):
-            relative = path.removeprefix("/tmp/redtrace-prompts/")
-            parts = Path(relative).parts
-            if not parts or any(part in ("", ".", "..") for part in parts):
-                raise ValueError(f"invalid local prompt path: {path}")
-            workspace = Path(container_name).resolve()
-            project_id = safe_project_key(workspace.name)
-            if workspace != self._project_dir(project_id):
-                raise ValueError(
-                    f"local workspace is outside managed root: {container_name}"
-                )
-            target = (
-                contained_path(self._project_state_root, project_id)
-                / "prompts"
-                / Path(*parts)
+        workspace = Path(container_name).resolve()
+        project_id = safe_project_key(workspace.name)
+        if workspace != self._project_dir(project_id):
+            raise ValueError(
+                f"local workspace is outside managed root: {container_name}"
+            )
+        virtual_root = "/home/kali/workspace/"
+        if path.startswith(virtual_root):
+            target = contained_path(
+                workspace, *Path(path.removeprefix(virtual_root)).parts
             )
         else:
-            target = Path(path)
-            if not target.is_absolute():
-                raise ValueError(f"local file path must be absolute: {path}")
+            target = Path(path).resolve()
+            try:
+                target.relative_to(workspace)
+            except ValueError as exc:
+                raise ValueError(f"local file path is outside workspace: {path}") from exc
         _ensure_directory(target.parent)
         target.write_text(content, encoding="utf-8")
         return str(target)
@@ -291,3 +287,10 @@ def _ensure_link(link: Path, target: Path) -> None:
     )
     if completed.returncode != 0:
         raise RuntimeError(f"cannot link Agent user configuration: {target}")
+
+
+def _copy_config(source: Path, target: Path) -> None:
+    if target.exists() or target.is_symlink():
+        return
+    _ensure_directory(target.parent)
+    shutil.copy2(source, target)

@@ -250,35 +250,45 @@ function auditPage() {
       return this.events.length > this.renderWindow || this._hasServerMore;
     },
 
-    loadMoreEvents() {
-      if (this.events.length > this.renderWindow) {
-        this.renderWindow = Math.min(this.renderWindow + this.RENDER_BATCH, this.events.length);
-        return;
-      }
-      this.loadOlderFromServer();
+    loadMoreOnScroll() {
+      const scroller = this.$refs.auditTimeline;
+      if (scroller?.scrollTop <= 120) this.loadMoreEvents();
     },
 
-    async loadOlderFromServer() {
-      if (this._loadingMore || !this._hasServerMore || !this.selectedTaskId) return;
+    async loadMoreEvents() {
+      if (this._loadingMore || !this.hasMoreEvents() || !this.selectedTaskId) return;
+      const scroller = this.$refs.auditTimeline;
       this._loadingMore = true;
       try {
-        const firstId = this.events.find(event => Number.isInteger(event.id))?.id;
-        const query = firstId ? `?limit=500&before_id=${firstId}` : '?limit=500';
-        const older = await this.request(
-          `/audit/tasks/${encodeURIComponent(this.selectedTaskId)}/events${query}`
-        );
-        if (!older.length) {
-          this._hasServerMore = false;
-          return;
+        if (this.events.length > this.renderWindow) {
+          const previousHeight = scroller?.scrollHeight || 0;
+          const previousTop = scroller?.scrollTop || 0;
+          this.renderWindow = Math.min(this.renderWindow + this.RENDER_BATCH, this.events.length);
+          await new Promise(resolve => this.$nextTick(resolve));
+          if (scroller) scroller.scrollTop = previousTop + scroller.scrollHeight - previousHeight;
+        } else {
+          const firstId = this.events.find(event => Number.isInteger(event.id))?.id;
+          const query = firstId ? `?limit=500&before_id=${firstId}` : '?limit=500';
+          const older = await this.request(
+            `/audit/tasks/${encodeURIComponent(this.selectedTaskId)}/events${query}`
+          );
+          if (!older.length) {
+            this._hasServerMore = false;
+            return;
+          }
+          const fresh = older.filter(event => {
+            const key = this.eventKey(event);
+            return !key || !this._eventKeys.has(key);
+          });
+          const previousHeight = scroller?.scrollHeight || 0;
+          const previousTop = scroller?.scrollTop || 0;
+          this.events = [...fresh, ...this.events];
+          this.renderWindow += fresh.length;
+          this.reindexEvents();
+          if (older.length < 500) this._hasServerMore = false;
+          await new Promise(resolve => this.$nextTick(resolve));
+          if (scroller) scroller.scrollTop = previousTop + scroller.scrollHeight - previousHeight;
         }
-        const fresh = older.filter(event => {
-          const key = this.eventKey(event);
-          return !key || !this._eventKeys.has(key);
-        });
-        this.events = [...fresh, ...this.events];
-        this.renderWindow += fresh.length;
-        this.reindexEvents();
-        if (older.length < 500) this._hasServerMore = false;
       } catch (_) {
         this._hasServerMore = false;
       } finally {

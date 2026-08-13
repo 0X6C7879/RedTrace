@@ -2,7 +2,8 @@
 # the host claude / codex / pi CLIs without adding another agent sandbox.
 # A complete per-Worker Endpoint + API Key + Model override takes precedence for only that
 # process. If all three are omitted, the CLI's existing login and global config are used.
-# HOME and each CLI's user config directory are preserved in both cases.
+# Login/config inputs are copied into each task Workspace; runtime state never writes back
+# to the user's CLI directories.
 #
 # Usage:
 #   cp redtrace.local.example.yaml redtrace.yaml
@@ -48,7 +49,7 @@ context_harness:
   parse_bytes: 67108864
   worker_output_chars: 8388608
 
-# Optional. If omitted: workspace_root defaults to the dispatcher's current directory,
+# Optional. If omitted: workspace_root defaults to <paths.root>/workspaces,
 # completed_action defaults to keep. Each project gets an isolated <workspace_root>/<project_id>/.
 local:
   # workspace_root: "/data/redtrace-runs"

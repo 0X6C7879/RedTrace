@@ -309,20 +309,25 @@ class ContainerManager:
     def _shared_volumes(self, project_id: str) -> dict[str, dict[str, str]]:
         if self._paths is None:
             return {}
+        workspace = contained_path(
+            self._paths.workspaces, safe_project_key(project_id)
+        )
         project = contained_path(
-            self._paths.projects, safe_project_key(project_id), "conversations"
+            workspace, ".redtrace", "conversations"
         )
         agent_homes = {
             "claudecode": (Path.home() / ".claude", "/home/kali/.claude"),
             "codex": (Path.home() / ".codex", "/home/kali/.codex"),
+            "pi": (Path.home() / ".pi", "/home/kali/.pi"),
         }
-        for directory, _ in agent_homes.values():
-            directory.mkdir(parents=True, exist_ok=True)
-        pi_home = Path.home() / ".pi"
-        pi_home.mkdir(parents=True, exist_ok=True)
-        for worker_type in (*agent_homes, "pi"):
+        workspace.mkdir(parents=True, exist_ok=True)
+        for worker_type in agent_homes:
             (project / worker_type).mkdir(parents=True, exist_ok=True)
         bindings = {
+            self._host_source(workspace): {
+                "bind": self._WORKSPACE,
+                "mode": "rw",
+            },
             self._host_source(project / "claudecode"): {
                 "bind": "/home/kali/.claude",
                 "mode": "rw",
@@ -331,12 +336,8 @@ class ContainerManager:
                 "bind": "/home/kali/.codex",
                 "mode": "rw",
             },
-            self._host_source(pi_home): {
-                "bind": "/home/kali/.pi",
-                "mode": "rw",
-            },
             self._host_source(project / "pi"): {
-                "bind": "/home/kali/.pi/sessions",
+                "bind": "/home/kali/.pi",
                 "mode": "rw",
             },
             self._host_source(self._paths.skills): {
@@ -365,12 +366,14 @@ class ContainerManager:
             },
         }
         for worker_type, (user_home, container_home) in agent_homes.items():
+            if not user_home.is_dir():
+                continue
             for source in user_home.iterdir():
                 if is_agent_runtime_state(worker_type, source.name):
                     continue
                 bindings[self._host_source(source)] = {
                     "bind": f"{container_home}/{source.name}",
-                    "mode": "rw",
+                    "mode": "ro",
                 }
         private_cases = os.environ.get("REDTRACE_CODE_AUDIT_PRIVATE_CASES_DIR")
         if private_cases and Path(private_cases).is_dir():

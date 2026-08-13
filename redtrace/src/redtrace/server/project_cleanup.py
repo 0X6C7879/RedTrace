@@ -14,6 +14,14 @@ from redtrace.server import db
 from redtrace.server.operations import operation_executor
 
 LOG = logging.getLogger(__name__)
+DURABLE_RESOURCE_KINDS = {
+    "webshell",
+    "c2_listener",
+    "c2_session",
+    "c2_payload",
+    "c2_profile",
+    "credential_ref",
+}
 
 
 def request_deletion(project_id: str) -> str:
@@ -94,11 +102,35 @@ def report_runtime_cleanup(
 
         _cleanup_project_files(project_id)
         with db.get_conn() as conn:
+            placeholders = ",".join("?" for _ in DURABLE_RESOURCE_KINDS)
+            durable = tuple(sorted(DURABLE_RESOURCE_KINDS))
+            conn.execute(
+                f"""
+                DELETE FROM resource_audit_events
+                WHERE project_id = ?
+                  AND (resource_id IS NULL OR resource_id NOT IN (
+                      SELECT id FROM shared_resources
+                      WHERE project_id = ? AND kind IN ({placeholders})
+                  ))
+                """,
+                (project_id, project_id, *durable),
+            )
+            conn.execute(
+                f"""
+                DELETE FROM shared_resources
+                WHERE project_id = ? AND kind NOT IN ({placeholders})
+                """,
+                (project_id, *durable),
+            )
             conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
             conn.execute(
                 "DELETE FROM project_deletions WHERE project_id = ?",
                 (project_id,),
             )
+        try:
+            db.compact()
+        except Exception:
+            LOG.warning("database compaction failed after project deletion", exc_info=True)
         return True
     except Exception as exc:
         LOG.warning("project deletion cleanup failed project=%s", project_id, exc_info=True)
@@ -142,6 +174,7 @@ def _cleanup_project_files(project_id: str) -> None:
         )
     targets = {
         contained_path(managed, "projects", project_id),
+        contained_path(managed, "log", "projects", project_id),
         contained_path(workspaces, project_id),
         contained_path(audit, project_id),
         contained_path(AUDIT_ROOT, project_id),

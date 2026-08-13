@@ -28,6 +28,8 @@ STATIC_DIR = Path(__file__).parent / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.configure(db.DEFAULT_DB)
+    db.output_root("webshell")
+    db.output_root("c2")
     resume_c2_listeners()
     resume_pending_tasks()
     try:

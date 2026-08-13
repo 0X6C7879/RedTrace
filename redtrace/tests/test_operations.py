@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import shutil
 import socket
@@ -569,29 +570,43 @@ def test_worker_registers_webshell_without_exposing_secret_and_reuses_it(
     assert "never-return-this" not in json.dumps(captured)
     result_id = task["result_ref"].rsplit("/", 1)[-1]
     assert client.get(f"/projects/{project_id}/operations/results/{result_id}").text == "uid=33(www-data)"
+    assert next((db.output_root("webshell") / "results").glob(f"*-{result_id}.txt")).read_text() == "uid=33(www-data)"
 
     detail = client.get(f"/projects/{project_id}").json()
     resource_fact = next(fact for fact in detail["facts"] if resource["id"] in fact["description"])
     assert "never-return-this" not in resource_fact["description"]
 
 
-def test_human_can_delete_webshell_resource(client: TestClient) -> None:
+@pytest.mark.parametrize(
+    ("kind", "metadata", "secret"),
+    [
+        ("webshell", {"method": "POST", "command_param": "cmd"}, {"password": "test-only"}),
+        ("c2_listener", {"listener_type": "http_beacon"}, {}),
+        ("c2_session", {"shell_type": "ssh", "connection_type": "direct"}, {}),
+        ("credential_ref", {"credential_type": "host"}, {"value": "test-only"}),
+    ],
+)
+def test_human_resource_delete_removes_its_graph_fact(
+    client: TestClient, kind: str, metadata: dict, secret: dict
+) -> None:
     project_id = create_project(client)
     created = client.post(
         f"/projects/{project_id}/resources",
         json={
-            "kind": "webshell",
-            "name": "待删除 WebShell",
+            "kind": kind,
+            "name": "待删除资源",
             "target": "https://delete.invalid/shell.php",
             "summary": "删除回归测试",
-            "metadata": {"method": "POST", "command_param": "cmd"},
-            "secret": {"password": "test-only"},
+            "metadata": metadata,
+            "secret": secret,
             "actor_type": "human",
             "actor": "测试员",
         },
     )
     assert created.status_code == 201
-    resource_id = created.json()["resource"]["id"]
+    resource = created.json()["resource"]
+    resource_id = resource["id"]
+    fact_id = resource["fact_id"]
 
     deleted = client.delete(
         f"/projects/{project_id}/resources/{resource_id}?actor=测试员"
@@ -601,11 +616,89 @@ def test_human_can_delete_webshell_resource(client: TestClient) -> None:
     assert client.get(f"/projects/{project_id}/resources/{resource_id}").status_code == 404
     listed = client.get(f"/projects/{project_id}/resources").json()["resources"]
     assert resource_id not in {resource["id"] for resource in listed}
+    facts = client.get(f"/projects/{project_id}").json()["facts"]
+    assert fact_id not in {fact["id"] for fact in facts}
+    changes = client.get(
+        f"/projects/{project_id}/blackboard/changes", params={"since": 0, "limit": 100}
+    ).json()["changes"]
+    assert any(
+        change["kind"] == "fact"
+        and change["node_id"] == fact_id
+        and change["action"] == "removed"
+        for change in changes
+    )
     audit = client.get(f"/projects/{project_id}/operations/audit").json()["events"]
     assert any(
         event["action"] == "resource.delete" and event["resource_id"] == resource_id
         for event in audit
     )
+
+
+def test_releasing_resource_fact_keeps_resource_and_blocks_used_facts(
+    client: TestClient,
+) -> None:
+    project_id = create_project(client)
+    resource = client.post(
+        f"/projects/{project_id}/resources",
+        json={"kind": "credential_ref", "name": "keep-me", "secret": {"value": "secret"}},
+    ).json()["resource"]
+    fact_id = resource["fact_id"]
+
+    released = client.delete(f"/projects/{project_id}/blackboard/facts/{fact_id}")
+    assert released.status_code == 204
+    kept = client.get(f"/projects/{project_id}/resources/{resource['id']}").json()["resource"]
+    assert kept["fact_id"] is None
+    assert client.get(f"/projects/{project_id}/blackboard/nodes/{fact_id}").json()["found"] is False
+
+    leaf_intent = client.post(
+        f"/projects/{project_id}/intents",
+        json={"from": ["origin"], "description": "leaf", "creator": "admin", "worker": "admin"},
+    ).json()
+    leaf = client.post(
+        f"/projects/{project_id}/intents/{leaf_intent['id']}/conclude",
+        json={"worker": "admin", "description": "leaf result"},
+    ).json()["fact"]
+    assert client.delete(f"/projects/{project_id}/blackboard/facts/{leaf['id']}").status_code == 204
+    intents = client.get(f"/projects/{project_id}").json()["intents"]
+    assert leaf_intent["id"] not in {intent["id"] for intent in intents}
+
+    parent_intent = client.post(
+        f"/projects/{project_id}/intents",
+        json={"from": ["origin"], "description": "parent", "creator": "admin", "worker": "admin"},
+    ).json()
+    parent = client.post(
+        f"/projects/{project_id}/intents/{parent_intent['id']}/conclude",
+        json={"worker": "admin", "description": "parent result"},
+    ).json()["fact"]
+    client.post(
+        f"/projects/{project_id}/intents",
+        json={"from": [parent["id"]], "description": "child", "creator": "admin"},
+    )
+    assert client.delete(f"/projects/{project_id}/blackboard/facts/{parent['id']}").status_code == 409
+
+
+def test_resource_delete_detaches_its_fact_from_graph_intents(client: TestClient) -> None:
+    project_id = create_project(client)
+    resource = client.post(
+        f"/projects/{project_id}/resources",
+        json={"kind": "webshell", "name": "used-resource"},
+    ).json()["resource"]
+    intent = client.post(
+        f"/projects/{project_id}/intents",
+        json={
+            "from": [resource["fact_id"]],
+            "description": "depends on resource",
+            "creator": "admin",
+            "worker": "admin",
+        },
+    ).json()
+
+    assert client.delete(
+        f"/projects/{project_id}/resources/{resource['id']}"
+    ).status_code == 204
+    project = client.get(f"/projects/{project_id}").json()
+    assert resource["fact_id"] not in {fact["id"] for fact in project["facts"]}
+    assert intent["id"] not in {item["id"] for item in project["intents"]}
 
 
 @pytest.mark.skipif(
@@ -950,6 +1043,70 @@ def test_c2_payload_and_profile_are_project_scoped_references(client: TestClient
     facts = client.get(f"/projects/{project_id}").json()["facts"]
     assert any("C2 载荷" in fact["description"] for fact in facts)
     assert any("C2 流量伪装" in fact["description"] for fact in facts)
+
+
+def test_payload_oneliner_and_worker_upload_are_retained_and_shareable(client: TestClient) -> None:
+    project_id = create_project(client)
+    listener = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "c2_listener",
+            "name": "Worker HTTP",
+            "target": "127.0.0.1:8443",
+            "metadata": {"listener_type": "http_beacon", "bind_port": 8443},
+        },
+    ).json()["resource"]
+    worker_headers = {
+        "X-RedTrace-Worker": "worker-payload",
+        "X-RedTrace-Task": "payload-build",
+        "X-RedTrace-Intent": "i-payload",
+    }
+
+    generated = client.post(
+        f"/projects/{project_id}/c2/payloads/oneliner",
+        headers=worker_headers,
+        json={"listener_id": listener["id"], "kind": "curl_beacon"},
+    )
+    assert generated.status_code == 200
+    command_payload = generated.json()["payload"]
+    assert command_payload["metadata"]["command"] == generated.json()["oneliner"]
+    assert command_payload["metadata"]["source_type"] == "worker"
+
+    content = b"redtrace-payload-evidence"
+    uploaded = client.post(
+        f"/projects/{project_id}/c2/payloads/upload",
+        headers={**worker_headers, "Content-Type": "application/octet-stream"},
+        params={
+            "filename": "operator-tool.bin",
+            "name": "Operator Tool",
+            "platform": "linux",
+            "arch": "amd64",
+            "listener_id": listener["id"],
+        },
+        content=content,
+    )
+    assert uploaded.status_code == 201
+    file_payload = uploaded.json()["payload"]
+    assert file_payload["metadata"]["original_filename"] == "operator-tool.bin"
+    assert file_payload["metadata"]["sha256"] == hashlib.sha256(content).hexdigest()
+    assert (
+        db.output_root("c2") / "payloads" / file_payload["metadata"]["filename"]
+    ).read_bytes() == content
+    assert db.output_root("webshell").is_dir()
+    assert client.get(file_payload["target"]).content == content
+
+    snapshot = client.get(
+        f"/projects/{project_id}/operations/snapshot",
+        headers=worker_headers,
+        params={"kinds": "c2_payload"},
+    ).json()["resources"]
+    assert {item["id"] for item in snapshot} == {command_payload["id"], file_payload["id"]}
+    assert next(item for item in snapshot if item["id"] == command_payload["id"])["metadata"]["command"]
+
+    assert client.delete(
+        f"/projects/{project_id}/resources/{file_payload['id']}"
+    ).status_code == 204
+    assert client.get(file_payload["target"]).status_code == 404
 
 
 def test_worker_snapshot_and_changes_reveal_human_webshell_and_c2_session(

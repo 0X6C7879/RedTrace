@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import shutil
 import sqlite3
+import tempfile
 import threading
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-DEFAULT_DB = Path.home() / ".local" / "share" / "redtrace" / "redtrace.db"
+from redtrace.paths import redtrace_root
+
+DEFAULT_DB = redtrace_root() / ".redtrace" / "redtrace.db"
+LEGACY_ROOT = Path.home() / ".local" / "share" / "redtrace"
 
 _db_path: Path | None = None
 _change_condition = threading.Condition()
@@ -403,9 +410,12 @@ def configure(path: Path) -> None:
         return
     _db_path = path
     _db_path.parent.mkdir(parents=True, exist_ok=True)
+    _migrate_legacy_storage(_db_path)
     conn = sqlite3.connect(str(_db_path))
     conn.row_factory = sqlite3.Row
     try:
+        conn.execute("PRAGMA secure_delete=ON")
+        conn.execute("PRAGMA temp_store=MEMORY")
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=OFF")
         conn.execute("PRAGMA legacy_alter_table=ON")
@@ -422,6 +432,79 @@ def configure(path: Path) -> None:
         )
     finally:
         conn.close()
+
+
+def _migrate_legacy_storage(path: Path) -> None:
+    if (
+        path.resolve() != DEFAULT_DB.resolve()
+        or LEGACY_ROOT.resolve() == path.parent.resolve()
+    ):
+        return
+    legacy_db = LEGACY_ROOT / "redtrace.db"
+    if not path.exists() and legacy_db.is_file():
+        fd, temporary = tempfile.mkstemp(prefix=".redtrace-migrate-", dir=path.parent)
+        os.close(fd)
+        target = Path(temporary)
+        try:
+            source_conn = sqlite3.connect(f"file:{legacy_db}?mode=ro", uri=True)
+            target_conn = sqlite3.connect(str(target))
+            try:
+                source_conn.backup(target_conn)
+                target_conn.execute("PRAGMA secure_delete=ON")
+                target_conn.execute("PRAGMA temp_store=MEMORY")
+                target_conn.execute("VACUUM")
+                if target_conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise RuntimeError("migrated RedTrace database failed integrity check")
+            finally:
+                target_conn.close()
+                source_conn.close()
+            os.replace(target, path)
+            legacy_db.unlink()
+            for suffix in ("-wal", "-shm"):
+                legacy_db.with_name(legacy_db.name + suffix).unlink(missing_ok=True)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+    for source, destination in (
+        (LEGACY_ROOT / "audit", path.parent / "audit"),
+        (LEGACY_ROOT / "payloads", project_root() / "output" / "c2" / "payloads"),
+    ):
+        _move_tree_verified(source, destination)
+    (LEGACY_ROOT / ".DS_Store").unlink(missing_ok=True)
+    try:
+        LEGACY_ROOT.rmdir()
+    except OSError:
+        pass
+
+
+def _move_tree_verified(source: Path, destination: Path) -> None:
+    if not source.is_dir():
+        return
+    entries = list(source.rglob("*"))
+    unsafe = [path for path in entries if path.is_symlink() or not (path.is_file() or path.is_dir())]
+    if unsafe:
+        raise RuntimeError(f"legacy RedTrace migration contains unsupported entry: {unsafe[0]}")
+    files = [path for path in entries if path.is_file()]
+    for old in files:
+        new = destination / old.relative_to(source)
+        new.parent.mkdir(parents=True, exist_ok=True)
+        digest = _file_digest(old)
+        if new.exists():
+            if digest != _file_digest(new):
+                raise RuntimeError(f"legacy RedTrace migration collision: {new}")
+        else:
+            shutil.copy2(old, new)
+        if digest != _file_digest(new):
+            raise RuntimeError(f"legacy RedTrace migration verification failed: {old}")
+    shutil.rmtree(source)
+
+
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _needs_nullable_project(conn: sqlite3.Connection, table: str) -> bool:
@@ -635,6 +718,8 @@ def get_conn(*, immediate: bool = False) -> Generator[sqlite3.Connection, None, 
     conn = sqlite3.connect(str(_db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA secure_delete=ON")
+    conn.execute("PRAGMA temp_store=MEMORY")
     if immediate:
         conn.execute("BEGIN IMMEDIATE")
     changes_before = conn.total_changes
@@ -652,5 +737,33 @@ def get_conn(*, immediate: bool = False) -> Generator[sqlite3.Connection, None, 
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+def project_root() -> Path:
+    """Resolve the root that owns the configured database and output tree."""
+    path = (_db_path or DEFAULT_DB).resolve()
+    return path.parent.parent if path.parent.name == ".redtrace" else path.parent
+
+
+def output_root(category: str) -> Path:
+    if category not in {"webshell", "c2"}:
+        raise ValueError(f"unsupported output category: {category}")
+    root = project_root() / "output" / category
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def compact() -> None:
+    """Physically release deleted task pages without using the system temp dir."""
+    assert _db_path is not None
+    conn = sqlite3.connect(str(_db_path), timeout=30)
+    try:
+        conn.execute("PRAGMA secure_delete=ON")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("VACUUM")
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     finally:
         conn.close()

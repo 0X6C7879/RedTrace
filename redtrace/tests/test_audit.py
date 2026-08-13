@@ -537,17 +537,21 @@ def test_static_audit_hides_claude_skill_plugin_namespace() -> None:
     assert "replace(/^redtrace-capabilities:/, '')" in audit
     assert "['tool.started', 'tool.completed'].includes(event.kind)" in audit
     assert "(?:launching|loading)\\s+skill:" in audit
-    assert "/static/audit.js?v=20260810-performance-1" in index
+    assert "/static/audit.js?v=20260813-infinite-scroll-1" in index
 
 
 def test_static_audit_batches_frames_and_bounds_live_history() -> None:
     static_dir = Path(__file__).parents[1] / "src" / "redtrace" / "server" / "static"
+    index = (static_dir / "index.html").read_text(encoding="utf-8")
     audit = (static_dir / "audit.js").read_text(encoding="utf-8")
 
     assert "EVENT_BUFFER_LIMIT: 2000" in audit
     assert "requestAnimationFrame(() =>" in audit
     assert "this.trimEventBuffer()" in audit
     assert "this.events.splice(0, this.events.length - limit)" in audit
+    assert '@scroll.passive="loadMoreOnScroll()"' in index
+    assert "加载更早的日志" not in index
+    assert "scroller.scrollTop = previousTop + scroller.scrollHeight - previousHeight" in audit
 
 
 def test_successful_worker_stderr_is_not_rendered_as_worker_error(
@@ -995,7 +999,7 @@ def test_static_audit_renders_thinking_cards() -> None:
     assert "'thinking.delta': '思考'" in audit
     assert ".audit-thinking" in styles
     assert ".audit-thinking" in theme
-    assert "/static/audit.js?v=20260810-performance-1" in index
+    assert "/static/audit.js?v=20260813-infinite-scroll-1" in index
 
 
 def test_worker_drivers_run_at_maximum_thinking_strength() -> None:

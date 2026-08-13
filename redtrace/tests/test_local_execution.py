@@ -267,7 +267,7 @@ def test_local_backend_keeps_agent_config_linked_and_conversations_in_project(
 
     workspace = Path(backend.ensure_running("proj_001"))
     env = backend.conversation_environment("proj_001", "codex")
-    state = paths.projects / "proj_001" / "conversations" / "codex"
+    state = paths.workspaces / "proj_001" / ".redtrace" / "conversations" / "codex"
 
     assert env == {"CODEX_HOME": str(state)}
     assert (state / "config.toml").read_text(encoding="utf-8") == config.read_text(
@@ -277,7 +277,7 @@ def test_local_backend_keeps_agent_config_linked_and_conversations_in_project(
     assert (workspace / ".pi" / "mcp.json").resolve() == pi_mcp.resolve()
     assert backend.conversation_environment("proj_001", "pi") == {
         "PI_CODING_AGENT_SESSION_DIR": str(
-            paths.projects / "proj_001" / "conversations" / "pi"
+            paths.workspaces / "proj_001" / ".redtrace" / "conversations" / "pi"
         )
     }
 
@@ -307,7 +307,9 @@ def test_local_graph_snapshot_uses_managed_project_path(tmp_path: Path) -> None:
     )
 
     snapshot = next(
-        (paths.projects / "proj_001" / "prompts").glob("reason_execute-*/graph.yaml")
+        (paths.workspaces / "proj_001" / ".redtrace" / "prompts").glob(
+            "reason_execute-*/graph.yaml"
+        )
     )
     assert snapshot.read_text(encoding="utf-8") == "facts:\n- id: f001\n"
     assert str(snapshot) in reference
@@ -371,11 +373,14 @@ def test_local_common_env_reaches_worker_subprocess(
 
 def test_local_backend_write_text_file_writes_to_host(tmp_path: Path) -> None:
     backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path)))
-    target = tmp_path / "snapshots" / "graph.yaml"
+    handle = backend.ensure_running("proj_001")
+    target = Path(handle) / "snapshots" / "graph.yaml"
 
-    backend.write_text_file("ignored", str(target), "facts: []\n")
+    backend.write_text_file(handle, str(target), "facts: []\n")
 
     assert target.read_text() == "facts: []\n"
+    with pytest.raises(ValueError, match="outside workspace"):
+        backend.write_text_file(handle, str(tmp_path / "outside.yaml"), "nope")
 
 
 def test_local_backend_keep_leaves_dir_and_reports_no_cleanup(tmp_path: Path) -> None:
@@ -727,8 +732,6 @@ def test_explore_runs_real_local_cli_end_to_end(tmp_path: Path, monkeypatch) -> 
         "claude",
         'echo \'{"accepted":true,"data":{"description":"local fake fact"}}\'',
     )
-    monkeypatch.setattr(common, "GRAPH_SNAPSHOT_ROOT", str(tmp_path / "prompts"))
-
     config = _local_config_for_worker("test-worker", "claudecode")
     backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path / "work")))
     intent = make_intent()
@@ -749,7 +752,7 @@ def test_explore_runs_real_local_cli_end_to_end(tmp_path: Path, monkeypatch) -> 
     assert outcome == "success"
     assert client.concluded == [("proj_001", "i001", "test-worker", "local fake fact")]
     # graph snapshot was materialised on the host under the patched root
-    snapshot_root = tmp_path / "prompts"
+    snapshot_root = tmp_path / "work" / "proj_001" / ".redtrace" / "prompts"
     assert any(p.name == "graph.yaml" for p in snapshot_root.rglob("*"))
 
 
@@ -762,8 +765,6 @@ def test_explore_local_cli_rejection_releases_intent(
         "claude",
         'echo \'{"accepted":false,"reason":"policy_refusal"}\'',
     )
-    monkeypatch.setattr(common, "GRAPH_SNAPSHOT_ROOT", str(tmp_path / "prompts"))
-
     config = _local_config_for_worker("test-worker", "claudecode")
     backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path / "work")))
     intent = make_intent()

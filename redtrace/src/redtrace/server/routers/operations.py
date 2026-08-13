@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import secrets
 import sqlite3
 from pathlib import Path
 from typing import Any, Literal
@@ -9,7 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, R
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
-from redtrace.board.storage import get_project_or_404
+from redtrace.board.storage import get_project_or_404, release_fact
 from redtrace.server import db
 from redtrace.server.c2_payloads import (
     build_beacon,
@@ -164,6 +166,9 @@ class C2ExternalPayloadRequest(BaseModel):
     format: str = Field(default="default", min_length=1, max_length=128)
     options: dict[str, Any] = Field(default_factory=dict)
     actor: str = Field(default="admin", min_length=1, max_length=128)
+
+
+MAX_PAYLOAD_UPLOAD_BYTES = 64 * 1024 * 1024
 
 
 def _actor(body_actor_type: str, body_actor: str, context: QueryContext) -> tuple[str, str, str | None]:
@@ -440,8 +445,7 @@ def test_webshell_connection(project_id: str, body: WebShellTestRequest):
 
 
 def _payload_root() -> Path:
-    configured = db._db_path or db.DEFAULT_DB
-    root = Path(configured).parent / "payloads"
+    root = db.output_root("c2") / "payloads"
     root.mkdir(parents=True, exist_ok=True)
     return root.resolve()
 
@@ -496,6 +500,29 @@ def create_c2_oneliner(
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        resource, _ = create_resource(
+            conn,
+            project_id=None if project_id == GLOBAL_SCOPE else project_id,
+            kind="c2_payload",
+            name=f"{body.kind}-{listener['name']}",
+            target="",
+            summary=f"{body.kind} 单行命令，绑定 {listener['name']}",
+            metadata={
+                "listener_id": listener["id"],
+                "payload_type": "command",
+                "source_type": "worker" if actor_type == "worker" else "generator",
+                "format": body.kind,
+                "size_bytes": len(oneliner.encode()),
+                "sha256": hashlib.sha256(oneliner.encode()).hexdigest(),
+            },
+            secret={"command": oneliner},
+            actor_type=actor_type,
+            actor=actor,
+            worker=context.worker if actor_type == "worker" else None,
+            intent_id=context.intent_id,
+            parent_resource_id=listener["id"],
+            publish_fact=True,
+        )
         audit_event(
             conn,
             project_id=project_id,
@@ -507,7 +534,12 @@ def create_c2_oneliner(
             status="succeeded",
             detail={"kind": body.kind, "intent_id": context.intent_id},
         )
-        return {"oneliner": oneliner, "kind": body.kind, "listener_id": listener["id"]}
+        return {
+            "oneliner": oneliner,
+            "kind": body.kind,
+            "listener_id": listener["id"],
+            "payload": resource,
+        }
 
 
 @router.post("/projects/{project_id}/c2/payloads/build", status_code=201)
@@ -550,10 +582,13 @@ def build_c2_payload(
             summary=f"{body.os}/{body.arch} Beacon，绑定 {listener['name']}",
             metadata={
                 "listener_id": body.listener_id,
+                "payload_type": "file",
+                "source_type": "worker" if actor_type == "worker" else "generator",
                 "platform": body.os,
                 "arch": body.arch,
                 "size_bytes": artifact.stat().st_size,
                 "filename": artifact.name,
+                "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
             },
             secret={"artifact_path": str(artifact)},
             actor_type=actor_type,
@@ -626,6 +661,9 @@ def build_external_c2_payload(
             summary=str(generated.get("summary") or f"{framework} {body.format} payload"),
             metadata={
                 **dict(generated.get("metadata") or {}),
+                "listener_id": body.listener_id,
+                "payload_type": "external",
+                "source_type": "worker" if actor_type == "worker" else "generator",
                 "framework": framework,
                 "format": body.format,
                 "external": True,
@@ -638,6 +676,85 @@ def build_external_c2_payload(
             publish_fact=True,
         )
         return {"payload": resource}
+
+
+@router.post("/projects/{project_id}/c2/payloads/upload", status_code=201)
+async def upload_c2_payload(
+    project_id: str,
+    request: Request,
+    filename: str = Query(min_length=1, max_length=255),
+    name: str = Query(default="", max_length=160),
+    platform: str = Query(default="unknown", max_length=32),
+    arch: str = Query(default="unknown", max_length=32),
+    listener_id: str = Query(default="", max_length=64),
+    summary: str = Query(default="", max_length=2000),
+    context: QueryContext = Depends(query_context),
+):
+    original_name = Path(filename).name
+    if original_name != filename or filename in {".", ".."} or "\\" in filename:
+        raise HTTPException(400, "Invalid payload filename")
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > MAX_PAYLOAD_UPLOAD_BYTES:
+            raise HTTPException(413, "Payload file exceeds 64 MB")
+        content.extend(chunk)
+    if not content:
+        raise HTTPException(400, "Payload file is empty")
+    payload_bytes = bytes(content)
+    actor_type = "worker" if context.worker != "unknown" else "human"
+    actor = context.worker if actor_type == "worker" else "admin"
+    suffix = Path(filename).suffix[:16]
+    stored_name = f"upload-{secrets.token_hex(8)}{suffix}"
+    artifact = _payload_root() / stored_name
+    artifact.write_bytes(payload_bytes)
+    try:
+        with get_conn() as conn:
+            _resolve_global_project(conn, project_id)
+            if listener_id:
+                listener = _resource_or_404(conn, project_id, listener_id)
+                if listener["kind"] != "c2_listener":
+                    raise HTTPException(400, "Resource is not a C2 listener")
+            resource, _ = create_resource(
+                conn,
+                project_id=None if project_id == GLOBAL_SCOPE else project_id,
+                kind="c2_payload",
+                name=name.strip() or original_name,
+                target=f"/projects/{project_id}/c2/payloads/download/{stored_name}",
+                summary=summary.strip() or "人工上传的 Payload 文件",
+                metadata={
+                    "listener_id": listener_id or None,
+                    "payload_type": "file",
+                    "source_type": "worker" if actor_type == "worker" else "upload",
+                    "platform": platform,
+                    "arch": arch,
+                    "filename": stored_name,
+                    "original_filename": original_name,
+                    "size_bytes": len(payload_bytes),
+                    "sha256": hashlib.sha256(payload_bytes).hexdigest(),
+                },
+                secret={"artifact_path": str(artifact)},
+                actor_type=actor_type,
+                actor=actor,
+                worker=context.worker if actor_type == "worker" else None,
+                intent_id=context.intent_id,
+                parent_resource_id=listener_id or None,
+                publish_fact=True,
+            )
+            audit_event(
+                conn,
+                project_id=project_id,
+                resource_id_value=resource["id"],
+                task_id_value=None,
+                actor_type=actor_type,
+                actor=actor,
+                action="c2.payload_upload",
+                status="succeeded",
+                detail={"filename": original_name, "intent_id": context.intent_id},
+            )
+            return {"payload": resource}
+    except Exception:
+        artifact.unlink(missing_ok=True)
+        raise
 
 
 @router.get("/projects/{project_id}/c2/payloads/download/{filename}")
@@ -668,7 +785,12 @@ def download_c2_payload(project_id: str, filename: str):
         raise HTTPException(404, "Payload not found") from exc
     if not artifact.is_file():
         raise HTTPException(404, "Payload not found")
-    return FileResponse(artifact, filename=filename, media_type="application/octet-stream")
+    metadata = json_load(row["metadata_json"], {})
+    return FileResponse(
+        artifact,
+        filename=str(metadata.get("original_filename") or filename),
+        media_type="application/octet-stream",
+    )
 
 
 @router.get("/projects/{project_id}/resources/{resource_id}")
@@ -741,14 +863,29 @@ def delete_resource(
     resource_id: str,
     actor: str = Query(default="admin", min_length=1, max_length=128),
 ):
+    artifact: Path | None = None
     with get_conn() as conn:
         row = _resource_or_404(conn, project_id, resource_id)
+        if row["kind"] == "c2_payload":
+            candidate = Path(str(json_load(row["secret_json"], {}).get("artifact_path") or "")).resolve()
+            try:
+                candidate.relative_to(_payload_root())
+                artifact = candidate
+            except ValueError:
+                pass
         running = conn.execute(
             "SELECT COUNT(*) AS count FROM operation_tasks WHERE resource_id = ? AND status IN ('queued', 'running', 'awaiting_approval')",
             (resource_id,),
         ).fetchone()["count"]
         if running:
             raise HTTPException(409, "Cancel active tasks before deleting this resource")
+        if row["project_id"] and row["fact_id"]:
+            release_fact(
+                conn,
+                row["project_id"],
+                row["fact_id"],
+                detach_references=True,
+            )
         audit_event(
             conn,
             project_id=project_id,
@@ -763,6 +900,8 @@ def delete_resource(
         conn.execute("DELETE FROM shared_resources WHERE id = ?", (resource_id,))
     if row["kind"] == "c2_listener":
         shell_broker.stop_listener(resource_id)
+    if artifact:
+        artifact.unlink(missing_ok=True)
     return Response(status_code=204)
 
 
