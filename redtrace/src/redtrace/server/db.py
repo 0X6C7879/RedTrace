@@ -306,7 +306,7 @@ ON shared_resources(parent_resource_id);
 
 CREATE TABLE IF NOT EXISTS operation_tasks (
     id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
     resource_id TEXT NOT NULL REFERENCES shared_resources(id) ON DELETE CASCADE,
     intent_id TEXT,
     fact_id TEXT,
@@ -338,7 +338,7 @@ ON operation_tasks(status, created_at);
 
 CREATE TABLE IF NOT EXISTS operation_results (
     id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
     task_id TEXT NOT NULL UNIQUE REFERENCES operation_tasks(id) ON DELETE CASCADE,
     content_type TEXT NOT NULL DEFAULT 'text/plain',
     content TEXT NOT NULL,
@@ -496,6 +496,56 @@ def _ensure_global_resource_schema(conn: sqlite3.Connection) -> None:
             ON resource_audit_events(project_id, id);
             CREATE INDEX IF NOT EXISTS idx_resource_audit_resource
             ON resource_audit_events(resource_id, id);
+            """
+        )
+
+    if _needs_nullable_project(conn, "operation_tasks") or _needs_nullable_project(conn, "operation_results"):
+        conn.executescript(
+            """
+            ALTER TABLE operation_results RENAME TO operation_results_project_scoped;
+            ALTER TABLE operation_tasks RENAME TO operation_tasks_project_scoped;
+            CREATE TABLE operation_tasks (
+                id TEXT PRIMARY KEY,
+                project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+                resource_id TEXT NOT NULL REFERENCES shared_resources(id) ON DELETE CASCADE,
+                intent_id TEXT,
+                fact_id TEXT,
+                action TEXT NOT NULL,
+                actor_type TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                risk TEXT NOT NULL DEFAULT 'low',
+                status TEXT NOT NULL DEFAULT 'queued',
+                input_json TEXT NOT NULL DEFAULT '{}',
+                output_summary TEXT NOT NULL DEFAULT '',
+                result_ref TEXT,
+                requires_approval INTEGER NOT NULL DEFAULT 0,
+                approved_by TEXT,
+                approved_at TEXT,
+                cancel_requested INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT
+            );
+            INSERT INTO operation_tasks SELECT * FROM operation_tasks_project_scoped;
+            CREATE TABLE operation_results (
+                id TEXT PRIMARY KEY,
+                project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+                task_id TEXT NOT NULL UNIQUE REFERENCES operation_tasks(id) ON DELETE CASCADE,
+                content_type TEXT NOT NULL DEFAULT 'text/plain',
+                content TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            INSERT INTO operation_results SELECT * FROM operation_results_project_scoped;
+            DROP TABLE operation_results_project_scoped;
+            DROP TABLE operation_tasks_project_scoped;
+            CREATE INDEX IF NOT EXISTS idx_operation_tasks_project
+            ON operation_tasks(project_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_operation_tasks_resource
+            ON operation_tasks(resource_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_operation_tasks_status
+            ON operation_tasks(status, created_at);
             """
         )
 

@@ -150,7 +150,7 @@ function operationsPage() {
     },
 
     canCreateForPage() {
-      return ['webshell', 'plugins', 'c2-listeners', 'c2-profiles', 'c2-credentials'].includes(this.pageMode);
+      return ['webshell', 'plugins', 'c2-listeners', 'c2-sessions', 'c2-profiles', 'c2-credentials'].includes(this.pageMode);
     },
 
     createButtonLabel() {
@@ -158,6 +158,7 @@ function operationsPage() {
         webshell: '添加连接',
         plugins: '添加插件',
         'c2-listeners': '创建监听器',
+        'c2-sessions': '新建会话',
         'c2-payloads': '生成 Payload',
         'c2-profiles': '创建 Profile',
         'c2-credentials': '保存凭证',
@@ -434,7 +435,7 @@ function operationsPage() {
         commandParam: 'cmd',
         passwordParam: '',
         password: '',
-        shellType: 'php',
+        shellType: kind === 'c2_session' ? 'ssh' : 'php',
         protocol: 'auto',
         targetOs: 'auto',
         encoding: 'auto',
@@ -462,6 +463,11 @@ function operationsPage() {
         credentialUsername: '',
         credentialDomain: '',
         credentialSecret: '',
+        sessionPort: '',
+        sessionUsername: '',
+        sessionDomain: '',
+        sessionSecret: '',
+        sessionSecretType: 'password',
       };
       this.createError = '';
       this.testMessage = '';
@@ -508,12 +514,21 @@ function operationsPage() {
         metadata.callback_host = form.callbackHost || '';
         metadata.target_host = form.targetHost || '';
         metadata.profile_id = form.profileId || '';
-        if (['msf', 'sliver', 'cobalt_strike', 'custom'].includes(form.listenerType)) {
+        if (form.listenerType === 'external_c2') {
           metadata.adapter_endpoint = form.endpoint || '';
           if (form.endpoint) secret.adapter_endpoint = form.endpoint;
           if (form.token) secret.token = form.token;
         }
         form.target = `${metadata.bind_host}:${metadata.bind_port}`;
+        form.status = 'available';
+      }
+      if (form.kind === 'c2_session') {
+        metadata.shell_type = form.shellType;
+        metadata.connection_type = 'direct';
+        metadata.username = form.sessionUsername || '';
+        metadata.domain = form.sessionDomain || '';
+        if (form.sessionPort) metadata.port = Number(form.sessionPort);
+        if (form.sessionSecret) secret[form.sessionSecretType] = form.sessionSecret;
         form.status = 'available';
       }
       if (form.kind === 'plugin') {
@@ -574,15 +589,6 @@ function operationsPage() {
     async createTask(action, arguments = {}, risk = 'low', requiresApproval = false, options = {}) {
       const resource = this.currentResource();
       if (!resource || this.runningAction) return null;
-      // Operation tasks must keep a project provenance (audit trail). Ask the
-      // operator to attach a task when none is selected instead of silently
-      // falling back to a phantom project.
-      if (this.isGlobalScope()) {
-        const message = '请先在「工作台」中选择一个 RedTrace 任务用于记录本次操作';
-        this.error = message;
-        if (!options.silent) this.terminalOutput = `操作失败：${message}`;
-        return null;
-      }
       this.runningAction = true;
       this.error = '';
       try {

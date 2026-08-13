@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="redtrace-resource",
         description=(
             "Discover and use globally shared WebShell, C2, proxy, file, credential, "
-            "plugin, and result resources without exposing stored secrets."
+            "plugin, and result resources. Credential resources include their stored secret."
         ),
     )
     parser.add_argument(
@@ -185,7 +185,7 @@ def build_parser() -> argparse.ArgumentParser:
     listener_create.add_argument(
         "--listener-type",
         default="http_beacon",
-        choices=["http_beacon", "https_beacon", "tcp_reverse", "tcp_bind", "websocket", "msf", "sliver", "cobalt_strike", "custom"],
+        choices=["http_beacon", "https_beacon", "tcp_reverse", "tcp_bind", "external_c2"],
     )
     listener_create.add_argument("--bind-host", default="0.0.0.0")
     listener_create.add_argument(
@@ -398,9 +398,7 @@ def _perform(args: argparse.Namespace) -> Any:
                     "write_file",
                     "delete_file",
                 ],
-                "c2_listener": [
-                    "worker create/enable reverse, bind, Beacon, external, or custom listeners; receive global Sessions"
-                ],
+                "c2_listener": ["worker create/enable HTTP(S) Beacon, TCP reverse, or TCP bind listeners; receive global Sessions"],
                 "c2_session": ["command and plugin-defined agent actions"],
                 "c2_payload": [
                     "worker generate from a Listener and deploy through an execution channel"
@@ -409,7 +407,7 @@ def _perform(args: argparse.Namespace) -> Any:
                 "plugin": ["actions declared in resource.metadata.actions"],
                 "proxy": [],
                 "file": [],
-                "credential_ref": ["store host, web, database, cloud, token, certificate, hash, ticket, and Active Directory credentials"],
+                "credential_ref": ["read and store plaintext host, web, database, cloud, token, certificate, hash, ticket, and Active Directory credentials"],
                 "result": [],
             },
             "workflow": [
@@ -422,7 +420,7 @@ def _perform(args: argparse.Namespace) -> Any:
                 "create WebShell resources with webshell-create and use them with run --wait",
                 "before declaring no access channel, call changes once with the retained audit_cursor",
                 "get the selected resource to inspect bounded metadata and declared actions",
-                "run an action by resource ID; stored secrets stay server-side",
+                "run an action by resource ID; credential secrets are shared with Workers",
                 "use --publish-result only for a result that should become a blackboard Fact reference",
                 "do not poll changes at a fixed frequency",
             ],

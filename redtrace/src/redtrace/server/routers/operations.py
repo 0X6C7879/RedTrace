@@ -883,6 +883,7 @@ def create_operation(
     actor_type, actor, context_intent = _actor(body.actor_type, body.actor, context)
     with get_conn() as conn:
         resource = _resource_or_404(conn, project_id, resource_id)
+        target_project_id = None if project_id == GLOBAL_SCOPE else project_id
         _ensure_resource_available_for_actor(resource, actor_type, actor)
         if resource["kind"] not in EXECUTABLE_KINDS | {"c2_session"}:
             raise HTTPException(409, "This resource type does not accept operation tasks")
@@ -906,7 +907,7 @@ def create_operation(
                 """,
                 (
                     op_id,
-                    project_id,
+                    target_project_id,
                     resource_id,
                     context_intent or body.intent_id,
                     body.fact_id,
@@ -921,13 +922,10 @@ def create_operation(
                 ),
             )
         except sqlite3.IntegrityError as exc:
-            raise HTTPException(
-                409,
-                "Operation tasks must target a real project; select a RedTrace task on the operations page",
-            ) from exc
+            raise HTTPException(409, "Operation task could not be saved") from exc
         audit_event(
             conn,
-            project_id=project_id,
+            project_id=target_project_id,
             resource_id_value=resource_id,
             task_id_value=op_id,
             actor_type=actor_type,
@@ -1050,8 +1048,10 @@ def get_operation_result(project_id: str, result_id: str):
     with get_conn() as conn:
         _resolve_global_project(conn, project_id)
         row = conn.execute(
-            "SELECT * FROM operation_results WHERE id = ? AND project_id = ?",
-            (result_id, project_id),
+            "SELECT * FROM operation_results WHERE id = ? AND project_id IS NULL"
+            if project_id == GLOBAL_SCOPE
+            else "SELECT * FROM operation_results WHERE id = ? AND project_id = ?",
+            (result_id,) if project_id == GLOBAL_SCOPE else (result_id, project_id),
         ).fetchone()
         if row is None:
             raise HTTPException(404, "Operation result not found")

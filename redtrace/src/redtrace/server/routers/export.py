@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 
 import yaml
@@ -42,7 +43,8 @@ def _load_project_data(conn, project_id: str):
     ).fetchall()
     resources = conn.execute(
         """
-        SELECT id, kind, name, status, target, summary, worker, intent_id, fact_id,
+        SELECT id, kind, name, status, target, summary, metadata_json, secret_json,
+               worker, intent_id, fact_id,
                parent_resource_id, source_task_id, locked_by_type, locked_by,
                worker_paused, created_at, updated_at, last_seen_at
         FROM shared_resources
@@ -131,6 +133,12 @@ def _export_yaml(conn, project_id: str) -> str:
                 "status": resource["status"],
                 "target": resource["target"],
                 "summary": resource["summary"],
+                "metadata": json.loads(resource["metadata_json"] or "{}"),
+                **(
+                    {"secret": json.loads(resource["secret_json"] or "{}")}
+                    if resource["kind"] == "credential_ref"
+                    else {}
+                ),
                 "worker": resource["worker"],
                 "intent": resource["intent_id"],
                 "fact": resource["fact_id"],

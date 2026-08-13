@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from io import StringIO
 
+import pytest
+
 from redtrace import resource_cli
 
 
@@ -150,6 +152,22 @@ def test_worker_registers_direct_session_credential_and_custom_payload(monkeypat
     assert calls[0][2]["metadata"]["shell_type"] == "evil_winrm"
     assert calls[1][2]["secret"] == {"value": "krbtgt-hash"}
     assert calls[2][2]["metadata"] == {"format": "custom", "framework": "sliver", "custom": True}
+
+
+def test_listener_create_only_accepts_supported_transports() -> None:
+    assert _parse(
+        "listener-create", "--name", "reverse", "--listener-type", "tcp_reverse",
+        "--bind-port", "4444",
+    ).listener_type == "tcp_reverse"
+    assert _parse(
+        "listener-create", "--name", "dns", "--listener-type", "external_c2",
+        "--bind-port", "53", "--adapter-endpoint", "http://adapter.test",
+    ).listener_type == "external_c2"
+    with pytest.raises(SystemExit):
+        _parse(
+            "listener-create", "--name", "fake", "--listener-type", "sliver",
+            "--bind-port", "4444",
+        )
 
 
 def test_webshell_create_reads_password_from_stdin_without_echo(monkeypatch) -> None:

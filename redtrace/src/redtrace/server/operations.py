@@ -43,6 +43,7 @@ RISK_LEVELS = {"low", "medium", "high", "critical"}
 TERMINAL_TASK_STATES = {"succeeded", "failed", "cancelled", "rejected"}
 MAX_RESULT_BYTES = 2 * 1024 * 1024
 C2_STALE_SECONDS = 120
+SUPPORTED_LISTENER_TYPES = {"http_beacon", "https_beacon", "tcp_reverse", "tcp_bind", "external_c2"}
 
 
 def json_load(value: str | None, fallback: Any) -> Any:
@@ -95,6 +96,8 @@ def public_resource(row: Any) -> dict[str, Any]:
     secret = json_load(item.pop("secret_json", "{}"), {})
     item["metadata"] = json_load(item.pop("metadata_json", "{}"), {})
     item["has_secret"] = bool(secret)
+    if item["kind"] == "credential_ref":
+        item["secret"] = secret
     item["worker_paused"] = bool(item.get("worker_paused"))
     item["locked"] = bool(item.get("locked_by"))
     item["source_project_id"] = item.get("project_id") or item["metadata"].get("source_project_id")
@@ -279,6 +282,10 @@ def create_resource(
     resource_secret = dict(secret or {})
     secret_once: str | None = None
     if kind == "c2_listener":
+        listener_type = str(resource_metadata.get("listener_type") or "http_beacon").lower()
+        if listener_type not in SUPPORTED_LISTENER_TYPES:
+            raise ValueError(f"unsupported listener type: {listener_type}")
+        resource_metadata["listener_type"] = listener_type
         secret_once = secrets.token_urlsafe(32)
         resource_secret = {
             **resource_secret,
@@ -381,7 +388,7 @@ def create_resource(
     return public_resource(row), secret_once
 
 
-def store_result(conn, project_id: str, task_id_value: str, content: str) -> tuple[str, str]:
+def store_result(conn, project_id: str | None, task_id_value: str, content: str) -> tuple[str, str]:
     encoded = content.encode("utf-8", errors="replace")
     if len(encoded) > MAX_RESULT_BYTES:
         encoded = encoded[:MAX_RESULT_BYTES]
@@ -397,7 +404,7 @@ def store_result(conn, project_id: str, task_id_value: str, content: str) -> tup
         """,
         (rid, project_id, task_id_value, content, len(encoded), digest, utcnow()),
     )
-    return rid, f"/projects/{project_id}/operations/results/{rid}"
+    return rid, f"/projects/{project_id or '_global'}/operations/results/{rid}"
 
 
 def output_summary(content: str, limit: int = 0) -> str:
@@ -734,6 +741,8 @@ def execute_direct_session(resource: Any, task: Any) -> str:
     username = str(secret.get("username") or metadata.get("username") or "")
     password = str(secret.get("password") or secret.get("value") or "")
     credential_hash = str(secret.get("hash") or secret.get("ntlm_hash") or "")
+    if not credential_hash and str(metadata.get("credential_type") or "").lower() == "hash":
+        credential_hash, password = password, ""
     domain = str(secret.get("domain") or metadata.get("domain") or "")
     timeout = min(max(float(arguments.get("timeout") or 60), 1), 300)
     stdin_input: str | None = None
@@ -805,7 +814,7 @@ class ShellBroker:
     def start_listener(self, resource: Any) -> None:
         metadata = json_load(resource["metadata_json"], {})
         listener_type = str(metadata.get("listener_type") or "").lower()
-        if listener_type in {"msf", "sliver", "cobalt_strike", "custom"}:
+        if listener_type in {"external_c2", "msf", "sliver", "cobalt_strike", "custom"}:
             self.stop_listener(resource["id"])
             stop = threading.Event()
             with self._lock:

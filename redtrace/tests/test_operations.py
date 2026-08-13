@@ -76,6 +76,22 @@ def test_legacy_project_scoped_resources_migrate_without_losing_source(
                   '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
         """
     )
+    conn.execute(
+        """
+        INSERT INTO operation_tasks (
+            id, project_id, resource_id, action, actor_type, actor, created_at
+        ) VALUES ('op_old', 'proj_old', 'ws_old', 'command', 'human', 'legacy',
+                  '2026-01-01T00:00:00Z')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO operation_results (
+            id, project_id, task_id, content, size_bytes, sha256, created_at
+        ) VALUES ('out_old', 'proj_old', 'op_old', 'ok', 2, 'hash',
+                  '2026-01-01T00:00:00Z')
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -90,6 +106,13 @@ def test_legacy_project_scoped_resources_migrate_without_losing_source(
         assert {
             row["table"] for row in migrated.execute("PRAGMA foreign_key_list(operation_tasks)")
         } == {"shared_resources", "projects"}
+        assert next(
+            row for row in migrated.execute("PRAGMA table_info(operation_tasks)")
+            if row["name"] == "project_id"
+        )["notnull"] == 0
+        assert migrated.execute(
+            "SELECT content FROM operation_results WHERE id = 'out_old'"
+        ).fetchone()["content"] == "ok"
         metadata = json.loads(
             migrated.execute(
                 "SELECT metadata_json FROM shared_resources WHERE id = 'ws_old'"
@@ -148,7 +171,17 @@ def test_webshell_sessions_and_credentials_are_global_with_source_attribution(
     assert shell["source"]["worker"] == "codex-1"
     assert saved_credential["metadata"]["credential_type"] == "active_directory"
     assert saved_credential["has_secret"] is True
-    assert "Passw0rd!" not in listed.text
+    assert saved_credential["secret"] == {"value": "Passw0rd!"}
+
+    snapshot = client.get(
+        f"/projects/{second}/operations/snapshot",
+        headers={"X-RedTrace-Worker": "codex-2"},
+        params={"kinds": "credential_ref"},
+    ).json()["resources"]
+    assert snapshot[0]["secret"] == {"value": "Passw0rd!"}
+
+    exported = client.get(f"/projects/{first}/export?format=yaml").text
+    assert "Passw0rd!" in exported
 
 
 def test_reverse_listener_creates_global_interactive_session(client: TestClient) -> None:
@@ -222,6 +255,37 @@ def test_reverse_listener_creates_global_interactive_session(client: TestClient)
     channel.close()
     assert result is not None and result["status"] == "succeeded"
     assert "root" in result["output_summary"]
+
+
+def test_listener_types_are_real_transports_and_http_payload_uses_server_url(
+    client: TestClient,
+) -> None:
+    project_id = create_project(client)
+    rejected = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "c2_listener",
+            "name": "not-a-transport",
+            "metadata": {"listener_type": "sliver"},
+        },
+    )
+    assert rejected.status_code == 400
+
+    listener_response = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "c2_listener",
+            "name": "worker-http",
+            "metadata": {"listener_type": "http_beacon"},
+        },
+    )
+    listener = listener_response.json()["resource"]
+    payload = client.post(
+        f"/projects/{project_id}/c2/payloads/oneliner",
+        json={"listener_id": listener["id"], "kind": "curl_beacon"},
+    )
+    assert payload.status_code == 200
+    assert f"http://testserver/c2/checkin/{listener['id']}" in payload.json()["oneliner"]
 
 
 def test_bind_listener_connects_and_exposes_an_interactive_session(
@@ -387,6 +451,47 @@ def test_direct_sessions_do_not_expire_like_polling_beacons(client: TestClient) 
     listed = client.get(f"/projects/{project_id}/resources?kind=c2_session").json()["resources"]
     session = next(item for item in listed if item["id"] == session_id)
     assert session["status"] == "available"
+
+
+def test_global_direct_session_can_open_shell_without_selected_project(
+    client: TestClient, monkeypatch
+) -> None:
+    captured: dict = {}
+
+    def run(argv, **kwargs):
+        captured["argv"] = argv
+        return SimpleNamespace(stdout="global-shell-ok\n", stderr="", returncode=0)
+
+    monkeypatch.setattr(operations.subprocess, "run", run)
+    session = client.post(
+        "/projects/_global/resources",
+        json={
+            "kind": "c2_session",
+            "name": "manual-ssh",
+            "target": "10.0.0.8",
+            "metadata": {
+                "shell_type": "ssh",
+                "connection_type": "direct",
+                "username": "alice",
+            },
+            "secret": {"private_key_path": "/tmp/test-key"},
+        },
+    ).json()["resource"]
+    queued = client.post(
+        f"/projects/_global/resources/{session['id']}/tasks",
+        json={"action": "command", "arguments": {"command": "whoami"}},
+    )
+    assert queued.status_code == 202
+    task_id = queued.json()["task"]["id"]
+    task = None
+    for _ in range(60):
+        task = client.get(f"/projects/_global/operations/tasks/{task_id}").json()["task"]
+        if task["status"] in {"succeeded", "failed"}:
+            break
+        time.sleep(0.05)
+    assert task is not None and task["status"] == "succeeded"
+    assert "global-shell-ok" in client.get(task["result_ref"]).text
+    assert captured["argv"][-1] == "whoami"
 
 
 def test_worker_registers_webshell_without_exposing_secret_and_reuses_it(

@@ -123,11 +123,11 @@ def add_blackboard_guidance(
             "Bind Shell 使用 `redtrace-resource listener-create --listener-type tcp_bind --target-host <target>` 作为主动 Connector。若无 session，不要止步：运行 `redtrace-resource listener-create`，"
             "再用 `payload-oneliner`，或通过 `payload-build` 构建 Beacon；也可通过 `payload-external` 让 MSF/Sliver/Cobalt Strike Adapter 生成匹配 Beacon，或让 Worker 自行生成兼容/免杀 payload 后用 `payload-import` 登记。"
             "MSF、Sliver、Cobalt Strike 等外部 C2 的 implant/session 用 `session-register --connection-type external_c2` 同步回来；普通 shell 可作为投递通道启动匹配 implant，不能伪装成另一种 C2 协议。"
-            "发现主机、Web、数据库、云或 AD 凭证时必须用 `credential-create --secret-stdin` 登记，禁止把 secret 放在命令行、Fact 或最终描述里。部署后 refresh 一次。重复建立 channel 前，"
+            "发现主机、Web、数据库、云或 AD 凭证时必须用 `credential-create --secret-stdin` 登记，禁止把 secret 放在命令行、Fact 或最终描述里；需要复用时从 credential_ref 资源的 secret 字段读取。部署后 refresh 一次。重复建立 channel 前，"
             "调用一次 `redtrace-resource changes --since <audit_cursor>`；这是 decision-point refresh，不是 timer。"
             "最终结论提到已获得 shell/RCE/session/credential 时，必须包含对应 Resource ID；没有 ID 就继续注册而不是结束。"
             "`protocol` 只能填写实际 WebShell 协议，`method` 只能是 GET/POST，不得把漏洞利用链名称填入任一字段。"
-            "不得索取已存储的 secret。"
+            "已存储的 credential_ref secret 可直接复用。"
         )
     if task_type != "reason":
         sections.extend(
