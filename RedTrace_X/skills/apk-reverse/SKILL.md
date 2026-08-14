@@ -9,7 +9,7 @@ description: 在 CLI 环境下做 Android APK 逆向时使用。适用于 APK �
 
 1. `NOW`: 运行 `redtrace-skill recall apk-reverse`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: 确认当前任务是否命中本 skill 的适用范围
-3. `NEXT`: 读取 `../tool-index.md`，校验工具可用性和实际路径
+3. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
 4. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
 5. `ACT`: 进入"工作流"第一步并执行，不要停在确认状态
 
@@ -155,7 +155,7 @@ jadx --deobf -d jadx_out app.apk
 边界：
 
 - JEB Pro 是商业软件，必须由用户自行取得并安装有效许可证；本包不会下载、破解或规避许可。
-- 仅在 `tool-index` 已确认本机 JEB 可用时调用；否则继续使用 `jadx`、`apktool`、Ghidra、IDA 或 radare2。
+- 仅在 `command -v` 已确认本机 JEB 可用时调用；否则继续使用 `jadx`、`apktool`、Ghidra、IDA 或 radare2。
 - 第三方 JEB MCP bridge 不是本包依赖。安装前必须审阅源码、权限、网络行为和版本，再由用户明确确认注册。
 
 ### `apktool`
@@ -404,6 +404,6 @@ frida -U -f com.example.app -l hook.js
 ## 任务完成自检（声称完成前 MUST 通过）
 
 - [ ] 我是否执行了工作流中的每一步（而不是只阅读）？
-- [ ] 我是否基于 `tool-index` 使用了真实工具路径？
+- [ ] 我是否基于 `command -v` 使用了真实工具路径？
 - [ ] 我是否产出了可复现证据（命令/脚本/截图/报告）？
 - [ ] 我是否完成并回写了 RULES 要求的 Checklist 项？

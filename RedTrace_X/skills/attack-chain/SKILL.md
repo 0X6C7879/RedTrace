@@ -9,7 +9,7 @@ description: Use for authorized multi-stage attack-path planning and orchestrati
 1. `NOW`: 运行 `redtrace-skill recall attack-chain`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: 在当前 RedTrace Workspace 创建或更新 case 与 `scope.md`；授权未明确为 granted 时禁止 ACT
 3. `NOW`: 以 **lead** 角色规划阶段并写入 specialist_roles
-4. `NEXT`: 读取 `../tool-index.md`，校验工具可用性和实际路径
+4. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
 5. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
 6. `ACT`: 按 `references/lifecycle-checklist.md` 过阶段门闩；每阶段更新 `timeline.md` + `workitems.md`；发现提升为 Evidence/Finding
 7. 结束：`docs-generator` 报告必须含 Evidence 链
@@ -646,6 +646,6 @@ touch -t 202301010000 /path/to/file
 ## 任务完成自检（声称完成前 MUST 通过）
 
 - [ ] 我是否执行了工作流中的每一步（而不是只阅读）？
-- [ ] 我是否基于 `tool-index` 使用了真实工具路径？
+- [ ] 我是否基于 `command -v` 使用了真实工具路径？
 - [ ] 我是否产出了可复现证据（命令/脚本/截图/报告）？
 - [ ] 我是否完成并回写了 RULES 要求的 Checklist 项？

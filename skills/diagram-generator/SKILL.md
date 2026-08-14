@@ -8,7 +8,7 @@ description: generate, refine, validate, and render diagrams from natural langua
 ## ACTION REQUIRED（读完后立刻执行）
 
 1. `NOW`：确认当前任务是否命中本 skill 的适用范围
-2. `NOW`：读取 `../tool-index.md`，校验工具可用性和实际路径
+2. `NOW`：用 `command -v` 检测工具可用性（不猜路径、不自动安装）
 3. `NEXT`：缺工具时调用 bootstrap，不要猜路径
 4. `ACT`：进入"工作流"第一步并执行，不要停在确认状态
 
@@ -182,6 +182,6 @@ For English user requests, respond in English. For Chinese user requests, respon
 ## 任务完成自检（声称完成前 MUST 通过）
 
 - [ ] 我是否执行了工作流中的每一步（而不是只阅读）？
-- [ ] 我是否基于 `tool-index` 使用了真实工具路径？
+- [ ] 我是否基于 `command -v` 使用了真实工具路径？
 - [ ] 我是否产出了可复现证据（命令/脚本/截图/报告）？
 - [ ] 我是否完成并回写了 RULES 要求的 Checklist 项？

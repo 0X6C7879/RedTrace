@@ -30,7 +30,7 @@
 | 默认对域名狂扫 | 必须 scope 资产列表 |
 | 弱证据直接写报告 | 强制 E/F/P 链 |
 | 单会话无角色 | role-map 交接 |
-| 无工具索引 | tool-index + bootstrap |
+| 无工具索引 | `command -v` 检测 + bootstrap |
 
 ## 每阶段 timeline 最少一条
 

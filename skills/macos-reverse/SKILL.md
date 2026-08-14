@@ -9,7 +9,7 @@ description: Use for authorized macOS and Mach-O reverse engineering including c
 
 1. `NOW`: 运行 `redtrace-skill recall macos-reverse`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: 确认目标为 macOS/Mach-O/App bundle（iOS IPA → `mobile-reverse/`）
-3. `NEXT`: tool-index；jtool2/lldb 等
+3. `NEXT`: `command -v` 检测；jtool2/lldb 等
 4. `ACT`: 签名与装载信息 → 静态 → 动态（lldb/Frida）
 
 ## 适用场景

@@ -10,7 +10,7 @@ description: Use for authorized reverse engineering of custom binary protocols, 
 1. `NOW`: 运行 `redtrace-skill recall protocol-reverse`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: 确认任务是否为**协议/流量/序列化格式**逆向（非纯 Web 参数签名 → 转 `js-reverse/`）
 3. `NOW`: 若有目标网络交互 → `../scripts/case-init.ps1` 完成 scope；`auth` 未 granted 禁止对目标 ACT
-4. `NEXT`: 读取 `../tool-index.md`；缺工具 bootstrap（tshark/wireshark 等可能需手动）
+4. `NEXT`: 用 `command -v` 检测工具状态；缺工具 bootstrap（tshark/wireshark 等可能需手动）
 5. `ACT`: 进入工作流 Phase 1，产出帧布局或消息字典草稿
 
 ## 适用场景

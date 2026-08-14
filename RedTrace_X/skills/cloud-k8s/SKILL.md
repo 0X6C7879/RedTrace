@@ -10,7 +10,7 @@ description: Use for authorized cloud, container, and Kubernetes security assess
 1. `NOW`: 运行 `redtrace-skill recall cloud-k8s`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: case-init + scope；明确账号边界、禁止破坏性操作
 3. `NOW`: 确认是云元数据/容器/K8s/IAM，而非普通 Web 扫（后者 `pentest-tools/`）
-4. `NEXT`: tool-index；kubectl/aws/gcloud 等多为手动安装
+4. `NEXT`: `command -v` 检测；kubectl/aws/gcloud 等多为手动安装
 5. `ACT`: 从「身份与暴露面」开始，禁止默认全网扫描
 
 ## 适用场景

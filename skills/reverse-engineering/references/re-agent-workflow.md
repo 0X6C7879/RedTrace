@@ -8,7 +8,7 @@
 
 ```text
 □ scope.md：offline 样本路径 或 授权设备/靶机
-□ tool-index：file/strings/r2/ida/frida 等实际路径
+□ `command -v`：file/strings/r2/ida/frida 等实际路径
 □ 角色：cre（ops/role-map）
 ```
 
@@ -58,5 +58,5 @@
 
 ## 5. 与「堆 RE skill 插件」的差异
 
-- 本包用 **阶段门闩 + tool-index**，不默认启用 Hex-Rays「unsafe 全自动执行」类插件  
+- 本包用 **阶段门闩 + `command -v`**，不默认启用 Hex-Rays「unsafe 全自动执行」类插件  
 - 动态插桩默认 **offline/lab** network_profile  

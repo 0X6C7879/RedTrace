@@ -16,7 +16,7 @@ metadata:
 
 1. `NOW`: 运行 `redtrace-skill recall reverse-engineering`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: 确认当前任务是否命中本 skill 的适用范围
-3. `NEXT`: 读取 `../tool-index.md`，校验工具可用性和实际路径
+3. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
 4. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
 5. `ACT`: 按 re-agent-workflow 推进；进入工作流第一步并执行，不要停在确认状态
 
@@ -206,6 +206,6 @@ Use [field-notes.md](field-notes.md) after the first round of triage when you kn
 ## 任务完成自检（声称完成前 MUST 通过）
 
 - [ ] 我是否执行了工作流中的每一步（而不是只阅读）？
-- [ ] 我是否基于 `tool-index` 使用了真实工具路径？
+- [ ] 我是否基于 `command -v` 使用了真实工具路径？
 - [ ] 我是否产出了可复现证据（命令/脚本/截图/报告）？
 - [ ] 我是否完成并回写了 RULES 要求的 Checklist 项？

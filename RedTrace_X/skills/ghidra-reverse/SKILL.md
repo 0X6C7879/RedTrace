@@ -9,7 +9,7 @@ description: Use for free/open reverse engineering with Ghidra (headless or GUI)
 
 1. `NOW`: 运行 `redtrace-skill recall ghidra-reverse`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: 确认需要 **Ghidra**（无 IDA / 偏好开源 / 批量 headless）
-3. `NEXT`: 读 `../tool-index.md` 查 ghidra / ghidra-mcp 路径
+3. `NEXT`: 用 `command -v` 检测 ghidra / ghidra-mcp 路径
 4. `NEXT`: 缺工具 → bootstrap `ghidra-mcp`（若 manifest 支持）或按手动步骤装 Ghidra
 5. `ACT`: 导入样本 → 自动分析 → 导出关键函数反编译
 
@@ -50,14 +50,14 @@ description: Use for free/open reverse engineering with Ghidra (headless or GUI)
 ### 3. Headless（批量）
 
 ```bash
-# 示例：analyzeHeadless 路径因安装而异，MUST 从 tool-index 取
+# 示例：analyzeHeadless 路径因安装而异，MUST 用 `command -v` 取
 analyzeHeadless /path/to/project Proj -import sample.bin -postScript ExportDecomp.py
 ```
 
 ### 4. MCP（若已配置）
 
 ```text
-□ 确认 ghidra MCP 端口（常见 8765，以 tool-index 为准）
+□ 确认 ghidra MCP 端口（常见 8765，以 `command -v` 检测结果为准）
 □ 用 MCP 工具拉反编译 / xrefs，禁止猜端口
 ```
 
@@ -81,7 +81,7 @@ analyzeHeadless /path/to/project Proj -import sample.bin -postScript ExportDecom
 
 ## 任务完成自检
 
-- [ ] 是否基于真实 Ghidra/tool-index 路径？
+- [ ] 是否基于 `command -v` 检测到的真实 Ghidra 路径？
 - [ ] 是否标注函数地址与重命名？
 - [ ] 是否有可复现步骤？
 - [ ] Checklist / journal？

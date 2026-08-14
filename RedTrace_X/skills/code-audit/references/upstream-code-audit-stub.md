@@ -10,7 +10,7 @@ description: Use for authorized source-code security review and SAST workflows i
 1. `NOW`: 运行 `redtrace-skill recall code-audit` 并确认代码审计授权
 2. `NOW`: 确认有**源码/仓库访问**（无源码二进制 → 转 RE skill）
 3. `NOW`: 明确语言栈与范围（目录/服务/PR diff）
-4. `NEXT`: tool-index；semgrep 等
+4. `NEXT`: `command -v` 检测；semgrep 等
 5. `ACT`: 威胁建模草图 → 自动扫描 → 人工验证
 
 ## 适用场景
