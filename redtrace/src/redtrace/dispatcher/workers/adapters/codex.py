@@ -13,6 +13,7 @@ from redtrace.dispatcher.workers.base import (
 )
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
 from redtrace.dispatcher.workers.live import CodexLiveControl
+from redtrace.skill_runtime import skill_runtime_enabled
 
 
 class CodexDriver(RegexSessionDriver):
@@ -67,22 +68,34 @@ class CodexDriver(RegexSessionDriver):
         return f"POST {worker.env['CODEX_BASE_URL']}/responses (model={worker.env['CODEX_MODEL']})"
 
     def build_execute(
-        self, worker: WorkerConfig, prompt: str, session: str | None
+        self,
+        worker: WorkerConfig,
+        prompt: str,
+        session: str | None,
+        *,
+        task_type: str | None = None,
     ) -> DriverResult:
-        return self._build_live(worker, prompt, session)
+        return self._build_live(worker, prompt, session, task_type=task_type)
 
     def build_conclude(
         self,
         worker: WorkerConfig,
         prompt: str,
         session: str,
+        *,
+        task_type: str | None = None,
     ) -> DriverResult:
-        return self._build_live(worker, prompt, session)
+        return self._build_live(worker, prompt, session, task_type=task_type)
 
     def _build_live(
-        self, worker: WorkerConfig, prompt: str, session: str | None
+        self,
+        worker: WorkerConfig,
+        prompt: str,
+        session: str | None,
+        *,
+        task_type: str | None = None,
     ) -> DriverResult:
-        capability_args = self._resource_args(worker)
+        capability_args = self._resource_args(worker, task_type)
         model = worker.env.get("CODEX_MODEL") if worker.api_configured() else None
         control = CodexLiveControl(
             prompt,
@@ -98,7 +111,7 @@ class CodexDriver(RegexSessionDriver):
                     *self._long_task_args(worker),
                     *capability_args,
                     "-c",
-                    self._custom_instructions(worker),
+                    self._custom_instructions(worker, task_type),
                 ],
                 session=session,
                 stdin=control.initial_input,
@@ -121,7 +134,7 @@ class CodexDriver(RegexSessionDriver):
                 "-c",
                 'model_reasoning_summary="detailed"',
                 "-c",
-                self._custom_instructions(worker),
+                self._custom_instructions(worker, task_type),
                 "-c",
                 f'model_providers.redtrace.base_url="{env["CODEX_BASE_URL"]}"',
                 "-c",
@@ -171,7 +184,9 @@ class CodexDriver(RegexSessionDriver):
         return stdout
 
     @staticmethod
-    def _resource_args(worker: WorkerConfig) -> list[str]:
+    def _resource_args(
+        worker: WorkerConfig, task_type: str | None = None
+    ) -> list[str]:
         raw = worker.env.get("REDTRACE_CODEX_RESOURCE_ARGS", "[]")
         try:
             value = json.loads(raw)
@@ -181,12 +196,31 @@ class CodexDriver(RegexSessionDriver):
             not isinstance(item, str) for item in value
         ):
             raise ValueError("REDTRACE_CODEX_RESOURCE_ARGS must be a JSON string array")
-        return value
+        if skill_runtime_enabled(task_type):
+            return value
+        return [
+            item
+            for index, item in enumerate(value)
+            if not (
+                item.startswith("skills.config=")
+                or (
+                    item == "-c"
+                    and index + 1 < len(value)
+                    and value[index + 1].startswith("skills.config=")
+                )
+            )
+        ]
 
     @staticmethod
-    def _custom_instructions(worker: WorkerConfig) -> str:
+    def _custom_instructions(
+        worker: WorkerConfig, task_type: str | None = None
+    ) -> str:
         instructions = "请始终使用中文进行思考、分析和回答。"
-        shared = worker.env.get("REDTRACE_GLOBAL_INSTRUCTIONS", "").strip()
+        shared = (
+            ""
+            if task_type == "reason"
+            else worker.env.get("REDTRACE_GLOBAL_INSTRUCTIONS", "").strip()
+        )
         if shared:
             instructions += "\n\n" + shared
         return f"custom_instructions={json.dumps(instructions, ensure_ascii=False)}"

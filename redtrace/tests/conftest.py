@@ -165,11 +165,15 @@ class FakeDriver:
     def check_health(self, _worker, *, timeout: float) -> HealthResult:
         return self.health
 
-    def build_execute(self, _worker, prompt: str, session: str | None) -> DriverResult:
+    def build_execute(
+        self, _worker, prompt: str, session: str | None, *, task_type: str | None = None
+    ) -> DriverResult:
         self.execute_prompts.append(prompt)
         return DriverResult(["execute"], session=session)
 
-    def build_conclude(self, _worker, prompt: str, _session: str) -> DriverResult:
+    def build_conclude(
+        self, _worker, prompt: str, _session: str, *, task_type: str | None = None
+    ) -> DriverResult:
         self.conclude_prompts.append(prompt)
         return DriverResult(["conclude"], session=_session)
 

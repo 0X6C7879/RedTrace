@@ -20,8 +20,6 @@ redtrace.yaml
 server.log
 dispatcher.log
 logs/
-skills/.redtrace/inbox/
-skills/.redtrace/locks/
 # 白盒私有案例：不进入公开仓库，可用 REDTRACE_CODE_AUDIT_PRIVATE_CASES_DIR 提供
 skills/code-audit/references/cases/internal-cases.json
 data/private/

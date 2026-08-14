@@ -303,7 +303,7 @@ def test_worker_process_receives_read_only_blackboard_context(
         {
             "name": f"{worker_type}-worker",
             "type": worker_type,
-            "task_types": ["explore"],
+            "task_types": ["explore", "reason"],
             "max_running": 1,
             "priority": 0,
             "context_length": 1_048_576,
@@ -335,6 +335,34 @@ def test_worker_process_receives_read_only_blackboard_context(
         assert captured["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "1048576"
     elif worker_type == "pi":
         assert captured["PI_MODEL_CONTEXT_WINDOW"] == "1048576"
+
+    worker.env.update(
+        {
+            "REDTRACE_SKILLS_DIR": "/skills",
+            "REDTRACE_SKILL_PATHS": '["/skills/example"]',
+            "REDTRACE_SKILL_MEMORY_DIR": "/skill-memory",
+            "REDTRACE_GLOBAL_INSTRUCTIONS": "skill policy",
+        }
+    )
+    captured.clear()
+    common.run_worker_process(
+        Manager(),
+        "workspace",
+        worker,
+        ["agent", "prompt"],
+        client=SimpleNamespace(base_url="http://redtrace-server:8000"),
+        project_id="proj_001",
+        blackboard_revision=17,
+        phase="reason_execute",
+        timeout_seconds=10,
+    )
+    assert captured["REDTRACE_TASK_TYPE"] == "reason"
+    assert not {
+        "REDTRACE_SKILLS_DIR",
+        "REDTRACE_SKILL_PATHS",
+        "REDTRACE_SKILL_MEMORY_DIR",
+        "REDTRACE_GLOBAL_INSTRUCTIONS",
+    } & captured.keys()
 
 
 def test_running_worker_receives_blackboard_delta_notice(
@@ -475,7 +503,7 @@ def test_prompt_guidance_requires_bounded_blackboard_refresh() -> None:
     assert "Web 调研能力贯穿整个会话" in prompt
     assert "不限于第一轮" in prompt
     assert "后续任一对话轮次" in prompt
-    assert "同时启用最多 5 个" in prompt
+    assert "同一会话最多四个" in prompt
 
 
 def test_prompt_guidance_describes_windows_local_shell() -> None:

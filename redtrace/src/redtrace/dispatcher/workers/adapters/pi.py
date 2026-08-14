@@ -12,6 +12,7 @@ from redtrace.dispatcher.config import WorkerConfig
 from redtrace.dispatcher.workers.base import DriverResult, WorkerDriver
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
 from redtrace.dispatcher.workers.live import PiLiveControl
+from redtrace.skill_runtime import skill_runtime_enabled
 
 
 class PiDriver(WorkerDriver):
@@ -89,24 +90,36 @@ class PiDriver(WorkerDriver):
         return f"POST {env['PI_BASE_URL']} (api={env['PI_PROVIDER_API']}, model={env['PI_MODEL']})"
 
     def build_execute(
-        self, worker: WorkerConfig, prompt: str, session: str | None
+        self,
+        worker: WorkerConfig,
+        prompt: str,
+        session: str | None,
+        *,
+        task_type: str | None = None,
     ) -> DriverResult:
-        return self._build_live(worker, prompt, session)
+        return self._build_live(worker, prompt, session, task_type=task_type)
 
     def build_conclude(
         self,
         worker: WorkerConfig,
         prompt: str,
         session: str,
+        *,
+        task_type: str | None = None,
     ) -> DriverResult:
-        return self._build_live(worker, prompt, session)
+        return self._build_live(worker, prompt, session, task_type=task_type)
 
     def _build_live(
-        self, worker: WorkerConfig, prompt: str, session: str | None
+        self,
+        worker: WorkerConfig,
+        prompt: str,
+        session: str | None,
+        *,
+        task_type: str | None = None,
     ) -> DriverResult:
         control = PiLiveControl(prompt, session)
         if self.local and not worker.api_configured():
-            argv = self._local_argv(worker, session)
+            argv = self._local_argv(worker, session, task_type=task_type)
         else:
             env = worker.env
             pi_argv = [
@@ -121,7 +134,7 @@ class PiDriver(WorkerDriver):
             ]
             if session:
                 pi_argv.extend(["--session", session])
-            argv = self._configured_argv(worker, pi_argv)
+            argv = self._configured_argv(worker, pi_argv, task_type=task_type)
         return DriverResult(
             argv=argv,
             session=session,
@@ -129,7 +142,13 @@ class PiDriver(WorkerDriver):
             live_control=control,
         )
 
-    def _local_argv(self, worker: WorkerConfig, session: str | None) -> list[str]:
+    def _local_argv(
+        self,
+        worker: WorkerConfig,
+        session: str | None,
+        *,
+        task_type: str | None = None,
+    ) -> list[str]:
         # Native pi: no provider/model overrides, so the host login and global config win.
         argv = [
             "pi",
@@ -139,8 +158,8 @@ class PiDriver(WorkerDriver):
             "rpc",
             "--extension",
             worker.env.get("REDTRACE_PI_MCP_EXTENSION", PI_MCP_EXTENSION),
-            *self._skill_args(worker),
-            *self._global_instruction_args(worker),
+            *self._skill_args(worker, task_type),
+            *self._global_instruction_args(worker, task_type),
         ]
         if session:
             argv.extend(["--session", session])
@@ -204,6 +223,8 @@ class PiDriver(WorkerDriver):
         cls,
         worker: WorkerConfig,
         pi_argv: list[str],
+        *,
+        task_type: str | None = None,
     ) -> list[str]:
         return [
             "pi",
@@ -214,13 +235,17 @@ class PiDriver(WorkerDriver):
             ),
             "--extension",
             worker.env.get("REDTRACE_PI_MCP_EXTENSION", PI_MCP_EXTENSION),
-            *cls._skill_args(worker),
-            *cls._global_instruction_args(worker),
+            *cls._skill_args(worker, task_type),
+            *cls._global_instruction_args(worker, task_type),
             *pi_argv,
         ]
 
     @staticmethod
-    def _skill_args(worker: WorkerConfig) -> list[str]:
+    def _skill_args(
+        worker: WorkerConfig, task_type: str | None = None
+    ) -> list[str]:
+        if not skill_runtime_enabled(task_type):
+            return []
         try:
             paths = json.loads(worker.env.get("REDTRACE_SKILL_PATHS", "[]"))
         except json.JSONDecodeError as exc:
@@ -232,7 +257,11 @@ class PiDriver(WorkerDriver):
         return [argument for path in paths for argument in ("--skill", path)]
 
     @staticmethod
-    def _global_instruction_args(worker: WorkerConfig) -> list[str]:
+    def _global_instruction_args(
+        worker: WorkerConfig, task_type: str | None = None
+    ) -> list[str]:
+        if task_type == "reason":
+            return []
         instructions = worker.env.get("REDTRACE_GLOBAL_INSTRUCTIONS", "").strip()
         return ["--append-system-prompt", instructions] if instructions else []
 

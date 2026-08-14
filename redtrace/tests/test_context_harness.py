@@ -460,6 +460,11 @@ def test_prompt_guidance_is_scoped_by_task_type() -> None:
     assert "已知漏洞优先利用" not in reason
     assert "Active WebShell 与 C2" not in reason
     assert "Context Harness" not in reason
+    assert "Skill" not in reason
+    assert "recall" not in reason
+    assert "learn" not in reason
+    assert "RedTrace Skill Runtime Policy" in bootstrap
+    assert "同一会话最多四个" in explore
     assert "Active WebShell 与 C2" in explore
     assert reason.rstrip().endswith("主任务字段必须完整。")
     assert len(reason) < 1500

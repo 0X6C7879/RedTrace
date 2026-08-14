@@ -209,7 +209,7 @@ def test_shared_skill_link_recovers_after_project_move(
     assert (skill_link / "portable" / "SKILL.md").is_file()
 
 
-def test_runtime_owns_global_skill_instructions(
+def test_runtime_keeps_skill_memory_outside_the_skill_catalog(
     tmp_path: Path,
 ) -> None:
     layout = _layout(tmp_path / "redtrace")
@@ -228,8 +228,12 @@ def test_runtime_owns_global_skill_instructions(
 
     AgentRuntimeManager(layout, execution="local").initialize([worker])
 
-    assert "不存在总路由 Skill" in worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"]
-    assert "redtrace-skill recall" in worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"]
+    assert "REDTRACE_GLOBAL_INSTRUCTIONS" not in worker.env
+    assert worker.env["REDTRACE_SKILL_MEMORY_DIR"] == str(
+        layout.managed / "skill-memory"
+    )
+    assert (layout.managed / "skill-memory").is_dir()
+    assert not (layout.skills / ".redtrace" / "learning").exists()
     assert worker.env["REDTRACE_TOOLS_DIR"] == str(layout.runtime / "tools")
     assert worker.env["REDTRACE_TOOLS_BIN"] == str(layout.runtime / "tools" / "bin")
     assert (layout.runtime / "tools" / "bin").is_dir()
@@ -256,16 +260,54 @@ def test_all_native_workers_receive_and_can_invoke_specialist_skills(tmp_path: P
     AgentRuntimeManager(layout, execution="local").initialize(workers)
     expected_path = str(skill.resolve())
     claude = ClaudeCodeDriver(local=True).build_execute(
-        workers[0], "prompt", "session"
+        workers[0], "prompt", "session", task_type="explore"
     ).argv
-    codex = CodexDriver(local=True).build_execute(workers[1], "prompt", None).argv
-    pi = PiDriver(local=True).build_execute(workers[2], "prompt", None).argv
+    codex = CodexDriver(local=True).build_execute(
+        workers[1], "prompt", None, task_type="explore"
+    ).argv
+    pi = PiDriver(local=True).build_execute(
+        workers[2], "prompt", None, task_type="explore"
+    ).argv
 
     assert claude[claude.index("--plugin-dir") + 1].endswith("claude-plugin")
     assert json.dumps(expected_path) in " ".join(codex)
     assert pi[pi.index("--skill") + 1] == expected_path
-    assert all("redtrace-skill recall" in worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"] for worker in workers)
-    assert "redtrace-skill recall" in " ".join(codex)
+    assert all("REDTRACE_GLOBAL_INSTRUCTIONS" not in worker.env for worker in workers)
+
+    reason_claude = ClaudeCodeDriver(local=True).build_execute(
+        workers[0], "prompt", "session", task_type="reason"
+    ).argv
+    reason_codex = CodexDriver(local=True).build_execute(
+        workers[1], "prompt", None, task_type="reason"
+    ).argv
+    reason_pi = PiDriver(local=True).build_execute(
+        workers[2], "prompt", None, task_type="reason"
+    ).argv
+    assert "--plugin-dir" not in reason_claude
+    assert expected_path not in " ".join(reason_codex)
+    assert "--skill" not in reason_pi
+
+
+def test_runtime_migrates_existing_skill_memory_without_deleting_it(
+    tmp_path: Path,
+) -> None:
+    layout = _layout(tmp_path / "redtrace")
+    previous = layout.skills / ".redtrace" / "learning"
+    previous.mkdir(parents=True)
+    (previous / "api-security.jsonl").write_text("legacy\n", encoding="utf-8")
+    current = layout.managed / "skill-memory"
+    current.mkdir(parents=True)
+    (current / "existing.jsonl").write_text("current\n", encoding="utf-8")
+    layout.mcp.mkdir(parents=True)
+    layout.plugins.mkdir(parents=True)
+
+    AgentRuntimeManager(layout, execution="local").initialize([])
+
+    assert (layout.managed / "skill-memory" / "api-security.jsonl").read_text(
+        encoding="utf-8"
+    ) == "legacy\n"
+    assert (previous / "api-security.jsonl").is_file()
+    assert (current / "existing.jsonl").read_text(encoding="utf-8") == "current\n"
 
 
 def test_local_runtime_auto_disables_and_recovers_mcp_with_missing_command(

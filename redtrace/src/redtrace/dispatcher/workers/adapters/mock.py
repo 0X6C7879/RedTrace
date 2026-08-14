@@ -141,7 +141,14 @@ class MockDriver(SeedSessionDriver):
     def describe_health(self, worker: WorkerConfig) -> str:
         return "mock in-process healthcheck"
 
-    def build_execute(self, worker: WorkerConfig, prompt: str, session: str | None) -> DriverResult:
+    def build_execute(
+        self,
+        worker: WorkerConfig,
+        prompt: str,
+        session: str | None,
+        *,
+        task_type: str | None = None,
+    ) -> DriverResult:
         return DriverResult(argv=self._argv(worker, prompt), session=session)
 
     def build_conclude(
@@ -149,5 +156,7 @@ class MockDriver(SeedSessionDriver):
         worker: WorkerConfig,
         prompt: str,
         session: str,
+        *,
+        task_type: str | None = None,
     ) -> DriverResult:
         return DriverResult(argv=self._argv(worker, prompt), session=session)

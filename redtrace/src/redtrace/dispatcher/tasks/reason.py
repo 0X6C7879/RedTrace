@@ -139,7 +139,9 @@ def run_reason_task(
             )
 
         session = driver.prepare_session()
-        command = driver.build_execute(worker, prompt, session)
+        command = driver.build_execute(
+            worker, prompt, session, task_type="reason"
+        )
         execute_started = time.perf_counter()
         result = run_worker_process(
             container_manager,
@@ -217,7 +219,7 @@ def run_reason_task(
                 "best valid raw reason JSON object. Do not emit Markdown or commentary."
             )
             recovery_command = driver.build_conclude(
-                worker, recovery_prompt, session
+                worker, recovery_prompt, session, task_type="reason"
             )
             record_session_checkpoint(
                 client,
@@ -306,7 +308,9 @@ def run_reason_task(
                 '{"accepted":true,"data":{"intents":[{"from":["fact-id"],"description":"..."}]}}\n'
             )
             try:
-                repair_command = driver.build_conclude(worker, repair_prompt, session)
+                repair_command = driver.build_conclude(
+                    worker, repair_prompt, session, task_type="reason"
+                )
                 repair = run_worker_process(
                     container_manager,
                     container_name,

@@ -11,8 +11,10 @@ import re
 import sys
 import tempfile
 import time
+import unicodedata
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -26,6 +28,8 @@ BEARER = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}")
 FLAG = re.compile(r"(?i)\b(?:flag|ctf)\{[^}\r\n]{1,512}\}")
 URL = re.compile(r'''(?i)\bhttps?://[^\s)\]>"']+''')
 IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
+CJK_RUN = re.compile(r"[\u3400-\u9fff]+")
+WORD = re.compile(r"[a-z0-9]{2,}")
 PRIVATE_KEY = re.compile(
     r"-----BEGIN [^-\r\n]*PRIVATE KEY-----.*?-----END [^-\r\n]*PRIVATE KEY-----",
     re.DOTALL,
@@ -47,10 +51,13 @@ def _skills_dir() -> Path:
 
 def _memory_dir(skills_dir: Path) -> Path:
     raw = _env("REDTRACE_SKILL_MEMORY_DIR")
-    path = Path(raw).resolve() if raw else skills_dir / ".redtrace" / "learning"
-    if path != skills_dir and skills_dir not in path.parents:
-        raise ValueError("REDTRACE_SKILL_MEMORY_DIR must be inside REDTRACE_SKILLS_DIR")
-    return path
+    root = Path(_env("REDTRACE_ROOT", str(Path.cwd()))).resolve()
+    return Path(raw).resolve() if raw else root / ".redtrace" / "skill-memory"
+
+
+def _require_skill_runtime() -> None:
+    if _env("REDTRACE_TASK_TYPE").lower() == "reason":
+        raise ValueError("Skill runtime is disabled during reason tasks")
 
 
 def _skill(skills_dir: Path, value: str) -> str:
@@ -143,7 +150,46 @@ def _content_file(path: Path) -> str:
     return data.decode("utf-8")
 
 
+def _normalized_text(text: str) -> str:
+    return " ".join(WORD.findall(unicodedata.normalize("NFKC", text).casefold()))
+
+
+def _keywords(text: str) -> set[str]:
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    terms = set(WORD.findall(normalized))
+    for run in CJK_RUN.findall(normalized):
+        terms.update(run[index : index + 2] for index in range(len(run) - 1))
+    return terms
+
+
+def _near_duplicate(
+    summary: str,
+    content: str,
+    records: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    normalized = _normalized_text(summary)
+    keywords = _keywords(f"{summary}\n{content}")
+    for item in records:
+        previous_summary = str(item.get("summary") or "")
+        if normalized and SequenceMatcher(
+            None, normalized, _normalized_text(previous_summary)
+        ).ratio() >= 0.86:
+            return item
+        previous_keywords = _keywords(
+            f"{previous_summary}\n{str(item.get('content') or '')}"
+        )
+        if not keywords or not previous_keywords:
+            continue
+        overlap = len(keywords & previous_keywords)
+        containment = overlap / min(len(keywords), len(previous_keywords))
+        union = len(keywords | previous_keywords)
+        if containment >= 0.7 and overlap / union >= 0.5:
+            return item
+    return None
+
+
 def learn(args: argparse.Namespace) -> dict[str, Any]:
+    _require_skill_runtime()
     skills = _skills_dir()
     name = _skill(skills, args.skill)
     summary = _sanitize(_one_line(args.summary, "--summary", 240))
@@ -158,6 +204,13 @@ def learn(args: argparse.Namespace) -> dict[str, Any]:
         records = _read_records(path)
         if any(item.get("digest") == digest for item in records):
             return {"status": "duplicate", "skill": name, "digest": digest}
+        if duplicate := _near_duplicate(summary, content, records):
+            return {
+                "status": "duplicate",
+                "skill": name,
+                "digest": duplicate.get("digest", ""),
+                "match": "similar",
+            }
         record = {
             "at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "skill": name,
@@ -214,6 +267,7 @@ def _bundled_note(skills: Path, name: str) -> str | None:
 
 
 def recall(args: argparse.Namespace) -> str:
+    _require_skill_runtime()
     skills = _skills_dir()
     name = _skill(skills, args.skill)
     memory = _memory_dir(skills)

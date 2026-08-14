@@ -173,6 +173,10 @@ def test_container_mounts_only_current_worker_session_and_native_config(
         "bind": "/opt/redtrace/claude-plugin/skills",
         "mode": "rw",
     }
+    assert volumes[str((paths.managed / "skill-memory").resolve())] == {
+        "bind": "/opt/redtrace/skill-memory",
+        "mode": "rw",
+    }
     assert volumes[str((paths.runtime / "tools").resolve())] == {
         "bind": "/opt/redtrace/tools",
         "mode": "rw",

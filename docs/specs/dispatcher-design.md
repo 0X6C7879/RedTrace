@@ -69,7 +69,7 @@ flowchart TB
     end
 
     subgraph Capability[能力与上下文]
-        SK[Skills / route-skills]
+        SK[Skills]
         MCP[MCP]
         CH[Context Harness]
         RES[Resource CLI]
@@ -340,7 +340,7 @@ Web Worker 配置服务使用 SHA-256 revision 做乐观并发控制，支持创
 `paths.skills`、`paths.mcp` 和 `paths.plugins` 是 RedTrace 的能力目录：
 
 - Skill 目录由 `CapabilityStore` 发现、启停、编辑和版本化；
-- `route-skills` 作为安全研究能力入口，按任务按需选择专家模块；
+- Worker 使用原生发现机制按任务加载最具体的专业 Skill；
 - MCP 配置转换为各 Agent CLI 的原生参数或配置；
 - 外部插件清单服务于浏览器、Burp 和其他接入端，不与 Agent Skill 混为一层。
 

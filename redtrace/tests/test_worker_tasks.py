@@ -212,6 +212,10 @@ def test_explore_early_plain_text_exit_uses_conclude_fallback(monkeypatch) -> No
     monkeypatch.setattr(explore, "get_driver", lambda *_a, **_k: driver)
     monkeypatch.setattr(explore.HeartbeatLease, "for_intent", _lease_factory(lease))
     monkeypatch.setattr(explore, "_run_process", lambda *_args, **_kwargs: next(results))
+    monkeypatch.setattr(
+        "redtrace.dispatcher.tasks.common.run_worker_process",
+        lambda *_args, **_kwargs: ProcessResult(0, '{"accepted":true,"data":{}}', ""),
+    )
 
     outcome = explore.run_explore_task(
         config,
@@ -230,7 +234,8 @@ def test_explore_early_plain_text_exit_uses_conclude_fallback(monkeypatch) -> No
     assert "/explore_execute-" in containers.writes[0][1]
     assert len(driver.execute_prompts) == 1
     assert "use the clue" in driver.execute_prompts[0]
-    assert len(driver.conclude_prompts) == 1
+    assert len(driver.conclude_prompts) == 2
+    assert "RedTrace Learning Checkpoint" in driver.conclude_prompts[-1]
     assert lease.started and lease.stopped
 
 

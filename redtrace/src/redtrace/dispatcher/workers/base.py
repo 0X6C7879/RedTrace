@@ -39,7 +39,12 @@ class WorkerDriver(ABC):
 
     @abstractmethod
     def build_execute(
-        self, worker: WorkerConfig, prompt: str, session: str | None
+        self,
+        worker: WorkerConfig,
+        prompt: str,
+        session: str | None,
+        *,
+        task_type: str | None = None,
     ) -> DriverResult:
         """Build the primary worker invocation."""
 
@@ -49,6 +54,8 @@ class WorkerDriver(ABC):
         worker: WorkerConfig,
         prompt: str,
         session: str,
+        *,
+        task_type: str | None = None,
     ) -> DriverResult:
         """Build the bounded fallback invocation for an existing session."""
 

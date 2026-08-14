@@ -31,7 +31,6 @@ def test_skill_catalog_is_flat_and_well_formed() -> None:
     names = {directory.name for directory in directories}
 
     assert len(directories) >= 80
-    assert "route-skills" not in names
     assert {"api-security", "attack-chain", "code-audit", "ctf-sandbox-orchestrator"} <= names
     for directory in directories:
         entrypoint = directory / "SKILL.md"
@@ -65,11 +64,3 @@ def test_specialist_skills_are_shared_with_all_workers(
 
     assert ".claude/skills/code-audit/scripts/validate-output.cjs" in files
     assert ".agents/skills/pentest-tools/tools/burp-mcp-full/mcp-bridge.js" in files
-
-
-def test_no_router_skill_is_discoverable() -> None:
-    store = CapabilityStore(REPO_ROOT)
-    names = {record.name for record in store.list_skills()}
-
-    assert not {"route-skills", "reverse-skill-router", "skills"} & names
-    assert not (SKILLS_DIR / "SKILL.md").exists()

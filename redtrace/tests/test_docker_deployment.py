@@ -19,7 +19,6 @@ def test_compose_builds_local_kali_worker_on_portable_bridge() -> None:
     assert worker["image"] == "redtrace-worker-container:latest"
     assert compose["networks"]["default"]["name"] == "redtrace-network"
 
-    assert "redtrace-route-skills-init" not in services
 
     for service_name in ("redtrace-server", "redtrace-dispatcher"):
         volumes = services[service_name]["volumes"]

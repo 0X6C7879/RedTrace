@@ -5,10 +5,12 @@ import os
 from importlib import resources
 from typing import Any
 
+from redtrace.skill_runtime import skill_runtime_instructions
+
 LANGUAGE_GUIDANCE = """## 输出语言
 
 自然语言及 JSON 自由文本值须用简体中文。
-JSON key、enum/status、phase、工具/Skill/MCP/plugin 名、命令、代码、路径、占位符和原始输出/错误保持原样；raw JSON contract 只输出 JSON。"""
+JSON key、enum/status、phase、专有名词、命令、代码、路径、占位符和原始输出/错误保持原样；raw JSON contract 只输出 JSON。"""
 
 FINAL_OUTPUT_CONTRACT = """## Final output contract
 
@@ -130,28 +132,14 @@ def add_blackboard_guidance(
             "已存储的 credential_ref secret 可直接复用。"
         )
     if task_type != "reason":
-        sections.extend(
-            [
-                (
-                    "## RedTrace 全自动执行覆盖规则\n\n"
-                    "阶段结束后自动选择证据最充分、最能推进 Goal 的具体下一步并立即执行；"
-                    "不得等待用户从下一步菜单中选择，不得因常规分支、工具替代或阶段切换暂停。"
-                    "仅在授权范围即将改变或缺少无法安全推断的必要输入时停下。"
-                ),
-                (
-                    "Skill、MCP 和 plugin 由 RedTrace root 共享。首次实质操作前用 Worker 原生 Skill 机制发现并调用最具体的相关 Skill；"
-                    "直接加载专业 Skill，不调用 Router、通配符或目录占位名。优先完成原生 Skill 选择和必要 Web 调研，再开始通用命令探索。"
-                    "后续若任务方向或知识缺口变化，可继续发现并加载 Skill；同时启用最多 5 个且不得重复加载。"
-                    "未完成专业 Skill 的规定步骤前，不得退回纯手写 curl/python/bash 流程。"
-                ),
-            ]
+        sections.append(
+            "## RedTrace 全自动执行覆盖规则\n\n"
+            "阶段结束后自动选择证据最充分、最能推进 Goal 的具体下一步并立即执行；"
+            "不得等待用户从下一步菜单中选择，不得因常规分支、工具替代或阶段切换暂停。"
+            "仅在授权范围即将改变或缺少无法安全推断的必要输入时停下。"
         )
-    sections.append(
-        "## Skill 学习闭环\n\n"
-        "加载专业 Skill 后运行一次 `redtrace-skill recall <canonical-id>`。任务结束前只有产生已验证、可复用且非项目事实的新经验时，"
-        "才在 Workspace 写脱敏说明并调用 `redtrace-skill learn <canonical-id> --summary <摘要> --evidence <验证依据> --content-file <文件>`。"
-        "RedTrace Core 负责锁、脱敏、去重、原子写入、索引和审计；没有新经验就不写。"
-    )
+    if skill_guidance := skill_runtime_instructions(task_type):
+        sections.append(skill_guidance)
     guidance = prompt.rstrip() + "\n\n" + "\n\n".join(sections)
     if local_execution and os.name == "nt":
         guidance += (

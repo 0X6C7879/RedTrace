@@ -18,6 +18,7 @@ from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
 from redtrace.dispatcher.runtime.process import ProcessResult
 from redtrace.dispatcher.workers.adapters.claudecode import CLAUDE_MAX_THINKING_TOKENS
+from redtrace.skill_runtime import learning_checkpoint_prompt
 
 PROCESS_COMMUNICATE_GRACE_SECONDS = 15
 GRAPH_SNAPSHOT_ROOT = "/home/kali/workspace/.redtrace/prompts"
@@ -460,6 +461,15 @@ def run_worker_process(
         timeout_seconds,
     )
     process_env = dict(worker.env)
+    task_type = phase.split("_", 1)[0]
+    if task_type == "reason":
+        for name in (
+            "REDTRACE_SKILLS_DIR",
+            "REDTRACE_SKILL_PATHS",
+            "REDTRACE_SKILL_MEMORY_DIR",
+            "REDTRACE_GLOBAL_INSTRUCTIONS",
+        ):
+            process_env.pop(name, None)
     if project_id is not None:
         environment = getattr(
             container_manager, "worker_conversation_environment", None
@@ -486,7 +496,7 @@ def run_worker_process(
             {
                 "REDTRACE_PROJECT_ID": project_id,
                 "REDTRACE_WORKER": worker.name,
-                "REDTRACE_TASK_TYPE": phase.split("_", 1)[0],
+                "REDTRACE_TASK_TYPE": task_type,
                 "REDTRACE_PHASE": phase,
                 "REDTRACE_BLACKBOARD_CURSOR": str(blackboard_revision),
             }
@@ -505,8 +515,6 @@ def run_worker_process(
         )
         process_env["REDTRACE_BLACKBOARD_NOTICE"] = notice_path
         if lease is not None and blackboard_inbox is None:
-            task_type = phase.split("_", 1)[0]
-
             def publish_blackboard_notice(previous: int, current: int) -> None:
                 payload = client.blackboard_changes(
                     project_id,
@@ -608,6 +616,83 @@ def run_worker_process(
             cancellation.attach_process(None)
         if publisher is not None:
             publisher.close()
+
+
+def run_learning_checkpoint(
+    driver: Any,
+    client: ControlPlaneClient,
+    container_manager: ContainerManager,
+    container_name: str,
+    worker: WorkerConfig,
+    session: str | None,
+    *,
+    task_type: str,
+    project_id: str,
+    intent_id: str,
+    blackboard_revision: int,
+    timeout_seconds: int,
+    lease: HeartbeatLease,
+    cancellation: TaskCancellation,
+    blackboard_inbox: BlackboardInbox | None = None,
+) -> bool:
+    """Run the one dispatcher-owned learning decision turn for a task session."""
+    if worker.type == "mock":
+        return True
+    if not session or not driver.supports_conclude():
+        LOG.warning(
+            "learning checkpoint unavailable project=%s intent=%s worker=%s task=%s has_session=%s",
+            project_id,
+            intent_id,
+            worker.name,
+            task_type,
+            bool(session),
+        )
+        return False
+    try:
+        command = driver.build_conclude(
+            worker,
+            learning_checkpoint_prompt(task_type),
+            session,
+            task_type=task_type,
+        )
+        result = run_worker_process(
+            container_manager,
+            container_name,
+            worker,
+            command.argv,
+            stdin_text=command.stdin,
+            client=client,
+            project_id=project_id,
+            intent_id=intent_id,
+            blackboard_revision=blackboard_revision,
+            phase=f"{task_type}_learning_checkpoint",
+            timeout_seconds=timeout_seconds,
+            lease=lease,
+            cancellation=cancellation,
+            blackboard_inbox=blackboard_inbox,
+            live_control=command.live_control,
+        )
+    except Exception:
+        LOG.exception(
+            "learning checkpoint crashed project=%s intent=%s worker=%s task=%s",
+            project_id,
+            intent_id,
+            worker.name,
+            task_type,
+        )
+        return False
+    ok = not did_timeout(result) and result.returncode == 0 and not result.cancelled
+    if not ok:
+        LOG.warning(
+            "learning checkpoint failed project=%s intent=%s worker=%s task=%s code=%s timed_out=%s",
+            project_id,
+            intent_id,
+            worker.name,
+            task_type,
+            result.returncode,
+            result.timed_out,
+        )
+    return ok
 
 
 def project_allows_conclude_fallback(

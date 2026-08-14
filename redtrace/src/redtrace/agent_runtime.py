@@ -20,7 +20,6 @@ from redtrace.capabilities import (
 from redtrace.config_secrets import atomic_write_text
 from redtrace.dispatcher.config import WorkerConfig
 from redtrace.paths import RedTracePaths
-from redtrace.skill_runtime import SKILL_RUNTIME_INSTRUCTIONS
 
 _CLI_SOURCES = {
     "redtrace-blackboard": "blackboard_cli.py",
@@ -50,7 +49,6 @@ class AgentRuntimeManager:
         self._shared_initialized = False
         self._skill_paths_cache: list[Path] = []
         self._mcp_args_cache: list[str] = []
-        self._global_instructions_cache = SKILL_RUNTIME_INSTRUCTIONS
         self._capability_signature_cache: tuple[int, ...] | None = None
 
     def initialize(self, workers: list[WorkerConfig]) -> None:
@@ -94,10 +92,12 @@ class AgentRuntimeManager:
         return True
 
     def _ensure_skill_memory(self) -> None:
-        target = self.paths.skills / ".redtrace" / "learning" / "legacy"
-        source = self.paths.root / "redtrace" / "skill-memory" / "legacy"
-        if not target.exists() and source.is_dir():
-            shutil.copytree(source, target)
+        memory = self.paths.managed / "skill-memory"
+        previous = self.paths.skills / ".redtrace" / "learning"
+        memory.mkdir(parents=True, exist_ok=True)
+        _copy_missing_tree(previous, memory)
+        bundled = self.paths.root / "redtrace" / "skill-memory" / "legacy"
+        _copy_missing_tree(bundled, memory / "legacy")
 
     def _sync_mcp_command_availability(
         self, records: list[McpRecord]
@@ -250,9 +250,9 @@ class AgentRuntimeManager:
                 ),
                 "REDTRACE_SKILL_PATHS": json.dumps(skills),
                 "REDTRACE_SKILL_MEMORY_DIR": (
-                    str(self.paths.skills / ".redtrace" / "learning")
+                    str(self.paths.managed / "skill-memory")
                     if self.execution == "local"
-                    else "/opt/redtrace/claude-plugin/skills/.redtrace/learning"
+                    else "/opt/redtrace/skill-memory"
                 ),
                 "REDTRACE_CODEX_RESOURCE_ARGS": json.dumps(resource_args),
             }
@@ -264,12 +264,6 @@ class AgentRuntimeManager:
                 if self.execution == "local"
                 else "/opt/redtrace/private-code-audit-cases"
             )
-        if self._global_instructions_cache:
-            worker.env["REDTRACE_GLOBAL_INSTRUCTIONS"] = (
-                self._global_instructions_cache
-            )
-        else:
-            worker.env.pop("REDTRACE_GLOBAL_INSTRUCTIONS", None)
 
     @staticmethod
     def _codex_skills_config(skills: list[str]) -> str:
@@ -342,3 +336,15 @@ class AgentRuntimeManager:
             path.write_bytes(content)
         if executable:
             path.chmod(0o755)
+
+
+def _copy_missing_tree(source: Path, target: Path) -> None:
+    if not source.is_dir():
+        return
+    for path in source.rglob("*"):
+        destination = target / path.relative_to(source)
+        if path.is_dir():
+            destination.mkdir(parents=True, exist_ok=True)
+        elif path.is_file() and not destination.exists():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, destination)

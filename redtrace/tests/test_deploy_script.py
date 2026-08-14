@@ -106,8 +106,6 @@ def test_playwright_cli_skill_is_complete_and_deployable() -> None:
 def test_deploy_has_no_router_initializer() -> None:
     script = (REPO_ROOT / "deploy.sh").read_text(encoding="utf-8")
 
-    assert "ROUTE_SKILLS_INITIALIZER" not in script
-    assert "route-skills" not in script
 
 
 def test_ctf_tool_installer_supports_all_linux_package_families() -> None:

@@ -12,6 +12,7 @@ from redtrace.dispatcher.workers.base import (
 )
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
 from redtrace.dispatcher.workers.live import ClaudeLiveControl
+from redtrace.skill_runtime import skill_runtime_enabled
 
 ANTHROPIC_VERSION = "2023-06-01"
 # Maximum extended-thinking budget for Claude Code workers. Setting
@@ -36,13 +37,13 @@ class ClaudeCodeDriver(SeedSessionDriver):
         return "claude"
 
     @staticmethod
-    def _permission_args() -> list[str]:
+    def _permission_args(task_type: str | None = None) -> list[str]:
         # Claude Code rejects bypassPermissions/--dangerously-skip-permissions
         # when executed as root. WSL deployments intentionally run RedTrace as
         # root, so use its non-interactive deny-by-default mode with the
         # workspace tools explicitly allowed instead.
-        if hasattr(os, "geteuid") and os.geteuid() == 0:
-            return [
+        if task_type == "reason" or (hasattr(os, "geteuid") and os.geteuid() == 0):
+            tools = [
                 "--permission-mode",
                 "dontAsk",
                 "--allowedTools",
@@ -55,11 +56,13 @@ class ClaudeCodeDriver(SeedSessionDriver):
                 "NotebookEdit",
                 "Agent",
                 "Task",
-                "Skill",
                 "WebFetch",
                 "WebSearch",
                 "mcp__*",
             ]
+            if skill_runtime_enabled(task_type):
+                tools.append("Skill")
+            return tools
         return ["--dangerously-skip-permissions"]
 
     def check_health(self, worker: WorkerConfig, *, timeout: float) -> HealthResult:
@@ -84,7 +87,12 @@ class ClaudeCodeDriver(SeedSessionDriver):
         return f"POST {worker.env['ANTHROPIC_BASE_URL']}/v1/messages (model={worker.env['ANTHROPIC_MODEL']})"
 
     def build_execute(
-        self, worker: WorkerConfig, prompt: str, session: str | None
+        self,
+        worker: WorkerConfig,
+        prompt: str,
+        session: str | None,
+        *,
+        task_type: str | None = None,
     ) -> DriverResult:
         assert session is not None
         control = ClaudeLiveControl(prompt, session)
@@ -97,12 +105,12 @@ class ClaudeCodeDriver(SeedSessionDriver):
             "claude",
             "--session-id",
             session,
-            *self._permission_args(),
+            *self._permission_args(task_type),
             *model_args,
             "--mcp-config",
             self._mcp_config(worker),
-            *self._plugin_args(worker),
-            *self._global_instruction_args(worker),
+            *self._plugin_args(worker, task_type),
+            *self._global_instruction_args(worker, task_type),
             "-p",
             "--input-format",
             "stream-json",
@@ -125,6 +133,8 @@ class ClaudeCodeDriver(SeedSessionDriver):
         worker: WorkerConfig,
         prompt: str,
         session: str,
+        *,
+        task_type: str | None = None,
     ) -> DriverResult:
         control = ClaudeLiveControl(prompt, session)
         model_args = (
@@ -136,12 +146,12 @@ class ClaudeCodeDriver(SeedSessionDriver):
             "claude",
             "-r",
             session,
-            *self._permission_args(),
+            *self._permission_args(task_type),
             *model_args,
             "--mcp-config",
             self._mcp_config(worker),
-            *self._plugin_args(worker),
-            *self._global_instruction_args(worker),
+            *self._plugin_args(worker, task_type),
+            *self._global_instruction_args(worker, task_type),
             "-p",
             "--input-format",
             "stream-json",
@@ -164,12 +174,20 @@ class ClaudeCodeDriver(SeedSessionDriver):
         return worker.env.get("REDTRACE_CLAUDE_MCP_CONFIG", CLAUDE_MCP_PATH)
 
     @classmethod
-    def _plugin_args(cls, worker: WorkerConfig) -> list[str]:
+    def _plugin_args(
+        cls, worker: WorkerConfig, task_type: str | None = None
+    ) -> list[str]:
+        if not skill_runtime_enabled(task_type):
+            return []
         plugin_dir = worker.env.get("REDTRACE_CLAUDE_PLUGIN_DIR")
         return ["--plugin-dir", plugin_dir] if plugin_dir else []
 
     @staticmethod
-    def _global_instruction_args(worker: WorkerConfig) -> list[str]:
+    def _global_instruction_args(
+        worker: WorkerConfig, task_type: str | None = None
+    ) -> list[str]:
+        if task_type == "reason":
+            return []
         instructions = worker.env.get("REDTRACE_GLOBAL_INSTRUCTIONS", "").strip()
         return ["--append-system-prompt", instructions] if instructions else []
 

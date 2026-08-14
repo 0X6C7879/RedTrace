@@ -29,6 +29,7 @@ from redtrace.dispatcher.tasks.common import (
     preview,
     process_failure_outcome,
     record_session_checkpoint,
+    run_learning_checkpoint,
     run_worker_process,
     write_conclude_result,
     write_graph_snapshot_reference,
@@ -55,6 +56,9 @@ def run_explore_task(
 ) -> str:
     driver = get_driver(worker.type, config.runtime.execution)
     task_started = time.perf_counter()
+    container_name: str | None = None
+    session: str | None = None
+    checkpoint_due = False
     lease = HeartbeatLease.for_intent(
         client, project.project.id, intent.id, worker.name, config.runtime.interval
     )
@@ -118,8 +122,11 @@ def run_explore_task(
             )
 
         session = driver.prepare_session()
-        execute = driver.build_execute(worker, prompt, session)
+        execute = driver.build_execute(
+            worker, prompt, session, task_type="explore"
+        )
         session = execute.session
+        checkpoint_due = True
         execute_started = time.perf_counter()
         first, session = _run_with_steering(
             driver,
@@ -301,6 +308,23 @@ def run_explore_task(
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return exception_failure_outcome(exc)
     finally:
+        if checkpoint_due and container_name is not None:
+            run_learning_checkpoint(
+                driver,
+                client,
+                container_manager,
+                container_name,
+                worker,
+                session,
+                task_type="explore",
+                project_id=project.project.id,
+                intent_id=intent.id,
+                blackboard_revision=project.blackboard_revision,
+                timeout_seconds=config.tasks.explore.conclude_timeout,
+                lease=lease,
+                cancellation=cancellation,
+                blackboard_inbox=inbox,
+            )
         if inbox is not None:
             inbox.stop()
         lease.stop()
@@ -392,7 +416,9 @@ def _try_conclude_fallback(
             "intent_description": intent.description,
         },
     )
-    conclude = driver.build_conclude(worker, prompt, session)
+    conclude = driver.build_conclude(
+        worker, prompt, session, task_type="explore"
+    )
     LOG.info(
         "starting conclude fallback project=%s intent=%s worker=%s",
         project_id,
