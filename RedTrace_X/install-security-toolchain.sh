@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Install the RedTrace CTF/security toolchain without downloading vulnerability,
-# PoC, or Nuclei template databases.
+# Install the RedTrace CTF/security/blockchain/AI toolchain and offline data
+# corpora (nuclei-templates, SecLists, PayloadsAllTheThings, semgrep-rules,
+# exploitdb) so agents can operate without network access at runtime.
 #
 # Supported system package managers:
 #   apt, dnf/yum, pacman, zypper, apk, brew
@@ -10,7 +11,7 @@
 #
 # Modes:
 #   system, apt, dnf, yum, pacman, zypper, apk, brew
-#   python, gems, go, rsactftool, qiling, all, --verify
+#   python, gems, go, rsactftool, qiling, blockchain, ai, data, all, --verify
 
 set -Eeuo pipefail
 
@@ -110,6 +111,11 @@ set_system_packages() {
         imagemagick apktool upx-ucl qemu-system-x86 qrencode bsdextrautils iputils-ping
         netcat-openbsd sshpass rlwrap nikto dirsearch yq adb yara p7zip-full
         file xxd zbar-tools sox qsstv tesseract-ocr
+        clang llvm lld autoconf automake libtool socat iproute2 libxml2-utils xmlstarlet
+        zstd tree procps psmisc time patchelf libcap2-bin valgrind
+        qemu-user qemu-user-static afl++ radamsa checksec
+        sqlite3 mariadb-client postgresql-client redis-tools
+        ldap-utils smbclient snmp ftp telnet jadx whatweb exploitdb rustc cargo perl
       )
       ;;
     dnf|yum)
@@ -315,6 +321,22 @@ PIP_PACKAGES=(
   "dnspython==2.8.0:dns"
   "dnslib==0.9.26:dnslib"
   "dissect.cobaltstrike==1.2.1:dissect.cobaltstrike"
+  "pyelftools==0.32:elftools"
+  "keystone-engine==0.9.2:keystone"
+  "arjun==2.2.2:arjun"
+  "wafw00f==2.2.0:wafw00f"
+  "web3==7.6.1:web3"
+  "eth-account==0.13.5:eth_account"
+  "eth-abi==5.2.0:eth_abi"
+  "eth-utils==5.1.0:eth_utils"
+  "eth-hash==0.7.1:eth_hash"
+  "rlp==4.1.0:rlp"
+  "slither-analyzer==0.11.2:slither"
+  "crytic-compile==0.3.10:crytic_compile"
+  "solc-select==1.0.6:solc_select"
+  "halmos==0.2.4:halmos"
+  "garak==0.10.0:garak"
+  "mitmproxy==11.1.3:mitmproxy"
 )
 
 install_python() {
@@ -378,11 +400,17 @@ install_gems() {
 install_go() {
   local command spec
   local tools=(
-    "ffuf:github.com/ffuf/ffuf/v2@latest"
+    "ffuf:github.com/ffuf/ffuf/v2@v2.1.0"
+    "httpx:github.com/projectdiscovery/httpx/cmd/httpx@v1.6.10"
+    "feroxbuster:github.com/epi052/feroxbuster/v2@v2.11.0"
+    "gobuster:github.com/OJ/gobuster/v3@v3.6.0"
+    "kiterunner:github.com/assetnote/kiterunner/cmd/kr@v1.0.2"
+    "grpcurl:github.com/fullstorydev/grpcurl/cmd/grpcurl@v1.9.3"
+    "websocat:github.com/vi/websocat@v1.14.0"
     "nuclei:github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v$NUCLEI_VERSION"
   )
   if [[ "$DRY_RUN" == true ]]; then
-    log_info "Would install Go tools: ffuf nuclei-engine@$NUCLEI_VERSION"
+    log_info "Would install Go tools: ffuf httpx feroxbuster gobuster kiterunner grpcurl websocat nuclei-engine@$NUCLEI_VERSION"
     return
   fi
   has go || { log_error "go is required for ffuf and Nuclei"; return 1; }
@@ -478,6 +506,157 @@ install_qiling() {
   ln -sfn "$QILING_WRAPPER" "$BIN_DIR/qiling-python"
 }
 
+detect_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) printf 'amd64' ;;
+    aarch64|arm64) printf 'arm64' ;;
+    *) printf '' ;;
+  esac
+}
+
+install_blockchain() {
+  local asset_arch tmp
+  asset_arch="$(detect_arch)"
+  if [[ "$DRY_RUN" == true ]]; then
+    log_info "Would install Foundry, Echidna, Aderyn, heimdall, solc, and Mythril"
+    return
+  fi
+  mkdir -p "$BIN_DIR"
+  if [[ -n "$asset_arch" ]]; then
+    # Foundry (forge / cast / anvil / chisel)
+    if [[ "$FORCE" == false ]] && has forge && has cast && has anvil && has chisel; then
+      SKIPPED+=("blockchain:foundry")
+    else
+      tmp="$(mktemp -d)"
+      if curl -fsSL "https://github.com/foundry-rs/foundry/releases/download/v1.2.0/foundry_stable_linux_${asset_arch}.tar.gz" -o "$tmp/foundry.tgz" \
+        && tar -xzf "$tmp/foundry.tgz" -C "$tmp" \
+        && cp "$tmp/forge" "$tmp/cast" "$tmp/anvil" "$tmp/chisel" "$BIN_DIR/"; then
+        SUCCEEDED+=("blockchain:foundry")
+      else
+        FAILED+=("blockchain:foundry")
+      fi
+      rm -rf "$tmp"
+    fi
+    # Echidna
+    if [[ "$FORCE" == false ]] && has echidna; then
+      SKIPPED+=("blockchain:echidna")
+    else
+      tmp="$(mktemp -d)"
+      if curl -fsSL "https://github.com/crytic/echidna/releases/download/v2.2.8/echidna-2.2.8-Linux.zip" -o "$tmp/echidna.zip" \
+        && unzip -qo "$tmp/echidna.zip" echidna -d "$tmp" \
+        && cp "$tmp/echidna" "$BIN_DIR/"; then
+        SUCCEEDED+=("blockchain:echidna")
+      else
+        FAILED+=("blockchain:echidna")
+      fi
+      rm -rf "$tmp"
+    fi
+    # Aderyn + heimdall-rs (asset names vary by release; verify at build time)
+    for tool in "aderyn:Cyfrin/aderyn:aderyn-v0.20.0/aderyn-linux-${asset_arch}" \
+                "heimdall:Jon-Becker/heimdall-rs:v0.8.2/heimdall-linux-${asset_arch}"; do
+      command="${tool%%:*}"; repo="${tool#*:}"; repo="${repo%%:*}"; ref="${tool##*:}"
+      if [[ "$FORCE" == false ]] && has "$command"; then
+        SKIPPED+=("blockchain:$command")
+        continue
+      fi
+      tmp="$(mktemp -d)"
+      if curl -fsSL "https://github.com/${repo}/releases/download/${ref}" -o "$tmp/$command" \
+        && cp "$tmp/$command" "$BIN_DIR/$command" && chmod +x "$BIN_DIR/$command"; then
+        SUCCEEDED+=("blockchain:$command")
+      else
+        FAILED+=("blockchain:$command")
+      fi
+      rm -rf "$tmp"
+    done
+  else
+    log_warn "unsupported architecture; skipping blockchain binary downloads"
+  fi
+
+  # solc multi-version cache (solc-select installed via pip)
+  if has solc-select; then
+    if solc-select install 0.8.19 0.8.24 0.8.28 >>"$LOG_FILE" 2>&1 && solc-select use 0.8.28 >>"$LOG_FILE" 2>&1; then
+      SUCCEEDED+=("blockchain:solc")
+    else
+      FAILED+=("blockchain:solc")
+    fi
+  else
+    SKIPPED+=("blockchain:solc")
+  fi
+
+  # Mythril in an isolated venv
+  local mythril_venv="$RUNTIME_DIR/mythril"
+  if [[ "$FORCE" == false ]] && [[ -x "$mythril_venv/bin/myth" ]]; then
+    SKIPPED+=("blockchain:mythril")
+  else
+    [[ -x "$mythril_venv/bin/python" ]] || python3 -m venv "$mythril_venv"
+    if "$mythril_venv/bin/python" -m pip install "mythril==0.24.9" >>"$LOG_FILE" 2>&1; then
+      ln -sfn "$mythril_venv/bin/myth" "$BIN_DIR/myth"
+      SUCCEEDED+=("blockchain:mythril")
+    else
+      FAILED+=("blockchain:mythril")
+    fi
+  fi
+}
+
+install_ai() {
+  if [[ "$DRY_RUN" == true ]]; then
+    log_info "Would install PyRIT (pip) and promptfoo (npm)"
+    return
+  fi
+  local python="$CTF_VENV/bin/python"
+  if [[ -x "$python" ]]; then
+    if [[ "$FORCE" == false ]] && "$python" -c "import pyrit" >/dev/null 2>&1; then
+      SKIPPED+=("ai:pyrit")
+    elif "$python" -m pip install "pyrit==0.5.0" >>"$LOG_FILE" 2>&1; then
+      SUCCEEDED+=("ai:pyrit")
+    else
+      FAILED+=("ai:pyrit")
+    fi
+  else
+    log_warn "CTF venv missing; PyRIT skipped"
+  fi
+  if has npm; then
+    if [[ "$FORCE" == false ]] && has promptfoo; then
+      SKIPPED+=("ai:promptfoo")
+    elif npm install -g "promptfoo@0.104.0" >>"$LOG_FILE" 2>&1; then
+      SUCCEEDED+=("ai:promptfoo")
+    else
+      FAILED+=("ai:promptfoo")
+    fi
+  else
+    log_warn "npm unavailable; promptfoo skipped"
+  fi
+}
+
+install_offline_data() {
+  local data_dir="${REDTRACE_DATA_DIR:-/opt/redtrace/data}"
+  local repo url dest
+  if [[ "$DRY_RUN" == true ]]; then
+    log_info "Would clone offline data corpora into $data_dir"
+    return
+  fi
+  mkdir -p "$data_dir"
+  local corpora=(
+    "nuclei-templates:https://github.com/projectdiscovery/nuclei-templates.git"
+    "seclists:https://github.com/danielmiessler/SecLists.git"
+    "payloads-all-the-things:https://github.com/swisskyrepo/PayloadsAllTheThings.git"
+    "semgrep-rules:https://github.com/returntocorp/semgrep-rules.git"
+    "exploitdb:https://gitlab.com/exploit-database/exploitdb.git"
+  )
+  for entry in "${corpora[@]}"; do
+    dest="${entry%%:*}"; url="${entry#*:}"
+    if [[ -d "$data_dir/$dest/.git" ]]; then
+      SKIPPED+=("data:$dest")
+      continue
+    fi
+    if git clone --depth=1 "$url" "$data_dir/$dest" >>"$LOG_FILE" 2>&1; then
+      SUCCEEDED+=("data:$dest")
+    else
+      FAILED+=("data:$dest")
+    fi
+  done
+}
+
 verify() {
   local command entry module spec name
   local found=() missing=()
@@ -531,9 +710,10 @@ Optional/manual tools:
   dnSpyEx  - https://github.com/dnSpyEx/dnSpy (Windows/.NET)
 fpylll, cysignals, SymPy, gmpy2, Z3, py_ecc, and RsaCtfTool provide the
 default Crypto workflow.
-No vulnerability database, PoC collection, or Nuclei template repository is
-downloaded. Agents perform live fingerprint-based research and fetch only the
-specific candidate PoC/EXP or validation template they need.
+Offline data corpora (nuclei-templates, SecLists, PayloadsAllTheThings,
+semgrep-rules, exploitdb) are cloned by the 'data' mode into
+${REDTRACE_DATA_DIR:-/opt/redtrace/data}. Run it once at image/deploy time;
+agents consume these locally and must not reach the network at runtime.
 EOF
 }
 
@@ -558,6 +738,9 @@ run_mode() {
     go) install_go ;;
     rsactftool) install_rsactftool ;;
     qiling) install_qiling ;;
+    blockchain) install_blockchain ;;
+    ai) install_ai ;;
+    data|offline-data) install_offline_data ;;
     manual) print_manual ;;
     --verify|verify) verify ;;
     all)
@@ -569,11 +752,14 @@ run_mode() {
       install_go
       install_rsactftool
       install_qiling
+      install_blockchain
+      install_ai
+      install_offline_data
       print_manual
       ;;
     *)
       log_error "Unknown mode: $MODE"
-      printf 'Usage: %s [--dry-run] [--force] {system|apt|dnf|yum|pacman|zypper|apk|brew|python|gems|go|rsactftool|qiling|all|--verify}\n' "$0" >&2
+      printf 'Usage: %s [--dry-run] [--force] {system|apt|dnf|yum|pacman|zypper|apk|brew|python|gems|go|rsactftool|qiling|blockchain|ai|data|all|--verify}\n' "$0" >&2
       return 2
       ;;
   esac

@@ -140,9 +140,12 @@ def test_ctf_tool_installer_supports_all_linux_package_families() -> None:
     assert "install_qiling" in script
     assert "isolated Python 3.11 environment" in script
     assert "SageMath" not in script
-    assert "No vulnerability database, PoC collection" in script
-    assert "nuclei-templates" not in script
-    assert "exploitdb" not in script
+    assert "Offline data corpora" in script
+    assert "nuclei-templates" in script
+    assert "exploitdb" in script
+    assert "install_blockchain" in script
+    assert "install_ai" in script
+    assert "install_offline_data" in script
     qiling_wrapper = (
         REPO_ROOT
         / "skills"
@@ -204,11 +207,11 @@ def test_container_has_known_vulnerability_and_crypto_toolchain() -> None:
     assert "github.com/RsaCtfTool/RsaCtfTool.git@" in dockerfile
     assert "RsaCtfTool --help" in dockerfile
     assert "playwright-cli install-browser chromium --with-deps" in dockerfile
-    assert "exploitdb" not in dockerfile
-    assert "nuclei-templates.git" not in dockerfile
+    assert "exploitdb" in dockerfile
+    assert "nuclei-templates.git" in dockerfile
     assert "/home/kali/pocs" not in dockerfile
     assert "/home/kali/knowledges" not in dockerfile
-    assert "PayloadsAllTheThings" not in dockerfile
+    assert "PayloadsAllTheThings" in dockerfile
     assert "/home/kali/knowledges" not in agent_instructions
     assert "必须先联网搜索厂商公告、CVE 和公开 PoC/EXP" in agent_instructions
     assert "不要下载或同步整套漏洞库" in agent_instructions
