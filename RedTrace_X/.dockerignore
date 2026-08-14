@@ -4,6 +4,15 @@
 .redtrace
 .redtrace-secrets
 
+# 渲染产物与真实密钥绝不进入构建上下文
+.env
+redtrace.yaml
+redtrace.local.yaml
+redtrace.container.yaml
+results/
+output/
+logs/
+
 **/.venv
 **/.codex-test-venv
 **/venv
