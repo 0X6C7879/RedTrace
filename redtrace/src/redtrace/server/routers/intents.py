@@ -52,6 +52,7 @@ def report_outcome(project_id: str, intent_id: str, body: TaskOutcomeRequest):
             return {"circuitOpen": bool(row["circuit_open"]), "failureCount": row["failure_count"]}
         count = int(row["failure_count"]) + 1
         signature = body.outcome[:100]
+        decay = 5 if count == 1 else 10
         now = utcnow()
         if count >= MAX_FAILURES:
             fact_id = next_fact_id(conn, project_id)
@@ -67,20 +68,22 @@ def report_outcome(project_id: str, intent_id: str, body: TaskOutcomeRequest):
                 """
                 UPDATE intents SET to_fact_id = ?, worker = NULL,
                     last_heartbeat_at = NULL, concluded_at = ?, failure_count = ?,
-                    failure_signature = ?, retry_after = NULL, circuit_open = 1
+                    failure_signature = ?, retry_after = NULL, circuit_open = 1,
+                    state = 'concluded', priority = MAX(0, priority - ?)
                 WHERE id = ? AND project_id = ?
                 """,
-                (fact_id, now, count, signature, intent_id, project_id),
+                (fact_id, now, count, signature, decay, intent_id, project_id),
             )
             return {"circuitOpen": True, "failureCount": count, "factId": fact_id}
         retry_after = time.time() + RETRY_DELAYS[count - 1]
         conn.execute(
             """
             UPDATE intents SET worker = NULL, last_heartbeat_at = NULL,
-                failure_count = ?, failure_signature = ?, retry_after = ?
+                failure_count = ?, failure_signature = ?, retry_after = ?,
+                state = 'open', priority = MAX(0, priority - ?)
             WHERE id = ? AND project_id = ?
             """,
-            (count, signature, retry_after, intent_id, project_id),
+            (count, signature, retry_after, decay, intent_id, project_id),
         )
         return {"circuitOpen": False, "failureCount": count, "retryAfter": retry_after}
 

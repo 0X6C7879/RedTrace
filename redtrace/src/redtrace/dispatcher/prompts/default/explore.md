@@ -22,6 +22,8 @@
 - `description` 只包含最新发现的增量事实。不得重复 graph snapshot 中已有信息，也不得加入无助于推进 Goal 的冗余细节。
 - 执行 HTTP 命令时必须把非 2xx 响应视为失败；使用 `curl --fail-with-body`（或等效方式）并检查 status/body，不得仅凭进程 exit code 0 判断请求成功。
 - 对改变资源状态的操作，只能使用上下文中明确记录的 endpoint；操作后重新读取资源状态。未确认目标状态前，不得声称资源已关闭、释放或回收。
+- 你的主要任务是完成当前 Intent。但在执行过程中如果发现与最终目标相关的重大新事实（例如新凭证、新端点、漏洞候选、SQL 注入、RCE 线索），必须立即通过 `redtrace-resource` / `credential-create` 等命令登记为 durable Fact，不需要等待当前 Intent 完成。不要为了探索额外事实无限偏离当前 Intent；重大突破可以记录后继续当前任务或结束任务。
+- Fact 提交与 Intent 结论分离：重要发现、Credential、WebShell、C2 Session、Artifact 都应在过程中即时提交，不要把所有成果都押在最后一次 JSON 上。
 
 # 上下文
 ## Graph

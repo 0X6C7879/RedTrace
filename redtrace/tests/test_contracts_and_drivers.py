@@ -23,32 +23,31 @@ def test_parse_json_output_extracts_object_from_markdown_noise() -> None:
     }
 
 
-def test_reason_payload_limits_number_of_intents() -> None:
-    kind, intents = validate_reason_payload(
+def test_reason_payload_normalizes_legacy_intents_to_graph_patch() -> None:
+    kind, patch = validate_reason_payload(
         {
             "accepted": True,
             "data": {
                 "intents": [
                     {"from": ["f001"], "description": "one"},
-                    {"from": ["f001"], "description": "two"},
                 ]
             },
         },
-        open_intents_empty=True,
-        max_intents=1,
+        valid_fact_ids={"f001"},
     )
 
-    assert kind == "intents"
-    assert intents == [{"from": ["f001"], "description": "one"}]
+    assert kind == "patch"
+    assert patch["create"] == [{"from": ["f001"], "description": "one", "priority": 50}]
 
 
-def test_reason_payload_requires_intent_when_none_are_open() -> None:
-    with pytest.raises(ValueError, match="intents is required"):
-        validate_reason_payload(
-            {"accepted": True, "data": {}},
-            open_intents_empty=True,
-            max_intents=3,
-        )
+def test_reason_payload_accepts_empty_frontier_patch() -> None:
+    kind, patch = validate_reason_payload(
+        {"accepted": True, "data": {}},
+    )
+
+    assert kind == "patch"
+    assert patch["create"] == []
+    assert patch["complete"] is None
 
 
 def test_reason_payload_rejects_goal_as_a_source() -> None:
@@ -57,11 +56,9 @@ def test_reason_payload_rejects_goal_as_a_source() -> None:
             {
                 "accepted": True,
                 "data": {
-                    "intents": [{"from": ["goal"], "description": "invalid"}]
+                    "create": [{"from": ["goal"], "description": "invalid"}]
                 },
             },
-            open_intents_empty=True,
-            max_intents=1,
             valid_fact_ids={"origin", "f001"},
         )
 

@@ -82,7 +82,24 @@ def rotate_projects(
 
 
 def open_intent_count(project: ProjectDetail) -> int:
-    return sum(intent.to is None for intent in project.intents)
+    return sum(
+        intent.to is None and intent.state not in ("dropped", "superseded")
+        for intent in project.intents
+    )
+
+
+def is_schedulable_intent(intent: Intent, *, now: float | None = None) -> bool:
+    if intent.to is not None:
+        return False
+    if intent.state in ("dropped", "superseded"):
+        return False
+    if intent.worker is not None:
+        return False
+    if intent.circuit_open:
+        return False
+    if intent.retry_after is not None and intent.retry_after > (now or time.time()):
+        return False
+    return True
 
 
 def is_bootstrap_intent(intent: Intent) -> bool:
@@ -146,11 +163,13 @@ def newest_unclaimed_intent(
     candidates = [
         intent
         for intent in project.intents
-        if intent.to is None
-        and intent.worker is None
-        and not intent.circuit_open
-        and (intent.retry_after is None or intent.retry_after <= time.time())
+        if is_schedulable_intent(intent)
         and intent.id not in running_intent_ids
         and not is_bootstrap_intent(intent)
     ]
-    return max(candidates, key=lambda intent: intent.created_at, default=None)
+    # Priority DESC, then created_at ASC (oldest first), then stable by id.
+    return min(
+        candidates,
+        key=lambda intent: (-intent.priority, intent.created_at, intent.id),
+        default=None,
+    )

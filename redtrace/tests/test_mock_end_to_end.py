@@ -86,6 +86,9 @@ class InProcessClient:
             {"from": from_ids, "description": description, "creator": creator, "worker": None},
         )
 
+    def apply_graph_patch(self, project_id: str, patch: dict[str, Any]) -> ApiResult:
+        return self._post(f"/projects/{project_id}/graph-patch", patch)
+
     def _post(self, path: str, payload: dict[str, Any]) -> ApiResult:
         response = self.http.post(path, json=payload)
         data = response.json() if response.headers.get("content-type", "").startswith("application/json") else None

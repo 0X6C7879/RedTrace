@@ -51,8 +51,8 @@ def list_all() -> list[ProjectSummary]:
             SELECT p.*,
                 (SELECT COUNT(*) FROM facts WHERE project_id = p.id) AS fact_count,
                 (SELECT COUNT(*) FROM intents WHERE project_id = p.id) AS intent_count,
-                (SELECT COUNT(*) FROM intents WHERE project_id = p.id AND concluded_at IS NULL AND worker IS NOT NULL) AS working_intent_count,
-                (SELECT COUNT(*) FROM intents WHERE project_id = p.id AND concluded_at IS NULL AND worker IS NULL AND circuit_open = 0 AND (retry_after IS NULL OR retry_after <= unixepoch('now'))) AS unclaimed_intent_count,
+                (SELECT COUNT(*) FROM intents WHERE project_id = p.id AND concluded_at IS NULL AND state NOT IN ('dropped', 'superseded') AND worker IS NOT NULL) AS working_intent_count,
+                (SELECT COUNT(*) FROM intents WHERE project_id = p.id AND concluded_at IS NULL AND state NOT IN ('dropped', 'superseded') AND worker IS NULL AND circuit_open = 0 AND (retry_after IS NULL OR retry_after <= unixepoch('now'))) AS unclaimed_intent_count,
                 (SELECT COUNT(*) FROM hints WHERE project_id = p.id) AS hint_count
             FROM projects p
             ORDER BY p.created_at
@@ -167,7 +167,7 @@ def transition_status(project_id: str, status: str) -> ProjectMeta:
         )
         if status == "stopped":
             conn.execute(
-                "UPDATE intents SET worker = NULL WHERE project_id = ? AND concluded_at IS NULL",
+                "UPDATE intents SET worker = NULL, state = 'open' WHERE project_id = ? AND concluded_at IS NULL AND state NOT IN ('dropped', 'superseded')",
                 (project_id,),
             )
             clear_project_reason(conn, project_id)
@@ -256,7 +256,7 @@ def complete(project_id: str, request: CompleteRequest) -> Intent:
         now = utcnow()
         intent_id = next_intent_id(conn, project_id)
         conn.execute(
-            "INSERT INTO intents (id, project_id, to_fact_id, description, creator, worker, last_heartbeat_at, created_at, concluded_at) VALUES (?, ?, 'goal', ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO intents (id, project_id, to_fact_id, description, creator, worker, last_heartbeat_at, created_at, concluded_at, state) VALUES (?, ?, 'goal', ?, ?, ?, ?, ?, ?, 'concluded')",
             (
                 intent_id,
                 project_id,
@@ -291,6 +291,7 @@ def complete(project_id: str, request: CompleteRequest) -> Intent:
             last_heartbeat_at=now,
             created_at=now,
             concluded_at=now,
+            state="concluded",
         )
 
 
@@ -319,7 +320,7 @@ def reopen(project_id: str, request: ReopenRequest) -> ReopenResponse:
             (fact_id, project_id, request.description),
         )
         conn.execute(
-            "INSERT INTO intents (id, project_id, to_fact_id, description, creator, worker, last_heartbeat_at, created_at, concluded_at) VALUES (?, ?, ?, 'external_feedback', ?, ?, ?, ?, ?)",
+            "INSERT INTO intents (id, project_id, to_fact_id, description, creator, worker, last_heartbeat_at, created_at, concluded_at, state) VALUES (?, ?, ?, 'external_feedback', ?, ?, ?, ?, ?, 'concluded')",
             (
                 intent_id,
                 project_id,

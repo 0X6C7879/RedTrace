@@ -42,7 +42,7 @@ def _intent_target(config: DispatchConfig) -> int:
         config.runtime.max_project_workers,
         sum(worker.max_running for worker in config.workers if worker.enabled),
     )
-    return min(config.tasks.reason.max_intents, max(1, explore_capacity + 1))
+    return min(config.tasks.reason.max_intents, max(1, explore_capacity * 2))
 
 
 def run_reason_task(
@@ -99,13 +99,20 @@ def run_reason_task(
                 "from": intent.from_,
                 "description": intent.description,
                 "worker": intent.worker,
+                "priority": intent.priority,
+                "state": intent.state,
+                "attempt_count": intent.attempt_count,
+                "fact_yield": intent.fact_yield,
+                "drop_reason": intent.drop_reason,
+                "superseded_by": intent.superseded_by,
             }
             for intent in project.intents
-            if intent.to is None
+            if intent.to is None and intent.state not in ("dropped", "superseded")
         ]
         intent_target = _intent_target(config)
         available_intent_slots = max(0, intent_target - len(open_intents))
         allowed_fact_ids = [fact.id for fact in project.facts if fact.id != "goal"]
+        valid_intent_ids = [intent.id for intent in project.intents]
         LOG.debug(
             "reason context prepared project=%s worker=%s facts=%s allowed_fact_ids=%s hints=%s open_intents=%s",
             project.project.id,
@@ -291,9 +298,8 @@ def run_reason_task(
             payload = parse_json_output(model_output)
             kind, data = validate_reason_payload(
                 payload,
-                open_intents_empty=not open_intents,
-                max_intents=available_intent_slots,
                 valid_fact_ids=set(allowed_fact_ids),
+                valid_intent_ids=set(valid_intent_ids),
             )
         except Exception as exc:
             if not driver.supports_conclude() or session is None:
@@ -318,10 +324,15 @@ def run_reason_task(
                 "你上一条最终响应不符合 reason JSON contract。\n"
                 f"校验错误：{preview(str(exc), 300)}\n"
                 "不得调用工具、继续分析或重复任务。立即只返回一个修正后的 raw JSON object，"
-                "不得输出 Markdown 或解释文字。只允许以下三种主结构：\n"
+                "不得输出 Markdown 或解释文字。只允许 GraphPatch 结构：\n"
                 '{"accepted":false,"reason":"policy_refusal"}\n'
-                '{"accepted":true,"data":{"complete":{"from":["fact-id"],"description":"..."}}}\n'
-                '{"accepted":true,"data":{"intents":[{"from":["fact-id"],"description":"..."}]}}\n'
+                '{"accepted":true,"data":{"base_revision":0,"create":[],"drop":[],'
+                '"reprioritize":[],"supersede":[],"complete":null}}\n'
+                'create 项形如 {"from":["fact-id"],"description":"...","priority":50}；'
+                'drop 项形如 {"intent_id":"i001","reason":"..."}；'
+                'reprioritize 项形如 {"intent_id":"i001","priority":90,"reason":"..."}；'
+                'supersede 项形如 {"intent_id":"i001","by":"i002","reason":"..."}；'
+                'complete 项形如 {"from":["fact-id"],"description":"..."}。\n'
             )
             try:
                 repair_command = driver.build_conclude(
@@ -384,9 +395,8 @@ def run_reason_task(
                 payload = parse_json_output(model_output)
                 kind, data = validate_reason_payload(
                     payload,
-                    open_intents_empty=not open_intents,
-                    max_intents=available_intent_slots,
                     valid_fact_ids=set(allowed_fact_ids),
+                    valid_intent_ids=set(valid_intent_ids),
                 )
             except Exception as repair_exc:
                 LOG.warning(
@@ -409,101 +419,63 @@ def run_reason_task(
                 preview(result.stdout),
             )
             return "rejected"
-        if kind == "complete":
-            response = client.complete(
-                project.project.id, data["from"], data["description"], worker.name
-            )
-            if response.status_code == 403:
-                LOG.info(
-                    "project became inactive during reason complete project=%s worker=%s",
-                    project.project.id,
-                    worker.name,
-                )
-                return "success"
-            if not response.ok:
-                LOG.warning(
-                    "reason complete write failed project=%s worker=%s status=%s body=%s",
-                    project.project.id,
-                    worker.name,
-                    response.status_code,
-                    response.text,
-                )
-                return "api_error"
+
+        patch = data or {}
+        patch["base_revision"] = project.blackboard_revision
+        patch["worker"] = worker.name
+        patch["create"] = (patch.get("create") or [])[:available_intent_slots]
+        if (
+            not patch.get("create")
+            and not patch.get("drop")
+            and not patch.get("reprioritize")
+            and not patch.get("supersede")
+            and patch.get("complete") is None
+        ):
             LOG.info(
-                "project completed project=%s worker=%s from=%s execute_ms=%s total_ms=%s",
+                "reason finished without graph change project=%s worker=%s execute_ms=%s total_ms=%s",
                 project.project.id,
                 worker.name,
-                data["from"],
                 execute_ms,
                 total_ms,
             )
             return "success"
-        if kind == "intents":
-            created = 0
-            for intent_data in data:
-                response = client.create_intent(
-                    project.project.id,
-                    intent_data["from"],
-                    intent_data["description"],
-                    worker.name,
-                )
-                if response.status_code == 403:
-                    LOG.info(
-                        "project became inactive during reason intent create project=%s worker=%s created=%s",
-                        project.project.id,
-                        worker.name,
-                        created,
-                    )
-                    return "success"
-                if response.status_code == 409:
-                    LOG.info(
-                        "reason intent lost race project=%s worker=%s from=%s",
-                        project.project.id,
-                        worker.name,
-                        intent_data["from"],
-                    )
-                    continue
-                if not response.ok:
-                    LOG.warning(
-                        "reason intent write failed project=%s worker=%s status=%s body=%s",
-                        project.project.id,
-                        worker.name,
-                        response.status_code,
-                        response.text,
-                    )
-                    continue
-                created += 1
-                LOG.info(
-                    "reason created intent project=%s worker=%s from=%s description=%s",
-                    project.project.id,
-                    worker.name,
-                    intent_data["from"],
-                    intent_data["description"],
-                )
+
+        response = client.apply_graph_patch(project.project.id, patch)
+        if response.status_code == 403:
             LOG.info(
-                "reason finished project=%s worker=%s created_intents=%s/%s execute_ms=%s total_ms=%s",
+                "project became inactive during reason graph patch project=%s worker=%s",
                 project.project.id,
                 worker.name,
-                created,
-                len(data),
+            )
+            return "success"
+        if response.status_code == 409:
+            LOG.warning(
+                "reason graph patch revision conflict project=%s worker=%s base_revision=%s execute_ms=%s total_ms=%s",
+                project.project.id,
+                worker.name,
+                project.blackboard_revision,
                 execute_ms,
                 total_ms,
             )
-            if created == 0:
-                LOG.warning(
-                    "reason created no intents project=%s worker=%s attempted=%s execute_ms=%s total_ms=%s",
-                    project.project.id,
-                    worker.name,
-                    len(data),
-                    execute_ms,
-                    total_ms,
-                )
-                return "api_error"
             return "success"
+        if not response.ok:
+            LOG.warning(
+                "reason graph patch failed project=%s worker=%s status=%s body=%s",
+                project.project.id,
+                worker.name,
+                response.status_code,
+                response.text,
+            )
+            return "api_error"
         LOG.info(
-            "reason finished without graph change project=%s worker=%s execute_ms=%s total_ms=%s",
+            "reason graph patch project=%s worker=%s create=%s drop=%s reprioritize=%s supersede=%s complete=%s execute_ms=%s total_ms=%s",
             project.project.id,
             worker.name,
+            len(patch.get("create") or []),
+            len(patch.get("drop") or []),
+            len(patch.get("reprioritize") or []),
+            len(patch.get("supersede") or []),
+            bool(patch.get("complete")),
             execute_ms,
             total_ms,
         )

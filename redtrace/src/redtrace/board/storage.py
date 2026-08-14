@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -199,6 +200,8 @@ def get_unclaimed_open_intent_or_404(
     row = get_intent_or_404(conn, project_id, intent_id)
     if row["to_fact_id"] is not None:
         raise HTTPException(409, "Intent already concluded")
+    if row["state"] in ("dropped", "superseded"):
+        raise HTTPException(409, f"Intent is {row['state']}")
     if row["worker"] is not None:
         raise HTTPException(409, f"Intent is currently claimed by {row['worker']}")
     if row["circuit_open"]:
@@ -215,6 +218,8 @@ def get_owned_open_intent_or_404(
     row = get_intent_or_404(conn, project_id, intent_id)
     if row["to_fact_id"] is not None:
         raise HTTPException(409, "Intent already concluded")
+    if row["state"] in ("dropped", "superseded"):
+        raise HTTPException(409, f"Intent is {row['state']}")
     if row["worker"] is None:
         raise HTTPException(409, "Intent is not currently claimed")
     if row["worker"] != worker:
@@ -229,6 +234,8 @@ def get_releasable_open_intent_or_404(
     row = get_intent_or_404(conn, project_id, intent_id)
     if row["to_fact_id"] is not None:
         raise HTTPException(409, "Intent already concluded")
+    if row["state"] in ("dropped", "superseded"):
+        raise HTTPException(409, f"Intent is {row['state']}")
     if row["worker"] is None:
         return row
     if worker != "admin" and row["worker"] != worker:
@@ -257,6 +264,13 @@ def intent_to_model(
         "SELECT fact_id FROM intent_sources WHERE intent_id = ? AND project_id = ? ORDER BY rowid",
         (row["id"], project_id),
     ).fetchall()
+    invalidated_raw = row["invalidated_by"] if "invalidated_by" in row.keys() else "[]"
+    try:
+        invalidated_by = json.loads(invalidated_raw or "[]")
+        if not isinstance(invalidated_by, list):
+            invalidated_by = []
+    except (TypeError, ValueError):
+        invalidated_by = []
     return Intent(
         id=row["id"],
         **{"from": [s["fact_id"] for s in sources]},
@@ -271,6 +285,20 @@ def intent_to_model(
         failure_signature=row["failure_signature"],
         retry_after=row["retry_after"],
         circuit_open=bool(row["circuit_open"]),
+        priority=row["priority"] if "priority" in row.keys() else 50,
+        state=row["state"] if "state" in row.keys() else "open",
+        goal_id=row["goal_id"] if "goal_id" in row.keys() else None,
+        superseded_by=row["superseded_by"] if "superseded_by" in row.keys() else None,
+        invalidated_by=invalidated_by,
+        drop_reason=row["drop_reason"] if "drop_reason" in row.keys() else None,
+        attempt_count=row["attempt_count"] if "attempt_count" in row.keys() else 0,
+        cumulative_runtime_ms=(
+            row["cumulative_runtime_ms"] if "cumulative_runtime_ms" in row.keys() else 0
+        ),
+        fact_yield=row["fact_yield"] if "fact_yield" in row.keys() else 0,
+        last_progress_at=(
+            row["last_progress_at"] if "last_progress_at" in row.keys() else None
+        ),
     )
 
 
@@ -337,7 +365,7 @@ def expire_workers(conn: sqlite3.Connection, project_id: str | None = None) -> N
     now = utcnow()
     query = """
         UPDATE intents
-        SET worker = NULL
+        SET worker = NULL, state = 'open'
         WHERE to_fact_id IS NULL
           AND worker IS NOT NULL
           AND last_heartbeat_at IS NOT NULL

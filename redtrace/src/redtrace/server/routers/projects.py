@@ -5,10 +5,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from redtrace.board import projects
+from redtrace.board import intents as intents_module
 from redtrace.board.storage import get_project_or_404, utcnow
 from redtrace.board.models import (
     CompleteRequest,
     CreateProjectRequest,
+    GraphPatchRequest,
+    GraphPatchResponse,
     HeartbeatRequest,
     Intent,
     ProjectDetail,
@@ -191,6 +194,14 @@ def release_project_reason(project_id: str, body: HeartbeatRequest):
 @router.post("/projects/{project_id}/complete", response_model=Intent)
 def complete_project(project_id: str, body: CompleteRequest):
     return projects.complete(project_id, body)
+
+
+@router.post(
+    "/projects/{project_id}/graph-patch",
+    response_model=GraphPatchResponse,
+)
+def apply_graph_patch(project_id: str, body: GraphPatchRequest):
+    return intents_module.apply_graph_patch(project_id, body)
 
 
 @router.post("/projects/{project_id}/reopen", response_model=ReopenResponse)

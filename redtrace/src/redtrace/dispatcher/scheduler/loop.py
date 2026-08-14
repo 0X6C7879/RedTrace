@@ -379,8 +379,13 @@ class DispatcherLoop:
             summary_trigger not in (None, "initial")
             and not self._reason_coalesce_ready(summary.id)
         )
+        frontier_empty = (
+            summary.unclaimed_intent_count == 0
+            and summary.working_intent_count == 0
+            and summary.fact_count > 2
+        )
         if summary.unclaimed_intent_count == 0 and (
-            summary.reason is not None or summary_trigger is None
+            summary.reason is not None or (summary_trigger is None and not frontier_empty)
         ):
             return False
 
@@ -844,13 +849,20 @@ class DispatcherLoop:
 
     def _reason_trigger(self, project: ProjectDetail) -> str | None:
         project_id = project.project.id
-        return project_policy.reason_trigger(
+        trigger = project_policy.reason_trigger(
             self.reason_checkpoints.get(project_id),
             fact_count=len(project.facts),
             hint_count=len(project.hints),
             open_intents=project_policy.open_intent_count(project),
             request_generation=self.reason_request_generations.get(project_id, 0),
         )
+        if (
+            trigger is None
+            and project_policy.open_intent_count(project) == 0
+            and len(project.facts) > 2
+        ):
+            return "frontier_empty"
+        return trigger
 
     def _reason_coalesce_ready(self, project_id: str) -> bool:
         dirty = getattr(self, "reason_dirty_since", None)
@@ -979,6 +991,9 @@ class DispatcherLoop:
                         request_generation=task.reason_request_generation,
                     )
                     getattr(self, "reason_dirty_since", {}).pop(task.project_id, None)
+                    self.reason_debounce_until[task.project_id] = (
+                        time.time() + REASON_DEBOUNCE_SECONDS
+                    )
                     LOG.debug(
                         "reason checkpoint updated project=%s facts=%s hints=%s open_intents=%s",
                         task.project_id,

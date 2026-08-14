@@ -63,7 +63,13 @@ def test_reason_writes_graph_snapshot_and_creates_intent(monkeypatch) -> None:
     )
 
     assert outcome == "success"
-    assert client.created_intents == [("proj_001", ["f001"], "next step", "test-worker")]
+    assert client.created_intents == []
+    assert len(client.patched) == 1
+    patched_project, patch = client.patched[0]
+    assert patched_project == "proj_001"
+    assert patch["worker"] == "test-worker"
+    assert patch["base_revision"] == 0
+    assert patch["create"] == [{"from": ["f001"], "description": "next step", "priority": 50}]
     assert client.released_reasons == [("proj_001", "test-worker")]
     assert lease.started and lease.stopped
     assert len(containers.writes) == 1
@@ -112,7 +118,9 @@ def test_reason_repairs_invalid_format_once(monkeypatch) -> None:
     )
 
     assert outcome == "success"
-    assert client.created_intents == [("proj_001", ["f001"], "next", "test-worker")]
+    assert client.patched[0][1]["create"] == [
+        {"from": ["f001"], "description": "next", "priority": 50}
+    ]
     assert len(driver.conclude_prompts) == 1
     assert "不得调用工具" in driver.conclude_prompts[0]
 
@@ -151,7 +159,7 @@ def test_reason_timeout_recovers_with_same_session(monkeypatch) -> None:
     )
 
     assert outcome == "success"
-    assert client.created_intents[-1][2] == "recovered"
+    assert client.patched[-1][1]["create"][0]["description"] == "recovered"
     assert len(driver.conclude_prompts) == 1
 
 
@@ -188,8 +196,8 @@ def test_reason_only_fills_available_open_intent_slots(monkeypatch) -> None:
     )
 
     assert outcome == "success"
-    assert client.created_intents == [
-        ("proj_001", ["f001"], "slot one", "test-worker")
+    assert client.patched[0][1]["create"] == [
+        {"from": ["f001"], "description": "slot one", "priority": 50}
     ]
 
 
@@ -351,10 +359,10 @@ def test_reason_complete_treats_inactive_project_as_success(monkeypatch) -> None
     containers = FakeContainerManager()
     lease = FakeLease()
 
-    def complete(*_args, **_kwargs) -> ApiResult:
+    def apply_graph_patch(*_args, **_kwargs) -> ApiResult:
         return ApiResult(403, text="inactive")
 
-    client.complete = complete  # type: ignore[method-assign]
+    client.apply_graph_patch = apply_graph_patch  # type: ignore[method-assign]
     monkeypatch.setattr(reason, "get_driver", lambda *_a, **_k: FakeDriver())
     monkeypatch.setattr(reason.HeartbeatLease, "for_reason", _lease_factory(lease))
     monkeypatch.setattr(
@@ -418,7 +426,9 @@ def test_reason_startup_only_mode_skips_task_healthcheck(monkeypatch) -> None:
     )
 
     assert outcome == "success"
-    assert client.created_intents == [("proj_001", ["f001"], "next", "test-worker")]
+    assert client.patched[0][1]["create"] == [
+        {"from": ["f001"], "description": "next", "priority": 50}
+    ]
 
 
 def test_access_channel_fact_gets_registered_resource_id() -> None:

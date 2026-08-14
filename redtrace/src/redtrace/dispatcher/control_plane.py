@@ -265,6 +265,13 @@ class ControlPlaneClient:
             },
         )
 
+    def apply_graph_patch(self, project_id: str, patch: dict[str, Any]) -> ApiResult:
+        return self._request_json(
+            "POST",
+            f"/projects/{project_id}/graph-patch",
+            json=patch,
+        )
+
     def append_audit_events(
         self,
         run: dict[str, Any],

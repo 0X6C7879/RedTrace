@@ -121,6 +121,16 @@ CREATE TABLE IF NOT EXISTS intents (
     failure_signature TEXT,
     retry_after REAL,
     circuit_open INTEGER NOT NULL DEFAULT 0,
+    priority INTEGER NOT NULL DEFAULT 50,
+    state TEXT NOT NULL DEFAULT 'open',
+    goal_id TEXT,
+    superseded_by TEXT,
+    invalidated_by TEXT NOT NULL DEFAULT '[]',
+    drop_reason TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    cumulative_runtime_ms INTEGER NOT NULL DEFAULT 0,
+    fact_yield INTEGER NOT NULL DEFAULT 0,
+    last_progress_at TEXT,
     PRIMARY KEY (id, project_id)
 );
 
@@ -728,9 +738,31 @@ def _ensure_project_columns(conn: sqlite3.Connection) -> None:
         "failure_signature": "TEXT",
         "retry_after": "REAL",
         "circuit_open": "INTEGER NOT NULL DEFAULT 0",
+        "priority": "INTEGER NOT NULL DEFAULT 50",
+        "state": "TEXT NOT NULL DEFAULT 'open'",
+        "goal_id": "TEXT",
+        "superseded_by": "TEXT",
+        "invalidated_by": "TEXT NOT NULL DEFAULT '[]'",
+        "drop_reason": "TEXT",
+        "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+        "cumulative_runtime_ms": "INTEGER NOT NULL DEFAULT 0",
+        "fact_yield": "INTEGER NOT NULL DEFAULT 0",
+        "last_progress_at": "TEXT",
     }.items():
         if name not in intent_columns:
             conn.execute(f"ALTER TABLE intents ADD COLUMN {name} {definition}")
+    # Backfill the new `state` column from the legacy to_fact_id/worker fields.
+    conn.execute(
+        """
+        UPDATE intents SET state = CASE
+            WHEN to_fact_id IS NOT NULL THEN 'concluded'
+            WHEN worker IS NOT NULL THEN 'working'
+            ELSE 'open'
+        END
+        WHERE state = 'open'
+          AND (to_fact_id IS NOT NULL OR worker IS NOT NULL)
+        """
+    )
 
 
 def _ensure_deletion_columns(conn: sqlite3.Connection) -> None:
