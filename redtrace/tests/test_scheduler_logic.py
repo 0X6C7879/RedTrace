@@ -48,10 +48,10 @@ def _summary(project_id: str, status: str) -> ProjectSummary:
     )
 
 
-def test_compact_project_snapshot_uses_already_loaded_detail() -> None:
+def test_reason_graph_snapshot_uses_already_loaded_detail() -> None:
     project = make_project(intents=[make_intent()])
 
-    payload = json.loads(project_policy.compact_snapshot(project))
+    payload = json.loads(project_policy.reason_graph_snapshot(project))
 
     assert payload["project"]["title"] == project.project.title
     assert payload["facts"][0]["id"] == "origin"
@@ -59,7 +59,7 @@ def test_compact_project_snapshot_uses_already_loaded_detail() -> None:
     assert "shared_resources" not in payload
 
 
-def test_explore_snapshot_only_contains_dependencies_and_bounds_large_facts() -> None:
+def test_explore_snapshot_only_contains_dependencies_without_truncation() -> None:
     intent = make_intent()
     intent.from_ = ["f001"]
     project = make_project(intents=[intent])
@@ -69,24 +69,9 @@ def test_explore_snapshot_only_contains_dependencies_and_bounds_large_facts() ->
     payload = json.loads(project_policy.compact_snapshot(project, intent))
 
     assert {fact["id"] for fact in payload["facts"]} == {"origin", "goal", "f001"}
-    assert "truncated; run redtrace-blackboard source f001" in payload["facts"][2]["description"]
+    assert payload["facts"][2]["description"] == "x" * 2000
+    assert "truncated" not in json.dumps(payload)
     assert [item["id"] for item in payload["intents"]] == [intent.id]
-
-
-def test_reason_snapshot_has_hard_total_budget() -> None:
-    project = make_project()
-    project.facts.extend(
-        Fact(id=f"f{index:03}", description="x" * 5_000)
-        for index in range(100)
-    )
-
-    snapshot = project_policy.compact_snapshot(project)
-
-    assert len(snapshot.encode()) <= 64 * 1024
-    assert {fact["id"] for fact in json.loads(snapshot)["facts"]} >= {
-        "origin",
-        "goal",
-    }
 
 
 def test_reason_trigger_detects_new_facts_and_open_intent_completion() -> None:

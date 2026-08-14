@@ -407,7 +407,7 @@ class DispatcherLoop:
                 return self._dispatch_initial_project(project)
             return self._dispatch_reason(
                 project,
-                project_policy.compact_snapshot(project),
+                project_policy.reason_graph_snapshot(project),
                 "initial",
             )
         if project.project.reason is None:
@@ -421,7 +421,7 @@ class DispatcherLoop:
                 and not reason_coalescing
                 and self._dispatch_reason(
                     project,
-                    project_policy.compact_snapshot(project),
+                    project_policy.reason_graph_snapshot(project),
                     reason_trigger,
                 )
             ):

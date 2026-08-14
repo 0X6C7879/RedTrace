@@ -8,58 +8,64 @@ from redtrace.dispatcher.scheduler.state import ReasonCheckpoint
 
 BOOTSTRAP_DESCRIPTION = "bootstrap"
 BOOTSTRAP_CREATOR = "dispatcher.bootstrap"
-FACT_SUMMARY_CHARS = 800
-MAX_SNAPSHOT_BYTES = 64 * 1024
 
 
-def compact_snapshot(project: ProjectDetail, intent: Intent | None = None) -> str:
-    """Serialize a bounded graph; full facts remain queryable from Blackboard."""
-    fact_ids = None if intent is None else {"origin", "goal", *intent.from_}
-    facts = [fact for fact in project.facts if fact_ids is None or fact.id in fact_ids]
-    intents = (
-        [item for item in project.intents if item.to is None]
-        if intent is None
-        else [intent]
-    )
+def reason_graph_snapshot(project: ProjectDetail) -> str:
+    """Serialize the complete Task Graph for the global Reason planner.
+
+    The Blackboard is the agent's long-term memory, so this snapshot is lossless:
+    every Fact, Hint, and Intent (including concluded, failed, and retried ones)
+    is preserved in full. There is no byte budget, no per-Fact character
+    truncation, and no importance pruning. The Reason prompt receives only a
+    file reference to this payload, so a large graph never inflates the model
+    context directly — the agent decides how much of it to read.
+    """
     payload = {
         "project": {
             "title": project.project.title,
             "status": project.project.status,
             "bootstrap_enabled": project.project.bootstrap_enabled,
         },
-        "facts": [_compact_fact(fact.id, fact.description) for fact in facts],
+        "facts": [
+            {"id": fact.id, "description": fact.description}
+            for fact in project.facts
+        ],
         "hints": [hint.model_dump(mode="json") for hint in project.hints],
-        "intents": [item.model_dump(mode="json", by_alias=True) for item in intents],
+        "intents": [
+            intent.model_dump(mode="json", by_alias=True)
+            for intent in project.intents
+        ],
     }
-    serialized = _serialize(payload)
-    if len(serialized.encode()) <= MAX_SNAPSHOT_BYTES:
-        return serialized
+    return _serialize(payload)
 
-    bounded = {"project": payload["project"], "facts": [], "hints": [], "intents": []}
-    for section in ("facts", "hints", "intents"):
-        for item in payload[section]:
-            bounded[section].append(item)
-            candidate = _serialize(bounded)
-            if len(candidate.encode()) > MAX_SNAPSHOT_BYTES:
-                bounded[section].pop()
-                break
-    return _serialize(bounded)
+
+def compact_snapshot(project: ProjectDetail, intent: Intent) -> str:
+    """Serialize the scoped Explore working set for a single Intent.
+
+    Explore executes one concrete Intent, so it receives only the Facts that
+    Intent depends on plus the Intent itself. Scoping selects the relevant
+    subgraph; it never truncates or prunes content.
+    """
+    fact_ids = {"origin", "goal", *intent.from_}
+    facts = [fact for fact in project.facts if fact.id in fact_ids]
+    payload = {
+        "project": {
+            "title": project.project.title,
+            "status": project.project.status,
+            "bootstrap_enabled": project.project.bootstrap_enabled,
+        },
+        "facts": [
+            {"id": fact.id, "description": fact.description}
+            for fact in facts
+        ],
+        "hints": [hint.model_dump(mode="json") for hint in project.hints],
+        "intents": [intent.model_dump(mode="json", by_alias=True)],
+    }
+    return _serialize(payload)
 
 
 def _serialize(payload: object) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-
-
-def _compact_fact(fact_id: str, description: str) -> dict[str, str]:
-    if len(description) <= FACT_SUMMARY_CHARS:
-        return {"id": fact_id, "description": description}
-    return {
-        "id": fact_id,
-        "description": (
-            description[:FACT_SUMMARY_CHARS]
-            + f"… [truncated; run redtrace-blackboard source {fact_id}]"
-        ),
-    }
 
 
 def rotate_projects(

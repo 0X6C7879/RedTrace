@@ -115,6 +115,22 @@ def run_reason_task(
             len(project.hints),
             len(open_intents),
         )
+        largest_fact = max(
+            project.facts, key=lambda fact: len(fact.description), default=None
+        )
+        LOG.info(
+            "reason graph prepared project=%s worker=%s facts=%s intents=%s open_intents=%s hints=%s bytes=%s chars=%s largest_fact_chars=%s largest_fact_id=%s truncated=false",
+            project.project.id,
+            worker.name,
+            len(project.facts),
+            len(project.intents),
+            len(open_intents),
+            len(project.hints),
+            len(export_yaml.encode()),
+            len(export_yaml),
+            len(largest_fact.description) if largest_fact is not None else 0,
+            largest_fact.id if largest_fact is not None else None,
+        )
         prompt = render_prompt(
             load_prompt(config.runtime.prompt_group, "reason.md"),
             {
