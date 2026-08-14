@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small, dependency-free read-only client for RedTrace's shared blackboard."""
+"""Small, dependency-free client for RedTrace's shared blackboard."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def _default_revision() -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="redtrace-blackboard",
-        description="Read the current RedTrace blackboard on demand. This client never writes or polls.",
+        description="Read the RedTrace blackboard or submit an incremental Fact.",
     )
     parser.add_argument(
         "--server", default=_env("REDTRACE_SERVER"), help="RedTrace server URL"
@@ -104,11 +104,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, default=50, choices=range(1, 201), metavar="1..200"
     )
     source.add_argument("--before-id", type=int)
+    submit = subparsers.add_parser(
+        "submit-fact", help="Persist a discovery without concluding the current Intent"
+    )
+    submit.add_argument("description")
     return parser
 
 
 def _request(args: argparse.Namespace) -> dict[str, Any]:
     project = quote(args.project, safe="")
+    method = "GET"
+    payload: bytes | None = None
     if args.command == "status":
         path = "status"
         params = {"since": args.since}
@@ -132,10 +138,24 @@ def _request(args: argparse.Namespace) -> dict[str, Any]:
         params = {"limit": args.limit}
         if args.before_id is not None:
             params["before_id"] = args.before_id
+    elif args.command == "submit-fact":
+        if not args.intent:
+            raise ValueError("--intent or REDTRACE_INTENT_ID is required")
+        path = ""
+        params = {}
+        method = "POST"
+        payload = json.dumps(
+            {"worker": args.worker, "description": args.description},
+            ensure_ascii=False,
+        ).encode("utf-8")
     else:  # pragma: no cover - argparse enforces this
         raise ValueError(f"unsupported command: {args.command}")
 
-    url = f"{args.server.rstrip('/')}/projects/{project}/blackboard/{path}"
+    if args.command == "submit-fact":
+        intent = quote(args.intent, safe="")
+        url = f"{args.server.rstrip('/')}/projects/{project}/intents/{intent}/facts"
+    else:
+        url = f"{args.server.rstrip('/')}/projects/{project}/blackboard/{path}"
     if params:
         url += "?" + urlencode(params)
     headers = {
@@ -146,7 +166,9 @@ def _request(args: argparse.Namespace) -> dict[str, Any]:
     }
     if args.intent:
         headers["X-RedTrace-Intent"] = args.intent
-    request = Request(url, headers=headers, method="GET")
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+    request = Request(url, data=payload, headers=headers, method=method)
     with urlopen(request, timeout=args.timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
@@ -170,6 +192,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--server or REDTRACE_SERVER is required")
     if not args.project:
         parser.error("--project or REDTRACE_PROJECT_ID is required")
+    if args.command == "submit-fact" and not args.intent:
+        parser.error("--intent or REDTRACE_INTENT_ID is required")
     try:
         result = _request(args)
     except HTTPError as exc:

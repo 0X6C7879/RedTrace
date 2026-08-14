@@ -8,6 +8,7 @@ from redtrace.board.models import (
     ConcludeResponse,
     CreateIntentRequest,
     HeartbeatRequest,
+    IncrementalFactResponse,
     Intent,
     TaskOutcomeRequest,
 )
@@ -38,8 +39,6 @@ def claim(project_id: str, intent_id: str, body: HeartbeatRequest):
 
 @router.post("/projects/{project_id}/intents/{intent_id}/outcome")
 def report_outcome(project_id: str, intent_id: str, body: TaskOutcomeRequest):
-    if body.outcome in {"success", "cancelled"}:
-        return {"circuitOpen": False, "failureCount": 0}
     with get_conn(immediate=True) as conn:
         check_project_active(conn, project_id)
         row = conn.execute(
@@ -48,6 +47,13 @@ def report_outcome(project_id: str, intent_id: str, body: TaskOutcomeRequest):
         ).fetchone()
         if row is None:
             raise HTTPException(404, "Intent not found")
+        if body.runtime_ms:
+            conn.execute(
+                "UPDATE intents SET cumulative_runtime_ms = cumulative_runtime_ms + ? WHERE id = ? AND project_id = ?",
+                (body.runtime_ms, intent_id, project_id),
+            )
+        if body.outcome in {"success", "cancelled"}:
+            return {"circuitOpen": False, "failureCount": 0}
         if row["to_fact_id"] is not None:
             return {"circuitOpen": bool(row["circuit_open"]), "failureCount": row["failure_count"]}
         count = int(row["failure_count"]) + 1
@@ -93,6 +99,15 @@ def report_outcome(project_id: str, intent_id: str, body: TaskOutcomeRequest):
 )
 def heartbeat(project_id: str, intent_id: str, body: HeartbeatRequest):
     return intents.heartbeat(project_id, intent_id, body.worker)
+
+
+@router.post(
+    "/projects/{project_id}/intents/{intent_id}/facts",
+    response_model=IncrementalFactResponse,
+    status_code=201,
+)
+def submit_fact(project_id: str, intent_id: str, body: ConcludeRequest):
+    return intents.submit_fact(project_id, intent_id, body)
 
 
 @router.post(

@@ -366,6 +366,11 @@ class DispatcherLoop:
             )
             return False
 
+        idle_explore_capacity = self._idle_explore_capacity(summary.id)
+        frontier_low = (
+            idle_explore_capacity > 0
+            and summary.unclaimed_intent_count < idle_explore_capacity
+        )
         summary_trigger = project_policy.reason_trigger(
             self.reason_checkpoints.get(summary.id),
             fact_count=summary.fact_count,
@@ -377,15 +382,12 @@ class DispatcherLoop:
         )
         reason_coalescing = (
             summary_trigger not in (None, "initial")
+            and not frontier_low
             and not self._reason_coalesce_ready(summary.id)
         )
-        frontier_empty = (
-            summary.unclaimed_intent_count == 0
-            and summary.working_intent_count == 0
-            and summary.fact_count > 2
-        )
         if summary.unclaimed_intent_count == 0 and (
-            summary.reason is not None or (summary_trigger is None and not frontier_empty)
+            summary.reason is not None
+            or summary_trigger is None
         ):
             return False
 
@@ -421,6 +423,12 @@ class DispatcherLoop:
                 and project.project.reason_retry_after > time.time()
             )
             reason_trigger = None if reason_blocked else self._reason_trigger(project)
+            if reason_trigger != "initial":
+                reason_trigger = (
+                    f"frontier_low:{reason_trigger}"
+                    if frontier_low and reason_trigger is not None
+                    else None
+                )
             if (
                 reason_trigger is not None
                 and not reason_coalescing
@@ -780,6 +788,23 @@ class DispatcherLoop:
             counts[task.worker_name] = counts.get(task.worker_name, 0) + 1
         return counts
 
+    def _idle_explore_capacity(self, project_id: str) -> int:
+        counts = self._worker_counts()
+        worker_capacity = sum(
+            max(0, worker.max_running - counts.get(worker.name, 0))
+            for worker in self.config.workers
+            if worker.enabled and "explore" in worker.task_types
+        )
+        return max(
+            0,
+            min(
+                worker_capacity,
+                self.config.runtime.max_workers - self._running_task_count(),
+                self.config.runtime.max_project_workers
+                - self._project_running_task_count(project_id),
+            ),
+        )
+
     def _running_task_count(self) -> int:
         return len(self.futures)
 
@@ -874,6 +899,7 @@ class DispatcherLoop:
         done = [future for future in self.futures if future.done()]
         for future in done:
             task = self.futures.pop(future)
+            runtime_ms = max(0, int((time.monotonic() - task.started_at) * 1000))
             outcome_reported = False
             try:
                 outcome = future.result()
@@ -896,12 +922,9 @@ class DispatcherLoop:
                 try:
                     if task.task_type == "reason":
                         reporter = getattr(self.client, "report_reason_outcome", None)
-                        if callable(reporter):
+                        if callable(reporter) and outcome != "revision_conflict":
                             reporter(task.project_id, task.worker_name, outcome)
-                    elif task.intent_id is not None and outcome not in {
-                        "success",
-                        "cancelled",
-                    }:
+                    elif task.intent_id is not None:
                         reporter = getattr(self.client, "report_intent_outcome", None)
                         if callable(reporter):
                             reporter(
@@ -909,6 +932,7 @@ class DispatcherLoop:
                                 task.intent_id,
                                 task.worker_name,
                                 outcome,
+                                runtime_ms,
                             )
                 except Exception:
                     LOG.exception(
@@ -948,7 +972,7 @@ class DispatcherLoop:
                 else:
                     self.worker_rejected_until.pop(rejection_key, None)
                 task_retry_key = (task.project_id, task.task_type, task.intent_id)
-                if outcome in {"success", "cancelled"}:
+                if outcome in {"success", "cancelled", "revision_conflict"}:
                     self.task_failures.pop(task_retry_key, None)
                     self.task_retry_until.pop(task_retry_key, None)
                 elif outcome not in {"unhealthy", "rejected"}:
@@ -972,13 +996,14 @@ class DispatcherLoop:
                         self.explore_retry_avoid[retry_key] = task.worker_name
                     elif outcome in {"success", "cancelled"}:
                         self.explore_retry_avoid.pop(retry_key, None)
-                if outcome == "success" and task.task_type in {"bootstrap", "explore"}:
+                if outcome == "revision_conflict" and task.task_type == "reason":
                     self.reason_request_generations[task.project_id] = (
                         self.reason_request_generations.get(task.project_id, 0) + 1
                     )
-                    self.reason_debounce_until[task.project_id] = (
-                        time.time() + REASON_DEBOUNCE_SECONDS
-                    )
+                    if not hasattr(self, "reason_dirty_since"):
+                        self.reason_dirty_since = {}
+                    self.reason_dirty_since[task.project_id] = 0.0
+                    self.reason_debounce_until.pop(task.project_id, None)
                 if outcome == "success" and task.task_type == "reason":
                     assert task.fact_count is not None
                     assert task.hint_count is not None
@@ -1021,6 +1046,7 @@ class DispatcherLoop:
                             task.intent_id,
                             task.worker_name,
                             "internal_error",
+                            runtime_ms,
                         )
                 except Exception:
                     LOG.exception(
@@ -1196,6 +1222,12 @@ class DispatcherLoop:
                 summary.working_intent_count + summary.unclaimed_intent_count
             )
             if open_intent_count == 0:
+                continue
+            idle_explore_capacity = self._idle_explore_capacity(summary.id)
+            if (
+                idle_explore_capacity > 0
+                and summary.unclaimed_intent_count < idle_explore_capacity
+            ):
                 continue
             self.reason_checkpoints[summary.id] = ReasonCheckpoint(
                 fact_count=summary.fact_count,

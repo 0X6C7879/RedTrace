@@ -22,8 +22,8 @@ from redtrace.dispatcher.tasks.common import (
     best_effort_release_reason,
     cancel_reason,
     did_timeout,
-    preflight_worker,
     ensure_worker_running,
+    preflight_worker,
     preview,
     process_failure_outcome,
     record_session_checkpoint,
@@ -40,7 +40,11 @@ def _intent_target(config: DispatchConfig) -> int:
     explore_capacity = min(
         config.runtime.max_workers,
         config.runtime.max_project_workers,
-        sum(worker.max_running for worker in config.workers if worker.enabled),
+        sum(
+            worker.max_running
+            for worker in config.workers
+            if worker.enabled and "explore" in worker.task_types
+        ),
     )
     return min(config.tasks.reason.max_intents, max(1, explore_capacity * 2))
 
@@ -448,7 +452,10 @@ def run_reason_task(
                 worker.name,
             )
             return "success"
-        if response.status_code == 409:
+        if response.status_code == 409 and (
+            response.data == {"detail": "revision_conflict"}
+            or "revision_conflict" in response.text
+        ):
             LOG.warning(
                 "reason graph patch revision conflict project=%s worker=%s base_revision=%s execute_ms=%s total_ms=%s",
                 project.project.id,
@@ -457,7 +464,7 @@ def run_reason_task(
                 execute_ms,
                 total_ms,
             )
-            return "success"
+            return "revision_conflict"
         if not response.ok:
             LOG.warning(
                 "reason graph patch failed project=%s worker=%s status=%s body=%s",

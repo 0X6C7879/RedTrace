@@ -27,6 +27,7 @@ def _loop() -> DispatcherLoop:
     loop.task_failures = {}
     loop.task_retry_until = {}
     loop.reason_debounce_until = {}
+    loop.reason_dirty_since = {}
     loop._log_state = {}
     loop.project_cursor = 0
     loop.futures = {}
@@ -203,7 +204,7 @@ def test_select_worker_only_uses_workers_configured_for_task() -> None:
     assert selection.blocked_task_type == ["reason"]
 
 
-def test_new_fact_coalesces_reason_without_blocking_explore() -> None:
+def test_new_fact_does_not_trigger_reason_while_ready_intent_fills_capacity() -> None:
     loop = _loop()
     loop.config = make_config()
     loop.futures = {}
@@ -232,10 +233,10 @@ def test_new_fact_coalesces_reason_without_blocking_explore() -> None:
     )
     loop._dispatch_explore = lambda *_args: dispatched.append(("explore", "")) or True
 
-    assert loop._try_dispatch_project(_summary("proj_001", "active"))
-    loop.reason_dirty_since["proj_001"] -= 10
-    assert loop._try_dispatch_project(_summary("proj_001", "active"))
-    assert dispatched == [("explore", ""), ("reason", "facts:3->4")]
+    summary = _summary("proj_001", "active")
+    summary.unclaimed_intent_count = 1
+    assert loop._try_dispatch_project(summary)
+    assert dispatched == [("explore", "")]
 
 
 def test_ready_intent_dispatches_when_reason_worker_is_busy() -> None:
@@ -257,6 +258,57 @@ def test_ready_intent_dispatches_when_reason_worker_is_busy() -> None:
 
     assert loop._try_dispatch_project(_summary("proj_001", "active"))
     assert dispatched == ["reason", "explore"]
+
+
+def test_idle_explore_capacity_triggers_reason_before_frontier_is_empty() -> None:
+    loop = _loop()
+    base = make_config()
+    explore_workers = [
+        base.workers[0].model_copy(
+            update={"name": f"explore-{index}", "task_types": ["explore"]}
+        )
+        for index in range(3)
+    ]
+    reason_worker = base.workers[0].model_copy(
+        update={"name": "reason-only", "task_types": ["reason"]}
+    )
+    loop.config = base.model_copy(
+        update={
+            "runtime": base.runtime.model_copy(
+                update={"max_workers": 4, "max_project_workers": 4}
+            ),
+            "workers": [*explore_workers, reason_worker],
+        }
+    )
+    first = make_intent("i001")
+    first.worker = "explore-0"
+    second = make_intent("i002")
+    second.worker = "explore-1"
+    project = make_project(intents=[first, second])
+    loop.reason_checkpoints["proj_001"] = ReasonCheckpoint(3, 1, 3)
+    for worker, intent_id in (("explore-0", "i001"), ("explore-1", "i002")):
+        loop.futures[Future()] = RunningTask(
+            "proj_001",
+            "explore",
+            worker,
+            TaskCancellation(),
+            intent_id=intent_id,
+        )
+    loop.container_manager = SimpleNamespace(
+        container_name=lambda project_id: project_id
+    )
+    loop.client = SimpleNamespace(get_project=lambda _project_id: project)
+    dispatched: list[str] = []
+    loop._dispatch_reason = lambda _project, _graph, trigger: (
+        dispatched.append(trigger) or True
+    )
+
+    summary = _summary("proj_001", "active")
+    summary.fact_count = 3
+    summary.intent_count = 2
+    summary.working_intent_count = 2
+    assert loop._try_dispatch_project(summary)
+    assert dispatched == ["frontier_low:open_intents:3->2"]
 
 
 def test_intent_completion_during_reason_requests_follow_up_reason() -> None:
@@ -290,8 +342,12 @@ def test_intent_completion_during_reason_requests_follow_up_reason() -> None:
     )
 
 
-def test_successful_explore_requests_reason() -> None:
+def test_successful_explore_records_runtime_without_direct_reason_request() -> None:
     loop = _loop()
+    reported: list[tuple] = []
+    loop.client = SimpleNamespace(
+        report_intent_outcome=lambda *args: reported.append(args)
+    )
     future: Future[str] = Future()
     future.set_result("success")
     loop.futures[future] = RunningTask(
@@ -300,8 +356,33 @@ def test_successful_explore_requests_reason() -> None:
 
     loop._reap_futures()
 
-    assert loop.reason_request_generations == {"proj_001": 1}
-    assert loop.reason_debounce_until["proj_001"] > 0
+    assert loop.reason_request_generations == {}
+    assert loop.reason_debounce_until == {}
+    assert reported[0][:4] == ("proj_001", "i001", "worker", "success")
+    assert reported[0][4] >= 0
+
+
+def test_revision_conflict_requests_follow_up_without_advancing_checkpoint() -> None:
+    loop = _loop()
+    loop.reason_checkpoints["proj_001"] = ReasonCheckpoint(4, 1, 2)
+    future: Future[str] = Future()
+    future.set_result("revision_conflict")
+    loop.futures[future] = RunningTask(
+        "proj_001",
+        "reason",
+        "reason-worker",
+        TaskCancellation(),
+        fact_count=4,
+        hint_count=1,
+        open_intent_count=2,
+        reason_request_generation=0,
+    )
+
+    loop._reap_futures()
+
+    assert loop.reason_checkpoints["proj_001"] == ReasonCheckpoint(4, 1, 2)
+    assert loop.reason_request_generations["proj_001"] == 1
+    assert loop.reason_dirty_since["proj_001"] == 0.0
 
 
 def test_failed_task_retries_use_exponential_backoff(monkeypatch) -> None:
@@ -499,6 +580,7 @@ def test_initialize_reason_checkpoint_only_for_active_projects_with_open_intents
     None
 ):
     loop = _loop()
+    loop.config = make_config()
     active = _summary("active", "active")
     active.unclaimed_intent_count = 1
 

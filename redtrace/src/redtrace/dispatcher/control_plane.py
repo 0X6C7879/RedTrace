@@ -216,12 +216,17 @@ class ControlPlaneClient:
         )
 
     def report_intent_outcome(
-        self, project_id: str, intent_id: str, worker: str, outcome: str
+        self,
+        project_id: str,
+        intent_id: str,
+        worker: str,
+        outcome: str,
+        runtime_ms: int = 0,
     ) -> ApiResult:
         return self._request_json(
             "POST",
             f"/projects/{project_id}/intents/{intent_id}/outcome",
-            json={"worker": worker, "outcome": outcome},
+            json={"worker": worker, "outcome": outcome, "runtime_ms": runtime_ms},
         )
 
     def report_reason_outcome(

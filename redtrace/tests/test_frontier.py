@@ -3,9 +3,8 @@ from __future__ import annotations
 import time
 
 import pytest
-from fastapi.testclient import TestClient
-
 from conftest import make_intent, make_project
+from fastapi.testclient import TestClient
 from redtrace.dispatcher.scheduler import project_policy
 from redtrace.server import db
 from redtrace.server.app import app
@@ -95,6 +94,36 @@ def test_graph_patch_rejects_stale_revision(client: TestClient) -> None:
     assert "revision_conflict" in response.json()["detail"]
 
 
+def test_frontier_semantic_update_invalidates_stale_revision(
+    client: TestClient,
+) -> None:
+    project_id = _project(client)
+    intent = _intent(client, project_id, "reprioritize me")
+    revision = _revision(client, project_id)
+
+    changed = _patch(
+        client,
+        project_id,
+        revision,
+        {
+            "reprioritize": [
+                {"intent_id": intent["id"], "priority": 90, "reason": "new evidence"}
+            ]
+        },
+    )
+    assert changed.status_code == 200
+    assert changed.json()["revision"] > revision
+
+    stale = _patch(
+        client,
+        project_id,
+        revision,
+        {"drop": [{"intent_id": intent["id"], "reason": "stale planner"}]},
+    )
+    assert stale.status_code == 409
+    assert "revision_conflict" in stale.json()["detail"]
+
+
 def test_graph_patch_rejects_unknown_fact_and_intent(client: TestClient) -> None:
     project_id = _project(client)
     revision = _revision(client, project_id)
@@ -145,7 +174,7 @@ def test_graph_patch_rejects_duplicate_intent(client: TestClient) -> None:
 
 def test_graph_patch_rolls_back_on_partial_failure(client: TestClient) -> None:
     project_id = _project(client)
-    i1 = _intent(client, project_id, "keep me")
+    _intent(client, project_id, "keep me")
     revision = _revision(client, project_id)
 
     response = _patch(
@@ -162,6 +191,62 @@ def test_graph_patch_rolls_back_on_partial_failure(client: TestClient) -> None:
     detail = client.get(f"/projects/{project_id}").json()
     assert [item["description"] for item in detail["intents"]] == ["keep me"]
     assert detail["intents"][0]["state"] == "open"
+
+
+def test_graph_patch_rejects_terminal_self_and_cyclic_mutations(
+    client: TestClient,
+) -> None:
+    project_id = _project(client)
+    first = _intent(client, project_id, "first")
+    second = _intent(client, project_id, "second")
+
+    self_reference = _patch(
+        client,
+        project_id,
+        _revision(client, project_id),
+        {
+            "supersede": [
+                {"intent_id": first["id"], "by": first["id"], "reason": "invalid"}
+            ]
+        },
+    )
+    assert self_reference.status_code == 400
+
+    cycle = _patch(
+        client,
+        project_id,
+        _revision(client, project_id),
+        {
+            "supersede": [
+                {"intent_id": first["id"], "by": second["id"], "reason": "a"},
+                {"intent_id": second["id"], "by": first["id"], "reason": "b"},
+            ]
+        },
+    )
+    assert cycle.status_code == 409
+    assert all(
+        item["state"] == "open"
+        for item in client.get(f"/projects/{project_id}").json()["intents"]
+    )
+
+    dropped = _patch(
+        client,
+        project_id,
+        _revision(client, project_id),
+        {"drop": [{"intent_id": first["id"], "reason": "done"}]},
+    )
+    assert dropped.status_code == 200
+    terminal = _patch(
+        client,
+        project_id,
+        _revision(client, project_id),
+        {
+            "reprioritize": [
+                {"intent_id": first["id"], "priority": 99, "reason": "too late"}
+            ]
+        },
+    )
+    assert terminal.status_code == 409
 
 
 def test_dropped_intent_cannot_be_claimed(client: TestClient) -> None:
@@ -259,6 +344,48 @@ def test_consecutive_failures_decay_priority(client: TestClient) -> None:
     stored = next(item for item in detail["intents"] if item["id"] == intent["id"])
     assert stored["priority"] == 35  # 50 - 5 - 10
     assert stored["state"] == "open"
+
+
+def test_incremental_fact_and_runtime_update_branch_budget(
+    client: TestClient,
+) -> None:
+    project_id = _project(client)
+    intent = _intent(client, project_id, "long investigation")
+    claimed = client.post(
+        f"/projects/{project_id}/intents/{intent['id']}/claim",
+        json={"worker": "explorer"},
+    )
+    assert claimed.status_code == 200
+
+    denied = client.post(
+        f"/projects/{project_id}/intents/{intent['id']}/facts",
+        json={"worker": "other", "description": "spoofed"},
+    )
+    assert denied.status_code == 409
+
+    submitted = client.post(
+        f"/projects/{project_id}/intents/{intent['id']}/facts",
+        json={"worker": "explorer", "description": "confirmed /admin endpoint"},
+    )
+    assert submitted.status_code == 201
+    assert submitted.json()["fact"]["id"] == "f001"
+    assert submitted.json()["intent"]["to"] is None
+    assert submitted.json()["intent"]["state"] == "working"
+    assert submitted.json()["intent"]["fact_yield"] == 1
+    assert submitted.json()["intent"]["last_progress_at"] is not None
+
+    outcome = client.post(
+        f"/projects/{project_id}/intents/{intent['id']}/outcome",
+        json={"worker": "explorer", "outcome": "cancelled", "runtime_ms": 1234},
+    )
+    assert outcome.status_code == 200
+    stored = next(
+        item
+        for item in client.get(f"/projects/{project_id}").json()["intents"]
+        if item["id"] == intent["id"]
+    )
+    assert stored["cumulative_runtime_ms"] == 1234
+    assert stored["fact_yield"] == 1
 
 
 def test_failed_conclude_does_not_delete_committed_facts(client: TestClient) -> None:

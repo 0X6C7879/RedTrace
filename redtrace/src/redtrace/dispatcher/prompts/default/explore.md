@@ -31,6 +31,9 @@
 {graph_yaml}
 ```
 
+## Incremental Fact protocol
+Persist every important discovery during execution with `redtrace-blackboard submit-fact "<objective fact>"`. This does not conclude the current Intent. Register Credential, WebShell, C2 Session, and Artifact objects with their dedicated Resource commands.
+
 ## Current Intent
 ```
 {intent_id}

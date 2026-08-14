@@ -192,6 +192,8 @@ def test_cli_uses_worker_context_and_snapshot_cursor(monkeypatch, capsys) -> Non
     def fake_urlopen(request, timeout):
         captured["url"] = request.full_url
         captured["headers"] = dict(request.header_items())
+        captured["method"] = request.method
+        captured["data"] = request.data
         captured["timeout"] = timeout
         return Response()
 
@@ -215,6 +217,16 @@ def test_cli_uses_worker_context_and_snapshot_cursor(monkeypatch, capsys) -> Non
     assert captured["url"] == (
         "http://redtrace.test/projects/proj_007/blackboard/facts/f007/source?limit=50"
     )
+
+    assert blackboard_cli.main(["submit-fact", "confirmed endpoint"]) == 0
+    assert captured["url"] == (
+        "http://redtrace.test/projects/proj_007/intents/i009/facts"
+    )
+    assert captured["method"] == "POST"
+    assert json.loads(captured["data"]) == {
+        "worker": "pi-1",
+        "description": "confirmed endpoint",
+    }
 
 
 def test_parallel_workers_can_query_safely(client: TestClient) -> None:

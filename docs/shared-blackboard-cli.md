@@ -1,6 +1,6 @@
 # Worker 按需访问共享黑板
 
-`redtrace-blackboard` 是 Claude Code、Codex 和 Pi Worker 共用的只读命令行接口。它用于任务执行期间按需查看 RedTrace 黑板的最新状态，不替代 RedTrace 原有的 Fact、Intent、Hint 和任务结论写入流程。
+`redtrace-blackboard` 是 Claude Code、Codex 和 Pi Worker 共用的命令行接口。默认命令只读；`submit-fact` 是唯一写命令，用于在不 conclude 当前 Intent 的情况下持久化增量发现。
 
 ## 行为边界
 
@@ -35,6 +35,9 @@ redtrace-blackboard path origin f003
 
 # 读取节点的有界局部上下文
 redtrace-blackboard context i002 --depth 1 --limit 30
+
+# 执行中持久化重要发现，不结束当前 Intent
+redtrace-blackboard submit-fact "确认 /admin 存在未授权访问"
 ```
 
 所有命令默认输出易于模型读取的缩进 JSON。可用 `--compact` 改为单行 JSON。边界如下：
@@ -62,9 +65,9 @@ Dispatcher 在每个 Worker 进程中设置：
 
 本地执行通过 Python 包安装的 `redtrace-blackboard` 入口运行；项目 Workspace 同时物化同一份无第三方依赖脚本。容器执行把该脚本同步到 `.redtrace/bin/redtrace-blackboard` 并加入 `PATH`。三种 Worker 使用完全相同的命令和输出格式，已有项目容器会在下一次任务启动前同步，无需新增常驻基础设施。
 
-## 服务端只读协议
+## 服务端协议
 
-CLI 调用以下只读接口：
+CLI 查询调用以下只读接口；增量提交调用 `POST /projects/{project_id}/intents/{intent_id}/facts`。写接口只允许当前持有 working Intent 的 Worker 使用，并在同一事务中增加 `fact_yield`、更新 `last_progress_at`：
 
 | 方法与路径 | 用途 |
 |---|---|

@@ -216,11 +216,24 @@ BEGIN
     VALUES (NEW.project_id, 'intent', NEW.id, 'added', NEW.created_at);
 END;
 
-CREATE TRIGGER IF NOT EXISTS trg_blackboard_intent_state_changed
-AFTER UPDATE OF worker, to_fact_id, concluded_at ON intents
+DROP TRIGGER IF EXISTS trg_blackboard_intent_state_changed;
+CREATE TRIGGER trg_blackboard_intent_state_changed
+AFTER UPDATE OF worker, to_fact_id, concluded_at, priority, state,
+    goal_id, superseded_by, invalidated_by, drop_reason, attempt_count,
+    cumulative_runtime_ms, fact_yield, last_progress_at ON intents
 WHEN OLD.worker IS NOT NEW.worker
   OR OLD.to_fact_id IS NOT NEW.to_fact_id
   OR OLD.concluded_at IS NOT NEW.concluded_at
+  OR OLD.priority IS NOT NEW.priority
+  OR OLD.state IS NOT NEW.state
+  OR OLD.goal_id IS NOT NEW.goal_id
+  OR OLD.superseded_by IS NOT NEW.superseded_by
+  OR OLD.invalidated_by IS NOT NEW.invalidated_by
+  OR OLD.drop_reason IS NOT NEW.drop_reason
+  OR OLD.attempt_count IS NOT NEW.attempt_count
+  OR OLD.cumulative_runtime_ms IS NOT NEW.cumulative_runtime_ms
+  OR OLD.fact_yield IS NOT NEW.fact_yield
+  OR OLD.last_progress_at IS NOT NEW.last_progress_at
 BEGIN
     INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
     VALUES (

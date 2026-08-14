@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 
@@ -18,6 +19,7 @@ class RunningTask:
     hint_count: int | None = None
     open_intent_count: int | None = None
     reason_request_generation: int | None = None
+    started_at: float = field(default_factory=time.monotonic)
 
 
 @dataclass(slots=True)

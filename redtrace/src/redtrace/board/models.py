@@ -184,6 +184,7 @@ class TaskOutcomeRequest(BaseModel):
         "rejected",
     ]
     detail: str = ""
+    runtime_ms: int = Field(default=0, ge=0)
 
     @field_validator("worker")
     @classmethod
@@ -248,6 +249,11 @@ class CompleteRequest(BaseModel):
 
 
 class ConcludeResponse(BaseModel):
+    fact: Fact
+    intent: Intent
+
+
+class IncrementalFactResponse(BaseModel):
     fact: Fact
     intent: Intent
 

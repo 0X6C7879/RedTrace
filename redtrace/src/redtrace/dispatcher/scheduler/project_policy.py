@@ -97,9 +97,9 @@ def is_schedulable_intent(intent: Intent, *, now: float | None = None) -> bool:
         return False
     if intent.circuit_open:
         return False
-    if intent.retry_after is not None and intent.retry_after > (now or time.time()):
-        return False
-    return True
+    return not (
+        intent.retry_after is not None and intent.retry_after > (now or time.time())
+    )
 
 
 def is_bootstrap_intent(intent: Intent) -> bool:
@@ -148,8 +148,10 @@ def reason_trigger(
         changes.append(f"facts:{checkpoint.fact_count}->{fact_count}")
     if hint_count > checkpoint.hint_count:
         changes.append(f"hints:{checkpoint.hint_count}->{hint_count}")
-    if checkpoint.open_intent_count > 0 and open_intents == 0:
-        changes.append(f"open_intents:{checkpoint.open_intent_count}->0")
+    if open_intents < checkpoint.open_intent_count:
+        changes.append(
+            f"open_intents:{checkpoint.open_intent_count}->{open_intents}"
+        )
     if request_generation > checkpoint.request_generation:
         changes.append(
             f"intent_results:{checkpoint.request_generation}->{request_generation}"

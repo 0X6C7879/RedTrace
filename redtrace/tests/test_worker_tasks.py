@@ -31,6 +31,16 @@ def test_reason_keeps_one_ready_intent_within_configured_cap() -> None:
     assert reason._intent_target(config) == 1
 
 
+def test_reason_capacity_counts_only_explore_workers() -> None:
+    config = make_config()
+    reason_only = config.workers[0].model_copy(
+        update={"name": "reason-only", "task_types": ["reason"], "max_running": 20}
+    )
+    config.workers.append(reason_only)
+
+    assert reason._intent_target(config) == 2
+
+
 def test_reason_writes_graph_snapshot_and_creates_intent(monkeypatch) -> None:
     config = make_config()
     project = make_project()
@@ -199,6 +209,43 @@ def test_reason_only_fills_available_open_intent_slots(monkeypatch) -> None:
     assert client.patched[0][1]["create"] == [
         {"from": ["f001"], "description": "slot one", "priority": 50}
     ]
+
+
+def test_reason_returns_revision_conflict_for_immediate_replan(monkeypatch) -> None:
+    config = make_config()
+    project = make_project()
+    client = FakeClient(project)
+    containers = FakeContainerManager()
+    driver = FakeDriver()
+    lease = FakeLease()
+
+    monkeypatch.setattr(reason, "get_driver", lambda *_a, **_k: driver)
+    monkeypatch.setattr(reason.HeartbeatLease, "for_reason", _lease_factory(lease))
+    monkeypatch.setattr(
+        reason,
+        "run_worker_process",
+        lambda *_args, **_kwargs: ProcessResult(
+            0,
+            '{"accepted":true,"data":{"intents":[{"from":["f001"],"description":"next"}]}}',
+            "",
+        ),
+    )
+    client.apply_graph_patch = lambda *_args, **_kwargs: ApiResult(
+        409, {"detail": "revision_conflict"}, "revision_conflict"
+    )
+
+    assert (
+        reason.run_reason_task(
+            config,
+            client,
+            containers,
+            project,
+            "graph",
+            config.workers[0],
+            TaskCancellation(),
+        )
+        == "revision_conflict"
+    )
 
 
 def test_explore_early_plain_text_exit_uses_conclude_fallback(monkeypatch) -> None:
