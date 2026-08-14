@@ -1,0 +1,1319 @@
+from __future__ import annotations
+
+import logging
+import os
+import shutil
+import subprocess
+import threading
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
+from pathlib import Path
+
+import requests
+from redtrace.agent_runtime import AgentRuntimeManager
+from redtrace.board.models import Intent, ProjectDetail, ProjectSummary
+from redtrace.dispatcher.config import LocalConfig
+from redtrace.dispatcher.config_reload import DispatchConfigReloader
+from redtrace.dispatcher.control_plane import ControlPlaneClient
+from redtrace.dispatcher.runtime.cancellation import TaskCancellation
+from redtrace.dispatcher.runtime.containers import ContainerManager
+from redtrace.dispatcher.runtime.local_backend import LocalBackend
+from redtrace.dispatcher.runtime.startup_healthcheck import (
+    format_failure_summary,
+    run_startup_healthchecks,
+)
+from redtrace.dispatcher.scheduler import project_policy
+from redtrace.dispatcher.scheduler.state import ReasonCheckpoint, RunningTask
+from redtrace.dispatcher.scheduler.worker_select import WorkerSelection, select_worker
+from redtrace.dispatcher.tasks.bootstrap import run_bootstrap_task
+from redtrace.dispatcher.tasks.explore import run_explore_task
+from redtrace.dispatcher.tasks.reason import run_reason_task
+from redtrace.dispatcher.workers.registry import get_driver
+
+LOG = logging.getLogger(__name__)
+UNHEALTHY_RETRY_AFTER_SECONDS = 5
+REJECTED_RETRY_AFTER_SECONDS = 5
+REASON_DEBOUNCE_SECONDS = 5
+TASK_RETRY_BACKOFF_SECONDS = (5, 15, 60, 300)
+REASON_COALESCE_SECONDS = 10
+
+
+def _local_cli_probe_command(path: str, *, platform: str = os.name) -> list[str]:
+    if platform == "nt" and Path(path).suffix.lower() in {".bat", ".cmd"}:
+        comspec = os.environ.get("COMSPEC", "cmd.exe")
+        return [comspec, "/d", "/s", "/c", subprocess.list2cmdline([path, "--help"])]
+    return [path, "--help"]
+
+
+class DispatcherLoop:
+    def __init__(self, config_path: Path):
+        self.config_path = config_path
+        self._config_reloader = DispatchConfigReloader(config_path)
+        self.config = self._config_reloader.config
+        self.agent_runtime = AgentRuntimeManager(
+            self.config.paths.layout(),
+            execution=self.config.runtime.execution,
+        )
+        self.agent_runtime.initialize(self.config.workers)
+        self.client = ControlPlaneClient(self.config.server)
+        if self.config.runtime.execution == "local":
+            self.container_manager = LocalBackend(
+                self.config.local or LocalConfig(),
+                self.config.context_harness,
+                self.config.paths.layout(),
+            )
+        else:
+            assert self.config.container is not None
+            self.container_manager = ContainerManager(
+                self.config.container,
+                self.config.context_harness,
+                self.config.paths.layout(),
+            )
+        self.executor = ThreadPoolExecutor(max_workers=self.config.runtime.max_workers)
+        self.cleanup_executor = ThreadPoolExecutor(
+            max_workers=max(1, min(8, self.config.runtime.max_workers))
+        )
+        self.futures: dict[Future[str], RunningTask] = {}
+        self.cleanup_futures: dict[
+            Future[bool], tuple[str, str | None, str | None]
+        ] = {}
+        self.reason_checkpoints: dict[str, ReasonCheckpoint] = {}
+        self.reason_request_generations: dict[str, int] = {}
+        self.reason_dirty_since: dict[str, float] = {}
+        self.runtime_project_ids: set[str] = set()
+        self.worker_unhealthy_until: dict[str, float] = {}
+        self.worker_rejected_until: dict[tuple[str, str, str], float] = {}
+        self.explore_retry_avoid: dict[tuple[str, str], str] = {}
+        self.task_failures: dict[tuple[str, str, str | None], int] = {}
+        self.task_retry_until: dict[tuple[str, str, str | None], float] = {}
+        self.reason_debounce_until: dict[str, float] = {}
+        self._log_state: dict[str, tuple[int, str, tuple[object, ...]]] = {}
+        self._cleanup_pending: set[str] = set()
+        self._inactive_cleanup_done: dict[str, str] = {}
+        self.project_cursor = 0
+        self._settings_checked = False
+        self._startup_healthchecks_checked = False
+        self._change_cursor: int | None = None
+        self._wakeup = threading.Event()
+
+    def close(self) -> None:
+        if self.futures:
+            LOG.info(
+                "dispatcher shutting down waiting_for_tasks=%s running_projects=%s",
+                self._running_task_count(),
+                sorted({task.project_id for task in self.futures.values()}),
+            )
+        self.executor.shutdown(wait=True)
+        self.cleanup_executor.shutdown(wait=True)
+        self.container_manager.close()
+        self.client.close()
+
+    def run(self, once: bool = False) -> None:
+        try:
+            self.run_startup_healthchecks()
+            while True:
+                try:
+                    if not self._settings_checked:
+                        self._validate_server_settings()
+                        self._settings_checked = True
+                    self._reap_futures()
+                    self._reap_cleanup_futures()
+                    self._refresh_worker_config()
+                    self.agent_runtime.refresh_capabilities(self.config.workers)
+                    summaries = self.client.list_projects()
+                    self._initialize_reason_checkpoints(summaries)
+                    self._refresh_runtime_projects(summaries)
+                    self._cancel_inactive_tasks(summaries)
+                    self._queue_container_cleanups(summaries)
+                    self._dispatch_available(summaries)
+                except requests.RequestException as exc:
+                    if once:
+                        raise
+                    LOG.warning(
+                        "dispatcher server request failed error=%s retry_in=%ss",
+                        exc,
+                        self.config.runtime.interval,
+                    )
+                    time.sleep(self.config.runtime.interval)
+                    continue
+                if once:
+                    break
+                if self.futures or self.cleanup_futures:
+                    self._wakeup.wait(
+                        timeout=max(1.0, min(5.0, self.config.runtime.interval))
+                    )
+                    self._wakeup.clear()
+                else:
+                    try:
+                        self._change_cursor = self.client.wait_for_changes(
+                            self._change_cursor,
+                            timeout=max(
+                                5.0,
+                                min(15.0, self.config.runtime.interval * 5),
+                            ),
+                        )
+                    except requests.RequestException as exc:
+                        LOG.warning(
+                            "dispatcher change wait failed error=%s retry_in=%ss",
+                            exc,
+                            self.config.runtime.interval,
+                        )
+                        time.sleep(self.config.runtime.interval)
+        finally:
+            self.close()
+
+    def run_startup_healthchecks_only(self) -> None:
+        try:
+            self.run_startup_healthchecks(show_commands=True, force=True)
+        finally:
+            self.close()
+
+    def run_startup_healthchecks(
+        self, *, show_commands: bool = False, force: bool = False
+    ) -> None:
+        if self._startup_healthchecks_checked:
+            return
+        if self.config.runtime.execution == "local":
+            self._run_local_binary_check()
+            self._startup_healthchecks_checked = True
+            return
+        if not force and self.config.runtime.worker_healthcheck == "disabled":
+            LOG.info(
+                "skip startup worker healthchecks because runtime.worker_healthcheck=disabled"
+            )
+            self._startup_healthchecks_checked = True
+            return
+        self._run_startup_healthchecks(show_commands=show_commands)
+        self._startup_healthchecks_checked = True
+
+    def _run_local_binary_check(self) -> None:
+        binaries: dict[str, list[str]] = {}
+        configured_workers: list[str] = []
+        native_workers: list[str] = []
+        for worker in self.config.workers:
+            if not worker.enabled:
+                continue
+            target = configured_workers if worker.api_configured() else native_workers
+            target.append(worker.name)
+            binary = get_driver(worker.type, "local").local_binary()
+            if binary is None:
+                continue
+            binaries.setdefault(binary, []).append(worker.name)
+        if not binaries:
+            return
+
+        LOG.info(
+            "[*] Local execution: checking %d worker CLI(s) on this host", len(binaries)
+        )
+        available: list[str] = []
+        missing: list[str] = []
+        for binary in sorted(binaries):
+            workers = ", ".join(sorted(binaries[binary]))
+            path, runnable = self._probe_local_cli(binary)
+            if path is None:
+                missing.append(binary)
+                LOG.error("[-] %-8s not found on PATH (workers: %s)", binary, workers)
+            elif runnable:
+                available.append(binary)
+                LOG.info("[+] %-8s %s (workers: %s)", binary, path, workers)
+            else:
+                available.append(binary)
+                LOG.warning(
+                    "[!] %-8s %s found but `%s --help` failed (workers: %s)",
+                    binary,
+                    path,
+                    binary,
+                    workers,
+                )
+
+        if not available:
+            raise RuntimeError(
+                "local execution: none of the configured worker CLIs are installed on PATH ("
+                + ", ".join(sorted(binaries))
+                + "). Install them and make sure each runs directly from your shell, then retry."
+            )
+        if missing:
+            raise RuntimeError(
+                "local execution: enabled Worker CLIs are missing from PATH ("
+                + ", ".join(sorted(missing))
+                + "). Install them or disable their Workers, then retry."
+            )
+        if configured_workers:
+            LOG.info(
+                "[+] Local Worker API overrides active workers=%s; Endpoint, API Key and "
+                "Model ID are process-local while user CLI config remains available",
+                ", ".join(sorted(configured_workers)),
+            )
+        if native_workers:
+            LOG.info(
+                "[+] Local Workers using host CLI login/config workers=%s",
+                ", ".join(sorted(native_workers)),
+            )
+
+    @staticmethod
+    def _probe_local_cli(binary: str) -> tuple[str | None, bool]:
+        path = shutil.which(binary)
+        if path is None:
+            return None, False
+        try:
+            result = subprocess.run(
+                _local_cli_probe_command(path),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return path, False
+        return path, result.returncode == 0
+
+    def _dispatch_available(self, summaries: list[ProjectSummary]) -> None:
+        if self._running_task_count() >= self.config.runtime.max_workers:
+            self._log_changed(
+                "dispatch/global",
+                logging.INFO,
+                "skip dispatch because max_workers reached running_tasks=%s",
+                self._running_task_count(),
+            )
+            return
+        active = [summary for summary in summaries if summary.status == "active"]
+        if not active:
+            self._log_changed(
+                "dispatch/global",
+                logging.INFO,
+                "skip dispatch because no active projects",
+            )
+            return
+
+        running_projects = self._ordered_projects(
+            [summary for summary in active if summary.id in self.runtime_project_ids]
+        )
+        idle_projects = self._ordered_projects(
+            [
+                summary
+                for summary in active
+                if summary.id not in self.runtime_project_ids
+            ]
+        )
+
+        dispatched = True
+        while dispatched and self._running_task_count() < self.config.runtime.max_workers:
+            dispatched = False
+            for summary in running_projects:
+                if self._try_dispatch_project(summary):
+                    dispatched = True
+                    if self._running_task_count() >= self.config.runtime.max_workers:
+                        return
+            if dispatched:
+                continue
+            if (
+                self._running_project_count(active)
+                >= self.config.runtime.max_running_projects
+            ):
+                self._log_changed(
+                    "dispatch/idle-limit",
+                    logging.INFO,
+                    "skip idle project dispatch because max_running_projects reached running_projects=%s",
+                    self._running_project_count(active),
+                )
+                return
+            for summary in idle_projects:
+                if (
+                    self._running_project_count(active)
+                    >= self.config.runtime.max_running_projects
+                ):
+                    self._log_changed(
+                        "dispatch/idle-limit",
+                        logging.INFO,
+                        "stop idle project dispatch because max_running_projects reached running_projects=%s",
+                        self._running_project_count(active),
+                    )
+                    return
+                if self._try_dispatch_project(summary):
+                    dispatched = True
+                    break
+
+    def _ordered_projects(
+        self, summaries: list[ProjectSummary]
+    ) -> list[ProjectSummary]:
+        ordered, self.project_cursor = project_policy.rotate_projects(
+            summaries, self.project_cursor
+        )
+        return ordered
+
+    def _try_dispatch_project(self, summary: ProjectSummary) -> bool:
+        skip_scope = f"project:{summary.id}:skip"
+        container_name = self.container_manager.container_name(summary.id)
+        if container_name in self._cleanup_pending:
+            self._log_changed(
+                f"{skip_scope}:cleanup_pending",
+                logging.DEBUG,
+                "skip project=%s because container cleanup is still pending container=%s",
+                summary.id,
+                container_name,
+            )
+            return False
+        if (
+            self._project_running_task_count(summary.id)
+            >= self.config.runtime.max_project_workers
+        ):
+            self._log_changed(
+                f"{skip_scope}:max_project_workers",
+                logging.INFO,
+                "skip project=%s because max_project_workers reached running_tasks=%s",
+                summary.id,
+                self._project_running_task_summary(summary.id),
+            )
+            return False
+
+        summary_trigger = project_policy.reason_trigger(
+            self.reason_checkpoints.get(summary.id),
+            fact_count=summary.fact_count,
+            hint_count=summary.hint_count,
+            open_intents=(
+                summary.working_intent_count + summary.unclaimed_intent_count
+            ),
+            request_generation=self.reason_request_generations.get(summary.id, 0),
+        )
+        reason_coalescing = (
+            summary_trigger not in (None, "initial")
+            and not self._reason_coalesce_ready(summary.id)
+        )
+        if summary.unclaimed_intent_count == 0 and (
+            summary.reason is not None or summary_trigger is None
+        ):
+            return False
+
+        project = self.client.get_project(summary.id)
+        if project.project.status != "active":
+            self._log_changed(
+                f"{skip_scope}:status",
+                logging.INFO,
+                "skip project=%s because status=%s",
+                summary.id,
+                project.project.status,
+            )
+            return False
+        if project_policy.is_initial(project):
+            if project.project.reason is not None:
+                return False
+            if project_policy.requires_bootstrap(project) and (
+                project_policy.bootstrap_intent(project) is not None
+                or any(
+                    worker.enabled and "bootstrap" in worker.task_types
+                    for worker in self.config.workers
+                )
+            ):
+                return self._dispatch_initial_project(project)
+            return self._dispatch_reason(
+                project,
+                project_policy.reason_graph_snapshot(project),
+                "initial",
+            )
+        if project.project.reason is None:
+            reason_blocked = project.project.reason_circuit_open or (
+                project.project.reason_retry_after is not None
+                and project.project.reason_retry_after > time.time()
+            )
+            reason_trigger = None if reason_blocked else self._reason_trigger(project)
+            if (
+                reason_trigger is not None
+                and not reason_coalescing
+                and self._dispatch_reason(
+                    project,
+                    project_policy.reason_graph_snapshot(project),
+                    reason_trigger,
+                )
+            ):
+                return True
+        running_intent_ids = self._project_running_explore_intents(summary.id)
+        newest_intent = project_policy.newest_unclaimed_intent(
+            project, running_intent_ids
+        )
+        if running_intent_ids and newest_intent is None:
+            self._log_changed(
+                f"{skip_scope}:explore_running",
+                logging.DEBUG,
+                "skip explore project=%s because all unclaimed intents are already running locally intents=%s",
+                summary.id,
+                sorted(running_intent_ids),
+            )
+        if newest_intent is not None:
+            return self._dispatch_explore(
+                project,
+                project_policy.compact_snapshot(project, newest_intent),
+                newest_intent,
+            )
+        if project.project.reason is not None:
+            self._log_changed(
+                f"{skip_scope}:reason_claimed",
+                logging.DEBUG,
+                "skip reason project=%s because reason is already claimed by %s",
+                summary.id,
+                project.project.reason.worker,
+            )
+            return False
+        self._log_changed(
+            f"{skip_scope}:graph_unchanged",
+            logging.DEBUG,
+            "skip reason project=%s because planning state is unchanged facts=%s hints=%s open_intents=%s intents=%s",
+            summary.id,
+            len(project.facts),
+            len(project.hints),
+            project_policy.open_intent_count(project),
+            len(project.intents),
+        )
+        return False
+
+    def _dispatch_initial_project(self, project: ProjectDetail) -> bool:
+        intent = project_policy.bootstrap_intent(project)
+        if intent is None:
+            intent = self._create_bootstrap_intent(project.project.id)
+            if intent is None:
+                return False
+        if self._project_has_running_bootstrap(project.project.id):
+            self._log_changed(
+                f"project:{project.project.id}:skip:bootstrap_running",
+                logging.DEBUG,
+                "skip bootstrap project=%s because bootstrap task is already running locally",
+                project.project.id,
+            )
+            return False
+        if intent.worker is not None:
+            self._log_changed(
+                f"project:{project.project.id}:skip:bootstrap_claimed",
+                logging.DEBUG,
+                "skip bootstrap project=%s because bootstrap intent=%s is already claimed by %s",
+                project.project.id,
+                intent.id,
+                intent.worker,
+            )
+            return False
+        return self._dispatch_bootstrap(project, intent)
+
+    def _dispatch_reason(
+        self, project: ProjectDetail, export_yaml: str, trigger: str
+    ) -> bool:
+        if self._task_retry_blocked((project.project.id, "reason", None)):
+            return False
+        if trigger != "initial" and time.time() < self.reason_debounce_until.get(
+            project.project.id, 0
+        ):
+            return False
+        selection = self._select_worker(project.project.id, "reason")
+        worker = selection.worker
+        if worker is None:
+            self._log_changed(
+                f"project:{project.project.id}:worker:reason",
+                logging.INFO,
+                "no worker available for reason project=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s",
+                project.project.id,
+                selection.blocked_busy,
+                selection.blocked_unhealthy,
+                selection.blocked_rejected,
+                selection.blocked_task_type,
+            )
+            return False
+        self._clear_log_state(f"project:{project.project.id}:worker:reason")
+        claim = self.client.claim_reason(project.project.id, worker.name, trigger)
+        if claim.status_code in (403, 409):
+            level = logging.INFO if claim.status_code == 403 else logging.WARNING
+            LOG.log(
+                level,
+                "reason claim failed project=%s worker=%s status=%s",
+                project.project.id,
+                worker.name,
+                claim.status_code,
+            )
+            return False
+        if not claim.ok:
+            LOG.warning(
+                "reason claim failed project=%s worker=%s status=%s",
+                project.project.id,
+                worker.name,
+                claim.status_code,
+            )
+            return False
+        try:
+            future = self.executor.submit(
+                run_reason_task,
+                self.config,
+                self.client,
+                self.container_manager,
+                project,
+                export_yaml,
+                worker,
+                cancellation := TaskCancellation(),
+            )
+        except Exception:
+            LOG.exception(
+                "failed to submit reason project=%s worker=%s",
+                project.project.id,
+                worker.name,
+            )
+            self._best_effort_release_reason(project.project.id, worker.name)
+            return False
+        self.futures[future] = RunningTask(
+            project.project.id,
+            "reason",
+            worker.name,
+            cancellation,
+            intent_id=None,
+            fact_count=len(project.facts),
+            hint_count=len(project.hints),
+            open_intent_count=project_policy.open_intent_count(project),
+            reason_request_generation=self.reason_request_generations.get(
+                project.project.id, 0
+            ),
+        )
+        future.add_done_callback(lambda _future: self._wakeup.set())
+        self.runtime_project_ids.add(project.project.id)
+        self._clear_project_log_state(project.project.id)
+        LOG.info(
+            "dispatched reason project=%s worker=%s trigger=%s",
+            project.project.id,
+            worker.name,
+            trigger,
+        )
+        return True
+
+    def _dispatch_bootstrap(self, project: ProjectDetail, intent: Intent) -> bool:
+        selection = self._select_worker(project.project.id, "bootstrap")
+        worker = selection.worker
+        if worker is None:
+            self._log_changed(
+                f"project:{project.project.id}:worker:bootstrap",
+                logging.INFO,
+                "no worker available for bootstrap project=%s intent=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s",
+                project.project.id,
+                intent.id,
+                selection.blocked_busy,
+                selection.blocked_unhealthy,
+                selection.blocked_rejected,
+                selection.blocked_task_type,
+            )
+            return False
+        self._clear_log_state(f"project:{project.project.id}:worker:bootstrap")
+        claim = self.client.claim_intent(project.project.id, intent.id, worker.name)
+        if claim.status_code in (403, 409):
+            level = logging.INFO if claim.status_code == 403 else logging.WARNING
+            LOG.log(
+                level,
+                "bootstrap claim failed project=%s intent=%s worker=%s status=%s",
+                project.project.id,
+                intent.id,
+                worker.name,
+                claim.status_code,
+            )
+            return False
+        if not claim.ok:
+            LOG.warning(
+                "bootstrap claim failed project=%s intent=%s worker=%s status=%s",
+                project.project.id,
+                intent.id,
+                worker.name,
+                claim.status_code,
+            )
+            return False
+        try:
+            future = self.executor.submit(
+                run_bootstrap_task,
+                self.config,
+                self.client,
+                self.container_manager,
+                project,
+                intent,
+                worker,
+                cancellation := TaskCancellation(),
+            )
+        except Exception:
+            LOG.exception(
+                "failed to submit bootstrap task project=%s intent=%s worker=%s",
+                project.project.id,
+                intent.id,
+                worker.name,
+            )
+            self._best_effort_release(project.project.id, intent.id, worker.name)
+            return False
+        self.futures[future] = RunningTask(
+            project.project.id,
+            "bootstrap",
+            worker.name,
+            cancellation,
+            intent_id=intent.id,
+        )
+        future.add_done_callback(lambda _future: self._wakeup.set())
+        self.runtime_project_ids.add(project.project.id)
+        self._clear_project_log_state(project.project.id)
+        LOG.info(
+            "dispatched bootstrap project=%s intent=%s worker=%s",
+            project.project.id,
+            intent.id,
+            worker.name,
+        )
+        return True
+
+    def _dispatch_explore(
+        self, project: ProjectDetail, export_yaml: str, intent: Intent
+    ) -> bool:
+        retry_key = (project.project.id, intent.id)
+        if self._task_retry_blocked((project.project.id, "explore", intent.id)):
+            return False
+        selection = self._select_worker(
+            project.project.id,
+            "explore",
+            avoid_worker=self.explore_retry_avoid.get(retry_key),
+        )
+        worker = selection.worker
+        if worker is None:
+            self._log_changed(
+                f"project:{project.project.id}:worker:explore",
+                logging.INFO,
+                "no worker available for explore project=%s intent=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s",
+                project.project.id,
+                intent.id,
+                selection.blocked_busy,
+                selection.blocked_unhealthy,
+                selection.blocked_rejected,
+                selection.blocked_task_type,
+            )
+            return False
+        self._clear_log_state(f"project:{project.project.id}:worker:explore")
+        claim = self.client.claim_intent(project.project.id, intent.id, worker.name)
+        if claim.status_code in (403, 409):
+            level = logging.INFO if claim.status_code == 403 else logging.WARNING
+            LOG.log(
+                level,
+                "explore claim failed project=%s intent=%s worker=%s status=%s",
+                project.project.id,
+                intent.id,
+                worker.name,
+                claim.status_code,
+            )
+            return False
+        if not claim.ok:
+            LOG.warning(
+                "explore claim failed project=%s intent=%s worker=%s status=%s",
+                project.project.id,
+                intent.id,
+                worker.name,
+                claim.status_code,
+            )
+            return False
+        try:
+            future = self.executor.submit(
+                run_explore_task,
+                self.config,
+                self.client,
+                self.container_manager,
+                project,
+                export_yaml,
+                intent,
+                worker,
+                cancellation := TaskCancellation(),
+            )
+        except Exception:
+            LOG.exception(
+                "failed to submit explore task project=%s intent=%s worker=%s",
+                project.project.id,
+                intent.id,
+                worker.name,
+            )
+            self._best_effort_release(project.project.id, intent.id, worker.name)
+            return False
+        self.futures[future] = RunningTask(
+            project.project.id,
+            "explore",
+            worker.name,
+            cancellation,
+            intent_id=intent.id,
+        )
+        future.add_done_callback(lambda _future: self._wakeup.set())
+        self.runtime_project_ids.add(project.project.id)
+        self._clear_project_log_state(project.project.id)
+        LOG.info(
+            "dispatched explore project=%s intent=%s worker=%s",
+            project.project.id,
+            intent.id,
+            worker.name,
+        )
+        return True
+
+    def _select_worker(
+        self,
+        project_id: str,
+        work_kind: str,
+        *,
+        avoid_worker: str | None = None,
+    ) -> WorkerSelection:
+        running_counts = self._worker_counts()
+        selection = select_worker(
+            self.config.workers,
+            running_counts,
+            self.worker_unhealthy_until,
+            self.worker_rejected_until,
+            project_id=project_id,
+            work_kind=work_kind,
+            now=time.time(),
+            avoid_worker=avoid_worker,
+        )
+        LOG.debug(
+            "worker selection project=%s work=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s chosen=%s",
+            project_id,
+            work_kind,
+            selection.blocked_busy,
+            selection.blocked_unhealthy,
+            selection.blocked_rejected,
+            selection.blocked_task_type,
+            selection.worker.name if selection.worker else None,
+        )
+        return selection
+
+    def _worker_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for task in self.futures.values():
+            counts[task.worker_name] = counts.get(task.worker_name, 0) + 1
+        return counts
+
+    def _running_task_count(self) -> int:
+        return len(self.futures)
+
+    def _project_running_task_count(self, project_id: str) -> int:
+        return sum(1 for task in self.futures.values() if task.project_id == project_id)
+
+    def _project_running_task_summary(self, project_id: str) -> list[str]:
+        summary: list[str] = []
+        for task in self.futures.values():
+            if task.project_id != project_id:
+                continue
+            if task.intent_id is None:
+                summary.append(f"{task.task_type}:{task.worker_name}")
+            else:
+                summary.append(f"{task.task_type}:{task.worker_name}:{task.intent_id}")
+        summary.sort()
+        return summary
+
+    def _project_has_running_bootstrap(self, project_id: str) -> bool:
+        return any(
+            task.project_id == project_id and task.task_type == "bootstrap"
+            for task in self.futures.values()
+        )
+
+    def _project_running_explore_intents(self, project_id: str) -> set[str]:
+        return {
+            task.intent_id
+            for task in self.futures.values()
+            if task.project_id == project_id
+            and task.task_type == "explore"
+            and task.intent_id is not None
+        }
+
+    def _running_project_count(self, summaries: list[ProjectSummary]) -> int:
+        active_ids = {summary.id for summary in summaries if summary.status == "active"}
+        return len(self.runtime_project_ids & active_ids)
+
+    def _create_bootstrap_intent(self, project_id: str) -> Intent | None:
+        response = self.client.create_intent(
+            project_id,
+            ["origin"],
+            project_policy.BOOTSTRAP_DESCRIPTION,
+            project_policy.BOOTSTRAP_CREATOR,
+        )
+        if response.status_code == 403:
+            LOG.info(
+                "project became inactive before bootstrap intent create project=%s",
+                project_id,
+            )
+            return None
+        if not response.ok:
+            LOG.warning(
+                "bootstrap intent write failed project=%s status=%s body=%s",
+                project_id,
+                response.status_code,
+                response.text,
+            )
+            return None
+        if not isinstance(response.data, dict):
+            LOG.warning(
+                "bootstrap intent create returned empty body project=%s", project_id
+            )
+            return None
+        intent = Intent.model_validate(response.data)
+        LOG.info("created bootstrap intent project=%s intent=%s", project_id, intent.id)
+        return intent
+
+    def _reason_trigger(self, project: ProjectDetail) -> str | None:
+        project_id = project.project.id
+        return project_policy.reason_trigger(
+            self.reason_checkpoints.get(project_id),
+            fact_count=len(project.facts),
+            hint_count=len(project.hints),
+            open_intents=project_policy.open_intent_count(project),
+            request_generation=self.reason_request_generations.get(project_id, 0),
+        )
+
+    def _reason_coalesce_ready(self, project_id: str) -> bool:
+        dirty = getattr(self, "reason_dirty_since", None)
+        if dirty is None:
+            dirty = self.reason_dirty_since = {}
+        started = dirty.setdefault(project_id, time.monotonic())
+        return time.monotonic() - started >= REASON_COALESCE_SECONDS
+    def _reap_futures(self) -> None:
+        done = [future for future in self.futures if future.done()]
+        for future in done:
+            task = self.futures.pop(future)
+            outcome_reported = False
+            try:
+                outcome = future.result()
+                if outcome == "cancelled":
+                    LOG.info(
+                        "task cancelled project=%s task=%s worker=%s",
+                        task.project_id,
+                        task.task_type,
+                        task.worker_name,
+                    )
+                elif outcome != "success":
+                    LOG.warning(
+                        "task finished project=%s task=%s worker=%s outcome=%s",
+                        task.project_id,
+                        task.task_type,
+                        task.worker_name,
+                        outcome,
+                    )
+                self._clear_project_log_state(task.project_id)
+                try:
+                    if task.task_type == "reason":
+                        reporter = getattr(self.client, "report_reason_outcome", None)
+                        if callable(reporter):
+                            reporter(task.project_id, task.worker_name, outcome)
+                    elif task.intent_id is not None and outcome not in {
+                        "success",
+                        "cancelled",
+                    }:
+                        reporter = getattr(self.client, "report_intent_outcome", None)
+                        if callable(reporter):
+                            reporter(
+                                task.project_id,
+                                task.intent_id,
+                                task.worker_name,
+                                outcome,
+                            )
+                except Exception:
+                    LOG.exception(
+                        "task outcome report failed project=%s task=%s worker=%s outcome=%s",
+                        task.project_id,
+                        task.task_type,
+                        task.worker_name,
+                        outcome,
+                    )
+                outcome_reported = True
+                if outcome == "unhealthy":
+                    retry_after_seconds = UNHEALTHY_RETRY_AFTER_SECONDS
+                    self.worker_unhealthy_until[task.worker_name] = (
+                        time.time() + retry_after_seconds
+                    )
+                    LOG.info(
+                        "worker marked unhealthy worker=%s retry_after=%.0fs",
+                        task.worker_name,
+                        retry_after_seconds,
+                    )
+                else:
+                    self.worker_unhealthy_until.pop(task.worker_name, None)
+                rejection_key = (task.project_id, task.task_type, task.worker_name)
+                if outcome == "rejected":
+                    retry_after_seconds = REJECTED_RETRY_AFTER_SECONDS
+                    self.worker_rejected_until[rejection_key] = (
+                        time.time() + retry_after_seconds
+                    )
+                    LOG.info(
+                        "worker temporarily excluded project=%s task=%s worker=%s outcome=%s retry_after=%.0fs",
+                        task.project_id,
+                        task.task_type,
+                        task.worker_name,
+                        outcome,
+                        retry_after_seconds,
+                    )
+                else:
+                    self.worker_rejected_until.pop(rejection_key, None)
+                task_retry_key = (task.project_id, task.task_type, task.intent_id)
+                if outcome in {"success", "cancelled"}:
+                    self.task_failures.pop(task_retry_key, None)
+                    self.task_retry_until.pop(task_retry_key, None)
+                elif outcome not in {"unhealthy", "rejected"}:
+                    failures = self.task_failures.get(task_retry_key, 0) + 1
+                    delay = TASK_RETRY_BACKOFF_SECONDS[
+                        min(failures - 1, len(TASK_RETRY_BACKOFF_SECONDS) - 1)
+                    ]
+                    self.task_failures[task_retry_key] = failures
+                    self.task_retry_until[task_retry_key] = time.time() + delay
+                    LOG.warning(
+                        "task retry backed off project=%s task=%s intent=%s failures=%s retry_after=%ss",
+                        task.project_id,
+                        task.task_type,
+                        task.intent_id,
+                        failures,
+                        delay,
+                    )
+                if task.task_type == "explore" and task.intent_id is not None:
+                    retry_key = (task.project_id, task.intent_id)
+                    if outcome in {"failed", "rejected"}:
+                        self.explore_retry_avoid[retry_key] = task.worker_name
+                    elif outcome in {"success", "cancelled"}:
+                        self.explore_retry_avoid.pop(retry_key, None)
+                if outcome == "success" and task.task_type in {"bootstrap", "explore"}:
+                    self.reason_request_generations[task.project_id] = (
+                        self.reason_request_generations.get(task.project_id, 0) + 1
+                    )
+                    self.reason_debounce_until[task.project_id] = (
+                        time.time() + REASON_DEBOUNCE_SECONDS
+                    )
+                if outcome == "success" and task.task_type == "reason":
+                    assert task.fact_count is not None
+                    assert task.hint_count is not None
+                    assert task.open_intent_count is not None
+                    assert task.reason_request_generation is not None
+                    self.reason_checkpoints[task.project_id] = ReasonCheckpoint(
+                        fact_count=task.fact_count,
+                        hint_count=task.hint_count,
+                        open_intent_count=task.open_intent_count,
+                        request_generation=task.reason_request_generation,
+                    )
+                    getattr(self, "reason_dirty_since", {}).pop(task.project_id, None)
+                    LOG.debug(
+                        "reason checkpoint updated project=%s facts=%s hints=%s open_intents=%s",
+                        task.project_id,
+                        task.fact_count,
+                        task.hint_count,
+                        task.open_intent_count,
+                    )
+            except Exception:
+                LOG.exception(
+                    "task crashed project=%s task=%s worker=%s",
+                    task.project_id,
+                    task.task_type,
+                    task.worker_name,
+                )
+                if outcome_reported:
+                    continue
+                try:
+                    if task.task_type == "reason":
+                        self.client.report_reason_outcome(
+                            task.project_id, task.worker_name, "internal_error"
+                        )
+                    elif task.intent_id is not None:
+                        self.client.report_intent_outcome(
+                            task.project_id,
+                            task.intent_id,
+                            task.worker_name,
+                            "internal_error",
+                        )
+                except Exception:
+                    LOG.exception(
+                        "crashed task outcome report failed project=%s task=%s worker=%s",
+                        task.project_id,
+                        task.task_type,
+                        task.worker_name,
+                    )
+
+    def _cleanup_completed_containers(self, summaries: list[ProjectSummary]) -> None:
+        for summary in summaries:
+            if summary.status != "completed":
+                continue
+            if self._inactive_cleanup_done.get(summary.id) == summary.status:
+                continue
+            container_name = self.container_manager.container_name(summary.id)
+            if container_name in self._cleanup_pending:
+                continue
+            if not self.container_manager.needs_completed_cleanup(summary.id):
+                self._inactive_cleanup_done[summary.id] = summary.status
+                continue
+            future = self.cleanup_executor.submit(
+                self.container_manager.cleanup_completed, summary.id
+            )
+            self.cleanup_futures[future] = (container_name, summary.id, summary.status)
+            future.add_done_callback(lambda _future: self._wakeup.set())
+            self._cleanup_pending.add(container_name)
+
+    def _cleanup_stopped_containers(self, summaries: list[ProjectSummary]) -> None:
+        for summary in summaries:
+            if summary.status != "stopped":
+                continue
+            if self._inactive_cleanup_done.get(summary.id) == summary.status:
+                continue
+            container_name = self.container_manager.container_name(summary.id)
+            if container_name in self._cleanup_pending:
+                continue
+            if not self.container_manager.needs_stopped_cleanup(summary.id):
+                self._inactive_cleanup_done[summary.id] = summary.status
+                continue
+            future = self.cleanup_executor.submit(
+                self.container_manager.cleanup_stopped, summary.id
+            )
+            self.cleanup_futures[future] = (container_name, summary.id, summary.status)
+            future.add_done_callback(lambda _future: self._wakeup.set())
+            self._cleanup_pending.add(container_name)
+
+    def _cleanup_deleted_project(self, project_id: str) -> bool:
+        try:
+            success = self.container_manager.cleanup_deleted(project_id)
+        except Exception as exc:
+            try:
+                self.client.report_project_runtime_cleaned(
+                    project_id,
+                    success=False,
+                    error=str(exc),
+                )
+            except requests.RequestException:
+                LOG.warning(
+                    "could not report deletion cleanup failure project=%s",
+                    project_id,
+                    exc_info=True,
+                )
+            raise
+        if not success:
+            self.client.report_project_runtime_cleaned(
+                project_id,
+                success=False,
+                error="runtime cleanup did not complete",
+            )
+            return False
+        self.client.report_project_runtime_cleaned(project_id, success=True)
+        return True
+
+    def _cleanup_deleting_projects(self, summaries: list[ProjectSummary]) -> None:
+        running_projects = {task.project_id for task in self.futures.values()}
+        for summary in summaries:
+            if summary.status != "deleting" or summary.id in running_projects:
+                continue
+            container_name = self.container_manager.container_name(summary.id)
+            if container_name in self._cleanup_pending:
+                continue
+            future = self.cleanup_executor.submit(
+                self._cleanup_deleted_project,
+                summary.id,
+            )
+            self.cleanup_futures[future] = (
+                container_name,
+                summary.id,
+                summary.status,
+            )
+            future.add_done_callback(lambda _future: self._wakeup.set())
+            self._cleanup_pending.add(container_name)
+
+    def _queue_container_cleanups(self, summaries: list[ProjectSummary]) -> None:
+        self._cleanup_deleting_projects(summaries)
+        self._cleanup_completed_containers(summaries)
+        self._cleanup_stopped_containers(summaries)
+
+    def _reap_cleanup_futures(self) -> None:
+        done = [future for future in self.cleanup_futures if future.done()]
+        for future in done:
+            name, project_id, target_status = self.cleanup_futures.pop(future)
+            self._cleanup_pending.discard(name)
+            try:
+                success = future.result()
+                if (
+                    success
+                    and project_id is not None
+                    and target_status in ("completed", "stopped")
+                ):
+                    self._inactive_cleanup_done[project_id] = target_status
+                elif project_id is not None:
+                    self._inactive_cleanup_done.pop(project_id, None)
+            except Exception:
+                if project_id is not None:
+                    self._inactive_cleanup_done.pop(project_id, None)
+                LOG.exception("container cleanup failed container=%s", name)
+
+    def _refresh_runtime_projects(self, summaries: list[ProjectSummary]) -> None:
+        active_ids = {summary.id for summary in summaries if summary.status == "active"}
+        self.runtime_project_ids.intersection_update(active_ids)
+        self.explore_retry_avoid = {
+            key: worker
+            for key, worker in self.explore_retry_avoid.items()
+            if key[0] in active_ids
+        }
+        self.task_failures = {
+            key: failures
+            for key, failures in self.task_failures.items()
+            if key[0] in active_ids
+        }
+        self.task_retry_until = {
+            key: deadline
+            for key, deadline in self.task_retry_until.items()
+            if key[0] in active_ids
+        }
+        self.reason_debounce_until = {
+            project_id: deadline
+            for project_id, deadline in self.reason_debounce_until.items()
+            if project_id in active_ids
+        }
+        inactive_status_by_id = {
+            summary.id: summary.status
+            for summary in summaries
+            if summary.status != "active"
+        }
+        for project_id, status in list(self._inactive_cleanup_done.items()):
+            current_status = inactive_status_by_id.get(project_id)
+            if current_status != status:
+                self._inactive_cleanup_done.pop(project_id, None)
+
+    def _cancel_inactive_tasks(self, summaries: list[ProjectSummary]) -> None:
+        status_by_project = {summary.id: summary.status for summary in summaries}
+        for task in self.futures.values():
+            status = status_by_project.get(task.project_id, "deleted")
+            if status != "active" and task.cancellation.cancel(status):
+                LOG.info(
+                    "cancelling running task for inactive project project=%s task=%s worker=%s status=%s",
+                    task.project_id,
+                    task.task_type,
+                    task.worker_name,
+                    status,
+                )
+
+    def _initialize_reason_checkpoints(self, summaries: list[ProjectSummary]) -> None:
+        for summary in summaries:
+            if summary.status != "active":
+                continue
+            if summary.id in self.reason_checkpoints:
+                continue
+            open_intent_count = (
+                summary.working_intent_count + summary.unclaimed_intent_count
+            )
+            if open_intent_count == 0:
+                continue
+            self.reason_checkpoints[summary.id] = ReasonCheckpoint(
+                fact_count=summary.fact_count,
+                hint_count=summary.hint_count,
+                open_intent_count=open_intent_count,
+                request_generation=self.reason_request_generations.get(summary.id, 0),
+            )
+            LOG.debug(
+                "reason checkpoint initialized project=%s facts=%s hints=%s open_intents=%s",
+                summary.id,
+                summary.fact_count,
+                summary.hint_count,
+                open_intent_count,
+            )
+
+    def _best_effort_release(
+        self, project_id: str, intent_id: str, worker_name: str
+    ) -> None:
+        response = self.client.release(project_id, intent_id, worker_name)
+        if not response.ok and response.status_code not in (403, 409):
+            LOG.warning(
+                "release failed project=%s intent=%s worker=%s status=%s",
+                project_id,
+                intent_id,
+                worker_name,
+                response.status_code,
+            )
+
+    def _task_retry_blocked(
+        self, key: tuple[str, str, str | None], *, now: float | None = None
+    ) -> bool:
+        return (time.time() if now is None else now) < self.task_retry_until.get(key, 0)
+
+    def _best_effort_release_reason(self, project_id: str, worker_name: str) -> None:
+        response = self.client.release_reason(project_id, worker_name)
+        if not response.ok and response.status_code not in (403, 409):
+            LOG.warning(
+                "reason release failed project=%s worker=%s status=%s",
+                project_id,
+                worker_name,
+                response.status_code,
+            )
+
+    def _log_changed(self, scope: str, level: int, message: str, *args: object) -> None:
+        state = (level, message, args)
+        if self._log_state.get(scope) == state:
+            return
+        self._log_state[scope] = state
+        LOG.log(level, message, *args)
+
+    def _clear_log_state(self, scope: str) -> None:
+        self._log_state.pop(scope, None)
+
+    def _clear_project_log_state(self, project_id: str) -> None:
+        prefix = f"project:{project_id}:"
+        for scope in list(self._log_state):
+            if scope.startswith(prefix):
+                self._log_state.pop(scope, None)
+
+    def _validate_server_settings(self) -> None:
+        settings = self.client.get_settings()
+        interval = self.config.runtime.interval
+        for name, value in (
+            ("intent_timeout", settings.intent_timeout),
+            ("reason_timeout", settings.reason_timeout),
+        ):
+            if value <= interval:
+                raise RuntimeError(
+                    f"server {name}={value}s must be greater than dispatcher interval={interval}s"
+                )
+            if value < interval * 2:
+                LOG.warning(
+                    "server %s is tight %s=%ss interval=%ss; heartbeat slack is only %ss",
+                    name,
+                    name,
+                    value,
+                    interval,
+                    value - interval,
+                )
+                continue
+            LOG.info(
+                "server setting validated %s=%ss interval=%ss",
+                name,
+                value,
+                interval,
+            )
+
+    def _refresh_worker_config(self) -> None:
+        refreshed = self._config_reloader.refresh()
+        if refreshed is None:
+            return
+        if refreshed.error is not None:
+            self._log_changed(
+                "dispatch/config-reload",
+                logging.ERROR,
+                "%s",
+                refreshed.error,
+            )
+            return
+        assert refreshed.config is not None
+        self.config = refreshed.config
+        self.agent_runtime.initialize(self.config.workers)
+        if self.config.runtime.execution == "local":
+            self._run_local_binary_check()
+        active_names = {worker.name for worker in self.config.workers if worker.enabled}
+        self.worker_unhealthy_until = {
+            name: until
+            for name, until in self.worker_unhealthy_until.items()
+            if name in active_names
+        }
+        self.worker_rejected_until = {
+            key: until
+            for key, until in self.worker_rejected_until.items()
+            if key[2] in active_names
+        }
+        self.explore_retry_avoid = {
+            key: worker
+            for key, worker in self.explore_retry_avoid.items()
+            if worker in active_names
+        }
+        self._clear_log_state("dispatch/config-reload")
+        LOG.info(
+            "worker config hot-reloaded workers=%s enabled=%s running_tasks_unchanged=%s",
+            len(self.config.workers),
+            len(active_names),
+            self._running_task_count(),
+        )
+
+    def _run_startup_healthchecks(self, *, show_commands: bool) -> None:
+        if not any(worker.enabled for worker in self.config.workers):
+            LOG.warning("startup healthcheck skipped because no workers are enabled")
+            return
+        results = run_startup_healthchecks(self.config, show_commands=show_commands)
+        if any(result.ok for result in results):
+            return
+        raise RuntimeError(format_failure_summary(results))

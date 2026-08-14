@@ -1,0 +1,79 @@
+# RedTrace_X 本地模式运行配置模板。
+# 敏感值（API Key / Token）用环境变量占位，由 start.sh 渲染为 redtrace.yaml。
+server: http://127.0.0.1:8000
+runtime:
+  execution: local
+  worker_healthcheck: disabled
+  max_workers: 4
+  max_running_projects: 2
+  max_project_workers: 4
+  interval: 3
+  healthcheck_timeout: 60
+  prompt_group: default
+tasks:
+  bootstrap:
+    timeout: 600
+    conclude_timeout: 120
+  reason:
+    timeout: 300
+    max_intents: 3
+  explore:
+    timeout: 1800
+    conclude_timeout: 300
+context_harness:
+  enabled: true
+  artifact_root: .redtrace/artifacts/context
+  inline_bytes: 524288
+  visible_bytes: 131072
+  query_bytes: 2097152
+  parse_bytes: 134217728
+  worker_output_chars: 16777216
+local:
+  completed_action: keep
+common_env:
+  BRAVE_API_KEY: ${BRAVE_API_KEY}
+  BENCHMARK_TOKEN: ${BENCHMARK_TOKEN}
+  BENCHMARK_BASE_URL: ${BENCHMARK_BASE_URL}
+  VPN_CHECK_URL: ${VPN_CHECK_URL}
+workers:
+- name: local-claude
+  type: claudecode
+  enabled: true
+  task_types:
+  - reason
+  - bootstrap
+  max_running: 2
+  priority: 0
+  env: {}
+- name: pi
+  type: pi
+  enabled: true
+  task_types:
+  - explore
+  max_running: 2
+  priority: 1
+  env:
+    PI_BASE_URL: ${PI_BASE_URL}
+    PI_MODEL: ${PI_MODEL}
+    PI_API_KEY: ${PI_API_KEY}
+    PI_PROVIDER_API: ${PI_PROVIDER_API}
+- name: claude2
+  type: claudecode
+  enabled: true
+  task_types:
+  - explore
+  max_running: 1
+  priority: 2
+  context_length: 1048576
+  env:
+    ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL}
+    ANTHROPIC_MODEL: ${ANTHROPIC_MODEL}
+    ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN}
+paths:
+  root: .
+  skills: skills
+  mcp: mcp
+  plugins: plugins
+  managed: .redtrace
+  workspaces: workspaces
+  audit: .redtrace/audit
