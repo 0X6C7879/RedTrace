@@ -32,6 +32,7 @@ benchctl task close <unique_code>               # 关闭容器，释放名额
 ## 错误处理
 
 - 提交返回 `duplicate`：该 flag 已计入，跳过即可。
+- `task start` 返回 `invalid_state`：容器已启动（可能是上一任 worker 未关闭遗留），直接使用打印出的地址继续解，不要反复 start。
 - `resource_unavailable` / 连接错误：稍后重试，勿疯狂重试。
 - 网络不通：先怀疑 VPN 异常。
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 from urllib import error as urlerror
 from urllib import request
@@ -80,6 +81,12 @@ class BenchmarkClient:
         except urlerror.HTTPError as exc:
             status = exc.code
             raw = exc.read().decode("utf-8", "replace")
+        except (OSError, http.client.HTTPException) as exc:
+            # URLError/timeout/connection reset/DNS 等瞬时网络故障统一映射成
+            # 可重试的 BenchmarkError，避免一次抖动直接终止整场跑分。
+            raise BenchmarkError(
+                "network_error", f"平台网络请求失败({type(exc).__name__}): {exc}"
+            ) from exc
 
         payload = None
         if raw:

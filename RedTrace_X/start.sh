@@ -55,5 +55,17 @@ if [[ "$ready" != "1" ]]; then
   exit 1
 fi
 
-# 4) 开始评测（VPN 预检通过后自动逐题推进）
-"$PYTHON" "$DIR/bench/benchctl.py" run
+# 4) 开始评测（VPN 预检通过后自动逐题推进）；RedTrace 中途挂掉则终止跑分
+"$PYTHON" "$DIR/bench/benchctl.py" run &
+BENCH_PID=$!
+while kill -0 "$BENCH_PID" 2>/dev/null; do
+  if ! kill -0 "$RT_PID" 2>/dev/null; then
+    echo "error: RedTrace 进程已退出，终止跑分" >&2
+    kill "$BENCH_PID" 2>/dev/null || true
+    break
+  fi
+  sleep 1
+done
+bench_status=0
+wait "$BENCH_PID" || bench_status=$?
+exit "$bench_status"

@@ -37,6 +37,14 @@ SCOPE_TEMPLATE = Path(__file__).resolve().parent / "prompts" / "scope.md"
 FLAG_RE = re.compile(r"^flag\{[^\s\r\n]{1,500}\}$")
 
 _DIFFICULTY_RANK = {"easy": 0, "medium": 1, "hard": 2}
+_PROJECT_TITLE = "[tsec] TSecBench 跑分"
+# 容器处于这些状态说明已占用平台槽位，需要 close 才能释放
+_ALLOCATED = ("available", "stop_pending", "pending")
+
+
+class RedTraceError(Exception):
+    """RedTrace 控制面不可达（Server/Dispatcher 已挂）。"""
+
 
 GOAL = (
     "在任务时限结束前（题目容器不可访问即说明结束），尽可能多地解出题目、提交 flag，"
@@ -62,8 +70,13 @@ def _redtrace(method: str, path: str, body: dict | None = None):
     data = json.dumps(body).encode("utf-8") if body is not None else None
     headers = {"Content-Type": "application/json"} if body is not None else {}
     req = urllib_request.Request(url, data=data, headers=headers, method=method)
-    with urllib_request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8", "replace"))
+    try:
+        with urllib_request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib_request.HTTPError:
+        raise
+    except OSError as exc:
+        raise RedTraceError(f"RedTrace 不可达: {exc}") from exc
 
 
 def _find(client: BenchmarkClient, code: str):
@@ -101,7 +114,7 @@ def _create_project(challenges: list) -> str:
         "POST",
         "/projects",
         {
-            "title": "[tsec] TSecBench 跑分",
+            "title": _PROJECT_TITLE,
             "origin": _build_scope(challenges),
             "goal": GOAL,
             "hints": [{"content": HINT, "creator": "benchctl"}],
@@ -110,12 +123,26 @@ def _create_project(challenges: list) -> str:
     return resp["project"]["id"]
 
 
+def _find_or_create_project(challenges: list) -> str:
+    """复用上一次尚未结束的跑分项目，避免重启后旧任务与新任务争抢 Worker。"""
+    projects = _redtrace("GET", "/projects")
+    active = [
+        p for p in projects
+        if p.get("title") == _PROJECT_TITLE and p.get("status") == "active"
+    ]
+    if not active:
+        return _create_project(challenges)
+    for stale in active[1:]:
+        try:
+            _redtrace("PUT", f"/projects/{stale['id']}/status", {"status": "stopped"})
+        except Exception:  # noqa: BLE001
+            pass
+    return active[0]["id"]
+
+
 def _project_status(project_id: str) -> str | None:
-    try:
-        projects = _redtrace("GET", "/projects")
-        return next((p.get("status") for p in projects if p.get("id") == project_id), None)
-    except Exception:  # noqa: BLE001
-        return None
+    projects = _redtrace("GET", "/projects")
+    return next((p.get("status") for p in projects if p.get("id") == project_id), None)
 
 
 def _close_running(client: BenchmarkClient) -> None:
@@ -124,19 +151,39 @@ def _close_running(client: BenchmarkClient) -> None:
     except BenchmarkError:
         return
     for c in challenges:
-        if c.get("container_status") in ("available", "stop_pending", "pending"):
+        if c.get("container_status") in _ALLOCATED:
             try:
                 client.close_challenge(c["unique_code"])
             except Exception:  # noqa: BLE001
                 pass
 
 
-def _sweep_completed(client: BenchmarkClient, challenges: list) -> None:
-    """释放已通关但容器仍未关闭的题目（worker 崩溃未 close 时的兜底）。"""
+def _open_intent_codes(project_id: str, codes: set[str]) -> set[str]:
+    """返回仍被某个未完结 intent 引用的 unique_code 集合。"""
+    try:
+        detail = _redtrace("GET", f"/projects/{project_id}")
+    except RedTraceError:
+        return set(codes)  # 控制面不可达时不回收，交给上层中止
+    claimed: set[str] = set()
+    for intent in detail.get("intents", []):
+        if intent.get("concluded_at") is not None:
+            continue
+        description = (intent.get("description") or "").lower()
+        claimed.update(code for code in codes if code.lower() in description)
+    return claimed
+
+
+def _sweep(client: BenchmarkClient, project_id: str, challenges: list) -> None:
+    """回收不再被任何 intent 持有的容器：已通关 + worker 崩溃后已放弃的题。"""
+    codes = {c["unique_code"] for c in challenges}
+    claimed = _open_intent_codes(project_id, codes)
     for c in challenges:
-        if c.get("is_completed") and c.get("container_status") in ("available", "stop_pending"):
+        if c.get("container_status") not in _ALLOCATED:
+            continue
+        code = c["unique_code"]
+        if c.get("is_completed") or code not in claimed:
             try:
-                client.close_challenge(c["unique_code"])
+                client.close_challenge(code)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -167,11 +214,11 @@ def cmd_run() -> int:
 
     # 整个评测 = 一个 RedTrace 项目；scope/goal/hint 注入后，规划交给 reason（最多 3 道并行）
     try:
-        project_id = _create_project(challenges)
+        project_id = _find_or_create_project(challenges)
     except Exception as exc:  # noqa: BLE001
-        print(f"[fatal] 创建 RedTrace 项目失败: {exc}", file=sys.stderr)
+        print(f"[fatal] 创建/恢复 RedTrace 项目失败: {exc}", file=sys.stderr)
         return 1
-    print(f"[project] {project_id} 已创建，reason 规划最优解题路线（分数随时间衰减，最多 3 道并行）...")
+    print(f"[project] {project_id} 已就绪，reason 规划最优解题路线（分数随时间衰减，最多 3 道并行）...")
 
     timeout = float(_env("TASK_TIMEOUT_SECONDS", "21600") or 21600)
     poll = float(_env("POLL_INTERVAL_SECONDS", "3") or 3)
@@ -183,11 +230,16 @@ def cmd_run() -> int:
         except BenchmarkError as exc:
             print(f"[poll] {exc}", file=sys.stderr)
             continue
-        _sweep_completed(client, current)
+        _sweep(client, project_id, current)
         remaining = [c for c in current if not c.get("is_completed")]
         if not remaining:
             break
-        status = _project_status(project_id)
+        try:
+            status = _project_status(project_id)
+        except RedTraceError as exc:
+            print(f"[fatal] {exc}，终止跑分", file=sys.stderr)
+            _close_running(client)
+            return 1
         if status in ("completed", "stopped"):
             break
 
@@ -226,7 +278,18 @@ def cmd_task(args) -> int:
         return 1
 
     if action == "start":
-        r = client.start_challenge(code)
+        try:
+            r = client.start_challenge(code)
+        except InvalidState:
+            # 容器已启动（上一任 worker 崩溃后未 close 留下的）：直接复用现有地址继续解，
+            # 不要反复 start 触发 invalid_state 死循环。
+            info = _find(client, code)
+            addr = info.get("container_addr") if info else None
+            if addr:
+                print("\n".join(addr))
+            else:
+                print("challenge already started (no address available)")
+            return 0
         print("\n".join(r.get("container_addr", [])) or "started (no address yet)")
     elif action == "context":
         info = _find(client, code)
