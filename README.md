@@ -245,7 +245,6 @@ Context Harness 会把完整输出保存到 `.redtrace/artifacts/context`，同�
 | `workspaces/` | 按任务隔离的 Worker 会话、提示、临时文件和工件（不提交） |
 | `output/webshell/`、`output/c2/` | 供人工审计的 WebShell/C2 落地文件（不提交） |
 | `docs/` | 协议、架构、上下文和插件兼容文档 |
-| `benchpacks/` | 可复现评测任务与控制工具 |
 
 ## 验证与测试
 
