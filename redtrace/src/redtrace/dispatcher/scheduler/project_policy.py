@@ -81,9 +81,16 @@ def rotate_projects(
     return [by_id[project_id] for project_id in ordered_ids], cursor + 1
 
 
-def open_intent_count(project: ProjectDetail) -> int:
+def open_intent_count(project: ProjectDetail, *, now: float | None = None) -> int:
+    """Count the usable Frontier: working plus schedulable unclaimed Intents."""
+    current_time = time.time() if now is None else now
     return sum(
-        intent.to is None and intent.state not in ("dropped", "superseded")
+        intent.to is None
+        and intent.state not in ("concluded", "dropped", "superseded")
+        and (
+            intent.worker is not None
+            or is_schedulable_intent(intent, now=current_time)
+        )
         for intent in project.intents
     )
 
@@ -98,7 +105,8 @@ def is_schedulable_intent(intent: Intent, *, now: float | None = None) -> bool:
     if intent.circuit_open:
         return False
     return not (
-        intent.retry_after is not None and intent.retry_after > (now or time.time())
+        intent.retry_after is not None
+        and intent.retry_after > (time.time() if now is None else now)
     )
 
 

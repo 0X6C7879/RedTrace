@@ -5,7 +5,9 @@ import time
 import pytest
 from conftest import make_intent, make_project
 from fastapi.testclient import TestClient
+from redtrace.board.models import ProjectDetail, ProjectSummary
 from redtrace.dispatcher.scheduler import project_policy
+from redtrace.dispatcher.scheduler.state import ReasonCheckpoint
 from redtrace.server import db
 from redtrace.server.app import app
 
@@ -327,6 +329,47 @@ def test_scheduler_skips_circuit_open_and_backoff_intents() -> None:
     project = make_project(intents=[open_intent, circuit, backoff])
 
     assert project_policy.newest_unclaimed_intent(project, set()).id == "i-open"
+
+
+def test_summary_and_detail_share_usable_frontier_count(client: TestClient) -> None:
+    project_id = _project(client)
+    schedulable = _intent(client, project_id, "schedulable")
+    working = _intent(client, project_id, "working")
+    circuit = _intent(client, project_id, "circuit")
+    backoff = _intent(client, project_id, "backoff")
+    assert client.post(
+        f"/projects/{project_id}/intents/{working['id']}/claim",
+        json={"worker": "explorer"},
+    ).status_code == 200
+    now = time.time()
+    with db.get_conn(immediate=True) as conn:
+        conn.execute(
+            "UPDATE intents SET circuit_open = 1 WHERE project_id = ? AND id = ?",
+            (project_id, circuit["id"]),
+        )
+        conn.execute(
+            "UPDATE intents SET retry_after = ? WHERE project_id = ? AND id = ?",
+            (now + 3600, project_id, backoff["id"]),
+        )
+
+    summaries = [
+        ProjectSummary.model_validate(item) for item in client.get("/projects").json()
+    ]
+    summary = next(item for item in summaries if item.id == project_id)
+    detail = ProjectDetail.model_validate(client.get(f"/projects/{project_id}").json())
+    detail_count = project_policy.open_intent_count(detail, now=now)
+
+    assert schedulable["id"] != working["id"]
+    assert summary.working_intent_count == 1
+    assert summary.unclaimed_intent_count == 1
+    assert detail_count == summary.working_intent_count + summary.unclaimed_intent_count
+    assert project_policy.reason_trigger(
+        ReasonCheckpoint(fact_count=2, hint_count=0, open_intent_count=4),
+        fact_count=2,
+        hint_count=0,
+        open_intents=detail_count,
+        request_generation=0,
+    ) == "open_intents:4->2"
 
 
 def test_consecutive_failures_decay_priority(client: TestClient) -> None:
