@@ -37,8 +37,9 @@ def test_start_script_uses_portable_project_relative_defaults() -> None:
     assert 'CONFIG_PATH="$SCRIPT_DIR/redtrace.yaml"' in script
     assert 'DB_PATH="$DATA_DIR/redtrace.db"' in script
     assert 'export TMPDIR="$DATA_DIR/tmp"' in script
-    assert 'uv run --project "$PROJECT_DIR" redtrace serve' in script
-    assert 'uv run --project "$PROJECT_DIR" redtrace dispatch' in script
+    assert 'uv sync --project "$PROJECT_DIR"' in script
+    assert 'uv run --no-sync --project "$PROJECT_DIR" redtrace serve' in script
+    assert 'uv run --no-sync --project "$PROJECT_DIR" redtrace dispatch' in script
     assert "launchctl" not in script
     assert "systemctl" not in script
 
@@ -54,6 +55,9 @@ def test_start_script_supervises_and_stops_both_components(tmp_path: Path) -> No
         """#!/usr/bin/env bash
 set -eu
 case " $* " in
+  *" sync "*)
+    exit 0
+    ;;
   *" redtrace serve "*)
     marker="$FAKE_REDTRACE_STATE/server"
     ;;
@@ -156,6 +160,9 @@ if [[ "$1" == "venv" ]]; then
   printf '#!/usr/bin/env bash\nprintf "redtrace-python:3.13\\n"\n' >"$target/bin/python3"
   chmod +x "$target/bin/python3"
   touch "$FAKE_REDTRACE_STATE/rebuilt"
+  exit 0
+fi
+if [[ "$1" == "sync" ]]; then
   exit 0
 fi
 if [[ " $* " == *" redtrace dispatch "* ]]; then

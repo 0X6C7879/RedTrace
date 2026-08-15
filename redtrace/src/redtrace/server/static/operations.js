@@ -467,7 +467,6 @@ function operationsPage() {
         actions: '',
         metadataJson: '{}',
         parentResourceId: '',
-        publishFact: true,
         credentialType: 'host',
         credentialUsername: '',
         credentialDomain: '',
@@ -580,7 +579,6 @@ function operationsPage() {
             parent_resource_id: form.parentResourceId || null,
             actor_type: 'human',
             actor: this.actorName(),
-            publish_fact: Boolean(form.publishFact),
           }),
         });
         this.secretOnce = data.secret_once || '';

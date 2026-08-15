@@ -1,0 +1,45 @@
+.vscode/
+.DS_Store
+__pycache__/
+.playwright-cli/
+.codex-test-venv/
+output/playwright/
+output/
+.redtrace/
+redtrace.local.yaml
+.venv/
+venv/
+env/
+.workbuddy/
+.codegraph/
+datas/
+workspaces/
+proj_002/
+redtrace.yaml
+.redtrace-secrets/
+server.log
+dispatcher.log
+logs/
+# 白盒私有案例：不进入公开仓库，可用 REDTRACE_CODE_AUDIT_PRIVATE_CASES_DIR 提供
+skills/code-audit/references/cases/internal-cases.json
+data/private/
+# 迁移临时脚本
+tmp_*.ps1
+# 白盒源目录迁移后归档（确认无误后可手工删除）
+白盒skills.migrated-*/
+plugins/**/dist/
+plugins/**/target/
+plugins/**/.gradle/
+plugins/**/build/
+plugins/**/lib/*.jar
+vendor/
+nul
+*.stackdump
+
+# 顶层设计文档不提交到公开仓库（docs/ 与 redtrace/tests/ 随代码推送）
+design-qa.md
+design-qa-*.png
+
+# RedTrace_X benchmark
+.env
+results/

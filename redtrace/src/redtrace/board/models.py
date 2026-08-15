@@ -33,7 +33,13 @@ class Intent(BaseModel):
     circuit_open: bool = False
     priority: int = Field(default=50, ge=0, le=100)
     state: Literal[
-        "open", "claimed", "working", "concluded", "dropped", "superseded"
+        "open",
+        "claimed",
+        "working",
+        "blocked",
+        "concluded",
+        "dropped",
+        "superseded",
     ] = "open"
     goal_id: str | None = None
     superseded_by: str | None = None
@@ -51,6 +57,14 @@ class Hint(BaseModel):
     id: str
     content: str
     creator: str
+    created_at: str
+
+
+class Observation(BaseModel):
+    id: str
+    intent_id: str
+    worker: str
+    content: str
     created_at: str
 
 
@@ -72,6 +86,8 @@ class ProjectMeta(BaseModel):
     reason_failure_signature: str | None = None
     reason_retry_after: float | None = None
     reason_circuit_open: bool = False
+    planning_revision: int = 0
+    reason_evaluated_revision: int = 0
 
 
 class ProjectSummary(ProjectMeta):
@@ -87,6 +103,7 @@ class ProjectDetail(BaseModel):
     facts: list[Fact]
     intents: list[Intent]
     hints: list[Hint]
+    observations: list[Observation] = Field(default_factory=list)
     blackboard_revision: int = 0
 
 
@@ -253,8 +270,21 @@ class ConcludeResponse(BaseModel):
     intent: Intent
 
 
-class IncrementalFactResponse(BaseModel):
-    fact: Fact
+class ObservationRequest(BaseModel):
+    worker: str
+    content: str
+
+    @field_validator("worker", "content")
+    @classmethod
+    def validate_non_empty_text(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("must not be empty")
+        return text
+
+
+class ObservationResponse(BaseModel):
+    observation: Observation
     intent: Intent
 
 
@@ -343,7 +373,7 @@ class GraphPatchComplete(BaseModel):
 
 
 class GraphPatchRequest(BaseModel):
-    base_revision: int = Field(ge=0)
+    base_planning_revision: int = Field(ge=0)
     worker: str
     create: list[GraphPatchCreate] = Field(default_factory=list)
     drop: list[GraphPatchDrop] = Field(default_factory=list)
@@ -362,6 +392,8 @@ class GraphPatchRequest(BaseModel):
 
 class GraphPatchResponse(BaseModel):
     revision: int
+    planning_revision: int
+    reason_evaluated_revision: int
     created: list[Intent] = Field(default_factory=list)
     dropped: list[str] = Field(default_factory=list)
     reprioritized: list[str] = Field(default_factory=list)

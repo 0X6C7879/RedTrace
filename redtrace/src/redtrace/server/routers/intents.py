@@ -2,22 +2,28 @@ import time
 
 from fastapi import APIRouter, HTTPException
 
-from redtrace.board import intents
+from redtrace.board import intents, observations
 from redtrace.board.models import (
     ConcludeRequest,
     ConcludeResponse,
     CreateIntentRequest,
     HeartbeatRequest,
-    IncrementalFactResponse,
     Intent,
+    ObservationRequest,
+    ObservationResponse,
     TaskOutcomeRequest,
 )
-from redtrace.board.storage import check_project_active, next_fact_id, utcnow
+from redtrace.board.storage import (
+    bump_planning_revision,
+    check_project_active,
+    utcnow,
+)
 from redtrace.server.db import get_conn
 
 router = APIRouter(tags=["intents"])
 RETRY_DELAYS = (5, 15, 60)
 MAX_FAILURES = len(RETRY_DELAYS)
+BOOTSTRAP_CREATOR = "dispatcher.bootstrap"
 
 
 @router.post(
@@ -47,6 +53,18 @@ def report_outcome(project_id: str, intent_id: str, body: TaskOutcomeRequest):
         ).fetchone()
         if row is None:
             raise HTTPException(404, "Intent not found")
+        conn.execute(
+            "INSERT INTO intent_execution_events (project_id, intent_id, worker, outcome, detail, runtime_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                project_id,
+                intent_id,
+                body.worker,
+                body.outcome,
+                body.detail,
+                body.runtime_ms,
+                utcnow(),
+            ),
+        )
         if body.runtime_ms:
             conn.execute(
                 "UPDATE intents SET cumulative_runtime_ms = cumulative_runtime_ms + ? WHERE id = ? AND project_id = ?",
@@ -58,38 +76,46 @@ def report_outcome(project_id: str, intent_id: str, body: TaskOutcomeRequest):
             return {"circuitOpen": bool(row["circuit_open"]), "failureCount": row["failure_count"]}
         count = int(row["failure_count"]) + 1
         signature = body.outcome[:100]
-        decay = 5 if count == 1 else 10
-        now = utcnow()
-        if count >= MAX_FAILURES:
-            fact_id = next_fact_id(conn, project_id)
-            description = (
-                f"Intent stopped after {count} failed attempts; retry circuit opened. "
-                f"category={signature}; detail={body.detail[:500]}"
-            )
-            conn.execute(
-                "INSERT INTO facts (id, project_id, description) VALUES (?, ?, ?)",
-                (fact_id, project_id, description),
-            )
+        if row["creator"] == BOOTSTRAP_CREATOR:
+            retry_after = time.time() + RETRY_DELAYS[
+                min(count - 1, len(RETRY_DELAYS) - 1)
+            ]
             conn.execute(
                 """
-                UPDATE intents SET to_fact_id = ?, worker = NULL,
-                    last_heartbeat_at = NULL, concluded_at = ?, failure_count = ?,
-                    failure_signature = ?, retry_after = NULL, circuit_open = 1,
-                    state = 'concluded', priority = MAX(0, priority - ?)
+                UPDATE intents SET worker = NULL, last_heartbeat_at = NULL,
+                    failure_count = ?, failure_signature = ?, retry_after = ?,
+                    circuit_open = 0, state = 'open'
                 WHERE id = ? AND project_id = ?
                 """,
-                (fact_id, now, count, signature, decay, intent_id, project_id),
+                (count, signature, retry_after, intent_id, project_id),
             )
-            return {"circuitOpen": True, "failureCount": count, "factId": fact_id}
+            return {
+                "circuitOpen": False,
+                "failureCount": count,
+                "retryAfter": retry_after,
+            }
+        if count >= MAX_FAILURES:
+            conn.execute(
+                """
+                UPDATE intents SET worker = NULL, last_heartbeat_at = NULL,
+                    failure_count = ?,
+                    failure_signature = ?, retry_after = NULL, circuit_open = 1,
+                    state = 'blocked'
+                WHERE id = ? AND project_id = ?
+                """,
+                (count, signature, intent_id, project_id),
+            )
+            bump_planning_revision(conn, project_id)
+            return {"circuitOpen": True, "failureCount": count, "state": "blocked"}
         retry_after = time.time() + RETRY_DELAYS[count - 1]
         conn.execute(
             """
-            UPDATE intents SET worker = NULL, last_heartbeat_at = NULL,
+                UPDATE intents SET worker = NULL, last_heartbeat_at = NULL,
                 failure_count = ?, failure_signature = ?, retry_after = ?,
-                state = 'open', priority = MAX(0, priority - ?)
+                state = 'open'
             WHERE id = ? AND project_id = ?
             """,
-            (count, signature, retry_after, decay, intent_id, project_id),
+            (count, signature, retry_after, intent_id, project_id),
         )
         return {"circuitOpen": False, "failureCount": count, "retryAfter": retry_after}
 
@@ -103,11 +129,23 @@ def heartbeat(project_id: str, intent_id: str, body: HeartbeatRequest):
 
 @router.post(
     "/projects/{project_id}/intents/{intent_id}/facts",
-    response_model=IncrementalFactResponse,
-    status_code=201,
 )
 def submit_fact(project_id: str, intent_id: str, body: ConcludeRequest):
-    return intents.submit_fact(project_id, intent_id, body)
+    raise HTTPException(
+        409,
+        "Incremental Fact submission is disabled; use observations during execution and conclude for a formal Fact",
+    )
+
+
+@router.post(
+    "/projects/{project_id}/intents/{intent_id}/observations",
+    response_model=ObservationResponse,
+    status_code=201,
+)
+def submit_observation(
+    project_id: str, intent_id: str, body: ObservationRequest
+):
+    return observations.create(project_id, intent_id, body)
 
 
 @router.post(

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, R
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
-from redtrace.board.storage import get_project_or_404, release_fact
+from redtrace.board.storage import get_project_or_404
 from redtrace.server import db
 from redtrace.server.c2_payloads import (
     build_beacon,
@@ -60,7 +60,7 @@ class ResourceCreate(BaseModel):
     fact_id: str | None = Field(default=None, max_length=128)
     parent_resource_id: str | None = Field(default=None, max_length=64)
     source_task_id: str | None = Field(default=None, max_length=64)
-    publish_fact: bool = True
+    publish_fact: bool = False
 
     @field_validator("kind")
     @classmethod
@@ -373,6 +373,11 @@ def register_resource(
     context: QueryContext = Depends(query_context),
 ):
     actor_type, actor, context_intent = _actor(body.actor_type, body.actor, context)
+    if body.publish_fact:
+        raise HTTPException(
+            409,
+            "Resources do not create formal Facts; conclude the owning Intent instead",
+        )
     resource_metadata = dict(body.metadata)
     if body.kind == "c2_listener":
         listener_type = str(resource_metadata.get("listener_type") or "").lower()
@@ -405,7 +410,6 @@ def register_resource(
                 fact_id=body.fact_id,
                 parent_resource_id=body.parent_resource_id,
                 source_task_id=body.source_task_id,
-                publish_fact=body.publish_fact,
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
@@ -521,7 +525,6 @@ def create_c2_oneliner(
             worker=context.worker if actor_type == "worker" else None,
             intent_id=context.intent_id,
             parent_resource_id=listener["id"],
-            publish_fact=True,
         )
         audit_event(
             conn,
@@ -596,7 +599,6 @@ def build_c2_payload(
             worker=context.worker if actor_type == "worker" else None,
             intent_id=context.intent_id,
             parent_resource_id=body.listener_id,
-            publish_fact=True,
         )
         audit_event(
             conn,
@@ -673,7 +675,6 @@ def build_external_c2_payload(
             worker=context.worker if actor_type == "worker" else None,
             intent_id=context.intent_id,
             parent_resource_id=body.listener_id,
-            publish_fact=True,
         )
         return {"payload": resource}
 
@@ -738,7 +739,6 @@ async def upload_c2_payload(
                 worker=context.worker if actor_type == "worker" else None,
                 intent_id=context.intent_id,
                 parent_resource_id=listener_id or None,
-                publish_fact=True,
             )
             audit_event(
                 conn,
@@ -879,13 +879,6 @@ def delete_resource(
         ).fetchone()["count"]
         if running:
             raise HTTPException(409, "Cancel active tasks before deleting this resource")
-        if row["project_id"] and row["fact_id"]:
-            release_fact(
-                conn,
-                row["project_id"],
-                row["fact_id"],
-                detach_references=True,
-            )
         audit_event(
             conn,
             project_id=project_id,
@@ -1316,7 +1309,6 @@ def c2_checkin(
                 actor_type="system",
                 actor=f"listener:{listener_id}",
                 parent_resource_id=listener_id,
-                publish_fact=True,
             )
             session_id = session["id"]
             action = "c2.session_online"
@@ -1434,7 +1426,7 @@ def c2_result(
         )
         arguments = json_load(task["input_json"], {})
         if body.success and bool(arguments.get("publish_result")):
-            result_resource, _ = create_resource(
+            create_resource(
                 conn,
                 project_id=task["project_id"],
                 kind="result",
@@ -1447,11 +1439,6 @@ def c2_result(
                 worker=task["actor"] if task["actor_type"] == "worker" else None,
                 intent_id=task["intent_id"],
                 source_task_id=operation_id,
-                publish_fact=True,
-            )
-            conn.execute(
-                "UPDATE operation_tasks SET fact_id = ? WHERE id = ?",
-                (result_resource.get("fact_id"), operation_id),
             )
         audit_event(
             conn,

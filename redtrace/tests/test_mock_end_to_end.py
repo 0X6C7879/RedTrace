@@ -13,7 +13,6 @@ from pydantic import TypeAdapter
 import pytest
 
 from redtrace.dispatcher.config import DispatchConfig
-from redtrace.dispatcher.scheduler.state import ReasonCheckpoint
 from redtrace.dispatcher.control_plane import ApiResult
 from redtrace.dispatcher.runtime.process import ProcessResult
 from redtrace.dispatcher.scheduler.loop import DispatcherLoop
@@ -268,15 +267,12 @@ def _loop(config: DispatchConfig, client: InProcessClient, containers: LocalCont
     loop.cleanup_executor = ThreadPoolExecutor(max_workers=1)
     loop.futures = {}
     loop.cleanup_futures = {}
-    loop.reason_checkpoints = {}
-    loop.reason_request_generations = {}
     loop.runtime_project_ids = set()
     loop.worker_unhealthy_until = {}
     loop.worker_rejected_until = {}
     loop.explore_retry_avoid = {}
     loop.task_failures = {}
     loop.task_retry_until = {}
-    loop.reason_debounce_until = {}
     loop._log_state = {}
     loop._cleanup_pending = set()
     loop._inactive_cleanup_done = {}
@@ -285,19 +281,12 @@ def _loop(config: DispatchConfig, client: InProcessClient, containers: LocalCont
     return loop
 
 
-def _dispatch_and_wait(
-    loop: DispatcherLoop, *, allow_coalesced_reason: bool = False
-) -> None:
+def _dispatch_and_wait(loop: DispatcherLoop) -> None:
     loop._reap_futures()
     summaries = loop.client.list_projects()
-    loop._initialize_reason_checkpoints(summaries)
     loop._refresh_runtime_projects(summaries)
     loop._cancel_inactive_tasks(summaries)
     loop._queue_container_cleanups(summaries)
-    if allow_coalesced_reason:
-        loop.reason_dirty_since = getattr(loop, "reason_dirty_since", {})
-        for summary in summaries:
-            loop.reason_dirty_since[summary.id] = 0.0
     loop._dispatch_available(summaries)
     assert loop.futures
     for future in list(loop.futures):
@@ -365,10 +354,8 @@ def test_mock_scheduler_runs_reason_explore_reason_complete_chain(http_client: T
 
     try:
         _dispatch_and_wait(loop)
-        assert loop.reason_checkpoints[project_id] == ReasonCheckpoint(3, 0, 0)
         _dispatch_and_wait(loop)
-        loop.reason_debounce_until.clear()
-        _dispatch_and_wait(loop, allow_coalesced_reason=True)
+        _dispatch_and_wait(loop)
         project = client.get_project(project_id)
     finally:
         loop.close()

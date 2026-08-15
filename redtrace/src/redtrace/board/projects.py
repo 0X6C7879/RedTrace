@@ -11,6 +11,7 @@ from redtrace.board.models import (
     Fact,
     Hint,
     Intent,
+    Observation,
     ProjectDetail,
     ProjectMeta,
     ProjectSummary,
@@ -51,8 +52,8 @@ def list_all() -> list[ProjectSummary]:
             SELECT p.*,
                 (SELECT COUNT(*) FROM facts WHERE project_id = p.id) AS fact_count,
                 (SELECT COUNT(*) FROM intents WHERE project_id = p.id) AS intent_count,
-                (SELECT COUNT(*) FROM intents WHERE project_id = p.id AND concluded_at IS NULL AND state NOT IN ('dropped', 'superseded') AND worker IS NOT NULL) AS working_intent_count,
-                (SELECT COUNT(*) FROM intents WHERE project_id = p.id AND concluded_at IS NULL AND state NOT IN ('dropped', 'superseded') AND worker IS NULL AND circuit_open = 0 AND (retry_after IS NULL OR retry_after <= unixepoch('now'))) AS unclaimed_intent_count,
+                (SELECT COUNT(*) FROM intents WHERE project_id = p.id AND concluded_at IS NULL AND state = 'working' AND worker IS NOT NULL) AS working_intent_count,
+                (SELECT COUNT(*) FROM intents WHERE project_id = p.id AND concluded_at IS NULL AND state = 'open' AND worker IS NULL AND circuit_open = 0 AND (retry_after IS NULL OR retry_after <= unixepoch('now'))) AS unclaimed_intent_count,
                 (SELECT COUNT(*) FROM hints WHERE project_id = p.id) AS hint_count
             FROM projects p
             ORDER BY p.created_at
@@ -66,6 +67,12 @@ def list_all() -> list[ProjectSummary]:
                 bootstrap_enabled=bool(row["bootstrap_enabled"]),
                 created_at=row["created_at"],
                 reason=project_reason_from_row(row),
+                reason_failure_count=row["reason_failure_count"],
+                reason_failure_signature=row["reason_failure_signature"],
+                reason_retry_after=row["reason_retry_after"],
+                reason_circuit_open=bool(row["reason_circuit_open"]),
+                planning_revision=row["planning_revision"],
+                reason_evaluated_revision=row["reason_evaluated_revision"],
                 fact_count=row["fact_count"],
                 intent_count=row["intent_count"],
                 working_intent_count=row["working_intent_count"],
@@ -108,20 +115,14 @@ def create(request: CreateProjectRequest) -> ProjectDetail:
             ],
         )
         return ProjectDetail(
-            project=ProjectMeta(
-                id=project_id,
-                title=request.title,
-                status="active",
-                bootstrap_enabled=request.bootstrap_enabled,
-                created_at=now,
-                reason=None,
-            ),
+            project=project_meta_from_row(get_project_or_404(conn, project_id)),
             facts=[
                 Fact(id="origin", description=request.origin),
                 Fact(id="goal", description=request.goal),
             ],
             intents=[],
             hints=hints,
+            observations=[],
             blackboard_revision=get_blackboard_revision(conn, project_id),
         )
 
@@ -138,11 +139,16 @@ def get(project_id: str) -> ProjectDetail:
             "SELECT * FROM hints WHERE project_id = ? ORDER BY created_at",
             (project_id,),
         ).fetchall()
+        observations = conn.execute(
+            "SELECT id, intent_id, worker, content, created_at FROM observations WHERE project_id = ? ORDER BY created_at, id",
+            (project_id,),
+        ).fetchall()
         return ProjectDetail(
             project=project_meta_from_row(project),
             facts=[Fact(**dict(fact)) for fact in facts],
             intents=build_intents(conn, project_id),
             hints=[Hint(**dict(hint)) for hint in hints],
+            observations=[Observation(**dict(item)) for item in observations],
             blackboard_revision=get_blackboard_revision(conn, project_id),
         )
 
@@ -167,7 +173,7 @@ def transition_status(project_id: str, status: str) -> ProjectMeta:
         )
         if status == "stopped":
             conn.execute(
-                "UPDATE intents SET worker = NULL, state = 'open' WHERE project_id = ? AND concluded_at IS NULL AND state NOT IN ('dropped', 'superseded')",
+                "UPDATE intents SET worker = NULL, state = 'open' WHERE project_id = ? AND concluded_at IS NULL AND state = 'working'",
                 (project_id,),
             )
             clear_project_reason(conn, project_id)
@@ -175,7 +181,8 @@ def transition_status(project_id: str, status: str) -> ProjectMeta:
             conn.execute(
                 """
                 UPDATE intents SET failure_count = 0, failure_signature = NULL,
-                    retry_after = NULL, circuit_open = 0
+                    retry_after = NULL, circuit_open = 0,
+                    state = CASE WHEN state = 'blocked' THEN 'open' ELSE state END
                 WHERE project_id = ? AND concluded_at IS NULL
                 """,
                 (project_id,),
@@ -207,6 +214,8 @@ def claim_reason(project_id: str, request: ReasonClaimRequest) -> ProjectMeta:
                 409,
                 f"Project reason is currently claimed by {current['reason_worker']}",
             )
+        if current["planning_revision"] <= current["reason_evaluated_revision"]:
+            raise HTTPException(409, "Planning revision is already evaluated")
         now = utcnow()
         conn.execute(
             """

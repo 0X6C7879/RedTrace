@@ -164,13 +164,12 @@ def test_workers_use_native_agent_state_and_shared_capabilities(
     assert json.loads(workers[0].env["REDTRACE_SKILL_PATHS"]) == [str(skill.resolve())]
     resource_args = workers[0].env["REDTRACE_CODEX_RESOURCE_ARGS"]
     assert "mcp_servers.filesystem.command" in resource_args
+    assert "skills.config=" not in resource_args
     assert "sqlite_home" not in resource_args
     assert workers[0].env["REDTRACE_PI_MCP_EXTENSION"] == "npm:pi-mcp-extension@1.5.0"
     workspace = layout.workspaces / "project-1"
     workspace.mkdir()
-    assert not any(
-        (workspace / name).exists() for name in (".claude", ".codex", ".pi", ".agents")
-    )
+    assert not any((workspace / name).exists() for name in (".claude", ".pi", ".agents"))
 
 
 def test_contained_path_rejects_traversal_and_root_deletion(tmp_path: Path) -> None:
@@ -270,7 +269,7 @@ def test_all_native_workers_receive_and_can_invoke_specialist_skills(tmp_path: P
     ).argv
 
     assert claude[claude.index("--plugin-dir") + 1].endswith("claude-plugin")
-    assert json.dumps(expected_path) in " ".join(codex)
+    assert "skills.config=" not in " ".join(codex)
     assert pi[pi.index("--skill") + 1] == expected_path
     assert all("REDTRACE_GLOBAL_INSTRUCTIONS" not in worker.env for worker in workers)
 

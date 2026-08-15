@@ -37,7 +37,7 @@ def main() -> None:
         assert exc.code == "network_error", exc.code
 
     # 回收逻辑：只有未被 open intent 引用的容器才该被 close
-    benchctl._redtrace = lambda method, path, body=None: {
+    benchctl._cairn = lambda method, path, body=None: {
         "intents": [
             {"description": "解 unique_code=WEB001", "concluded_at": None},
             {"description": "解 WEB002", "concluded_at": "2026-08-14T00:00:00Z"},
@@ -47,7 +47,7 @@ def main() -> None:
     assert claimed == {"WEB001"}, claimed
 
     # 项目恢复：已有 active 跑分项目时复用，而不是再创建一个
-    benchctl._redtrace = lambda method, path, body=None: [
+    benchctl._cairn = lambda method, path, body=None: [
         {"id": "p-old", "title": "[tsec] TSecBench 跑分", "status": "stopped"},
         {"id": "p-active", "title": "[tsec] TSecBench 跑分", "status": "active"},
     ]

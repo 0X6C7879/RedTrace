@@ -104,6 +104,9 @@ def test_pi_audit_records_session_file_and_final_message() -> None:
             }
         ),
     )
+    # No prior text_delta: message_end is the non-streamed fallback and must
+    # still carry the full assistant body.
+    state: dict[str, object] = {}
     message = normalize_event(
         "pi",
         json.dumps(
@@ -115,12 +118,125 @@ def test_pi_audit_records_session_file_and_final_message() -> None:
                 },
             }
         ),
+        pi_state=state,
     )
 
     assert session[0]["session_id"] == "pi-1"
     assert session[0]["session_file"] == "/sessions/pi-1.jsonl"
     assert message[0]["kind"] == "assistant.message"
     assert message[0]["content"] == '{"accepted":true}'
+
+
+def test_pi_streamed_text_delta_then_message_end_does_not_duplicate() -> None:
+    state: dict[str, object] = {}
+    delta = normalize_event(
+        "pi",
+        json.dumps(
+            {
+                "type": "message_update",
+                "assistantMessageEvent": {"type": "text_delta", "delta": "hello"},
+            }
+        ),
+        pi_state=state,
+    )
+    end = normalize_event(
+        "pi",
+        json.dumps(
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "hello"}],
+                },
+            }
+        ),
+        pi_state=state,
+    )
+
+    assert len(delta) == 1
+    assert delta[0]["kind"] == "assistant.delta"
+    assert delta[0]["content"] == "hello"
+    # The body was already delivered through text_delta; message_end must not
+    # create a second assistant.message copy.
+    assert end == []
+    # The streamed flag is consumed and reset by message_end.
+    assert state["text_streamed"] is False
+
+
+def test_pi_non_streamed_message_end_keeps_full_text_fallback() -> None:
+    state: dict[str, object] = {}
+    events = normalize_event(
+        "pi",
+        json.dumps(
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "hello"}],
+                },
+            }
+        ),
+        pi_state=state,
+    )
+
+    assert len(events) == 1
+    assert events[0]["kind"] == "assistant.message"
+    assert events[0]["role"] == "assistant"
+    assert events[0]["content"] == "hello"
+
+
+def test_pi_audit_publisher_persists_single_streamed_message(tmp_path: Path) -> None:
+    client = RecordingClient()
+    worker = WorkerConfig.model_validate(
+        {
+            "name": "pi-1",
+            "type": "pi",
+            "max_running": 1,
+            "priority": 0,
+            "env": {},
+        }
+    )
+    publisher = AuditPublisher(
+        client,
+        "proj_001",
+        "i001",
+        worker,
+        "explore_execute",
+        str(tmp_path),
+        "prompt",
+    )
+    text = "VPN 联通预检通过"
+    for payload in (
+        {
+            "type": "message_update",
+            "assistantMessageEvent": {"type": "text_delta", "delta": text},
+        },
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": text}],
+            },
+        },
+        {"type": "turn_end"},
+    ):
+        publisher.handle_output("stdout", json.dumps(payload, ensure_ascii=False))
+    publisher.finish(ProcessResult(returncode=0, stdout="", stderr=""))
+    publisher.close()
+
+    events = _events_of(client)
+    deltas = [event for event in events if event["kind"] == "assistant.delta"]
+    messages = [
+        event
+        for event in events
+        if event["kind"] == "assistant.message"
+        and event.get("persist_only")
+        and event.get("content") == text
+    ]
+    # Realtime deltas still flow to the live UI...
+    assert [event["content"] for event in deltas] == [text]
+    # ...but the durable body is persisted exactly once.
+    assert [event["content"] for event in messages] == [text]
 
 
 def test_codex_command_display_is_compact_and_repairs_mojibake() -> None:

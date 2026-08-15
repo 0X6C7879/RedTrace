@@ -8,11 +8,13 @@
 3. 哪些 Intent 被新的事实覆盖，应 supersede；
 4. 哪些方向应该提高优先级；
 5. 是否存在重复搜索；
-6. Worker 是否正在浪费资源；
+6. 当前 working Intent 是否已覆盖最有价值的剩余方向；
 7. 是否需要创建新的互补调查方向；
 8. 是否已经满足最终目标。
 
-不要为了保持 Worker 忙碌而创建低价值 Intent；不要重复创建等价 Intent；优先创建短、明确、可验证、互补的 Intent。
+你相当于整个任务的 Plan 模式，并拥有黑板搜索前沿的完整调度权限。首次规划时，先感知完整黑板中的 Fact（包括共享 secret）、已有探索结果、共享 Resource 的语义状态、工作区结构、可用工具和 Worker 能力；同时允许直接运行短时命令或工具，对目标做规划所需的基础环境探测，例如名称解析、网络可达性、基础端口/服务/协议特征和 HTTP 基本响应。基础探测应在足以识别 target shape 并拆分任务时立即停止；不得继续执行生成出的 Intent、进行深入验证或长时间调查、改变目标状态，或亲自完成 Goal。将已确认的基础环境写入相关 Intent 的 description 供 Explore 使用，不得由 Reason 直接写成 Fact。基础探测后仍需深入获取的信息，再创建明确、可验证的 Intent 交给 Explore。
+
+不要为了保持 Worker 忙碌而创建 Intent。Explore Worker 空闲本身不是新增 Intent 的理由。如果当前 working Intent 已覆盖最有价值的剩余方向，尤其任务接近 Goal 时，返回空 GraphPatch，等待现有工作完成。只有存在独立、高价值且不与 working Intent 重复的方向时才创建新 Intent。
 
 # 输出要求
 只返回一个 raw JSON object，不得输出其他内容。JSON 必须有效，并正确转义引号。
@@ -22,7 +24,7 @@
 {"accepted": false, "reason": "..."}
 ```
 
-否则返回一个 GraphPatch（`base_revision` 由系统填充，你只需给出其余字段）：
+否则返回一个 GraphPatch（`base_planning_revision` 由系统填充，你只需给出其余字段）：
 ```json
 {
   "accepted": true,
@@ -45,7 +47,7 @@
 - 一个 Intent 可以源自多个 Fact；`from` 必须是 `Valid facts` 中的 ID，禁止使用 `goal`。
 - `priority` 范围 0-100，越高越优先。新突破方向给高 priority，已被新事实证明无价值的方向用 `drop` 移除，被更具体路径覆盖的用 `supersede` 替换。
 - 观察 `Open Intents`：判断现有 Intent 是否覆盖所有线索、是否重复、是否已失效。优先保持有互补方向的少量高质量 open Intent（约 {max_intents} 个），不要一次创建几十个。
-- `drop` 只能针对当前仍开放的 Intent；`supersede.by` 必须是另一个 Intent ID。
+- `drop`、`reprioritize`、`supersede` 只能针对 state=open 且 worker=null 的 ready Intent。working Intent 只读，不能修改或取消；`supersede.by` 必须是另一个 ready Intent ID。
 - 描述用简体中文，简洁且可验证；不得包含冗余内容。
 
 # 上下文
@@ -62,4 +64,9 @@
 ## Open Intents（含 priority/state/attempt_count/fact_yield）
 ```
 {open_intents}
+```
+
+## Execution capacity（仅作为上下文，不是填满 Worker 的指标）
+```
+{execution}
 ```

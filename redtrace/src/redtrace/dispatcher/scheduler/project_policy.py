@@ -4,17 +4,18 @@ import json
 import time
 
 from redtrace.board.models import Intent, ProjectDetail, ProjectSummary
-from redtrace.dispatcher.scheduler.state import ReasonCheckpoint
 
 BOOTSTRAP_DESCRIPTION = "bootstrap"
 BOOTSTRAP_CREATOR = "dispatcher.bootstrap"
 
 
-def reason_graph_snapshot(project: ProjectDetail) -> str:
+def reason_graph_snapshot(
+    project: ProjectDetail, resources: list[dict[str, object]] | None = None
+) -> str:
     """Serialize the complete Task Graph for the global Reason planner.
 
     The Blackboard is the agent's long-term memory, so this snapshot is lossless:
-    every Fact, Hint, and Intent (including concluded, failed, and retried ones)
+    every Fact, Hint, Observation, and Intent (including concluded, blocked, and retried ones)
     is preserved in full. There is no byte budget, no per-Fact character
     truncation, and no importance pruning. The Reason prompt receives only a
     file reference to this payload, so a large graph never inflates the model
@@ -31,6 +32,10 @@ def reason_graph_snapshot(project: ProjectDetail) -> str:
             for fact in project.facts
         ],
         "hints": [hint.model_dump(mode="json") for hint in project.hints],
+        "observations": [
+            observation.model_dump(mode="json") for observation in project.observations
+        ],
+        "shared_resources": resources or [],
         "intents": [
             intent.model_dump(mode="json", by_alias=True)
             for intent in project.intents
@@ -59,6 +64,11 @@ def compact_snapshot(project: ProjectDetail, intent: Intent) -> str:
             for fact in facts
         ],
         "hints": [hint.model_dump(mode="json") for hint in project.hints],
+        "observations": [
+            observation.model_dump(mode="json")
+            for observation in project.observations
+            if observation.intent_id == intent.id
+        ],
         "intents": [intent.model_dump(mode="json", by_alias=True)],
     }
     return _serialize(payload)
@@ -86,9 +96,8 @@ def open_intent_count(project: ProjectDetail, *, now: float | None = None) -> in
     current_time = time.time() if now is None else now
     return sum(
         intent.to is None
-        and intent.state not in ("concluded", "dropped", "superseded")
         and (
-            intent.worker is not None
+            (intent.state == "working" and intent.worker is not None)
             or is_schedulable_intent(intent, now=current_time)
         )
         for intent in project.intents
@@ -96,9 +105,9 @@ def open_intent_count(project: ProjectDetail, *, now: float | None = None) -> in
 
 
 def is_schedulable_intent(intent: Intent, *, now: float | None = None) -> bool:
-    if intent.to is not None:
+    if intent.state != "open":
         return False
-    if intent.state in ("dropped", "superseded"):
+    if intent.to is not None:
         return False
     if intent.worker is not None:
         return False
@@ -139,32 +148,6 @@ def is_initial(project: ProjectDetail) -> bool:
 
 def requires_bootstrap(project: ProjectDetail) -> bool:
     return project.project.bootstrap_enabled
-
-
-def reason_trigger(
-    checkpoint: ReasonCheckpoint | None,
-    *,
-    fact_count: int,
-    hint_count: int,
-    open_intents: int,
-    request_generation: int,
-) -> str | None:
-    if checkpoint is None:
-        return "initial"
-    changes: list[str] = []
-    if fact_count > checkpoint.fact_count:
-        changes.append(f"facts:{checkpoint.fact_count}->{fact_count}")
-    if hint_count > checkpoint.hint_count:
-        changes.append(f"hints:{checkpoint.hint_count}->{hint_count}")
-    if open_intents < checkpoint.open_intent_count:
-        changes.append(
-            f"open_intents:{checkpoint.open_intent_count}->{open_intents}"
-        )
-    if request_generation > checkpoint.request_generation:
-        changes.append(
-            f"intent_results:{checkpoint.request_generation}->{request_generation}"
-        )
-    return ",".join(changes) or None
 
 
 def newest_unclaimed_intent(

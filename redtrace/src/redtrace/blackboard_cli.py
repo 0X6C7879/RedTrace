@@ -28,7 +28,7 @@ def _default_revision() -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="redtrace-blackboard",
-        description="Read the RedTrace blackboard or submit an incremental Fact.",
+        description="Read the RedTrace blackboard or share an intermediate Observation.",
     )
     parser.add_argument(
         "--server", default=_env("REDTRACE_SERVER"), help="RedTrace server URL"
@@ -105,7 +105,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     source.add_argument("--before-id", type=int)
     submit = subparsers.add_parser(
-        "submit-fact", help="Persist a discovery without concluding the current Intent"
+        "submit-observation",
+        help="Share an intermediate observation without creating a formal Fact",
     )
     submit.add_argument("description")
     return parser
@@ -138,22 +139,24 @@ def _request(args: argparse.Namespace) -> dict[str, Any]:
         params = {"limit": args.limit}
         if args.before_id is not None:
             params["before_id"] = args.before_id
-    elif args.command == "submit-fact":
+    elif args.command == "submit-observation":
         if not args.intent:
             raise ValueError("--intent or REDTRACE_INTENT_ID is required")
         path = ""
         params = {}
         method = "POST"
         payload = json.dumps(
-            {"worker": args.worker, "description": args.description},
+            {"worker": args.worker, "content": args.description},
             ensure_ascii=False,
         ).encode("utf-8")
     else:  # pragma: no cover - argparse enforces this
         raise ValueError(f"unsupported command: {args.command}")
 
-    if args.command == "submit-fact":
+    if args.command == "submit-observation":
         intent = quote(args.intent, safe="")
-        url = f"{args.server.rstrip('/')}/projects/{project}/intents/{intent}/facts"
+        url = (
+            f"{args.server.rstrip('/')}/projects/{project}/intents/{intent}/observations"
+        )
     else:
         url = f"{args.server.rstrip('/')}/projects/{project}/blackboard/{path}"
     if params:
@@ -192,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--server or REDTRACE_SERVER is required")
     if not args.project:
         parser.error("--project or REDTRACE_PROJECT_ID is required")
-    if args.command == "submit-fact" and not args.intent:
+    if args.command == "submit-observation" and not args.intent:
         parser.error("--intent or REDTRACE_INTENT_ID is required")
     try:
         result = _request(args)

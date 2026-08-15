@@ -1,10 +1,10 @@
-# RedTrace 协作探索协议
+# Cairn 协作探索协议
 
 ---
 
 ## 本质
 
-衍迹（RedTrace）将目标导向的探索过程建模为一张有向无环图：从已知事实出发，不断探索产出新事实，直到某些事实共同满足终点。名称取自登山者用石头垒起的路标——每个 Fact 是一块石头，Agent 沿着前人的 redtrace 继续探索，同时垒新的 redtrace 给后来者。
+衍迹（Cairn）将目标导向的探索过程建模为一张有向无环图：从已知事实出发，不断探索产出新事实，直到某些事实共同满足终点。名称取自登山者用石头垒起的路标——每个 Fact 是一块石头，Agent 沿着前人的 cairn 继续探索，同时垒新的 cairn 给后来者。
 
 这套 API 管理这张图的生长过程。多个消费者（人或 Agent）并发读取完整图，各自声明探索意图，各自产出新事实，最终由某个消费者判断终点已达成。对于一些很简单的问题，消费者也可以在项目最初阶段直接围绕起点和终点做一次快速推进，而不必先拆成多轮显式规划；这种“起步即做”的过程仍通过 Intent/Fact 正常落图。
 
@@ -48,7 +48,7 @@ Fact 只增不改，状态变化通过追加新 Fact 表达。例如在多层网
 
 图中的节点，代表一个已确认的客观事实。只有描述文本，没有状态标记。只增不改，永久保留。
 
-描述文本应是探索结论的提炼，而非原始数据。当原始输出较大时（如扫描结果），描述应包含关键洞见和当前 Workspace 内的文件引用，例如："nmap 全端口扫描发现 22/80/443/8080 开放，80 和 8080 均为 HTTP 服务，详细结果见 $REDTRACE_WORKSPACE/scans/nmap_192.168.1.10.xml"。这保证图保持轻量，同时原始数据仍可追溯。
+描述文本应是探索结论的提炼，而非原始数据。当原始输出较大时（如扫描结果），描述应包含关键洞见和原始数据的文件引用，例如："nmap 全端口扫描发现 22/80/443/8080 开放，80 和 8080 均为 HTTP 服务，详细结果见 /tmp/scans/nmap_192.168.1.10.xml"。这保证图保持轻量，同时原始数据仍可追溯。
 
 每个 Project 有两个特殊 Fact，在 Project 创建时写入：
 
@@ -518,7 +518,7 @@ Body：
 
 #### POST /projects/{project_id}/intents/{intent_id}/release
 
-当前 `worker` 主动释放一条尚无结论的 Intent，使其回到未认领状态，供其他消费者立即接手。仅当前 `worker` 本人可以释放；管理员（`worker: "admin"`）可以强制释放任意 Worker 的认领。其他消费者操作被占用且未超时的 Intent 时返回 409。若该 Intent 当前已未认领，则幂等返回当前状态。`last_heartbeat_at` 保留，不清空。Release 属于探索写操作，仅 `active` 项目允许；`stopped` 或 `completed` 返回 403。
+当前 `worker` 主动释放一条尚无结论的 Intent，使其回到未认领状态，供其他消费者立即接手。仅当前 `worker` 本人可以释放；若被其他消费者占用且未超时，返回 409。若该 Intent 当前已未认领，则幂等返回当前状态。`last_heartbeat_at` 保留，不清空。Release 属于探索写操作，仅 `active` 项目允许；`stopped` 或 `completed` 返回 403。
 
 Body：
 
@@ -534,7 +534,7 @@ Body：
 
 #### POST /projects/{project_id}/intents/{intent_id}/conclude
 
-探索结束，产出新 Fact 并将 Intent 结论落定。原子操作。仅对尚无结论的 Intent 有效。未认领的 Intent 可直接 conclude，已认领的 Intent 只能由当前 `worker` conclude；管理员（`worker: "admin"`）可以人工接管任意 open Intent 并提交 Fact。其他消费者操作被占用且未超时的 Intent 时返回 409。Conclude 属于探索写操作，仅 `active` 项目允许；`stopped` 或 `completed` 返回 403。
+探索结束，产出新 Fact 并将 Intent 结论落定。原子操作。仅对尚无结论的 Intent 有效。claim 规则与 heartbeat 相同：未认领可直接 conclude；由当前 `worker` conclude；若被其他消费者占用且未超时，返回 409。Conclude 属于探索写操作，仅 `active` 项目允许；`stopped` 或 `completed` 返回 403。
 
 `worker` 写入后永久保留，标识本次结论由谁产出。
 

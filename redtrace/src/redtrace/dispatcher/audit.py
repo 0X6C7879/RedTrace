@@ -66,7 +66,10 @@ class AuditPublisher:
         self._thinking_chars = 0
         self._tool_calls: dict[str, dict[str, Any]] = {}
         self._claude_tool_blocks: dict[int, dict[str, Any]] = {}
-        self._pi_state: dict[str, Any] = {"thinking_streamed": False}
+        self._pi_state: dict[str, Any] = {
+            "thinking_streamed": False,
+            "text_streamed": False,
+        }
         self._run = {
             "id": self.run_id,
             "project_id": project_id,
@@ -574,6 +577,15 @@ def _normalize_pi(
         message = payload.get("message")
         if not isinstance(message, dict) or message.get("role") != "assistant":
             return []
+        streamed = bool(state.get("text_streamed")) if state else False
+        if state is not None:
+            state["text_streamed"] = False
+        if streamed:
+            # The full body was already streamed through text_delta and
+            # aggregated by AuditPublisher._assistant_parts; message_end only
+            # marks the completion of this assistant message and must not
+            # create a second durable copy of the same text.
+            return []
         message_content = message.get("content")
         content = (
             "\n".join(
@@ -593,6 +605,8 @@ def _normalize_pi(
         update = payload.get("assistantMessageEvent") or {}
         update_type = update.get("type")
         if update_type == "text_delta":
+            if state is not None:
+                state["text_streamed"] = True
             return [
                 _event("assistant.delta", timestamp, content=update.get("delta", ""))
             ]

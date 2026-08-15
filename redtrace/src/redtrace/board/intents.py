@@ -11,12 +11,12 @@ from redtrace.board.models import (
     Fact,
     GraphPatchRequest,
     GraphPatchResponse,
-    IncrementalFactResponse,
     Intent,
 )
 from redtrace.board.storage import (
     check_project_active,
     get_blackboard_revision,
+    get_planning_revision,
     get_intent_or_404,
     get_owned_open_intent_or_404,
     get_releasable_open_intent_or_404,
@@ -139,42 +139,41 @@ def conclude(
         validate_registered_access_claim(conn, request.description)
         now = utcnow()
         fact_id = next_fact_id(conn, project_id)
+        description = _with_linked_resource_secrets(
+            conn, project_id, intent_id, request.description
+        )
         conn.execute(
             "INSERT INTO facts (id, project_id, description) VALUES (?, ?, ?)",
-            (fact_id, project_id, request.description),
+            (fact_id, project_id, description),
         )
         conn.execute(
             "UPDATE intents SET to_fact_id = ?, worker = ?, last_heartbeat_at = ?, concluded_at = ?, state = 'concluded', fact_yield = fact_yield + 1, last_progress_at = ? WHERE id = ? AND project_id = ?",
             (fact_id, request.worker, now, now, now, intent_id, project_id),
         )
+        conn.execute(
+            "UPDATE shared_resources SET fact_id = ? WHERE project_id = ? AND intent_id = ?",
+            (fact_id, project_id, intent_id),
+        )
         return ConcludeResponse(
-            fact=Fact(id=fact_id, description=request.description),
+            fact=Fact(id=fact_id, description=description),
             intent=_load_intent(conn, project_id, intent_id),
         )
 
 
-def submit_fact(
-    project_id: str, intent_id: str, request: ConcludeRequest
-) -> IncrementalFactResponse:
-    """Persist a useful discovery without concluding its active Intent."""
-    with get_conn(immediate=True) as conn:
-        check_project_active(conn, project_id)
-        get_owned_open_intent_or_404(conn, project_id, intent_id, request.worker)
-        validate_registered_access_claim(conn, request.description)
-        now = utcnow()
-        fact_id = next_fact_id(conn, project_id)
-        conn.execute(
-            "INSERT INTO facts (id, project_id, description) VALUES (?, ?, ?)",
-            (fact_id, project_id, request.description),
-        )
-        conn.execute(
-            "UPDATE intents SET fact_yield = fact_yield + 1, last_progress_at = ? WHERE id = ? AND project_id = ?",
-            (now, intent_id, project_id),
-        )
-        return IncrementalFactResponse(
-            fact=Fact(id=fact_id, description=request.description),
-            intent=_load_intent(conn, project_id, intent_id),
-        )
+def _with_linked_resource_secrets(
+    conn, project_id: str, intent_id: str, description: str
+) -> str:
+    rows = conn.execute(
+        "SELECT id, secret_json FROM shared_resources WHERE project_id = ? AND intent_id = ? AND secret_json != '{}' ORDER BY id",
+        (project_id, intent_id),
+    ).fetchall()
+    shared = [
+        f"- [resource:{row['id']}] {row['secret_json']}"
+        for row in rows
+    ]
+    if not shared:
+        return description
+    return f"{description.rstrip()}\n\nShared resource secrets:\n" + "\n".join(shared)
 
 
 def validate_registered_access_claim(conn, description: str) -> None:
@@ -210,10 +209,18 @@ def _open_intent_row_or_409(conn, project_id: str, intent_id: str):
     row = get_intent_or_404(conn, project_id, intent_id)
     if row["to_fact_id"] is not None or row["state"] in (
         "concluded",
+        "blocked",
         "dropped",
         "superseded",
     ):
         raise HTTPException(409, f"Intent {intent_id} is not open")
+    return row
+
+
+def _patchable_intent_row_or_409(conn, project_id: str, intent_id: str):
+    row = _open_intent_row_or_409(conn, project_id, intent_id)
+    if row["state"] != "open" or row["worker"] is not None:
+        raise HTTPException(409, f"Intent {intent_id} is already working")
     return row
 
 
@@ -265,9 +272,11 @@ def apply_graph_patch(
     whole patch commits or rolls back together — there is no partial success.
     """
     with get_conn(immediate=True) as conn:
-        check_project_active(conn, project_id)
-        current_revision = get_blackboard_revision(conn, project_id)
-        if request.base_revision != current_revision:
+        project = check_project_active(conn, project_id)
+        if project["reason_worker"] != request.worker:
+            raise HTTPException(409, "Reason patch worker does not own the planning lease")
+        current_planning_revision = get_planning_revision(conn, project_id)
+        if request.base_planning_revision != current_planning_revision:
             raise HTTPException(409, "revision_conflict")
 
         drop_ids = {entry.intent_id for entry in request.drop}
@@ -333,7 +342,7 @@ def apply_graph_patch(
             created.append(_load_intent(conn, project_id, intent_id))
 
         for entry in request.drop:
-            _open_intent_row_or_409(conn, project_id, entry.intent_id)
+            _patchable_intent_row_or_409(conn, project_id, entry.intent_id)
             conn.execute(
                 "UPDATE intents SET state = 'dropped', drop_reason = ?, worker = NULL, last_heartbeat_at = NULL WHERE id = ? AND project_id = ?",
                 (entry.reason, entry.intent_id, project_id),
@@ -341,7 +350,7 @@ def apply_graph_patch(
             dropped.append(entry.intent_id)
 
         for entry in request.reprioritize:
-            _open_intent_row_or_409(conn, project_id, entry.intent_id)
+            _patchable_intent_row_or_409(conn, project_id, entry.intent_id)
             conn.execute(
                 "UPDATE intents SET priority = ? WHERE id = ? AND project_id = ?",
                 (entry.priority, entry.intent_id, project_id),
@@ -351,8 +360,8 @@ def apply_graph_patch(
         for entry in request.supersede:
             if entry.intent_id == entry.by:
                 raise HTTPException(400, "an intent cannot supersede itself")
-            _open_intent_row_or_409(conn, project_id, entry.intent_id)
-            _open_intent_row_or_409(conn, project_id, entry.by)
+            _patchable_intent_row_or_409(conn, project_id, entry.intent_id)
+            _patchable_intent_row_or_409(conn, project_id, entry.by)
             conn.execute(
                 "UPDATE intents SET state = 'superseded', superseded_by = ?, drop_reason = ?, worker = NULL, last_heartbeat_at = NULL WHERE id = ? AND project_id = ?",
                 (entry.by, entry.reason, entry.intent_id, project_id),
@@ -370,8 +379,15 @@ def apply_graph_patch(
             )
             completed = True
 
+        conn.execute(
+            "UPDATE projects SET reason_evaluated_revision = ? WHERE id = ?",
+            (current_planning_revision, project_id),
+        )
+
         return GraphPatchResponse(
             revision=get_blackboard_revision(conn, project_id),
+            planning_revision=current_planning_revision,
+            reason_evaluated_revision=current_planning_revision,
             created=created,
             dropped=dropped,
             reprioritized=reprioritized,

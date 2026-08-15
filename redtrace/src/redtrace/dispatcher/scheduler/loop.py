@@ -23,7 +23,7 @@ from redtrace.dispatcher.runtime.startup_healthcheck import (
     run_startup_healthchecks,
 )
 from redtrace.dispatcher.scheduler import project_policy
-from redtrace.dispatcher.scheduler.state import ReasonCheckpoint, RunningTask
+from redtrace.dispatcher.scheduler.state import RunningTask
 from redtrace.dispatcher.scheduler.worker_select import WorkerSelection, select_worker
 from redtrace.dispatcher.tasks.bootstrap import run_bootstrap_task
 from redtrace.dispatcher.tasks.explore import run_explore_task
@@ -33,9 +33,7 @@ from redtrace.dispatcher.workers.registry import get_driver
 LOG = logging.getLogger(__name__)
 UNHEALTHY_RETRY_AFTER_SECONDS = 5
 REJECTED_RETRY_AFTER_SECONDS = 5
-REASON_DEBOUNCE_SECONDS = 5
 TASK_RETRY_BACKOFF_SECONDS = (5, 15, 60, 300)
-REASON_COALESCE_SECONDS = 10
 
 
 def _local_cli_probe_command(path: str, *, platform: str = os.name) -> list[str]:
@@ -77,16 +75,12 @@ class DispatcherLoop:
         self.cleanup_futures: dict[
             Future[bool], tuple[str, str | None, str | None]
         ] = {}
-        self.reason_checkpoints: dict[str, ReasonCheckpoint] = {}
-        self.reason_request_generations: dict[str, int] = {}
-        self.reason_dirty_since: dict[str, float] = {}
         self.runtime_project_ids: set[str] = set()
         self.worker_unhealthy_until: dict[str, float] = {}
         self.worker_rejected_until: dict[tuple[str, str, str], float] = {}
         self.explore_retry_avoid: dict[tuple[str, str], str] = {}
         self.task_failures: dict[tuple[str, str, str | None], int] = {}
         self.task_retry_until: dict[tuple[str, str, str | None], float] = {}
-        self.reason_debounce_until: dict[str, float] = {}
         self._log_state: dict[str, tuple[int, str, tuple[object, ...]]] = {}
         self._cleanup_pending: set[str] = set()
         self._inactive_cleanup_done: dict[str, str] = {}
@@ -121,7 +115,6 @@ class DispatcherLoop:
                     self._refresh_worker_config()
                     self.agent_runtime.refresh_capabilities(self.config.workers)
                     summaries = self.client.list_projects()
-                    self._initialize_reason_checkpoints(summaries)
                     self._refresh_runtime_projects(summaries)
                     self._cancel_inactive_tasks(summaries)
                     self._queue_container_cleanups(summaries)
@@ -366,29 +359,12 @@ class DispatcherLoop:
             )
             return False
 
-        idle_explore_capacity = self._idle_explore_capacity(summary.id)
-        frontier_low = (
-            idle_explore_capacity > 0
-            and summary.unclaimed_intent_count < idle_explore_capacity
+        planning_pending = (
+            summary.planning_revision > summary.reason_evaluated_revision
         )
-        summary_trigger = project_policy.reason_trigger(
-            self.reason_checkpoints.get(summary.id),
-            fact_count=summary.fact_count,
-            hint_count=summary.hint_count,
-            open_intents=(
-                summary.working_intent_count + summary.unclaimed_intent_count
-            ),
-            request_generation=self.reason_request_generations.get(summary.id, 0),
-        )
-        reason_coalescing = (
-            summary_trigger not in (None, "initial")
-            and not frontier_low
-            and not self._reason_coalesce_ready(summary.id)
-        )
-        if summary.unclaimed_intent_count == 0 and (
-            summary.reason is not None
-            or summary_trigger is None
-        ):
+        if summary.reason is not None:
+            return False
+        if not planning_pending and summary.unclaimed_intent_count == 0:
             return False
 
         project = self.client.get_project(summary.id)
@@ -404,41 +380,37 @@ class DispatcherLoop:
         if project_policy.is_initial(project):
             if project.project.reason is not None:
                 return False
-            if project_policy.requires_bootstrap(project) and (
-                project_policy.bootstrap_intent(project) is not None
-                or any(
-                    worker.enabled and "bootstrap" in worker.task_types
-                    for worker in self.config.workers
-                )
+            bootstrap = project_policy.bootstrap_intent(project)
+            if project_policy.requires_bootstrap(project):
+                if bootstrap is not None or any(
+                    "bootstrap" in worker.task_types for worker in self.config.workers
+                ):
+                    return self._dispatch_initial_project(project)
+            if (
+                project.project.planning_revision
+                <= project.project.reason_evaluated_revision
             ):
-                return self._dispatch_initial_project(project)
+                return False
             return self._dispatch_reason(
                 project,
-                project_policy.reason_graph_snapshot(project),
-                "initial",
+                self._reason_graph_snapshot(project),
+                self._planning_trigger(project),
             )
-        if project.project.reason is None:
+        if (
+            project.project.planning_revision
+            > project.project.reason_evaluated_revision
+        ):
             reason_blocked = project.project.reason_circuit_open or (
                 project.project.reason_retry_after is not None
                 and project.project.reason_retry_after > time.time()
             )
-            reason_trigger = None if reason_blocked else self._reason_trigger(project)
-            if reason_trigger != "initial":
-                reason_trigger = (
-                    f"frontier_low:{reason_trigger}"
-                    if frontier_low and reason_trigger is not None
-                    else None
-                )
-            if (
-                reason_trigger is not None
-                and not reason_coalescing
-                and self._dispatch_reason(
-                    project,
-                    project_policy.reason_graph_snapshot(project),
-                    reason_trigger,
-                )
-            ):
-                return True
+            if reason_blocked:
+                return False
+            return self._dispatch_reason(
+                project,
+                self._reason_graph_snapshot(project),
+                self._planning_trigger(project),
+            )
         running_intent_ids = self._project_running_explore_intents(summary.id)
         newest_intent = project_policy.newest_unclaimed_intent(
             project, running_intent_ids
@@ -469,14 +441,17 @@ class DispatcherLoop:
         self._log_changed(
             f"{skip_scope}:graph_unchanged",
             logging.DEBUG,
-            "skip reason project=%s because planning state is unchanged facts=%s hints=%s open_intents=%s intents=%s",
+            "skip project=%s because planning revision is evaluated revision=%s intents=%s",
             summary.id,
-            len(project.facts),
-            len(project.hints),
-            project_policy.open_intent_count(project),
+            project.project.planning_revision,
             len(project.intents),
         )
         return False
+
+    def _reason_graph_snapshot(self, project: ProjectDetail) -> str:
+        load_resources = getattr(self.client, "planning_resource_snapshot", None)
+        resources = load_resources(project.project.id) if callable(load_resources) else []
+        return project_policy.reason_graph_snapshot(project, resources)
 
     def _dispatch_initial_project(self, project: ProjectDetail) -> bool:
         intent = project_policy.bootstrap_intent(project)
@@ -508,10 +483,6 @@ class DispatcherLoop:
         self, project: ProjectDetail, export_yaml: str, trigger: str
     ) -> bool:
         if self._task_retry_blocked((project.project.id, "reason", None)):
-            return False
-        if trigger != "initial" and time.time() < self.reason_debounce_until.get(
-            project.project.id, 0
-        ):
             return False
         selection = self._select_worker(project.project.id, "reason")
         worker = selection.worker
@@ -572,12 +543,7 @@ class DispatcherLoop:
             worker.name,
             cancellation,
             intent_id=None,
-            fact_count=len(project.facts),
-            hint_count=len(project.hints),
-            open_intent_count=project_policy.open_intent_count(project),
-            reason_request_generation=self.reason_request_generations.get(
-                project.project.id, 0
-            ),
+            planning_revision=project.project.planning_revision,
         )
         future.add_done_callback(lambda _future: self._wakeup.set())
         self.runtime_project_ids.add(project.project.id)
@@ -788,23 +754,6 @@ class DispatcherLoop:
             counts[task.worker_name] = counts.get(task.worker_name, 0) + 1
         return counts
 
-    def _idle_explore_capacity(self, project_id: str) -> int:
-        counts = self._worker_counts()
-        worker_capacity = sum(
-            max(0, worker.max_running - counts.get(worker.name, 0))
-            for worker in self.config.workers
-            if worker.enabled and "explore" in worker.task_types
-        )
-        return max(
-            0,
-            min(
-                worker_capacity,
-                self.config.runtime.max_workers - self._running_task_count(),
-                self.config.runtime.max_project_workers
-                - self._project_running_task_count(project_id),
-            ),
-        )
-
     def _running_task_count(self) -> int:
         return len(self.futures)
 
@@ -872,29 +821,14 @@ class DispatcherLoop:
         LOG.info("created bootstrap intent project=%s intent=%s", project_id, intent.id)
         return intent
 
-    def _reason_trigger(self, project: ProjectDetail) -> str | None:
-        project_id = project.project.id
-        trigger = project_policy.reason_trigger(
-            self.reason_checkpoints.get(project_id),
-            fact_count=len(project.facts),
-            hint_count=len(project.hints),
-            open_intents=project_policy.open_intent_count(project),
-            request_generation=self.reason_request_generations.get(project_id, 0),
+    @staticmethod
+    def _planning_trigger(project: ProjectDetail) -> str:
+        return (
+            "planning_revision:"
+            f"{project.project.reason_evaluated_revision}"
+            f"->{project.project.planning_revision}"
         )
-        if (
-            trigger is None
-            and project_policy.open_intent_count(project) == 0
-            and len(project.facts) > 2
-        ):
-            return "frontier_empty"
-        return trigger
 
-    def _reason_coalesce_ready(self, project_id: str) -> bool:
-        dirty = getattr(self, "reason_dirty_since", None)
-        if dirty is None:
-            dirty = self.reason_dirty_since = {}
-        started = dirty.setdefault(project_id, time.monotonic())
-        return time.monotonic() - started >= REASON_COALESCE_SECONDS
     def _reap_futures(self) -> None:
         done = [future for future in self.futures if future.done()]
         for future in done:
@@ -996,35 +930,11 @@ class DispatcherLoop:
                         self.explore_retry_avoid[retry_key] = task.worker_name
                     elif outcome in {"success", "cancelled"}:
                         self.explore_retry_avoid.pop(retry_key, None)
-                if outcome == "revision_conflict" and task.task_type == "reason":
-                    self.reason_request_generations[task.project_id] = (
-                        self.reason_request_generations.get(task.project_id, 0) + 1
-                    )
-                    if not hasattr(self, "reason_dirty_since"):
-                        self.reason_dirty_since = {}
-                    self.reason_dirty_since[task.project_id] = 0.0
-                    self.reason_debounce_until.pop(task.project_id, None)
                 if outcome == "success" and task.task_type == "reason":
-                    assert task.fact_count is not None
-                    assert task.hint_count is not None
-                    assert task.open_intent_count is not None
-                    assert task.reason_request_generation is not None
-                    self.reason_checkpoints[task.project_id] = ReasonCheckpoint(
-                        fact_count=task.fact_count,
-                        hint_count=task.hint_count,
-                        open_intent_count=task.open_intent_count,
-                        request_generation=task.reason_request_generation,
-                    )
-                    getattr(self, "reason_dirty_since", {}).pop(task.project_id, None)
-                    self.reason_debounce_until[task.project_id] = (
-                        time.time() + REASON_DEBOUNCE_SECONDS
-                    )
                     LOG.debug(
-                        "reason checkpoint updated project=%s facts=%s hints=%s open_intents=%s",
+                        "reason evaluated planning revision project=%s revision=%s",
                         task.project_id,
-                        task.fact_count,
-                        task.hint_count,
-                        task.open_intent_count,
+                        task.planning_revision,
                     )
             except Exception:
                 LOG.exception(
@@ -1184,11 +1094,6 @@ class DispatcherLoop:
             for key, deadline in self.task_retry_until.items()
             if key[0] in active_ids
         }
-        self.reason_debounce_until = {
-            project_id: deadline
-            for project_id, deadline in self.reason_debounce_until.items()
-            if project_id in active_ids
-        }
         inactive_status_by_id = {
             summary.id: summary.status
             for summary in summaries
@@ -1211,37 +1116,6 @@ class DispatcherLoop:
                     task.worker_name,
                     status,
                 )
-
-    def _initialize_reason_checkpoints(self, summaries: list[ProjectSummary]) -> None:
-        for summary in summaries:
-            if summary.status != "active":
-                continue
-            if summary.id in self.reason_checkpoints:
-                continue
-            open_intent_count = (
-                summary.working_intent_count + summary.unclaimed_intent_count
-            )
-            if open_intent_count == 0:
-                continue
-            idle_explore_capacity = self._idle_explore_capacity(summary.id)
-            if (
-                idle_explore_capacity > 0
-                and summary.unclaimed_intent_count < idle_explore_capacity
-            ):
-                continue
-            self.reason_checkpoints[summary.id] = ReasonCheckpoint(
-                fact_count=summary.fact_count,
-                hint_count=summary.hint_count,
-                open_intent_count=open_intent_count,
-                request_generation=self.reason_request_generations.get(summary.id, 0),
-            )
-            LOG.debug(
-                "reason checkpoint initialized project=%s facts=%s hints=%s open_intents=%s",
-                summary.id,
-                summary.fact_count,
-                summary.hint_count,
-                open_intent_count,
-            )
 
     def _best_effort_release(
         self, project_id: str, intent_id: str, worker_name: str

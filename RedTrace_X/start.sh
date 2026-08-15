@@ -1,71 +1,46 @@
 #!/usr/bin/env bash
-
 set -Eeuo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-ENV_FILE="$DIR/.env"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PYTHON="${PYTHON:-python3}"
 
-if [[ -f "$ENV_FILE" ]]; then
+if [[ -f "$ROOT/.env" ]]; then
   set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
+  # shellcheck disable=SC1091
+  source "$ROOT/.env"
   set +a
-else
-  echo "warning: $ENV_FILE 不存在，按系统环境变量运行（参考 .env.example）" >&2
 fi
 
-if [[ -z "${BENCHMARK_TOKEN:-}" ]]; then
-  echo "error: BENCHMARK_TOKEN 为空，请编辑 $ENV_FILE 后重试" >&2
-  exit 1
-fi
+: "${API_KEY:?set API_KEY in .env or the environment}"
+: "${BENCHMARK_TOKEN:?set BENCHMARK_TOKEN in .env or the environment}"
 
-command -v "$PYTHON" >/dev/null 2>&1 || { echo "error: python3 未安装或不在 PATH" >&2; exit 1; }
+export MODEL="${MODEL:-glm-5.2-agent-chanllenge}"
+export AGENT_BASE_URL="${AGENT_BASE_URL:-https://agent-awd.baidu.com}"
+export BENCHMARK_BASE_URL="${BENCHMARK_BASE_URL:-https://tsecbench.zc.tencent.com}"
+export VPN_CHECK_URL="${VPN_CHECK_URL:-http://10.0.100.58}"
+export CAIRN_BASE_URL="${CAIRN_BASE_URL:-http://127.0.0.1:8000}"
+export PI_CODING_AGENT_DIR="$ROOT/container/.pi/agent"
 
-# 1) 用环境变量渲染 redtrace.yaml（敏感配置不写入代码包）
-"$PYTHON" "$DIR/bench/render_config.py" "$DIR/redtrace.yaml.template" "$DIR/redtrace.yaml"
+"$PYTHON" "$ROOT/bench/render_config.py" "$ROOT/dispatch.yaml.template" "$ROOT/dispatch.yaml"
 
-# 2) 后台启动 RedTrace（Server + Dispatcher，本地模式）
-"$DIR/start-redtrace.sh" --config "$DIR/redtrace.yaml" &
-RT_PID=$!
-
+uv run --project "$ROOT/cairn" cairn serve --no-access-log &
+SERVER_PID=$!
+DISPATCHER_PID=""
 cleanup() {
-  if [[ -n "${RT_PID:-}" ]]; then
-    kill "$RT_PID" 2>/dev/null || true
-    wait "$RT_PID" 2>/dev/null || true
-  fi
+  [[ -z "$DISPATCHER_PID" ]] || kill "$DISPATCHER_PID" 2>/dev/null || true
+  kill "$SERVER_PID" 2>/dev/null || true
+  [[ -z "$DISPATCHER_PID" ]] || wait "$DISPATCHER_PID" 2>/dev/null || true
+  wait "$SERVER_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
-# 3) 等待 RedTrace Server 就绪
-ready=0
-for _ in $(seq 1 200); do
-  if curl -fsS --max-time 2 "http://127.0.0.1:8000/projects" >/dev/null 2>&1; then
-    ready=1
-    break
-  fi
-  if ! kill -0 "$RT_PID" 2>/dev/null; then
-    echo "error: RedTrace 启动进程提前退出" >&2
-    exit 1
-  fi
+for _ in $(seq 1 120); do
+  curl -fsS --max-time 2 "$CAIRN_BASE_URL/projects" >/dev/null 2>&1 && break
+  kill -0 "$SERVER_PID" 2>/dev/null || { echo "Cairn server exited during startup" >&2; exit 1; }
   sleep 0.25
 done
-if [[ "$ready" != "1" ]]; then
-  echo "error: RedTrace Server 启动超时" >&2
-  exit 1
-fi
+curl -fsS --max-time 2 "$CAIRN_BASE_URL/projects" >/dev/null
 
-# 4) 开始评测（VPN 预检通过后自动逐题推进）；RedTrace 中途挂掉则终止跑分
-"$PYTHON" "$DIR/bench/benchctl.py" run &
-BENCH_PID=$!
-while kill -0 "$BENCH_PID" 2>/dev/null; do
-  if ! kill -0 "$RT_PID" 2>/dev/null; then
-    echo "error: RedTrace 进程已退出，终止跑分" >&2
-    kill "$BENCH_PID" 2>/dev/null || true
-    break
-  fi
-  sleep 1
-done
-bench_status=0
-wait "$BENCH_PID" || bench_status=$?
-exit "$bench_status"
+uv run --project "$ROOT/cairn" cairn dispatch --config "$ROOT/dispatch.yaml" &
+DISPATCHER_PID=$!
+"$PYTHON" "$ROOT/bench/benchctl.py" run

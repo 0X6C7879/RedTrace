@@ -104,7 +104,6 @@ def test_listener_and_payload_commands_use_worker_aware_api(monkeypatch) -> None
             "actor": "codex-1",
             "worker": "codex-1",
             "intent_id": None,
-            "publish_fact": True,
         },
     )
     assert calls[1][1:] == (

@@ -13,6 +13,7 @@ from redtrace.dispatcher.workers.base import (
 )
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
 from redtrace.dispatcher.workers.live import CodexLiveControl
+from redtrace.dispatcher.workers.codex_compat import codex_compat_base_url
 from redtrace.skill_runtime import skill_runtime_enabled
 
 
@@ -26,10 +27,12 @@ class CodexDriver(RegexSessionDriver):
         return "codex"
 
     @staticmethod
-    def _long_task_args(worker: WorkerConfig) -> list[str]:
+    def _long_task_args(
+        worker: WorkerConfig, *, web_search: str = "live"
+    ) -> list[str]:
         args = [
             "-c",
-            'web_search="live"',
+            f'web_search="{web_search}"',
         ]
         if worker.context_length is not None:
             args.extend(
@@ -95,7 +98,9 @@ class CodexDriver(RegexSessionDriver):
         *,
         task_type: str | None = None,
     ) -> DriverResult:
-        capability_args = self._resource_args(worker, task_type)
+        capability_args = (
+            [] if worker.api_configured() else self._resource_args(worker, task_type)
+        )
         model = worker.env.get("CODEX_MODEL") if worker.api_configured() else None
         control = CodexLiveControl(
             prompt,
@@ -118,11 +123,17 @@ class CodexDriver(RegexSessionDriver):
                 live_control=control,
             )
         env = worker.env
+        base_url = codex_compat_base_url(env["CODEX_BASE_URL"])
         return DriverResult(
             argv=[
                 "codex",
                 "app-server",
-                *self._long_task_args(worker),
+                *self._long_task_args(worker, web_search="disabled"),
+                # Third-party Responses endpoints commonly implement the
+                # standard function/MCP union but not Codex's namespace tool
+                # extension or the newer web_search variant.
+                "-c",
+                "features.multi_agent=false",
                 "-c",
                 'model_provider="redtrace"',
                 "-c",
@@ -136,7 +147,7 @@ class CodexDriver(RegexSessionDriver):
                 "-c",
                 self._custom_instructions(worker, task_type),
                 "-c",
-                f'model_providers.redtrace.base_url="{env["CODEX_BASE_URL"]}"',
+                f'model_providers.redtrace.base_url="{base_url}"',
                 "-c",
                 'model_providers.redtrace.env_key="OPENAI_API_KEY"',
                 *capability_args,

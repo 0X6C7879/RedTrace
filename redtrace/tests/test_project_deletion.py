@@ -232,7 +232,9 @@ def test_intent_retry_budget_persists_and_opens_circuit(client: TestClient) -> N
     detail = client.get(f"/projects/{project_id}").json()
     failed = next(item for item in detail["intents"] if item["id"] == intent["id"])
     assert failed["circuit_open"] is True
-    assert failed["to"] is not None
+    assert failed["state"] == "blocked"
+    assert failed["to"] is None
+    assert {fact["id"] for fact in detail["facts"]} == {"origin", "goal"}
 
 
 def test_reason_retry_budget_stops_project(client: TestClient) -> None:

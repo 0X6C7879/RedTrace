@@ -149,7 +149,6 @@ def build_parser() -> argparse.ArgumentParser:
     register.add_argument("--metadata-json", default="{}")
     register.add_argument("--secret-stdin", action="store_true")
     register.add_argument("--parent")
-    register.add_argument("--no-fact", action="store_true")
 
     webshell_create = commands.add_parser(
         "webshell-create",
@@ -175,7 +174,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     webshell_create.add_argument("--verify-tls", action="store_true")
     webshell_create.add_argument("--password-stdin", action="store_true")
-    webshell_create.add_argument("--no-fact", action="store_true")
 
     listener_create = commands.add_parser(
         "listener-create",
@@ -204,7 +202,6 @@ def build_parser() -> argparse.ArgumentParser:
     listener_create.add_argument(
         "--status", default="available", choices=["available", "offline"]
     )
-    listener_create.add_argument("--no-fact", action="store_true")
 
     payload_kinds = commands.add_parser(
         "payload-kinds",
@@ -262,7 +259,6 @@ def build_parser() -> argparse.ArgumentParser:
     session_register.add_argument("--summary", default="")
     session_register.add_argument("--metadata-json", default="{}")
     session_register.add_argument("--secret-stdin", action="store_true")
-    session_register.add_argument("--no-fact", action="store_true")
 
     credential_create = commands.add_parser(
         "credential-create",
@@ -280,7 +276,6 @@ def build_parser() -> argparse.ArgumentParser:
     credential_create.add_argument("--summary", default="")
     credential_create.add_argument("--metadata-json", default="{}")
     credential_create.add_argument("--secret-stdin", action="store_true")
-    credential_create.add_argument("--no-fact", action="store_true")
 
     payload_import = commands.add_parser(
         "payload-import",
@@ -294,7 +289,6 @@ def build_parser() -> argparse.ArgumentParser:
     payload_import.add_argument("--summary", default="")
     payload_import.add_argument("--metadata-json", default="{}")
     payload_import.add_argument("--secret-stdin", action="store_true")
-    payload_import.add_argument("--no-fact", action="store_true")
     payload_build.add_argument(
         "--arch", default="amd64", choices=["amd64", "arm64", "386"]
     )
@@ -484,7 +478,6 @@ def _perform(args: argparse.Namespace) -> Any:
                 "worker": args.worker,
                 "intent_id": args.intent or None,
                 "parent_resource_id": args.parent,
-                "publish_fact": not args.no_fact,
             },
         )
     if args.command == "webshell-create":
@@ -514,7 +507,6 @@ def _perform(args: argparse.Namespace) -> Any:
                 "actor": args.worker,
                 "worker": args.worker,
                 "intent_id": args.intent or None,
-                "publish_fact": not args.no_fact,
             },
         )
     if args.command == "listener-create":
@@ -549,7 +541,6 @@ def _perform(args: argparse.Namespace) -> Any:
                 "actor": args.worker,
                 "worker": args.worker,
                 "intent_id": args.intent or None,
-                "publish_fact": not args.no_fact,
             },
         )
     if args.command == "session-register":
@@ -563,7 +554,7 @@ def _perform(args: argparse.Namespace) -> Any:
             "summary": args.summary, "status": "available", "metadata": metadata,
             "secret": secret, "actor_type": "worker", "actor": args.worker,
             "worker": args.worker, "intent_id": args.intent or None,
-            "parent_resource_id": args.listener, "publish_fact": not args.no_fact,
+            "parent_resource_id": args.listener,
         })
     if args.command == "credential-create":
         metadata = _json_object(args.metadata_json, "--metadata-json")
@@ -573,7 +564,7 @@ def _perform(args: argparse.Namespace) -> Any:
             "kind": "credential_ref", "name": args.name, "target": args.target,
             "summary": args.summary, "metadata": metadata, "secret": secret,
             "actor_type": "worker", "actor": args.worker, "worker": args.worker,
-            "intent_id": args.intent or None, "publish_fact": not args.no_fact,
+            "intent_id": args.intent or None,
         })
     if args.command == "payload-import":
         metadata = _json_object(args.metadata_json, "--metadata-json")
@@ -584,7 +575,6 @@ def _perform(args: argparse.Namespace) -> Any:
             "summary": args.summary, "metadata": metadata, "secret": secret,
             "actor_type": "worker", "actor": args.worker, "worker": args.worker,
             "intent_id": args.intent or None, "parent_resource_id": args.listener,
-            "publish_fact": not args.no_fact,
         })
     if args.command == "payload-kinds":
         listener = quote(args.listener_id, safe="")

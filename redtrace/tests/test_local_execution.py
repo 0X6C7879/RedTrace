@@ -269,6 +269,12 @@ def test_local_backend_keeps_agent_config_linked_and_sessions_outside_workspace(
         workspaces=tmp_path / "workspaces",
         audit=tmp_path / ".redtrace" / "audit",
     )
+    skill = paths.skills / "api-security"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: api-security\ndescription: API security\n---\n",
+        encoding="utf-8",
+    )
     pi_mcp = paths.runtime / "mcp" / "pi.json"
     pi_mcp.parent.mkdir(parents=True)
     pi_mcp.write_text('{"mcpServers":{}}\n', encoding="utf-8")
@@ -286,6 +292,10 @@ def test_local_backend_keeps_agent_config_linked_and_sessions_outside_workspace(
     )
     assert not (state / "sessions").exists()
     assert (workspace / ".pi" / "mcp.json").resolve() == pi_mcp.resolve()
+    assert (workspace / ".agents" / "skills" / "api-security" / "SKILL.md").is_file()
+    assert (workspace / ".claude" / "skills" / "api-security" / "SKILL.md").is_file()
+    assert (workspace / ".agents" / "skills" / "api-security").resolve() == skill.resolve()
+    assert (workspace / ".claude" / "skills" / "api-security").resolve() == skill.resolve()
     assert backend.conversation_environment("proj_001", "pi") == {
         "PI_CODING_AGENT_SESSION_DIR": str(
             paths.managed / "sessions" / "proj_001" / "pi" / "default"

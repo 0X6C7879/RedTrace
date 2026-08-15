@@ -184,7 +184,9 @@ def test_local_pi_and_codex_use_complete_provider_config_without_exposing_key() 
         == "gpt-test"
     )
     assert 'model_provider="redtrace"' in codex_argv
-    assert 'web_search="live"' in codex_argv
+    assert 'web_search="live"' not in codex_argv
+    assert 'web_search="disabled"' in codex_argv
+    assert "features.multi_agent=false" in codex_argv
     assert "model_context_window=1048576" in codex_argv
     assert "model_auto_compact_token_limit=943718" in codex_argv
     assert "codex-secret" not in codex_argv
@@ -349,7 +351,11 @@ def test_claude_driver_extracts_structured_stream_result() -> None:
     }
 
 
-def test_codex_driver_execute_argv_passes_model_endpoint_and_prompt() -> None:
+def test_codex_driver_execute_argv_passes_model_endpoint_and_prompt(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "redtrace.dispatcher.workers.adapters.codex.codex_compat_base_url",
+        lambda _upstream: "http://127.0.0.1:1234/token",
+    )
     worker = WorkerConfig.model_validate(
         {
             "name": "codex",
@@ -371,8 +377,9 @@ def test_codex_driver_execute_argv_passes_model_endpoint_and_prompt() -> None:
 
     assert argv[:2] == ["codex", "app-server"]
     assert result.live_control.model == "gpt-test"
-    assert 'model_providers.redtrace.base_url="http://api/v1"' in argv
-    assert 'web_search="live"' in argv
+    assert 'model_providers.redtrace.base_url="http://127.0.0.1:1234/token"' in argv
+    assert 'web_search="disabled"' in argv
+    assert "features.multi_agent=false" in argv
     assert "model_context_window=1048576" in argv
     assert "model_auto_compact_token_limit=943718" in argv
     assert result.live_control.prompt == "prompt"

@@ -9,14 +9,12 @@ from redtrace.board.models import Fact, ProjectSummary
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.scheduler import project_policy
 from redtrace.dispatcher.scheduler.loop import DispatcherLoop
-from redtrace.dispatcher.scheduler.state import ReasonCheckpoint, RunningTask
+from redtrace.dispatcher.scheduler.state import RunningTask
 from redtrace.dispatcher.scheduler.worker_select import select_worker
 
 
 def _loop() -> DispatcherLoop:
     loop = DispatcherLoop.__new__(DispatcherLoop)
-    loop.reason_checkpoints = {}
-    loop.reason_request_generations = {}
     loop.runtime_project_ids = set()
     loop.cleanup_futures = {}
     loop._cleanup_pending = set()
@@ -26,8 +24,6 @@ def _loop() -> DispatcherLoop:
     loop.explore_retry_avoid = {}
     loop.task_failures = {}
     loop.task_retry_until = {}
-    loop.reason_debounce_until = {}
-    loop.reason_dirty_since = {}
     loop._log_state = {}
     loop.project_cursor = 0
     loop.futures = {}
@@ -46,6 +42,8 @@ def _summary(project_id: str, status: str) -> ProjectSummary:
         working_intent_count=0,
         unclaimed_intent_count=0,
         hint_count=0,
+        planning_revision=2,
+        reason_evaluated_revision=0,
     )
 
 
@@ -57,7 +55,23 @@ def test_reason_graph_snapshot_uses_already_loaded_detail() -> None:
     assert payload["project"]["title"] == project.project.title
     assert payload["facts"][0]["id"] == "origin"
     assert payload["intents"][0]["from"] == project.intents[0].from_
-    assert "shared_resources" not in payload
+    assert payload["shared_resources"] == []
+
+
+def test_reason_graph_snapshot_includes_planning_resources() -> None:
+    project = make_project()
+    resources = [
+        {
+            "id": "fil_001",
+            "kind": "file",
+            "status": "available",
+            "summary": "shared output",
+        }
+    ]
+
+    payload = json.loads(project_policy.reason_graph_snapshot(project, resources))
+
+    assert payload["shared_resources"] == resources
 
 
 def test_explore_snapshot_only_contains_dependencies_without_truncation() -> None:
@@ -75,30 +89,21 @@ def test_explore_snapshot_only_contains_dependencies_without_truncation() -> Non
     assert [item["id"] for item in payload["intents"]] == [intent.id]
 
 
-def test_reason_trigger_detects_new_facts_and_open_intent_completion() -> None:
-    loop = _loop()
+def test_only_open_unclaimed_intents_are_schedulable() -> None:
+    intent = make_intent()
+    intent.worker = None
+    intent.state = "blocked"
+    intent.circuit_open = False
+
+    assert project_policy.is_schedulable_intent(intent) is False
+
+
+def test_planning_trigger_reports_persistent_revision_gap() -> None:
     project = make_project(intents=[make_intent()])
-    loop.reason_checkpoints["proj_001"] = ReasonCheckpoint(
-        fact_count=3,
-        hint_count=1,
-        open_intent_count=1,
-    )
-    project.facts.append(Fact(id="f002", description="new"))
-    project.intents = []
+    project.project.planning_revision = 7
+    project.project.reason_evaluated_revision = 4
 
-    assert loop._reason_trigger(project) == "facts:3->4,open_intents:1->0"
-
-
-def test_reason_trigger_returns_none_when_graph_is_unchanged() -> None:
-    loop = _loop()
-    project = make_project(intents=[make_intent()])
-    loop.reason_checkpoints["proj_001"] = ReasonCheckpoint(
-        fact_count=3,
-        hint_count=1,
-        open_intent_count=1,
-    )
-
-    assert loop._reason_trigger(project) is None
+    assert DispatcherLoop._planning_trigger(project) == "planning_revision:4->7"
 
 
 def test_refresh_runtime_projects_discards_active_and_changed_cleanup_markers() -> None:
@@ -204,18 +209,15 @@ def test_select_worker_only_uses_workers_configured_for_task() -> None:
     assert selection.blocked_task_type == ["reason"]
 
 
-def test_new_fact_does_not_trigger_reason_while_ready_intent_fills_capacity() -> None:
+def test_planning_revision_dispatches_reason_before_ready_intent() -> None:
     loop = _loop()
     loop.config = make_config()
     loop.futures = {}
     project = make_project(intents=[make_intent()])
     project.intents[0].worker = None
     project.facts.append(Fact(id="f002", description="new"))
-    loop.reason_checkpoints["proj_001"] = ReasonCheckpoint(
-        fact_count=3,
-        hint_count=1,
-        open_intent_count=1,
-    )
+    project.project.planning_revision = 4
+    project.project.reason_evaluated_revision = 3
     loop.container_manager = type(
         "Containers", (), {"container_name": lambda _self, project_id: project_id}
     )()
@@ -235,17 +237,20 @@ def test_new_fact_does_not_trigger_reason_while_ready_intent_fills_capacity() ->
 
     summary = _summary("proj_001", "active")
     summary.unclaimed_intent_count = 1
+    summary.planning_revision = 4
+    summary.reason_evaluated_revision = 3
     assert loop._try_dispatch_project(summary)
-    assert dispatched == [("explore", "")]
+    assert dispatched == [("reason", "planning_revision:3->4")]
 
 
-def test_ready_intent_dispatches_when_reason_worker_is_busy() -> None:
+def test_ready_intent_waits_when_pending_reason_cannot_dispatch() -> None:
     loop = _loop()
     loop.config = make_config()
     project = make_project(intents=[make_intent()])
     project.intents[0].worker = None
     project.facts.append(Fact(id="f002", description="new"))
-    loop.reason_checkpoints["proj_001"] = ReasonCheckpoint(3, 1, 1)
+    project.project.planning_revision = 4
+    project.project.reason_evaluated_revision = 3
     loop.container_manager = SimpleNamespace(
         container_name=lambda project_id: project_id
     )
@@ -253,14 +258,16 @@ def test_ready_intent_dispatches_when_reason_worker_is_busy() -> None:
     dispatched: list[str] = []
     loop._dispatch_reason = lambda *_args: dispatched.append("reason") or False
     loop._dispatch_explore = lambda *_args: dispatched.append("explore") or True
-    assert not loop._reason_coalesce_ready("proj_001")
-    loop.reason_dirty_since["proj_001"] -= 10
+    summary = _summary("proj_001", "active")
+    summary.unclaimed_intent_count = 1
+    summary.planning_revision = 4
+    summary.reason_evaluated_revision = 3
 
-    assert loop._try_dispatch_project(_summary("proj_001", "active"))
-    assert dispatched == ["reason", "explore"]
+    assert not loop._try_dispatch_project(summary)
+    assert dispatched == ["reason"]
 
 
-def test_idle_explore_capacity_triggers_reason_before_frontier_is_empty() -> None:
+def test_idle_explore_capacity_does_not_trigger_reason() -> None:
     loop = _loop()
     base = make_config()
     explore_workers = [
@@ -285,7 +292,8 @@ def test_idle_explore_capacity_triggers_reason_before_frontier_is_empty() -> Non
     second = make_intent("i002")
     second.worker = "explore-1"
     project = make_project(intents=[first, second])
-    loop.reason_checkpoints["proj_001"] = ReasonCheckpoint(3, 1, 3)
+    project.project.planning_revision = 3
+    project.project.reason_evaluated_revision = 3
     for worker, intent_id in (("explore-0", "i001"), ("explore-1", "i002")):
         loop.futures[Future()] = RunningTask(
             "proj_001",
@@ -307,13 +315,14 @@ def test_idle_explore_capacity_triggers_reason_before_frontier_is_empty() -> Non
     summary.fact_count = 3
     summary.intent_count = 2
     summary.working_intent_count = 2
-    assert loop._try_dispatch_project(summary)
-    assert dispatched == ["frontier_low:open_intents:3->2"]
+    summary.planning_revision = 3
+    summary.reason_evaluated_revision = 3
+    assert not loop._try_dispatch_project(summary)
+    assert dispatched == []
 
 
-def test_intent_completion_during_reason_requests_follow_up_reason() -> None:
+def test_completed_reason_does_not_create_in_memory_follow_up_state() -> None:
     loop = _loop()
-    loop.reason_request_generations["proj_001"] = 2
     future: Future[str] = Future()
     future.set_result("success")
     loop.futures[future] = RunningTask(
@@ -321,25 +330,12 @@ def test_intent_completion_during_reason_requests_follow_up_reason() -> None:
         "reason",
         "worker",
         TaskCancellation(),
-        fact_count=4,
-        hint_count=1,
-        open_intent_count=1,
-        reason_request_generation=1,
+        planning_revision=4,
     )
 
     loop._reap_futures()
 
-    assert loop.reason_checkpoints["proj_001"].request_generation == 1
-    assert (
-        project_policy.reason_trigger(
-            loop.reason_checkpoints["proj_001"],
-            fact_count=4,
-            hint_count=1,
-            open_intents=1,
-            request_generation=2,
-        )
-        == "intent_results:1->2"
-    )
+    assert loop.futures == {}
 
 
 def test_successful_explore_records_runtime_without_direct_reason_request() -> None:
@@ -356,15 +352,12 @@ def test_successful_explore_records_runtime_without_direct_reason_request() -> N
 
     loop._reap_futures()
 
-    assert loop.reason_request_generations == {}
-    assert loop.reason_debounce_until == {}
     assert reported[0][:4] == ("proj_001", "i001", "worker", "success")
     assert reported[0][4] >= 0
 
 
-def test_revision_conflict_requests_follow_up_without_advancing_checkpoint() -> None:
+def test_revision_conflict_leaves_follow_up_to_persistent_revision_gap() -> None:
     loop = _loop()
-    loop.reason_checkpoints["proj_001"] = ReasonCheckpoint(4, 1, 2)
     future: Future[str] = Future()
     future.set_result("revision_conflict")
     loop.futures[future] = RunningTask(
@@ -372,17 +365,12 @@ def test_revision_conflict_requests_follow_up_without_advancing_checkpoint() -> 
         "reason",
         "reason-worker",
         TaskCancellation(),
-        fact_count=4,
-        hint_count=1,
-        open_intent_count=2,
-        reason_request_generation=0,
+        planning_revision=4,
     )
 
     loop._reap_futures()
 
-    assert loop.reason_checkpoints["proj_001"] == ReasonCheckpoint(4, 1, 2)
-    assert loop.reason_request_generations["proj_001"] == 1
-    assert loop.reason_dirty_since["proj_001"] == 0.0
+    assert loop.futures == {}
 
 
 def test_failed_task_retries_use_exponential_backoff(monkeypatch) -> None:
@@ -484,6 +472,7 @@ def test_initial_project_without_bootstrap_worker_dispatches_reason() -> None:
     )
     project = make_project()
     project.facts = project.facts[:2]
+    project.project.planning_revision = 2
     loop.container_manager = SimpleNamespace(
         container_name=lambda project_id: project_id
     )
@@ -505,6 +494,7 @@ def test_initial_disabled_project_skips_configured_bootstrap_worker() -> None:
     project = make_project()
     project.project.bootstrap_enabled = False
     project.facts = project.facts[:2]
+    project.project.planning_revision = 2
     loop.container_manager = type(
         "Containers", (), {"container_name": lambda _self, project_id: project_id}
     )()
@@ -525,7 +515,67 @@ def test_initial_disabled_project_skips_configured_bootstrap_worker() -> None:
     )
 
     assert loop._try_dispatch_project(_summary("proj_001", "active"))
-    assert dispatched == [("reason", "initial")]
+    assert dispatched == [("reason", "planning_revision:0->2")]
+
+
+def test_initial_reason_skips_when_detail_was_already_evaluated() -> None:
+    loop = _loop()
+    config = make_config()
+    loop.config = config.model_copy(
+        update={
+            "workers": [
+                config.workers[0].model_copy(
+                    update={"task_types": ["reason", "explore"]}
+                )
+            ]
+        }
+    )
+    project = make_project()
+    project.facts = project.facts[:2]
+    project.project.planning_revision = 2
+    project.project.reason_evaluated_revision = 2
+    loop.container_manager = SimpleNamespace(
+        container_name=lambda project_id: project_id
+    )
+    loop.client = SimpleNamespace(get_project=lambda _project_id: project)
+    loop._dispatch_reason = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("unexpected duplicate reason dispatch")
+    )
+    stale_summary = _summary("proj_001", "active")
+    stale_summary.reason_evaluated_revision = 1
+
+    assert loop._try_dispatch_project(stale_summary) is False
+
+
+def test_existing_bootstrap_keeps_cairn_bootstrap_path() -> None:
+    loop = _loop()
+    loop.config = make_config()
+    bootstrap = make_intent()
+    bootstrap.description = "bootstrap"
+    bootstrap.creator = "dispatcher.bootstrap"
+    bootstrap.from_ = ["origin"]
+    bootstrap.worker = None
+    bootstrap.state = "blocked"
+    bootstrap.circuit_open = True
+    project = make_project(intents=[bootstrap])
+    project.facts = project.facts[:2]
+    project.project.planning_revision = 3
+    project.project.reason_evaluated_revision = 2
+    loop.container_manager = SimpleNamespace(
+        container_name=lambda project_id: project_id
+    )
+    loop.client = SimpleNamespace(get_project=lambda _project_id: project)
+    dispatched: list[str] = []
+    loop._dispatch_initial_project = (
+        lambda _project: dispatched.append("bootstrap") or True
+    )
+    loop._dispatch_reason = lambda *_args: dispatched.append("reason") or True
+    summary = _summary("proj_001", "active")
+    summary.planning_revision = 3
+    summary.reason_evaluated_revision = 2
+
+    assert loop._try_dispatch_project(summary)
+    assert dispatched == ["bootstrap"]
 
 
 def test_initial_enabled_project_requires_bootstrap() -> None:
@@ -576,27 +626,6 @@ def test_cancel_inactive_tasks_marks_stopped_and_deleted_projects() -> None:
     assert deleted.reason == "deleted"
 
 
-def test_initialize_reason_checkpoint_only_for_active_projects_with_open_intents() -> (
-    None
-):
-    loop = _loop()
-    loop.config = make_config()
-    active = _summary("active", "active")
-    active.unclaimed_intent_count = 1
-
-    loop._initialize_reason_checkpoints(
-        [
-            active,
-            _summary("idle", "active"),
-            _summary("stopped", "stopped"),
-        ]
-    )
-
-    assert loop.reason_checkpoints == {
-        "active": ReasonCheckpoint(fact_count=2, hint_count=0, open_intent_count=1)
-    }
-
-
 def test_select_worker_reports_busy_unhealthy_and_rejected_workers(
     monkeypatch,
 ) -> None:
@@ -630,9 +659,10 @@ def test_stable_summary_skips_project_detail_request() -> None:
             AssertionError(f"unexpected detail request for {project_id}")
         )
     )
-    loop.reason_checkpoints["stable"] = ReasonCheckpoint(2, 0, 0)
+    summary = _summary("stable", "active")
+    summary.reason_evaluated_revision = summary.planning_revision
 
-    assert loop._try_dispatch_project(_summary("stable", "active")) is False
+    assert loop._try_dispatch_project(summary) is False
 
 
 def test_disabled_worker_healthcheck_skips_automatic_startup_but_force_runs_diagnostic() -> (

@@ -97,7 +97,9 @@ CREATE TABLE IF NOT EXISTS projects (
     reason_failure_count INTEGER NOT NULL DEFAULT 0,
     reason_failure_signature TEXT,
     reason_retry_after REAL,
-    reason_circuit_open INTEGER NOT NULL DEFAULT 0
+    reason_circuit_open INTEGER NOT NULL DEFAULT 0,
+    planning_revision INTEGER NOT NULL DEFAULT 0,
+    reason_evaluated_revision INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS facts (
@@ -150,6 +152,32 @@ CREATE TABLE IF NOT EXISTS hints (
     created_at TEXT NOT NULL,
     PRIMARY KEY (id, project_id)
 );
+
+CREATE TABLE IF NOT EXISTS observations (
+    id TEXT NOT NULL,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    intent_id TEXT NOT NULL,
+    worker TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (id, project_id),
+    FOREIGN KEY (intent_id, project_id) REFERENCES intents(id, project_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS intent_execution_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    intent_id TEXT NOT NULL,
+    worker TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    runtime_ms INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (intent_id, project_id) REFERENCES intents(id, project_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_intent_execution_events_project
+ON intent_execution_events(project_id, id);
 
 CREATE TABLE IF NOT EXISTS counters (
     name TEXT PRIMARY KEY,
@@ -255,6 +283,13 @@ AFTER INSERT ON hints
 BEGIN
     INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
     VALUES (NEW.project_id, 'hint', NEW.id, 'added', NEW.created_at);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_blackboard_observation_added
+AFTER INSERT ON observations
+BEGIN
+    INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
+    VALUES (NEW.project_id, 'observation', NEW.id, 'added', NEW.created_at);
 END;
 
 CREATE TABLE IF NOT EXISTS audit_runs (
@@ -474,6 +509,86 @@ BEGIN
     INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
     VALUES (OLD.project_id, 'hint', OLD.id, 'removed', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
 END;
+
+DROP TRIGGER IF EXISTS trg_blackboard_observation_removed;
+CREATE TRIGGER trg_blackboard_observation_removed
+AFTER DELETE ON observations
+WHEN EXISTS (SELECT 1 FROM projects WHERE id = OLD.project_id)
+BEGIN
+    INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
+    VALUES (OLD.project_id, 'observation', OLD.id, 'removed', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
+END;
+"""
+
+PLANNING_REVISION_TRIGGERS = """\
+DROP TRIGGER IF EXISTS trg_planning_fact_added;
+CREATE TRIGGER trg_planning_fact_added
+AFTER INSERT ON facts
+BEGIN
+    UPDATE projects
+    SET planning_revision = planning_revision + 1
+    WHERE id = NEW.project_id;
+END;
+
+DROP TRIGGER IF EXISTS trg_planning_fact_removed;
+CREATE TRIGGER trg_planning_fact_removed
+AFTER DELETE ON facts
+WHEN EXISTS (SELECT 1 FROM projects WHERE id = OLD.project_id)
+BEGIN
+    UPDATE projects
+    SET planning_revision = planning_revision + 1
+    WHERE id = OLD.project_id;
+END;
+
+DROP TRIGGER IF EXISTS trg_planning_hint_added;
+CREATE TRIGGER trg_planning_hint_added
+AFTER INSERT ON hints
+BEGIN
+    UPDATE projects
+    SET planning_revision = planning_revision + 1
+    WHERE id = NEW.project_id;
+END;
+
+DROP TRIGGER IF EXISTS trg_planning_resource_added;
+CREATE TRIGGER trg_planning_resource_added
+AFTER INSERT ON shared_resources
+WHEN NEW.project_id IS NOT NULL
+BEGIN
+    UPDATE projects
+    SET planning_revision = planning_revision + 1
+    WHERE id = NEW.project_id;
+END;
+
+DROP TRIGGER IF EXISTS trg_planning_resource_changed;
+CREATE TRIGGER trg_planning_resource_changed
+AFTER UPDATE OF project_id, kind, name, status, target, summary, metadata_json, parent_resource_id
+ON shared_resources
+WHEN (OLD.project_id IS NOT NULL OR NEW.project_id IS NOT NULL)
+ AND (
+    OLD.project_id IS NOT NEW.project_id
+    OR OLD.kind IS NOT NEW.kind
+    OR OLD.name IS NOT NEW.name
+    OR OLD.status IS NOT NEW.status
+    OR OLD.target IS NOT NEW.target
+    OR OLD.summary IS NOT NEW.summary
+    OR OLD.metadata_json IS NOT NEW.metadata_json
+    OR OLD.parent_resource_id IS NOT NEW.parent_resource_id
+ )
+BEGIN
+    UPDATE projects
+    SET planning_revision = planning_revision + 1
+    WHERE id IN (OLD.project_id, NEW.project_id);
+END;
+
+DROP TRIGGER IF EXISTS trg_planning_resource_removed;
+CREATE TRIGGER trg_planning_resource_removed
+AFTER DELETE ON shared_resources
+WHEN OLD.project_id IS NOT NULL
+BEGIN
+    UPDATE projects
+    SET planning_revision = planning_revision + 1
+    WHERE id = OLD.project_id;
+END;
 """
 
 
@@ -494,8 +609,9 @@ def configure(path: Path) -> None:
         conn.execute("PRAGMA legacy_alter_table=ON")
         conn.executescript(SCHEMA)
         _ensure_global_resource_schema(conn)
-        conn.executescript(BLACKBOARD_DELETE_TRIGGERS)
         _ensure_project_columns(conn)
+        conn.executescript(BLACKBOARD_DELETE_TRIGGERS)
+        conn.executescript(PLANNING_REVISION_TRIGGERS)
         _ensure_deletion_columns(conn)
         _backfill_blackboard_events(conn)
         conn.commit()
@@ -739,10 +855,25 @@ def _ensure_project_columns(conn: sqlite3.Connection) -> None:
         "reason_failure_signature": "TEXT",
         "reason_retry_after": "REAL",
         "reason_circuit_open": "INTEGER NOT NULL DEFAULT 0",
+        "planning_revision": "INTEGER NOT NULL DEFAULT 0",
+        "reason_evaluated_revision": "INTEGER NOT NULL DEFAULT 0",
     }
+    planning_revision_added = "planning_revision" not in columns
     for name, definition in additions.items():
         if name not in columns:
             conn.execute(f"ALTER TABLE projects ADD COLUMN {name} {definition}")
+    if planning_revision_added:
+        conn.execute(
+            """
+            UPDATE projects
+            SET planning_revision = MAX(
+                1,
+                (SELECT COUNT(*) FROM facts WHERE project_id = projects.id)
+                + (SELECT COUNT(*) FROM hints WHERE project_id = projects.id)
+            ),
+                reason_evaluated_revision = 0
+            """
+        )
     intent_columns = {
         row["name"] for row in conn.execute("PRAGMA table_info(intents)")
     }

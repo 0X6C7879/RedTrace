@@ -419,6 +419,11 @@ def test_prompt_guidance_reuses_existing_state_and_bounded_queries() -> None:
     assert "redtrace-resource snapshot --kind webshell" in prompt
     assert "redtrace-resource webshell-create" in prompt
     assert "redtrace-resource listener-create" in prompt
+    assert (
+        "redtrace-resource register --kind file --name <name> --target <workspace-path>"
+        in prompt
+    )
+    assert "--no-fact" not in prompt
     assert "再用 `payload-oneliner`，或通过 `payload-build` 构建 Beacon" in prompt
     assert "若无 session，不要止步" in prompt
     assert "redtrace-resource changes --since <audit_cursor>" in prompt

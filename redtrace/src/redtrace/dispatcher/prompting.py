@@ -79,7 +79,7 @@ def add_blackboard_guidance(
                     "普通非题目任务可以直接使用 Workspace 根目录。所有脚本、PoC/EXP、日志、中间文件和证据都必须写在 "
                     "`$REDTRACE_WORKSPACE` 内，不得写入 `/tmp`、用户主目录或仓库外路径。"
                     "修改其他 Worker 可能同时使用的既有文件或独占通道前，先在 `redtrace-resource list` 复用对应 `file`/Resource，"
-                    "必要时用 `register --kind file --no-fact` 注册，再执行 `redtrace-resource lock <id>`；HTTP 423 时改读、等待或写独立文件，"
+                    "必要时用 `redtrace-resource register --kind file --name <name> --target <workspace-path>` 注册，再执行 `redtrace-resource lock <id>`；HTTP 423 时改读、等待或写独立文件，"
                     "不得覆盖。完成或放弃修改后 `unlock <id>`。只读分析无需锁，不得用粗粒度目录锁串行化可并行探索。"
                     "每道已处理题目都要创建或更新一个可复用、"
                     "不绑定本次 flag/容器地址的通用解题脚本，供其他 Worker 直接复用。Agent 自身配置和会话状态目录不属于任务产物。"

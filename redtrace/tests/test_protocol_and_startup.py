@@ -126,6 +126,51 @@ def test_blackboard_changes_collects_all_pages() -> None:
     }
 
 
+def test_planning_resource_snapshot_requests_all_and_omits_resource_secrets() -> None:
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "resources": [
+                    {
+                        "id": "cred_001",
+                        "kind": "credential_ref",
+                        "status": "available",
+                        "summary": "reusable login",
+                        "metadata": {"username": "alice"},
+                        "secret": {"password": "hidden"},
+                    }
+                ]
+            }
+
+    class Session:
+        def __init__(self):
+            self.params = None
+
+        def get(self, _url, **kwargs):
+            self.params = kwargs["params"]
+            return Response()
+
+    client = ControlPlaneClient("http://server")
+    session = Session()
+    client._local.session = session
+
+    resources = client.planning_resource_snapshot("proj_001")
+
+    assert session.params == {"kinds": "", "limit": 500}
+    assert resources == [
+        {
+            "id": "cred_001",
+            "kind": "credential_ref",
+            "status": "available",
+            "summary": "reusable login",
+            "metadata": {"username": "alice"},
+        }
+    ]
+
+
 def test_windows_cli_probe_runs_cmd_shims_through_comspec(monkeypatch) -> None:
     monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
 

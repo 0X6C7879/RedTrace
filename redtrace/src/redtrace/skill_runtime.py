@@ -8,7 +8,7 @@ SKILL_TASK_TYPES = frozenset({"bootstrap", "explore"})
 
 SKILL_RUNTIME_INSTRUCTIONS = """## RedTrace Skill Runtime Policy
 
-- 使用 Worker 原生发现机制加载与任务最具体匹配的专业 Skill；canonical ID 是 Skill 一级目录名（也与 frontmatter `name` 一致）。
+- 每个任务开始时优先检查 Worker 原生 Skill 索引，由你根据当前任务与 Skill 的 name/description 自主判断并加载最具体匹配项；不存在明确匹配时可以不加载。canonical ID 是 Skill 一级目录名（也与 frontmatter `name` 一致）。
 - 每个任务选择一个主 Skill，仅在确有知识缺口时补充其他 Skill；同一会话最多四个且不重复加载。
 - 每次加载 Skill 后、首次实质操作前，运行一次 `redtrace-skill recall <canonical-id>` 消费该 Skill 已验证的历史经验。
 - Worker 不直接修改共享 Skill、Skill Memory、索引或 Agent 用户配置。只有 Learning Checkpoint 可以决定是否通过 `redtrace-skill learn` 沉淀经验。

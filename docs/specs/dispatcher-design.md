@@ -24,6 +24,7 @@ RedTrace 的核心抽象不是聊天线程，而是“证据驱动的执行闭�
 | `Fact` | 已验证、可供后续任务复用的结论 | 追加式写入，带来源与创建者 |
 | `Intent` | 从一个或多个 Fact 出发的待验证方向 | `open → claimed → concluded`，支持 heartbeat 与 release |
 | `Hint` | 人工注入的约束、优先级或背景 | 不作为因果证据，但进入任务上下文 |
+| `Observation` | Worker 执行中的中间观察 | 可共享、可待验证，不触发重新规划，也不等同于 Fact |
 
 `Intent.from` 可以引用多个 Fact，因此图谱可以表达“多项证据共同支持下一步调查”的关系。Server 维护合法状态转换和单调递增的图谱修订号；Worker 不直接修改数据库，而是通过 Dispatcher 和控制面协议提交结果。
 
@@ -205,7 +206,9 @@ Reason 是短时全局判断任务，负责：
 3. 控制 open Intent 数量不超过 `tasks.reason.max_intents`；
 4. 在已有足够工作时返回空操作，避免重复分支。
 
-Reason 使用项目级租约，避免多个 Reason 同时产生冲突方向。其输出只能是 Complete、Intent、No-op 或拒绝，不能直接伪造探索结果。
+Reason 使用项目级租约，避免多个 Reason 同时产生冲突方向。`planning_revision` 只在 Fact、Hint、Resource 语义变化或 Intent 最终阻塞时递增；Reason 即使返回 No-op 也会持久化 `reason_evaluated_revision`。claim、heartbeat、last-seen 和并发槽位变化不会触发重新规划。
+
+Reason 只能修改尚未认领的 ready Intent；working Intent 在执行期间只读。其输出只能是 Complete、Intent、No-op 或拒绝，不能直接伪造探索结果。
 
 ### 4.3 Explore
 
@@ -369,7 +372,7 @@ Context Harness 在工具完整输出和模型可见上下文之间增加一层�
 4. Server 根据风险与审批状态排队；
 5. `OperationExecutor` 执行 WebShell 或外部插件动作；
 6. 完整结果写入结果资源，摘要进入任务记录；
-7. 只有显式 `publish_result` 时，结果才转换为证据 Fact。
+7. `publish_result` 只创建结果 Resource；正式 Fact 仍由 Intent conclude 提交。
 
 操作状态包含 queued、running、succeeded、failed、cancelled 和 rejected。Server 重启后可恢复仍可执行的 queued 任务，项目取消会传播到未完成操作。
 

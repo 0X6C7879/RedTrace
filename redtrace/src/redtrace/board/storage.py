@@ -69,12 +69,29 @@ def next_hint_id(conn: sqlite3.Connection, project_id: str) -> str:
     return _next_scoped_id(conn, "hint", "h", project_id)
 
 
+def next_observation_id(conn: sqlite3.Connection, project_id: str) -> str:
+    return _next_scoped_id(conn, "observation", "o", project_id)
+
+
 def get_blackboard_revision(conn: sqlite3.Connection, project_id: str) -> int:
     row = conn.execute(
         "SELECT COALESCE(MAX(revision), 0) AS revision FROM blackboard_events WHERE project_id = ?",
         (project_id,),
     ).fetchone()
     return int(row["revision"])
+
+
+def get_planning_revision(conn: sqlite3.Connection, project_id: str) -> int:
+    row = get_project_or_404(conn, project_id)
+    return int(row["planning_revision"])
+
+
+def bump_planning_revision(conn: sqlite3.Connection, project_id: str) -> int:
+    conn.execute(
+        "UPDATE projects SET planning_revision = planning_revision + 1 WHERE id = ?",
+        (project_id,),
+    )
+    return get_planning_revision(conn, project_id)
 
 
 def get_project_or_404(conn: sqlite3.Connection, project_id: str) -> sqlite3.Row:
@@ -200,10 +217,10 @@ def get_unclaimed_open_intent_or_404(
     row = get_intent_or_404(conn, project_id, intent_id)
     if row["to_fact_id"] is not None:
         raise HTTPException(409, "Intent already concluded")
-    if row["state"] in ("dropped", "superseded"):
-        raise HTTPException(409, f"Intent is {row['state']}")
     if row["worker"] is not None:
         raise HTTPException(409, f"Intent is currently claimed by {row['worker']}")
+    if row["state"] != "open":
+        raise HTTPException(409, f"Intent is {row['state']}")
     if row["circuit_open"]:
         raise HTTPException(409, "Intent retry circuit is open")
     if row["retry_after"] is not None and row["retry_after"] > time.time():
@@ -218,7 +235,7 @@ def get_owned_open_intent_or_404(
     row = get_intent_or_404(conn, project_id, intent_id)
     if row["to_fact_id"] is not None:
         raise HTTPException(409, "Intent already concluded")
-    if row["state"] in ("dropped", "superseded"):
+    if row["state"] != "working":
         raise HTTPException(409, f"Intent is {row['state']}")
     if row["worker"] is None:
         raise HTTPException(409, "Intent is not currently claimed")
@@ -234,7 +251,7 @@ def get_releasable_open_intent_or_404(
     row = get_intent_or_404(conn, project_id, intent_id)
     if row["to_fact_id"] is not None:
         raise HTTPException(409, "Intent already concluded")
-    if row["state"] in ("dropped", "superseded"):
+    if row["state"] not in ("open", "working"):
         raise HTTPException(409, f"Intent is {row['state']}")
     if row["worker"] is None:
         return row
@@ -343,6 +360,8 @@ def project_meta_from_row(row: sqlite3.Row) -> ProjectMeta:
         reason_failure_signature=row["reason_failure_signature"],
         reason_retry_after=row["reason_retry_after"],
         reason_circuit_open=bool(row["reason_circuit_open"]),
+        planning_revision=row["planning_revision"],
+        reason_evaluated_revision=row["reason_evaluated_revision"],
     )
 
 

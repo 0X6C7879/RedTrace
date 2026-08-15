@@ -9,12 +9,12 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 ## 核心能力
 
 - **Trace Loop 任务闭环**：通过 `bootstrap → reason → explore` 循环完成初始突破、全局判断和并行验证，直到目标完成、人工停止或暂时没有可执行方向。
-- **证据图谱**：用 `Project`、`Fact`、`Intent`、`Hint` 区分目标、事实、调查方向和人工输入，避免把模型的临时推测当成结论。
+- **证据图谱**：用 `Project`、`Fact`、`Intent`、`Hint`、`Observation` 区分目标、正式事实、调查方向、人工输入和中间观察，避免把模型的临时推测当成结论。
 - **异构 Worker 协同**：统一接入 Claude Code、Codex、Pi 和 Mock，同时保留各 CLI 的会话、模型、Skill、MCP 与原生工具能力。
 - **运行中知识同步**：证据修订会通过增量通知和 Worker 原生双向协议送达正在运行的任务；Worker 也可以通过只读 CLI 按需查询快照、变化、来源和局部上下文。
 - **双运行后端**：Local 模式直接复用宿主机 Agent CLI；Container 模式为每个项目提供独立 Linux 执行环境和持久 Workspace。
 - **上下文预算治理**：Context Harness 对大文件、HTTP 输出和安全工具结果进行有预算的摘要、索引和增量读取，完整原始数据保留在任务工件中。
-- **资源与操作面**：统一管理 WebShell、C2 Listener、Session、Payload、外部插件和操作结果；高风险操作可进入审批流程，结果可选择发布为新证据。
+- **资源与操作面**：统一管理 WebShell、C2 Listener、Session、Payload、外部插件和操作结果；Resource 保留可变运行状态，不会隐式生成 Fact。
 - **可观测与可恢复**：任务、会话、工具事件、输出、心跳、超时、取消和资源操作均可审计；Server 或 Dispatcher 重启后可以恢复未完成状态。
 - **Web 控制台与插件接入**：内置项目图谱、运行记录、Workspace、Worker 与能力管理界面，并提供浏览器扩展、Burp Suite 和兼容插件 API。
 
@@ -43,7 +43,7 @@ flowchart LR
 2. `bootstrap` 尝试直接取得关键证据或完成目标。
 3. `reason` 读取当前证据图谱，判断是否已经完成；若未完成，则创建新的 Intent。
 4. 一个或多个 `explore` Worker 认领 Intent，并行执行验证。
-5. 通过验证的结果写为 Fact，Intent 被收束，随后进入下一轮 `reason`。
+5. 执行中的发现先共享为 Observation；最终验证结果通过 conclude 原子写为 Fact 并收束 Intent，随后进入下一轮 `reason`。
 6. 目标满足后项目标记为 completed；失败、超时或取消则按任务协议回收或恢复。
 
 详细设计见 [技术架构与调度设计](docs/specs/dispatcher-design.md)。

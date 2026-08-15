@@ -160,6 +160,12 @@ def _node_for_kind(
             (project_id, node_id),
         ).fetchone()
         return {"kind": "hint", **dict(row)} if row else None
+    if kind == "observation":
+        row = conn.execute(
+            "SELECT id, intent_id, worker, content, created_at FROM observations WHERE project_id = ? AND id = ?",
+            (project_id, node_id),
+        ).fetchone()
+        return {"kind": "observation", **dict(row)} if row else None
     if kind == "intent":
         row = conn.execute(
             "SELECT * FROM intents WHERE project_id = ? AND id = ?",
@@ -179,7 +185,7 @@ def _node_for_kind(
 def _find_node(
     conn: sqlite3.Connection, project_id: str, node_id: str
 ) -> dict[str, Any] | None:
-    for kind in ("fact", "intent", "hint"):
+    for kind in ("fact", "intent", "hint", "observation"):
         node = _node_for_kind(conn, project_id, kind, node_id)
         if node is not None:
             return node
@@ -211,6 +217,17 @@ def _graph_edges(conn: sqlite3.Connection, project_id: str) -> list[dict[str, st
                 {"from": row["intent_id"], "to": row["target"], "relation": "result"}
             )
             result_edges.add(result_edge)
+    for row in conn.execute(
+        "SELECT intent_id, id FROM observations WHERE project_id = ? ORDER BY created_at, id",
+        (project_id,),
+    ).fetchall():
+        edges.append(
+            {
+                "from": row["intent_id"],
+                "to": row["id"],
+                "relation": "observation",
+            }
+        )
     return edges
 
 
@@ -282,9 +299,10 @@ def blackboard_status(
             SELECT
                 (SELECT COUNT(*) FROM facts WHERE project_id = ?) AS facts,
                 (SELECT COUNT(*) FROM intents WHERE project_id = ?) AS intents,
-                (SELECT COUNT(*) FROM hints WHERE project_id = ?) AS hints
+                (SELECT COUNT(*) FROM hints WHERE project_id = ?) AS hints,
+                (SELECT COUNT(*) FROM observations WHERE project_id = ?) AS observations
             """,
-            (project_id, project_id, project_id),
+            (project_id, project_id, project_id, project_id),
         ).fetchone()
         result = {
             "project": project_id,
@@ -359,6 +377,13 @@ def blackboard_snapshot(
                 (project_id,),
             ).fetchall()
         ]
+        observations = [
+            {"kind": "observation", **dict(row)}
+            for row in conn.execute(
+                "SELECT id, intent_id, worker, content, created_at FROM observations WHERE project_id = ? ORDER BY created_at, id",
+                (project_id,),
+            ).fetchall()
+        ]
         result = {
             "project": project_id,
             "command": "snapshot",
@@ -366,6 +391,7 @@ def blackboard_snapshot(
             "facts": facts,
             "intents": intents,
             "hints": hints,
+            "observations": observations,
             "edges": _graph_edges(conn, project_id),
         }
         return _audit_result(
@@ -375,7 +401,7 @@ def blackboard_snapshot(
             "snapshot",
             {},
             result,
-            result_count=len(facts) + len(intents) + len(hints),
+            result_count=len(facts) + len(intents) + len(hints) + len(observations),
         )
 
 

@@ -10,6 +10,7 @@ from redtrace.dispatcher.control_plane import ControlPlaneClient
 from redtrace.dispatcher.prompting import (
     add_blackboard_guidance,
     format_fact_ids,
+    format_json_block,
     format_open_intents,
     load_prompt,
     render_prompt,
@@ -34,19 +35,6 @@ from redtrace.dispatcher.workers.registry import get_driver
 
 LOG = logging.getLogger(__name__)
 FORMAT_REPAIR_TIMEOUT_SECONDS = 60
-
-
-def _intent_target(config: DispatchConfig) -> int:
-    explore_capacity = min(
-        config.runtime.max_workers,
-        config.runtime.max_project_workers,
-        sum(
-            worker.max_running
-            for worker in config.workers
-            if worker.enabled and "explore" in worker.task_types
-        ),
-    )
-    return min(config.tasks.reason.max_intents, max(1, explore_capacity * 2))
 
 
 def run_reason_task(
@@ -111,10 +99,58 @@ def run_reason_task(
                 "superseded_by": intent.superseded_by,
             }
             for intent in project.intents
-            if intent.to is None and intent.state not in ("dropped", "superseded")
+            if intent.to is None and intent.state in ("open", "working")
         ]
-        intent_target = _intent_target(config)
-        available_intent_slots = max(0, intent_target - len(open_intents))
+        explore_capacity = min(
+            config.runtime.max_workers,
+            config.runtime.max_project_workers,
+            sum(
+                candidate.max_running
+                for candidate in config.workers
+                if candidate.enabled and "explore" in candidate.task_types
+            ),
+        )
+        working_explore = sum(
+            intent.state == "working" and intent.worker is not None
+            for intent in project.intents
+        )
+        execution = {
+            "planning_mode": (
+                "initial_environment_sensing"
+                if all(fact.id in {"origin", "goal"} for fact in project.facts)
+                else "frontier_replanning"
+            ),
+            "bootstrap": {
+                "enabled": project.project.bootstrap_enabled,
+                "handed_off": any(
+                    intent.creator == "dispatcher.bootstrap"
+                    and intent.state == "blocked"
+                    and intent.failure_signature == "timeout"
+                    for intent in project.intents
+                ),
+            },
+            "available_workers": [
+                {
+                    "name": candidate.name,
+                    "type": candidate.type,
+                    "task_types": candidate.task_types,
+                    "max_running": candidate.max_running,
+                }
+                for candidate in config.workers
+                if candidate.enabled
+            ],
+            "explore_workers": {
+                "total": explore_capacity,
+                "working": working_explore,
+                "idle": max(0, explore_capacity - working_explore),
+            },
+            "frontier": {
+                "ready": sum(intent["state"] == "open" for intent in open_intents),
+                "working": sum(
+                    intent["state"] == "working" for intent in open_intents
+                ),
+            },
+        }
         allowed_fact_ids = [fact.id for fact in project.facts if fact.id != "goal"]
         valid_intent_ids = [intent.id for intent in project.intents]
         LOG.debug(
@@ -153,7 +189,8 @@ def run_reason_task(
                 ),
                 "fact_ids": format_fact_ids(allowed_fact_ids),
                 "open_intents": format_open_intents(open_intents),
-                "max_intents": str(intent_target),
+                "execution": format_json_block(execution),
+                "max_intents": str(config.tasks.reason.max_intents),
             },
         )
         if worker.type != "mock":
@@ -330,7 +367,7 @@ def run_reason_task(
                 "不得调用工具、继续分析或重复任务。立即只返回一个修正后的 raw JSON object，"
                 "不得输出 Markdown 或解释文字。只允许 GraphPatch 结构：\n"
                 '{"accepted":false,"reason":"policy_refusal"}\n'
-                '{"accepted":true,"data":{"base_revision":0,"create":[],"drop":[],'
+                '{"accepted":true,"data":{"create":[],"drop":[],'
                 '"reprioritize":[],"supersede":[],"complete":null}}\n'
                 'create 项形如 {"from":["fact-id"],"description":"...","priority":50}；'
                 'drop 项形如 {"intent_id":"i001","reason":"..."}；'
@@ -425,24 +462,14 @@ def run_reason_task(
             return "rejected"
 
         patch = data or {}
-        patch["base_revision"] = project.blackboard_revision
+        patch["base_planning_revision"] = project.project.planning_revision
         patch["worker"] = worker.name
-        patch["create"] = (patch.get("create") or [])[:available_intent_slots]
-        if (
-            not patch.get("create")
-            and not patch.get("drop")
-            and not patch.get("reprioritize")
-            and not patch.get("supersede")
-            and patch.get("complete") is None
-        ):
-            LOG.info(
-                "reason finished without graph change project=%s worker=%s execute_ms=%s total_ms=%s",
-                project.project.id,
-                worker.name,
-                execute_ms,
-                total_ms,
-            )
-            return "success"
+        active_intents = sum(
+            intent.to is None and intent.state in {"open", "working"}
+            for intent in project.intents
+        )
+        create_limit = max(0, config.tasks.reason.max_intents - active_intents)
+        patch["create"] = (patch.get("create") or [])[:create_limit]
 
         response = client.apply_graph_patch(project.project.id, patch)
         if response.status_code == 403:
@@ -457,10 +484,10 @@ def run_reason_task(
             or "revision_conflict" in response.text
         ):
             LOG.warning(
-                "reason graph patch revision conflict project=%s worker=%s base_revision=%s execute_ms=%s total_ms=%s",
+                "reason graph patch revision conflict project=%s worker=%s base_planning_revision=%s execute_ms=%s total_ms=%s",
                 project.project.id,
                 worker.name,
-                project.blackboard_revision,
+                project.project.planning_revision,
                 execute_ms,
                 total_ms,
             )

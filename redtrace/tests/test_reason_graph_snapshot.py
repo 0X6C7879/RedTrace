@@ -111,6 +111,7 @@ def test_reason_prompt_contains_only_graph_file_reference() -> None:
                 [fact.id for fact in project.facts if fact.id != "goal"]
             ),
             "open_intents": format_open_intents([]),
+            "execution": "{}",
             "max_intents": "3",
         },
     )

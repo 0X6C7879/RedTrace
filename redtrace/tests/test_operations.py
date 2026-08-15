@@ -185,6 +185,51 @@ def test_webshell_sessions_and_credentials_are_global_with_source_attribution(
     assert "Passw0rd!" in exported
 
 
+def test_intent_fact_includes_secrets_from_its_resources(client: TestClient) -> None:
+    project_id = create_project(client)
+    intent = client.post(
+        f"/projects/{project_id}/intents",
+        json={
+            "from": ["origin"],
+            "description": "inspect service",
+            "creator": "reasoner",
+        },
+    ).json()
+    claimed = client.post(
+        f"/projects/{project_id}/intents/{intent['id']}/claim",
+        json={"worker": "explorer"},
+    )
+    assert claimed.status_code == 200
+    resource = client.post(
+        f"/projects/{project_id}/resources",
+        headers={
+            "X-RedTrace-Worker": "explorer",
+            "X-RedTrace-Task": "explore",
+            "X-RedTrace-Intent": intent["id"],
+        },
+        json={
+            "kind": "credential_ref",
+            "name": "shared login",
+            "secret": {"username": "alice", "password": "plain-value"},
+            "actor_type": "worker",
+            "actor": "explorer",
+        },
+    ).json()["resource"]
+
+    concluded = client.post(
+        f"/projects/{project_id}/intents/{intent['id']}/conclude",
+        json={"worker": "explorer", "description": "login confirmed"},
+    )
+
+    assert concluded.status_code == 200
+    fact = concluded.json()["fact"]
+    assert f"[resource:{resource['id']}]" in fact["description"]
+    assert '"password":"plain-value"' in fact["description"]
+    listed = client.get(f"/projects/{project_id}/resources").json()["resources"]
+    linked = next(item for item in listed if item["id"] == resource["id"])
+    assert linked["fact_id"] == fact["id"]
+
+
 def test_reverse_listener_creates_global_interactive_session(client: TestClient) -> None:
     project_id = create_project(client)
     probe = socket.socket()
@@ -573,8 +618,8 @@ def test_worker_registers_webshell_without_exposing_secret_and_reuses_it(
     assert next((db.output_root("webshell") / "results").glob(f"*-{result_id}.txt")).read_text() == "uid=33(www-data)"
 
     detail = client.get(f"/projects/{project_id}").json()
-    resource_fact = next(fact for fact in detail["facts"] if resource["id"] in fact["description"])
-    assert "never-return-this" not in resource_fact["description"]
+    assert resource["fact_id"] is None
+    assert {fact["id"] for fact in detail["facts"]} == {"origin", "goal"}
 
 
 @pytest.mark.parametrize(
@@ -586,7 +631,7 @@ def test_worker_registers_webshell_without_exposing_secret_and_reuses_it(
         ("credential_ref", {"credential_type": "host"}, {"value": "test-only"}),
     ],
 )
-def test_human_resource_delete_removes_its_graph_fact(
+def test_human_resource_delete_does_not_touch_graph_facts(
     client: TestClient, kind: str, metadata: dict, secret: dict
 ) -> None:
     project_id = create_project(client)
@@ -606,7 +651,7 @@ def test_human_resource_delete_removes_its_graph_fact(
     assert created.status_code == 201
     resource = created.json()["resource"]
     resource_id = resource["id"]
-    fact_id = resource["fact_id"]
+    assert resource["fact_id"] is None
 
     deleted = client.delete(
         f"/projects/{project_id}/resources/{resource_id}?actor=测试员"
@@ -617,16 +662,11 @@ def test_human_resource_delete_removes_its_graph_fact(
     listed = client.get(f"/projects/{project_id}/resources").json()["resources"]
     assert resource_id not in {resource["id"] for resource in listed}
     facts = client.get(f"/projects/{project_id}").json()["facts"]
-    assert fact_id not in {fact["id"] for fact in facts}
+    assert {fact["id"] for fact in facts} == {"origin", "goal"}
     changes = client.get(
         f"/projects/{project_id}/blackboard/changes", params={"since": 0, "limit": 100}
     ).json()["changes"]
-    assert any(
-        change["kind"] == "fact"
-        and change["node_id"] == fact_id
-        and change["action"] == "removed"
-        for change in changes
-    )
+    assert not any(change["kind"] == "fact" and change["action"] == "removed" for change in changes)
     audit = client.get(f"/projects/{project_id}/operations/audit").json()["events"]
     assert any(
         event["action"] == "resource.delete" and event["resource_id"] == resource_id
@@ -634,22 +674,84 @@ def test_human_resource_delete_removes_its_graph_fact(
     )
 
 
-def test_releasing_resource_fact_keeps_resource_and_blocks_used_facts(
+def test_resource_semantics_bump_planning_revision_but_timestamps_do_not(
+    client: TestClient,
+) -> None:
+    project_id = create_project(client)
+    before = client.get(f"/projects/{project_id}").json()["project"][
+        "planning_revision"
+    ]
+    created = client.post(
+        f"/projects/{project_id}/resources",
+        json={"kind": "webshell", "name": "shell", "target": "https://target"},
+    ).json()["resource"]
+    after_create = client.get(f"/projects/{project_id}").json()["project"][
+        "planning_revision"
+    ]
+    assert after_create == before + 1
+
+    with db.get_conn(immediate=True) as conn:
+        conn.execute(
+            "UPDATE shared_resources SET last_seen_at = ?, updated_at = ? WHERE id = ?",
+            ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", created["id"]),
+        )
+    assert (
+        client.get(f"/projects/{project_id}").json()["project"][
+            "planning_revision"
+        ]
+        == after_create
+    )
+
+    assert client.put(
+        f"/projects/{project_id}/resources/{created['id']}",
+        json={"status": "degraded"},
+    ).status_code == 200
+    after_update = client.get(f"/projects/{project_id}").json()["project"][
+        "planning_revision"
+    ]
+    assert after_update == after_create + 1
+
+    assert client.delete(
+        f"/projects/{project_id}/resources/{created['id']}"
+    ).status_code == 204
+    assert (
+        client.get(f"/projects/{project_id}").json()["project"][
+            "planning_revision"
+        ]
+        == after_update + 1
+    )
+
+
+def test_moving_resource_out_of_project_bumps_old_planning_revision(
     client: TestClient,
 ) -> None:
     project_id = create_project(client)
     resource = client.post(
         f"/projects/{project_id}/resources",
-        json={"kind": "credential_ref", "name": "keep-me", "secret": {"value": "secret"}},
+        json={"kind": "file", "name": "result", "target": "result.txt"},
     ).json()["resource"]
-    fact_id = resource["fact_id"]
+    before_move = client.get(f"/projects/{project_id}").json()["project"][
+        "planning_revision"
+    ]
 
-    released = client.delete(f"/projects/{project_id}/blackboard/facts/{fact_id}")
-    assert released.status_code == 204
-    kept = client.get(f"/projects/{project_id}/resources/{resource['id']}").json()["resource"]
-    assert kept["fact_id"] is None
-    assert client.get(f"/projects/{project_id}/blackboard/nodes/{fact_id}").json()["found"] is False
+    with db.get_conn(immediate=True) as conn:
+        conn.execute(
+            "UPDATE shared_resources SET project_id = NULL WHERE id = ?",
+            (resource["id"],),
+        )
 
+    assert (
+        client.get(f"/projects/{project_id}").json()["project"][
+            "planning_revision"
+        ]
+        == before_move + 1
+    )
+
+
+def test_releasing_leaf_fact_and_blocking_used_facts(
+    client: TestClient,
+) -> None:
+    project_id = create_project(client)
     leaf_intent = client.post(
         f"/projects/{project_id}/intents",
         json={"from": ["origin"], "description": "leaf", "creator": "admin", "worker": "admin"},
@@ -677,28 +779,32 @@ def test_releasing_resource_fact_keeps_resource_and_blocks_used_facts(
     assert client.delete(f"/projects/{project_id}/blackboard/facts/{parent['id']}").status_code == 409
 
 
-def test_resource_delete_detaches_its_fact_from_graph_intents(client: TestClient) -> None:
+def test_resource_delete_preserves_linked_fact_and_intent(client: TestClient) -> None:
     project_id = create_project(client)
-    resource = client.post(
-        f"/projects/{project_id}/resources",
-        json={"kind": "webshell", "name": "used-resource"},
-    ).json()["resource"]
     intent = client.post(
         f"/projects/{project_id}/intents",
         json={
-            "from": [resource["fact_id"]],
-            "description": "depends on resource",
+            "from": ["origin"],
+            "description": "produce linked fact",
             "creator": "admin",
             "worker": "admin",
         },
     ).json()
+    fact = client.post(
+        f"/projects/{project_id}/intents/{intent['id']}/conclude",
+        json={"worker": "admin", "description": "confirmed independently"},
+    ).json()["fact"]
+    resource = client.post(
+        f"/projects/{project_id}/resources",
+        json={"kind": "webshell", "name": "used-resource", "fact_id": fact["id"]},
+    ).json()["resource"]
 
     assert client.delete(
         f"/projects/{project_id}/resources/{resource['id']}"
     ).status_code == 204
     project = client.get(f"/projects/{project_id}").json()
-    assert resource["fact_id"] not in {fact["id"] for fact in project["facts"]}
-    assert intent["id"] not in {item["id"] for item in project["intents"]}
+    assert fact["id"] in {item["id"] for item in project["facts"]}
+    assert intent["id"] in {item["id"] for item in project["intents"]}
 
 
 @pytest.mark.skipif(
@@ -922,7 +1028,7 @@ def test_c2_listener_session_task_approval_poll_and_result(client: TestClient) -
     )
     assert completed.status_code == 200
     assert completed.json()["task"]["status"] == "succeeded"
-    assert completed.json()["task"]["fact_id"]
+    assert completed.json()["task"]["fact_id"] is None
 
     resources = client.get(f"/projects/{project_id}/resources").json()["resources"]
     kinds = {item["kind"] for item in resources}
@@ -1041,8 +1147,7 @@ def test_c2_payload_and_profile_are_project_scoped_references(client: TestClient
     listed = client.get(f"/projects/{project_id}/resources").json()["resources"]
     assert {item["kind"] for item in listed} >= {"c2_payload", "c2_profile"}
     facts = client.get(f"/projects/{project_id}").json()["facts"]
-    assert any("C2 载荷" in fact["description"] for fact in facts)
-    assert any("C2 流量伪装" in fact["description"] for fact in facts)
+    assert {fact["id"] for fact in facts} == {"origin", "goal"}
 
 
 def test_payload_oneliner_and_worker_upload_are_retained_and_shareable(client: TestClient) -> None:

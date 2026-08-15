@@ -49,7 +49,13 @@ WORKER_ENV_KEYS: dict[WorkerType, tuple[str, ...]] = {
 }
 
 DEFAULT_PROMPT_REQUIRED_TOKENS: dict[str, tuple[str, ...]] = {
-    "reason.md": ("{graph_yaml}", "{fact_ids}", "{open_intents}", "{max_intents}"),
+    "reason.md": (
+        "{graph_yaml}",
+        "{fact_ids}",
+        "{open_intents}",
+        "{execution}",
+        "{max_intents}",
+    ),
     "explore.md": ("{graph_yaml}", "{intent_id}", "{intent_description}"),
     "explore_conclude.md": ("{graph_yaml}", "{intent_id}", "{intent_description}"),
     "bootstrap.md": ("{origin}", "{goal}", "{hints}"),

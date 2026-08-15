@@ -307,6 +307,10 @@ def test_skill_list_reuses_short_process_cache(
 
 
 def test_drivers_keep_native_config_and_inject_shared_mcp(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "redtrace.dispatcher.workers.adapters.codex.codex_compat_base_url",
+        lambda _upstream: "http://127.0.0.1:1234/token",
+    )
     monkeypatch.setenv("REDTRACE_CAPABILITIES_ROOT", str(tmp_path))
     store = CapabilityStore(tmp_path)
     store.write_mcp(
@@ -325,6 +329,22 @@ def test_drivers_keep_native_config_and_inject_shared_mcp(monkeypatch, tmp_path:
     )
     codex = CodexDriver(local=True).build_execute(codex_worker, "PROMPT", None).argv
     assert any("mcp_servers.filesystem.command" in argument for argument in codex)
+
+    codex_worker.env.update(
+        {
+            "CODEX_MODEL": "custom-model",
+            "CODEX_BASE_URL": "https://example.test/v1",
+            "OPENAI_API_KEY": "secret",
+        }
+    )
+    configured_codex = CodexDriver(local=True).build_execute(
+        codex_worker, "PROMPT", None
+    ).argv
+    assert not any(
+        "mcp_servers.filesystem.command" in argument for argument in configured_codex
+    )
+    assert "features.multi_agent=false" in configured_codex
+    assert 'web_search="disabled"' in configured_codex
 
     pi = PiDriver(local=True).build_execute(_worker("pi"), "PROMPT", None).argv
     assert PI_MCP_EXTENSION in pi

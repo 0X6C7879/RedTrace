@@ -20,7 +20,7 @@ from typing import Any
 
 import requests
 
-from redtrace.board.storage import next_fact_id, utcnow
+from redtrace.board.storage import utcnow
 from redtrace.config_secrets import atomic_write_bytes
 from redtrace.server import db
 from redtrace.server.event_hub import event_hub
@@ -234,27 +234,6 @@ def expire_stale_c2_sessions(conn, project_id: str | None = None) -> list[str]:
     return ids
 
 
-def _fact_summary(kind: str, name: str, rid: str, target: str, summary: str) -> str:
-    kind_labels = {
-        "webshell": "WebShell",
-        "c2_listener": "C2 Listener",
-        "c2_session": "C2 Session",
-        "c2_payload": "C2 载荷",
-        "c2_profile": "C2 流量伪装",
-        "proxy": "代理通道",
-        "file": "文件",
-        "credential_ref": "凭据引用",
-        "plugin": "插件",
-        "result": "任务结果",
-    }
-    parts = [f"[resource:{rid}] 已登记{kind_labels.get(kind, kind)}：{name}"]
-    if target:
-        parts.append(f"目标 {target}")
-    if summary:
-        parts.append(summary[:240])
-    return "；".join(parts)
-
-
 def create_resource(
     conn,
     *,
@@ -273,7 +252,6 @@ def create_resource(
     fact_id: str | None = None,
     parent_resource_id: str | None = None,
     source_task_id: str | None = None,
-    publish_fact: bool = True,
 ) -> tuple[dict[str, Any], str | None]:
     if kind not in RESOURCE_KINDS:
         raise ValueError(f"unsupported resource kind: {kind}")
@@ -356,26 +334,6 @@ def create_resource(
             now if kind == "c2_session" else None,
         ),
     )
-    if project_id is not None and publish_fact and fact_id is None and kind in {
-        "webshell",
-        "c2_listener",
-        "c2_session",
-        "c2_payload",
-        "c2_profile",
-        "proxy",
-        "credential_ref",
-        "plugin",
-        "result",
-    }:
-        fid = next_fact_id(conn, project_id)
-        conn.execute(
-            "INSERT INTO facts (id, project_id, description) VALUES (?, ?, ?)",
-            (fid, project_id, _fact_summary(kind, name, rid, target, summary)),
-        )
-        conn.execute(
-            "UPDATE shared_resources SET fact_id = ? WHERE id = ?",
-            (fid, rid),
-        )
     audit_event(
         conn,
         project_id=project_id,
@@ -1053,7 +1011,6 @@ class ShellBroker:
                         actor_type="system",
                         actor=f"listener:{listener['id']}",
                         parent_resource_id=listener["id"],
-                        publish_fact=True,
                     )
                 else:
                     conn.execute(
@@ -1111,7 +1068,6 @@ class ShellBroker:
                 actor_type="system",
                 actor=f"listener:{listener['id']}",
                 parent_resource_id=listener["id"],
-                publish_fact=True,
             )
             session_id = session["id"]
             audit_event(
@@ -1324,9 +1280,8 @@ class OperationExecutor:
                 (utcnow(), utcnow(), current["resource_id"]),
             )
             arguments = json_load(current["input_json"], {})
-            fact_id_value = None
             if bool(arguments.get("publish_result")):
-                result_resource, _ = create_resource(
+                create_resource(
                     conn,
                     project_id=current["project_id"],
                     kind="result",
@@ -1339,13 +1294,7 @@ class OperationExecutor:
                     worker=current["actor"] if current["actor_type"] == "worker" else None,
                     intent_id=current["intent_id"],
                     source_task_id=task_id_value,
-                    publish_fact=True,
                 )
-                fact_id_value = result_resource.get("fact_id")
-            conn.execute(
-                "UPDATE operation_tasks SET fact_id = COALESCE(?, fact_id) WHERE id = ?",
-                (fact_id_value, task_id_value),
-            )
             audit_event(
                 conn,
                 project_id=current["project_id"],

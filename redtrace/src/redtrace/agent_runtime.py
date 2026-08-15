@@ -216,11 +216,7 @@ class AgentRuntimeManager:
             tools = Path("/opt/redtrace/tools")
             plugin_dir = Path("/opt/redtrace/claude-plugin")
 
-        resource_args = [
-            *self._mcp_args_cache,
-            "-c",
-            self._codex_skills_config(skills),
-        ]
+        resource_args = [*self._mcp_args_cache]
         worker.env.update(
             {
                 "REDTRACE_ROOT": (
@@ -254,6 +250,9 @@ class AgentRuntimeManager:
                     if self.execution == "local"
                     else "/opt/redtrace/skill-memory"
                 ),
+                # Codex discovers Skills from the canonical project links in
+                # .agents/skills. Its driver suppresses MCP only for custom
+                # Responses providers that cannot accept namespace tools.
                 "REDTRACE_CODEX_RESOURCE_ARGS": json.dumps(resource_args),
             }
         )
@@ -264,13 +263,6 @@ class AgentRuntimeManager:
                 if self.execution == "local"
                 else "/opt/redtrace/private-code-audit-cases"
             )
-
-    @staticmethod
-    def _codex_skills_config(skills: list[str]) -> str:
-        values = ",".join(
-            f"{{path={json.dumps(path)},enabled=true}}" for path in skills
-        )
-        return f"skills.config=[{values}]"
 
     def _ensure_claude_plugin(self) -> None:
         plugin = self.runtime / "claude-plugin"

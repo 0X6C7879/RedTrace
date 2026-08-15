@@ -9,6 +9,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from redtrace.capabilities import CapabilityStore
 from redtrace.dispatcher.config import ContextHarnessConfig, LocalConfig
 from redtrace.dispatcher.runtime.backend import (
     is_agent_runtime_state,
@@ -50,6 +51,16 @@ class LocalBackend:
             else Path(__file__).resolve().parents[5] / ".redtrace" / "runtime" / "bin"
         )
         self._tools_dir = self._runtime_bin.parent / "tools"
+        self._capability_store = (
+            CapabilityStore(
+                paths.root,
+                skills_dir=paths.skills,
+                mcp_dir=paths.mcp,
+                plugins_dir=paths.plugins,
+            )
+            if paths is not None
+            else None
+        )
         self._project_state_root = (
             paths.projects
             if paths is not None
@@ -87,6 +98,8 @@ class LocalBackend:
         _ensure_directory(project_dir)
         _ensure_directory(marker.parent)
         marker.touch(exist_ok=True)
+        if self._capability_store is not None:
+            self._ensure_native_skill_links(project_dir)
         pi_mcp = self._runtime_bin.parent / "mcp" / "pi.json"
         if pi_mcp.is_file():
             target = project_dir / ".pi" / "mcp.json"
@@ -104,6 +117,21 @@ class LocalBackend:
             "local project workdir ready project=%s dir=%s", project_id, project_dir
         )
         return str(project_dir)
+
+    def _ensure_native_skill_links(self, project_dir: Path) -> None:
+        assert self._capability_store is not None
+        roots = (
+            project_dir / ".agents" / "skills",
+            project_dir / ".claude" / "skills",
+        )
+        for root in roots:
+            _ensure_directory(root)
+        for skill in self._capability_store.list_skills():
+            if not skill.enabled:
+                continue
+            source = self._capability_store.skills_dir / skill.name
+            for root in roots:
+                _ensure_link(root / skill.name, source)
 
     def conversation_environment(
         self, project_id: str, worker_type: str, worker_name: str = "default"
@@ -333,7 +361,7 @@ def _ensure_link(link: Path, target: Path) -> None:
         check=False,
     )
     if completed.returncode != 0:
-        raise RuntimeError(f"cannot link Agent user configuration: {target}")
+        raise RuntimeError(f"cannot create Agent runtime link: {target}")
 
 
 def _copy_config(source: Path, target: Path) -> None:

@@ -22,25 +22,6 @@ def _lease_factory(lease: FakeLease):
     return lambda *_args, **_kwargs: lease
 
 
-def test_reason_keeps_one_ready_intent_within_configured_cap() -> None:
-    config = make_config()
-
-    assert reason._intent_target(config) == 2
-
-    config.tasks.reason.max_intents = 1
-    assert reason._intent_target(config) == 1
-
-
-def test_reason_capacity_counts_only_explore_workers() -> None:
-    config = make_config()
-    reason_only = config.workers[0].model_copy(
-        update={"name": "reason-only", "task_types": ["reason"], "max_running": 20}
-    )
-    config.workers.append(reason_only)
-
-    assert reason._intent_target(config) == 2
-
-
 def test_reason_writes_graph_snapshot_and_creates_intent(monkeypatch) -> None:
     config = make_config()
     project = make_project()
@@ -78,7 +59,7 @@ def test_reason_writes_graph_snapshot_and_creates_intent(monkeypatch) -> None:
     patched_project, patch = client.patched[0]
     assert patched_project == "proj_001"
     assert patch["worker"] == "test-worker"
-    assert patch["base_revision"] == 0
+    assert patch["base_planning_revision"] == 0
     assert patch["create"] == [{"from": ["f001"], "description": "next step", "priority": 50}]
     assert client.released_reasons == [("proj_001", "test-worker")]
     assert lease.started and lease.stopped
@@ -90,7 +71,95 @@ def test_reason_writes_graph_snapshot_and_creates_intent(monkeypatch) -> None:
     assert content == graph_yaml
     assert graph_yaml not in driver.execute_prompts[0]
     assert path in driver.execute_prompts[0]
+    assert '"planning_mode": "frontier_replanning"' in driver.execute_prompts[0]
+    assert '"available_workers"' in driver.execute_prompts[0]
     assert driver.conclude_prompts == []
+
+
+def test_reason_uses_initial_environment_sensing_without_bootstrap(monkeypatch) -> None:
+    config = make_config()
+    project = make_project()
+    project.facts = project.facts[:2]
+    project.project.bootstrap_enabled = False
+    client = FakeClient(project)
+    containers = FakeContainerManager()
+    driver = FakeDriver()
+    lease = FakeLease()
+
+    monkeypatch.setattr(reason, "get_driver", lambda *_a, **_k: driver)
+    monkeypatch.setattr(reason.HeartbeatLease, "for_reason", _lease_factory(lease))
+    monkeypatch.setattr(
+        reason,
+        "run_worker_process",
+        lambda *_args, **_kwargs: ProcessResult(
+            0,
+            '{"accepted":true,"data":{"create":[{"from":["origin"],"description":"inspect environment"}]}}',
+            "",
+        ),
+    )
+
+    outcome = reason.run_reason_task(
+        config,
+        client,
+        containers,
+        project,
+        "graph",
+        config.workers[0],
+        TaskCancellation(),
+    )
+
+    assert outcome == "success"
+    assert '"planning_mode": "initial_environment_sensing"' in driver.execute_prompts[0]
+    assert '"enabled": false' in driver.execute_prompts[0]
+    assert "允许直接运行短时命令或工具" in driver.execute_prompts[0]
+    assert "名称解析、网络可达性、基础端口/服务/协议特征" in driver.execute_prompts[0]
+    assert "信息不足时，优先创建一个可验证的环境探测 Intent" not in driver.execute_prompts[0]
+    assert client.patched[0][1]["create"][0]["description"] == "inspect environment"
+
+
+def test_bootstrap_timeout_uses_cairn_conclude_fallback(monkeypatch) -> None:
+    config = make_config()
+    intent = make_intent()
+    intent.creator = "dispatcher.bootstrap"
+    project = make_project(intents=[intent])
+    client = FakeClient(project)
+    containers = FakeContainerManager()
+    driver = FakeDriver()
+    lease = FakeLease()
+    results: Iterator[ProcessResult] = iter(
+        [
+            ProcessResult(124, "discovered workspace layout", "", timed_out=True),
+            ProcessResult(
+                0,
+                '{"accepted":true,"data":{"fact":{"description":"confirmed partial result"}}}',
+                "",
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(bootstrap, "get_driver", lambda *_a, **_k: driver)
+    monkeypatch.setattr(bootstrap.HeartbeatLease, "for_intent", _lease_factory(lease))
+    monkeypatch.setattr(
+        bootstrap,
+        "run_worker_process",
+        lambda *_args, **_kwargs: next(results),
+    )
+
+    outcome = bootstrap.run_bootstrap_task(
+        config,
+        client,
+        containers,
+        project,
+        intent,
+        config.workers[0],
+        TaskCancellation(),
+    )
+
+    assert outcome == "success"
+    assert client.concluded == [
+        ("proj_001", "i001", "test-worker", "confirmed partial result")
+    ]
+    assert len(driver.conclude_prompts) == 1
 
 
 def test_reason_repairs_invalid_format_once(monkeypatch) -> None:
@@ -207,8 +276,48 @@ def test_reason_only_fills_available_open_intent_slots(monkeypatch) -> None:
 
     assert outcome == "success"
     assert client.patched[0][1]["create"] == [
-        {"from": ["f001"], "description": "slot one", "priority": 50}
+        {"from": ["f001"], "description": "slot one", "priority": 50},
+        {"from": ["f001"], "description": "slot two", "priority": 50},
     ]
+
+
+def test_reason_noop_still_commits_evaluated_revision(monkeypatch) -> None:
+    config = make_config()
+    project = make_project(intents=[make_intent("i001")])
+    project.project.planning_revision = 5
+    client = FakeClient(project)
+    containers = FakeContainerManager()
+    driver = FakeDriver()
+    lease = FakeLease()
+
+    monkeypatch.setattr(reason, "get_driver", lambda *_a, **_k: driver)
+    monkeypatch.setattr(reason.HeartbeatLease, "for_reason", _lease_factory(lease))
+    monkeypatch.setattr(
+        reason,
+        "run_worker_process",
+        lambda *_args, **_kwargs: ProcessResult(
+            0, '{"accepted":true,"data":{}}', ""
+        ),
+    )
+
+    outcome = reason.run_reason_task(
+        config,
+        client,
+        containers,
+        project,
+        "graph",
+        config.workers[0],
+        TaskCancellation(),
+    )
+
+    assert outcome == "success"
+    assert client.patched[0][0] == "proj_001"
+    patch = client.patched[0][1]
+    assert patch["base_planning_revision"] == 5
+    assert patch["worker"] == "test-worker"
+    assert patch["create"] == patch["drop"] == patch["reprioritize"] == []
+    assert patch["supersede"] == []
+    assert patch["complete"] is None
 
 
 def test_reason_returns_revision_conflict_for_immediate_replan(monkeypatch) -> None:
@@ -362,7 +471,7 @@ def test_bootstrap_success_concludes_fact_then_completes_project(monkeypatch) ->
     assert lease.started and lease.stopped
 
 
-def test_bootstrap_partial_fact_concludes_without_completing_project(monkeypatch) -> None:
+def test_bootstrap_partial_execute_result_uses_conclude_fallback(monkeypatch) -> None:
     config = make_config()
     intent = make_intent()
     project = make_project(intents=[intent])
@@ -396,6 +505,7 @@ def test_bootstrap_partial_fact_concludes_without_completing_project(monkeypatch
     assert outcome == "success"
     assert client.concluded == [("proj_001", "i001", "test-worker", "initial confirmed fact")]
     assert client.completed == []
+    assert len(driver.conclude_prompts) == 1
     assert lease.started and lease.stopped
 
 

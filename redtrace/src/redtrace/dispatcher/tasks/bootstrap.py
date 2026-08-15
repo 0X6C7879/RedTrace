@@ -31,7 +31,6 @@ from redtrace.dispatcher.tasks.common import (
     preview,
     process_failure_outcome,
     record_session_checkpoint,
-    run_learning_checkpoint,
     run_worker_process,
     write_conclude_result,
     write_conclude_result_with_fact_id,
@@ -54,7 +53,6 @@ def run_bootstrap_task(
     task_started = time.perf_counter()
     container_name: str | None = None
     session: str | None = None
-    checkpoint_due = False
     lease = HeartbeatLease.for_intent(
         client, project.project.id, intent.id, worker.name, config.runtime.interval
     )
@@ -96,7 +94,6 @@ def run_bootstrap_task(
             worker, prompt, session, task_type="bootstrap"
         )
         session = execute.session
-        checkpoint_due = True
         execute_started = time.perf_counter()
         first = run_worker_process(
             container_manager,
@@ -196,17 +193,6 @@ def run_bootstrap_task(
                 )
                 best_effort_release(client, project.project.id, intent.id, worker.name)
                 return "rejected"
-            if kind == "fact":
-                return write_conclude_result(
-                    client,
-                    project.project.id,
-                    intent.id,
-                    worker.name,
-                    data["fact_description"],
-                    source="bootstrap",
-                    phase_ms=execute_ms,
-                    total_ms=int((time.perf_counter() - task_started) * 1000),
-                )
             return _write_bootstrap_complete_result(
                 client,
                 project.project.id,
@@ -265,22 +251,6 @@ def run_bootstrap_task(
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return exception_failure_outcome(exc)
     finally:
-        if checkpoint_due and container_name is not None:
-            run_learning_checkpoint(
-                driver,
-                client,
-                container_manager,
-                container_name,
-                worker,
-                session,
-                task_type="bootstrap",
-                project_id=project.project.id,
-                intent_id=intent.id,
-                blackboard_revision=project.blackboard_revision,
-                timeout_seconds=config.tasks.bootstrap.conclude_timeout,
-                lease=lease,
-                cancellation=cancellation,
-            )
         lease.stop()
 
 

@@ -230,6 +230,7 @@ export TMPDIR="$DATA_DIR/tmp"
 export TMP="$TMPDIR"
 export TEMP="$TMPDIR"
 ensure_project_environment
+uv sync --project "$PROJECT_DIR"
 trap cleanup EXIT
 trap 'handle_signal 130' INT
 trap 'handle_signal 143' TERM
@@ -240,7 +241,7 @@ if server_is_ready; then
 else
   printf 'Starting RedTrace Server at http://%s:%s ...\n' "$HOST" "$PORT"
   REDTRACE_DISPATCH_CONFIG="$CONFIG_PATH" \
-    uv run --project "$PROJECT_DIR" redtrace serve --db-path "$DB_PATH" --host "$HOST" --port "$PORT" &
+    uv run --no-sync --project "$PROJECT_DIR" redtrace serve --db-path "$DB_PATH" --host "$HOST" --port "$PORT" &
   SERVER_PID=$!
   OWNS_SERVER=1
 
@@ -260,7 +261,7 @@ else
 fi
 
 printf 'Starting RedTrace Dispatcher with %s ...\n' "$CONFIG_PATH"
-uv run --project "$PROJECT_DIR" redtrace dispatch --config "$CONFIG_PATH" &
+uv run --no-sync --project "$PROJECT_DIR" redtrace dispatch --config "$CONFIG_PATH" &
 DISPATCHER_PID=$!
 
 printf 'RedTrace is running. Press Ctrl+C to stop.\n'

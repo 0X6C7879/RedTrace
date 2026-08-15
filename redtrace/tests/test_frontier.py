@@ -7,7 +7,6 @@ from conftest import make_intent, make_project
 from fastapi.testclient import TestClient
 from redtrace.board.models import ProjectDetail, ProjectSummary
 from redtrace.dispatcher.scheduler import project_policy
-from redtrace.dispatcher.scheduler.state import ReasonCheckpoint
 from redtrace.server import db
 from redtrace.server.app import app
 
@@ -36,13 +35,26 @@ def _intent(client: TestClient, project_id: str, description: str) -> dict:
 
 
 def _revision(client: TestClient, project_id: str) -> int:
-    return client.get(f"/projects/{project_id}").json()["blackboard_revision"]
+    return client.get(f"/projects/{project_id}").json()["project"][
+        "planning_revision"
+    ]
 
 
 def _patch(client: TestClient, project_id: str, revision: int, body: dict):
+    project = client.get(f"/projects/{project_id}").json()["project"]
+    if project["reason"] is None:
+        claim = client.post(
+            f"/projects/{project_id}/reason/claim",
+            json={"worker": "reasoner", "trigger": "test"},
+        )
+        assert claim.status_code == 200
     return client.post(
         f"/projects/{project_id}/graph-patch",
-        json={"base_revision": revision, "worker": "reasoner", **body},
+        json={
+            "base_planning_revision": revision,
+            "worker": "reasoner",
+            **body,
+        },
     )
 
 
@@ -84,7 +96,10 @@ def test_graph_patch_applies_all_operations_atomically(client: TestClient) -> No
 def test_graph_patch_rejects_stale_revision(client: TestClient) -> None:
     project_id = _project(client)
     revision = _revision(client, project_id)
-    _intent(client, project_id, "bumps revision")
+    client.post(
+        f"/projects/{project_id}/hints",
+        json={"content": "new direction", "creator": "human"},
+    )
 
     response = _patch(
         client,
@@ -96,7 +111,84 @@ def test_graph_patch_rejects_stale_revision(client: TestClient) -> None:
     assert "revision_conflict" in response.json()["detail"]
 
 
-def test_frontier_semantic_update_invalidates_stale_revision(
+def test_noop_patch_marks_current_planning_revision_evaluated(
+    client: TestClient,
+) -> None:
+    project_id = _project(client)
+    revision = _revision(client, project_id)
+
+    response = _patch(client, project_id, revision, {})
+
+    assert response.status_code == 200
+    assert response.json()["planning_revision"] == revision
+    assert response.json()["reason_evaluated_revision"] == revision
+    project = client.get(f"/projects/{project_id}").json()["project"]
+    assert project["reason_evaluated_revision"] == project["planning_revision"]
+    assert client.post(
+        f"/projects/{project_id}/reason/release",
+        json={"worker": "reasoner"},
+    ).status_code == 200
+
+    duplicate = client.post(
+        f"/projects/{project_id}/reason/claim",
+        json={"worker": "other-reasoner", "trigger": "stale-summary"},
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "Planning revision is already evaluated"
+
+
+def test_graph_patch_cannot_modify_working_intent(client: TestClient) -> None:
+    project_id = _project(client)
+    intent = _intent(client, project_id, "already executing")
+    assert client.post(
+        f"/projects/{project_id}/intents/{intent['id']}/claim",
+        json={"worker": "explorer"},
+    ).status_code == 200
+
+    response = _patch(
+        client,
+        project_id,
+        _revision(client, project_id),
+        {
+            "reprioritize": [
+                {"intent_id": intent["id"], "priority": 99, "reason": "too late"}
+            ]
+        },
+    )
+
+    assert response.status_code == 409
+    stored = client.get(f"/projects/{project_id}").json()["intents"][0]
+    assert stored["state"] == "working"
+    assert stored["priority"] == 50
+
+
+def test_runtime_noise_does_not_conflict_with_reason_patch(client: TestClient) -> None:
+    project_id = _project(client)
+    intent = _intent(client, project_id, "long running")
+    assert client.post(
+        f"/projects/{project_id}/intents/{intent['id']}/claim",
+        json={"worker": "explorer"},
+    ).status_code == 200
+    revision = _revision(client, project_id)
+    assert client.post(
+        f"/projects/{project_id}/reason/claim",
+        json={"worker": "reasoner", "trigger": "test"},
+    ).status_code == 200
+    assert client.post(
+        f"/projects/{project_id}/intents/{intent['id']}/heartbeat",
+        json={"worker": "explorer"},
+    ).status_code == 200
+
+    response = client.post(
+        f"/projects/{project_id}/graph-patch",
+        json={"base_planning_revision": revision, "worker": "reasoner"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["planning_revision"] == revision
+
+
+def test_frontier_only_update_does_not_invalidate_planning_revision(
     client: TestClient,
 ) -> None:
     project_id = _project(client)
@@ -114,16 +206,15 @@ def test_frontier_semantic_update_invalidates_stale_revision(
         },
     )
     assert changed.status_code == 200
-    assert changed.json()["revision"] > revision
+    assert changed.json()["planning_revision"] == revision
 
-    stale = _patch(
+    follow_up = _patch(
         client,
         project_id,
         revision,
         {"drop": [{"intent_id": intent["id"], "reason": "stale planner"}]},
     )
-    assert stale.status_code == 409
-    assert "revision_conflict" in stale.json()["detail"]
+    assert follow_up.status_code == 200
 
 
 def test_graph_patch_rejects_unknown_fact_and_intent(client: TestClient) -> None:
@@ -363,21 +454,16 @@ def test_summary_and_detail_share_usable_frontier_count(client: TestClient) -> N
     assert summary.working_intent_count == 1
     assert summary.unclaimed_intent_count == 1
     assert detail_count == summary.working_intent_count + summary.unclaimed_intent_count
-    assert project_policy.reason_trigger(
-        ReasonCheckpoint(fact_count=2, hint_count=0, open_intent_count=4),
-        fact_count=2,
-        hint_count=0,
-        open_intents=detail_count,
-        request_generation=0,
-    ) == "open_intents:4->2"
 
 
-def test_consecutive_failures_decay_priority(client: TestClient) -> None:
+def test_consecutive_failures_preserve_priority_and_block_without_fact(
+    client: TestClient,
+) -> None:
     project_id = _project(client)
     intent = _intent(client, project_id, "attempt")
     path = f"/projects/{project_id}/intents/{intent['id']}/outcome"
 
-    for _ in range(2):
+    for _ in range(3):
         response = client.post(
             path, json={"worker": "w", "outcome": "provider_exit", "detail": ""}
         )
@@ -385,11 +471,50 @@ def test_consecutive_failures_decay_priority(client: TestClient) -> None:
 
     detail = client.get(f"/projects/{project_id}").json()
     stored = next(item for item in detail["intents"] if item["id"] == intent["id"])
-    assert stored["priority"] == 35  # 50 - 5 - 10
+    assert stored["priority"] == 50
+    assert stored["state"] == "blocked"
+    assert {fact["id"] for fact in detail["facts"]} == {"origin", "goal"}
+    late_conclusion = client.post(
+        f"/projects/{project_id}/intents/{intent['id']}/conclude",
+        json={"worker": "w", "description": "late result"},
+    )
+    assert late_conclusion.status_code == 409
+    assert late_conclusion.json()["detail"] == "Intent is blocked"
+
+
+def test_bootstrap_failures_keep_the_cairn_retry_path_open(
+    client: TestClient,
+) -> None:
+    project_id = _project(client)
+    intent = client.post(
+        f"/projects/{project_id}/intents",
+        json={
+            "from": ["origin"],
+            "description": "bootstrap",
+            "creator": "dispatcher.bootstrap",
+        },
+    ).json()
+    before = _revision(client, project_id)
+
+    path = f"/projects/{project_id}/intents/{intent['id']}/outcome"
+    for _ in range(4):
+        response = client.post(
+            path,
+            json={"worker": "bootstrap-worker", "outcome": "timeout"},
+        )
+        assert response.status_code == 200
+        assert response.json()["circuitOpen"] is False
+
+    detail = client.get(f"/projects/{project_id}").json()
+    stored = next(item for item in detail["intents"] if item["id"] == intent["id"])
     assert stored["state"] == "open"
+    assert stored["failure_count"] == 4
+    assert stored["circuit_open"] is False
+    assert detail["project"]["planning_revision"] == before
+    assert {fact["id"] for fact in detail["facts"]} == {"origin", "goal"}
 
 
-def test_incremental_fact_and_runtime_update_branch_budget(
+def test_observation_and_runtime_update_branch_budget(
     client: TestClient,
 ) -> None:
     project_id = _project(client)
@@ -400,22 +525,30 @@ def test_incremental_fact_and_runtime_update_branch_budget(
     )
     assert claimed.status_code == 200
 
-    denied = client.post(
+    legacy_fact = client.post(
         f"/projects/{project_id}/intents/{intent['id']}/facts",
-        json={"worker": "other", "description": "spoofed"},
+        json={"worker": "explorer", "description": "must not bypass conclude"},
+    )
+    assert legacy_fact.status_code == 409
+
+    denied = client.post(
+        f"/projects/{project_id}/intents/{intent['id']}/observations",
+        json={"worker": "other", "content": "spoofed"},
     )
     assert denied.status_code == 409
 
     submitted = client.post(
-        f"/projects/{project_id}/intents/{intent['id']}/facts",
-        json={"worker": "explorer", "description": "confirmed /admin endpoint"},
+        f"/projects/{project_id}/intents/{intent['id']}/observations",
+        json={"worker": "explorer", "content": "possible /admin endpoint"},
     )
     assert submitted.status_code == 201
-    assert submitted.json()["fact"]["id"] == "f001"
+    assert submitted.json()["observation"]["id"] == "o001"
     assert submitted.json()["intent"]["to"] is None
     assert submitted.json()["intent"]["state"] == "working"
-    assert submitted.json()["intent"]["fact_yield"] == 1
+    assert submitted.json()["intent"]["fact_yield"] == 0
     assert submitted.json()["intent"]["last_progress_at"] is not None
+    detail = client.get(f"/projects/{project_id}").json()
+    assert {fact["id"] for fact in detail["facts"]} == {"origin", "goal"}
 
     outcome = client.post(
         f"/projects/{project_id}/intents/{intent['id']}/outcome",
@@ -428,7 +561,7 @@ def test_incremental_fact_and_runtime_update_branch_budget(
         if item["id"] == intent["id"]
     )
     assert stored["cumulative_runtime_ms"] == 1234
-    assert stored["fact_yield"] == 1
+    assert stored["fact_yield"] == 0
 
 
 def test_failed_conclude_does_not_delete_committed_facts(client: TestClient) -> None:

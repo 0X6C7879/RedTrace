@@ -1,0 +1,34 @@
+server: "http://127.0.0.1:8000"
+runtime:
+  execution: local
+  interval: 3
+  max_workers: 4
+  max_running_projects: 1
+  max_project_workers: 4
+  healthcheck_timeout: 60
+  worker_healthcheck: startup_only
+  prompt_group: default
+tasks:
+  bootstrap: {timeout: 600, conclude_timeout: 120}
+  reason: {timeout: 300, max_intents: 3}
+  explore: {timeout: 1800, conclude_timeout: 300}
+local: {completed_action: keep}
+common_env:
+  BENCHMARK_TOKEN: ${BENCHMARK_TOKEN}
+  BENCHMARK_BASE_URL: ${BENCHMARK_BASE_URL}
+  VPN_CHECK_URL: ${VPN_CHECK_URL}
+  PI_CODING_AGENT_DIR: ${PI_CODING_AGENT_DIR}
+workers:
+  - name: pi-coordinator
+    type: pi
+    task_types: [bootstrap, reason]
+    max_running: 1
+    priority: 0
+    env: &gateway
+      PI_BASE_URL: ${AGENT_BASE_URL}/v1
+      PI_MODEL: ${MODEL}
+      PI_API_KEY: ${API_KEY}
+      PI_PROVIDER_API: openai-completions
+  - {name: pi-explore-1, type: pi, task_types: [explore], max_running: 1, priority: 0, env: *gateway}
+  - {name: pi-explore-2, type: pi, task_types: [explore], max_running: 1, priority: 0, env: *gateway}
+  - {name: pi-explore-3, type: pi, task_types: [explore], max_running: 1, priority: 0, env: *gateway}
