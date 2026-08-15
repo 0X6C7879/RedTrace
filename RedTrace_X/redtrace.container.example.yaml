@@ -1,0 +1,104 @@
+# RedTrace container deployment example.
+# RedTrace server API endpoint.
+server: "http://redtrace-server:8000"
+
+# Shared environment variables merged into every worker.
+common_env:
+  TSEC_SERVER_HOST: "<SERVER_HOST>:8000"
+  TSEC_AGENT_TOKEN: "xxx"
+  BRAVE_API_KEY: "replace-me"  # fallback after native Claude/Codex web search
+
+runtime:
+  # Docker mode is explicit so this file cannot silently become a host-local deployment.
+  execution: "container"
+  # Scheduler tick interval in seconds.
+  interval: 3
+  # Global concurrency cap across all workers and all projects.
+  max_workers: 8
+  # Maximum number of projects that may be actively scheduled at the same time.
+  max_running_projects: 3
+  # Per-project worker cap. Prevents one project from monopolizing the whole dispatcher.
+  max_project_workers: 4
+  # Timeout for each enabled worker healthcheck.
+  healthcheck_timeout: 60
+  # "startup_and_task" checks at dispatcher startup and before every task.
+  # "startup_only" checks only at startup. "disabled" skips automatic worker checks.
+  worker_healthcheck: "startup_only"
+  # Prompt set loaded from redtrace/src/redtrace/dispatcher/prompts/.
+  prompt_group: "default"
+
+tasks:
+  bootstrap:
+    # Main execution timeout for the initial direct solve attempt.
+    timeout: 1800
+    # Time budget for conclude fallback after the main phase times out or returns unusable output.
+    conclude_timeout: 300
+  reason:
+    # Reason decides whether the goal is met and whether new intents should be proposed.
+    timeout: 300
+    # Cap open intents at one ready item beyond per-project Worker capacity.
+    max_intents: 5
+  explore:
+    # Main execution timeout for exploring a claimed intent.
+    timeout: 1800
+    # Time budget for conclude fallback used to summarize confirmed findings from the same session.
+    conclude_timeout: 300
+
+context_harness:
+  # Shared post-RTK layer for Claude Code, Codex, and Pi. Set false for raw execution.
+  enabled: true
+  # Complete security/HTTP/Web output is stored inside the task workspace.
+  artifact_root: ".redtrace/artifacts/context"
+  # Small plain text remains transparent; structured Web/security data is summarized.
+  inline_bytes: 262144
+  visible_bytes: 65536
+  query_bytes: 1048576
+  parse_bytes: 67108864
+  # Bounded prefix+tail retained from each outer Worker stdout/stderr stream.
+  worker_output_chars: 8388608
+
+container:
+  # Built locally by docker compose. The dispatcher execs agent commands inside
+  # one Kali Linux container per project.
+  image: "redtrace-worker-container:latest"
+  # Shared named bridge works on Linux Engine and Docker Desktop for Windows/macOS.
+  network_mode: "redtrace-network"
+  # "stop" keeps finished containers for inspection; "remove" is cleaner but loses post-run state.
+  completed_action: "stop"
+  # Add Linux capabilities only when a task truly needs them, such as packet crafting or network admin actions.
+  # cap_add:
+  #   - "NET_RAW"
+  #   - "NET_ADMIN"
+
+
+workers:
+  # Worker priority is ascending: lower numbers are preferred first.
+  # max_running is per-worker concurrency. Slower backends such as Pi usually benefit from lower values.
+  # - name: "codex_qwen3.6-plus"
+  #   task_types: [bootstrap, reason, explore]
+  #   max_running: 2
+  #   priority: 0
+  #   env:
+  #     CODEX_MODEL: "qwen3.6-plus"
+  #     CODEX_BASE_URL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  #     OPENAI_API_KEY: "sk-xxx"
+
+  # - name: "pi_qwen3.6-plus"
+  #   type: "pi"
+  #   task_types: [bootstrap, reason, explore]
+  #   max_running: 2
+  #   priority: 0
+  #   env:
+  #     PI_MODEL: "qwen3.6-plus"
+  #     PI_BASE_URL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  #     PI_API_KEY: "sk-xxx"
+  #     PI_PROVIDER_API: "openai-completions"
+  #     PI_MODEL_CONTEXT_WINDOW: "1000000"
+paths:
+  root: .
+  skills: skills
+  mcp: mcp
+  plugins: plugins
+  managed: .redtrace
+  workspaces: workspaces
+  audit: .redtrace/audit

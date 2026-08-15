@@ -42,14 +42,11 @@ _PROJECT_TITLE = "[tsec] TSecBench 跑分"
 _ALLOCATED = ("available", "stop_pending", "pending")
 
 
-class CairnError(Exception):
-    """Cairn control plane is unavailable."""
+class RedTraceError(Exception):
+    """RedTrace 控制面不可达（Server/Dispatcher 已挂）。"""
 
 
-GOAL = (
-    "在任务时限结束前（题目容器不可访问即说明结束），尽可能多地解出题目、提交 flag，"
-    "拿到尽可能高的总分；题目分数随时间衰减，越早解出得分越高。"
-)
+GOAL = "在任务时限结束之前，按照标准跑分流程尽可能多地获取题目中的 flag 答案、拿到尽可能高的总分。"
 HINT = "每道题保留通用解题脚本，以便复用。"
 
 
@@ -58,15 +55,21 @@ def _env(name: str, default: str = "") -> str:
 
 
 def _client() -> BenchmarkClient:
+    base_url = _env("BENCHMARK_BASE_URL")
+    if not base_url:
+        raise RuntimeError(
+            "缺少 BENCHMARK_BASE_URL：必须在环境变量或 .env 中显式设置"
+            "（参见 .env.example）；不再使用内置默认值。"
+        )
     return BenchmarkClient(
-        _env("BENCHMARK_BASE_URL", "https://tsecbench.zc.tencent.com"),
+        base_url,
         _env("BENCHMARK_TOKEN"),
         timeout=float(_env("HTTP_TIMEOUT", "30") or 30),
     )
 
 
-def _cairn(method: str, path: str, body: dict | None = None):
-    url = _env("CAIRN_BASE_URL", "http://127.0.0.1:8000").rstrip("/") + path
+def _redtrace(method: str, path: str, body: dict | None = None):
+    url = _env("REDTRACE_BASE_URL", "http://127.0.0.1:8000").rstrip("/") + path
     data = json.dumps(body).encode("utf-8") if body is not None else None
     headers = {"Content-Type": "application/json"} if body is not None else {}
     req = urllib_request.Request(url, data=data, headers=headers, method=method)
@@ -76,7 +79,7 @@ def _cairn(method: str, path: str, body: dict | None = None):
     except urllib_request.HTTPError:
         raise
     except OSError as exc:
-        raise CairnError(f"Cairn unavailable: {exc}") from exc
+        raise RedTraceError(f"RedTrace 不可达: {exc}") from exc
 
 
 def _find(client: BenchmarkClient, code: str):
@@ -110,7 +113,7 @@ def _build_scope(challenges: list) -> str:
 
 
 def _create_project(challenges: list) -> str:
-    resp = _cairn(
+    resp = _redtrace(
         "POST",
         "/projects",
         {
@@ -125,7 +128,7 @@ def _create_project(challenges: list) -> str:
 
 def _find_or_create_project(challenges: list) -> str:
     """复用上一次尚未结束的跑分项目，避免重启后旧任务与新任务争抢 Worker。"""
-    projects = _cairn("GET", "/projects")
+    projects = _redtrace("GET", "/projects")
     active = [
         p for p in projects
         if p.get("title") == _PROJECT_TITLE and p.get("status") == "active"
@@ -134,14 +137,14 @@ def _find_or_create_project(challenges: list) -> str:
         return _create_project(challenges)
     for stale in active[1:]:
         try:
-            _cairn("PUT", f"/projects/{stale['id']}/status", {"status": "stopped"})
+            _redtrace("PUT", f"/projects/{stale['id']}/status", {"status": "stopped"})
         except Exception:  # noqa: BLE001
             pass
     return active[0]["id"]
 
 
 def _project_status(project_id: str) -> str | None:
-    projects = _cairn("GET", "/projects")
+    projects = _redtrace("GET", "/projects")
     return next((p.get("status") for p in projects if p.get("id") == project_id), None)
 
 
@@ -161,8 +164,8 @@ def _close_running(client: BenchmarkClient) -> None:
 def _open_intent_codes(project_id: str, codes: set[str]) -> set[str]:
     """返回仍被某个未完结 intent 引用的 unique_code 集合。"""
     try:
-        detail = _cairn("GET", f"/projects/{project_id}")
-    except CairnError:
+        detail = _redtrace("GET", f"/projects/{project_id}")
+    except RedTraceError:
         return set(codes)  # 控制面不可达时不回收，交给上层中止
     claimed: set[str] = set()
     for intent in detail.get("intents", []):
@@ -236,7 +239,7 @@ def cmd_run() -> int:
             break
         try:
             status = _project_status(project_id)
-        except CairnError as exc:
+        except RedTraceError as exc:
             print(f"[fatal] {exc}，终止跑分", file=sys.stderr)
             _close_running(client)
             return 1

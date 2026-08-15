@@ -1,0 +1,381 @@
+# ============================================================================
+# RedTrace_X Benchmark Docker — Headless offline security benchmark runtime
+#
+# Final image = RedTrace Headless Runtime + Pi Coding-Agent CLI
+#               + Benchmark Adapter + Skills + 4-direction offline toolchain
+#               (Web / Binary / AI / Blockchain) + offline data corpora.
+#
+# Everything a Worker needs must be installed at BUILD time. At RUNTIME the
+# only permitted egress is: model API endpoint, TSecBench Challenge API,
+# and the benchmark target addresses. No pip/npm/cargo/go install, no
+# git clone, no `nuclei -update-templates`, no `solc-select install`.
+#
+# Build (pin the data commits + agent CLI versions via --build-arg):
+#   docker build -f Dockerfile.benchmark -t redtrace-x-benchmark:latest .
+# ============================================================================
+
+# --- Build args (versions are pinned; never `latest`) ----------------------
+ARG PI_CODING_AGENT_VERSION=0.83.0
+ARG NODE_VERSION=22.19.0
+ARG GHIDRA_VERSION=12.1.2
+ARG GHIDRA_BUILD=20260605
+ARG KALI_MIRROR=http://mirrors.aliyun.com/kali
+ARG NUCLEI_TEMPLATES_COMMIT=
+ARG SECLISTS_COMMIT=
+ARG PAYLOADS_COMMIT=
+ARG SEMGREP_RULES_COMMIT=
+ARG JWT_TOOL_COMMIT=
+
+FROM kalilinux/kali-rolling:latest
+
+ARG TARGETARCH
+ARG PI_CODING_AGENT_VERSION
+ARG NODE_VERSION
+ARG GHIDRA_VERSION
+ARG GHIDRA_BUILD
+ARG KALI_MIRROR
+ARG NUCLEI_TEMPLATES_COMMIT
+ARG SECLISTS_COMMIT
+ARG PAYLOADS_COMMIT
+ARG SEMGREP_RULES_COMMIT
+ARG JWT_TOOL_COMMIT
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=Asia/Shanghai \
+    PYTHONUNBUFFERED=1
+RUN rm -f /etc/apt/sources.list.d/* && \
+    printf 'deb %s kali-rolling main contrib non-free non-free-firmware\n' \
+      "$KALI_MIRROR" > /etc/apt/sources.list
+
+# ============================================================================
+# 0. Base runtime + compilers (spec §7). Exact packages only — no meta package.
+# ============================================================================
+RUN apt-get -o Acquire::Retries=5 update && \
+    apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+    ca-certificates curl wget git unzip xz-utils sudo \
+    build-essential pkg-config cmake ninja-build \
+    clang llvm lld autoconf automake libtool \
+    python3 python3-venv python3-pip python3-dev \
+    openjdk-21-jdk-headless maven gradle ruby ruby-dev golang-go rustc cargo perl \
+    libffi-dev libssl-dev libgmp-dev libmpfr-dev libmpc-dev zlib1g-dev \
+    jq ripgrep file procps iproute2 zstd tree \
+    && rm -rf /var/lib/apt/lists/*
+
+# uv (pinned via the astral-sh image copy, reused from RedTrace app Dockerfile)
+COPY --from=ghcr.io/astral-sh/uv:0.8.9 /uv /uvx /usr/local/bin/
+
+# ============================================================================
+# 1. Web + Binary + middleware system packages (spec §9/§11).
+#    qemu-user only (no qemu-system) covering common target arches (spec §12).
+# ============================================================================
+RUN apt-get -o Acquire::Retries=5 update && \
+    apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+    gdb radare2 binutils binwalk libimage-exiftool-perl john nmap whois \
+    bind9-dnsutils hashcat strace ltrace apktool upx-ucl qrencode \
+    bsdextrautils iputils-ping netcat-openbsd sshpass rlwrap nikto dirsearch \
+    yq p7zip-full patchelf libcap2-bin valgrind qemu-user qemu-user-static \
+    afl++ checksec sqlite3 mariadb-client postgresql-client redis-tools \
+    ldap-utils smbclient snmp ftp telnet jadx whatweb exploitdb socat \
+    libxml2-utils xmlstarlet \
+    && rm -rf /var/lib/apt/lists/*
+
+# ============================================================================
+# 2. Node.js (>= 22) + pnpm (spec §7/§9)
+# ============================================================================
+RUN case "$TARGETARCH" in amd64) node_arch=x64 ;; arm64) node_arch=arm64 ;; \
+      *) echo "unsupported arch: $TARGETARCH" >&2; exit 1 ;; esac && \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
+      -o /tmp/node.tar.xz && \
+    tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 && \
+    rm -f /tmp/node.tar.xz && \
+    npm install -g pnpm@9.15.0
+
+# ============================================================================
+# 3. Agent CLIs — pinned (spec §8). Disable auto-update.
+# ============================================================================
+RUN npm install -g "@earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION}" --ignore-scripts && \
+    HOME=/root /usr/local/bin/pi install npm:pi-mcp-extension@1.5.0
+
+# ============================================================================
+# 4. Python toolchain — pinned, shared venv per conflict domain (spec §20).
+#    /opt/redtrace/venvs/security is the primary Web/Binary/AI/Blockchain venv.
+# ============================================================================
+RUN uv venv --python 3.12 /opt/redtrace/venvs/security && \
+    /opt/redtrace/venvs/security/bin/python -m ensurepip --upgrade && \
+    /opt/redtrace/venvs/security/bin/python -m pip install --no-cache-dir \
+    pwntools==4.15.0 pycryptodome==3.23.0 z3-solver==4.13.0.0 sympy==1.14.0 \
+    gmpy2==2.3.0 cysignals==1.12.6 fpylll==0.6.4 py_ecc==8.0.0 pycparser==2.23 \
+    angr==9.2.193 frida-tools==14.8.0 ropper==1.13.13 ROPgadget==7.7 \
+    pefile==2024.8.26 capstone==5.0.3 unicorn==2.1.2 keystone-engine==0.9.2 \
+    pyelftools==0.32 lief==0.17.6 yara-python==4.5.4 \
+    requests==2.32.5 sqlmap==1.10.3 arjun==2.2.2 wafw00f==2.2.0 \
+    web3==6.20.4 solc-select==1.2.0 slither-analyzer==0.11.2 \
+    crytic-compile==0.3.10 \
+    mitmproxy==11.1.3 \
+    && rm -rf /root/.cache/pip
+
+# Halmos pins z3-solver 4.12.6 while angr pins 4.13.0, so keep it isolated.
+RUN uv venv --python 3.12 /opt/redtrace/venvs/halmos && \
+    /opt/redtrace/venvs/halmos/bin/python -m ensurepip --upgrade && \
+    /opt/redtrace/venvs/halmos/bin/python -m pip install --no-cache-dir halmos==0.2.4 && \
+    ln -sf /opt/redtrace/venvs/halmos/bin/halmos /usr/local/bin/halmos && \
+    rm -rf /root/.cache/pip
+
+# RsaCtfTool in its own pinned venv (spec §11)
+RUN uv venv --python 3.12 /opt/redtrace/venvs/rsactftool && \
+    /opt/redtrace/venvs/rsactftool/bin/python -m ensurepip --upgrade && \
+    /opt/redtrace/venvs/rsactftool/bin/python -m pip install --no-cache-dir \
+    "git+https://github.com/RsaCtfTool/RsaCtfTool.git@7c98848f1945de3e67a420871e8672f5ad9aa5d5" && \
+    ln -sfn /opt/redtrace/venvs/rsactftool/bin/RsaCtfTool /usr/local/bin/RsaCtfTool
+
+# Qiling in its own Python 3.11 venv (spec §11)
+RUN uv venv --python 3.11 /opt/redtrace/venvs/qiling && \
+    /opt/redtrace/venvs/qiling/bin/python -m ensurepip --upgrade && \
+    /opt/redtrace/venvs/qiling/bin/python -m pip install --no-cache-dir qiling==1.4.6
+
+# Mythril in an isolated venv (spec §11/§15)
+RUN uv venv --python 3.11 /opt/redtrace/venvs/mythril && \
+    /opt/redtrace/venvs/mythril/bin/python -m ensurepip --upgrade && \
+    /opt/redtrace/venvs/mythril/bin/python -m pip install --no-cache-dir mythril==0.24.8
+
+# Ruby gems (pwn helpers, spec §11)
+RUN gem install one_gadget seccomp-tools --no-document
+
+# ============================================================================
+# 5. Web Go tools — pinned (spec §9)
+# ============================================================================
+RUN for module in \
+      github.com/projectdiscovery/httpx/cmd/httpx@v1.6.10 \
+      github.com/ffuf/ffuf/v2@v2.1.0 \
+      github.com/OJ/gobuster/v3@v3.6.0 \
+      github.com/assetnote/kiterunner/cmd/kr@v1.0.2 \
+      github.com/fullstorydev/grpcurl/cmd/grpcurl@v1.9.3; \
+    do GOBIN=/usr/local/bin go install "$module"; done
+
+RUN case "$TARGETARCH" in \
+      amd64) ferox_arch=x86_64; websocat_asset=websocat_max.x86_64-unknown-linux-musl ;; \
+      arm64) ferox_arch=aarch64; websocat_asset=websocat_max.aarch64-unknown-linux-musl ;; \
+      *) echo "unsupported arch: $TARGETARCH" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/epi052/feroxbuster/releases/download/v2.11.0/${ferox_arch}-linux-feroxbuster.zip" -o /tmp/feroxbuster.zip && \
+    unzip -j /tmp/feroxbuster.zip feroxbuster -d /usr/local/bin && \
+    curl -fsSL "https://github.com/vi/websocat/releases/download/v1.14.0/${websocat_asset}" -o /usr/local/bin/websocat && \
+    chmod 0755 /usr/local/bin/feroxbuster /usr/local/bin/websocat && \
+    rm -f /tmp/feroxbuster.zip
+
+# --- Web binaries (pinned releases) + remaining web Python tools (spec §9) ---
+RUN case "$TARGETARCH" in amd64|arm64) asset_arch="$TARGETARCH" ;; \
+      *) echo "unsupported arch: $TARGETARCH" >&2; exit 1 ;; esac && \
+    curl -fsSL "https://github.com/projectdiscovery/nuclei/releases/download/v3.11.0/nuclei_3.11.0_linux_${asset_arch}.zip" -o /tmp/nuclei.zip && \
+    unzip -qo /tmp/nuclei.zip nuclei -d /usr/local/bin && \
+    curl -fsSL "https://github.com/projectdiscovery/katana/releases/download/v1.5.0/katana_1.5.0_linux_${asset_arch}.zip" -o /tmp/katana.zip && \
+    unzip -qo /tmp/katana.zip katana -d /usr/local/bin && \
+    curl -fsSL "https://github.com/hahwul/dalfox/releases/download/v2.12.0/dalfox-linux-${asset_arch}.tar.gz" -o /tmp/dalfox.tgz && \
+    tar -xzf /tmp/dalfox.tgz -C /usr/local/bin && \
+    mv "/usr/local/bin/dalfox-linux-${asset_arch}" /usr/local/bin/dalfox && \
+    curl -fsSL "https://github.com/anchore/syft/releases/download/v1.19.0/syft_1.19.0_linux_${asset_arch}.tar.gz" -o /tmp/syft.tgz && \
+    tar -xzf /tmp/syft.tgz -C /usr/local/bin syft && \
+    curl -fsSL "https://github.com/anchore/grype/releases/download/v0.88.0/grype_0.88.0_linux_${asset_arch}.tar.gz" -o /tmp/grype.tgz && \
+    tar -xzf /tmp/grype.tgz -C /usr/local/bin grype && \
+    rm -f /tmp/nuclei.zip /tmp/katana.zip /tmp/dalfox.tgz /tmp/syft.tgz /tmp/grype.tgz
+
+RUN /opt/redtrace/venvs/security/bin/python -m pip install --no-cache-dir \
+    "git+https://github.com/commixproject/commix.git@785843cfb7f50444582d4255dc95636fd9d2aec0" && \
+    ln -sfn /opt/redtrace/venvs/security/bin/commix /usr/local/bin/commix && \
+    git clone --filter=blob:none https://github.com/vladko312/SSTImap.git /opt/redtrace/tools/sstimap && \
+    git -C /opt/redtrace/tools/sstimap checkout d4f09055b15967b0e2265f20eb348a7ec2f25a2c && \
+    /opt/redtrace/venvs/security/bin/python -m pip install --no-cache-dir -r /opt/redtrace/tools/sstimap/requirements.txt && \
+    sed -i '1c #!/opt/redtrace/venvs/security/bin/python' /opt/redtrace/tools/sstimap/sstimap.py && \
+    chmod 0755 /opt/redtrace/tools/sstimap/sstimap.py && \
+    ln -sfn /opt/redtrace/tools/sstimap/sstimap.py /usr/local/bin/sstimap
+
+# jwt_tool: single-script tool, pinned to a commit (spec §19)
+RUN [ -n "$JWT_TOOL_COMMIT" ] || { echo "ERROR: JWT_TOOL_COMMIT build-arg is empty (pin it)" >&2; exit 1; } && \
+    git clone https://github.com/ticarpi/jwt_tool.git /opt/redtrace/data/jwt_tool && \
+    git -C /opt/redtrace/data/jwt_tool checkout "$JWT_TOOL_COMMIT" && \
+    /opt/redtrace/venvs/security/bin/python -m pip install --no-cache-dir -r /opt/redtrace/data/jwt_tool/requirements.txt && \
+    ln -sfn /opt/redtrace/data/jwt_tool/jwt_tool.py /usr/local/bin/jwt_tool && \
+    rm -rf /opt/redtrace/data/jwt_tool/.git
+
+# ============================================================================
+# 6. Blockchain binaries (spec §15): Foundry / Echidna / Aderyn / heimdall
+# ============================================================================
+RUN case "$TARGETARCH" in \
+      amd64) asset_arch=amd64; rust_arch=x86_64 ;; \
+      arm64) asset_arch=arm64; rust_arch=aarch64 ;; \
+      *) echo "unsupported arch: $TARGETARCH" >&2; exit 1 ;; esac && \
+    curl -fsSL "https://github.com/foundry-rs/foundry/releases/download/v1.2.0/foundry_v1.2.0_linux_${asset_arch}.tar.gz" -o /tmp/foundry.tgz && \
+    tar -xzf /tmp/foundry.tgz -C /usr/local/bin && \
+    curl -fsSL "https://github.com/crytic/echidna/releases/download/v2.3.3/echidna-2.3.3-${rust_arch}-linux.tar.gz" -o /tmp/echidna.tgz && \
+    tar -xzf /tmp/echidna.tgz -C /usr/local/bin echidna && \
+    curl -fsSL "https://github.com/Cyfrin/aderyn/releases/download/aderyn-v0.6.8/aderyn-${rust_arch}-unknown-linux-gnu.tar.xz" -o /tmp/aderyn.tar.xz && \
+    tar -xJf /tmp/aderyn.tar.xz -C /usr/local/bin --strip-components=1 "aderyn-${rust_arch}-unknown-linux-gnu/aderyn" && \
+    curl -fsSL "https://github.com/Jon-Becker/heimdall-rs/releases/download/0.9.3/heimdall-linux-${asset_arch}" -o /usr/local/bin/heimdall && \
+    chmod +x /usr/local/bin/heimdall && \
+    rm -f /tmp/foundry.tgz /tmp/echidna.tgz /tmp/aderyn.tar.xz
+
+# ============================================================================
+# 7. solc multi-version offline cache (spec §16). Never `solc-select install`.
+# ============================================================================
+RUN /opt/redtrace/venvs/security/bin/solc-select install \
+      0.4.26 0.5.17 0.6.12 0.7.6 0.8.19 0.8.24 0.8.28 && \
+    /opt/redtrace/venvs/security/bin/solc-select use 0.8.28 && \
+    ln -sfn /root/.solc-select/solc /usr/local/bin/solc && \
+    ln -sfn /opt/redtrace/venvs/security/bin/solc-select /usr/local/bin/solc-select
+
+# ============================================================================
+# 8. AI red-team CLI + blockchain Node tooling (spec §14/§15)
+# ============================================================================
+RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g promptfoo@0.104.0 hardhat@2.22.17
+
+# ============================================================================
+# 9. Ghidra headless (spec §11) — pinned release.
+# ============================================================================
+RUN curl -fsSL \
+      "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_BUILD}.zip" \
+      -o /tmp/ghidra.zip && \
+    unzip -q /tmp/ghidra.zip -d /opt && \
+    ln -s /opt/ghidra_${GHIDRA_VERSION}_PUBLIC/support/analyzeHeadless /usr/local/bin/analyzeHeadless && \
+    rm -f /tmp/ghidra.zip
+
+# ============================================================================
+# Extended benchmark toolchain. Shared with Linux deployments so the hosted
+# image and project installer use the same versions and offline-cache layout.
+# ============================================================================
+RUN apt-get -o Acquire::Retries=5 update && \
+    apt-get -o Acquire::Retries=5 install -y --no-install-recommends liblzma-dev && \
+    rm -rf /var/lib/apt/lists/*
+COPY container/install-benchmark-extras.sh /tmp/install-benchmark-extras.sh
+ENV REDTRACE_BIN_DIR=/usr/local/bin \
+    REDTRACE_DATA_DIR=/opt/redtrace/data \
+    REDTRACE_OFFLINE_DIR=/opt/redtrace/offline \
+    REDTRACE_SECURITY_VENV=/opt/redtrace/venvs/security
+RUN TARGETARCH="$TARGETARCH" bash /tmp/install-benchmark-extras.sh analysis-ai
+RUN TARGETARCH="$TARGETARCH" bash /tmp/install-benchmark-extras.sh solana-move
+RUN TARGETARCH="$TARGETARCH" bash /tmp/install-benchmark-extras.sh cairo-ton
+RUN TARGETARCH="$TARGETARCH" bash /tmp/install-benchmark-extras.sh cosmos-substrate
+RUN TARGETARCH="$TARGETARCH" bash /tmp/install-benchmark-extras.sh caches && \
+    rm -f /tmp/install-benchmark-extras.sh && \
+    rm -rf /tmp/redtrace-extras
+
+# ============================================================================
+# 10. Offline data corpora (spec §10/§19). Pinned commits, .git stripped,
+#     SecLists + PayloadsAllTheThings pruned to the 4-direction subsets.
+# ============================================================================
+RUN : "data commits must be pinned via --build-arg (never git clone --depth=1)" && \
+    for v in NUCLEI_TEMPLATES_COMMIT SECLISTS_COMMIT PAYLOADS_COMMIT \
+             SEMGREP_RULES_COMMIT; do \
+      eval "c=\$$v"; [ -n "$c" ] || { echo "ERROR: $v build-arg is empty (pin it)" >&2; exit 1; }; \
+    done
+
+RUN mkdir -p /opt/redtrace/data && cd /opt/redtrace/data && \
+    git clone https://github.com/projectdiscovery/nuclei-templates.git nuclei-templates && \
+    git -C nuclei-templates checkout "$NUCLEI_TEMPLATES_COMMIT" && \
+    rm -rf nuclei-templates/.git && \
+    git clone https://github.com/danielmiessler/SecLists.git seclists && \
+    git -C seclists checkout "$SECLISTS_COMMIT" && \
+    mkdir -p seclists-keep && \
+    for d in Discovery/Web-Content Discovery/DNS Fuzzing Payloads Pattern-Matching Ai/LLM_Testing Passwords/Common-Credentials; do \
+      [ -d "seclists/$d" ] && mkdir -p "seclists-keep/$d" && cp -r "seclists/$d/." "seclists-keep/$d/"; \
+    done && \
+    rm -rf seclists && mv seclists-keep seclists && \
+    git clone https://github.com/swisskyrepo/PayloadsAllTheThings.git payloads-all-the-things && \
+    git -C payloads-all-the-things checkout "$PAYLOADS_COMMIT" && \
+    rm -rf payloads-all-the-things/.git && \
+    git clone https://github.com/returntocorp/semgrep-rules.git semgrep-rules && \
+    git -C semgrep-rules checkout "$SEMGREP_RULES_COMMIT" && \
+    rm -rf semgrep-rules/.git && \
+    ln -s /usr/share/exploitdb exploitdb
+
+# Nuclei: fixed snapshot templates, update-check disabled (spec §10)
+RUN mkdir -p /root/.config/nuclei && \
+    printf 'disable-update-check: true\n' > /root/.config/nuclei/config.yaml
+
+# ============================================================================
+# 11. Wrappers so skills can reach the pinned venv tools via PATH
+# ============================================================================
+RUN ln -sfn /opt/redtrace/venvs/security/bin/sqlmap /usr/local/bin/sqlmap && \
+    ln -sfn /opt/redtrace/venvs/security/bin/arjun /usr/local/bin/arjun && \
+    ln -sfn /opt/redtrace/venvs/security/bin/wafw00f /usr/local/bin/wafw00f && \
+    ln -sfn /opt/redtrace/venvs/security/bin/slither /usr/local/bin/slither && \
+    ln -sfn /opt/redtrace/venvs/security/bin/crytic-compile /usr/local/bin/crytic-compile && \
+    ln -sfn /opt/redtrace/venvs/mythril/bin/myth /usr/local/bin/myth && \
+    ln -sfn /opt/redtrace/venvs/qiling/bin/qltool /usr/local/bin/qltool
+
+# ============================================================================
+# 12. Copy the app (headless runtime + bench + skills). No UI/WebShell/C2/
+#     plugin/browser assets are copied. Skills that depend on removed
+#     capabilities (browser/cloud/AD/forensics/brave) are excluded (spec §22).
+#     RedTrace resolves skills/plugins/mcp relative to REDTRACE_ROOT, which
+#     start-redtrace.sh sets to /opt/redtrace/app.
+# ============================================================================
+RUN mkdir -p /opt/redtrace/app /opt/redtrace/app/plugins /opt/redtrace/app/mcp \
+    /data/redtrace
+COPY redtrace /opt/redtrace/app/redtrace
+COPY bench /opt/redtrace/app/bench
+COPY start.sh start-redtrace.sh redtrace.yaml.template /opt/redtrace/app/
+COPY container/toolchain-manifest.py container/skill-tool-check.py \
+     container/verify-offline.sh container/install-benchmark-extras.sh \
+     /opt/redtrace/app/container/
+COPY skills /opt/redtrace/app/skills-full
+
+# Prune skills that require removed capabilities.
+RUN cd /opt/redtrace/app/skills-full && \
+    for s in brave-search browser-automation playwright browser-extension-reverse \
+             competition-browser-persistence cloud-k8s competition-agent-cloud \
+             competition-cloud-metadata-path competition-k8s-control-plane \
+             windows-ad attack-chain competition-ad-certificate-abuse \
+             competition-kerberos-delegation \
+             competition-lsass-ticket-material competition-relay-coercion-chain \
+             competition-identity-windows competition-windows-pivot \
+             competition-linux-credential-pivot identity-federation \
+             digital-forensics competition-forensic-timeline competition-stego-media \
+             competition-pcap-protocol ot-ics radio-sdr wifi-wireless \
+             diagram-generator docs-generator threat-hunting; do \
+      rm -rf "$s"; \
+    done && \
+    mkdir -p /opt/redtrace/app/skills && \
+    mv /opt/redtrace/app/skills-full/* /opt/redtrace/app/skills/ && \
+    rmdir /opt/redtrace/app/skills-full
+
+# Self-evolution / autonomous-learning skill loops are out-of-scope for the eval image.
+RUN cd /opt/redtrace/app/skills && rm -rf continuous-learning continuous-learning-v2 proactive-agent self-improving--proactive-agent 2>/dev/null || true
+
+# ============================================================================
+# 13. Build the RedTrace Python env from the pinned lock (spec §20/§21).
+# ============================================================================
+RUN cd /opt/redtrace/app && \
+    uv sync --frozen --project redtrace --no-install-project -i https://mirrors.aliyun.com/pypi/simple/ && \
+    uv sync --frozen --project redtrace -i https://mirrors.aliyun.com/pypi/simple/
+
+# ============================================================================
+# 14. toolchain manifest + skill→tool consistency check (spec §26/§28).
+#     Both run at build time; the consistency check fails the build.
+# ============================================================================
+RUN python3 /opt/redtrace/app/container/toolchain-manifest.py \
+      > /opt/redtrace/toolchain-manifest.json && \
+    cd /opt/redtrace/app && python3 container/skill-tool-check.py /opt/redtrace/app/skills
+
+# ============================================================================
+# 15. Offline smoke test (spec §27). Run it here so a broken image fails early.
+# ============================================================================
+RUN bash /opt/redtrace/app/container/verify-offline.sh
+
+# ============================================================================
+# 16. Final runtime env + entrypoint. /opt/redtrace is read-only capability;
+#     /data/redtrace is all runtime growth (spec §23).
+# ============================================================================
+ENV PATH="/opt/redtrace/app/redtrace/.venv/bin:/usr/local/bin:/opt/redtrace/venvs/security/bin:${PATH}" \
+    DOTNET_ROOT=/opt/redtrace/offline/dotnet \
+    CARGO_HOME=/opt/redtrace/offline/cargo \
+    RUSTUP_HOME=/opt/redtrace/offline/rustup \
+    GOMODCACHE=/opt/redtrace/offline/go/pkg/mod \
+    GRYPE_DB_CACHE_DIR=/opt/redtrace/data/grype-db \
+    GRYPE_DB_AUTO_UPDATE=false \
+    REDTRACE_ROOT=/opt/redtrace/app \
+    REDTRACE_DATA_DIR=/opt/redtrace/data \
+    REDTRACE_MANAGED_DIR=/data/redtrace
+
+WORKDIR /opt/redtrace/app
+
+CMD ["bash", "start.sh"]

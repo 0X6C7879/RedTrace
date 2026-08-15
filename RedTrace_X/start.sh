@@ -1,46 +1,113 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-PYTHON="${PYTHON:-python3}"
+# 单任务测评启动器：
+#   渲染配置 → 起 RedTrace 服务与调度器（本地包）→ 自动跑一次 bench/benchctl.py run → 结束后退出。
+# 容器默认 CMD 即本文件。Worker 仅 Pi：1 个跑 Reason(+bootstrap)，3 个跑 Explore。
+#
+# 环境变量来自 .env（参考 .env.example）。必需项缺失即报错退出，不静默继续。
 
-if [[ -f "$ROOT/.env" ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "$ROOT/.env"
-  set +a
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+PROJECT_DIR="$ROOT/redtrace"
+CONFIG_TEMPLATE="${REDTRACE_CONFIG_TEMPLATE:-$ROOT/redtrace.yaml.template}"
+CONFIG_PATH="$ROOT/redtrace.yaml"
+DATA_DIR="$ROOT/.redtrace"
+DB_PATH="$DATA_DIR/redtrace.db"
+HOST="${REDTRACE_HOST:-127.0.0.1}"
+PORT="${REDTRACE_PORT:-8000}"
+START_TIMEOUT="${REDTRACE_START_TIMEOUT:-120}"
+SHUTDOWN_TIMEOUT="${REDTRACE_SHUTDOWN_TIMEOUT:-8}"
+
+SERVER_PID=""
+DISPATCHER_PID=""
+OWNS_SERVER=0
+EXITCODE=0
+
+[[ -f "$ROOT/.env" ]] && { set -a; . "$ROOT/.env"; set +a; }
+
+need_var() {
+  local name="$1"
+  if [ -z "${!name:-}" ]; then
+    printf 'error: 缺少环境变量 %s（请在 %s/.env 中填写，参见 .env.example）\n' "$name" "$ROOT" >&2
+    exit 1
+  fi
+}
+for v in API_KEY MODEL AGENT_BASE_URL BENCHMARK_TOKEN BENCHMARK_BASE_URL VPN_CHECK_URL; do need_var "$v"; done
+
+command -v uv >/dev/null 2>&1 || { printf 'error: 需要 uv 但未找到\n' >&2; exit 1; }
+command -v curl >/dev/null 2>&1 || { printf 'error: 需要 curl 但未找到\n' >&2; exit 1; }
+
+mkdir -p "$DATA_DIR/tmp" "$PROJECT_DIR/workspaces"
+export REDTRACE_ROOT="$ROOT"
+export TMPDIR="$DATA_DIR/tmp"
+export TMP="$TMPDIR"
+export TEMP="$TMPDIR"
+export CAIRN_BASE_URL="http://127.0.0.1:${PORT}"   # benchctl 默认探测此地址
+export REDTRACE_BASE_URL="http://127.0.0.1:${PORT}"
+
+probe_host() {
+  case "$HOST" in 0.0.0.0|::|'[::]') printf '%s' 127.0.0.1 ;; *) printf '%s' "$HOST" ;; esac
+}
+server_url() { printf 'http://%s:%s/projects' "$(probe_host)" "$PORT"; }
+is_ready()   { curl -fsS --max-time 2 "$(server_url)" >/dev/null 2>&1; }
+
+stop_pid() {
+  local pid="$1"
+  [ -n "$pid" ] || return 0
+  kill -TERM "$pid" >/dev/null 2>&1 || true
+  local i=0
+  while ((i < SHUTDOWN_TIMEOUT * 10)) && kill -0 "$pid" >/dev/null 2>&1; do sleep 0.1; i=$((i + 1)); done
+  kill -KILL "$pid" >/dev/null 2>&1 || true
+  wait "$pid" 2>/dev/null || true
+}
+
+finish() {
+  trap - EXIT INT TERM HUP
+  stop_pid "$DISPATCHER_PID"
+  if ((OWNS_SERVER == 1)); then stop_pid "$SERVER_PID"; fi
+  return "$EXITCODE"
+}
+trap finish EXIT
+trap 'trap - INT; EXITCODE=130; exit 130' INT
+trap 'trap - TERM; EXITCODE=143; exit 143' TERM
+
+printf '[config] rendering %s ← %s\n' "$CONFIG_PATH" "$CONFIG_TEMPLATE"
+python3 "$ROOT/bench/render_config.py" "$CONFIG_TEMPLATE" "$CONFIG_PATH"
+
+if ! is_ready; then
+  printf '[serve] starting RedTrace server @ http://%s:%s\n' "$HOST" "$PORT"
+  REDTRACE_DISPATCH_CONFIG="$CONFIG_PATH" \
+    uv run --project "$PROJECT_DIR" redtrace serve --db-path "$DB_PATH" --host "$HOST" --port "$PORT" &
+  SERVER_PID=$!
+  OWNS_SERVER=1
+
+  deadline=$((SECONDS + START_TIMEOUT))
+  until is_ready; do
+    if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+      st=0; wait "$SERVER_PID" || st=$?
+      printf 'error: 服务进程在就绪前退出(status=%s)\n' "$st" >&2
+      EXITCODE=1; exit 1
+    fi
+    ((SECONDS >= deadline)) && { printf 'error: 服务健康检查超时(%ss)\n' "$START_TIMEOUT" >&2; EXITCODE=1; exit 1; }
+    sleep 0.25
+  done
+else
+  printf '[serve] 复用已在运行的 RedTrace server (%s)\n' "$(server_url)"
 fi
 
-: "${API_KEY:?set API_KEY in .env or the environment}"
-: "${BENCHMARK_TOKEN:?set BENCHMARK_TOKEN in .env or the environment}"
-
-export MODEL="${MODEL:-glm-5.2-agent-chanllenge}"
-export AGENT_BASE_URL="${AGENT_BASE_URL:-https://agent-awd.baidu.com}"
-export BENCHMARK_BASE_URL="${BENCHMARK_BASE_URL:-https://tsecbench.zc.tencent.com}"
-export VPN_CHECK_URL="${VPN_CHECK_URL:-http://10.0.100.58}"
-export CAIRN_BASE_URL="${CAIRN_BASE_URL:-http://127.0.0.1:8000}"
-export PI_CODING_AGENT_DIR="$ROOT/container/.pi/agent"
-
-"$PYTHON" "$ROOT/bench/render_config.py" "$ROOT/dispatch.yaml.template" "$ROOT/dispatch.yaml"
-
-uv run --project "$ROOT/cairn" cairn serve --no-access-log &
-SERVER_PID=$!
-DISPATCHER_PID=""
-cleanup() {
-  [[ -z "$DISPATCHER_PID" ]] || kill "$DISPATCHER_PID" 2>/dev/null || true
-  kill "$SERVER_PID" 2>/dev/null || true
-  [[ -z "$DISPATCHER_PID" ]] || wait "$DISPATCHER_PID" 2>/dev/null || true
-  wait "$SERVER_PID" 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
-
-for _ in $(seq 1 120); do
-  curl -fsS --max-time 2 "$CAIRN_BASE_URL/projects" >/dev/null 2>&1 && break
-  kill -0 "$SERVER_PID" 2>/dev/null || { echo "Cairn server exited during startup" >&2; exit 1; }
-  sleep 0.25
-done
-curl -fsS --max-time 2 "$CAIRN_BASE_URL/projects" >/dev/null
-
-uv run --project "$ROOT/cairn" cairn dispatch --config "$ROOT/dispatch.yaml" &
+printf '[dispatch] starting scheduler with %s\n' "$CONFIG_PATH"
+uv run --project "$PROJECT_DIR" redtrace dispatch --config "$CONFIG_PATH" &
 DISPATCHER_PID=$!
-"$PYTHON" "$ROOT/bench/benchctl.py" run
+
+# 给调度器一个起步窗口再开测；失败不致命，仅记录。
+i=0
+while ((i < 40)) && kill -0 "$DISPATCHER_PID" >/dev/null 2>&1; do sleep 0.25; i=$((i + 1)); done
+
+printf '[bench] starting single-project evaluation now...\n'
+set +e
+python3 "$ROOT/bench/benchctl.py" run
+rc=$?
+set -e
+printf '[bench] finished with status=%s\n' "$rc"
+EXITCODE=$rc
+exit "$rc"

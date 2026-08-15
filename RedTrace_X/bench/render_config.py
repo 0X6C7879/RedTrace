@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a Cairn dispatch template from environment variables."""
+"""用环境变量渲染 redtrace.yaml.template → redtrace.yaml。"""
 
 from __future__ import annotations
 
