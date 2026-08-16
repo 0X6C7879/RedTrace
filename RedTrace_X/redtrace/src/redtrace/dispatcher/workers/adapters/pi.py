@@ -203,10 +203,12 @@ class PiDriver(WorkerDriver):
                             assistant_message = message
                             break
         if assistant_message is None:
-            return stdout
+            # Do NOT return raw stdout — it contains Pi CLI system JSON
+            # (state, prompt events) that parse_json_output would误认为是模型输出。
+            return ""
         content = assistant_message.get("content")
         if not isinstance(content, list):
-            return stdout
+            return ""
         parts: list[str] = []
         for item in content:
             if not isinstance(item, dict):
@@ -216,7 +218,7 @@ class PiDriver(WorkerDriver):
             text = item.get("text")
             if isinstance(text, str) and text:
                 parts.append(text)
-        return "\n".join(parts).strip() or stdout
+        return "\n".join(parts).strip()
 
     @classmethod
     def _configured_argv(

@@ -286,6 +286,28 @@ class WorkerConfig(BaseModel):
             legacy_context = self.env.get("PI_MODEL_CONTEXT_WINDOW", "").strip()
             if self.context_length is None and legacy_context:
                 self.context_length = int(legacy_context)
+            # ponytail: 模型相关配置优先取平台下发的运行时环境变量，缺失时回退到模板里的公开常量。
+            # - 网关密钥：API_KEY 回填为各 Pi worker 的 PI_API_KEY。
+            # - 网关根地址：AGENT_BASE_URL 覆盖 PI_BASE_URL（自动补 /v1；假定下发值为不含 /v1 的根地址）。
+            # - 模型名：MODEL 覆盖 PI_MODEL。
+            agent_root = os.environ.get("AGENT_BASE_URL", "").strip()
+            if agent_root:
+                self.env["PI_BASE_URL"] = agent_root.rstrip("/") + "/v1"
+            model_from_env = os.environ.get("MODEL", "").strip()
+            if model_from_env:
+                self.env["PI_MODEL"] = model_from_env
+            if "PI_API_KEY" not in self.env or not self.env.get("PI_API_KEY", "").strip():
+                api_key_env = os.environ.get("API_KEY", "").strip()
+                if api_key_env:
+                    self.env["PI_API_KEY"] = api_key_env
+
+            # ponytail: 把镜像/平台下发的 noop 扩展路径透传进 worker.env。
+            # 否则 adapter 会回退到默认的 npm:pi-mcp-extension@1.5.0 并在隔离网络里联网安装失败(ECONNRESET)；
+            # 镜像内 ENV 默认指向 /opt/redtrace/app/container/pi-noop-extension.js，平台也可用 Runtime ENV 覆盖。
+            mcp_ext_env = os.environ.get("REDTRACE_PI_MCP_EXTENSION", "").strip()
+            if (("REDTRACE_PI_MCP_EXTENSION" not in self.env)
+                    or not str(self.env.get("REDTRACE_PI_MCP_EXTENSION", "")).strip()) and mcp_ext_env:
+                self.env["REDTRACE_PI_MCP_EXTENSION"] = mcp_ext_env
         if self.type == "mock":
             resolve_mock_behavior(self.name, self.env)
         return self

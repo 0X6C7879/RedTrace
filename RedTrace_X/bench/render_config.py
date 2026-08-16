@@ -1,11 +1,25 @@
 #!/usr/bin/env python3
-"""用环境变量渲染 redtrace.yaml.template → redtrace.yaml。"""
+"""校验必需环境变量后把 redtrace.yaml.template 原样复制为 redtrace.yaml。
+
+只读三项由测评平台下发的机密：BENCHMARK_TOKEN / BENCHMARK_BASE_URL / API_KEY。
+其余常量（模型名、网关地址、VPN 探针）已在模板里写死，benchctl 内部也带 VPN 默认值。
+redtrace.yaml 本身不含任何明文或引用，可随镜像/代码提交而不泄密。
+"""
 
 from __future__ import annotations
 
 import os
+import shutil
 import sys
-from string import Template
+
+
+# 这三项是平台下发、运行时必须存在于调度进程环境中的唯一敏感值；
+# 缺失即提前失败（fail-fast），与旧版行为一致但范围收窄到这三项。
+REQUIRED_ENV_VARS = (
+    "API_KEY",
+    "BENCHMARK_TOKEN",
+    "BENCHMARK_BASE_URL",
+)
 
 
 def main() -> int:
@@ -13,15 +27,17 @@ def main() -> int:
         print("usage: render_config.py <template> <output>", file=sys.stderr)
         return 2
     src, dst = sys.argv[1], sys.argv[2]
-    template = Template(open(src, encoding="utf-8").read())
-    missing = sorted(name for name in template.get_identifiers() if name not in os.environ)
+    missing = sorted(v for v in REQUIRED_ENV_VARS if v not in os.environ)
     if missing:
-        print("error: 缺少环境变量: " + ", ".join(missing), file=sys.stderr)
-        print("请在 RedTrace_X/.env 中填写后重试（参考 .env.example）", file=sys.stderr)
+        print(
+            "error: 缺少平台下发机密: " + ", ".join(missing),
+            file=sys.stderr,
+        )
+        print("请在启动前通过环境变量导出(交互式 export 或容器启动注入)", file=sys.stderr)
         return 1
-    with open(dst, "w", encoding="utf-8") as handle:
-        handle.write(template.substitute(os.environ))
-    print(f"rendered {dst}")
+    # 原样复制——redtrace.yaml 不含任何明文密钥或占位引用。
+    shutil.copyfile(src, dst)
+    print(f"wrote {dst} (no secret substitution)")
     return 0
 
 

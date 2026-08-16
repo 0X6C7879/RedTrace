@@ -28,11 +28,11 @@ EXITCODE=0
 need_var() {
   local name="$1"
   if [ -z "${!name:-}" ]; then
-    printf 'error: 缺少环境变量 %s（请在 %s/.env 中填写，参见 .env.example）\n' "$name" "$ROOT" >&2
+    printf 'error: 缺少平台下发机密: 环境变量 %s（运行前须经交互式 export 或容器启动注入）\n' "$name" >&2
     exit 1
   fi
 }
-for v in API_KEY MODEL AGENT_BASE_URL BENCHMARK_TOKEN BENCHMARK_BASE_URL VPN_CHECK_URL; do need_var "$v"; done
+for v in API_KEY BENCHMARK_TOKEN BENCHMARK_BASE_URL; do need_var "$v"; done
 
 command -v uv >/dev/null 2>&1 || { printf 'error: 需要 uv 但未找到\n' >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || { printf 'error: 需要 curl 但未找到\n' >&2; exit 1; }

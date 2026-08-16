@@ -1,8 +1,21 @@
+# RedTrace_X Headless 测评单镜像构建流水线。
+#
+# 流程：
+#   1. docker build（根目录 Dockerfile，代理经宿主机 7890 端口注入构建期）
+#   2. docker export/import 压平为单层镜像（收尾 purge 才能真正减小体积）
+#   3. --network none 离线冒烟测试（container/verify-headless.sh）
+#   4. docker save | gzip -9 → 上传压缩包；> 3 GiB 直接失败
+#
+# 镜像中不含任何密钥：.env / redtrace.yaml 已在 .dockerignore 排除，
+# BENCHMARK_TOKEN / BENCHMARK_BASE_URL / API_KEY 由平台运行时 ENV 注入。
+
 [CmdletBinding()]
 param(
     [string]$BuildTag = "redtrace-x-benchmark:build",
     [string]$FinalTag = "redtrace-x-benchmark:latest",
     [string]$OutputPath = "artifacts/redtrace-x-benchmark-upload.tar.gz",
+    # 宿主机 127.0.0.1:7890 代理；容器内须经 host.docker.internal 回指宿主机
+    [string]$Proxy = "http://host.docker.internal:7890",
     [switch]$KeepBuildImage
 )
 
@@ -18,14 +31,13 @@ $Completed = $false
 
 try {
     $Pins = [ordered]@{
-        NUCLEI_TEMPLATES_COMMIT = "e84ce385bfda7da56d73e9ecf2ff0e9a80ad7e3e"
-        SECLISTS_COMMIT = "eedc5117b3f506d874d033c18786a218e7cec34c"
-        PAYLOADS_COMMIT = "3bff425aca2b020f7334f9d744eed3ca55de8cdf"
-        SEMGREP_RULES_COMMIT = "40b8c63f75dc7c22c8a77482d73bfb864b146f7e"
         JWT_TOOL_COMMIT = "3bc7407cf2222d6a821dcc19c776e5a1b1cb9a9b"
     }
 
-    $BuildArgs = @("build", "--progress=plain", "-f", "Dockerfile.benchmark", "-t", $BuildTag)
+    # BUILD_PROXY（下划线前缀，BuildKit 不会注入为 RUN 环境）仅供 RUN 层显式使用；
+    # 不能传 HTTP(S)_PROXY 预定义参数，否则 apt 走代理拉国内镜像源会失败。
+    $BuildArgs = @("build", "--progress=plain", "-f", "Dockerfile", "-t", $BuildTag,
+        "--build-arg", "BUILD_PROXY=$Proxy")
     foreach ($entry in $Pins.GetEnumerator()) {
         $BuildArgs += @("--build-arg", "$($entry.Key)=$($entry.Value)")
     }
@@ -64,8 +76,8 @@ try {
 
     & docker rm $ContainerName | Out-Null
     $ContainerName = ""
-    & docker run --rm --network none --entrypoint bash $FinalTag -lc "bash container/verify-offline.sh"
-    if ($LASTEXITCODE -ne 0) { throw "Offline image verification failed" }
+    & docker run --rm --network none --entrypoint bash $FinalTag -lc "bash container/verify-headless.sh"
+    if ($LASTEXITCODE -ne 0) { throw "Headless image verification failed" }
 
     $ImageTar = Join-Path $TempDir "image.tar"
     & docker save --output $ImageTar $FinalTag

@@ -9,9 +9,12 @@
 redtrace.yaml
 redtrace.local.yaml
 redtrace.container.yaml
+redtrace.mock.example.yaml
+redtrace.container.example.yaml
 results/
 output/
 logs/
+artifacts/
 
 **/.venv
 **/.codex-test-venv
@@ -28,3 +31,22 @@ logs/
 
 datas
 workspaces
+plugins
+mcp
+
+# 非运行资料与旧构建入口（文档 Repo/Image 文件裁剪）
+docs
+README.md
+RedTrace_X-docker构建.md
+docker-compose.yaml
+Dockerfile.benchmark
+deploy.sh
+start-redtrace.sh.bak
+.redtrace/
+redtrace/tests
+redtrace/scripts
+redtrace/skill-memory
+redtrace/workspaces
+bench/__pycache__
+skills/.redtrace
+*.md.backup

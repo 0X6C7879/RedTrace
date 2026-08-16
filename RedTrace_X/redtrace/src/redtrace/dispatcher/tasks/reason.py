@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 
@@ -337,6 +338,13 @@ def run_reason_task(
         try:
             model_output = driver.extract_response_text(result.stdout, result.stderr)
             payload = parse_json_output(model_output)
+            LOG.debug(
+                "reason parsed payload project=%s worker=%s payload_keys=%s payload_preview=%s",
+                project.project.id,
+                worker.name,
+                sorted(payload.keys()),
+                preview(json.dumps(payload, ensure_ascii=False), 500),
+            )
             kind, data = validate_reason_payload(
                 payload,
                 valid_fact_ids=set(allowed_fact_ids),
@@ -434,6 +442,13 @@ def run_reason_task(
                     repair.stdout, repair.stderr
                 )
                 payload = parse_json_output(model_output)
+                LOG.debug(
+                    "reason repair parsed payload project=%s worker=%s payload_keys=%s payload_preview=%s",
+                    project.project.id,
+                    worker.name,
+                    sorted(payload.keys()),
+                    preview(json.dumps(payload, ensure_ascii=False), 500),
+                )
                 kind, data = validate_reason_payload(
                     payload,
                     valid_fact_ids=set(allowed_fact_ids),
@@ -441,10 +456,11 @@ def run_reason_task(
                 )
             except Exception as repair_exc:
                 LOG.warning(
-                    "reason format repair invalid project=%s worker=%s error=%s stdout_preview=%s stderr_preview=%s",
+                    "reason format repair invalid project=%s worker=%s error=%s model_output_preview=%s stdout_preview=%s stderr_preview=%s",
                     project.project.id,
                     worker.name,
                     repair_exc,
+                    preview(model_output, 300) if model_output else "<empty>",
                     preview(repair.stdout),
                     preview(repair.stderr),
                 )

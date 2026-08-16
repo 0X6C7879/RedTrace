@@ -46,6 +46,14 @@ def parse_json_output(stdout: str) -> dict[str, Any]:
 
 def _unwrap_wrapped_payload(payload: dict[str, Any]) -> tuple[bool | None, dict[str, Any] | None]:
     accepted = payload.get("accepted")
+    # Coerce string "true"/"false" to boolean — reasoning models (e.g. GLM-5.2)
+    # frequently emit JSON with quoted booleans that fail strict `is` checks.
+    if isinstance(accepted, str):
+        normalized = accepted.strip().lower()
+        if normalized == "true":
+            accepted = True
+        elif normalized == "false":
+            accepted = False
     if accepted is False:
         return False, None
     if accepted is True:
