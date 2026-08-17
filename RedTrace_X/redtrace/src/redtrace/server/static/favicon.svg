@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" shape-rendering="geometricPrecision">
-  <title>RedTrace</title>
-  <desc>Three trail stones forming an ascending trace.</desc>
-  <path d="m7 44 16-10 16 8-16 11Z" fill="#7f91a8" />
-  <path d="m18 28 16-10 15 8-16 10Z" fill="#ff686b" />
-  <path d="m36 13 11-7 10 6-11 7Z" fill="#d8e1ec" />
-</svg>

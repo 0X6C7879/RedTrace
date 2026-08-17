@@ -39,3 +39,6 @@ nul
 # 顶层设计文档不提交到公开仓库（docs/ 与 redtrace/tests/ 随代码推送）
 design-qa.md
 design-qa-*.png
+
+# 构建产物/镜像归档（体积过大，不入库）
+RedTrace_X/artifacts/
