@@ -63,5 +63,9 @@ class DispatchConfigReloader:
 
     @staticmethod
     def _requires_restart(current: DispatchConfig, candidate: DispatchConfig) -> bool:
-        excluded = {"workers", "common_env"}
+        excluded = {
+            "workers": True,
+            "common_env": True,
+            "runtime": {"prompt_mode"},
+        }
         return current.model_dump(exclude=excluded) != candidate.model_dump(exclude=excluded)
