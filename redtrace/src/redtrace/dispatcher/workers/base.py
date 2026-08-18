@@ -20,6 +20,33 @@ REDTRACE_OUTPUT_SCHEMA_OBJECT = {
 }
 
 
+class ProviderError(RuntimeError):
+    """Raised when a worker's upstream provider returns a runtime or API
+    error instead of a valid agent response.
+
+    Task runners use this to distinguish provider-level failures (rate
+    limits, auth errors, unsupported features) from contract parse errors
+    so that conclude fallback is only triggered for the latter.
+
+    Attributes:
+        code:  Short provider or protocol error code (e.g.
+               ``responses_feature_not_supported``, ``turn/start/failed``).
+        message: Human-readable error description.
+        raw_event: The raw JSON-RPC event dict, if available.
+    """
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        raw_event: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(f"[{code}] {message}")
+        self.code = code
+        self.message = message
+        self.raw_event = raw_event
+
+
 @dataclass(frozen=True, slots=True)
 class DriverResult:
     argv: list[str]

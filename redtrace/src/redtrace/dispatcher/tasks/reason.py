@@ -7,6 +7,7 @@ from redtrace.board.models import ProjectDetail
 from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
 from redtrace.dispatcher.contracts import parse_json_output, validate_reason_payload
 from redtrace.dispatcher.control_plane import ControlPlaneClient
+from redtrace.dispatcher.workers.base import ProviderError
 from redtrace.dispatcher.prompting import (
     add_blackboard_guidance,
     format_fact_ids,
@@ -342,6 +343,17 @@ def run_reason_task(
                 valid_fact_ids=set(allowed_fact_ids),
                 valid_intent_ids=set(valid_intent_ids),
             )
+        except ProviderError as exc:
+            LOG.warning(
+                "reason provider error project=%s worker=%s code=%s message=%s execute_ms=%s total_ms=%s",
+                project.project.id,
+                worker.name,
+                exc.code,
+                exc.message,
+                execute_ms,
+                total_ms,
+            )
+            return "provider_error"
         except Exception as exc:
             if not driver.supports_conclude() or session is None:
                 LOG.warning(
@@ -439,6 +451,15 @@ def run_reason_task(
                     valid_fact_ids=set(allowed_fact_ids),
                     valid_intent_ids=set(valid_intent_ids),
                 )
+            except ProviderError as exc:
+                LOG.warning(
+                    "reason format repair provider error project=%s worker=%s code=%s message=%s",
+                    project.project.id,
+                    worker.name,
+                    exc.code,
+                    exc.message,
+                )
+                return "provider_error"
             except Exception as repair_exc:
                 LOG.warning(
                     "reason format repair invalid project=%s worker=%s error=%s stdout_preview=%s stderr_preview=%s",

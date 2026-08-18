@@ -65,7 +65,7 @@ def test_claude_streams_signal_and_waits_for_both_results() -> None:
 
 def test_codex_queues_signal_until_active_turn_then_uses_turn_steer() -> None:
     process = FakeProcess()
-    control = CodexLiveControl("initial", model="gpt-test", output_schema={})
+    control = CodexLiveControl("initial", model="gpt-test")
     control.attach(process)
 
     assert control.send_signal("optional fact")

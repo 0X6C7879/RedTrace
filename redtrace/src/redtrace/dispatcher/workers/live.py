@@ -136,11 +136,9 @@ class CodexLiveControl(LiveControl):
         *,
         session_id: str | None = None,
         model: str | None = None,
-        output_schema: dict[str, Any] | None = None,
     ):
         super().__init__(prompt, session_id)
         self.model = model
-        self.output_schema = output_schema
         self.turn_id: str | None = None
         self._next_id = 10
         self._queued_signals: list[str] = []
@@ -236,8 +234,6 @@ class CodexLiveControl(LiveControl):
             "approvalPolicy": "never",
             "sandboxPolicy": {"type": "dangerFullAccess"},
         }
-        if self.output_schema is not None:
-            params["outputSchema"] = self.output_schema
         self._send({"method": "turn/start", "id": self.TURN_ID, "params": params})
 
     def _send_steer(self, message: str) -> bool:

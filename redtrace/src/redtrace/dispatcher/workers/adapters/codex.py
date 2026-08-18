@@ -1,20 +1,35 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from redtrace.dispatcher.config import (
     WorkerConfig,
     model_auto_compact_token_limit,
 )
 from redtrace.dispatcher.workers.base import (
-    REDTRACE_OUTPUT_SCHEMA_OBJECT,
     DriverResult,
+    ProviderError,
     RegexSessionDriver,
 )
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
 from redtrace.dispatcher.workers.live import CodexLiveControl
 from redtrace.dispatcher.workers.codex_compat import codex_compat_base_url
 from redtrace.skill_runtime import skill_runtime_enabled
+
+LOG = logging.getLogger(__name__)
+
+_PROVIDER_ERROR_PATTERNS = (
+    "responses_feature_not_supported",
+    "unsupported_feature",
+    "text.format type",
+    "json_schema is not supported",
+    "rate_limit",
+    "rate limit",
+    "authentication_error",
+    "invalid_api_key",
+    "insufficient_quota",
+)
 
 
 class CodexDriver(RegexSessionDriver):
@@ -106,7 +121,6 @@ class CodexDriver(RegexSessionDriver):
             prompt,
             session_id=session,
             model=model,
-            output_schema=REDTRACE_OUTPUT_SCHEMA_OBJECT,
         )
         if self.local and not worker.api_configured():
             return DriverResult(
@@ -176,7 +190,8 @@ class CodexDriver(RegexSessionDriver):
         return super().extract_session(session, stdout, stderr)
 
     def extract_response_text(self, stdout: str, stderr: str) -> str:
-        for event in reversed(self._iter_events(stdout)):
+        events = self._iter_events(stdout)
+        for event in reversed(events):
             if event.get("type") == "item.completed":
                 item = event.get("item")
             elif event.get("method") == "item/completed":
@@ -192,7 +207,54 @@ class CodexDriver(RegexSessionDriver):
             text = item.get("text")
             if isinstance(text, str) and text.strip():
                 return text
+        self._raise_if_provider_error(events, stdout)
         return stdout
+
+    @staticmethod
+    def _raise_if_provider_error(events: list[dict], stdout: str) -> None:
+        """Raise ``ProviderError`` when *events* contain a Codex
+        app-server error instead of a valid agent response.
+
+        This prevents error event JSON from being fed into
+        ``parse_json_output`` / ``validate_*_payload`` where it would
+        surface as a misleading contract violation such as
+        "accepted must be true or false".
+        """
+        for event in events:
+            error = event.get("error")
+            if isinstance(error, dict):
+                code = error.get("code") or ""
+                message = error.get("message") or ""
+                raise ProviderError(code, message, event)
+            if event.get("type") == "error":
+                code = event.get("code") or ""
+                message = event.get("message") or event.get("error") or ""
+                if isinstance(message, str) and message:
+                    raise ProviderError(str(code), message, event)
+            method = event.get("method")
+            if isinstance(method, str) and method.startswith("turn/") and method.endswith("/failed"):
+                code = method
+                error_obj = event.get("error") or event.get("params", {})
+                message = ""
+                if isinstance(error_obj, dict):
+                    message = error_obj.get("message") or error_obj.get("error") or ""
+                    # params may nest a deeper error object
+                    if not isinstance(message, str) or not message:
+                        nested = error_obj.get("error") if isinstance(error_obj.get("error"), dict) else None
+                        if nested:
+                            message = nested.get("message") or nested.get("error") or ""
+                if not isinstance(message, str):
+                    message = str(message)
+                if not message:
+                    message = event.get("reason") or ""
+                raise ProviderError(code, message or "turn failed", event)
+
+        # Last resort: check raw stdout for known provider-level error
+        # patterns that Codex may emit without structured events.
+        lower = stdout.lower()
+        for pattern in _PROVIDER_ERROR_PATTERNS:
+            if pattern in lower:
+                raise ProviderError("provider_error", stdout.strip()[:300])
 
     @staticmethod
     def _resource_args(

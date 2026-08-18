@@ -8,6 +8,7 @@ from redtrace.board.models import Intent, ProjectDetail
 from redtrace.dispatcher.config import DispatchConfig, WorkerConfig
 from redtrace.dispatcher.contracts import parse_json_output, validate_explore_payload
 from redtrace.dispatcher.control_plane import ControlPlaneClient
+from redtrace.dispatcher.workers.base import ProviderError
 from redtrace.dispatcher.prompting import (
     add_blackboard_guidance,
     format_hints,
@@ -184,6 +185,19 @@ def run_explore_task(
                 model_output = driver.extract_response_text(first.stdout, first.stderr)
                 payload = parse_json_output(model_output)
                 kind, description = validate_explore_payload(payload)
+            except ProviderError as exc:
+                LOG.warning(
+                    "explore provider error project=%s intent=%s worker=%s code=%s message=%s execute_ms=%s total_ms=%s",
+                    project.project.id,
+                    intent.id,
+                    worker.name,
+                    exc.code,
+                    exc.message,
+                    execute_ms,
+                    int((time.perf_counter() - task_started) * 1000),
+                )
+                best_effort_release(client, project.project.id, intent.id, worker.name)
+                return "provider_error"
             except Exception as exc:
                 LOG.warning(
                     "explore parse failed project=%s intent=%s worker=%s error=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -476,6 +490,18 @@ def _try_conclude_fallback(
         model_output = driver.extract_response_text(result.stdout, result.stderr)
         payload = parse_json_output(model_output)
         kind, description = validate_explore_payload(payload)
+    except ProviderError as exc:
+        LOG.warning(
+            "conclude provider error project=%s intent=%s worker=%s code=%s message=%s conclude_ms=%s",
+            project_id,
+            intent.id,
+            worker.name,
+            exc.code,
+            exc.message,
+            conclude_ms,
+        )
+        best_effort_release(client, project_id, intent.id, worker.name)
+        return "provider_error"
     except Exception as exc:
         LOG.warning(
             "conclude parse failed project=%s intent=%s worker=%s error=%s conclude_ms=%s stdout_preview=%s stderr_preview=%s",

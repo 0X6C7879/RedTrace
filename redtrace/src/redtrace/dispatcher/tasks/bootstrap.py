@@ -11,6 +11,7 @@ from redtrace.dispatcher.contracts import (
     validate_bootstrap_execute_payload,
 )
 from redtrace.dispatcher.control_plane import ControlPlaneClient
+from redtrace.dispatcher.workers.base import ProviderError
 from redtrace.dispatcher.prompting import (
     add_blackboard_guidance,
     format_hints,
@@ -156,6 +157,19 @@ def run_bootstrap_task(
                 model_output = driver.extract_response_text(first.stdout, first.stderr)
                 payload = parse_json_output(model_output)
                 kind, data = validate_bootstrap_execute_payload(payload)
+            except ProviderError as exc:
+                LOG.warning(
+                    "bootstrap provider error project=%s intent=%s worker=%s code=%s message=%s execute_ms=%s total_ms=%s",
+                    project.project.id,
+                    intent.id,
+                    worker.name,
+                    exc.code,
+                    exc.message,
+                    execute_ms,
+                    int((time.perf_counter() - task_started) * 1000),
+                )
+                best_effort_release(client, project.project.id, intent.id, worker.name)
+                return "provider_error"
             except Exception as exc:
                 LOG.warning(
                     "bootstrap parse failed project=%s intent=%s worker=%s error=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -397,6 +411,18 @@ def _try_conclude_fallback(
                 preview(str(conclude_data.get("complete"))),
             )
         kind, fact_description = validate_bootstrap_conclude_payload(payload)
+    except ProviderError as exc:
+        LOG.warning(
+            "bootstrap conclude provider error project=%s intent=%s worker=%s code=%s message=%s conclude_ms=%s",
+            project.project.id,
+            intent.id,
+            worker.name,
+            exc.code,
+            exc.message,
+            conclude_ms,
+        )
+        best_effort_release(client, project.project.id, intent.id, worker.name)
+        return "provider_error"
     except Exception as exc:
         LOG.warning(
             "bootstrap conclude parse failed project=%s intent=%s worker=%s error=%s conclude_ms=%s stdout_preview=%s stderr_preview=%s",
