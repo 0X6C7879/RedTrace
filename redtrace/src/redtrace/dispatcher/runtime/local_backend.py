@@ -161,7 +161,19 @@ class LocalBackend:
                 ):
                     continue
                 _copy_config(source, state / source.name)
+            # Always refresh settings.json from the home config so that
+            # native_cli_config changes (e.g. removing ANTHROPIC_BASE_URL
+            # in direct endpoint mode) propagate to the session directory.
+            # _copy_config skips existing files, so we force-overwrite here.
+            settings_file = "settings.json"
+            source = user_home / settings_file
+            if source.is_file():
+                shutil.copy2(source, state / settings_file)
         if worker_type == "claudecode":
+            # Scrub provider routing keys from the session settings.json so
+            # they can never override the per-process env vars set by
+            # build_exec_process (relay URL, auth token, model, etc.).
+            _scrub_claude_provider_env(state / "settings.json")
             _ensure_claude_workspace_trust(state)
         return {variable: str(state)}
 
@@ -372,6 +384,51 @@ def _copy_config(source: Path, target: Path) -> None:
         return
     _ensure_directory(target.parent)
     shutil.copy2(source, target)
+
+
+# Provider routing keys that must be controlled exclusively by per-process
+# env vars (from WorkerConfig + EndpointRelay).  If these appear in the
+# session settings.json, the Claude CLI treats them as higher-priority than
+# the process environment and breaks direct-mode relay routing.
+_CLAUDE_PROVIDER_ENV_KEYS = frozenset({
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_OAUTH_TOKEN",
+    "ANTHROPIC_MODEL",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+})
+
+
+def _scrub_claude_provider_env(settings_path: Path) -> None:
+    """Remove provider routing keys from a Claude settings.json.
+
+    The Claude CLI treats ``settings.json`` ``env`` entries as higher
+    priority than the process environment.  RedTrace sets these values
+    via per-process env vars (including the relay URL for direct mode),
+    so stale values in settings.json must be removed.
+    """
+    if not settings_path.is_file():
+        return
+    try:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return
+    env = data.get("env")
+    if not isinstance(env, dict):
+        return
+    changed = False
+    for key in _CLAUDE_PROVIDER_ENV_KEYS:
+        if key in env:
+            del env[key]
+            changed = True
+    if changed:
+        settings_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
 
 def _ensure_claude_workspace_trust(state: Path) -> None:
