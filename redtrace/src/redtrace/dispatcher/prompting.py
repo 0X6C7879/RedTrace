@@ -5,8 +5,6 @@ import os
 from importlib import resources
 from typing import Any
 
-from redtrace.skill_runtime import skill_runtime_instructions
-
 LANGUAGE_GUIDANCE = """## 输出语言
 
 自然语言及 JSON 自由文本值须用简体中文。
@@ -26,7 +24,19 @@ def load_prompt(group: str, name: str) -> str:
     )
 
 
-def render_prompt(template: str, replacements: dict[str, str]) -> str:
+def load_prompt_for_mode(prompt_mode: str, name: str, *, prompt_group: str | None = None) -> str:
+    """Select prompt group based on prompt_mode.
+
+    If prompt_group is provided (e.g. "mock"), use it directly.
+    Otherwise route "cairn" to cairn group, everything else to "default".
+    """
+    if prompt_group is not None:
+        return load_prompt(prompt_group, name)
+    group = "cairn" if prompt_mode == "cairn" else "default"
+    return load_prompt(group, name)
+
+
+def render_prompt(template: str, replacements: dict[str, str], *, prompt_mode: str = "cairn") -> str:
     text = template
     for key, value in replacements.items():
         text = text.replace("{" + key + "}", value)
@@ -37,6 +47,8 @@ def render_prompt(template: str, replacements: dict[str, str]) -> str:
     except json.JSONDecodeError:
         pass
     else:
+        return text.rstrip()
+    if prompt_mode == "cairn":
         return text.rstrip()
     return LANGUAGE_GUIDANCE + "\n\n" + text.rstrip()
 
@@ -49,7 +61,10 @@ def add_blackboard_guidance(
     context_harness_enabled: bool = True,
     local_execution: bool = False,
     hints: str | None = None,
+    prompt_mode: str = "cairn",
 ) -> str:
+    if prompt_mode == "cairn":
+        return prompt.rstrip()
     if task_type not in {"bootstrap", "reason", "explore"}:
         raise ValueError(f"unsupported task type: {task_type}")
     sections = [
@@ -132,14 +147,28 @@ def add_blackboard_guidance(
             "已存储的 credential_ref secret 可直接复用。"
         )
     if task_type != "reason":
-        sections.append(
-            "## RedTrace 全自动执行覆盖规则\n\n"
-            "阶段结束后自动选择证据最充分、最能推进 Goal 的具体下一步并立即执行；"
-            "不得等待用户从下一步菜单中选择，不得因常规分支、工具替代或阶段切换暂停。"
-            "仅在授权范围即将改变或缺少无法安全推断的必要输入时停下。"
+        sections.extend(
+            [
+                (
+                    "## RedTrace 全自动执行覆盖规则\n\n"
+                    "阶段结束后自动选择证据最充分、最能推进 Goal 的具体下一步并立即执行；"
+                    "不得等待用户从下一步菜单中选择，不得因常规分支、工具替代或阶段切换暂停。"
+                    "仅在授权范围即将改变或缺少无法安全推断的必要输入时停下。"
+                ),
+                (
+                    "Skill、MCP 和 plugin 由 RedTrace root 共享。首次实质操作前用 Worker 原生 Skill 机制发现并调用最具体的相关 Skill；"
+                    "直接加载专业 Skill，不调用 Router、通配符或目录占位名。优先完成原生 Skill 选择和必要 Web 调研，再开始通用命令探索。"
+                    "后续若任务方向或知识缺口变化，可继续发现并加载 Skill；同时启用最多 5 个且不得重复加载。"
+                    "未完成专业 Skill 的规定步骤前，不得退回纯手写 curl/python/bash 流程。"
+                ),
+            ]
         )
-    if skill_guidance := skill_runtime_instructions(task_type):
-        sections.append(skill_guidance)
+    sections.append(
+        "## Skill 学习闭环\n\n"
+        "加载专业 Skill 后运行一次 `redtrace-skill recall <canonical-id>`。任务结束前只有产生已验证、可复用且非项目事实的新经验时，"
+        "才在 Workspace 写脱敏说明并调用 `redtrace-skill learn <canonical-id> --summary <摘要> --evidence <验证依据> --content-file <文件>`。"
+        "RedTrace Core 负责锁、脱敏、去重、原子写入、索引和审计；没有新经验就不写。"
+    )
     guidance = prompt.rstrip() + "\n\n" + "\n\n".join(sections)
     if local_execution and os.name == "nt":
         guidance += (

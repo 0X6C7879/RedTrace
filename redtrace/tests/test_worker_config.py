@@ -21,6 +21,8 @@ from redtrace.worker_config import (
     CONNECTION_TESTER,
     WorkerConfigConflict,
     WorkerConfigService,
+    _strip_api_path_suffix,
+    _worker_payload as _make_worker_payload,
 )
 
 
@@ -437,3 +439,355 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     assert 'x-text="webshellSessionLabel()"' in index
     assert 'x-show="webshellUsable()" @submit.prevent="runCommand()"' in index
     assert "当前 WebShell 不可用" in index
+
+
+# ── endpoint normalization ────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("worker_type", "input_url", "expected"),
+    [
+        # Pi OpenAI — base URL passes through unchanged
+        ("pi", "https://host/v1", "https://host/v1"),
+        # Pi OpenAI — full endpoint stripped
+        ("pi", "https://host/v1/chat/completions", "https://host/v1"),
+        # Pi Responses — stripped
+        ("pi", "https://host/v1/responses", "https://host/v1"),
+        # Pi Anthropic — stripped to base (health check re-appends /v1/messages)
+        ("pi", "https://host/v1/messages", "https://host"),
+        # Codex — base URL passes through
+        ("codex", "https://host/v1", "https://host/v1"),
+        # Codex — full endpoint stripped
+        ("codex", "https://host/v1/responses", "https://host/v1"),
+        # Claude — base URL passes through
+        ("claudecode", "https://host/v1", "https://host"),
+        # Claude — full endpoint stripped
+        ("claudecode", "https://host/v1/messages", "https://host"),
+        # Non-matching path preserved
+        ("pi", "https://host/custom/path", "https://host/custom/path"),
+    ],
+)
+def test_strip_api_path_suffix(
+    worker_type: str, input_url: str, expected: str
+) -> None:
+    assert _strip_api_path_suffix(input_url, worker_type) == expected
+
+
+def test_worker_payload_normalizes_full_endpoint_for_codex(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Full /v1/responses endpoint should be stored as bare /v1 base URL."""
+    config_path = tmp_path / "redtrace.yaml"
+    raw = _raw_config()
+    raw["runtime"]["execution"] = "local"
+    raw["runtime"]["worker_healthcheck"] = "disabled"
+    raw["local"] = {"completed_action": "keep"}
+    _write_config(config_path, raw)
+    monkeypatch.setenv("REDTRACE_DISPATCH_CONFIG", str(config_path))
+    monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(tmp_path / "secrets"))
+    monkeypatch.setattr(
+        CONNECTION_TESTER,
+        "_probe",
+        lambda _c, _w: {
+            "ok": True,
+            "status": 200,
+            "duration_ms": 1,
+            "detail": "connection successful",
+        },
+    )
+    CONNECTION_TESTER._success_cache.clear()
+    service = WorkerConfigService(config_path, cli_config_home=tmp_path / "home")
+
+    payload = {
+        "expected_revision": service.snapshot()["revision"],
+        "name": "codex-full-endpoint",
+        "type": "codex",
+        "enabled": True,
+        "api_endpoint": "https://api.example.test/v1/responses",
+        "api_key": "sk-test-key-12345",
+        "model_id": "gpt-test",
+        "task_types": ["explore"],
+        "priority": 0,
+        "max_running": 1,
+    }
+    created = service.create(payload)
+    worker = created["workers"][0]
+    assert worker["api_endpoint"] == "https://api.example.test/v1"
+
+
+def test_worker_payload_normalizes_full_endpoint_for_pi_openai(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "redtrace.yaml"
+    raw = _raw_config()
+    raw["runtime"]["execution"] = "local"
+    raw["runtime"]["worker_healthcheck"] = "disabled"
+    raw["local"] = {"completed_action": "keep"}
+    _write_config(config_path, raw)
+    monkeypatch.setenv("REDTRACE_DISPATCH_CONFIG", str(config_path))
+    monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(tmp_path / "secrets"))
+    monkeypatch.setattr(
+        CONNECTION_TESTER,
+        "_probe",
+        lambda _c, _w: {
+            "ok": True,
+            "status": 200,
+            "duration_ms": 1,
+            "detail": "connection successful",
+        },
+    )
+    CONNECTION_TESTER._success_cache.clear()
+    service = WorkerConfigService(config_path, cli_config_home=tmp_path / "home")
+
+    payload = {
+        "expected_revision": service.snapshot()["revision"],
+        "name": "pi-full-endpoint",
+        "type": "pi",
+        "enabled": True,
+        "api_endpoint": "https://api.example.test/v1/chat/completions",
+        "api_key": "sk-test-key-12345",
+        "model_id": "gpt-test",
+        "task_types": ["explore"],
+        "priority": 0,
+        "max_running": 1,
+    }
+    created = service.create(payload)
+    worker = created["workers"][0]
+    assert worker["api_endpoint"] == "https://api.example.test/v1"
+
+
+def test_worker_payload_normalizes_full_endpoint_for_claudecode(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "redtrace.yaml"
+    raw = _raw_config()
+    raw["runtime"]["execution"] = "local"
+    raw["runtime"]["worker_healthcheck"] = "disabled"
+    raw["local"] = {"completed_action": "keep"}
+    _write_config(config_path, raw)
+    monkeypatch.setenv("REDTRACE_DISPATCH_CONFIG", str(config_path))
+    monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(tmp_path / "secrets"))
+    monkeypatch.setattr(
+        CONNECTION_TESTER,
+        "_probe",
+        lambda _c, _w: {
+            "ok": True,
+            "status": 200,
+            "duration_ms": 1,
+            "detail": "connection successful",
+        },
+    )
+    CONNECTION_TESTER._success_cache.clear()
+    service = WorkerConfigService(config_path, cli_config_home=tmp_path / "home")
+
+    payload = {
+        "expected_revision": service.snapshot()["revision"],
+        "name": "claude-full-endpoint",
+        "type": "claudecode",
+        "enabled": True,
+        "api_endpoint": "https://api.anthropic.com/v1/messages",
+        "api_key": "sk-test-key-12345",
+        "model_id": "claude-test",
+        "task_types": ["explore"],
+        "priority": 0,
+        "max_running": 1,
+    }
+    created = service.create(payload)
+    worker = created["workers"][0]
+    assert worker["api_endpoint"] == "https://api.anthropic.com"
+
+
+def test_worker_payload_preserves_base_url_without_suffix(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Base URLs that already lack API path suffixes should pass through."""
+    config_path = tmp_path / "redtrace.yaml"
+    raw = _raw_config()
+    raw["runtime"]["execution"] = "local"
+    raw["runtime"]["worker_healthcheck"] = "disabled"
+    raw["local"] = {"completed_action": "keep"}
+    _write_config(config_path, raw)
+    monkeypatch.setenv("REDTRACE_DISPATCH_CONFIG", str(config_path))
+    monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(tmp_path / "secrets"))
+    monkeypatch.setattr(
+        CONNECTION_TESTER,
+        "_probe",
+        lambda _c, _w: {
+            "ok": True,
+            "status": 200,
+            "duration_ms": 1,
+            "detail": "connection successful",
+        },
+    )
+    CONNECTION_TESTER._success_cache.clear()
+    service = WorkerConfigService(config_path, cli_config_home=tmp_path / "home")
+
+    payload = {
+        "expected_revision": service.snapshot()["revision"],
+        "name": "codex-base-url",
+        "type": "codex",
+        "enabled": True,
+        "api_endpoint": "https://api.example.test/v1",
+        "api_key": "sk-test-key-12345",
+        "model_id": "gpt-test",
+        "task_types": ["explore"],
+        "priority": 0,
+        "max_running": 1,
+    }
+    created = service.create(payload)
+    worker = created["workers"][0]
+    assert worker["api_endpoint"] == "https://api.example.test/v1"
+
+
+def test_endpoint_mode_defaults_to_auto() -> None:
+    """endpoint_mode auto infers 'base' for /v1 URLs, 'direct' for proxy URLs."""
+    base_result = _make_worker_payload(
+        {
+            "name": "test-defaults-base",
+            "type": "codex",
+            "enabled": True,
+            "api_endpoint": "https://api.example.test/v1",
+            "api_key": "sk-test-key-12345",
+            "model_id": "gpt-test",
+            "task_types": ["explore"],
+            "priority": 0,
+            "max_running": 1,
+        },
+        runtime_max_workers=3,
+    )
+    assert base_result["endpoint_mode"] == "base"
+
+    direct_result = _make_worker_payload(
+        {
+            "name": "test-defaults-direct",
+            "type": "codex",
+            "enabled": True,
+            "api_endpoint": "https://gateway.example.com/proxy/abc",
+            "api_key": "sk-test-key-12345",
+            "model_id": "gpt-test",
+            "task_types": ["explore"],
+            "priority": 0,
+            "max_running": 1,
+        },
+        runtime_max_workers=3,
+    )
+    assert direct_result["endpoint_mode"] == "direct"
+
+
+def test_endpoint_mode_direct_preserves_full_url() -> None:
+    """In direct mode the full endpoint URL must be stored without stripping."""
+    result = _make_worker_payload(
+        {
+            "name": "test-direct",
+            "type": "claudecode",
+            "enabled": True,
+            "api_endpoint": "https://llm-gateway.example.com/llm-gateway/proxy/e/xxxx",
+            "api_key": "sk-test-key-12345",
+            "model_id": "claude-test",
+            "task_types": ["explore"],
+            "priority": 0,
+            "max_running": 1,
+            "endpoint_mode": "direct",
+        },
+        runtime_max_workers=3,
+    )
+    assert result["endpoint_mode"] == "direct"
+    assert result["env"]["ANTHROPIC_BASE_URL"] == (
+        "https://llm-gateway.example.com/llm-gateway/proxy/e/xxxx"
+    )
+
+
+def test_endpoint_mode_direct_requires_endpoint() -> None:
+    """Direct mode requires an api_endpoint."""
+    with pytest.raises(
+        Exception, match="api_endpoint is required when endpoint_mode is direct"
+    ):
+        _make_worker_payload(
+            {
+                "name": "test-no-endpoint",
+                "type": "codex",
+                "enabled": True,
+                "api_endpoint": "",
+                "api_key": "sk-test-key-12345",
+                "model_id": "gpt-test",
+                "task_types": ["explore"],
+                "priority": 0,
+                "max_running": 1,
+                "endpoint_mode": "direct",
+            },
+            runtime_max_workers=3,
+        )
+
+
+def test_endpoint_mode_base_strips_known_suffixes() -> None:
+    """In base mode known API path suffixes are stripped."""
+    result = _make_worker_payload(
+        {
+            "name": "test-base-mode",
+            "type": "pi",
+            "enabled": True,
+            "api_endpoint": "https://host/v1/chat/completions",
+            "api_key": "sk-test-key-12345",
+            "model_id": "gpt-test",
+            "task_types": ["explore"],
+            "priority": 0,
+            "max_running": 1,
+            "endpoint_mode": "base",
+        },
+        runtime_max_workers=3,
+    )
+    assert result["endpoint_mode"] == "base"
+    assert result["env"]["PI_BASE_URL"] == "https://host/v1"
+
+
+def test_worker_view_includes_endpoint_mode(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "redtrace.yaml"
+    raw = _raw_config()
+    raw["runtime"]["execution"] = "local"
+    raw["runtime"]["worker_healthcheck"] = "disabled"
+    raw["local"] = {"completed_action": "keep"}
+    _write_config(config_path, raw)
+    monkeypatch.setenv("REDTRACE_DISPATCH_CONFIG", str(config_path))
+    monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(tmp_path / "secrets"))
+    monkeypatch.setattr(
+        CONNECTION_TESTER,
+        "_probe",
+        lambda _c, _w: {
+            "ok": True,
+            "status": 200,
+            "duration_ms": 1,
+            "detail": "connection successful",
+        },
+    )
+    CONNECTION_TESTER._success_cache.clear()
+    service = WorkerConfigService(config_path, cli_config_home=tmp_path / "home")
+
+    payload = {
+        "expected_revision": service.snapshot()["revision"],
+        "name": "direct-worker",
+        "type": "codex",
+        "enabled": True,
+        "api_endpoint": "https://gateway.example.com/proxy/abc",
+        "api_key": "sk-test-key-12345",
+        "model_id": "gpt-test",
+        "task_types": ["explore"],
+        "priority": 0,
+        "max_running": 1,
+        "endpoint_mode": "direct",
+    }
+    created = service.create(payload)
+    worker = created["workers"][0]
+    assert worker["endpoint_mode"] == "direct"
+    assert worker["api_endpoint"] == "https://gateway.example.com/proxy/abc"
+
+
+def test_endpoint_relay_register_returns_consistent_url() -> None:
+    """Registering the same upstream twice should return the same relay URL."""
+    from redtrace.dispatcher.workers.endpoint_relay import EndpointRelay
+
+    url1 = EndpointRelay.register("https://example.com/proxy/test")
+    url2 = EndpointRelay.register("https://example.com/proxy/test")
+    assert url1 == url2
+    assert url1.startswith("http://127.0.0.1:")

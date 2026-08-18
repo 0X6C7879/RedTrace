@@ -16,6 +16,7 @@ from redtrace.paths import RedTracePaths, resolve_portable_path
 
 TaskType = Literal["reason", "explore", "bootstrap"]
 WorkerType = Literal["claudecode", "codex", "pi", "mock"]
+EndpointMode = Literal["auto", "base", "direct"]
 CompletedAction = Literal["remove", "stop"]
 WorkerHealthcheckMode = Literal["startup_and_task", "startup_only", "disabled"]
 ExecutionMode = Literal["container", "local"]
@@ -251,6 +252,7 @@ class RuntimeConfig(BaseModel):
     worker_healthcheck: WorkerHealthcheckMode = "startup_only"
     execution: ExecutionMode = "container"
     prompt_group: str = Field(min_length=1)
+    prompt_mode: Literal["cairn", "legacy"] = "cairn"
 
 
 class WorkerConfig(BaseModel):
@@ -259,6 +261,7 @@ class WorkerConfig(BaseModel):
     name: str
     type: WorkerType
     enabled: bool = True
+    endpoint_mode: EndpointMode = "auto"
     task_types: list[TaskType] = Field(
         default_factory=lambda: ["reason", "explore", "bootstrap"]
     )
@@ -473,6 +476,18 @@ def validate_prompt_resources(prompt_group: str) -> None:
         missing = [token for token in tokens if token not in content]
         if missing:
             raise ValueError(f"prompt group {prompt_group} resource {name} missing placeholders: {', '.join(missing)}")
+
+    # Validate cairn prompt group
+    cairn_dir = prompts_dir.joinpath("cairn")
+    if cairn_dir.is_dir():
+        for name, tokens in DEFAULT_PROMPT_REQUIRED_TOKENS.items():
+            try:
+                content = cairn_dir.joinpath(name).read_text(encoding="utf-8")
+            except FileNotFoundError:
+                raise ValueError(f"prompt group cairn missing resource: {name}")
+            missing_tokens = [token for token in tokens if token not in content]
+            if missing_tokens:
+                raise ValueError(f"prompt group cairn resource {name} missing placeholders: {', '.join(missing_tokens)}")
 
 
 def resolve_mock_behavior(worker_name: str, env: dict[str, str]) -> dict[str, dict[str, Any]]:

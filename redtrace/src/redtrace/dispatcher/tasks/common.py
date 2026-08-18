@@ -18,7 +18,7 @@ from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
 from redtrace.dispatcher.runtime.process import ProcessResult
 from redtrace.dispatcher.workers.adapters.claudecode import CLAUDE_MAX_THINKING_TOKENS
-from redtrace.skill_runtime import learning_checkpoint_prompt
+from redtrace.skill_runtime import learning_checkpoint_prompt, learning_hook_prompt
 
 PROCESS_COMMUNICATE_GRACE_SECONDS = 15
 GRAPH_SNAPSHOT_ROOT = "/home/kali/workspace/.redtrace/prompts"
@@ -454,6 +454,9 @@ def run_worker_process(
     cancellation: TaskCancellation | None = None,
     blackboard_inbox: BlackboardInbox | None = None,
     live_control: Any | None = None,
+    session: str | None = None,
+    prompt_mode: str = "legacy",
+    env_overrides: dict[str, str] | None = None,
 ) -> ProcessResult:
     LOG.info(
         "starting container exec container=%s worker=%s phase=%s timeout=%ss",
@@ -463,6 +466,8 @@ def run_worker_process(
         timeout_seconds,
     )
     process_env = dict(worker.env)
+    if env_overrides:
+        process_env.update(env_overrides)
     task_type = phase.split("_", 1)[0]
     if task_type == "reason":
         for name in (
@@ -516,6 +521,11 @@ def run_worker_process(
             )
         )
         process_env["REDTRACE_BLACKBOARD_NOTICE"] = notice_path
+        # Session-level skill tracking (cairn mode only)
+        tracking_path = resolve_session_skill_tracking_path(container_name, session)
+        if prompt_mode == "cairn" and tracking_path is not None:
+            process_env["REDTRACE_LOADED_SKILLS_FILE"] = str(tracking_path)
+            process_env["REDTRACE_PROMPT_MODE"] = "cairn"
         if lease is not None and blackboard_inbox is None:
             def publish_blackboard_notice(previous: int, current: int) -> None:
                 payload = client.blackboard_changes(
@@ -673,6 +683,7 @@ def run_learning_checkpoint(
             cancellation=cancellation,
             blackboard_inbox=blackboard_inbox,
             live_control=command.live_control,
+            env_overrides=command.env,
         )
     except Exception:
         LOG.exception(
@@ -695,6 +706,118 @@ def run_learning_checkpoint(
             result.timed_out,
         )
     return ok
+
+
+def resolve_session_skill_tracking_path(
+    container_name: str,
+    session: str | None,
+) -> Path | None:
+    """Return the per-session loaded-skills tracking file path.
+
+    Uses the real provider session ID so execute/conclude/learning_hook
+    for the same session resolve to the same file. Different sessions
+    get different files.
+    """
+    if not session or not container_name:
+        return None
+    tracking_id = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"{container_name}:{session}",
+    ).hex[:12]
+    workspace = Path(container_name)
+    if workspace.is_absolute():
+        return workspace / ".redtrace" / f"loaded-skills-{tracking_id}.json"
+    return Path(f"/home/kali/workspace/.redtrace/loaded-skills-{tracking_id}.json")
+
+
+def _read_loaded_skills(tracking_path: Path | None) -> list[str]:
+    """Read loaded skill IDs from a resolved tracking path."""
+    if tracking_path is None:
+        return []
+    try:
+        data = tracking_path.read_text(encoding="utf-8")
+        skills = json.loads(data)
+        if isinstance(skills, list):
+            return [str(s) for s in skills]
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+    return []
+
+
+def _cleanup_skill_tracking(tracking_path: Path | None) -> None:
+    """Remove the session tracking file after learning hook completes."""
+    if tracking_path is None:
+        return
+    try:
+        tracking_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def run_task_end_learning(
+    driver: Any,
+    container_manager: ContainerManager,
+    container_name: str,
+    worker: WorkerConfig,
+    session: str | None,
+    *,
+    task_type: str,
+) -> bool:
+    """Run task-end learning hook in the current session (cairn mode only).
+
+    Reuses the existing provider session via build_execute. The learning turn
+    result is discarded — it does not enter task result, Fact, Graph, or Complete.
+    No new Agent session or Worker is created. Cleans up tracking file after.
+    """
+    if worker.type == "mock":
+        return True
+    if not session:
+        return False
+    hook_prompt = learning_hook_prompt(task_type)
+    if not hook_prompt:
+        return False
+    tracking_path = resolve_session_skill_tracking_path(container_name, session)
+    loaded_ids = _read_loaded_skills(tracking_path)
+    LOG.info(
+        "task-end learning hook task=%s worker=%s session=%s loaded_skills=%s",
+        task_type,
+        worker.name,
+        session,
+        loaded_ids,
+    )
+    try:
+        command = driver.build_execute(
+            worker, hook_prompt, session, task_type=task_type
+        )
+        # Reuse existing session with explicit cairn prompt_mode
+        # so REDTRACE_LOADED_SKILLS_FILE and REDTRACE_PROMPT_MODE
+        # are in the process env for fail-closed enforcement
+        run_worker_process(
+            container_manager,
+            container_name,
+            worker,
+            command.argv,
+            stdin_text=command.stdin,
+            session=session,
+            phase=f"{task_type}_learning_hook",
+            timeout_seconds=120,
+            live_control=command.live_control,
+            prompt_mode="cairn",
+            env_overrides=command.env,
+        )
+    except Exception:
+        LOG.warning(
+            "task-end learning hook failed task=%s worker=%s",
+            task_type,
+            worker.name,
+            exc_info=True,
+        )
+    finally:
+        # Clean up tracking file after learning hook completes.
+        # The session will not be resumed after this point.
+        _cleanup_skill_tracking(tracking_path)
+    # Learning result is always discarded — never modifies task result
+    return True
 
 
 def project_allows_conclude_fallback(

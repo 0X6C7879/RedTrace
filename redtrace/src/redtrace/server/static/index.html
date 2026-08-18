@@ -1690,6 +1690,7 @@
               </div>
               <div class="mt-2 flex flex-wrap gap-x-5 gap-y-1.5 text-[11px] text-slate-400">
                 <span class="max-w-64 truncate" :title="worker.api_endpoint || ''" x-text="worker.api_endpoint || '使用用户级 CLI 配置'"></span>
+                <span x-show="worker.endpoint_mode && worker.endpoint_mode !== 'auto'" class="rounded bg-amber-50 px-1.5 py-0.5 text-amber-600" x-text="worker.endpoint_mode === 'direct' ? '直连代理' : 'Base URL'"></span>
                 <span x-text="worker.model_id || '未指定模型'"></span>
                 <span x-text="`优先级 ${worker.priority}`"></span>
                 <span x-text="`最大并发 ${worker.max_running}`"></span>
@@ -1890,7 +1891,7 @@
     <div class="grid gap-4 px-6 py-5 sm:grid-cols-2">
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">Worker 名称</span><input x-model.trim="workerForm.name" required maxlength="64" autocomplete="off" placeholder="codex-primary" class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">Agent CLI</span><select x-model="workerForm.type" class="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><option value="claudecode">Claude Code</option><option value="codex">Codex</option><option value="pi">Pi</option></select></label>
-      <label class="block sm:col-span-2"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">API 端点</span><input x-model.trim="workerForm.api_endpoint" type="url" autocomplete="off" placeholder="https://api.example.com/v1" class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
+      <label class="block sm:col-span-2"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">API 端点</span><input x-model.trim="workerForm.api_endpoint" type="url" autocomplete="off" placeholder="https://api.example.com/v1" class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><span class="mt-1 block text-[10px] text-slate-400" x-text="inferEndpointHint(workerForm.api_endpoint)"></span></label>
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">API Key</span><input x-model="workerForm.api_key" type="text" autocomplete="off" placeholder="输入 API Key" class="h-10 w-full rounded-xl border border-slate-200 px-3 font-mono text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><span class="mt-1.5 block text-[10px] text-slate-400">本地部署调试模式：当前密钥会以明文显示。</span></label>
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">模型 ID</span><span class="flex items-center gap-2"><input x-model.trim="workerForm.model_id" maxlength="256" autocomplete="off" placeholder="模型标识" class="h-10 min-w-0 flex-1 rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><span class="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-600"><input type="checkbox" x-model="workerForm.context_1m" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span>1M</span></span></span></label>
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">优先级</span><input x-model.number="workerForm.priority" type="number" min="0" max="1000" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
@@ -2556,6 +2557,28 @@ function redtraceApp() {
       return { bootstrap: 'Bootstrap', reason: 'Reason', explore: 'Explore' }[taskType] || taskType;
     },
 
+    inferEndpointHint(url) {
+      if (!url || !url.trim()) return '';
+      try {
+        const path = new URL(url).pathname.replace(/\/+$/, '').toLowerCase();
+        if (path === '/v1' || path === '/v2' || path.endsWith('/v1') || path.endsWith('/v2')
+            || path.endsWith('/openai/v1') || path.endsWith('/openai/v2')) {
+          return '✓ 自动识别为 API Base URL（程序将追加标准路径）';
+        }
+        const segs = path.split('/').filter(Boolean);
+        if (segs.some(s => ['proxy','gateway','llm-gateway'].includes(s))) {
+          return '✓ 自动识别为直连端点代理（程序将原样转发请求）';
+        }
+        if (segs.length >= 2) {
+          const tail = segs[segs.length - 1];
+          if (tail.length >= 8 && /\d/.test(tail) && /[a-z]/i.test(tail)) {
+            return '✓ 自动识别为直连端点代理（程序将原样转发请求）';
+          }
+        }
+        return '✓ 自动识别为 API Base URL（程序将追加标准路径）';
+      } catch { return ''; }
+    },
+
     openWorkerEditor(worker = null) {
       if (worker && !worker.editable) return;
       this.workerEditingName = worker?.name || '';
@@ -2600,6 +2623,7 @@ function redtraceApp() {
         name: this.workerForm.name,
         type: this.workerForm.type,
         enabled: !!this.workerForm.enabled,
+        endpoint_mode: 'auto',
         api_endpoint: this.workerForm.api_endpoint,
         api_key: this.workerForm.api_key || null,
         clear_api_key: false,

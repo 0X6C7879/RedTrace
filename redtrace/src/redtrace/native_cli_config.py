@@ -99,7 +99,6 @@ def _write_claude(home: Path, worker: WorkerConfig) -> None:
     env["CLAUDE_CODE_USER_PROMPT_APPEND"] = "\n请始终使用中文进行思考、分析和回答。"
     env.update(
         {
-            "ANTHROPIC_BASE_URL": worker.env["ANTHROPIC_BASE_URL"],
             "ANTHROPIC_AUTH_TOKEN": worker.env["ANTHROPIC_AUTH_TOKEN"],
             "ANTHROPIC_MODEL": model,
             "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
@@ -112,6 +111,15 @@ def _write_claude(home: Path, worker: WorkerConfig) -> None:
             "MAX_THINKING_TOKENS": "31999",
         }
     )
+    # In direct endpoint mode the runtime relay provides the URL via the
+    # ANTHROPIC_BASE_URL env var.  Writing the raw proxy URL to settings.json
+    # would override the env var (settings.json env has higher priority),
+    # so skip the base URL write and remove any stale value copied from
+    # the user's ~/.claude/settings.json.
+    if worker.endpoint_mode != "direct":
+        env["ANTHROPIC_BASE_URL"] = worker.env["ANTHROPIC_BASE_URL"]
+    else:
+        env.pop("ANTHROPIC_BASE_URL", None)
     if worker.context_length is not None:
         env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(worker.context_length)
     updated = deepcopy(existing)
@@ -255,7 +263,7 @@ def _write_pi(home: Path, worker: WorkerConfig) -> None:
         if worker.context_length is not None
         else DEFAULT_PI_MODEL_CONTEXT_WINDOW
     )
-    providers["redtrace"] = {
+    redtrace_provider: dict[str, Any] = {
         "baseUrl": worker.env["PI_BASE_URL"],
         "apiKey": worker.env["PI_API_KEY"],
         "api": worker.env["PI_PROVIDER_API"],
@@ -270,6 +278,7 @@ def _write_pi(home: Path, worker: WorkerConfig) -> None:
             }
         ],
     }
+    providers["redtrace"] = redtrace_provider
     models["providers"] = providers
     if "systemPromptAppend" not in settings:
         settings["systemPromptAppend"] = "请始终使用中文进行思考、分析和回答。"

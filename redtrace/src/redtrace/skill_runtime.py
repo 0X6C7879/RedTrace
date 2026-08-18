@@ -27,6 +27,14 @@ LEARNING_CHECKPOINT_PROMPT = """## RedTrace Learning Checkpoint
 完成判断后只返回：`{"accepted":true,"data":{}}`
 """
 
+LEARNING_HOOK_PROMPT = """主任务已完成并已返回结果。
+
+如果本次任务产生了可复用、已验证、非项目事实的新经验，且适用于本次实际加载过的专业 Skill，
+按需加载 skill-evolution 并执行；否则直接确认。
+
+不得重新执行任务、运行新命令或修改已提交的结果。
+"""
+
 
 def skill_runtime_enabled(task_type: SkillTaskType | str | None) -> bool:
     return task_type is None or task_type in SKILL_TASK_TYPES
@@ -40,3 +48,9 @@ def learning_checkpoint_prompt(task_type: SkillTaskType | str) -> str:
     if not skill_runtime_enabled(task_type):
         raise ValueError(f"Skill runtime is disabled for task type: {task_type}")
     return LEARNING_CHECKPOINT_PROMPT
+
+
+def learning_hook_prompt(task_type: SkillTaskType | str) -> str:
+    if not skill_runtime_enabled(task_type):
+        return ""
+    return LEARNING_HOOK_PROMPT

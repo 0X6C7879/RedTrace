@@ -53,6 +53,7 @@ class DriverResult:
     session: str | None = None
     stdin: str | None = None
     live_control: Any | None = None
+    env: dict[str, str] | None = None
 
 
 class WorkerDriver(ABC):

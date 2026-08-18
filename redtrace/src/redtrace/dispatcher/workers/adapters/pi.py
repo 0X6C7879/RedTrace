@@ -10,6 +10,7 @@ from redtrace.capabilities import (
 )
 from redtrace.dispatcher.config import WorkerConfig
 from redtrace.dispatcher.workers.base import DriverResult, WorkerDriver
+from redtrace.dispatcher.workers.endpoint_relay import EndpointRelay
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
 from redtrace.dispatcher.workers.live import PiLiveControl
 from redtrace.skill_runtime import skill_runtime_enabled
@@ -40,7 +41,15 @@ class PiDriver(WorkerDriver):
 
     def check_health(self, worker: WorkerConfig, *, timeout: float) -> HealthResult:
         env = worker.env
-        base = env["PI_BASE_URL"].rstrip("/")
+        if worker.endpoint_mode == "direct":
+            ok, detail = EndpointRelay.ping(env["PI_BASE_URL"], timeout=timeout)
+            return HealthResult(ok=ok, status=None, detail=detail)
+        base = (
+            env["PI_BASE_URL"]
+            .removesuffix("/v1/messages")
+            .removesuffix("/responses")
+            .removesuffix("/chat/completions")
+        )
         model = env["PI_MODEL"]
         api = env["PI_PROVIDER_API"]
         proxies = proxies_from_env(env)
@@ -87,6 +96,8 @@ class PiDriver(WorkerDriver):
 
     def describe_health(self, worker: WorkerConfig) -> str:
         env = worker.env
+        if worker.endpoint_mode == "direct":
+            return f"relay -> {env['PI_BASE_URL']}"
         return f"POST {env['PI_BASE_URL']} (api={env['PI_PROVIDER_API']}, model={env['PI_MODEL']})"
 
     def build_execute(
@@ -135,11 +146,16 @@ class PiDriver(WorkerDriver):
             if session:
                 pi_argv.extend(["--session", session])
             argv = self._configured_argv(worker, pi_argv, task_type=task_type)
+        pi_env_overrides: dict[str, str] | None = None
+        if worker.endpoint_mode == "direct":
+            relay_url = EndpointRelay.register(worker.env["PI_BASE_URL"])
+            pi_env_overrides = {"PI_BASE_URL": relay_url}
         return DriverResult(
             argv=argv,
             session=session,
             stdin=control.initial_input,
             live_control=control,
+            env=pi_env_overrides,
         )
 
     def _local_argv(

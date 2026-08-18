@@ -76,6 +76,68 @@ WORKER_ENV_FIELDS: dict[str, WorkerEnvFields] = {
 SECRET_ENV_KEYS = frozenset(fields.api_key for fields in WORKER_ENV_FIELDS.values())
 
 
+_API_PATH_SUFFIXES: dict[str, tuple[str, ...]] = {
+    "claudecode": ("/v1/messages", "/v1"),
+    "codex": ("/responses",),
+    "pi": ("/v1/messages", "/responses", "/chat/completions"),
+}
+
+# URL path patterns that indicate a standard API base URL (the CLI should
+# append its own API path suffix).  Anything else is treated as a direct
+# proxy endpoint that must be forwarded as-is via a local relay.
+_API_BASE_PATH_PATTERNS = ("/v1", "/v2", "/openai/v1", "/openai/v2")
+_PROXY_PATH_MARKERS = frozenset({"proxy", "gateway", "llm-gateway"})
+
+
+def _strip_api_path_suffix(endpoint: str, worker_type: str) -> str:
+    """Strip well-known API path suffixes from *endpoint*.
+
+    Users may supply a full endpoint (e.g. ``https://host/v1/chat/completions``)
+    instead of a bare base URL.  The adapters append API paths themselves, so
+    storing the full endpoint would produce a doubled path.  This function
+    removes the longest matching suffix to recover the base URL.
+    """
+    lower = endpoint.lower()
+    for suffix in _API_PATH_SUFFIXES.get(worker_type, ()):
+        if lower.endswith(suffix):
+            return endpoint[: -len(suffix)]
+    return endpoint
+
+
+def _infer_endpoint_mode(endpoint: str) -> str:
+    """Infer ``endpoint_mode`` from the URL path.
+
+    Returns ``"base"`` when the URL looks like a standard API base URL
+    where the CLI should append its own API path.  Returns ``"direct"``
+    for proxy/gateway endpoints where the URL is the final destination.
+    """
+    if not endpoint:
+        return "base"
+    parsed = urlsplit(endpoint)
+    path = parsed.path.rstrip("/").lower()
+    # 1. Standard API version suffix → base URL
+    for pattern in _API_BASE_PATH_PATTERNS:
+        if path == pattern or path.endswith(pattern):
+            return "base"
+    segments = [s for s in path.split("/") if s]
+    if not segments:
+        return "base"
+    # 2. Known proxy/gateway keywords → direct
+    if any(seg in _PROXY_PATH_MARKERS for seg in segments):
+        return "direct"
+    # 3. Multi-segment path whose last segment looks like a random token
+    #    (≥8 chars, both letters and digits) → direct
+    if len(segments) >= 2:
+        tail = segments[-1]
+        if (
+            len(tail) >= 8
+            and any(c.isdigit() for c in tail)
+            and any(c.isalpha() for c in tail)
+        ):
+            return "direct"
+    return "base"
+
+
 class WorkerConfigError(ValueError):
     pass
 
@@ -223,6 +285,15 @@ def _worker_payload(
         )
 
     endpoint = _normalize_endpoint(payload.get("api_endpoint"))
+    endpoint_mode = str(payload.get("endpoint_mode") or "auto").strip()
+    if endpoint_mode not in {"auto", "base", "direct"}:
+        raise WorkerConfigError("endpoint_mode must be auto, base, or direct")
+    if endpoint_mode == "auto" and endpoint:
+        endpoint_mode = _infer_endpoint_mode(endpoint)
+    if endpoint_mode == "direct" and not endpoint:
+        raise WorkerConfigError("api_endpoint is required when endpoint_mode is direct")
+    if endpoint and endpoint_mode == "base":
+        endpoint = _strip_api_path_suffix(endpoint, worker_type)
     model_id = str(payload.get("model_id") or "").strip()
     if len(model_id) > 256:
         raise WorkerConfigError("model ID must not exceed 256 characters")
@@ -282,6 +353,7 @@ def _worker_payload(
         "name": name,
         "type": worker_type,
         "enabled": bool(payload.get("enabled", True)),
+        "endpoint_mode": endpoint_mode,
         "task_types": list(task_types),
         "max_running": max_running,
         "priority": priority,
@@ -699,6 +771,7 @@ class WorkerConfigService:
                 "name": worker.name,
                 "type": worker.type,
                 "enabled": worker.enabled,
+                "endpoint_mode": worker.endpoint_mode,
                 "api_endpoint": "",
                 "api_key": "",
                 "api_key_configured": False,
@@ -715,6 +788,7 @@ class WorkerConfigService:
             "name": worker.name,
             "type": worker.type,
             "enabled": worker.enabled,
+            "endpoint_mode": worker.endpoint_mode,
             "api_endpoint": worker.env.get(fields.endpoint, ""),
             "api_key": worker.env.get(fields.api_key, ""),
             "api_key_configured": bool(worker.env.get(fields.api_key)),

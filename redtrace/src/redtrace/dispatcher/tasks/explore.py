@@ -12,7 +12,7 @@ from redtrace.dispatcher.workers.base import ProviderError
 from redtrace.dispatcher.prompting import (
     add_blackboard_guidance,
     format_hints,
-    load_prompt,
+    load_prompt_for_mode,
     render_prompt,
 )
 from redtrace.dispatcher.runtime.cancellation import TaskCancellation
@@ -31,6 +31,7 @@ from redtrace.dispatcher.tasks.common import (
     process_failure_outcome,
     record_session_checkpoint,
     run_learning_checkpoint,
+    run_task_end_learning,
     run_worker_process,
     write_conclude_result,
     write_graph_snapshot_reference,
@@ -60,6 +61,7 @@ def run_explore_task(
     container_name: str | None = None
     session: str | None = None
     checkpoint_due = False
+    result_committed = False
     lease = HeartbeatLease.for_intent(
         client, project.project.id, intent.id, worker.name, config.runtime.interval
     )
@@ -105,12 +107,13 @@ def run_explore_task(
                 revision=project.blackboard_revision,
             )
         prompt = render_prompt(
-            load_prompt(config.runtime.prompt_group, "explore.md"),
+            load_prompt_for_mode(config.runtime.prompt_mode, "explore.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),
             {
                 "graph_yaml": graph_reference,
                 "intent_id": intent.id,
                 "intent_description": intent.description,
             },
+            prompt_mode=config.runtime.prompt_mode,
         )
         if worker.type != "mock":
             prompt = add_blackboard_guidance(
@@ -120,6 +123,7 @@ def run_explore_task(
                 context_harness_enabled=config.context_harness.enabled,
                 local_execution=config.runtime.execution == "local",
                 hints=format_hints([hint.model_dump() for hint in project.hints]),
+                prompt_mode=config.runtime.prompt_mode,
             )
 
         session = driver.prepare_session()
@@ -145,6 +149,8 @@ def run_explore_task(
             cancellation=cancellation,
             blackboard_revision=project.blackboard_revision,
             inbox=inbox,
+            prompt_mode=config.runtime.prompt_mode,
+            env_overrides=execute.env,
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
         session = driver.extract_session(session, first.stdout, first.stderr)
@@ -263,7 +269,7 @@ def run_explore_task(
                     ),
                     fallback_description=description,
                 )
-            return write_conclude_result(
+            result = write_conclude_result(
                 client,
                 project.project.id,
                 intent.id,
@@ -273,6 +279,8 @@ def run_explore_task(
                 phase_ms=execute_ms,
                 total_ms=int((time.perf_counter() - task_started) * 1000),
             )
+            result_committed = True
+            return result
         if did_timeout(first):
             LOG.warning(
                 "explore timed out project=%s intent=%s worker=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -322,7 +330,17 @@ def run_explore_task(
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return exception_failure_outcome(exc)
     finally:
-        if checkpoint_due and container_name is not None:
+        if config.runtime.prompt_mode == "cairn":
+            if result_committed and container_name is not None:
+                run_task_end_learning(
+                    driver,
+                    container_manager,
+                    container_name,
+                    worker,
+                    session,
+                    task_type="explore",
+                )
+        elif checkpoint_due and container_name is not None:
             run_learning_checkpoint(
                 driver,
                 client,
@@ -423,12 +441,13 @@ def _try_conclude_fallback(
     )
 
     prompt = correction_prompt or render_prompt(
-        load_prompt(config.runtime.prompt_group, "explore_conclude.md"),
+        load_prompt_for_mode(config.runtime.prompt_mode, "explore_conclude.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),
         {
             "graph_yaml": graph_reference,
             "intent_id": intent.id,
             "intent_description": intent.description,
         },
+        prompt_mode=config.runtime.prompt_mode,
     )
     conclude = driver.build_conclude(
         worker, prompt, session, task_type="explore"
@@ -455,6 +474,8 @@ def _try_conclude_fallback(
         lease=lease,
         cancellation=cancellation,
         inbox=inbox,
+        prompt_mode=config.runtime.prompt_mode,
+        env_overrides=conclude.env,
     )
     conclude_ms = int((time.perf_counter() - conclude_started) * 1000)
     cancelled = cancel_reason(result, cancellation)
@@ -608,6 +629,9 @@ def _run_process(
     blackboard_revision: int = 0,
     inbox: BlackboardInbox | None = None,
     live_control=None,
+    session: str | None = None,
+    prompt_mode: str = "legacy",
+    env_overrides: dict[str, str] | None = None,
 ):
     return run_worker_process(
         container_manager,
@@ -625,6 +649,9 @@ def _run_process(
         cancellation=cancellation,
         blackboard_inbox=inbox,
         live_control=live_control,
+        session=session,
+        prompt_mode=prompt_mode,
+        env_overrides=env_overrides,
     )
 
 
@@ -645,6 +672,8 @@ def _run_with_steering(
     cancellation: TaskCancellation,
     blackboard_revision: int = 0,
     inbox: BlackboardInbox | None = None,
+    prompt_mode: str = "legacy",
+    env_overrides: dict[str, str] | None = None,
 ):
     result = _run_process(
         client,
@@ -662,6 +691,9 @@ def _run_with_steering(
         blackboard_revision=blackboard_revision,
         inbox=inbox,
         live_control=getattr(invocation, "live_control", None),
+        session=session,
+        prompt_mode=prompt_mode,
+        env_overrides=env_overrides,
     )
     session = driver.extract_session(session, result.stdout, result.stderr)
     control = getattr(invocation, "live_control", None)

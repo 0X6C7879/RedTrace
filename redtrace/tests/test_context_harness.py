@@ -239,7 +239,7 @@ def test_context_config_is_bounded_and_exports_worker_environment() -> None:
 
 
 def test_render_prompt_requires_chinese_with_english_protocol() -> None:
-    rendered = render_prompt("{task}", {"task": "执行任务"})
+    rendered = render_prompt("{task}", {"task": "执行任务"}, prompt_mode="legacy")
 
     assert "自然语言及 JSON 自由文本值须用简体中文" in rendered
     assert "JSON key、enum/status、phase" in rendered
@@ -403,11 +403,13 @@ def test_prompt_guidance_reuses_existing_state_and_bounded_queries() -> None:
         "task",
         4,
         context_harness_enabled=True,
+        prompt_mode="legacy",
     )
     disabled = add_blackboard_guidance(
         "task",
         4,
         context_harness_enabled=False,
+        prompt_mode="legacy",
     )
 
     assert "redtrace-context run -- rtk" in prompt
@@ -456,20 +458,20 @@ def test_prompt_guidance_reuses_existing_state_and_bounded_queries() -> None:
 
 
 def test_prompt_guidance_is_scoped_by_task_type() -> None:
-    bootstrap = add_blackboard_guidance("task", 1, task_type="bootstrap")
-    reason = add_blackboard_guidance("task", 1, task_type="reason")
-    explore = add_blackboard_guidance("task", 1, task_type="explore")
+    bootstrap = add_blackboard_guidance("task", 1, task_type="bootstrap", prompt_mode="legacy")
+    reason = add_blackboard_guidance("task", 1, task_type="reason", prompt_mode="legacy")
+    explore = add_blackboard_guidance("task", 1, task_type="explore", prompt_mode="legacy")
 
     assert "已知漏洞优先利用" in bootstrap
     assert "Active WebShell 与 C2" not in bootstrap
     assert "已知漏洞优先利用" not in reason
     assert "Active WebShell 与 C2" not in reason
     assert "Context Harness" not in reason
-    assert "Skill" not in reason
-    assert "recall" not in reason
-    assert "learn" not in reason
-    assert "RedTrace Skill Runtime Policy" in bootstrap
-    assert "同一会话最多四个" in explore
+    assert "Skill 学习闭环" in reason
+    assert "redtrace-skill recall" in reason
+    assert "redtrace-skill learn" in reason
+    assert "Skill、MCP 和 plugin 由 RedTrace root 共享" in bootstrap
+    assert "同时启用最多 5 个" in explore
     assert "Active WebShell 与 C2" in explore
     assert reason.rstrip().endswith("主任务字段必须完整。")
     assert len(reason) < 1500

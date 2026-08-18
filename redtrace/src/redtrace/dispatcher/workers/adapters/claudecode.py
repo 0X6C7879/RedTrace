@@ -10,6 +10,7 @@ from redtrace.dispatcher.workers.base import (
     DriverResult,
     SeedSessionDriver,
 )
+from redtrace.dispatcher.workers.endpoint_relay import EndpointRelay
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
 from redtrace.dispatcher.workers.live import ClaudeLiveControl
 from redtrace.skill_runtime import skill_runtime_enabled
@@ -65,8 +66,25 @@ class ClaudeCodeDriver(SeedSessionDriver):
             return tools
         return ["--dangerously-skip-permissions"]
 
-    def check_health(self, worker: WorkerConfig, *, timeout: float) -> HealthResult:
+    @staticmethod
+    def _api_env(worker: WorkerConfig) -> dict[str, str]:
+        """Return env vars with the relay URL swapped in for direct mode."""
         env = worker.env
+        if worker.endpoint_mode != "direct":
+            return env
+        relay_url = EndpointRelay.register(env["ANTHROPIC_BASE_URL"])
+        return {**env, "ANTHROPIC_BASE_URL": relay_url}
+
+    @staticmethod
+    def _env_overrides(worker: WorkerConfig) -> dict[str, str] | None:
+        """Return env overrides for DriverResult in direct mode."""
+        if worker.endpoint_mode != "direct":
+            return None
+        relay_url = EndpointRelay.register(worker.env["ANTHROPIC_BASE_URL"])
+        return {"ANTHROPIC_BASE_URL": relay_url}
+
+    def check_health(self, worker: WorkerConfig, *, timeout: float) -> HealthResult:
+        env = self._api_env(worker)
         return http_ping(
             f"{env['ANTHROPIC_BASE_URL']}/v1/messages",
             headers={
@@ -84,7 +102,10 @@ class ClaudeCodeDriver(SeedSessionDriver):
         )
 
     def describe_health(self, worker: WorkerConfig) -> str:
-        return f"POST {worker.env['ANTHROPIC_BASE_URL']}/v1/messages (model={worker.env['ANTHROPIC_MODEL']})"
+        if worker.endpoint_mode == "direct":
+            return f"relay -> {worker.env['ANTHROPIC_BASE_URL']}"
+        base = worker.env["ANTHROPIC_BASE_URL"].removesuffix("/v1/messages").removesuffix("/v1")
+        return f"POST {base}/v1/messages (model={worker.env['ANTHROPIC_MODEL']})"
 
     def build_execute(
         self,
@@ -126,6 +147,7 @@ class ClaudeCodeDriver(SeedSessionDriver):
             session=session,
             stdin=control.initial_input,
             live_control=control,
+            env=self._env_overrides(worker),
         )
 
     def build_conclude(
@@ -167,6 +189,7 @@ class ClaudeCodeDriver(SeedSessionDriver):
             session=session,
             stdin=control.initial_input,
             live_control=control,
+            env=self._env_overrides(worker),
         )
 
     @classmethod

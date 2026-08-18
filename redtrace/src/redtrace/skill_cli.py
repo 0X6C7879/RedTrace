@@ -60,6 +60,43 @@ def _require_skill_runtime() -> None:
         raise ValueError("Skill runtime is disabled during reason tasks")
 
 
+def _session_loaded_skills() -> set[str]:
+    """Read the session-level loaded skill allowlist."""
+    path = _env("REDTRACE_LOADED_SKILLS_FILE")
+    if not path:
+        return set()
+    try:
+        data = Path(path).read_text(encoding="utf-8")
+        skills = json.loads(data)
+        if isinstance(skills, list):
+            return {str(s) for s in skills}
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+    return set()
+
+
+def _track_skill_load(skill_name: str) -> None:
+    """Record a skill load to the session-level loaded skills file."""
+    path = _env("REDTRACE_LOADED_SKILLS_FILE")
+    if not path:
+        return
+    loaded_file = Path(path)
+    try:
+        existing = set()
+        if loaded_file.is_file():
+            data = json.loads(loaded_file.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                existing = {str(s) for s in data}
+        existing.add(skill_name)
+        loaded_file.parent.mkdir(parents=True, exist_ok=True)
+        loaded_file.write_text(
+            json.dumps(sorted(existing), ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+
+
 def _skill(skills_dir: Path, value: str) -> str:
     name = value.strip().lower()
     if not NAME.fullmatch(name) or not (skills_dir / name / "SKILL.md").is_file():
@@ -192,6 +229,21 @@ def learn(args: argparse.Namespace) -> dict[str, Any]:
     _require_skill_runtime()
     skills = _skills_dir()
     name = _skill(skills, args.skill)
+    # FAIL-CLOSED: cairn mode requires explicit session allowlist
+    prompt_mode = _env("REDTRACE_PROMPT_MODE", "legacy")
+    if prompt_mode == "cairn":
+        loaded = _session_loaded_skills()
+        if not loaded or name not in loaded:
+            raise ValueError(
+                f"cairn mode: skill '{name}' not in session loaded set "
+                f"(loaded={sorted(loaded) if loaded else 'EMPTY/MISSING'}). "
+                f"Only skills actually loaded in this session may be learned."
+            )
+    else:
+        # Legacy: permissive (empty loaded set = no restriction)
+        loaded = _session_loaded_skills()
+        if loaded and name not in loaded:
+            raise ValueError(f"skill '{name}' was not loaded in this session; allowed: {sorted(loaded)}")
     summary = _sanitize(_one_line(args.summary, "--summary", 240))
     evidence = _sanitize(_one_line(args.evidence, "--evidence", 500))
     content = _sanitize(_content_file(args.content_file).strip())
@@ -270,6 +322,7 @@ def recall(args: argparse.Namespace) -> str:
     _require_skill_runtime()
     skills = _skills_dir()
     name = _skill(skills, args.skill)
+    _track_skill_load(name)
     memory = _memory_dir(skills)
     records = _read_records(memory / f"{name}.jsonl")[-args.limit :]
     lines = [f"# RedTrace learnings: {name}"]
@@ -303,6 +356,8 @@ def build_parser() -> argparse.ArgumentParser:
     learn_parser.add_argument("--summary", required=True)
     learn_parser.add_argument("--evidence", required=True)
     learn_parser.add_argument("--content-file", required=True, type=Path)
+    track_parser = commands.add_parser("track-load", help="Record a skill load to the session loaded skills file")
+    track_parser.add_argument("skill")
     return parser
 
 
@@ -311,6 +366,11 @@ def main() -> int:
     try:
         if args.command == "recall":
             print(recall(args))
+        elif args.command == "track-load":
+            skills_dir = _skills_dir()
+            name = _skill(skills_dir, args.skill)
+            _track_skill_load(name)
+            print(json.dumps({"status": "tracked", "skill": name}))
         else:
             print(json.dumps(learn(args), ensure_ascii=False, separators=(",", ":")))
     except (OSError, UnicodeError, ValueError, TimeoutError) as exc:

@@ -359,6 +359,7 @@ def test_reason_returns_revision_conflict_for_immediate_replan(monkeypatch) -> N
 
 def test_explore_early_plain_text_exit_uses_conclude_fallback(monkeypatch) -> None:
     config = make_config()
+    config.runtime.prompt_mode = "legacy"
     config.workers[0].type = "pi"
     intent = make_intent()
     project = make_project(intents=[intent])

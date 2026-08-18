@@ -518,7 +518,7 @@ def test_running_worker_receives_blackboard_delta_notice(
 
 def test_prompt_guidance_requires_bounded_blackboard_refresh() -> None:
     prompt = add_blackboard_guidance(
-        "Do the task.", 23, hints='[{"content":"keep it"}]'
+        "Do the task.", 23, hints='[{"content":"keep it"}]', prompt_mode="legacy"
     )
     assert "Graph snapshot revision 为 23" in prompt
     assert "`redtrace-blackboard snapshot`" in prompt
@@ -536,7 +536,7 @@ def test_prompt_guidance_requires_bounded_blackboard_refresh() -> None:
     assert "Web 调研能力贯穿整个会话" in prompt
     assert "不限于第一轮" in prompt
     assert "后续任一对话轮次" in prompt
-    assert "同一会话最多四个" in prompt
+    assert "同时启用最多 5 个" in prompt
 
 
 def test_prompt_guidance_describes_windows_local_shell() -> None:
@@ -544,6 +544,7 @@ def test_prompt_guidance_describes_windows_local_shell() -> None:
         "Do the task.",
         23,
         local_execution=True,
+        prompt_mode="legacy",
     )
     if os.name == "nt":
         assert "Windows local execution" in prompt

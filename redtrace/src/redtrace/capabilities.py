@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+NAME_PATTERN = re.compile(r"^[^\W_][\w-]{0,63}$", re.UNICODE)
 MANIFEST_PATH = ".redtrace/capabilities.json"
 BLACKBOARD_CLI_PATH = ".redtrace/bin/redtrace-blackboard"
 RESOURCE_CLI_PATH = ".redtrace/bin/redtrace-resource"
@@ -51,9 +51,7 @@ export default function (pi) {
   const present = names.filter((name) => values[name]);
   if (present.length === 0) return;
   const missing = names.filter((name) => !values[name]);
-  if (missing.length) {
-    throw new Error(`incomplete RedTrace Pi API configuration; missing: ${missing.join(", ")}`);
-  }
+  if (missing.length) return;
   const configuredContext = Number.parseInt(
     process.env.PI_MODEL_CONTEXT_WINDOW || "",
     10

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import json
 import logging
 import os
 import shutil
@@ -160,6 +161,8 @@ class LocalBackend:
                 ):
                     continue
                 _copy_config(source, state / source.name)
+        if worker_type == "claudecode":
+            _ensure_claude_workspace_trust(state)
         return {variable: str(state)}
 
     def ensure_worker_running(
@@ -369,3 +372,29 @@ def _copy_config(source: Path, target: Path) -> None:
         return
     _ensure_directory(target.parent)
     shutil.copy2(source, target)
+
+
+def _ensure_claude_workspace_trust(state: Path) -> None:
+    """Ensure ``.claude.json`` in the session directory has
+    ``hasTrustDialogAccepted: true``.
+
+    Claude Code refuses to honour ``permissions.allow`` entries from
+    ``settings.local.json`` when the workspace trust flag is missing.
+    RedTrace workers run non-interactively, so the trust dialog can
+    never be accepted interactively — we patch it here instead.
+    """
+    config_file = state / ".claude.json"
+    data: dict[str, object] = {}
+    if config_file.exists():
+        try:
+            data = json.loads(config_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            data = {}
+    if data.get("hasTrustDialogAccepted") is True:
+        return
+    data["hasTrustDialogAccepted"] = True
+    _ensure_directory(state)
+    config_file.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )

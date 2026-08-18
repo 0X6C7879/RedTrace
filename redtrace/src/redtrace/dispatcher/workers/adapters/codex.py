@@ -15,6 +15,7 @@ from redtrace.dispatcher.workers.base import (
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
 from redtrace.dispatcher.workers.live import CodexLiveControl
 from redtrace.dispatcher.workers.codex_compat import codex_compat_base_url
+from redtrace.dispatcher.workers.endpoint_relay import EndpointRelay
 from redtrace.skill_runtime import skill_runtime_enabled
 
 LOG = logging.getLogger(__name__)
@@ -67,8 +68,12 @@ class CodexDriver(RegexSessionDriver):
 
     def check_health(self, worker: WorkerConfig, *, timeout: float) -> HealthResult:
         env = worker.env
+        if worker.endpoint_mode == "direct":
+            ok, detail = EndpointRelay.ping(env["CODEX_BASE_URL"], timeout=timeout)
+            return HealthResult(ok=ok, status=None, detail=detail)
+        base = env["CODEX_BASE_URL"].removesuffix("/responses")
         return http_ping(
-            f"{env['CODEX_BASE_URL']}/responses",
+            f"{base}/responses",
             headers={
                 "Authorization": f"Bearer {env['OPENAI_API_KEY']}",
                 "content-type": "application/json",
@@ -83,7 +88,10 @@ class CodexDriver(RegexSessionDriver):
         )
 
     def describe_health(self, worker: WorkerConfig) -> str:
-        return f"POST {worker.env['CODEX_BASE_URL']}/responses (model={worker.env['CODEX_MODEL']})"
+        if worker.endpoint_mode == "direct":
+            return f"relay -> {worker.env['CODEX_BASE_URL']}"
+        base = worker.env["CODEX_BASE_URL"].removesuffix("/responses")
+        return f"POST {base}/responses (model={worker.env['CODEX_MODEL']})"
 
     def build_execute(
         self,
@@ -137,7 +145,14 @@ class CodexDriver(RegexSessionDriver):
                 live_control=control,
             )
         env = worker.env
-        base_url = codex_compat_base_url(env["CODEX_BASE_URL"])
+        upstream = env["CODEX_BASE_URL"]
+        codex_base = upstream
+        codex_env_overrides: dict[str, str] | None = None
+        if worker.endpoint_mode == "direct":
+            relay_url = EndpointRelay.register(upstream)
+            codex_env_overrides = {"CODEX_BASE_URL": relay_url}
+            codex_base = relay_url
+        base_url = codex_compat_base_url(codex_base)
         return DriverResult(
             argv=[
                 "codex",
@@ -169,6 +184,7 @@ class CodexDriver(RegexSessionDriver):
             session=session,
             stdin=control.initial_input,
             live_control=control,
+            env=codex_env_overrides,
         )
 
     def extract_session(
