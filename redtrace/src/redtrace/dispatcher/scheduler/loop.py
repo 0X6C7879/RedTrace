@@ -449,9 +449,7 @@ class DispatcherLoop:
         return False
 
     def _reason_graph_snapshot(self, project: ProjectDetail) -> str:
-        load_resources = getattr(self.client, "planning_resource_snapshot", None)
-        resources = load_resources(project.project.id) if callable(load_resources) else []
-        return project_policy.reason_graph_snapshot(project, resources)
+        return project_policy.reason_graph_snapshot(project)
 
     def _dispatch_initial_project(self, project: ProjectDetail) -> bool:
         intent = project_policy.bootstrap_intent(project)

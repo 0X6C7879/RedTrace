@@ -54,7 +54,6 @@ DEFAULT_PROMPT_REQUIRED_TOKENS: dict[str, tuple[str, ...]] = {
         "{graph_yaml}",
         "{fact_ids}",
         "{open_intents}",
-        "{execution}",
         "{max_intents}",
     ),
     "explore.md": ("{graph_yaml}", "{intent_id}", "{intent_description}"),
@@ -476,18 +475,6 @@ def validate_prompt_resources(prompt_group: str) -> None:
         missing = [token for token in tokens if token not in content]
         if missing:
             raise ValueError(f"prompt group {prompt_group} resource {name} missing placeholders: {', '.join(missing)}")
-
-    # Validate cairn prompt group
-    cairn_dir = prompts_dir.joinpath("cairn")
-    if cairn_dir.is_dir():
-        for name, tokens in DEFAULT_PROMPT_REQUIRED_TOKENS.items():
-            try:
-                content = cairn_dir.joinpath(name).read_text(encoding="utf-8")
-            except FileNotFoundError:
-                raise ValueError(f"prompt group cairn missing resource: {name}")
-            missing_tokens = [token for token in tokens if token not in content]
-            if missing_tokens:
-                raise ValueError(f"prompt group cairn resource {name} missing placeholders: {', '.join(missing_tokens)}")
 
 
 def resolve_mock_behavior(worker_name: str, env: dict[str, str]) -> dict[str, dict[str, Any]]:

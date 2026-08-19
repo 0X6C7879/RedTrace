@@ -12,32 +12,29 @@ BOOTSTRAP_CREATOR = "dispatcher.bootstrap"
 def reason_graph_snapshot(
     project: ProjectDetail, resources: list[dict[str, object]] | None = None
 ) -> str:
-    """Serialize the complete Task Graph for the global Reason planner.
+    """Serialize the Task Graph for the global Reason planner.
 
-    The Blackboard is the agent's long-term memory, so this snapshot is lossless:
-    every Fact, Hint, Observation, and Intent (including concluded, blocked, and retried ones)
-    is preserved in full. There is no byte budget, no per-Fact character
-    truncation, and no importance pruning. The Reason prompt receives only a
-    file reference to this payload, so a large graph never inflates the model
-    context directly — the agent decides how much of it to read.
+    Aligned with Cairn: only project, hints, facts, and intents are included.
+    Observations and shared_resources are not part of the Reason context.
     """
     payload = {
         "project": {
             "title": project.project.title,
-            "status": project.project.status,
+            "origin": next(
+                (f.description for f in project.facts if f.id == "origin"), ""
+            ),
+            "goal": next(
+                (f.description for f in project.facts if f.id == "goal"), ""
+            ),
             "bootstrap_enabled": project.project.bootstrap_enabled,
         },
+        "hints": [hint.model_dump(mode="json") for hint in project.hints],
         "facts": [
             {"id": fact.id, "description": fact.description}
             for fact in project.facts
         ],
-        "hints": [hint.model_dump(mode="json") for hint in project.hints],
-        "observations": [
-            observation.model_dump(mode="json") for observation in project.observations
-        ],
-        "shared_resources": resources or [],
         "intents": [
-            intent.model_dump(mode="json", by_alias=True)
+            _cairn_intent_export(intent)
             for intent in project.intents
         ],
     }
@@ -47,16 +44,20 @@ def reason_graph_snapshot(
 def compact_snapshot(project: ProjectDetail, intent: Intent) -> str:
     """Serialize the scoped Explore working set for a single Intent.
 
-    Explore executes one concrete Intent, so it receives only the Facts that
-    Intent depends on plus the Intent itself. Scoping selects the relevant
-    subgraph; it never truncates or prunes content.
+    Aligned with Cairn: only project, relevant facts, hints, and the intent.
+    Observations are not included.
     """
     fact_ids = {"origin", "goal", *intent.from_}
     facts = [fact for fact in project.facts if fact.id in fact_ids]
     payload = {
         "project": {
             "title": project.project.title,
-            "status": project.project.status,
+            "origin": next(
+                (f.description for f in project.facts if f.id == "origin"), ""
+            ),
+            "goal": next(
+                (f.description for f in project.facts if f.id == "goal"), ""
+            ),
             "bootstrap_enabled": project.project.bootstrap_enabled,
         },
         "facts": [
@@ -64,14 +65,22 @@ def compact_snapshot(project: ProjectDetail, intent: Intent) -> str:
             for fact in facts
         ],
         "hints": [hint.model_dump(mode="json") for hint in project.hints],
-        "observations": [
-            observation.model_dump(mode="json")
-            for observation in project.observations
-            if observation.intent_id == intent.id
-        ],
-        "intents": [intent.model_dump(mode="json", by_alias=True)],
+        "intents": [_cairn_intent_export(intent)],
     }
     return _serialize(payload)
+
+
+def _cairn_intent_export(intent: Intent) -> dict[str, object]:
+    """Export an Intent in Cairn format: only from, to, description, creator, worker, timestamps."""
+    return {
+        "from": intent.from_,
+        "to": intent.to,
+        "description": intent.description,
+        "creator": intent.creator,
+        "worker": intent.worker,
+        "created_at": intent.created_at,
+        "concluded_at": intent.concluded_at,
+    }
 
 
 def _serialize(payload: object) -> str:
@@ -160,9 +169,10 @@ def newest_unclaimed_intent(
         and intent.id not in running_intent_ids
         and not is_bootstrap_intent(intent)
     ]
-    # Priority DESC, then created_at ASC (oldest first), then stable by id.
+    # Newest first: created_at ASC (oldest first), then stable by id.
+    # Aligned with Cairn: no priority-based sorting.
     return min(
         candidates,
-        key=lambda intent: (-intent.priority, intent.created_at, intent.id),
+        key=lambda intent: (intent.created_at, intent.id),
         default=None,
     )

@@ -23,8 +23,8 @@ def test_parse_json_output_extracts_object_from_markdown_noise() -> None:
     }
 
 
-def test_reason_payload_normalizes_legacy_intents_to_graph_patch() -> None:
-    kind, patch = validate_reason_payload(
+def test_reason_payload_normalizes_legacy_intents() -> None:
+    kind, data = validate_reason_payload(
         {
             "accepted": True,
             "data": {
@@ -33,33 +33,26 @@ def test_reason_payload_normalizes_legacy_intents_to_graph_patch() -> None:
                 ]
             },
         },
-        valid_fact_ids={"f001"},
     )
 
-    assert kind == "patch"
-    assert patch["create"] == [{"from": ["f001"], "description": "one", "priority": 50}]
+    assert kind == "intents"
+    assert data == [{"from": ["f001"], "description": "one"}]
 
 
-def test_reason_payload_accepts_empty_frontier_patch() -> None:
-    kind, patch = validate_reason_payload(
+def test_reason_payload_accepts_empty_data_as_noop() -> None:
+    kind, data = validate_reason_payload(
         {"accepted": True, "data": {}},
     )
 
-    assert kind == "patch"
-    assert patch["create"] == []
-    assert patch["complete"] is None
+    assert kind == "noop"
+    assert data is None
 
 
-def test_reason_payload_rejects_goal_as_a_source() -> None:
-    with pytest.raises(ValueError, match="invalid fact IDs: goal"):
+def test_reason_payload_rejects_empty_intents_when_open_intents_empty() -> None:
+    with pytest.raises(ValueError, match="intents must not be empty when open_intents is empty"):
         validate_reason_payload(
-            {
-                "accepted": True,
-                "data": {
-                    "create": [{"from": ["goal"], "description": "invalid"}]
-                },
-            },
-            valid_fact_ids={"origin", "f001"},
+            {"accepted": True, "data": {"intents": []}},
+            open_intents_empty=True,
         )
 
 

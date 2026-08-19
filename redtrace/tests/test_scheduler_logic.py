@@ -55,23 +55,6 @@ def test_reason_graph_snapshot_uses_already_loaded_detail() -> None:
     assert payload["project"]["title"] == project.project.title
     assert payload["facts"][0]["id"] == "origin"
     assert payload["intents"][0]["from"] == project.intents[0].from_
-    assert payload["shared_resources"] == []
-
-
-def test_reason_graph_snapshot_includes_planning_resources() -> None:
-    project = make_project()
-    resources = [
-        {
-            "id": "fil_001",
-            "kind": "file",
-            "status": "available",
-            "summary": "shared output",
-        }
-    ]
-
-    payload = json.loads(project_policy.reason_graph_snapshot(project, resources))
-
-    assert payload["shared_resources"] == resources
 
 
 def test_explore_snapshot_only_contains_dependencies_without_truncation() -> None:
@@ -86,7 +69,7 @@ def test_explore_snapshot_only_contains_dependencies_without_truncation() -> Non
     assert {fact["id"] for fact in payload["facts"]} == {"origin", "goal", "f001"}
     assert payload["facts"][2]["description"] == "x" * 2000
     assert "truncated" not in json.dumps(payload)
-    assert [item["id"] for item in payload["intents"]] == [intent.id]
+    assert [item["description"] for item in payload["intents"]] == [intent.description]
 
 
 def test_only_open_unclaimed_intents_are_schedulable() -> None:

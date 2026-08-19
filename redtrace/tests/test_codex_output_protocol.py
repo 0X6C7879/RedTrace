@@ -120,11 +120,11 @@ def test_normal_explore_accepted_passes_contract() -> None:
 def test_normal_reason_accepted_passes_contract() -> None:
     payload = {
         "accepted": True,
-        "data": {"create": [{"from": ["f1"], "description": "desc"}]},
+        "data": {"intents": [{"from": ["f1"], "description": "desc"}]},
     }
-    kind, patch = validate_reason_payload(payload, valid_fact_ids={"f1"})
-    assert kind == "patch"
-    assert len(patch["create"]) == 1
+    kind, intents = validate_reason_payload(payload)
+    assert kind == "intents"
+    assert len(intents) == 1
 
 
 def test_bootstrap_execute_accepted_passes_contract() -> None:
@@ -347,13 +347,12 @@ def test_reason_unwrapped_json_without_provider_schema() -> None:
     payload = {
         "accepted": True,
         "data": {
-            "create": [{"from": ["f1"], "description": "new intent", "priority": 80}],
-            "complete": None,
+            "intents": [{"from": ["f1"], "description": "new intent"}],
         },
     }
-    kind, patch = validate_reason_payload(payload, valid_fact_ids={"f1"})
-    assert kind == "patch"
-    assert patch["create"][0]["priority"] == 80
+    kind, intents = validate_reason_payload(payload)
+    assert kind == "intents"
+    assert intents[0]["description"] == "new intent"
 
 
 def test_explore_unwrapped_json_without_provider_schema() -> None:

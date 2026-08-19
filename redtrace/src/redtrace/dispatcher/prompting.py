@@ -25,15 +25,12 @@ def load_prompt(group: str, name: str) -> str:
 
 
 def load_prompt_for_mode(prompt_mode: str, name: str, *, prompt_group: str | None = None) -> str:
-    """Select prompt group based on prompt_mode.
-
-    If prompt_group is provided (e.g. "mock"), use it directly.
-    Otherwise route "cairn" to cairn group, everything else to "default".
+    """Select prompt group. If prompt_group is provided (e.g. "mock"), use it directly.
+    Otherwise always use "default" (the single canonical prompt set).
     """
     if prompt_group is not None:
         return load_prompt(prompt_group, name)
-    group = "cairn" if prompt_mode == "cairn" else "default"
-    return load_prompt(group, name)
+    return load_prompt("default", name)
 
 
 def render_prompt(template: str, replacements: dict[str, str], *, prompt_mode: str = "cairn") -> str:

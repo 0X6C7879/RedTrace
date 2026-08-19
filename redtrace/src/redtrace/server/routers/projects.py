@@ -141,7 +141,8 @@ def report_reason_outcome(project_id: str, body: TaskOutcomeRequest):
                 """
                 UPDATE projects SET reason_failure_count = 0,
                     reason_failure_signature = NULL, reason_retry_after = NULL,
-                    reason_circuit_open = 0 WHERE id = ?
+                    reason_circuit_open = 0,
+                    reason_evaluated_revision = planning_revision WHERE id = ?
                 """,
                 (project_id,),
             )
