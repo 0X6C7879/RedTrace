@@ -5,13 +5,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from redtrace.board import projects
-from redtrace.board import intents as intents_module
 from redtrace.board.storage import get_project_or_404, utcnow
 from redtrace.board.models import (
     CompleteRequest,
     CreateProjectRequest,
-    GraphPatchRequest,
-    GraphPatchResponse,
     HeartbeatRequest,
     Intent,
     ProjectDetail,
@@ -136,13 +133,23 @@ def claim_project_reason(project_id: str, body: ReasonClaimRequest):
 def report_reason_outcome(project_id: str, body: TaskOutcomeRequest):
     with get_conn(immediate=True) as conn:
         row = get_project_or_404(conn, project_id)
-        if body.outcome in {"success", "cancelled"}:
+        if body.outcome == "success":
             conn.execute(
                 """
                 UPDATE projects SET reason_failure_count = 0,
                     reason_failure_signature = NULL, reason_retry_after = NULL,
                     reason_circuit_open = 0,
                     reason_evaluated_revision = planning_revision WHERE id = ?
+                """,
+                (project_id,),
+            )
+            return {"circuitOpen": False, "failureCount": 0}
+        if body.outcome == "cancelled":
+            conn.execute(
+                """
+                UPDATE projects SET reason_failure_count = 0,
+                    reason_failure_signature = NULL, reason_retry_after = NULL,
+                    reason_circuit_open = 0 WHERE id = ?
                 """,
                 (project_id,),
             )
@@ -195,14 +202,6 @@ def release_project_reason(project_id: str, body: HeartbeatRequest):
 @router.post("/projects/{project_id}/complete", response_model=Intent)
 def complete_project(project_id: str, body: CompleteRequest):
     return projects.complete(project_id, body)
-
-
-@router.post(
-    "/projects/{project_id}/graph-patch",
-    response_model=GraphPatchResponse,
-)
-def apply_graph_patch(project_id: str, body: GraphPatchRequest):
-    return intents_module.apply_graph_patch(project_id, body)
 
 
 @router.post("/projects/{project_id}/reopen", response_model=ReopenResponse)

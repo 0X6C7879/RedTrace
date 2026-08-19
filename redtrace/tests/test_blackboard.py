@@ -86,12 +86,6 @@ def test_blackboard_status_changes_node_path_context_and_audit(
     )
     assert created.status_code == 201
     intent_id = created.json()["id"]
-    observed = client.post(
-        f"/projects/{project_id}/intents/{intent_id}/observations",
-        json={"worker": "codex-1", "content": "candidate endpoint"},
-    )
-    assert observed.status_code == 201
-    observation_id = observed.json()["observation"]["id"]
     concluded = client.post(
         f"/projects/{project_id}/intents/{intent_id}/conclude",
         json={"worker": "codex-1", "description": "new shared fact"},
@@ -106,21 +100,17 @@ def test_blackboard_status_changes_node_path_context_and_audit(
     ).json()
     assert [change["kind"] for change in changes["changes"]] == [
         "intent",
-        "observation",
-        "intent",
         "fact",
         "intent",
     ]
     assert [change["action"] for change in changes["changes"]] == [
         "added",
         "added",
-        "updated",
-        "added",
         "concluded",
     ]
     assert changes["next_revision"] == changes["revision"]
     assert changes["has_more"] is False
-    assert changes["changes"][3]["node"]["description"] == "new shared fact"
+    assert changes["changes"][1]["node"]["description"] == "new shared fact"
 
     snapshot = client.get(
         f"/projects/{project_id}/blackboard/snapshot", headers=headers
@@ -133,8 +123,8 @@ def test_blackboard_status_changes_node_path_context_and_audit(
     }
     assert [item["id"] for item in snapshot["intents"]] == [intent_id]
     assert snapshot["hints"][0]["content"] == "look here"
-    assert snapshot["observations"][0]["id"] == observation_id
-    assert len(snapshot["edges"]) == 3
+    assert snapshot["observations"] == []
+    assert len(snapshot["edges"]) == 2
 
     node = client.get(
         f"/projects/{project_id}/blackboard/nodes/{fact_id}", headers=headers
@@ -163,9 +153,8 @@ def test_blackboard_status_changes_node_path_context_and_audit(
         intent_id,
         "origin",
         fact_id,
-        observation_id,
     }
-    assert len(context["edges"]) == 3
+    assert len(context["edges"]) == 2
 
     with db.get_conn() as conn:
         audit = conn.execute(
@@ -183,7 +172,7 @@ def test_blackboard_status_changes_node_path_context_and_audit(
         "task_type": "explore",
         "intent_id": "i001",
         "command": "context",
-        "result_count": 4,
+        "result_count": 3,
         "output_sha256": audit["output_sha256"],
         "output_bytes": audit["output_bytes"],
     }

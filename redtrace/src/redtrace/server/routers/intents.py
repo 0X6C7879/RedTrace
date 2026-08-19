@@ -2,19 +2,16 @@ import time
 
 from fastapi import APIRouter, HTTPException
 
-from redtrace.board import intents, observations
+from redtrace.board import intents
 from redtrace.board.models import (
     ConcludeRequest,
     ConcludeResponse,
     CreateIntentRequest,
     HeartbeatRequest,
     Intent,
-    ObservationRequest,
-    ObservationResponse,
     TaskOutcomeRequest,
 )
 from redtrace.board.storage import (
-    bump_planning_revision,
     check_project_active,
     utcnow,
 )
@@ -105,7 +102,6 @@ def report_outcome(project_id: str, intent_id: str, body: TaskOutcomeRequest):
                 """,
                 (count, signature, intent_id, project_id),
             )
-            bump_planning_revision(conn, project_id)
             return {"circuitOpen": True, "failureCount": count, "state": "blocked"}
         retry_after = time.time() + RETRY_DELAYS[count - 1]
         conn.execute(
@@ -135,17 +131,6 @@ def submit_fact(project_id: str, intent_id: str, body: ConcludeRequest):
         409,
         "Incremental Fact submission is disabled; use observations during execution and conclude for a formal Fact",
     )
-
-
-@router.post(
-    "/projects/{project_id}/intents/{intent_id}/observations",
-    response_model=ObservationResponse,
-    status_code=201,
-)
-def submit_observation(
-    project_id: str, intent_id: str, body: ObservationRequest
-):
-    return observations.create(project_id, intent_id, body)
 
 
 @router.post(

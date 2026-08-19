@@ -11,7 +11,6 @@ from redtrace.board.models import (
     Fact,
     Hint,
     Intent,
-    Observation,
     ProjectDetail,
     ProjectMeta,
     ProjectSummary,
@@ -139,16 +138,12 @@ def get(project_id: str) -> ProjectDetail:
             "SELECT * FROM hints WHERE project_id = ? ORDER BY created_at",
             (project_id,),
         ).fetchall()
-        observations = conn.execute(
-            "SELECT id, intent_id, worker, content, created_at FROM observations WHERE project_id = ? ORDER BY created_at, id",
-            (project_id,),
-        ).fetchall()
         return ProjectDetail(
             project=project_meta_from_row(project),
             facts=[Fact(**dict(fact)) for fact in facts],
             intents=build_intents(conn, project_id),
             hints=[Hint(**dict(hint)) for hint in hints],
-            observations=[Observation(**dict(item)) for item in observations],
+            observations=[],
             blackboard_revision=get_blackboard_revision(conn, project_id),
         )
 

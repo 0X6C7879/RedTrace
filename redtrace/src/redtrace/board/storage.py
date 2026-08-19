@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -281,13 +280,6 @@ def intent_to_model(
         "SELECT fact_id FROM intent_sources WHERE intent_id = ? AND project_id = ? ORDER BY rowid",
         (row["id"], project_id),
     ).fetchall()
-    invalidated_raw = row["invalidated_by"] if "invalidated_by" in row.keys() else "[]"
-    try:
-        invalidated_by = json.loads(invalidated_raw or "[]")
-        if not isinstance(invalidated_by, list):
-            invalidated_by = []
-    except (TypeError, ValueError):
-        invalidated_by = []
     return Intent(
         id=row["id"],
         **{"from": [s["fact_id"] for s in sources]},
@@ -302,12 +294,7 @@ def intent_to_model(
         failure_signature=row["failure_signature"],
         retry_after=row["retry_after"],
         circuit_open=bool(row["circuit_open"]),
-        priority=row["priority"] if "priority" in row.keys() else 50,
         state=row["state"] if "state" in row.keys() else "open",
-        goal_id=row["goal_id"] if "goal_id" in row.keys() else None,
-        superseded_by=row["superseded_by"] if "superseded_by" in row.keys() else None,
-        invalidated_by=invalidated_by,
-        drop_reason=row["drop_reason"] if "drop_reason" in row.keys() else None,
         attempt_count=row["attempt_count"] if "attempt_count" in row.keys() else 0,
         cumulative_runtime_ms=(
             row["cumulative_runtime_ms"] if "cumulative_runtime_ms" in row.keys() else 0

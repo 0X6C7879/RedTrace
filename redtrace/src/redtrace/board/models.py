@@ -31,7 +31,6 @@ class Intent(BaseModel):
     failure_signature: str | None = None
     retry_after: float | None = None
     circuit_open: bool = False
-    priority: int = Field(default=50, ge=0, le=100)
     state: Literal[
         "open",
         "claimed",
@@ -41,10 +40,6 @@ class Intent(BaseModel):
         "dropped",
         "superseded",
     ] = "open"
-    goal_id: str | None = None
-    superseded_by: str | None = None
-    invalidated_by: list[str] = Field(default_factory=list)
-    drop_reason: str | None = None
     attempt_count: int = 0
     cumulative_runtime_ms: int = 0
     fact_yield: int = 0
@@ -154,7 +149,6 @@ class CreateIntentRequest(BaseModel):
     description: str
     creator: str
     worker: str | None = None
-    priority: int = Field(default=50, ge=0, le=100)
 
     model_config = {"populate_by_name": True}
 
@@ -286,119 +280,6 @@ class ObservationRequest(BaseModel):
 class ObservationResponse(BaseModel):
     observation: Observation
     intent: Intent
-
-
-class GraphPatchCreate(BaseModel):
-    from_: list[str] = Field(alias="from", min_length=1)
-    description: str
-    priority: int = Field(default=50, ge=0, le=100)
-    goal_id: str | None = None
-
-    model_config = {"populate_by_name": True}
-
-    @field_validator("description")
-    @classmethod
-    def validate_description(cls, value: str) -> str:
-        text = value.strip()
-        if not text:
-            raise ValueError("must not be empty")
-        return text
-
-
-class GraphPatchDrop(BaseModel):
-    intent_id: str
-    reason: str
-
-    @field_validator("intent_id", "reason")
-    @classmethod
-    def validate_non_empty_text(cls, value: str) -> str:
-        text = value.strip()
-        if not text:
-            raise ValueError("must not be empty")
-        return text
-
-
-class GraphPatchReprioritize(BaseModel):
-    intent_id: str
-    priority: int = Field(ge=0, le=100)
-    reason: str = ""
-
-    @field_validator("intent_id")
-    @classmethod
-    def validate_intent_id(cls, value: str) -> str:
-        text = value.strip()
-        if not text:
-            raise ValueError("must not be empty")
-        return text
-
-
-class GraphPatchSupersede(BaseModel):
-    intent_id: str
-    by: str
-    reason: str = ""
-
-    @field_validator("intent_id", "by")
-    @classmethod
-    def validate_non_empty_text(cls, value: str) -> str:
-        text = value.strip()
-        if not text:
-            raise ValueError("must not be empty")
-        return text
-
-
-class GraphPatchComplete(BaseModel):
-    from_: list[str] = Field(alias="from", min_length=1)
-    description: str
-
-    model_config = {"populate_by_name": True}
-
-    @field_validator("description")
-    @classmethod
-    def validate_description(cls, value: str) -> str:
-        text = value.strip()
-        if not text:
-            raise ValueError("must not be empty")
-        return text
-
-    @field_validator("from_")
-    @classmethod
-    def validate_fact_ids(cls, value: list[str]) -> list[str]:
-        cleaned = []
-        for item in value:
-            text = item.strip()
-            if not text:
-                raise ValueError("fact ids must not be empty")
-            cleaned.append(text)
-        return cleaned
-
-
-class GraphPatchRequest(BaseModel):
-    base_planning_revision: int = Field(ge=0)
-    worker: str
-    create: list[GraphPatchCreate] = Field(default_factory=list)
-    drop: list[GraphPatchDrop] = Field(default_factory=list)
-    reprioritize: list[GraphPatchReprioritize] = Field(default_factory=list)
-    supersede: list[GraphPatchSupersede] = Field(default_factory=list)
-    complete: GraphPatchComplete | None = None
-
-    @field_validator("worker")
-    @classmethod
-    def validate_worker(cls, value: str) -> str:
-        text = value.strip()
-        if not text:
-            raise ValueError("must not be empty")
-        return text
-
-
-class GraphPatchResponse(BaseModel):
-    revision: int
-    planning_revision: int
-    reason_evaluated_revision: int
-    created: list[Intent] = Field(default_factory=list)
-    dropped: list[str] = Field(default_factory=list)
-    reprioritized: list[str] = Field(default_factory=list)
-    superseded: list[str] = Field(default_factory=list)
-    completed: bool = False
 
 
 class UpdateProjectStatusRequest(BaseModel):

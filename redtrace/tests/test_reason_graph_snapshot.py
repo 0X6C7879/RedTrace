@@ -63,7 +63,7 @@ def test_reason_snapshot_handles_1000_facts() -> None:
     }
 
 
-def test_reason_snapshot_includes_completed_and_open_intents() -> None:
+def test_reason_snapshot_includes_only_open_intents() -> None:
     completed = make_intent("i-completed")
     completed.to = "f002"
     open_intent = make_intent("i-open")
@@ -72,14 +72,14 @@ def test_reason_snapshot_includes_completed_and_open_intents() -> None:
 
     payload = json.loads(project_policy.reason_graph_snapshot(project))
 
-    by_to = {intent["to"]: intent for intent in payload["intents"]}
-    # Concluded lineage is preserved, not dropped.
-    assert by_to["f002"]["description"] == "investigate"
-    assert by_to["f002"]["creator"] == "reasoner"
-    assert by_to[None]["description"] == "investigate"
+    # Cairn snapshot only includes open intents (to=None); concluded are excluded.
+    assert len(payload["intents"]) == 1
+    intent = payload["intents"][0]
+    assert intent["to"] is None
+    assert intent["description"] == "investigate"
+    assert intent["creator"] == "reasoner"
     # Cairn export includes only: from, to, description, creator, worker, timestamps.
-    for intent in payload["intents"]:
-        assert set(intent) == {"from", "to", "description", "creator", "worker", "created_at", "concluded_at"}
+    assert set(intent) == {"from", "to", "description", "creator", "worker", "created_at", "concluded_at"}
 
 
 def test_write_graph_snapshot_reference_inlines_nothing() -> None:

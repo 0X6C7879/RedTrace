@@ -548,47 +548,6 @@ BEGIN
     SET planning_revision = planning_revision + 1
     WHERE id = NEW.project_id;
 END;
-
-DROP TRIGGER IF EXISTS trg_planning_resource_added;
-CREATE TRIGGER trg_planning_resource_added
-AFTER INSERT ON shared_resources
-WHEN NEW.project_id IS NOT NULL
-BEGIN
-    UPDATE projects
-    SET planning_revision = planning_revision + 1
-    WHERE id = NEW.project_id;
-END;
-
-DROP TRIGGER IF EXISTS trg_planning_resource_changed;
-CREATE TRIGGER trg_planning_resource_changed
-AFTER UPDATE OF project_id, kind, name, status, target, summary, metadata_json, parent_resource_id
-ON shared_resources
-WHEN (OLD.project_id IS NOT NULL OR NEW.project_id IS NOT NULL)
- AND (
-    OLD.project_id IS NOT NEW.project_id
-    OR OLD.kind IS NOT NEW.kind
-    OR OLD.name IS NOT NEW.name
-    OR OLD.status IS NOT NEW.status
-    OR OLD.target IS NOT NEW.target
-    OR OLD.summary IS NOT NEW.summary
-    OR OLD.metadata_json IS NOT NEW.metadata_json
-    OR OLD.parent_resource_id IS NOT NEW.parent_resource_id
- )
-BEGIN
-    UPDATE projects
-    SET planning_revision = planning_revision + 1
-    WHERE id IN (OLD.project_id, NEW.project_id);
-END;
-
-DROP TRIGGER IF EXISTS trg_planning_resource_removed;
-CREATE TRIGGER trg_planning_resource_removed
-AFTER DELETE ON shared_resources
-WHEN OLD.project_id IS NOT NULL
-BEGIN
-    UPDATE projects
-    SET planning_revision = planning_revision + 1
-    WHERE id = OLD.project_id;
-END;
 """
 
 

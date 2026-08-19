@@ -36,6 +36,7 @@ def reason_graph_snapshot(
         "intents": [
             _cairn_intent_export(intent)
             for intent in project.intents
+            if intent.to is None and intent.state not in ("blocked", "dropped", "superseded")
         ],
     }
     return _serialize(payload)
