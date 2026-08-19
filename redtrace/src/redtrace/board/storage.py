@@ -68,10 +68,6 @@ def next_hint_id(conn: sqlite3.Connection, project_id: str) -> str:
     return _next_scoped_id(conn, "hint", "h", project_id)
 
 
-def next_observation_id(conn: sqlite3.Connection, project_id: str) -> str:
-    return _next_scoped_id(conn, "observation", "o", project_id)
-
-
 def get_blackboard_revision(conn: sqlite3.Connection, project_id: str) -> int:
     row = conn.execute(
         "SELECT COALESCE(MAX(revision), 0) AS revision FROM blackboard_events WHERE project_id = ?",

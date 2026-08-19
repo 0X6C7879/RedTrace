@@ -254,12 +254,16 @@ class ControlPlaneClient:
         )
 
     def report_reason_outcome(
-        self, project_id: str, worker: str, outcome: str
+        self, project_id: str, worker: str, outcome: str,
+        base_planning_revision: int | None = None,
     ) -> ApiResult:
+        body: dict[str, object] = {"worker": worker, "outcome": outcome}
+        if base_planning_revision is not None:
+            body["base_planning_revision"] = base_planning_revision
         return self._request_json(
             "POST",
             f"/projects/{project_id}/reason/outcome",
-            json={"worker": worker, "outcome": outcome},
+            json=body,
         )
 
     def conclude(

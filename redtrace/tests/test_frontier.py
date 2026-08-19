@@ -40,7 +40,7 @@ def _revision(client: TestClient, project_id: str) -> int:
     ]
 
 
-def test_scheduler_prefers_oldest_unclaimed_intent() -> None:
+def test_scheduler_prefers_newest_unclaimed_intent() -> None:
     newer = make_intent("i-new")
     newer.worker = None
     newer.created_at = "2026-01-01T00:00:03Z"
@@ -49,7 +49,7 @@ def test_scheduler_prefers_oldest_unclaimed_intent() -> None:
     older.created_at = "2026-01-01T00:00:01Z"
     project = make_project(intents=[newer, older])
 
-    assert project_policy.newest_unclaimed_intent(project, set()).id == "i-old"
+    assert project_policy.newest_unclaimed_intent(project, set()).id == "i-new"
 
 
 def test_scheduler_skips_dropped_and_superseded_intents() -> None:

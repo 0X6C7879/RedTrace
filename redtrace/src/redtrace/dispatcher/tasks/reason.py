@@ -91,7 +91,7 @@ def run_reason_task(
                 "description": intent.description,
             }
             for intent in project.intents
-            if intent.to is None
+            if intent.to is None and intent.state in ("open", "working")
         ]
         allowed_fact_ids = [fact.id for fact in project.facts if fact.id != "goal"]
         LOG.debug(

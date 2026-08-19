@@ -121,7 +121,6 @@ def create(request: CreateProjectRequest) -> ProjectDetail:
             ],
             intents=[],
             hints=hints,
-            observations=[],
             blackboard_revision=get_blackboard_revision(conn, project_id),
         )
 
@@ -143,7 +142,6 @@ def get(project_id: str) -> ProjectDetail:
             facts=[Fact(**dict(fact)) for fact in facts],
             intents=build_intents(conn, project_id),
             hints=[Hint(**dict(hint)) for hint in hints],
-            observations=[],
             blackboard_revision=get_blackboard_revision(conn, project_id),
         )
 

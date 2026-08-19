@@ -129,19 +129,29 @@ def claim_project_reason(project_id: str, body: ReasonClaimRequest):
     return projects.claim_reason(project_id, body)
 
 
+class ReasonOutcomeRequest(BaseModel):
+    worker: str
+    outcome: str
+    detail: str = ""
+    base_planning_revision: int | None = None
+
+
 @router.post("/projects/{project_id}/reason/outcome")
-def report_reason_outcome(project_id: str, body: TaskOutcomeRequest):
+def report_reason_outcome(project_id: str, body: ReasonOutcomeRequest):
     with get_conn(immediate=True) as conn:
         row = get_project_or_404(conn, project_id)
         if body.outcome == "success":
+            target_revision = body.base_planning_revision
+            if target_revision is None:
+                target_revision = int(row["planning_revision"])
             conn.execute(
                 """
                 UPDATE projects SET reason_failure_count = 0,
                     reason_failure_signature = NULL, reason_retry_after = NULL,
                     reason_circuit_open = 0,
-                    reason_evaluated_revision = planning_revision WHERE id = ?
+                    reason_evaluated_revision = ? WHERE id = ?
                 """,
-                (project_id,),
+                (target_revision, project_id),
             )
             return {"circuitOpen": False, "failureCount": 0}
         if body.outcome == "cancelled":

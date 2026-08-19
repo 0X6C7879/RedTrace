@@ -14,8 +14,8 @@ def reason_graph_snapshot(
 ) -> str:
     """Serialize the Task Graph for the global Reason planner.
 
-    Aligned with Cairn: only project, hints, facts, and intents are included.
-    Observations and shared_resources are not part of the Reason context.
+    Aligned with Cairn: the graph contains ALL intents (including concluded)
+    for full task lineage. Open Intents are filtered separately in reason.py.
     """
     payload = {
         "project": {
@@ -36,7 +36,6 @@ def reason_graph_snapshot(
         "intents": [
             _cairn_intent_export(intent)
             for intent in project.intents
-            if intent.to is None and intent.state not in ("blocked", "dropped", "superseded")
         ],
     }
     return _serialize(payload)
@@ -170,9 +169,9 @@ def newest_unclaimed_intent(
         and intent.id not in running_intent_ids
         and not is_bootstrap_intent(intent)
     ]
-    # Newest first: created_at ASC (oldest first), then stable by id.
-    # Aligned with Cairn: no priority-based sorting.
-    return min(
+    # Cairn semantics: newest created intent first.
+    # max(created_at) DESC, then stable by id descending.
+    return max(
         candidates,
         key=lambda intent: (intent.created_at, intent.id),
         default=None,

@@ -855,7 +855,8 @@ class DispatcherLoop:
                     if task.task_type == "reason":
                         reporter = getattr(self.client, "report_reason_outcome", None)
                         if callable(reporter) and outcome != "revision_conflict":
-                            reporter(task.project_id, task.worker_name, outcome)
+                            reporter(task.project_id, task.worker_name, outcome,
+                                     base_planning_revision=task.planning_revision)
                     elif task.intent_id is not None:
                         reporter = getattr(self.client, "report_intent_outcome", None)
                         if callable(reporter):
@@ -946,7 +947,8 @@ class DispatcherLoop:
                 try:
                     if task.task_type == "reason":
                         self.client.report_reason_outcome(
-                            task.project_id, task.worker_name, "internal_error"
+                            task.project_id, task.worker_name, "internal_error",
+                            base_planning_revision=task.planning_revision,
                         )
                     elif task.intent_id is not None:
                         self.client.report_intent_outcome(

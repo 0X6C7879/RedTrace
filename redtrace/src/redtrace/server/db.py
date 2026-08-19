@@ -285,13 +285,6 @@ BEGIN
     VALUES (NEW.project_id, 'hint', NEW.id, 'added', NEW.created_at);
 END;
 
-CREATE TRIGGER IF NOT EXISTS trg_blackboard_observation_added
-AFTER INSERT ON observations
-BEGIN
-    INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
-    VALUES (NEW.project_id, 'observation', NEW.id, 'added', NEW.created_at);
-END;
-
 CREATE TABLE IF NOT EXISTS audit_runs (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -509,15 +502,6 @@ BEGIN
     INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
     VALUES (OLD.project_id, 'hint', OLD.id, 'removed', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
 END;
-
-DROP TRIGGER IF EXISTS trg_blackboard_observation_removed;
-CREATE TRIGGER trg_blackboard_observation_removed
-AFTER DELETE ON observations
-WHEN EXISTS (SELECT 1 FROM projects WHERE id = OLD.project_id)
-BEGIN
-    INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
-    VALUES (OLD.project_id, 'observation', OLD.id, 'removed', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
-END;
 """
 
 PLANNING_REVISION_TRIGGERS = """\
@@ -548,6 +532,12 @@ BEGIN
     SET planning_revision = planning_revision + 1
     WHERE id = NEW.project_id;
 END;
+
+-- Clean up legacy resource planning triggers from old databases.
+-- Resource add/change/remove must NOT bump planning_revision.
+DROP TRIGGER IF EXISTS trg_planning_resource_added;
+DROP TRIGGER IF EXISTS trg_planning_resource_changed;
+DROP TRIGGER IF EXISTS trg_planning_resource_removed;
 """
 
 

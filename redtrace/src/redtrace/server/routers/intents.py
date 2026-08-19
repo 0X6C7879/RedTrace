@@ -12,6 +12,7 @@ from redtrace.board.models import (
     TaskOutcomeRequest,
 )
 from redtrace.board.storage import (
+    bump_planning_revision,
     check_project_active,
     utcnow,
 )
@@ -102,6 +103,7 @@ def report_outcome(project_id: str, intent_id: str, body: TaskOutcomeRequest):
                 """,
                 (count, signature, intent_id, project_id),
             )
+            bump_planning_revision(conn, project_id)
             return {"circuitOpen": True, "failureCount": count, "state": "blocked"}
         retry_after = time.time() + RETRY_DELAYS[count - 1]
         conn.execute(
@@ -129,7 +131,7 @@ def heartbeat(project_id: str, intent_id: str, body: HeartbeatRequest):
 def submit_fact(project_id: str, intent_id: str, body: ConcludeRequest):
     raise HTTPException(
         409,
-        "Incremental Fact submission is disabled; use observations during execution and conclude for a formal Fact",
+        "Incremental Fact submission is disabled; use session/workspace for intermediate results and submit formal Facts via conclude",
     )
 
 

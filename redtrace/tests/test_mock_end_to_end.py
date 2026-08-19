@@ -88,8 +88,12 @@ class InProcessClient:
     def apply_graph_patch(self, project_id: str, patch: dict[str, Any]) -> ApiResult:
         return self._post(f"/projects/{project_id}/graph-patch", patch)
 
-    def report_reason_outcome(self, project_id: str, worker: str, outcome: str) -> ApiResult:
-        return self._post(f"/projects/{project_id}/reason/outcome", {"worker": worker, "outcome": outcome})
+    def report_reason_outcome(self, project_id: str, worker: str, outcome: str,
+                              base_planning_revision: int | None = None) -> ApiResult:
+        body: dict[str, Any] = {"worker": worker, "outcome": outcome}
+        if base_planning_revision is not None:
+            body["base_planning_revision"] = base_planning_revision
+        return self._post(f"/projects/{project_id}/reason/outcome", body)
 
     def _post(self, path: str, payload: dict[str, Any]) -> ApiResult:
         response = self.http.post(path, json=payload)

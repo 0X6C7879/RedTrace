@@ -63,7 +63,7 @@ def test_reason_snapshot_handles_1000_facts() -> None:
     }
 
 
-def test_reason_snapshot_includes_only_open_intents() -> None:
+def test_reason_snapshot_includes_all_intents_for_lineage() -> None:
     completed = make_intent("i-completed")
     completed.to = "f002"
     open_intent = make_intent("i-open")
@@ -72,10 +72,10 @@ def test_reason_snapshot_includes_only_open_intents() -> None:
 
     payload = json.loads(project_policy.reason_graph_snapshot(project))
 
-    # Cairn snapshot only includes open intents (to=None); concluded are excluded.
-    assert len(payload["intents"]) == 1
+    # Cairn snapshot includes ALL intents (full lineage), including concluded.
+    assert len(payload["intents"]) == 2
+    # Open Intents filtering happens in reason.py, not in the snapshot.
     intent = payload["intents"][0]
-    assert intent["to"] is None
     assert intent["description"] == "investigate"
     assert intent["creator"] == "reasoner"
     # Cairn export includes only: from, to, description, creator, worker, timestamps.
@@ -114,7 +114,6 @@ def test_reason_prompt_contains_only_graph_file_reference() -> None:
                 [fact.id for fact in project.facts if fact.id != "goal"]
             ),
             "open_intents": format_open_intents([]),
-            "execution": "{}",
             "max_intents": "3",
         },
     )

@@ -72,7 +72,6 @@ def test_blackboard_status_changes_node_path_context_and_audit(
         "facts": 2,
         "intents": 0,
         "hints": 1,
-        "observations": 0,
     }
 
     created = client.post(
@@ -123,7 +122,6 @@ def test_blackboard_status_changes_node_path_context_and_audit(
     }
     assert [item["id"] for item in snapshot["intents"]] == [intent_id]
     assert snapshot["hints"][0]["content"] == "look here"
-    assert snapshot["observations"] == []
     assert len(snapshot["edges"]) == 2
 
     node = client.get(
@@ -202,8 +200,6 @@ def test_cli_uses_worker_context_and_snapshot_cursor(monkeypatch, capsys) -> Non
     def fake_urlopen(request, timeout):
         captured["url"] = request.full_url
         captured["headers"] = dict(request.header_items())
-        captured["method"] = request.method
-        captured["data"] = request.data
         captured["timeout"] = timeout
         return Response()
 
@@ -227,16 +223,6 @@ def test_cli_uses_worker_context_and_snapshot_cursor(monkeypatch, capsys) -> Non
     assert captured["url"] == (
         "http://redtrace.test/projects/proj_007/blackboard/facts/f007/source?limit=50"
     )
-
-    assert blackboard_cli.main(["submit-observation", "possible endpoint"]) == 0
-    assert captured["url"] == (
-        "http://redtrace.test/projects/proj_007/intents/i009/observations"
-    )
-    assert captured["method"] == "POST"
-    assert json.loads(captured["data"]) == {
-        "worker": "pi-1",
-        "content": "possible endpoint",
-    }
 
 
 def test_parallel_workers_can_query_safely(client: TestClient) -> None:

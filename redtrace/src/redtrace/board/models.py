@@ -55,14 +55,6 @@ class Hint(BaseModel):
     created_at: str
 
 
-class Observation(BaseModel):
-    id: str
-    intent_id: str
-    worker: str
-    content: str
-    created_at: str
-
-
 class ProjectReason(BaseModel):
     worker: str
     trigger: str
@@ -98,7 +90,6 @@ class ProjectDetail(BaseModel):
     facts: list[Fact]
     intents: list[Intent]
     hints: list[Hint]
-    observations: list[Observation] = Field(default_factory=list)
     blackboard_revision: int = 0
 
 
@@ -261,24 +252,6 @@ class CompleteRequest(BaseModel):
 
 class ConcludeResponse(BaseModel):
     fact: Fact
-    intent: Intent
-
-
-class ObservationRequest(BaseModel):
-    worker: str
-    content: str
-
-    @field_validator("worker", "content")
-    @classmethod
-    def validate_non_empty_text(cls, value: str) -> str:
-        text = value.strip()
-        if not text:
-            raise ValueError("must not be empty")
-        return text
-
-
-class ObservationResponse(BaseModel):
-    observation: Observation
     intent: Intent
 
 
