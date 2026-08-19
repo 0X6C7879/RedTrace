@@ -511,7 +511,7 @@ def test_prompt_guidance_requires_bounded_blackboard_refresh() -> None:
     assert "Web 调研能力贯穿整个会话" in prompt
     assert "不限于第一轮" in prompt
     assert "后续任一对话轮次" in prompt
-    assert "同时启用最多 5 个" in prompt
+    assert "任务中优先加载 Skill" in prompt
 
 
 def test_prompt_guidance_describes_windows_local_shell() -> None:

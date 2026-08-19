@@ -3,14 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from redtrace.skill_cli import build_parser, learn, recall
-from redtrace.skill_runtime import skill_runtime_instructions
-
-
-def test_runtime_lets_worker_choose_from_native_skill_index() -> None:
-    instructions = skill_runtime_instructions("explore")
-
-    assert "Worker 原生 Skill 索引" in instructions
-    assert "name/description 自主判断" in instructions
 
 
 def _env(monkeypatch, tmp_path: Path) -> tuple[Path, Path, Path]:

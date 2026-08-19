@@ -22,6 +22,7 @@ from redtrace.dispatcher.tasks.common import (
     BlackboardInbox,
     best_effort_release,
     cancel_reason,
+    cleanup_skill_tracking_for_session,
     did_timeout,
     preflight_worker,
     exception_failure_outcome,
@@ -30,8 +31,6 @@ from redtrace.dispatcher.tasks.common import (
     preview,
     process_failure_outcome,
     record_session_checkpoint,
-    run_learning_checkpoint,
-    run_task_end_learning,
     run_worker_process,
     write_conclude_result,
     write_graph_snapshot_reference,
@@ -330,33 +329,8 @@ def run_explore_task(
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return exception_failure_outcome(exc)
     finally:
-        if config.runtime.prompt_mode == "cairn":
-            if result_committed and container_name is not None:
-                run_task_end_learning(
-                    driver,
-                    container_manager,
-                    container_name,
-                    worker,
-                    session,
-                    task_type="explore",
-                )
-        elif checkpoint_due and container_name is not None:
-            run_learning_checkpoint(
-                driver,
-                client,
-                container_manager,
-                container_name,
-                worker,
-                session,
-                task_type="explore",
-                project_id=project.project.id,
-                intent_id=intent.id,
-                blackboard_revision=project.blackboard_revision,
-                timeout_seconds=config.tasks.explore.conclude_timeout,
-                lease=lease,
-                cancellation=cancellation,
-                blackboard_inbox=inbox,
-            )
+        if container_name is not None:
+            cleanup_skill_tracking_for_session(container_name, session)
         if inbox is not None:
             inbox.stop()
         lease.stop()

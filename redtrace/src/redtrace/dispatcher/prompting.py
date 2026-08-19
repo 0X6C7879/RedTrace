@@ -153,18 +153,12 @@ def add_blackboard_guidance(
                     "仅在授权范围即将改变或缺少无法安全推断的必要输入时停下。"
                 ),
                 (
-                    "Skill、MCP 和 plugin 由 RedTrace root 共享。首次实质操作前用 Worker 原生 Skill 机制发现并调用最具体的相关 Skill；"
-                    "直接加载专业 Skill，不调用 Router、通配符或目录占位名。优先完成原生 Skill 选择和必要 Web 调研，再开始通用命令探索。"
-                    "后续若任务方向或知识缺口变化，可继续发现并加载 Skill；同时启用最多 5 个且不得重复加载。"
-                    "未完成专业 Skill 的规定步骤前，不得退回纯手写 curl/python/bash 流程。"
+                    "任务中优先加载 Skill，任务过程中动态按需加载，可同时加载多个不重复的 Skill。"
                 ),
             ]
         )
     sections.append(
-        "## Skill 学习闭环\n\n"
-        "加载专业 Skill 后运行一次 `redtrace-skill recall <canonical-id>`。任务结束前只有产生已验证、可复用且非项目事实的新经验时，"
-        "才在 Workspace 写脱敏说明并调用 `redtrace-skill learn <canonical-id> --summary <摘要> --evidence <验证依据> --content-file <文件>`。"
-        "RedTrace Core 负责锁、脱敏、去重、原子写入、索引和审计；没有新经验就不写。"
+        "当任务中产生经验证、可复用的新经验时，可按需加载 `skill-evolution` Skill。"
     )
     guidance = prompt.rstrip() + "\n\n" + "\n\n".join(sections)
     if local_execution and os.name == "nt":

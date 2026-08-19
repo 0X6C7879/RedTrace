@@ -341,8 +341,7 @@ def test_explore_early_plain_text_exit_uses_conclude_fallback(monkeypatch) -> No
     assert "/explore_execute-" in containers.writes[0][1]
     assert len(driver.execute_prompts) == 1
     assert "use the clue" in driver.execute_prompts[0]
-    assert len(driver.conclude_prompts) == 2
-    assert "RedTrace Learning Checkpoint" in driver.conclude_prompts[-1]
+    assert len(driver.conclude_prompts) == 1
     assert lease.started and lease.stopped
 
 

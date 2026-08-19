@@ -24,6 +24,7 @@ from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
 from redtrace.dispatcher.tasks.common import (
     best_effort_release,
     cancel_reason,
+    cleanup_skill_tracking_for_session,
     did_timeout,
     preflight_worker,
     ensure_worker_running,
@@ -32,7 +33,6 @@ from redtrace.dispatcher.tasks.common import (
     preview,
     process_failure_outcome,
     record_session_checkpoint,
-    run_task_end_learning,
     run_worker_process,
     write_conclude_result,
     write_conclude_result_with_fact_id,
@@ -274,15 +274,8 @@ def run_bootstrap_task(
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return exception_failure_outcome(exc)
     finally:
-        if container_name is not None and config.runtime.prompt_mode == "cairn" and result_committed:
-            run_task_end_learning(
-                driver,
-                container_manager,
-                container_name,
-                worker,
-                session,
-                task_type="bootstrap",
-            )
+        if container_name is not None:
+            cleanup_skill_tracking_for_session(container_name, session)
         lease.stop()
 
 

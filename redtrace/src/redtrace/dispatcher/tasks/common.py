@@ -18,7 +18,6 @@ from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
 from redtrace.dispatcher.runtime.process import ProcessResult
 from redtrace.dispatcher.workers.adapters.claudecode import CLAUDE_MAX_THINKING_TOKENS
-from redtrace.skill_runtime import learning_checkpoint_prompt, learning_hook_prompt
 
 PROCESS_COMMUNICATE_GRACE_SECONDS = 15
 GRAPH_SNAPSHOT_ROOT = "/home/kali/workspace/.redtrace/prompts"
@@ -630,84 +629,6 @@ def run_worker_process(
             publisher.close()
 
 
-def run_learning_checkpoint(
-    driver: Any,
-    client: ControlPlaneClient,
-    container_manager: ContainerManager,
-    container_name: str,
-    worker: WorkerConfig,
-    session: str | None,
-    *,
-    task_type: str,
-    project_id: str,
-    intent_id: str,
-    blackboard_revision: int,
-    timeout_seconds: int,
-    lease: HeartbeatLease,
-    cancellation: TaskCancellation,
-    blackboard_inbox: BlackboardInbox | None = None,
-) -> bool:
-    """Run the one dispatcher-owned learning decision turn for a task session."""
-    if worker.type == "mock":
-        return True
-    if not session or not driver.supports_conclude():
-        LOG.warning(
-            "learning checkpoint unavailable project=%s intent=%s worker=%s task=%s has_session=%s",
-            project_id,
-            intent_id,
-            worker.name,
-            task_type,
-            bool(session),
-        )
-        return False
-    try:
-        command = driver.build_conclude(
-            worker,
-            learning_checkpoint_prompt(task_type),
-            session,
-            task_type=task_type,
-        )
-        result = run_worker_process(
-            container_manager,
-            container_name,
-            worker,
-            command.argv,
-            stdin_text=command.stdin,
-            client=client,
-            project_id=project_id,
-            intent_id=intent_id,
-            blackboard_revision=blackboard_revision,
-            phase=f"{task_type}_learning_checkpoint",
-            timeout_seconds=timeout_seconds,
-            lease=lease,
-            cancellation=cancellation,
-            blackboard_inbox=blackboard_inbox,
-            live_control=command.live_control,
-            env_overrides=command.env,
-        )
-    except Exception:
-        LOG.exception(
-            "learning checkpoint crashed project=%s intent=%s worker=%s task=%s",
-            project_id,
-            intent_id,
-            worker.name,
-            task_type,
-        )
-        return False
-    ok = not did_timeout(result) and result.returncode == 0 and not result.cancelled
-    if not ok:
-        LOG.warning(
-            "learning checkpoint failed project=%s intent=%s worker=%s task=%s code=%s timed_out=%s",
-            project_id,
-            intent_id,
-            worker.name,
-            task_type,
-            result.returncode,
-            result.timed_out,
-        )
-    return ok
-
-
 def resolve_session_skill_tracking_path(
     container_name: str,
     session: str | None,
@@ -754,70 +675,13 @@ def _cleanup_skill_tracking(tracking_path: Path | None) -> None:
         pass
 
 
-def run_task_end_learning(
-    driver: Any,
-    container_manager: ContainerManager,
+def cleanup_skill_tracking_for_session(
     container_name: str,
-    worker: WorkerConfig,
     session: str | None,
-    *,
-    task_type: str,
-) -> bool:
-    """Run task-end learning hook in the current session (cairn mode only).
-
-    Reuses the existing provider session via build_execute. The learning turn
-    result is discarded — it does not enter task result, Fact, Graph, or Complete.
-    No new Agent session or Worker is created. Cleans up tracking file after.
-    """
-    if worker.type == "mock":
-        return True
-    if not session:
-        return False
-    hook_prompt = learning_hook_prompt(task_type)
-    if not hook_prompt:
-        return False
+) -> None:
+    """Remove the per-session skill tracking file. No LLM call."""
     tracking_path = resolve_session_skill_tracking_path(container_name, session)
-    loaded_ids = _read_loaded_skills(tracking_path)
-    LOG.info(
-        "task-end learning hook task=%s worker=%s session=%s loaded_skills=%s",
-        task_type,
-        worker.name,
-        session,
-        loaded_ids,
-    )
-    try:
-        command = driver.build_execute(
-            worker, hook_prompt, session, task_type=task_type
-        )
-        # Reuse existing session with explicit cairn prompt_mode
-        # so REDTRACE_LOADED_SKILLS_FILE and REDTRACE_PROMPT_MODE
-        # are in the process env for fail-closed enforcement
-        run_worker_process(
-            container_manager,
-            container_name,
-            worker,
-            command.argv,
-            stdin_text=command.stdin,
-            session=session,
-            phase=f"{task_type}_learning_hook",
-            timeout_seconds=120,
-            live_control=command.live_control,
-            prompt_mode="cairn",
-            env_overrides=command.env,
-        )
-    except Exception:
-        LOG.warning(
-            "task-end learning hook failed task=%s worker=%s",
-            task_type,
-            worker.name,
-            exc_info=True,
-        )
-    finally:
-        # Clean up tracking file after learning hook completes.
-        # The session will not be resumed after this point.
-        _cleanup_skill_tracking(tracking_path)
-    # Learning result is always discarded — never modifies task result
-    return True
+    _cleanup_skill_tracking(tracking_path)
 
 
 def project_allows_conclude_fallback(
