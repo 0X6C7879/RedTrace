@@ -205,9 +205,9 @@ Reason 是短时全局判断任务，负责：
 3. 单次 Reason 最多提出 `tasks.reason.max_intents` 个新 Intent；
 4. 在已有足够工作时返回空操作，避免重复分支。
 
-Reason 使用项目级租约，避免多个 Reason 同时产生冲突方向。`planning_revision` 只在 Fact 或 Hint 变化时递增；Reason 即使返回 No-op 也会持久化 `reason_evaluated_revision`。claim、heartbeat、last-seen 和并发槽位变化不会触发重新规划。
+Reason 使用项目级租约，避免多个 Reason 同时产生冲突方向。`planning_revision` 在 Fact、Hint 变化或 Intent 断路器打开时递增；Reason 即使返回 No-op 也会持久化 `reason_evaluated_revision`。claim、heartbeat、last-seen 和并发槽位变化不会触发重新规划。
 
-Reason 只能修改尚未认领的 ready Intent；working Intent 在执行期间只读。其输出只能是 Complete、Intent、No-op 或拒绝，不能直接伪造探索结果。
+Reason 只能创建新 Intent 或完成项目，不能修改已有 Intent。其输出只能是 Complete、Intent、No-op 或拒绝，不能直接伪造探索结果。
 
 ### 4.3 Explore
 

@@ -19,7 +19,6 @@ from redtrace.dispatcher.runtime.cancellation import TaskCancellation
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
 from redtrace.dispatcher.tasks.common import (
-    BlackboardInbox,
     best_effort_release_reason,
     cancel_reason,
     did_timeout,
@@ -51,7 +50,6 @@ def run_reason_task(
     lease = HeartbeatLease.for_reason(
         client, project.project.id, worker.name, config.runtime.interval
     )
-    inbox: BlackboardInbox | None = None
     lease.start()
     try:
         container_name = ensure_worker_running(
@@ -69,22 +67,6 @@ def run_reason_task(
         )
         if early_result is not None:
             return early_result
-        if worker.type != "mock" and callable(
-            getattr(client, "wait_for_blackboard", None)
-        ):
-            inbox = BlackboardInbox(
-                client,
-                container_manager,
-                container_name,
-                project_id=project.project.id,
-                intent_id=None,
-                intent_description="",
-                source_fact_ids=[],
-                worker_name=worker.name,
-                revision=project.blackboard_revision,
-                task_type="reason",
-                all_facts=True,
-            )
         open_intents = [
             {
                 "from": intent.from_,
@@ -157,7 +139,6 @@ def run_reason_task(
             timeout_seconds=config.tasks.reason.timeout,
             lease=lease,
             cancellation=cancellation,
-            blackboard_inbox=inbox,
             live_control=command.live_control,
             session=None,
             prompt_mode=config.runtime.prompt_mode,
@@ -344,7 +325,6 @@ def run_reason_task(
                     ),
                     lease=lease,
                     cancellation=cancellation,
-                    blackboard_inbox=inbox,
                     live_control=repair_command.live_control,
                     session=None,
                     prompt_mode=config.runtime.prompt_mode,
@@ -530,7 +510,5 @@ def run_reason_task(
         )
         return "success"
     finally:
-        if inbox is not None:
-            inbox.stop()
         lease.stop()
         best_effort_release_reason(client, project.project.id, worker.name)

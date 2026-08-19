@@ -538,6 +538,11 @@ END;
 DROP TRIGGER IF EXISTS trg_planning_resource_added;
 DROP TRIGGER IF EXISTS trg_planning_resource_changed;
 DROP TRIGGER IF EXISTS trg_planning_resource_removed;
+
+-- Clean up legacy observation blackboard triggers from old databases.
+-- Observations are no longer part of the Blackboard graph.
+DROP TRIGGER IF EXISTS trg_blackboard_observation_added;
+DROP TRIGGER IF EXISTS trg_blackboard_observation_removed;
 """
 
 
