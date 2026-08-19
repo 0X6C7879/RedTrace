@@ -34,7 +34,7 @@ tasks:
     conclude_timeout: 300
   reason:
     timeout: 300
-    # Keep one ready Intent beyond the three active Worker slots.
+    # Max new Intents proposed per single Reason call.
     max_intents: 4
   explore:
     timeout: 1800

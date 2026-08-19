@@ -63,7 +63,7 @@ def test_reason_snapshot_handles_1000_facts() -> None:
     }
 
 
-def test_reason_snapshot_includes_all_intents_for_lineage() -> None:
+def test_reason_snapshot_includes_concluded_intents_for_lineage() -> None:
     completed = make_intent("i-completed")
     completed.to = "f002"
     open_intent = make_intent("i-open")
@@ -72,7 +72,7 @@ def test_reason_snapshot_includes_all_intents_for_lineage() -> None:
 
     payload = json.loads(project_policy.reason_graph_snapshot(project))
 
-    # Cairn snapshot includes ALL intents (full lineage), including concluded.
+    # Cairn snapshot includes concluded + open intents (full lineage).
     assert len(payload["intents"]) == 2
     # Open Intents filtering happens in reason.py, not in the snapshot.
     intent = payload["intents"][0]
@@ -80,6 +80,39 @@ def test_reason_snapshot_includes_all_intents_for_lineage() -> None:
     assert intent["creator"] == "reasoner"
     # Cairn export includes only: from, to, description, creator, worker, timestamps.
     assert set(intent) == {"from", "to", "description", "creator", "worker", "created_at", "concluded_at"}
+
+
+def test_reason_snapshot_excludes_blocked_dropped_superseded() -> None:
+    open_intent = make_intent("i-open")
+    open_intent.to = None
+    open_intent.state = "open"
+
+    blocked = make_intent("i-blocked")
+    blocked.to = None
+    blocked.state = "blocked"
+
+    dropped = make_intent("i-dropped")
+    dropped.to = None
+    dropped.state = "dropped"
+
+    superseded = make_intent("i-superseded")
+    superseded.to = None
+    superseded.state = "superseded"
+
+    concluded = make_intent("i-concluded")
+    concluded.to = "f002"
+    concluded.state = "concluded"
+
+    project = make_project(intents=[open_intent, blocked, dropped, superseded, concluded])
+
+    payload = json.loads(project_policy.reason_graph_snapshot(project))
+
+    # Only open + concluded intents appear; blocked/dropped/superseded are excluded.
+    # Cairn export does not include 'id', so we match by description + to field.
+    exported = payload["intents"]
+    assert len(exported) == 2
+    assert any(i["to"] is None for i in exported)           # open
+    assert any(i["to"] == "f002" for i in exported)         # concluded
 
 
 def test_write_graph_snapshot_reference_inlines_nothing() -> None:

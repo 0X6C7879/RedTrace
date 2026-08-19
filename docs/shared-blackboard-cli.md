@@ -1,17 +1,17 @@
 # Worker 按需访问共享黑板
 
-`redtrace-blackboard` 是 Claude Code、Codex 和 Pi Worker 共用的命令行接口。默认命令只读；`submit-observation` 是唯一写命令，用于共享执行中的中间观察，但不会创建正式 Fact。
+`redtrace-blackboard` 是 Claude Code、Codex 和 Pi Worker 共用的命令行接口，提供只读查询能力。
 
 ## 行为边界
 
 - Worker 自主判断是否调用、何时调用以及查询哪些节点。
 - RedTrace 不推送变化、不自动轮询、不强制中断任务，也不把新增节点自动注入模型上下文。
 - 初始 Prompt 只介绍用途和原则，不要求固定频率检查。
-- CLI 查询使用 HTTP `GET`；`submit-observation` 使用一次 HTTP `POST`，不使用 MCP。
+- CLI 查询使用 HTTP `GET`，不使用 MCP。
 - 每次调用只启动一个短生命周期 CLI 进程和一个 HTTP 请求；没有守护进程或后台订阅。
 - SQLite 使用现有 WAL 模式，修订事件与黑板写入处于同一事务，可供多个并行 Worker 安全读取。
 
-查询会追加一条审计记录，但不会修改 Fact、Intent、Hint、Observation、项目状态或黑板修订号。
+查询会追加一条审计记录，但不会修改 Fact、Intent、Hint、项目状态或黑板修订号。
 
 ## 命令
 
@@ -27,7 +27,7 @@ redtrace-blackboard changes
 # 从指定修订继续读取；响应中的 next_revision 可作为下一次游标
 redtrace-blackboard changes --since 42 --limit 20
 
-# 读取一个 Fact、Intent、Hint 或 Observation
+# 读取一个 Fact、Intent 或 Hint
 redtrace-blackboard node f003
 
 # 读取两个图节点之间的有向最短路径
@@ -35,9 +35,6 @@ redtrace-blackboard path origin f003
 
 # 读取节点的有界局部上下文
 redtrace-blackboard context i002 --depth 1 --limit 30
-
-# 执行中共享中间观察，不创建 Fact，也不结束当前 Intent
-redtrace-blackboard submit-observation "观察到 /admin 可能未授权，待复核"
 ```
 
 所有命令默认输出易于模型读取的缩进 JSON。可用 `--compact` 改为单行 JSON。边界如下：
@@ -67,7 +64,7 @@ Dispatcher 在每个 Worker 进程中设置：
 
 ## 服务端协议
 
-CLI 查询调用以下只读接口；中间观察调用 `POST /projects/{project_id}/intents/{intent_id}/observations`。写接口只允许当前持有 working Intent 的 Worker 使用，并在同一事务中更新 `last_progress_at`；正式 Fact 只能通过 conclude 提交：
+CLI 查询调用以下只读接口：
 
 | 方法与路径 | 用途 |
 |---|---|
@@ -76,9 +73,8 @@ CLI 查询调用以下只读接口；中间观察调用 `POST /projects/{project
 | `GET /projects/{id}/blackboard/nodes/{node_id}` | 读取指定节点 |
 | `GET /projects/{id}/blackboard/path` | 查询有向路径 |
 | `GET /projects/{id}/blackboard/context/{node_id}` | 查询局部上下文 |
-| `POST /projects/{id}/intents/{intent_id}/observations` | 共享中间观察 |
 
-黑板内容变更由 SQLite 触发器记录为单调递增的 `blackboard_events.revision`。新 Fact、Intent、Hint、Observation 以及重开项目时移除的完成 Intent 都会产生事件；Worker claim、heartbeat 和审计写入不会产生黑板修订。Observation 不增加 `planning_revision`，只有正式 Fact、Hint 和 Resource 语义变化触发重新规划。
+黑板内容变更由 SQLite 触发器记录为单调递增的 `blackboard_events.revision`。新 Fact、Intent、Hint 以及重开项目时移除的完成 Intent 都会产生事件；Worker claim、heartbeat 和审计写入不会产生黑板修订。只有 Fact 和 Hint 变化触发 Reason 重新规划。
 
 ## 审计
 

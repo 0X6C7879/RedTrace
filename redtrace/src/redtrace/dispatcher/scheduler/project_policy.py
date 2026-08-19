@@ -8,14 +8,16 @@ from redtrace.board.models import Intent, ProjectDetail, ProjectSummary
 BOOTSTRAP_DESCRIPTION = "bootstrap"
 BOOTSTRAP_CREATOR = "dispatcher.bootstrap"
 
+_DEAD_INTENT_STATES = frozenset({"blocked", "dropped", "superseded"})
 
-def reason_graph_snapshot(
-    project: ProjectDetail, resources: list[dict[str, object]] | None = None
-) -> str:
+
+def reason_graph_snapshot(project: ProjectDetail) -> str:
     """Serialize the Task Graph for the global Reason planner.
 
-    Aligned with Cairn: the graph contains ALL intents (including concluded)
-    for full task lineage. Open Intents are filtered separately in reason.py.
+    Aligned with Cairn: the graph contains concluded intents for full task
+    lineage.  ``blocked``, ``dropped`` and ``superseded`` intents are excluded
+    because they carry no useful signal for the Reason planner.
+    Open Intents are filtered separately in reason.py.
     """
     payload = {
         "project": {
@@ -36,17 +38,14 @@ def reason_graph_snapshot(
         "intents": [
             _cairn_intent_export(intent)
             for intent in project.intents
+            if intent.state not in _DEAD_INTENT_STATES
         ],
     }
     return _serialize(payload)
 
 
 def compact_snapshot(project: ProjectDetail, intent: Intent) -> str:
-    """Serialize the scoped Explore working set for a single Intent.
-
-    Aligned with Cairn: only project, relevant facts, hints, and the intent.
-    Observations are not included.
-    """
+    """Serialize the scoped Explore working set for a single Intent."""
     fact_ids = {"origin", "goal", *intent.from_}
     facts = [fact for fact in project.facts if fact.id in fact_ids]
     payload = {
@@ -101,7 +100,7 @@ def rotate_projects(
 
 
 def open_intent_count(project: ProjectDetail, *, now: float | None = None) -> int:
-    """Count the usable Frontier: working plus schedulable unclaimed Intents."""
+    """Count open intents: working plus schedulable unclaimed Intents."""
     current_time = time.time() if now is None else now
     return sum(
         intent.to is None

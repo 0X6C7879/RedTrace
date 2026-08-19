@@ -80,7 +80,7 @@ def test_scheduler_skips_circuit_open_and_backoff_intents() -> None:
     assert project_policy.newest_unclaimed_intent(project, set()).id == "i-open"
 
 
-def test_summary_and_detail_share_usable_frontier_count(client: TestClient) -> None:
+def test_summary_and_detail_share_open_intent_count(client: TestClient) -> None:
     project_id = _project(client)
     schedulable = _intent(client, project_id, "schedulable")
     working = _intent(client, project_id, "working")

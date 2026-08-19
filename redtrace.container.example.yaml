@@ -36,7 +36,7 @@ tasks:
   reason:
     # Reason decides whether the goal is met and whether new intents should be proposed.
     timeout: 300
-    # Cap open intents at one ready item beyond per-project Worker capacity.
+    # Max new Intents proposed per single Reason call.
     max_intents: 5
   explore:
     # Main execution timeout for exploring a claimed intent.
