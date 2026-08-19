@@ -66,6 +66,5 @@ class DispatchConfigReloader:
         excluded = {
             "workers": True,
             "common_env": True,
-            "runtime": {"prompt_mode"},
         }
         return current.model_dump(exclude=excluded) != candidate.model_dump(exclude=excluded)

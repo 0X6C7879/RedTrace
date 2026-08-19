@@ -7,8 +7,6 @@ description: Web research strategy — provider priority, URL retention, and whe
 
 Web 调研策略。仅在需要互联网调研时加载。
 
-**加载后首先执行：** `redtrace-skill recall web-research`
-
 ## 优先级
 
 1. Claude/Codex: 原生 Web search/fetch 优先

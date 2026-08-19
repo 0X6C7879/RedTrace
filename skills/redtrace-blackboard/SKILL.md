@@ -7,8 +7,6 @@ description: Query RedTrace Blackboard history, source context, graph paths, and
 
 高级 Blackboard 查询方法。仅在需要跨 Worker 溯源或历史查询时加载。
 
-**加载后首先执行：** `redtrace-skill recall redtrace-blackboard`
-
 ## 命令
 
 - `redtrace-blackboard snapshot` — 完整黑板快照

@@ -301,7 +301,6 @@ def test_reason_noop_still_commits_evaluated_revision(monkeypatch) -> None:
 
 def test_explore_early_plain_text_exit_uses_conclude_fallback(monkeypatch) -> None:
     config = make_config()
-    config.runtime.prompt_mode = "legacy"
     config.workers[0].type = "pi"
     intent = make_intent()
     project = make_project(intents=[intent])
@@ -340,7 +339,7 @@ def test_explore_early_plain_text_exit_uses_conclude_fallback(monkeypatch) -> No
     assert len(containers.writes) == 1
     assert "/explore_execute-" in containers.writes[0][1]
     assert len(driver.execute_prompts) == 1
-    assert "use the clue" in driver.execute_prompts[0]
+    assert "investigate" in driver.execute_prompts[0]
     assert len(driver.conclude_prompts) == 1
     assert lease.started and lease.stopped
 

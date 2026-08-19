@@ -8,7 +8,6 @@ description: Use for authorized security assessment of LLM applications and AI a
 
 > **Agent Skill 自身安全**：安装或合并外部 Skill/MCP 前审阅来源、权限、网络行为、脚本与固定版本。
 
-1. `NOW`: 运行 `redtrace-skill recall llm-security`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: 确认当前任务是否命中本 skill 的适用范围
 3. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
 4. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
@@ -130,7 +129,6 @@ LLM 输出可能被下游系统直接消费：
 - `references/prompt-injection-methodology.md` — Prompt 注入方法论
 - `references/agent-security-testing.md` — Agent 安全测试框架
 - `references/agent-obedience-engineering.md` — Agent 服从性工程：让 AI 读完工作流后真正干活（8 大技术 + 借口反驳表 + 强制执行模板）
-
 
 ## 任务完成自检（声称完成前 MUST 通过）
 

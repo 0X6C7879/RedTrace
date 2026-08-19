@@ -7,7 +7,6 @@ description: Use for authorized reverse engineering of browser extensions (Chrom
 
 ## ACTION REQUIRED（读完后立刻执行）
 
-1. `NOW`: 运行 `redtrace-skill recall browser-extension-reverse`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: 确认目标是**浏览器扩展**（crx/xpi/解压目录），不是普通网页 JS（普通 → `js-reverse/`）
 3. `NEXT`: 解压扩展；读 manifest
 4. `ACT`: 权限面 → 后台脚本 → 网络/存储钩子
@@ -59,7 +58,6 @@ description: Use for authorized reverse engineering of browser extensions (Chrom
 ## 参考
 
 - `references/extension-analysis.md`
-- `redtrace-skill recall browser-extension-reverse` 中的扩展恢复经验
 - `../js-reverse/` `../malware-analysis/`
 
 ## 路由上下文

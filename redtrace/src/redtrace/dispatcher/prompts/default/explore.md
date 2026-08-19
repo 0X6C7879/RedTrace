@@ -24,6 +24,7 @@
 - 如果你之后在同一个 session 中收到 conclude-phase 指令，则新的 conclude 指令立即覆盖当前探索指令。在 conclude phase 中，必须停止探索、停止等待、停止运行或规划进一步操作，并立即返回要求的 summary JSON。
 - `description` 必须清楚说明已经确认的关键客观结果。例如，在 CTF 场景中，可以包含多个 flag、shell、权限证明、关键利用结果以及类似证据。不要把长数据块放入 `description`；长数据应写入文件，并在 `description` 中引用。
 - `description` 应只包含最新发现的增量事实。不要重复 graph snapshot 中已经存在的信息，也不要包含无助于推进 Goal 的冗余细节。
+- 当任务中产生经验证、可复用的新经验时，可按需加载 `skill-evolution` Skill。
 
 # 上下文
 

@@ -85,7 +85,6 @@ metadata:
 
 - **Finding 唯一标识**：`CA-<project>-<mode>-<category>-<hash>`；多个 Worker 发现同一问题时按 `file + function + sink + category` 计算去重键，合并证据，不重复创建 Finding。
 - **Codegraph 索引**：不存在索引时执行 `codegraph init`，已有索引且代码变化时执行 `codegraph sync`；init/sync 前获取 `<workspace>/.redtrace/locks/codegraph.lock`，同一时间只允许一个 Worker 执行，其他 Worker 可读取已完成索引。
-- **经验沉淀**：任务结束前，只有满足沉淀条件的新经验才通过 `redtrace-skill learn code-audit ...` 写入 RedTrace Skill memory；项目事实只留在 Workspace，不进入全局经验。
 - **私有案例**：`references/cases/internal-cases.json` 为私有案例（不入库、不公开提交）；缺失时公开规则和 learned 仍能正常运行。可通过环境变量 `REDTRACE_CODE_AUDIT_PRIVATE_CASES_DIR` 提供外部私有案例目录。
 
 ---

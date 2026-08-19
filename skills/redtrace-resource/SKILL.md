@@ -7,8 +7,6 @@ description: RedTrace Resource operations — snapshot, list, register, lock, un
 
 Resource 操作方法。仅在需要手工操作 Resource 时加载。
 
-**加载后首先执行：** `redtrace-skill recall redtrace-resource`
-
 ## 核心概念
 
 - Resource = 运行状态（WebShell、C2 Session、Credential、文件等）

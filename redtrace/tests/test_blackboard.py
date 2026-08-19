@@ -19,7 +19,6 @@ from redtrace.capabilities import (
     workspace_tar,
 )
 from redtrace.dispatcher.config import WorkerConfig
-from redtrace.dispatcher.prompting import add_blackboard_guidance
 from redtrace.dispatcher.runtime.process import ProcessResult
 from redtrace.dispatcher.tasks import common, explore
 from redtrace.server import db
@@ -489,44 +488,6 @@ def test_running_worker_receives_blackboard_delta_notice(
     assert queried_since == [7, 7]
     assert notice["since"] == 7
     assert notice["changes"][0]["node_id"] == "f011"
-
-
-def test_prompt_guidance_requires_bounded_blackboard_refresh() -> None:
-    prompt = add_blackboard_guidance(
-        "Do the task.", 23, hints='[{"content":"keep it"}]', prompt_mode="legacy"
-    )
-    assert "Graph snapshot revision 为 23" in prompt
-    assert "`redtrace-blackboard snapshot`" in prompt
-    assert "`redtrace-blackboard changes --since" in prompt
-    assert "$REDTRACE_BLACKBOARD_NOTICE" in prompt
-    assert "`redtrace-blackboard source <fact_id>`" in prompt
-    assert "不得固定频率轮询" in prompt
-    assert "$REDTRACE_WORKSPACE" in prompt
-    assert "`<题目ID>/`" in prompt
-    assert "由你依据当前任务性质自行决定" in prompt
-    assert "`/tmp`" in prompt
-    assert "通用解题脚本" in prompt
-    assert "$REDTRACE_TOOLS_DIR" in prompt
-    assert '"content":"keep it"' in prompt
-    assert "Web 调研能力贯穿整个会话" in prompt
-    assert "不限于第一轮" in prompt
-    assert "后续任一对话轮次" in prompt
-    assert "任务中优先加载 Skill" in prompt
-
-
-def test_prompt_guidance_describes_windows_local_shell() -> None:
-    prompt = add_blackboard_guidance(
-        "Do the task.",
-        23,
-        local_execution=True,
-        prompt_mode="legacy",
-    )
-    if os.name == "nt":
-        assert "Windows local execution" in prompt
-        assert "不得将 PowerShell syntax 传给 Bash" in prompt
-        assert "rtk proxy powershell" in prompt
-    else:
-        assert "Windows local execution" not in prompt
 
 
 def test_fact_source_exposes_worker_conversation(client: TestClient) -> None:

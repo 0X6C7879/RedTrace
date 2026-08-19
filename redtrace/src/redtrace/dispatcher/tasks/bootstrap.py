@@ -13,7 +13,6 @@ from redtrace.dispatcher.contracts import (
 from redtrace.dispatcher.control_plane import ControlPlaneClient
 from redtrace.dispatcher.workers.base import ProviderError
 from redtrace.dispatcher.prompting import (
-    add_blackboard_guidance,
     format_hints,
     load_prompt_for_mode,
     render_prompt,
@@ -80,19 +79,9 @@ def run_bootstrap_task(
             return early_result
 
         prompt = render_prompt(
-            load_prompt_for_mode(config.runtime.prompt_mode, "bootstrap.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),
+            load_prompt_for_mode("bootstrap.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),
             _bootstrap_prompt_replacements(project),
-            prompt_mode=config.runtime.prompt_mode,
         )
-        if worker.type != "mock":
-            prompt = add_blackboard_guidance(
-                prompt,
-                project.blackboard_revision,
-                task_type="bootstrap",
-                context_harness_enabled=config.context_harness.enabled,
-                local_execution=config.runtime.execution == "local",
-                prompt_mode=config.runtime.prompt_mode,
-            )
 
         session = driver.prepare_session()
         execute = driver.build_execute(
@@ -116,7 +105,7 @@ def run_bootstrap_task(
             cancellation=cancellation,
             live_control=execute.live_control,
             session=session,
-            prompt_mode=config.runtime.prompt_mode,
+            
             env_overrides=execute.env,
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
@@ -346,9 +335,8 @@ def _try_conclude_fallback(
     )
 
     prompt = render_prompt(
-        load_prompt_for_mode(config.runtime.prompt_mode, "bootstrap_conclude.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),
+        load_prompt_for_mode("bootstrap_conclude.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),
         _bootstrap_prompt_replacements(project),
-        prompt_mode=config.runtime.prompt_mode,
     )
     conclude = driver.build_conclude(
         worker, prompt, session, task_type="bootstrap"
@@ -376,7 +364,7 @@ def _try_conclude_fallback(
         cancellation=cancellation,
         live_control=conclude.live_control,
         session=session,
-        prompt_mode=config.runtime.prompt_mode,
+        
         env_overrides=conclude.env,
     )
     conclude_ms = int((time.perf_counter() - conclude_started) * 1000)

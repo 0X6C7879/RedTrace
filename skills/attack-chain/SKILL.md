@@ -6,7 +6,6 @@ description: Use for authorized multi-stage attack-path planning and orchestrati
 
 ## ACTION REQUIRED（读完后立刻执行）
 
-1. `NOW`: 运行 `redtrace-skill recall attack-chain`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: 在当前 RedTrace Workspace 创建或更新 case 与 `scope.md`；授权未明确为 granted 时禁止 ACT
 3. `NOW`: 以 **lead** 角色规划阶段并写入 specialist_roles
 4. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
@@ -641,7 +640,6 @@ touch -t 202301010000 /path/to/file
 | AI 辅助渗透 | `mcp-kali-server` / `metasploitmcp` / `hexstrike-ai` |
 | 报告生成 | `docs-generator/SKILL.md` |
 | 攻击路径图 | `diagram-generator/SKILL.md` |
-
 
 ## 任务完成自检（声称完成前 MUST 通过）
 

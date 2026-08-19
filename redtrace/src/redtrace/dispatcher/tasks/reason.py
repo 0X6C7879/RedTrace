@@ -9,7 +9,6 @@ from redtrace.dispatcher.contracts import parse_json_output, validate_reason_pay
 from redtrace.dispatcher.control_plane import ControlPlaneClient
 from redtrace.dispatcher.workers.base import ProviderError
 from redtrace.dispatcher.prompting import (
-    add_blackboard_guidance,
     format_fact_ids,
     format_open_intents,
     load_prompt_for_mode,
@@ -97,7 +96,7 @@ def run_reason_task(
             len(export_yaml),
         )
         prompt = render_prompt(
-            load_prompt_for_mode(config.runtime.prompt_mode, "reason.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),
+            load_prompt_for_mode("reason.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),
             {
                 "graph_yaml": write_graph_snapshot_reference(
                     container_manager,
@@ -109,17 +108,7 @@ def run_reason_task(
                 "open_intents": format_open_intents(open_intents),
                 "max_intents": str(config.tasks.reason.max_intents),
             },
-            prompt_mode=config.runtime.prompt_mode,
         )
-        if worker.type != "mock":
-            prompt = add_blackboard_guidance(
-                prompt,
-                project.blackboard_revision,
-                task_type="reason",
-                context_harness_enabled=config.context_harness.enabled,
-                local_execution=config.runtime.execution == "local",
-                prompt_mode=config.runtime.prompt_mode,
-            )
 
         session = driver.prepare_session()
         command = driver.build_execute(
@@ -141,7 +130,6 @@ def run_reason_task(
             cancellation=cancellation,
             live_control=command.live_control,
             session=None,
-            prompt_mode=config.runtime.prompt_mode,
             env_overrides=command.env,
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
@@ -231,7 +219,6 @@ def run_reason_task(
                 lease=lease,
                 cancellation=cancellation,
                 session=None,
-                prompt_mode=config.runtime.prompt_mode,
                 env_overrides=recovery_command.env,
             )
             cancelled = cancel_reason(result, cancellation)
@@ -327,7 +314,6 @@ def run_reason_task(
                     cancellation=cancellation,
                     live_control=repair_command.live_control,
                     session=None,
-                    prompt_mode=config.runtime.prompt_mode,
                     env_overrides=repair_command.env,
                 )
             except Exception as repair_exc:

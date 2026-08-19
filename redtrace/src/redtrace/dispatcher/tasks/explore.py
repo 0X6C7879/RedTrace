@@ -10,8 +10,6 @@ from redtrace.dispatcher.contracts import parse_json_output, validate_explore_pa
 from redtrace.dispatcher.control_plane import ControlPlaneClient
 from redtrace.dispatcher.workers.base import ProviderError
 from redtrace.dispatcher.prompting import (
-    add_blackboard_guidance,
-    format_hints,
     load_prompt_for_mode,
     render_prompt,
 )
@@ -106,24 +104,13 @@ def run_explore_task(
                 revision=project.blackboard_revision,
             )
         prompt = render_prompt(
-            load_prompt_for_mode(config.runtime.prompt_mode, "explore.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),
+            load_prompt_for_mode("explore.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),
             {
                 "graph_yaml": graph_reference,
                 "intent_id": intent.id,
                 "intent_description": intent.description,
             },
-            prompt_mode=config.runtime.prompt_mode,
         )
-        if worker.type != "mock":
-            prompt = add_blackboard_guidance(
-                prompt,
-                project.blackboard_revision,
-                task_type="explore",
-                context_harness_enabled=config.context_harness.enabled,
-                local_execution=config.runtime.execution == "local",
-                hints=format_hints([hint.model_dump() for hint in project.hints]),
-                prompt_mode=config.runtime.prompt_mode,
-            )
 
         session = driver.prepare_session()
         execute = driver.build_execute(
@@ -148,7 +135,6 @@ def run_explore_task(
             cancellation=cancellation,
             blackboard_revision=project.blackboard_revision,
             inbox=inbox,
-            prompt_mode=config.runtime.prompt_mode,
             env_overrides=execute.env,
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
@@ -415,13 +401,12 @@ def _try_conclude_fallback(
     )
 
     prompt = correction_prompt or render_prompt(
-        load_prompt_for_mode(config.runtime.prompt_mode, "explore_conclude.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),
+        load_prompt_for_mode("explore_conclude.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),
         {
             "graph_yaml": graph_reference,
             "intent_id": intent.id,
             "intent_description": intent.description,
         },
-        prompt_mode=config.runtime.prompt_mode,
     )
     conclude = driver.build_conclude(
         worker, prompt, session, task_type="explore"
@@ -448,7 +433,6 @@ def _try_conclude_fallback(
         lease=lease,
         cancellation=cancellation,
         inbox=inbox,
-        prompt_mode=config.runtime.prompt_mode,
         env_overrides=conclude.env,
     )
     conclude_ms = int((time.perf_counter() - conclude_started) * 1000)
@@ -604,7 +588,6 @@ def _run_process(
     inbox: BlackboardInbox | None = None,
     live_control=None,
     session: str | None = None,
-    prompt_mode: str = "legacy",
     env_overrides: dict[str, str] | None = None,
 ):
     return run_worker_process(
@@ -624,7 +607,6 @@ def _run_process(
         blackboard_inbox=inbox,
         live_control=live_control,
         session=session,
-        prompt_mode=prompt_mode,
         env_overrides=env_overrides,
     )
 
@@ -646,7 +628,6 @@ def _run_with_steering(
     cancellation: TaskCancellation,
     blackboard_revision: int = 0,
     inbox: BlackboardInbox | None = None,
-    prompt_mode: str = "legacy",
     env_overrides: dict[str, str] | None = None,
 ):
     result = _run_process(
@@ -666,7 +647,6 @@ def _run_with_steering(
         inbox=inbox,
         live_control=getattr(invocation, "live_control", None),
         session=session,
-        prompt_mode=prompt_mode,
         env_overrides=env_overrides,
     )
     session = driver.extract_session(session, result.stdout, result.stderr)

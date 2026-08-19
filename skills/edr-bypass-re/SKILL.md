@@ -11,7 +11,6 @@ description: |
 
 ## ACTION REQUIRED（读完后立刻执行）
 
-1. `NOW`: 运行 `redtrace-skill recall edr-bypass-re`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: 确认当前任务是否命中本 skill 的适用范围
 3. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
 4. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
@@ -204,7 +203,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "&lt;SKILL_ROOT&gt;\skills\s
 
 - `pentest-tools/network-attack-defense.md` — 内网横向时如何与本 skill 联动
 - `malware-analysis/` — 反向视角，看检测方怎么写规则
-- `redtrace-skill learn edr-bypass-re ...` — 仅在产生已验证且可复用的新方法时回写
 
 **下游交付**：
 
@@ -224,7 +222,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "&lt;SKILL_ROOT&gt;\skills\s
 - unhook / syscall 技术：`references/unhook-techniques.md`
 - ETW / AMSI / 反取证：`references/telemetry-blinding.md`
 - MITRE ATT&CK T1562：<https://attack.mitre.org/techniques/T1562/>
-
 
 ## 任务完成自检（声称完成前 MUST 通过）
 

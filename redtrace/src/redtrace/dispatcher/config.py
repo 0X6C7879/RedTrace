@@ -251,7 +251,6 @@ class RuntimeConfig(BaseModel):
     worker_healthcheck: WorkerHealthcheckMode = "startup_only"
     execution: ExecutionMode = "container"
     prompt_group: str = Field(min_length=1)
-    prompt_mode: Literal["cairn", "legacy"] = "cairn"
 
 
 class WorkerConfig(BaseModel):

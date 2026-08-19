@@ -7,8 +7,6 @@ description: C2 Listener, Session, Payload lifecycle — reverse shell, bind she
 
 C2 工作流。仅在需要 reverse/bind shell 或 C2 时加载。
 
-**加载后首先执行：** `redtrace-skill recall redtrace-c2`
-
 ## Listener
 
 - `redtrace-resource listener-create` — 创建 TCP reverse listener

@@ -10,7 +10,6 @@ description: |
 
 ## ACTION REQUIRED（读完后立刻执行）
 
-1. `NOW`: 运行 `redtrace-skill recall pwn-chain`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: 确认当前任务是否命中本 skill 的适用范围
 3. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
 4. `NEXT`: 缺工具时调用 bootstrap，不要猜路径

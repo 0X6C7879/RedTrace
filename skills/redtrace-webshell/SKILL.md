@@ -7,8 +7,6 @@ description: WebShell registration, operation, and lifecycle management via RedT
 
 WebShell 操作方法。仅在获取或操作 WebShell 时加载。
 
-**加载后首先执行：** `redtrace-skill recall redtrace-webshell`
-
 ## 注册
 
 - 用 `redtrace-resource webshell-create` 注册 WebShell

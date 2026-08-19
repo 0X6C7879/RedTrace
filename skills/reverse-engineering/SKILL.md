@@ -14,7 +14,6 @@ metadata:
 
 > 阶段门闩：`references/re-agent-workflow.md`（triage→static→dynamic→synthesis）。社区 RE skill 对照：`../references/community-security-skills.md`。
 
-1. `NOW`: 运行 `redtrace-skill recall reverse-engineering`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: 确认当前任务是否命中本 skill 的适用范围
 3. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
 4. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
@@ -201,7 +200,6 @@ Use [field-notes.md](field-notes.md) after the first round of triage when you kn
 - 遇到 CTF 模式 → `patterns*.md`
 
 **同级关联模块**: `apk-reverse/`（APK 定位到 .so 时可切回本模块的 Frida/radare2 分支）
-
 
 ## 任务完成自检（声称完成前 MUST 通过）
 

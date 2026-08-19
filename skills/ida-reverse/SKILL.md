@@ -12,7 +12,6 @@ description: |
 
 ## ACTION REQUIRED（读完后立刻执行）
 
-1. `NOW`: 运行 `redtrace-skill recall ida-reverse`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: 确认当前任务是否命中本 skill 的适用范围
 3. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
 4. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
@@ -341,7 +340,6 @@ ida-pro-mcp --config
 
 - IDA Pro 已安装且 `IDADIR` 环境变量已设置（或脚本内默认路径正确）
 - Python 已安装（idalib-mcp 依赖 Python）
-
 
 ## 任务完成自检（声称完成前 MUST 通过）
 

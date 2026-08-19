@@ -21,7 +21,6 @@ from redtrace.capabilities import (
 from redtrace.context_cli import __file__ as context_cli_file
 from redtrace.dispatcher.config import ContextHarnessConfig, LocalConfig
 from redtrace.dispatcher.prompting import (
-    add_blackboard_guidance,
     load_prompt,
     render_prompt,
 )
@@ -238,12 +237,10 @@ def test_context_config_is_bounded_and_exports_worker_environment() -> None:
         ContextHarnessConfig(artifact_root="../outside")
 
 
-def test_render_prompt_requires_chinese_with_english_protocol() -> None:
-    rendered = render_prompt("{task}", {"task": "执行任务"}, prompt_mode="legacy")
+def test_render_prompt_substitutes_replacements() -> None:
+    rendered = render_prompt("{task}", {"task": "执行任务"})
 
-    assert "自然语言及 JSON 自由文本值须用简体中文" in rendered
-    assert "JSON key、enum/status、phase" in rendered
-    assert "raw JSON contract 只输出 JSON" in rendered
+    assert "执行任务" in rendered
 
 
 def test_render_prompt_preserves_machine_readable_json_templates() -> None:
@@ -396,83 +393,6 @@ def test_log_preview_bounds_work_before_compacting() -> None:
 
     assert len(value) <= 103
     assert value.endswith("...")
-
-
-def test_prompt_guidance_reuses_existing_state_and_bounded_queries() -> None:
-    prompt = add_blackboard_guidance(
-        "task",
-        4,
-        context_harness_enabled=True,
-        prompt_mode="legacy",
-    )
-    disabled = add_blackboard_guidance(
-        "task",
-        4,
-        context_harness_enabled=False,
-        prompt_mode="legacy",
-    )
-
-    assert "redtrace-context run -- rtk" in prompt
-    assert "只为已确认结论写入 Fact" in prompt
-    assert "不得另建 Idea、Memory" in prompt
-    assert "优先使用原生 Web search/fetch" in prompt
-    assert "`brave-search` Skill 作为 fallback" in prompt
-    assert "## Active WebShell 与 C2 工作流" in prompt
-    assert "redtrace-resource snapshot --kind webshell" in prompt
-    assert "redtrace-resource webshell-create" in prompt
-    assert "redtrace-resource listener-create" in prompt
-    assert (
-        "redtrace-resource register --kind file --name <name> --target <workspace-path>"
-        in prompt
-    )
-    assert "--no-fact" not in prompt
-    assert "再用 `payload-oneliner`，或通过 `payload-build` 构建 Beacon" in prompt
-    assert "若无 session，不要止步" in prompt
-    assert "redtrace-resource changes --since <audit_cursor>" in prompt
-    assert "decision-point refresh，不是 timer" in prompt
-    assert "## 已知漏洞优先利用" in prompt
-    assert "至少执行一次实时 Web query" in prompt
-    assert (
-        "不得安装、clone 或同步批量漏洞库" in prompt
-    )
-    assert "只获取特定 PoC/EXP" in prompt
-    assert "向 Nuclei 传入明确的 template path" in prompt
-    assert "不得自动发现或更新 template" in prompt
-    assert "优先复用现有 PoC" in prompt
-    assert "确认漏洞后使用匹配的 EXP" in prompt
-    assert "执行顺序，不是 approval gate" in prompt
-    assert "才转向自定义漏洞发现" in prompt
-    assert "## 共享工具 Bootstrap" in prompt
-    assert "依据官方文档" in prompt
-    assert "$REDTRACE_TOOLS_DIR" in prompt
-    assert "$REDTRACE_TOOLS_BIN" in prompt
-    assert "禁止写系统目录或修改 shell rc 文件" in prompt
-    assert "`--version` 和最小 smoke check" in prompt
-    assert "不得循环或阻塞" in prompt
-    assert "## RedTrace 全自动执行覆盖规则" in prompt
-    assert "自动选择证据最充分" in prompt
-    assert "不得等待用户从下一步菜单中选择" in prompt
-    assert "Context Harness" not in disabled
-    assert prompt.rstrip().endswith("主任务字段必须完整。")
-    assert disabled.rstrip().endswith("主任务字段必须完整。")
-
-
-def test_prompt_guidance_is_scoped_by_task_type() -> None:
-    bootstrap = add_blackboard_guidance("task", 1, task_type="bootstrap", prompt_mode="legacy")
-    reason = add_blackboard_guidance("task", 1, task_type="reason", prompt_mode="legacy")
-    explore = add_blackboard_guidance("task", 1, task_type="explore", prompt_mode="legacy")
-
-    assert "已知漏洞优先利用" in bootstrap
-    assert "Active WebShell 与 C2" not in bootstrap
-    assert "已知漏洞优先利用" not in reason
-    assert "Active WebShell 与 C2" not in reason
-    assert "Context Harness" not in reason
-    assert "skill-evolution" in reason
-    assert "任务中优先加载 Skill" in bootstrap
-    assert "Active WebShell 与 C2" in explore
-    assert reason.rstrip().endswith("主任务字段必须完整。")
-    assert len(reason) < 1500
-    assert len(bootstrap) < len(explore)
 
 
 def test_context_harness_defaults_are_sized_for_long_tasks() -> None:

@@ -7,7 +7,6 @@ description: Use for free/open reverse engineering with Ghidra (headless or GUI)
 
 ## ACTION REQUIRED（读完后立刻执行）
 
-1. `NOW`: 运行 `redtrace-skill recall ghidra-reverse`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: 确认需要 **Ghidra**（无 IDA / 偏好开源 / 批量 headless）
 3. `NEXT`: 用 `command -v` 检测 ghidra / ghidra-mcp 路径
 4. `NEXT`: 缺工具 → bootstrap `ghidra-mcp`（若 manifest 支持）或按手动步骤装 Ghidra

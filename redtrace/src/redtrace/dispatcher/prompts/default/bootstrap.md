@@ -28,6 +28,7 @@
 - `fact.description` 必须清楚说明已经确认的关键客观结果。例如，在 CTF 场景中，可以包含多个 flag、shell、权限证明、关键利用结果以及类似证据。
 - `complete.description` 应说明为什么当前已经确认的结果足以证明 Goal 已经实现。
 - 不要把长数据块放入 `description`。长数据应写入文件，并在 `description` 中引用。
+- 当任务中产生经验证、可复用的新经验时，可按需加载 `skill-evolution` Skill。
 
 # 上下文
 

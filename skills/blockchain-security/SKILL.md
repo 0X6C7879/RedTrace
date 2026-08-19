@@ -6,7 +6,6 @@ description: Use for authorized blockchain, smart-contract and DeFi security res
 
 ## ACTION REQUIRED（读完后立刻执行）
 
-1. `NOW`: 运行 `redtrace-skill recall blockchain-security`，读取本 Skill 已验证的可复用经验。
 2. `NOW`: 确认任务是否命中本 Skill 适用范围（仅限 authorized 的区块链/智能合约/DeFi 安全研究）。
 3. `NEXT`: 运行 `python scripts/detect-stack.py <target>` 识别链 / VM / 语言 / 框架 / 协议类型。
 4. `NEXT`: 按需读取 `references/` 下对应文件（不要一次全读）。
@@ -88,4 +87,3 @@ Finding 不允许因为"Slither 报告了"就成立。至少满足：**Reachable
 - [ ] 每个 Finding 是否满足 Reachable + Attacker Controlled + Impact Demonstrated？
 - [ ] 是否用 `command -v` 检测工具、且没有自动安装任何东西？
 - [ ] 高危 Finding 是否给出了可复现 PoC / transaction sequence / before-after 状态？无法复现时是否标记 `unverified hypothesis`？
-- [ ] 是否通过 `redtrace-skill learn blockchain-security` 沉淀了可复用、已验证、非项目专属的经验？

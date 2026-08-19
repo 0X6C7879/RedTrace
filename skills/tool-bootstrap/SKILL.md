@@ -7,8 +7,6 @@ description: Missing tool installation workflow — find equivalents, verify OS/
 
 工具缺失时的安装流程。仅在需要新工具时加载。
 
-**加载后首先执行：** `redtrace-skill recall tool-bootstrap`
-
 ## 流程
 
 1. 先寻找已安装的等价工具并核验 OS/architecture

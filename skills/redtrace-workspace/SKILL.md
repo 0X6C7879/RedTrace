@@ -7,8 +7,6 @@ description: Multi-worker shared file collaboration rules, file Resources, lock/
 
 多 Worker 共享文件协作规则。仅在发生共享文件写冲突时加载。
 
-**加载后首先执行：** `redtrace-skill recall redtrace-workspace`
-
 ## 约定
 
 - 工作目录 = `$REDTRACE_WORKSPACE`（Runtime 自动设置）

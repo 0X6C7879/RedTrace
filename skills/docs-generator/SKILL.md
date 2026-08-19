@@ -135,7 +135,6 @@ For README, API endpoint, and file organization templates, see [references/templ
 - `Skill(ce:writer)` - Writing style, tone, and voice (load The Engineer persona)
 - `Skill(ce:visualizing-with-mermaid)` - Architecture and flow diagrams
 
-
 ---
 
 ## 按需自举（On-Demand Bootstrap）
@@ -158,11 +157,9 @@ For README, API endpoint, and file organization templates, see [references/templ
 - `radare2/` — CLI 分析完成后生成逆向报告
 - `js-reverse/` — JS 签名逆向完成后生成签名报告
 - `reverse-engineering/` — 通用逆向完成后生成逆向报告
-- `redtrace-skill learn docs-generator ...` — 仅把已验证且可复用的方法沉淀为经验
 
 **安全报告模板**: `references/security-report-templates.md`
 **通用文档模板**: `references/templates.md`
-
 
 ## 任务完成自检（声称完成前 MUST 通过）
 

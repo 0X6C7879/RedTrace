@@ -229,21 +229,6 @@ def learn(args: argparse.Namespace) -> dict[str, Any]:
     _require_skill_runtime()
     skills = _skills_dir()
     name = _skill(skills, args.skill)
-    # FAIL-CLOSED: cairn mode requires explicit session allowlist
-    prompt_mode = _env("REDTRACE_PROMPT_MODE", "legacy")
-    if prompt_mode == "cairn":
-        loaded = _session_loaded_skills()
-        if not loaded or name not in loaded:
-            raise ValueError(
-                f"cairn mode: skill '{name}' not in session loaded set "
-                f"(loaded={sorted(loaded) if loaded else 'EMPTY/MISSING'}). "
-                f"Only skills actually loaded in this session may be learned."
-            )
-    else:
-        # Legacy: permissive (empty loaded set = no restriction)
-        loaded = _session_loaded_skills()
-        if loaded and name not in loaded:
-            raise ValueError(f"skill '{name}' was not loaded in this session; allowed: {sorted(loaded)}")
     summary = _sanitize(_one_line(args.summary, "--summary", 240))
     evidence = _sanitize(_one_line(args.evidence, "--evidence", 500))
     content = _sanitize(_content_file(args.content_file).strip())

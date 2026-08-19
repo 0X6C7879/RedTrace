@@ -454,7 +454,6 @@ def run_worker_process(
     blackboard_inbox: BlackboardInbox | None = None,
     live_control: Any | None = None,
     session: str | None = None,
-    prompt_mode: str = "legacy",
     env_overrides: dict[str, str] | None = None,
 ) -> ProcessResult:
     LOG.info(
@@ -520,11 +519,6 @@ def run_worker_process(
             )
         )
         process_env["REDTRACE_BLACKBOARD_NOTICE"] = notice_path
-        # Session-level skill tracking (cairn mode only)
-        tracking_path = resolve_session_skill_tracking_path(container_name, session)
-        if prompt_mode == "cairn" and tracking_path is not None:
-            process_env["REDTRACE_LOADED_SKILLS_FILE"] = str(tracking_path)
-            process_env["REDTRACE_PROMPT_MODE"] = "cairn"
         if lease is not None and blackboard_inbox is None:
             def publish_blackboard_notice(previous: int, current: int) -> None:
                 payload = client.blackboard_changes(
