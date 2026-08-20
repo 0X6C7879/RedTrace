@@ -1,30 +1,28 @@
 """User-level Skill home management.
 
 RedTrace manages the canonical Skill store (``<root>/skills``); agents load
-Skills natively from their own user-level Skill directories. This module keeps
-those two facts consistent by pointing every agent's native Skill root at the
-canonical store through a single directory link::
+Skills natively from their own user-level Skill directories. This module
+keeps the two consistent by appending one directory link per Skill into each
+agent's native Skill directory::
 
-    ~/.claude/skills      -> <RedTrace>/skills
-    ~/.codex/skills       -> <RedTrace>/skills
-    ~/.pi/agent/skills    -> <RedTrace>/skills
+    ~/.claude/skills/<name>   -> <RedTrace>/skills/<name>
+    ~/.codex/skills/<name>    -> <RedTrace>/skills/<name>
+    ~/.pi/agent/skills/<name> -> <RedTrace>/skills/<name>
 
-Because the agents read through the link, edits in the canonical store are
-visible immediately — no copy, sync, or watcher. ``ensure_agent_skill_roots``
-is idempotent and never deletes pre-existing user Skills: a real directory is
-migrated into the canonical store first (name collisions are reported and the
-originals are preserved in a timestamped backup), and a link that points at a
-different live directory is refused instead of silently replaced.
+The user's own directory is never replaced, migrated, or backed up — only
+links that RedTrace itself created are ever touched. The sync is idempotent:
+re-running it adds missing links, repairs stale ones (for example after the
+checkout moved), and removes links whose Skill was disabled or deleted,
+while user entries (real directories, files, or links pointing elsewhere)
+are left strictly alone. A Skill name the user already occupies is reported
+as a conflict, never overwritten.
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
-import shutil
 import subprocess
-from datetime import datetime
 from pathlib import Path
 
 LOG = logging.getLogger(__name__)
@@ -36,44 +34,13 @@ AGENT_SKILL_HOME_RELATIVE: dict[str, tuple[str, ...]] = {
     "pi": (".pi", "agent", "skills"),
 }
 
-_BACKUP_PREFIX = "redtrace-backup-"
-
 
 class SkillHomeError(RuntimeError):
-    """Raised when an agent Skill home cannot be linked to the canonical store."""
+    """Raised when an agent Skill home cannot be synced with the store."""
 
 
-def ensure_directory_link(link: Path, target: Path) -> None:
-    """Ensure ``link`` is a directory link pointing at ``target``.
-
-    Idempotent and self-healing: a link whose target no longer exists (for
-    example after the RedTrace checkout moved) is re-created, but a link that
-    deliberately points at another live directory is never silently replaced.
-    A real directory or a regular file at ``link`` is an error — callers that
-    own the directory must migrate it first (see ``ensure_agent_skill_roots``).
-    """
-    target = target.resolve()
-    if not target.is_dir():
-        raise SkillHomeError(f"Skill link target is not a directory: {target}")
-    is_junction = bool(hasattr(link, "is_junction") and link.is_junction())
-    if link.is_symlink() or is_junction:
-        if link.resolve(strict=False) == target:
-            return
-        if link.resolve(strict=False).exists():
-            raise SkillHomeError(
-                f"refusing to replace {link}: it points at "
-                f"{link.resolve(strict=False)}, not {target}"
-            )
-        # Stale link (its target disappeared); safe to repair.
-        if link.is_symlink():
-            link.unlink()
-        else:
-            link.rmdir()
-    elif link.exists():
-        raise SkillHomeError(
-            f"refusing to replace {link}: it is a real {'file' if link.is_file() else 'directory'}"
-        )
-    _create_directory_link(link, target)
+def _is_link(path: Path) -> bool:
+    return path.is_symlink() or bool(hasattr(path, "is_junction") and path.is_junction())
 
 
 def _create_directory_link(link: Path, target: Path) -> None:
@@ -97,108 +64,148 @@ def _create_directory_link(link: Path, target: Path) -> None:
         )
 
 
-def _entry_signature(entry: Path) -> str | None:
-    """Content hash used to decide whether two same-named Skills are identical."""
-    try:
-        entrypoint = entry / "SKILL.md"
-        if entrypoint.is_file():
-            payload = entrypoint.read_bytes()
-        elif entry.is_file():
-            payload = entry.read_bytes()
-        else:
-            return None
-    except OSError:
-        return None
-    return hashlib.sha256(payload).hexdigest()
+def ensure_directory_link(link: Path, target: Path) -> None:
+    """Ensure ``link`` is a directory link pointing at ``target``.
 
-
-def _is_skill_entry(entry: Path) -> bool:
-    if entry.name.startswith("."):
-        return False
-    if entry.is_symlink():
-        return (entry / "SKILL.md").is_file()
-    return entry.is_dir() and (entry / "SKILL.md").is_file()
-
-
-def _move_entry(entry: Path, destination: Path) -> None:
-    if entry.is_symlink():
-        # Recreate the link with an absolute target: a relative link would
-        # break once it lives under the canonical store.
-        target = os.readlink(entry)
-        if not os.path.isabs(target):
-            target = str((entry.parent / target).resolve(strict=False))
-        destination.symlink_to(target)
-        entry.unlink()
-        return
-    shutil.move(str(entry), str(destination))
-
-
-def _migrate_skill_entries(source: Path, canonical: Path) -> list[str]:
-    """Move user Skills from ``source`` into the canonical store.
-
-    Returns the names that could not be migrated because a different Skill
-    with the same name already exists in the store. Everything that is not a
-    Skill (or could not be migrated) stays in ``source`` for the caller to
-    preserve as a backup.
+    Idempotent and self-healing: a link whose target no longer exists (for
+    example after the RedTrace checkout moved) is re-created, but a link
+    that deliberately points at another live directory is never silently
+    replaced. A real directory or a regular file at ``link`` is an error —
+    this helper is only for locations RedTrace owns.
     """
+    target = target.resolve()
+    if not target.is_dir():
+        raise SkillHomeError(f"Skill link target is not a directory: {target}")
+    if _is_link(link):
+        if link.resolve(strict=False) == target:
+            return
+        if link.resolve(strict=False).exists():
+            raise SkillHomeError(
+                f"refusing to replace {link}: it points at "
+                f"{link.resolve(strict=False)}, not {target}"
+            )
+        # Stale link (its target disappeared); safe to repair.
+        if link.is_symlink():
+            link.unlink()
+        else:
+            link.rmdir()
+    elif link.exists():
+        raise SkillHomeError(
+            f"refusing to replace {link}: it is a real "
+            f"{'file' if link.is_file() else 'directory'}"
+        )
+    _create_directory_link(link, target)
+
+
+def _points_into_store(link: Path, store: Path, disabled_root: Path) -> bool:
+    """True when ``link`` is a RedTrace-managed link into the Skill store."""
+    if not _is_link(link):
+        return False
+    try:
+        target = link.resolve(strict=False)
+    except OSError:
+        return False
+    return store == target or store in target.parents or (
+        disabled_root == target or disabled_root in target.parents
+    )
+
+
+def _remove_link(link: Path) -> None:
+    if link.is_symlink():
+        link.unlink()
+    else:
+        link.rmdir()
+
+
+def _sync_agent_skill_home(
+    user_dir: Path,
+    store: Path,
+    disabled_root: Path,
+    skill_names: set[str],
+) -> list[str]:
+    """Append one link per store Skill into ``user_dir``; remove stale ones.
+
+    Returns the names the user already occupies (their entry is kept and the
+    store Skill stays invisible for this agent).
+    """
+    if _is_link(user_dir):
+        if user_dir.resolve(strict=False) == store:
+            # A root link from an earlier RedTrace release already exposes
+            # the whole store; appending per-Skill links into it would create
+            # self-referencing loops.
+            return []
+        # The user's own link to their Skill hub: append through it.
+    if user_dir.exists() and not user_dir.is_dir():
+        raise SkillHomeError(
+            f"agent Skill home is not a directory: {user_dir}"
+        )
+    user_dir.mkdir(parents=True, exist_ok=True)
+
     conflicts: list[str] = []
-    for entry in sorted(source.iterdir()):
-        if not _is_skill_entry(entry):
-            continue
-        destination = canonical / entry.name
-        if destination.exists() or destination.is_symlink():
-            existing = _entry_signature(destination)
-            incoming = _entry_signature(entry)
-            if existing is not None and existing == incoming:
+    for name in sorted(skill_names):
+        entry = user_dir / name
+        target = (store / name).resolve()
+        if _is_link(entry):
+            if entry.resolve(strict=False) == target:
                 continue
-            conflicts.append(entry.name)
+            if _points_into_store(entry, store, disabled_root) or not (
+                entry.resolve(strict=False).exists()
+            ):
+                # Our own stale link (moved store, renamed Skill) or a
+                # dangling link of the same name — repair it.
+                _remove_link(entry)
+                _create_directory_link(entry, target)
+                continue
+            conflicts.append(name)
             continue
-        try:
-            _move_entry(entry, destination)
-        except OSError as exc:
-            LOG.error("cannot migrate Skill %s into %s: %s", entry.name, canonical, exc)
-            conflicts.append(entry.name)
+        if entry.exists():
+            # The user's own real directory or file shadows this Skill.
+            conflicts.append(name)
+            continue
+        _create_directory_link(entry, target)
+
+    # Remove RedTrace links whose Skill was disabled or deleted while the
+    # user's own entries stay untouched.
+    try:
+        existing = list(user_dir.iterdir())
+    except OSError:
+        return conflicts
+    for entry in existing:
+        if not _is_link(entry) or not _points_into_store(entry, store, disabled_root):
+            continue
+        target = entry.resolve(strict=False)
+        keep = (
+            entry.name in skill_names
+            and target == (store / entry.name).resolve()
+        )
+        if not keep:
+            _remove_link(entry)
     return conflicts
 
 
-def _backup_directory(source: Path) -> Path:
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup = source.with_name(f"{source.name}.{_BACKUP_PREFIX}{stamp}")
-    while backup.exists():
-        backup = backup.with_name(backup.name + "-1")
-    source.rename(backup)
-    return backup
-
-
 def ensure_agent_skill_roots(skills_dir: str | Path) -> None:
-    """Point every agent's native Skill root at the canonical Skill store."""
-    canonical = Path(skills_dir).resolve()
-    canonical.mkdir(parents=True, exist_ok=True)
+    """Sync every agent's native Skill home with the canonical Skill store.
+
+    Appends one directory link per enabled Skill into ``~/.claude/skills``,
+    ``~/.codex/skills`` and ``~/.pi/agent/skills``. Idempotent; never
+    replaces, migrates, or deletes user-owned entries.
+    """
+    store = Path(skills_dir).resolve()
+    store.mkdir(parents=True, exist_ok=True)
+    disabled_root = store.parent / "disabled-skills"
+    skill_names = {
+        directory.name
+        for directory in store.iterdir()
+        if directory.is_dir() and (directory / "SKILL.md").is_file()
+    }
     home = Path.home()
     for agent, relative in AGENT_SKILL_HOME_RELATIVE.items():
-        link = home.joinpath(*relative)
-        if not link.is_symlink() and not (
-            hasattr(link, "is_junction") and link.is_junction()
-        ) and link.is_dir():
-            conflicts = _migrate_skill_entries(link, canonical)
-            if conflicts:
-                LOG.error(
-                    "Skill home %s has name conflicts with the canonical store "
-                    "(kept in the pre-link backup): %s",
-                    link,
-                    ", ".join(sorted(conflicts)),
-                )
-            try:
-                next(link.iterdir())
-            except StopIteration:
-                link.rmdir()
-            else:
-                backup = _backup_directory(link)
-                LOG.info(
-                    "migrated user Skills from %s into %s; "
-                    "originals preserved in %s",
-                    link,
-                    canonical,
-                    backup,
-                )
-        ensure_directory_link(link, canonical)
+        user_dir = home.joinpath(*relative)
+        conflicts = _sync_agent_skill_home(user_dir, store, disabled_root, skill_names)
+        if conflicts:
+            LOG.warning(
+                "agent %s keeps its own entries for %s; the canonical store "
+                "versions stay hidden for this agent",
+                agent,
+                ", ".join(sorted(conflicts)),
+            )

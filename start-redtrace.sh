@@ -231,6 +231,26 @@ export TMP="$TMPDIR"
 export TEMP="$TMPDIR"
 ensure_project_environment
 uv sync --project "$PROJECT_DIR"
+
+# Sync the agents' user-level Skill homes with the canonical store:
+# one link per Skill is appended into ~/.claude/skills, ~/.codex/skills
+# and ~/.pi/agent/skills so Claude, Codex and Pi load RedTrace Skills
+# natively. Idempotent; user-owned entries are never replaced and
+# conflicts are kept (the user's version wins).
+printf 'Linking agent Skill homes to the canonical Skill store ...\n'
+REDTRACE_DISPATCH_CONFIG="$CONFIG_PATH" \
+  uv run --no-sync --project "$PROJECT_DIR" python -c '
+from pathlib import Path
+import os
+from redtrace.dispatcher.config import DispatchConfig
+from redtrace.skill_home import ensure_agent_skill_roots
+config = DispatchConfig.load(Path(os.environ["REDTRACE_DISPATCH_CONFIG"]))
+if config.runtime.execution == "local":
+    skills = config.paths.layout().skills
+    ensure_agent_skill_roots(skills)
+    print(f"agent Skill homes -> {skills}")
+' || die "cannot link agent Skill homes to the canonical Skill store"
+
 trap cleanup EXIT
 trap 'handle_signal 130' INT
 trap 'handle_signal 143' TERM

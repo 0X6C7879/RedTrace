@@ -50,9 +50,6 @@ def _skills_dir() -> Path:
 
 
 def _memory_dir(skills_dir: Path, name: str) -> Path:
-    override = _env("REDTRACE_SKILL_MEMORY_DIR")
-    if override:
-        return Path(override).resolve() / name
     return skills_dir / name / "memory"
 
 

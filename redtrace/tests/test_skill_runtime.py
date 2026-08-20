@@ -4,8 +4,7 @@ These tests pin the final closure of the Skill learning loop:
 
 - Skill memory lives in each skill's own ``memory/`` directory
   (``skills/<name>/memory/records.jsonl`` and ``audit.jsonl``), not in a
-  central store.  The ``REDTRACE_SKILL_MEMORY_DIR`` env var is only an
-  optional override; by default it is not set.
+  central store.
 - Learning decisions belong to the model: ``learn()`` enforces only
   mechanical safety (sanitization, dedup, format limits, reason isolation,
   canonical skill names) and is deliberately independent of the loaded-skill

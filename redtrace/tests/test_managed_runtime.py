@@ -177,7 +177,7 @@ def test_contained_path_rejects_traversal_and_root_deletion(tmp_path: Path) -> N
         contained_path(Path(Path.cwd().anchor), "project")
 
 
-def test_agent_skill_roots_recover_after_project_move(
+def test_agent_skill_roots_append_and_recover_after_project_move(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -188,82 +188,119 @@ def test_agent_skill_roots_recover_after_project_move(
         "# portable\n",
         encoding="utf-8",
     )
-    layout.mcp.mkdir()
     empty_home = tmp_path / "home"
     empty_home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: empty_home))
 
     ensure_agent_skill_roots(layout.skills)
+    for relative in ((".claude", "skills"), (".codex", "skills"), (".pi", "agent", "skills")):
+        user_dir = empty_home.joinpath(*relative)
+        assert user_dir.is_dir() and not user_dir.is_symlink()
+        assert (user_dir / "portable").is_symlink()
+        assert (user_dir / "portable").resolve() == (layout.skills / "portable").resolve()
+
+    # Idempotent: a second run leaves exactly the same state.
+    ensure_agent_skill_roots(layout.skills)
+    assert len(list((empty_home / ".claude" / "skills").iterdir())) == 1
+
     moved = tmp_path / "redtrace-after"
     root.rename(moved)
     moved_layout = _layout(moved)
 
-    # A moved checkout leaves stale links; re-running the initializer
-    # repairs them because the old target no longer exists.
+    # A moved checkout leaves dangling links; re-running repairs them.
     ensure_agent_skill_roots(moved_layout.skills)
-
     for relative in ((".claude", "skills"), (".codex", "skills"), (".pi", "agent", "skills")):
-        link = empty_home.joinpath(*relative)
+        link = empty_home.joinpath(*relative, "portable")
         assert link.is_symlink()
-        assert link.resolve() == moved_layout.skills.resolve()
+        assert link.resolve() == (moved_layout.skills / "portable").resolve()
     assert (empty_home / ".claude" / "skills" / "portable" / "SKILL.md").is_file()
 
 
-def test_agent_skill_roots_migrate_existing_user_skills(
+def test_agent_skill_roots_append_without_touching_user_entries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    root = tmp_path / "redtrace"
-    layout = _layout(root)
-    (layout.skills / "existing").mkdir(parents=True)
-    (layout.skills / "existing" / "SKILL.md").write_text(
-        "# existing\n", encoding="utf-8"
-    )
+    layout = _layout(tmp_path / "redtrace")
+    for name, text in (("recon", "# recon\n"), ("shared", "# store version\n")):
+        (layout.skills / name).mkdir(parents=True)
+        (layout.skills / name / "SKILL.md").write_text(text, encoding="utf-8")
     home = tmp_path / "home"
     claude_skills = home / ".claude" / "skills"
-    # A distinct user Skill migrates into the canonical store, a duplicate
-    # with identical content is deduplicated, and a conflicting Skill of the
-    # same name is preserved in the pre-link backup instead of overwritten.
+    # The user's own entries: a real Skill, a same-name real Skill that
+    # shadows the store version, a plain file, and a link to their own hub.
     (claude_skills / "personal").mkdir(parents=True)
     (claude_skills / "personal" / "SKILL.md").write_text("# personal\n", encoding="utf-8")
-    (claude_skills / "existing").mkdir()
-    (claude_skills / "existing" / "SKILL.md").write_text("# existing\n", encoding="utf-8")
-    (claude_skills / "conflict").mkdir()
-    (claude_skills / "conflict" / "SKILL.md").write_text("# user version\n", encoding="utf-8")
-    (layout.skills / "conflict").mkdir()
-    (layout.skills / "conflict" / "SKILL.md").write_text("# store version\n", encoding="utf-8")
+    (claude_skills / "shared").mkdir()
+    (claude_skills / "shared" / "SKILL.md").write_text("# user version\n", encoding="utf-8")
     (claude_skills / "notes.txt").write_text("not a skill\n", encoding="utf-8")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
 
     ensure_agent_skill_roots(layout.skills)
 
-    assert claude_skills.is_symlink()
-    assert claude_skills.resolve() == layout.skills.resolve()
-    assert (layout.skills / "personal" / "SKILL.md").read_text(encoding="utf-8") == "# personal\n"
-    backups = sorted((home / ".claude").glob("skills.redtrace-backup-*"))
-    assert len(backups) == 1
-    assert (backups[0] / "conflict" / "SKILL.md").read_text(encoding="utf-8") == "# user version\n"
-    assert (backups[0] / "notes.txt").is_file()
+    # The user directory itself stays a real directory — no replacement,
+    # no migration, no backup.
+    assert claude_skills.is_dir() and not claude_skills.is_symlink()
+    assert not list((home / ".claude").glob("skills.redtrace-backup-*"))
+    # Store Skills appear as appended links...
+    assert (claude_skills / "recon").is_symlink()
+    assert (claude_skills / "recon" / "SKILL.md").read_text(encoding="utf-8") == "# recon\n"
+    # ...while every user entry is preserved untouched, including the
+    # same-name conflict, which keeps the user's version.
+    assert (claude_skills / "personal" / "SKILL.md").read_text(encoding="utf-8") == "# personal\n"
+    assert not (claude_skills / "shared").is_symlink()
+    assert (claude_skills / "shared" / "SKILL.md").read_text(encoding="utf-8") == "# user version\n"
+    assert (claude_skills / "notes.txt").read_text(encoding="utf-8") == "not a skill\n"
 
 
-def test_agent_skill_roots_refuse_foreign_live_link(
+def test_agent_skill_roots_append_through_user_hub_link_and_prune_stale(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     layout = _layout(tmp_path / "redtrace")
     (layout.skills / "recon").mkdir(parents=True)
     (layout.skills / "recon" / "SKILL.md").write_text("# recon\n", encoding="utf-8")
-    other = tmp_path / "other-skills"
-    other.mkdir()
+    home = tmp_path / "home"
+    hub = tmp_path / "hub" / "skills"
+    hub.mkdir(parents=True)
+    claude_skills = home / ".claude" / "skills"
+    claude_skills.parent.mkdir(parents=True)
+    claude_skills.symlink_to(hub, target_is_directory=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    # The user's native skills directory is their own link to a hub;
+    # appending goes through it without replacing the link.
+    ensure_agent_skill_roots(layout.skills)
+    assert claude_skills.is_symlink()
+    assert claude_skills.resolve() == hub.resolve()
+    assert (hub / "recon").is_symlink()
+
+    # Disabling (moving out of skills/) prunes RedTrace's own link on the
+    # next sync while hub entries that are not ours stay untouched.
+    (hub / "user-entry").mkdir()
+    disabled = tmp_path / "redtrace" / "disabled-skills"
+    disabled.mkdir()
+    (layout.skills / "recon").rename(disabled / "recon")
+    ensure_agent_skill_roots(layout.skills)
+    assert not (hub / "recon").exists()
+    assert (hub / "user-entry").is_dir()
+
+
+def test_agent_skill_roots_refuse_regular_file_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = _layout(tmp_path / "redtrace")
+    (layout.skills / "recon").mkdir(parents=True)
+    (layout.skills / "recon" / "SKILL.md").write_text("# recon\n", encoding="utf-8")
     home = tmp_path / "home"
     claude_skills = home / ".claude" / "skills"
     claude_skills.parent.mkdir(parents=True)
-    claude_skills.symlink_to(other, target_is_directory=True)
+    claude_skills.write_text("not a directory\n", encoding="utf-8")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
 
     with pytest.raises(SkillHomeError):
         ensure_agent_skill_roots(layout.skills)
-    assert claude_skills.resolve() == other.resolve()
+    assert claude_skills.read_text(encoding="utf-8") == "not a directory\n"
 
 
 def test_runtime_defaults_to_per_skill_memory(
@@ -285,8 +322,8 @@ def test_runtime_defaults_to_per_skill_memory(
     AgentRuntimeManager(layout, execution="local").initialize([worker])
 
     assert "REDTRACE_GLOBAL_INSTRUCTIONS" not in worker.env
-    # REDTRACE_SKILL_MEMORY_DIR is not set by default — skill memory lives
-    # inside each skill's own directory (skills/<name>/memory/).
+    # Skill memory lives inside each skill's own directory
+    # (skills/<name>/memory/); no separate memory env var exists.
     assert "REDTRACE_SKILL_MEMORY_DIR" not in worker.env
     assert (layout.skills / "api-security" / "memory").is_dir()
     assert not (layout.skills / ".redtrace" / "learning").exists()
