@@ -300,10 +300,12 @@ def test_local_backend_keeps_agent_config_linked_and_sessions_outside_workspace(
         encoding="utf-8"
     )
     assert not (state / "sessions").exists()
-    assert (workspace / ".pi" / "mcp.json").resolve() == user_pi_mcp.resolve()
+    runtime_dir = workspace.parent / "runtime"
+    assert (runtime_dir / ".pi" / "mcp.json").resolve() == user_pi_mcp.resolve()
     # The task workspace never receives Skill copies or links; the agent's
     # session config home gets a Skills link to the canonical store instead,
     # so native discovery finds the same directory the user-level roots use.
+    assert not (workspace / ".pi").exists()
     assert not (workspace / ".agents").exists()
     assert not (workspace / ".claude").exists()
     assert (state / "skills").is_symlink()

@@ -201,6 +201,10 @@ def test_deletion_failure_is_visible_and_retry_finishes_cleanup(
         assert conn.execute(
             "SELECT 1 FROM resource_audit_events WHERE resource_id = 'file-drop'"
         ).fetchone() is None
+        assert conn.execute(
+            "SELECT 1 FROM project_lifecycle_events WHERE project_id = ?",
+            (project_id,),
+        ).fetchone() is None
     assert conversation_marker.encode() not in (tmp_path / "redtrace.db").read_bytes()
 
 

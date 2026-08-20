@@ -97,15 +97,17 @@ class LocalBackend:
                 f"active project workspace integrity failure: {project_dir} disappeared"
             )
         _ensure_directory(project_dir)
-        _ensure_directory(self._cache_dir(project_id))
-        _ensure_directory(self._runtime_dir(project_id))
+        cache_dir = self._cache_dir(project_id)
+        runtime_dir = self._runtime_dir(project_id)
+        _ensure_directory(cache_dir)
+        _ensure_directory(runtime_dir)
         _ensure_directory(marker.parent)
         marker.touch(exist_ok=True)
         # MCP config lives at user level (~/.pi/agent/mcp.json), symlink
-        # into the workspace so Pi discovers it without per-project copies.
+        # into the runtime directory so Pi discovers it without polluting workspace.
         user_pi_mcp = Path.home() / ".pi" / "agent" / "mcp.json"
         if user_pi_mcp.is_file():
-            target = project_dir / ".pi" / "mcp.json"
+            target = runtime_dir / ".pi" / "mcp.json"
             _ensure_directory(target.parent)
             if target.is_symlink() and target.resolve(strict=False) != user_pi_mcp.resolve():
                 with contextlib.suppress(FileNotFoundError):

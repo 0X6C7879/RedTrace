@@ -182,6 +182,11 @@ def report_runtime_cleanup(
                 """,
                 (project_id, *durable),
             )
+            # project_lifecycle_events has no FK to projects — clean explicitly
+            conn.execute(
+                "DELETE FROM project_lifecycle_events WHERE project_id = ?",
+                (project_id,),
+            )
             conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
             conn.execute(
                 "DELETE FROM project_deletions WHERE project_id = ?",
