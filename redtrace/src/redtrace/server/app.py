@@ -16,7 +16,6 @@ from redtrace.server.routers import (
     hints,
     intents,
     operations,
-    plugins,
     projects,
     settings,
     workers,
@@ -55,7 +54,6 @@ app.include_router(capabilities.router)
 app.include_router(blackboard.router)
 app.include_router(operations.router)
 app.include_router(workers.router)
-app.include_router(plugins.router)
 
 
 @app.get("/", include_in_schema=False)

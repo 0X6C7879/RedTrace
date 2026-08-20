@@ -57,7 +57,6 @@ class LocalBackend:
                 paths.root,
                 skills_dir=paths.skills,
                 mcp_dir=paths.mcp,
-                plugins_dir=paths.plugins,
             )
             if paths is not None
             else None

@@ -2,9 +2,14 @@
 
 These tests pin the final closure of the Skill learning loop:
 
-- Skill tracking lifecycle is decoupled from the provider session id.
-  A task-identity tracking file is created at task start (bootstrap/explore)
-  and seeded with the professional skills exposed for that task.
+- Skill memory lives in each skill's own ``memory/`` directory
+  (``skills/<name>/memory/records.jsonl`` and ``audit.jsonl``), not in a
+  central store.  The ``REDTRACE_SKILL_MEMORY_DIR`` env var is only an
+  optional override; by default it is not set.
+- The loaded-skill tracking file is **not** pre-seeded with all exposed
+  skills at task start.  Only skills the agent explicitly records via
+  ``redtrace-skill track-load`` are considered loaded, so ``learn()``'s
+  fail-closed gate reflects actual usage rather than mere availability.
 - ``recall()`` only reads memory and never fakes a loaded skill.
 - ``learn()`` is fail-closed: it rejects skills not recorded as loaded,
   including the empty/missing tracking file case.
@@ -42,9 +47,8 @@ def _env(monkeypatch, tmp_path: Path) -> tuple[Path, Path, Path]:
     )
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    memory = tmp_path / ".redtrace" / "skill-memory"
+    memory = skills / "api-security" / "memory"
     monkeypatch.setenv("REDTRACE_SKILLS_DIR", str(skills))
-    monkeypatch.setenv("REDTRACE_SKILL_MEMORY_DIR", str(memory))
     monkeypatch.setenv("REDTRACE_WORKSPACE", str(workspace))
     monkeypatch.setenv("REDTRACE_PROJECT_ID", "project-1")
     monkeypatch.setenv("REDTRACE_INTENT_ID", "intent-1")
@@ -105,7 +109,7 @@ def test_learning_is_sanitized_deduplicated_and_recalled(tmp_path: Path, monkeyp
 
     assert learn(args)["status"] == "stored"
     assert learn(args)["status"] == "duplicate"
-    stored = (memory / "api-security.jsonl").read_text(encoding="utf-8")
+    stored = (memory / "records.jsonl").read_text(encoding="utf-8")
     assert "supersecret" not in stored
     assert "target.example" not in stored
     assert str(workspace) not in stored
@@ -180,7 +184,7 @@ def test_learning_deduplicates_near_equivalent_wording(
     assert stored["status"] == "stored"
     assert duplicate["status"] == "duplicate"
     assert duplicate["match"] == "similar"
-    lines = (memory / "api-security.jsonl").read_text(encoding="utf-8").splitlines()
+    lines = (memory / "records.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
 
 
@@ -350,90 +354,35 @@ def test_resolve_skill_tracking_path_independent_of_session(tmp_path: Path) -> N
     )
 
 
-def test_bootstrap_task_start_creates_tracking_file(tmp_path: Path) -> None:
-    """Bootstrap Task start must create a tracking file, independent of session."""
-    from redtrace.dispatcher.tasks.common import (
-        _seed_loaded_skills,
-        resolve_skill_tracking_path,
-    )
+def test_bootstrap_task_tracking_not_pre_seeded(tmp_path: Path) -> None:
+    """Bootstrap task start must NOT pre-seed the tracking file.
+
+    Exposed skills are available, not loaded. Only an explicit
+    ``track-load`` call creates the tracking file.
+    """
+    from redtrace.dispatcher.tasks.common import resolve_skill_tracking_path
 
     tracking = resolve_skill_tracking_path(
         str(tmp_path), "bootstrap", "proj_b", "intent_b", "claude-w"
     )
     assert tracking is not None
-    _seed_loaded_skills(
-        tracking, json.dumps([str(tmp_path / "skills" / "api-security")])
-    )
-    assert tracking.is_file()
-    assert "api-security" in tracking.read_text(encoding="utf-8")
+    # No seeding: the file does not exist until track-load is called.
+    assert not tracking.exists()
 
 
-def test_explore_task_start_creates_tracking_file(tmp_path: Path) -> None:
-    """Explore Task start must create a tracking file, independent of session."""
-    from redtrace.dispatcher.tasks.common import (
-        _seed_loaded_skills,
-        resolve_skill_tracking_path,
-    )
+def test_explore_task_tracking_not_pre_seeded(tmp_path: Path) -> None:
+    """Explore task start must NOT pre-seed the tracking file."""
+    from redtrace.dispatcher.tasks.common import resolve_skill_tracking_path
 
     tracking = resolve_skill_tracking_path(
         str(tmp_path), "explore", "proj_e", "intent_e", "codex-w"
     )
     assert tracking is not None
-    _seed_loaded_skills(
-        tracking, json.dumps([str(tmp_path / "skills" / "reverse-engineering")])
-    )
-    assert tracking.is_file()
-    assert "reverse-engineering" in tracking.read_text(encoding="utf-8")
-
-
-def test_seed_excludes_skill_evolution(tmp_path: Path) -> None:
-    """skill-evolution is never auto-seeded so learn(skill-evolution) fails."""
-    from redtrace.dispatcher.tasks.common import (
-        _seed_loaded_skills,
-        resolve_skill_tracking_path,
-    )
-
-    tracking = resolve_skill_tracking_path(
-        str(tmp_path), "explore", "proj_s", "intent_s", "pi-w"
-    )
-    assert tracking is not None
-    _seed_loaded_skills(
-        tracking,
-        json.dumps(
-            [
-                str(tmp_path / "skills" / "api-security"),
-                str(tmp_path / "skills" / "skill-evolution"),
-            ]
-        ),
-    )
-    loaded = json.loads(tracking.read_text(encoding="utf-8"))
-    assert "api-security" in loaded
-    assert "skill-evolution" not in loaded
-
-
-def test_seed_merges_with_existing_tracking(tmp_path: Path) -> None:
-    """Seeding merges with (not overwrites) any existing tracking records."""
-    from redtrace.dispatcher.tasks.common import (
-        _seed_loaded_skills,
-        resolve_skill_tracking_path,
-    )
-
-    tracking = resolve_skill_tracking_path(
-        str(tmp_path), "explore", "proj_m", "intent_m", "pi-w"
-    )
-    assert tracking is not None
-    tracking.parent.mkdir(parents=True, exist_ok=True)
-    tracking.write_text(json.dumps(["agent-loaded-by-track"]), encoding="utf-8")
-    _seed_loaded_skills(
-        tracking, json.dumps([str(tmp_path / "skills" / "api-security")])
-    )
-    loaded = json.loads(tracking.read_text(encoding="utf-8"))
-    assert set(loaded) == {"agent-loaded-by-track", "api-security"}
+    assert not tracking.exists()
 
 
 def test_cleanup_skill_tracking_removes_file(tmp_path: Path) -> None:
     from redtrace.dispatcher.tasks.common import (
-        _seed_loaded_skills,
         cleanup_skill_tracking,
         resolve_skill_tracking_path,
     )
@@ -442,42 +391,50 @@ def test_cleanup_skill_tracking_removes_file(tmp_path: Path) -> None:
         str(tmp_path), "bootstrap", "proj_c", "intent_c", "claude-w"
     )
     assert tracking is not None
-    _seed_loaded_skills(
-        tracking, json.dumps([str(tmp_path / "skills" / "api-security")])
-    )
+    # Simulate a track-load call that created the file.
+    tracking.parent.mkdir(parents=True, exist_ok=True)
+    tracking.write_text(json.dumps(["api-security"]), encoding="utf-8")
     assert tracking.is_file()
     cleanup_skill_tracking(str(tmp_path), "bootstrap", "proj_c", "intent_c", "claude-w")
     assert not tracking.exists()
 
 
+def test_cleanup_skill_tracking_noop_when_file_absent(tmp_path: Path) -> None:
+    """Cleanup is a no-op when track-load was never called."""
+    from redtrace.dispatcher.tasks.common import (
+        cleanup_skill_tracking,
+        resolve_skill_tracking_path,
+    )
+
+    tracking = resolve_skill_tracking_path(
+        str(tmp_path), "explore", "proj_n", "intent_n", "pi-w"
+    )
+    assert tracking is not None
+    assert not tracking.exists()
+    # Must not raise.
+    cleanup_skill_tracking(str(tmp_path), "explore", "proj_n", "intent_n", "pi-w")
+    assert not tracking.exists()
+
+
 # ---------------------------------------------------------------------------
-# Claude / Codex / Pi native skill load -> tracking (Point 3)
+# Claude / Codex / Pi: tracking is NOT pre-seeded for any provider
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("worker_type", ["claudecode", "codex", "pi"])
-def test_provider_task_start_has_tracking_file(worker_type: str, tmp_path: Path) -> None:
-    """Each provider's first execution already has a tracking file in place.
+def test_provider_task_tracking_not_pre_seeded(worker_type: str, tmp_path: Path) -> None:
+    """No provider gets its tracking file pre-seeded with exposed skills.
 
-    For Claude the session is seeded up front; for Codex/Pi the session is
-    only discovered from the output stream AFTER the first run. Because the
-    tracking id is task-identity based, all three providers have a tracking
-    file available before/at the first run regardless of session state.
+    The tracking id is task-identity based so all three providers resolve a
+    deterministic path, but the file is never created until the agent
+    explicitly calls ``track-load``.
     """
-    from redtrace.dispatcher.tasks.common import (
-        _seed_loaded_skills,
-        resolve_skill_tracking_path,
-    )
+    from redtrace.dispatcher.tasks.common import resolve_skill_tracking_path
 
     tracking = resolve_skill_tracking_path(
         str(tmp_path), "explore", "proj_t", "intent_t", f"{worker_type}-w"
     )
     assert tracking is not None
-    _seed_loaded_skills(
-        tracking, json.dumps([str(tmp_path / "skills" / "api-security")])
-    )
-    assert tracking.is_file()
-    loaded = json.loads(tracking.read_text(encoding="utf-8"))
-    assert "api-security" in loaded
+    assert not tracking.exists()
 
 
 # ---------------------------------------------------------------------------

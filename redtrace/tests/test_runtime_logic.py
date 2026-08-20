@@ -140,7 +140,6 @@ def test_container_mounts_only_current_worker_session_and_native_config(
         root=tmp_path,
         skills=tmp_path / "skills",
         mcp=tmp_path / "mcp",
-        plugins=tmp_path / "plugins",
         managed=tmp_path / ".redtrace",
         workspaces=tmp_path / "workspaces",
         audit=tmp_path / ".redtrace" / "audit",
@@ -173,10 +172,7 @@ def test_container_mounts_only_current_worker_session_and_native_config(
         "bind": "/opt/redtrace/claude-plugin/skills",
         "mode": "rw",
     }
-    assert volumes[str((paths.managed / "skill-memory").resolve())] == {
-        "bind": "/opt/redtrace/skill-memory",
-        "mode": "rw",
-    }
+    assert "/opt/redtrace/skill-memory" not in targets
     assert volumes[str((paths.runtime / "tools").resolve())] == {
         "bind": "/opt/redtrace/tools",
         "mode": "rw",

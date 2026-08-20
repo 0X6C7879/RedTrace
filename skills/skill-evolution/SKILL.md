@@ -13,7 +13,7 @@ description: Review verified outcomes and evolve Skills with reusable learnings 
 
 - 默认只 `learn` 专业 Skill，例如 `learn api-security`
 - **不要默认 `learn skill-evolution`**：除非当前任务本身就是优化 Skill Evolution 机制，否则不要将普通专业经验写入 `skill-evolution`
-- `learn()` 对未加载的 Skill fail-closed：只有本次被 Runtime 记录为已加载的专业 Skill 才能写入经验
+- `learn()` 对未加载的 Skill fail-closed：只有本次实际加载并通过 `track-load` 记录的专业 Skill 才能写入经验
 
 ## 新经验判定
 
@@ -34,8 +34,9 @@ description: Review verified outcomes and evolve Skills with reusable learnings 
 
 若判定有新经验：
 
-1. 在当前 Workspace 写一份脱敏说明文件
-2. 运行 `redtrace-skill learn <canonical-id> --summary <摘要> --evidence <验证依据> --content-file <文件>`
+1. 对本次任务中**实际加载并使用过**的专业 Skill，运行 `redtrace-skill track-load <canonical-id>` 记录加载（每个 Skill 一次）
+2. 在当前 Workspace 写一份脱敏说明文件
+3. 运行 `redtrace-skill learn <canonical-id> --summary <摘要> --evidence <验证依据> --content-file <文件>`
 
 参数要求：
 - `--summary`：一行概括，不超过 240 字符

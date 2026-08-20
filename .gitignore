@@ -42,3 +42,12 @@ design-qa-*.png
 
 # 构建产物/镜像归档（体积过大，不入库）
 RedTrace_X/artifacts/
+
+# Skill 运行时依赖（npm install 产物，不入库；需要时在 skills/*/ 下重新安装）
+skills/*/node_modules/
+skills/*/package-lock.json
+# Per-skill memory runtime lock (ephemeral, created by learn())
+skills/*/memory/.lock/
+# Playwright 测试产物
+test-results/
+playwright-report/

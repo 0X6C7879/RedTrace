@@ -49,10 +49,11 @@ def _skills_dir() -> Path:
     return Path(raw).resolve()
 
 
-def _memory_dir(skills_dir: Path) -> Path:
-    raw = _env("REDTRACE_SKILL_MEMORY_DIR")
-    root = Path(_env("REDTRACE_ROOT", str(Path.cwd()))).resolve()
-    return Path(raw).resolve() if raw else root / ".redtrace" / "skill-memory"
+def _memory_dir(skills_dir: Path, name: str) -> Path:
+    override = _env("REDTRACE_SKILL_MEMORY_DIR")
+    if override:
+        return Path(override).resolve() / name
+    return skills_dir / name / "memory"
 
 
 def _require_skill_runtime() -> None:
@@ -244,8 +245,8 @@ def learn(args: argparse.Namespace) -> dict[str, Any]:
     if not content:
         raise ValueError("--content-file is empty")
     digest = hashlib.sha256(f"{name}\n{summary}\n{evidence}\n{content}".encode()).hexdigest()
-    memory = _memory_dir(skills)
-    path = memory / f"{name}.jsonl"
+    memory = _memory_dir(skills, name)
+    path = memory / "records.jsonl"
     with _lock(memory):
         records = _read_records(path)
         if any(item.get("digest") == digest for item in records):
@@ -320,8 +321,8 @@ def recall(args: argparse.Namespace) -> str:
     # tracking state. Recording a load here would let skill-evolution fake an
     # unloaded skill into the allowlist (recall api-security -> track-load ->
     # learn api-security passes), defeating the fail-closed gate.
-    memory = _memory_dir(skills)
-    records = _read_records(memory / f"{name}.jsonl")[-args.limit :]
+    memory = _memory_dir(skills, name)
+    records = _read_records(memory / "records.jsonl")[-args.limit :]
     lines = [f"# RedTrace learnings: {name}"]
     for item in records:
         lines.extend(

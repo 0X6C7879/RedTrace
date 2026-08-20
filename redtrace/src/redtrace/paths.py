@@ -154,7 +154,6 @@ class RedTracePaths:
     root: Path
     skills: Path
     mcp: Path
-    plugins: Path
     managed: Path
     workspaces: Path
     audit: Path

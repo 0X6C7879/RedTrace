@@ -29,7 +29,6 @@ WORKSPACE_CLI_PATHS = {
     CONTEXT_CLI_PATH,
     SKILL_CLI_PATH,
 }
-PLUGIN_CATALOG_PATH = ".redtrace/plugins.json"
 CLAUDE_MCP_PATH = ".redtrace/mcp/claude.json"
 PI_MCP_PATH = ".pi/mcp.json"
 PI_MCP_EXTENSION = "npm:pi-mcp-extension@1.5.0"
@@ -124,10 +123,10 @@ def resolve_capabilities_root(explicit: str | Path | None = None) -> Path:
         return Path(configured).expanduser().resolve()
 
     source_root = Path(__file__).resolve().parents[3]
-    if any((source_root / name).is_dir() for name in ("skills", "mcp", "plugins")):
+    if any((source_root / name).is_dir() for name in ("skills", "mcp")):
         return source_root
     cwd = Path.cwd().resolve()
-    if any((cwd / name).is_dir() for name in ("skills", "mcp", "plugins")):
+    if any((cwd / name).is_dir() for name in ("skills", "mcp")):
         return cwd
     if (cwd / "redtrace" / "pyproject.toml").is_file() or (cwd / "pyproject.toml").is_file():
         return cwd
@@ -228,16 +227,12 @@ class CapabilityStore:
         *,
         skills_dir: str | Path | None = None,
         mcp_dir: str | Path | None = None,
-        plugins_dir: str | Path | None = None,
     ):
         self.root = resolve_capabilities_root(root)
         self.skills_dir = (
             Path(skills_dir).resolve() if skills_dir else self.root / "skills"
         )
         self.mcp_dir = Path(mcp_dir).resolve() if mcp_dir else self.root / "mcp"
-        self.plugins_dir = (
-            Path(plugins_dir).resolve() if plugins_dir else self.root / "plugins"
-        )
         self.skill_meta_dir = self.skills_dir / ".redtrace"
         self.max_skills = _positive_env("REDTRACE_MAX_SKILLS", DEFAULT_MAX_SKILLS)
         self.max_skill_chars = _positive_env("REDTRACE_MAX_SKILL_CHARS", DEFAULT_MAX_SKILL_CHARS)
@@ -246,7 +241,6 @@ class CapabilityStore:
     def ensure(self) -> None:
         self.skills_dir.mkdir(parents=True, exist_ok=True)
         self.mcp_dir.mkdir(parents=True, exist_ok=True)
-        self.plugins_dir.mkdir(parents=True, exist_ok=True)
         self.skill_meta_dir.mkdir(parents=True, exist_ok=True)
 
     def list_skills(self) -> list[SkillRecord]:
@@ -740,10 +734,6 @@ class CapabilityStore:
                     continue
                 digest.update(str(path.relative_to(self.root)).replace("\\", "/").encode())
                 digest.update(path.read_bytes())
-        plugin_manifest = self.plugins_dir / "manifest.json"
-        if plugin_manifest.is_file():
-            digest.update(b"plugins/manifest.json")
-            digest.update(plugin_manifest.read_bytes())
         return digest.hexdigest()
 
 
@@ -858,11 +848,8 @@ def _workspace_cli_bytes(path: str) -> bytes:
 
 
 def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
-    from redtrace.plugin_registry import PluginRegistry
-
     skills = store.list_skills()
     mcp_records = store.list_mcp()
-    plugin_records = PluginRegistry(store.root).list_plugins()
     files: dict[str, bytes] = {}
     enabled_names: list[str] = []
     skill_versions: dict[str, dict[str, Any]] = {}
@@ -889,25 +876,6 @@ def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
     files[PI_MCP_PATH] = build_pi_mcp(mcp_records).encode()
     pi_provider_extension = PI_PROVIDER_EXTENSION.encode()
     files[PI_PROVIDER_EXTENSION_PATH] = pi_provider_extension
-    enabled_plugins = [
-        plugin.summary(store.root)
-        for plugin in plugin_records
-        if plugin.enabled
-    ]
-    files[PLUGIN_CATALOG_PATH] = (
-        json.dumps(
-            {
-                "schemaVersion": 1,
-                "source": str(store.plugins_dir),
-                "agents": ["claude", "codex", "pi"],
-                "plugins": enabled_plugins,
-            },
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n"
-    ).encode()
     files[BLACKBOARD_CLI_PATH] = _workspace_cli_bytes("blackboard_cli.py")
     files[RESOURCE_CLI_PATH] = _workspace_cli_bytes("resource_cli.py")
     context_cli = _workspace_cli_bytes("context_cli.py")
@@ -936,7 +904,6 @@ def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
             for skill in skills
             if skill.enabled
         },
-        "plugins": [plugin.id for plugin in plugin_records if plugin.enabled],
         "snapshotFrozen": True,
         "runtimeFiles": {
             CONTEXT_CLI_PATH: hashlib.sha256(context_cli).hexdigest(),
@@ -950,7 +917,6 @@ def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
             RESOURCE_CLI_PATH,
             CONTEXT_CLI_PATH,
             SKILL_CLI_PATH,
-            PLUGIN_CATALOG_PATH,
             CLAUDE_MCP_PATH,
             PI_MCP_PATH,
             PI_PROVIDER_EXTENSION_PATH,

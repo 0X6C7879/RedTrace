@@ -11,7 +11,6 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from redtrace.capabilities import CapabilityStore, SkillConflictError, _frontmatter
-from redtrace.plugin_registry import PluginRegistry
 
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
 
@@ -57,10 +56,6 @@ class RollbackRequest(BaseModel):
 
 def _store() -> CapabilityStore:
     return CapabilityStore()
-
-
-def _plugins() -> PluginRegistry:
-    return PluginRegistry(_store().root)
 
 
 def _not_found(kind: str, name: str) -> HTTPException:
@@ -192,42 +187,33 @@ def get_capabilities():
     store = _store()
     skill_entries = list_skill_entries()
     servers = store.list_mcp()
-    plugins = _plugins().list_plugins()
     return {
         "root": str(store.root),
         "skillsDir": str(store.skills_dir),
         "mcpDir": str(store.mcp_dir),
-        "pluginsDir": str(store.plugins_dir),
         "skills": {
             "total": len(skill_entries),
             "enabled": sum(entry["enabled"] for entry in skill_entries),
         },
         "mcp": {"total": len(servers), "enabled": sum(server.enabled for server in servers)},
-        "plugins": {
-            "total": len(plugins),
-            "enabled": sum(plugin.enabled for plugin in plugins),
-        },
         "agents": [
             {
                 "id": "claude",
                 "skills": str(store.skills_dir),
                 "runtimeSnapshot": None,
                 "mcp": "--mcp-config",
-                "plugins": str(store.plugins_dir),
             },
             {
                 "id": "codex",
                 "skills": str(store.skills_dir),
                 "runtimeSnapshot": None,
                 "mcp": "mcp_servers config",
-                "plugins": str(store.plugins_dir),
             },
             {
                 "id": "pi",
                 "skills": str(store.skills_dir),
                 "runtimeSnapshot": None,
                 "mcp": "worker-managed mcp.json",
-                "plugins": str(store.plugins_dir),
             },
         ],
     }
@@ -498,70 +484,32 @@ def delete_mcp(name: str):
 
 @router.get("/plugins")
 def list_plugins():
-    try:
-        registry = _plugins()
-        return [record.summary(registry.root) for record in registry.list_plugins()]
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(500, str(exc)) from exc
+    return []
 
 
 @router.get("/plugins/{plugin_id}")
 def get_plugin(plugin_id: str):
-    try:
-        registry = _plugins()
-        return registry.get_plugin(plugin_id).summary(registry.root)
-    except FileNotFoundError:
-        raise _not_found("plugin", plugin_id) from None
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+    raise HTTPException(404, f"plugin not found: {plugin_id}")
 
 
 @router.post("/plugins", status_code=201)
 def create_plugin(body: PluginWrite):
-    registry = _plugins()
-    try:
-        registry.get_plugin(body.id)
-    except FileNotFoundError:
-        pass
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(400, str(exc)) from exc
-    else:
-        raise HTTPException(409, f"plugin already exists: {body.id}")
-    try:
-        return registry.write_plugin(body.id, body.config).summary(registry.root)
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+    raise HTTPException(501, "plugins are no longer supported")
 
 
 @router.put("/plugins/{plugin_id}")
 def update_plugin(plugin_id: str, body: PluginUpdate):
-    registry = _plugins()
-    try:
-        registry.get_plugin(plugin_id)
-        return registry.write_plugin(plugin_id, body.config).summary(registry.root)
-    except FileNotFoundError:
-        raise _not_found("plugin", plugin_id) from None
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+    raise HTTPException(501, "plugins are no longer supported")
 
 
 @router.patch("/plugins/{plugin_id}/enabled")
 def set_plugin_enabled(plugin_id: str, body: EnabledUpdate):
-    registry = _plugins()
-    try:
-        return registry.set_enabled(plugin_id, body.enabled).summary(registry.root)
-    except FileNotFoundError:
-        raise _not_found("plugin", plugin_id) from None
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+    raise HTTPException(501, "plugins are no longer supported")
 
 
 @router.delete("/plugins/{plugin_id}", status_code=204)
 def delete_plugin(plugin_id: str):
-    try:
-        _plugins().delete_plugin(plugin_id)
-    except FileNotFoundError:
-        raise _not_found("plugin", plugin_id) from None
+    raise HTTPException(501, "plugins are no longer supported")
     except (ValueError, TypeError) as exc:
         raise HTTPException(400, str(exc)) from exc
     return Response(status_code=204)

@@ -44,7 +44,6 @@ class AgentRuntimeManager:
             paths.root,
             skills_dir=paths.skills,
             mcp_dir=paths.mcp,
-            plugins_dir=paths.plugins,
         )
         self._shared_initialized = False
         self._skill_paths_cache: list[Path] = []
@@ -92,12 +91,117 @@ class AgentRuntimeManager:
         return True
 
     def _ensure_skill_memory(self) -> None:
-        memory = self.paths.managed / "skill-memory"
-        previous = self.paths.skills / ".redtrace" / "learning"
-        memory.mkdir(parents=True, exist_ok=True)
-        _copy_missing_tree(previous, memory)
-        bundled = self.paths.root / "redtrace" / "skill-memory" / "legacy"
-        _copy_missing_tree(bundled, memory / "legacy")
+        """Migrate legacy Skill Memory into per-skill memory directories.
+
+        Old central layout → new per-skill layout:
+          managed/skill-memory/<name>.jsonl      → skills/<name>/memory/records.jsonl
+          managed/skill-memory/audit.jsonl      → skills/<name>/memory/audit.jsonl (split by skill)
+          managed/skill-memory/legacy/*.md       → skills/<name>/memory/legacy/*.md (keyword match)
+          skills/.redtrace/learning/<name>.jsonl → skills/<name>/memory/records.jsonl
+
+        Notes matching no skill are copied to skills/_legacy-unmatched/.
+        Old sources are preserved (not deleted). Idempotent: copy/merge
+        only when the destination does not already contain the record.
+        """
+        skills = [
+            (directory.name, directory)
+            for directory in sorted(self.paths.skills.iterdir(), key=lambda d: d.name)
+            if directory.is_dir() and (directory / "SKILL.md").is_file()
+        ]
+        old_memory = self.paths.managed / "skill-memory"
+        older_learning = self.paths.skills / ".redtrace" / "learning"
+
+        for name, skill_dir in skills:
+            new_memory = skill_dir / "memory"
+            new_memory.mkdir(parents=True, exist_ok=True)
+            for source in (old_memory, older_learning):
+                old_records = source / f"{name}.jsonl"
+                if old_records.is_file():
+                    _merge_jsonl_by_digest(
+                        old_records, new_memory / "records.jsonl", _MIGRATION_RECORD_CAP
+                    )
+            old_audit = old_memory / "audit.jsonl"
+            if old_audit.is_file():
+                _merge_audit_by_skill(
+                    old_audit, new_memory / "audit.jsonl", name, _MIGRATION_AUDIT_CAP
+                )
+
+        self._distribute_legacy_notes(skills, old_memory)
+
+    def _distribute_legacy_notes(
+        self,
+        skills: list[tuple[str, Path]],
+        old_memory: Path,
+    ) -> None:
+        """Distribute curated legacy .md notes to matching skills' memory/legacy/.
+
+        Uses the same keyword-matching logic as skill_cli._legacy_notes:
+        a note matches a skill when the skill name (or hyphen→space variant)
+        appears in the note text. A note may match multiple skills. Notes
+        matching no skill are copied to skills/_legacy-unmatched/ so nothing
+        is silently lost. A MIGRATION.md report is written alongside.
+        """
+        bundled_legacy = self.paths.root / "redtrace" / "skill-memory" / "legacy"
+        unmatched_dir = self.paths.skills / "_legacy-unmatched"
+        unmatched_dir.mkdir(parents=True, exist_ok=True)
+        skill_names = [name for name, _ in skills]
+        distribution: dict[str, list[str]] = {}
+
+        for source_legacy in (bundled_legacy, old_memory / "legacy"):
+            if not source_legacy.is_dir():
+                continue
+            for path in sorted(source_legacy.glob("*.md")):
+                if path.name.startswith("_"):
+                    continue
+                if path.name in distribution:
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                lowered = text.lower()
+                matched: list[str] = []
+                for skill_name in skill_names:
+                    terms = {skill_name, skill_name.replace("-", " ")}
+                    if any(term in lowered for term in terms):
+                        dest = (
+                            self.paths.skills
+                            / skill_name
+                            / "memory"
+                            / "legacy"
+                            / path.name
+                        )
+                        if not dest.exists():
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(path, dest)
+                        if skill_name not in matched:
+                            matched.append(skill_name)
+                if not matched:
+                    dest = unmatched_dir / path.name
+                    if not dest.exists():
+                        shutil.copy2(path, dest)
+                distribution[path.name] = matched
+
+        report_path = unmatched_dir / "MIGRATION.md"
+        lines = [
+            "# Legacy Notes Migration Report",
+            "",
+            "Curated legacy notes distributed from `redtrace/skill-memory/legacy/`",
+            "to per-skill `memory/legacy/` directories by keyword matching.",
+            "",
+            "## Distributed to skills",
+            "",
+        ]
+        for note, matched in sorted(distribution.items()):
+            if matched:
+                lines.append(f"- `{note}` → {', '.join(matched)}")
+        lines.extend(["", "## Unmatched (no skill name keyword found)", ""])
+        for note, matched in sorted(distribution.items()):
+            if not matched:
+                lines.append(f"- `{note}`")
+        report_content = "\n".join(lines) + "\n"
+        if not report_path.is_file() or report_path.read_text(encoding="utf-8") != report_content:
+            atomic_write_text(report_path, report_content)
 
     def _sync_mcp_command_availability(
         self, records: list[McpRecord]
@@ -245,11 +349,6 @@ class AgentRuntimeManager:
                     runtime / "pi" / "redtrace-provider.js"
                 ),
                 "REDTRACE_SKILL_PATHS": json.dumps(skills),
-                "REDTRACE_SKILL_MEMORY_DIR": (
-                    str(self.paths.managed / "skill-memory")
-                    if self.execution == "local"
-                    else "/opt/redtrace/skill-memory"
-                ),
                 # Codex discovers Skills from the canonical project links in
                 # .agents/skills. Its driver suppresses MCP only for custom
                 # Responses providers that cannot accept namespace tools.
@@ -330,13 +429,66 @@ class AgentRuntimeManager:
             path.chmod(0o755)
 
 
-def _copy_missing_tree(source: Path, target: Path) -> None:
-    if not source.is_dir():
+_MIGRATION_RECORD_CAP = 100
+_MIGRATION_AUDIT_CAP = 1000
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    """Read a JSONL file, skipping malformed lines."""
+    if not path.is_file():
+        return []
+    records: list[dict] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            records.append(item)
+    return records
+
+
+def _write_jsonl(path: Path, records: list[dict], cap: int) -> None:
+    """Atomically write JSONL records, keeping at most the last ``cap`` entries."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = "".join(
+        json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n"
+        for item in records[-cap:]
+    )
+    atomic_write_text(path, content)
+
+
+def _merge_jsonl_by_digest(source: Path, target: Path, cap: int) -> None:
+    """Merge JSONL records from *source* into *target*, deduplicating by digest."""
+    source_records = _read_jsonl(source)
+    if not source_records:
         return
-    for path in source.rglob("*"):
-        destination = target / path.relative_to(source)
-        if path.is_dir():
-            destination.mkdir(parents=True, exist_ok=True)
-        elif path.is_file() and not destination.exists():
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, destination)
+    target_records = _read_jsonl(target) if target.is_file() else []
+    existing = {r.get("digest") for r in target_records if isinstance(r, dict)}
+    merged = list(target_records)
+    for record in source_records:
+        digest = record.get("digest")
+        if digest and digest not in existing:
+            merged.append(record)
+            existing.add(digest)
+    _write_jsonl(target, merged, cap)
+
+
+def _merge_audit_by_skill(
+    source: Path, target: Path, skill_name: str, cap: int
+) -> None:
+    """Merge audit entries for *skill_name* from a central source into *target*."""
+    source_records = _read_jsonl(source)
+    target_records = _read_jsonl(target) if target.is_file() else []
+    existing = {r.get("digest") for r in target_records if isinstance(r, dict)}
+    merged = list(target_records)
+    for record in source_records:
+        if not isinstance(record, dict):
+            continue
+        if record.get("skill") != skill_name:
+            continue
+        digest = record.get("digest")
+        if digest and digest not in existing:
+            merged.append(record)
+            existing.add(digest)
+    _write_jsonl(target, merged, cap)
