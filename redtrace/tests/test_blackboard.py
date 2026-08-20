@@ -599,9 +599,7 @@ def test_intent_ownership_changes_are_coordination_events(client: TestClient) ->
     assert actions == ["added", "claimed", "released"]
 
 
-def test_inbox_signals_only_related_facts_without_injecting_source_context(
-    tmp_path: Path,
-) -> None:
+def test_inbox_signals_only_new_hints(tmp_path: Path) -> None:
     writes: list[dict] = []
     signals: list[str] = []
 
@@ -624,14 +622,12 @@ def test_inbox_signals_only_related_facts_without_injecting_source_context(
         str(tmp_path),
         project_id="proj_001",
         intent_id="i002",
-        intent_description="test https://target.test/login",
-        source_fact_ids=["origin", "f001"],
         worker_name="worker-b",
         revision=7,
     )
     inbox.on_process_attached(send_signal)
     try:
-        related = {
+        fact = {
             "revision": 8,
             "kind": "fact",
             "node_id": "f008",
@@ -646,21 +642,32 @@ def test_inbox_signals_only_related_facts_without_injecting_source_context(
                 },
             },
         }
-        inbox._publish({"revision": 8, "changes": [related]})
-        assert len(signals) == 1
-        assert "f008" in signals[0]
-        assert "credential found" in signals[0]
-        assert "不要求采用" in signals[0]
-        assert "use admin" not in signals[0]
+        inbox._publish({"revision": 8, "changes": [fact]})
+        assert signals == []
         assert (
             writes[-1]["changes"][0]["node"]["source"]["events"][0]["content"]
             == "use admin"
         )
 
-        unrelated = {
-            **related,
+        hint = {
             "revision": 9,
+            "kind": "hint",
+            "node_id": "h003",
+            "action": "added",
+            "node": {"description": "human hint: check the staging host"},
+        }
+        inbox._publish({"revision": 9, "changes": [hint]})
+        assert len(signals) == 1
+        assert "h003" in signals[0]
+        assert "human hint" in signals[0]
+        assert "不要求采用" in signals[0]
+        assert "REDTRACE_BLACKBOARD_NOTICE" in signals[0]
+
+        other_fact = {
+            "revision": 10,
+            "kind": "fact",
             "node_id": "f009",
+            "action": "added",
             "node": {
                 "description": "SMB result",
                 "source": {
@@ -671,8 +678,9 @@ def test_inbox_signals_only_related_facts_without_injecting_source_context(
                 },
             },
         }
-        inbox._publish({"revision": 9, "changes": [unrelated]})
+        inbox._publish({"revision": 10, "changes": [other_fact]})
         assert len(signals) == 1
+        assert writes[-1]["changes"][-1]["node_id"] == "f009"
     finally:
         inbox.stop()
 

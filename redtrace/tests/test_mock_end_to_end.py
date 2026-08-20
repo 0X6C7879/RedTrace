@@ -152,6 +152,7 @@ class LocalProcess:
 class LocalContainerManager:
     def __init__(self) -> None:
         self.writes: list[tuple[str, str, str]] = []
+        self.commands: list[list[str]] = []
 
     def close(self) -> None:
         return None
@@ -179,6 +180,7 @@ class LocalContainerManager:
         assert kill_after_seconds == 5
         if os.name == "nt" and command[0] == "python3":
             command = [sys.executable, *command[1:]]
+        self.commands.append(command)
         return LocalProcess(command, env)
 
     def write_text_file(self, container_name: str, path: str, content: str) -> None:
@@ -374,7 +376,15 @@ def test_mock_scheduler_runs_reason_explore_reason_complete_chain(http_client: T
         ("i002", "f002"),
         ("i003", "goal"),
     ]
-    assert any("/reason_execute-" in path and "f002" in content for _, path, content in containers.writes)
+    reason_fact_ids: list[list[str]] = []
+    for command in containers.commands:
+        try:
+            payload = json.loads(command[-1])
+        except (ValueError, TypeError):
+            continue
+        if isinstance(payload, dict) and payload.get("phase") == "reason":
+            reason_fact_ids.append(payload.get("fact_ids") or [])
+    assert any("f002" in ids for ids in reason_fact_ids)
     assert any(
         "/explore_execute-" in path and '"origin"' in content
         for _, path, content in containers.writes

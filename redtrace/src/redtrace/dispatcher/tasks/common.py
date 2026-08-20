@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import threading
 import uuid
 from collections.abc import Callable
@@ -23,12 +22,6 @@ PROCESS_COMMUNICATE_GRACE_SECONDS = 15
 GRAPH_SNAPSHOT_ROOT = "/home/kali/workspace/.redtrace/prompts"
 BLACKBOARD_NOTICE_ROOT = ".redtrace/blackboard-notices"
 LOG = logging.getLogger(__name__)
-_COORDINATION_KEY = re.compile(
-    r"https?://[^\s]+|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b|"
-    r"\bCVE-\d{4}-\d+\b|\b(?:ws|lis|ses|pay)_[0-9a-f]{12}\b|"
-    r"(?:/[A-Za-z0-9._~!$&'()*+,;=:@%+-]+){2,}",
-    re.IGNORECASE,
-)
 
 
 @dataclass(slots=True)
@@ -210,7 +203,7 @@ def blackboard_notice_path(container_name: str, identity: str) -> str:
 
 
 class BlackboardInbox:
-    """A per-turn, project-scoped inbox that emits short relevant Fact signals."""
+    """A per-turn, project-scoped inbox that signals newly added Hints."""
 
     def __init__(
         self,
@@ -220,23 +213,17 @@ class BlackboardInbox:
         *,
         project_id: str,
         intent_id: str | None,
-        intent_description: str,
-        source_fact_ids: list[str],
         worker_name: str,
         revision: int,
         task_type: str = "explore",
-        all_facts: bool = False,
     ):
         self._client = client
         self._container_manager = container_manager
         self._container_name = container_name
         self._project_id = project_id
         self._intent_id = intent_id
-        self._intent_description = intent_description
-        self._source_fact_ids = set(source_fact_ids) - {"origin", "goal"}
         self._worker_name = worker_name
         self._task_type = task_type
-        self._all_facts = all_facts
         self._cursor = revision
         self._initial_revision = revision
         self.notice_path = blackboard_notice_path(
@@ -341,7 +328,7 @@ class BlackboardInbox:
             sender = self._signal_sender
             if not pending or sender is None:
                 return
-            if sender(format_fact_signal(pending)):
+            if sender(format_hint_signal(pending)):
                 self._signalled_revision = max(self._signalled_revision, revision)
                 self._pending = [
                     change
@@ -365,55 +352,20 @@ class BlackboardInbox:
         )
 
     def _should_signal(self, change: dict[str, Any]) -> bool:
-        if change.get("action") != "added":
-            return False
-        if change.get("kind") == "hint":
-            return True
-        if change.get("kind") != "fact":
-            return False
-        node = change.get("node")
-        if not isinstance(node, dict):
-            return False
-        source = node.get("source")
-        if not isinstance(source, dict) or source.get("intent_id") == self._intent_id:
-            return False
-        if self._all_facts:
-            return True
-        other_sources = set(source.get("from") or []) - {"origin", "goal"}
-        if self._source_fact_ids & other_sources:
-            return True
-        current_keys = {
-            match.group(0).lower()
-            for match in _COORDINATION_KEY.finditer(self._intent_description)
-        }
-        other_text = " ".join(
-            (
-                str(source.get("intent_description") or ""),
-                str(node.get("description") or ""),
-            )
-        )
-        other_keys = {
-            match.group(0).lower() for match in _COORDINATION_KEY.finditer(other_text)
-        }
-        return bool(current_keys & other_keys)
+        return change.get("action") == "added" and change.get("kind") == "hint"
 
 
-def format_fact_signal(changes: list[dict[str, Any]]) -> str:
+def format_hint_signal(changes: list[dict[str, Any]]) -> str:
     change = max(changes, key=lambda item: int(item.get("revision", 0)))
     node = change.get("node") if isinstance(change.get("node"), dict) else {}
     revision = int(change.get("revision", 0))
     node_id = str(change.get("node_id") or node.get("id") or "")
     summary = str(node.get("description") or node.get("content") or "").strip()
     summary = " ".join(summary.split())[:240]
-    kind = "Fact" if change.get("kind") == "fact" else "Hint"
-    inspect = (
-        f"需要时运行 redtrace-blackboard source {node_id} 查看详情和来源对话。"
-        if kind == "Fact" and node_id
-        else "需要时读取 REDTRACE_BLACKBOARD_NOTICE 查看详情。"
-    )
     return (
-        f"[RedTrace {kind} signal r{revision}] {node_id}: {summary}\n"
-        f"这是可选的新证据，不要求采用，也不要自动改变当前方向；由你判断相关性。{inspect}"
+        f"[RedTrace Hint signal r{revision}] {node_id}: {summary}\n"
+        "这是可选的新证据，不要求采用，也不要自动改变当前方向；由你判断相关性。"
+        "需要时读取 REDTRACE_BLACKBOARD_NOTICE 查看详情。"
     )
 
 

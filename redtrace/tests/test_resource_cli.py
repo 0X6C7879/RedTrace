@@ -257,11 +257,15 @@ def test_snapshot_changes_and_waiting_run_are_bounded(monkeypatch) -> None:
     assert calls[-1][1] == "/projects/p001/operations/tasks/op_123"
 
 
-def test_capabilities_tell_worker_to_create_channels_and_refresh_once() -> None:
+def test_capabilities_tell_worker_to_query_on_demand() -> None:
     capabilities = resource_cli._perform(_parse("capabilities"))
     workflow = " ".join(capabilities["workflow"])
 
-    assert "create a Listener and generate a Payload" in workflow
-    assert "webshell-create" in workflow
-    assert "changes once" in workflow
+    assert "call changes once with the retained audit_cursor" in workflow
+    assert "list --kind" in workflow
+    assert "get the selected resource by ID" in workflow
+    assert "reuse an existing resource before registering a duplicate" in workflow
     assert "do not poll changes at a fixed frequency" in workflow
+    # The registry is a sharing plane, not an execution monopoly.
+    assert "register every" not in workflow
+    assert "before declaring no access channel" not in workflow

@@ -135,49 +135,6 @@ class ControlPlaneClient:
         response.raise_for_status()
         return int(response.json()["revision"])
 
-    def resource_snapshot(
-        self,
-        project_id: str,
-        *,
-        kinds: str = "webshell,c2_listener,c2_session,c2_payload",
-        limit: int = 100,
-    ) -> list[dict[str, Any]]:
-        """Return the bounded shared access-resource snapshot for Worker gates."""
-        try:
-            response = self._session().get(
-                self._url(f"/projects/{project_id}/operations/snapshot"),
-                params={"kinds": kinds, "limit": limit},
-                timeout=self._timeout,
-            )
-            response.raise_for_status()
-            data = response.json()
-        except (requests.RequestException, ValueError) as exc:
-            LOG.warning("resource snapshot failed project=%s error=%s", project_id, exc)
-            return []
-        resources = data.get("resources") if isinstance(data, dict) else None
-        return resources if isinstance(resources, list) else []
-
-    def planning_resource_snapshot(self, project_id: str) -> list[dict[str, Any]]:
-        """Return the semantic Resource fields needed by the Reason planner."""
-        fields = (
-            "id",
-            "kind",
-            "name",
-            "status",
-            "target",
-            "summary",
-            "metadata",
-            "parent_resource_id",
-            "source_project_id",
-            "intent_id",
-            "worker",
-            "updated_at",
-        )
-        return [
-            {field: resource.get(field) for field in fields if field in resource}
-            for resource in self.resource_snapshot(project_id, kinds="", limit=500)
-        ]
-
     def report_project_runtime_cleaned(
         self,
         project_id: str,

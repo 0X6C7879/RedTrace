@@ -40,6 +40,7 @@ def test_start_script_uses_portable_project_relative_defaults() -> None:
     assert 'uv sync --project "$PROJECT_DIR"' in script
     assert 'uv run --no-sync --project "$PROJECT_DIR" redtrace serve' in script
     assert 'uv run --no-sync --project "$PROJECT_DIR" redtrace dispatch' in script
+    assert "ensure_agent_skill_roots" in script
     assert "launchctl" not in script
     assert "systemctl" not in script
 
@@ -56,6 +57,11 @@ def test_start_script_supervises_and_stops_both_components(tmp_path: Path) -> No
 set -eu
 case " $* " in
   *" sync "*)
+    exit 0
+    ;;
+  *" python -c "*)
+    # The agent-Skill-home linking step.
+    touch "$FAKE_REDTRACE_STATE/skill-homes"
     exit 0
     ;;
   *" redtrace serve "*)
@@ -88,10 +94,13 @@ test -f "$FAKE_REDTRACE_STATE/server"
     config = tmp_path / "redtrace.yaml"
     config.write_text("server: http://127.0.0.1:8000\nworkers: []\n", encoding="utf-8")
     environment = os.environ.copy()
+    sandbox_home = tmp_path / "home"
+    sandbox_home.mkdir()
     environment.update(
         {
             "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
             "FAKE_REDTRACE_STATE": str(state_dir),
+            "HOME": str(sandbox_home),
             "REDTRACE_START_TIMEOUT": "5",
             "REDTRACE_SHUTDOWN_TIMEOUT": "2",
         }
@@ -114,6 +123,7 @@ test -f "$FAKE_REDTRACE_STATE/server"
         time.sleep(0.05)
 
     assert process.poll() is None
+    assert (state_dir / "skill-homes").exists()
     assert (state_dir / "server").exists()
     assert (state_dir / "dispatcher").exists()
 
@@ -165,6 +175,11 @@ fi
 if [[ "$1" == "sync" ]]; then
   exit 0
 fi
+if [[ " $* " == *" python -c "* ]]; then
+  # The agent-Skill-home linking step.
+  touch "$FAKE_REDTRACE_STATE/skill-homes"
+  exit 0
+fi
 if [[ " $* " == *" redtrace dispatch "* ]]; then
   project=""
   previous=""
@@ -188,10 +203,13 @@ exit 2
     fake_curl.chmod(0o755)
 
     environment = os.environ.copy()
+    sandbox_home = tmp_path / "home"
+    sandbox_home.mkdir()
     environment.update(
         {
             "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
             "FAKE_REDTRACE_STATE": str(state_dir),
+            "HOME": str(sandbox_home),
             "REDTRACE_SHUTDOWN_TIMEOUT": "2",
         }
     )
@@ -216,6 +234,7 @@ exit 2
     try:
         assert process.poll() is None
         assert (state_dir / "rebuilt").exists()
+        assert (state_dir / "skill-homes").exists()
         assert (state_dir / "dispatcher").exists()
     finally:
         if process.poll() is None:

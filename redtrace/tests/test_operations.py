@@ -185,7 +185,7 @@ def test_webshell_sessions_and_credentials_are_global_with_source_attribution(
     assert "Passw0rd!" in exported
 
 
-def test_intent_fact_includes_secrets_from_its_resources(client: TestClient) -> None:
+def test_intent_fact_stays_decoupled_from_its_resources(client: TestClient) -> None:
     project_id = create_project(client)
     intent = client.post(
         f"/projects/{project_id}/intents",
@@ -223,11 +223,75 @@ def test_intent_fact_includes_secrets_from_its_resources(client: TestClient) -> 
 
     assert concluded.status_code == 200
     fact = concluded.json()["fact"]
-    assert f"[resource:{resource['id']}]" in fact["description"]
-    assert '"password":"plain-value"' in fact["description"]
+    assert fact["description"] == "login confirmed"
+    assert "[resource:" not in fact["description"]
+    assert "plain-value" not in fact["description"]
     listed = client.get(f"/projects/{project_id}/resources").json()["resources"]
     linked = next(item for item in listed if item["id"] == resource["id"])
     assert linked["fact_id"] == fact["id"]
+
+
+def test_conclude_without_resource_id_is_accepted(client: TestClient) -> None:
+    project_id = create_project(client)
+    intent = client.post(
+        f"/projects/{project_id}/intents",
+        json={
+            "from": ["origin"],
+            "description": "inspect service",
+            "creator": "reasoner",
+        },
+    ).json()
+    claimed = client.post(
+        f"/projects/{project_id}/intents/{intent['id']}/claim",
+        json={"worker": "explorer"},
+    )
+    assert claimed.status_code == 200
+
+    concluded = client.post(
+        f"/projects/{project_id}/intents/{intent['id']}/conclude",
+        json={
+            "worker": "explorer",
+            "description": "obtained a reverse shell on the target host",
+        },
+    )
+
+    assert concluded.status_code == 200
+    assert concluded.json()["fact"]["description"] == (
+        "obtained a reverse shell on the target host"
+    )
+
+
+def test_resource_registration_never_creates_facts(client: TestClient) -> None:
+    project_id = create_project(client)
+    before = client.get(f"/projects/{project_id}").json()["facts"]
+
+    registered = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "file",
+            "name": "loot.txt",
+            "target": "loot.txt",
+            "actor": "tester",
+        },
+    )
+
+    assert registered.status_code == 201
+    after = client.get(f"/projects/{project_id}").json()["facts"]
+    assert [fact["id"] for fact in after] == [fact["id"] for fact in before]
+
+    rejected = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "file",
+            "name": "loot.txt",
+            "target": "loot.txt",
+            "actor": "tester",
+            "publish_fact": True,
+        },
+    )
+    assert rejected.status_code == 409
+    final = client.get(f"/projects/{project_id}").json()["facts"]
+    assert [fact["id"] for fact in final] == [fact["id"] for fact in before]
 
 
 def test_reverse_listener_creates_global_interactive_session(client: TestClient) -> None:

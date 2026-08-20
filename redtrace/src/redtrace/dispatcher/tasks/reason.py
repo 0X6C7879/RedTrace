@@ -27,12 +27,11 @@ from redtrace.dispatcher.tasks.common import (
     process_failure_outcome,
     record_session_checkpoint,
     run_worker_process,
-    write_graph_snapshot_reference,
 )
 from redtrace.dispatcher.workers.registry import get_driver
 
 LOG = logging.getLogger(__name__)
-FORMAT_REPAIR_TIMEOUT_SECONDS = 60
+RECOVERY_TIMEOUT_SECONDS = 60
 
 
 def run_reason_task(
@@ -98,12 +97,7 @@ def run_reason_task(
         prompt = render_prompt(
             load_prompt_for_mode("reason.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),
             {
-                "graph_yaml": write_graph_snapshot_reference(
-                    container_manager,
-                    container_name,
-                    export_yaml.strip(),
-                    phase="reason_execute",
-                ),
+                "graph_yaml": export_yaml.strip(),
                 "fact_ids": format_fact_ids(allowed_fact_ids),
                 "open_intents": format_open_intents(open_intents),
                 "max_intents": str(config.tasks.reason.max_intents),
@@ -214,7 +208,7 @@ def run_reason_task(
                 blackboard_revision=project.blackboard_revision,
                 phase="reason_timeout_recovery",
                 timeout_seconds=min(
-                    config.tasks.reason.timeout, FORMAT_REPAIR_TIMEOUT_SECONDS
+                    config.tasks.reason.timeout, RECOVERY_TIMEOUT_SECONDS
                 ),
                 lease=lease,
                 cancellation=cancellation,
@@ -265,119 +259,17 @@ def run_reason_task(
             )
             return "provider_error"
         except Exception as exc:
-            if not driver.supports_conclude() or session is None:
-                LOG.warning(
-                    "reason parse failed project=%s worker=%s error=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
-                    project.project.id,
-                    worker.name,
-                    exc,
-                    execute_ms,
-                    total_ms,
-                    preview(result.stdout),
-                    preview(result.stderr),
-                )
-                return "contract_error"
-            LOG.info(
-                "reason output invalid; requesting format-only repair project=%s worker=%s error=%s",
+            LOG.warning(
+                "reason parse failed project=%s worker=%s error=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
                 project.project.id,
                 worker.name,
                 exc,
+                execute_ms,
+                total_ms,
+                preview(result.stdout),
+                preview(result.stderr),
             )
-            repair_prompt = (
-                "你上一条最终响应不符合 reason JSON contract。\n"
-                f"校验错误：{preview(str(exc), 300)}\n"
-                "不得调用工具、继续分析或重复任务。立即只返回一个修正后的 raw JSON object，"
-                "不得输出 Markdown 或解释文字。只允许以下结构：\n"
-                '{"accepted":false,"reason":"policy_refusal"}\n'
-                '{"accepted":true,"data":{"complete":{"from":["f001"],"description":"..."}}}\n'
-                '{"accepted":true,"data":{"intents":[{"from":["f001"],"description":"..."}]}}\n'
-                '{"accepted":true,"data":{}}\n'
-            )
-            try:
-                repair_command = driver.build_conclude(
-                    worker, repair_prompt, session, task_type="reason"
-                )
-                repair = run_worker_process(
-                    container_manager,
-                    container_name,
-                    worker,
-                    repair_command.argv,
-                    stdin_text=repair_command.stdin,
-                    client=client,
-                    project_id=project.project.id,
-                    blackboard_revision=project.blackboard_revision,
-                    phase="reason_format_repair",
-                    timeout_seconds=min(
-                        config.tasks.reason.timeout, FORMAT_REPAIR_TIMEOUT_SECONDS
-                    ),
-                    lease=lease,
-                    cancellation=cancellation,
-                    live_control=repair_command.live_control,
-                    session=None,
-                    env_overrides=repair_command.env,
-                )
-            except Exception as repair_exc:
-                LOG.warning(
-                    "reason format repair execution failed project=%s worker=%s error=%s",
-                    project.project.id,
-                    worker.name,
-                    repair_exc,
-                )
-                return "provider_exit"
-            cancelled = cancel_reason(repair, cancellation)
-            if cancelled is not None:
-                LOG.info(
-                    "reason format repair cancelled project=%s worker=%s reason=%s",
-                    project.project.id,
-                    worker.name,
-                    cancelled,
-                )
-                return "cancelled"
-            if (
-                lease.failure is not None
-                or did_timeout(repair)
-                or repair.returncode != 0
-            ):
-                LOG.warning(
-                    "reason format repair failed project=%s worker=%s code=%s timed_out=%s stdout_preview=%s stderr_preview=%s",
-                    project.project.id,
-                    worker.name,
-                    repair.returncode,
-                    repair.timed_out,
-                    preview(repair.stdout),
-                    preview(repair.stderr),
-                )
-                return process_failure_outcome(repair)
-            try:
-                model_output = driver.extract_response_text(
-                    repair.stdout, repair.stderr
-                )
-                payload = parse_json_output(model_output)
-                kind, data = validate_reason_payload(
-                    payload,
-                    open_intents_empty=not open_intents,
-                    max_intents=config.tasks.reason.max_intents,
-                )
-            except ProviderError as exc:
-                LOG.warning(
-                    "reason format repair provider error project=%s worker=%s code=%s message=%s",
-                    project.project.id,
-                    worker.name,
-                    exc.code,
-                    exc.message,
-                )
-                return "provider_error"
-            except Exception as repair_exc:
-                LOG.warning(
-                    "reason format repair invalid project=%s worker=%s error=%s stdout_preview=%s stderr_preview=%s",
-                    project.project.id,
-                    worker.name,
-                    repair_exc,
-                    preview(repair.stdout),
-                    preview(repair.stderr),
-                )
-                return "contract_error"
-            result = repair
+            return "contract_error"
         if kind == "rejected":
             LOG.warning(
                 "reason rejected project=%s worker=%s execute_ms=%s total_ms=%s stdout_preview=%s",

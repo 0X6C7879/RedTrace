@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import time
 
 from redtrace.board.models import Intent, ProjectDetail
@@ -37,11 +36,6 @@ from redtrace.dispatcher.tasks.common import (
 from redtrace.dispatcher.workers.registry import get_driver
 
 LOG = logging.getLogger(__name__)
-_ACCESS_CHANNEL = re.compile(
-    r"web\s*shell|reverse\s*shell|c2\s*session|反弹\s*shell|反向\s*shell|持久.{0,8}通道",
-    re.IGNORECASE,
-)
-_ACCESS_RESOURCE_ID = re.compile(r"\b(?:ws|ses)_[0-9a-f]{12}\b", re.IGNORECASE)
 
 
 def run_explore_task(
@@ -111,8 +105,6 @@ def run_explore_task(
                 container_name,
                 project_id=project.project.id,
                 intent_id=intent.id,
-                intent_description=intent.description,
-                source_fact_ids=intent.from_,
                 worker_name=worker.name,
                 revision=project.blackboard_revision,
             )
@@ -241,32 +233,6 @@ def run_explore_task(
                 )
                 best_effort_release(client, project.project.id, intent.id, worker.name)
                 return "rejected"
-            description, resource_ok = _attach_access_resource_ids(
-                client, project.project.id, intent.id, worker.name, description
-            )
-            if not resource_ok:
-                return _try_conclude_fallback(
-                    config,
-                    client,
-                    container_manager,
-                    container_name,
-                    worker,
-                    driver,
-                    project.project.id,
-                    intent,
-                    graph_reference,
-                    session,
-                    lease,
-                    cancellation,
-                    inbox=inbox,
-                    correction_prompt=(
-                        "你已声明建立 WebShell/reverse shell/C2 通道，但当前 Intent 没有共享 Resource。"
-                        "立即使用 redtrace-resource 注册；失败时查看对应子命令 --help 并修正参数重试一次。"
-                        "确认 snapshot 中出现 Resource ID 后，只返回符合原 explore schema 的 raw JSON，"
-                        "description 必须包含该 ID。不要重新利用漏洞。"
-                    ),
-                    fallback_description=description,
-                )
             result = write_conclude_result(
                 client,
                 project.project.id,
@@ -351,8 +317,6 @@ def _try_conclude_fallback(
     lease: HeartbeatLease,
     cancellation: TaskCancellation,
     inbox: BlackboardInbox | None = None,
-    correction_prompt: str | None = None,
-    fallback_description: str | None = None,
 ) -> str:
     if not driver.supports_conclude() or not session:
         LOG.info(
@@ -363,16 +327,6 @@ def _try_conclude_fallback(
             driver.supports_conclude(),
             bool(session),
         )
-        if fallback_description is not None:
-            return write_conclude_result(
-                client,
-                project_id,
-                intent.id,
-                worker.name,
-                _resource_commit_failure(fallback_description),
-                source="explore_resource_commit",
-                phase_ms=0,
-            )
         best_effort_release(client, project_id, intent.id, worker.name)
         return "contract_error"
     if lease.failure is not None:
@@ -415,7 +369,7 @@ def _try_conclude_fallback(
         "resume_start",
     )
 
-    prompt = correction_prompt or render_prompt(
+    prompt = render_prompt(
         load_prompt_for_mode("explore_conclude.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),
         {
             "graph_yaml": graph_reference,
@@ -520,25 +474,6 @@ def _try_conclude_fallback(
         )
         best_effort_release(client, project_id, intent.id, worker.name)
         return "rejected"
-    description, resource_ok = _attach_access_resource_ids(
-        client, project_id, intent.id, worker.name, description
-    )
-    if not resource_ok:
-        LOG.warning(
-            "access channel missing shared resource project=%s intent=%s worker=%s",
-            project_id,
-            intent.id,
-            worker.name,
-        )
-        return write_conclude_result(
-            client,
-            project_id,
-            intent.id,
-            worker.name,
-            _resource_commit_failure(fallback_description or description),
-            source="explore_resource_commit",
-            phase_ms=conclude_ms,
-        )
     return write_conclude_result(
         client,
         project_id,
@@ -547,41 +482,6 @@ def _try_conclude_fallback(
         description,
         source="explore_conclude",
         phase_ms=conclude_ms,
-    )
-
-
-def _attach_access_resource_ids(
-    client: ControlPlaneClient,
-    project_id: str,
-    intent_id: str,
-    worker_name: str,
-    description: str,
-) -> tuple[str, bool]:
-    if not _ACCESS_CHANNEL.search(description):
-        return description, True
-    ids = {
-        str(resource["id"]).lower(): str(resource["id"])
-        for resource in client.resource_snapshot(project_id)
-        if isinstance(resource, dict)
-        and resource.get("kind") in {"webshell", "c2_session"}
-        and _ACCESS_RESOURCE_ID.fullmatch(str(resource.get("id", "")))
-        and resource.get("status", "available") not in {"closed", "deleted"}
-    }
-    cited = {
-        resource_id.lower() for resource_id in _ACCESS_RESOURCE_ID.findall(description)
-    }
-    if cited:
-        return description, bool(cited & ids.keys())
-    if not ids:
-        return description, False
-    return f"{description.rstrip()}\nShared Resource IDs: {', '.join(sorted(ids.values()))}", True
-
-
-def _resource_commit_failure(description: str) -> str:
-    return (
-        "Execution result preserved; shared access Resource registration failed. "
-        "Do not repeat exploitation—repair only the Resource record.\n"
-        + description.strip()
     )
 
 

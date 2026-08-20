@@ -5,6 +5,7 @@ import json
 from conftest import FakeContainerManager, make_intent, make_project
 from redtrace.blackboard_cli import build_parser
 from redtrace.board.models import Fact
+from redtrace.dispatcher.control_plane import ControlPlaneClient
 from redtrace.dispatcher.prompting import (
     format_fact_ids,
     format_open_intents,
@@ -27,6 +28,24 @@ def test_reason_snapshot_preserves_fact_over_800_chars() -> None:
 
     assert payload["facts"][0]["description"] == "x" * 5000
     assert "truncated" not in json.dumps(payload)
+
+
+def test_reason_snapshot_contains_no_resource_section() -> None:
+    # Reason only receives Fact / Intent / Hint state. Resources stay in the
+    # registry and must never leak into the planner's graph snapshot.
+    project = make_project()
+
+    snapshot = project_policy.reason_graph_snapshot(project)
+    payload = json.loads(snapshot)
+
+    assert set(payload) == {"project", "hints", "facts", "intents"}
+    assert "shared_resources" not in json.dumps(payload).lower()
+    assert not hasattr(
+        ControlPlaneClient, "planning_resource_snapshot"
+    ), "planners must not pull resource snapshots"
+    assert not hasattr(
+        ControlPlaneClient, "resource_snapshot"
+    ), "dispatcher resource gates were removed with the Execution Monopoly"
 
 
 def test_reason_snapshot_exceeds_64kib_without_loss() -> None:

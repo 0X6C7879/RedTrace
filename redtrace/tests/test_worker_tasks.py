@@ -22,7 +22,7 @@ def _lease_factory(lease: FakeLease):
     return lambda *_args, **_kwargs: lease
 
 
-def test_reason_writes_graph_snapshot_and_creates_intent(monkeypatch) -> None:
+def test_reason_inlines_graph_snapshot_and_creates_intent(monkeypatch) -> None:
     config = make_config()
     project = make_project()
     client = FakeClient(project)
@@ -57,14 +57,8 @@ def test_reason_writes_graph_snapshot_and_creates_intent(monkeypatch) -> None:
     assert client.created_intents == [("proj_001", ["f001"], "next step", "test-worker")]
     assert client.released_reasons == [("proj_001", "test-worker")]
     assert lease.started and lease.stopped
-    assert len(containers.writes) == 1
-    container_name, path, content = containers.writes[0]
-    assert container_name == "container-proj_001"
-    assert path.startswith("/home/kali/workspace/.redtrace/prompts/reason_execute-")
-    assert path.endswith("/graph.yaml")
-    assert content == graph_yaml
-    assert graph_yaml not in driver.execute_prompts[0]
-    assert path in driver.execute_prompts[0]
+    assert containers.writes == []
+    assert graph_yaml in driver.execute_prompts[0]
     assert driver.conclude_prompts == []
 
 
@@ -149,28 +143,22 @@ def test_bootstrap_timeout_uses_cairn_conclude_fallback(monkeypatch) -> None:
     assert len(driver.conclude_prompts) == 1
 
 
-def test_reason_repairs_invalid_format_once(monkeypatch) -> None:
+def test_reason_returns_contract_error_on_invalid_format(monkeypatch) -> None:
     config = make_config()
     project = make_project()
     client = FakeClient(project)
     containers = FakeContainerManager()
     driver = FakeDriver()
     lease = FakeLease()
-    results: Iterator[ProcessResult] = iter(
-        [
-            ProcessResult(0, "analysis finished, but this is not JSON", ""),
-            ProcessResult(
-                0,
-                '{"accepted":true,"data":{"intents":[{"from":["f001"],"description":"next"}]}}',
-                "",
-            ),
-        ]
-    )
 
     monkeypatch.setattr(reason, "get_driver", lambda *_a, **_k: driver)
     monkeypatch.setattr(reason.HeartbeatLease, "for_reason", _lease_factory(lease))
     monkeypatch.setattr(
-        reason, "run_worker_process", lambda *_args, **_kwargs: next(results)
+        reason,
+        "run_worker_process",
+        lambda *_args, **_kwargs: ProcessResult(
+            0, "analysis finished, but this is not JSON", ""
+        ),
     )
 
     outcome = reason.run_reason_task(
@@ -183,10 +171,9 @@ def test_reason_repairs_invalid_format_once(monkeypatch) -> None:
         TaskCancellation(),
     )
 
-    assert outcome == "success"
-    assert client.created_intents == [("proj_001", ["f001"], "next", "test-worker")]
-    assert len(driver.conclude_prompts) == 1
-    assert "不得调用工具" in driver.conclude_prompts[0]
+    assert outcome == "contract_error"
+    assert client.created_intents == []
+    assert driver.conclude_prompts == []
 
 
 def test_reason_timeout_recovers_with_same_session(monkeypatch) -> None:
@@ -530,97 +517,40 @@ def test_reason_startup_only_mode_skips_task_healthcheck(monkeypatch) -> None:
     assert client.created_intents == [("proj_001", ["f001"], "next", "test-worker")]
 
 
-def test_access_channel_fact_gets_registered_resource_id() -> None:
-    class Client:
-        @staticmethod
-        def resource_snapshot(_project_id: str):
-            return [
-                {
-                    "id": "ws_123456789abc",
-                    "kind": "webshell",
-                    "intent_id": "other-intent",
-                    "worker": "other-worker",
-                    "status": "available",
-                }
-            ]
-
-    description, ok = explore._attach_access_resource_ids(
-        Client(), "proj_001", "i001", "Pi", "WebShell 已验证可执行命令"
-    )
-
-    assert ok
-    assert description.endswith("Shared Resource IDs: ws_123456789abc")
-
-
-def test_listener_id_does_not_satisfy_access_channel_gate() -> None:
-    class Client:
-        @staticmethod
-        def resource_snapshot(_project_id: str):
-            return [
-                {
-                    "id": "lis_123456789abc",
-                    "kind": "c2_listener",
-                    "intent_id": "i001",
-                    "worker": "Pi",
-                }
-            ]
-
-    description, ok = explore._attach_access_resource_ids(
-        Client(), "proj_001", "i001", "Pi", "reverse shell via lis_123456789abc"
-    )
-
-    assert not ok
-    assert description == "reverse shell via lis_123456789abc"
-
-
-def test_access_channel_fact_without_registered_resource_is_blocked() -> None:
-    class Client:
-        @staticmethod
-        def resource_snapshot(_project_id: str):
-            return []
-
-    description, ok = explore._attach_access_resource_ids(
-        Client(), "proj_001", "i001", "Pi", "reverse shell connected"
-    )
-
-    assert not ok
-    assert description == "reverse shell connected"
-
-
-def test_resource_commit_failure_preserves_result_without_reexecution(monkeypatch) -> None:
+def test_access_channel_claim_concludes_without_resource_registration(
+    monkeypatch,
+) -> None:
     config = make_config()
     intent = make_intent()
     project = make_project(intents=[intent])
     client = FakeClient(project)
-    client.resource_snapshot = lambda _project_id: []  # type: ignore[attr-defined]
     containers = FakeContainerManager()
     driver = FakeDriver()
     lease = FakeLease()
+    monkeypatch.setattr(explore, "get_driver", lambda *_a, **_k: driver)
+    monkeypatch.setattr(explore.HeartbeatLease, "for_intent", _lease_factory(lease))
     monkeypatch.setattr(
         explore,
         "_run_process",
         lambda *_args, **_kwargs: ProcessResult(
             0,
-            '{"accepted":true,"data":{"description":"reverse shell connected"}}',
+            '{"accepted":true,"data":{"description":"reverse shell connected on target"}}',
             "",
         ),
     )
 
-    outcome = explore._try_conclude_fallback(
+    outcome = explore.run_explore_task(
         config,
         client,
         containers,
-        "container-proj_001",
-        config.workers[0],
-        driver,
-        "proj_001",
+        project,
+        "facts:\n- id: f001\n",
         intent,
-        "graph",
-        "session-001",
-        lease,
+        config.workers[0],
         TaskCancellation(),
-        fallback_description="reverse shell connected",
     )
 
     assert outcome == "success"
-    assert "Do not repeat exploitation" in client.concluded[-1][3]
+    assert client.concluded == [
+        ("proj_001", "i001", "test-worker", "reverse shell connected on target")
+    ]
