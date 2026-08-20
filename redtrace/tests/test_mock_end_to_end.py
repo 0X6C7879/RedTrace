@@ -175,6 +175,7 @@ class LocalContainerManager:
         command: list[str],
         timeout_seconds: int | None = None,
         kill_after_seconds: int = 5,
+        project_id: str | None = None,
     ) -> LocalProcess:
         assert timeout_seconds is not None
         assert kill_after_seconds == 5

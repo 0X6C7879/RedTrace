@@ -97,21 +97,23 @@ class LocalBackend:
                 f"active project workspace integrity failure: {project_dir} disappeared"
             )
         _ensure_directory(project_dir)
+        _ensure_directory(self._cache_dir(project_id))
+        _ensure_directory(self._runtime_dir(project_id))
         _ensure_directory(marker.parent)
         marker.touch(exist_ok=True)
-        pi_mcp = self._runtime_bin.parent / "mcp" / "pi.json"
-        if pi_mcp.is_file():
+        # MCP config lives at user level (~/.pi/agent/mcp.json), symlink
+        # into the workspace so Pi discovers it without per-project copies.
+        user_pi_mcp = Path.home() / ".pi" / "agent" / "mcp.json"
+        if user_pi_mcp.is_file():
             target = project_dir / ".pi" / "mcp.json"
             _ensure_directory(target.parent)
-            if target.is_symlink() and target.resolve(strict=False) != pi_mcp.resolve():
+            if target.is_symlink() and target.resolve(strict=False) != user_pi_mcp.resolve():
                 with contextlib.suppress(FileNotFoundError):
-                    # WSL drvfs ghost entries report is_symlink() but unlink()
-                    # fails with ENOENT; nothing can be removed in-process.
                     target.unlink()
             elif target.exists() and not target.is_symlink():
                 with contextlib.suppress(FileNotFoundError):
                     target.unlink()
-            _ensure_link(target, pi_mcp)
+            _ensure_link(target, user_pi_mcp)
         LOG.debug(
             "local project workdir ready project=%s dir=%s", project_id, project_dir
         )
@@ -166,6 +168,11 @@ class LocalBackend:
             ensure_directory_link(
                 state / "skills", self._capability_store.skills_dir
             )
+        # MCP configs live at user level (~/.claude/mcpServers/), symlink
+        # into the session directory so agent-native discovery picks them up.
+        user_mcp_servers = Path.home() / ".claude" / "mcpServers"
+        if user_mcp_servers.is_dir() and worker_type == "claudecode":
+            ensure_directory_link(state / "mcpServers", user_mcp_servers)
         return {variable: str(state)}
 
     def ensure_worker_running(
@@ -198,6 +205,7 @@ class LocalBackend:
         keep_stdin_open: bool = False,
         timeout_seconds: int | None = None,
         kill_after_seconds: int = 5,
+        project_id: str | None = None,
     ) -> LocalProcess:
         merged_env = {
             **os.environ,
@@ -209,11 +217,27 @@ class LocalBackend:
             {
                 "PWD": workspace,
                 "REDTRACE_WORKSPACE": workspace,
-                "TMPDIR": workspace,
-                "TMP": workspace,
-                "TEMP": workspace,
             }
         )
+        if project_id is not None:
+            cache_dir = str(self._cache_dir(project_id))
+            runtime_dir = str(self._runtime_dir(project_id))
+            merged_env.update(
+                {
+                    "XDG_CACHE_HOME": cache_dir,
+                    "TMPDIR": runtime_dir,
+                    "TMP": runtime_dir,
+                    "TEMP": runtime_dir,
+                }
+            )
+        else:
+            merged_env.update(
+                {
+                    "TMPDIR": workspace,
+                    "TMP": workspace,
+                    "TEMP": workspace,
+                }
+            )
         if all(
             (env or {}).get(key)
             for key in (
@@ -253,7 +277,7 @@ class LocalBackend:
 
     def write_text_file(self, container_name: str, path: str, content: str) -> str:
         workspace = Path(container_name).resolve()
-        project_id = safe_project_key(workspace.name)
+        project_id = safe_project_key(workspace.parent.name)
         if workspace != self._project_dir(project_id):
             raise ValueError(
                 f"local workspace is outside managed root: {container_name}"
@@ -288,26 +312,36 @@ class LocalBackend:
         return True
 
     def cleanup_deleted(self, project_id: str) -> bool:
-        project_dir = self._project_dir(project_id)
-        if project_dir.exists():
+        project_root = self._project_root_dir(project_id)
+        if project_root.exists():
             LOG.info(
-                "removing deleted project workdir project=%s dir=%s",
+                "removing deleted project root project=%s dir=%s",
                 project_id,
-                project_dir,
+                project_root,
             )
-            shutil.rmtree(project_dir)
+            shutil.rmtree(project_root)
         marker = contained_path(
             self._project_state_root, safe_project_key(project_id), "workspace.created"
         )
         with contextlib.suppress(FileNotFoundError):
             marker.unlink()
-        return not project_dir.exists()
+        return not project_root.exists()
 
     def managed_container_names(self) -> list[str]:
         return []
 
-    def _project_dir(self, project_id: str) -> Path:
+    def _project_root_dir(self, project_id: str) -> Path:
+        """Return the top-level directory for a project (contains workspace/cache/runtime)."""
         return contained_path(self._root, safe_project_key(project_id))
+
+    def _project_dir(self, project_id: str) -> Path:
+        return self._project_root_dir(project_id) / "workspace"
+
+    def _cache_dir(self, project_id: str) -> Path:
+        return self._project_root_dir(project_id) / "cache"
+
+    def _runtime_dir(self, project_id: str) -> Path:
+        return self._project_root_dir(project_id) / "runtime"
 
 
 def _ensure_directory(path: Path) -> None:

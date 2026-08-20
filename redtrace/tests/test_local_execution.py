@@ -179,22 +179,24 @@ def test_local_backend_creates_isolated_project_dir(tmp_path: Path) -> None:
     backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path)))
     handle = backend.ensure_running("proj_001")
 
-    assert Path(handle) == tmp_path / "proj_001"
+    assert Path(handle) == tmp_path / "proj_001" / "workspace"
     assert Path(handle).is_dir()
-    assert backend.container_name("proj_001") == str(tmp_path / "proj_001")
+    assert (tmp_path / "proj_001" / "cache").is_dir()
+    assert (tmp_path / "proj_001" / "runtime").is_dir()
+    assert backend.container_name("proj_001") == str(tmp_path / "proj_001" / "workspace")
 
 
 def test_local_backend_retries_transient_workspace_create_race(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    project_dir = tmp_path / "proj_001"
+    workspace_dir = tmp_path / "proj_001" / "workspace"
     original_mkdir = Path.mkdir
     raced = False
 
     def racing_mkdir(path: Path, *args, **kwargs) -> None:
         nonlocal raced
-        if path == project_dir and not raced:
+        if path == workspace_dir and not raced:
             raced = True
             original_mkdir(path, *args, **kwargs)
             raise FileExistsError(path)
@@ -203,7 +205,7 @@ def test_local_backend_retries_transient_workspace_create_race(
     monkeypatch.setattr(Path, "mkdir", racing_mkdir)
     backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path)))
 
-    assert Path(backend.ensure_running("proj_001")) == project_dir
+    assert Path(backend.ensure_running("proj_001")) == workspace_dir
 
 
 def test_local_backend_refuses_to_recreate_missing_active_workspace(
@@ -211,7 +213,7 @@ def test_local_backend_refuses_to_recreate_missing_active_workspace(
 ) -> None:
     backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path)))
     workspace = Path(backend.ensure_running("proj_001"))
-    shutil.rmtree(workspace)
+    shutil.rmtree(workspace.parent)
 
     with pytest.raises(RuntimeError, match="workspace integrity failure"):
         backend.ensure_running("proj_001")
@@ -219,23 +221,25 @@ def test_local_backend_refuses_to_recreate_missing_active_workspace(
 
 def test_local_backend_does_not_replace_workspace_file(tmp_path: Path) -> None:
     project_path = tmp_path / "proj_001"
-    project_path.write_text("keep me", encoding="utf-8")
+    project_path.mkdir(parents=True)
+    workspace_file = project_path / "workspace"
+    workspace_file.write_text("keep me", encoding="utf-8")
     backend = LocalBackend(LocalConfig(workspace_root=str(tmp_path)))
 
     with pytest.raises(NotADirectoryError, match="managed directory path"):
         backend.ensure_running("proj_001")
 
-    assert project_path.read_text(encoding="utf-8") == "keep me"
+    assert workspace_file.read_text(encoding="utf-8") == "keep me"
 
 
 def test_local_backend_reports_wsl_ghost_directory_with_guidance(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    project_dir = tmp_path / "proj_001"
+    workspace_dir = tmp_path / "proj_001" / "workspace"
 
     def ghosted_mkdir(path: Path, *args, **kwargs) -> None:
-        if path == project_dir:
+        if path == workspace_dir:
             # WSL drvfs ghost: mkdir says EEXIST while stat says ENOENT.
             raise FileExistsError(17, "File exists", str(path))
         Path.mkdir(path, *args, **kwargs)
@@ -246,7 +250,7 @@ def test_local_backend_reports_wsl_ghost_directory_with_guidance(
     with pytest.raises(RuntimeError, match="wsl.exe --shutdown"):
         backend.ensure_running("proj_001")
 
-    assert not project_dir.exists()
+    assert not workspace_dir.exists()
 
 
 def test_local_backend_keeps_agent_config_linked_and_sessions_outside_workspace(
@@ -259,6 +263,11 @@ def test_local_backend_keeps_agent_config_linked_and_sessions_outside_workspace(
     config = codex_home / "config.toml"
     config.write_text('model = "user-model"\n', encoding="utf-8")
     (codex_home / "sessions").mkdir()
+    claude_mcp_servers = home / ".claude" / "mcpServers"
+    claude_mcp_servers.mkdir(parents=True)
+    (claude_mcp_servers / "codegraph.json").write_text(
+        '{"enabled": true}\n', encoding="utf-8"
+    )
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     paths = RedTracePaths(
         root=tmp_path,
@@ -274,9 +283,10 @@ def test_local_backend_keeps_agent_config_linked_and_sessions_outside_workspace(
         "---\nname: api-security\ndescription: API security\n---\n",
         encoding="utf-8",
     )
-    pi_mcp = paths.runtime / "mcp" / "pi.json"
-    pi_mcp.parent.mkdir(parents=True)
-    pi_mcp.write_text('{"mcpServers":{}}\n', encoding="utf-8")
+    pi_agent_dir = home / ".pi" / "agent"
+    pi_agent_dir.mkdir(parents=True, exist_ok=True)
+    user_pi_mcp = pi_agent_dir / "mcp.json"
+    user_pi_mcp.write_text('{"mcpServers":{}}\n', encoding="utf-8")
     backend = LocalBackend(
         LocalConfig(workspace_root=str(paths.workspaces)), paths=paths
     )
@@ -290,7 +300,7 @@ def test_local_backend_keeps_agent_config_linked_and_sessions_outside_workspace(
         encoding="utf-8"
     )
     assert not (state / "sessions").exists()
-    assert (workspace / ".pi" / "mcp.json").resolve() == pi_mcp.resolve()
+    assert (workspace / ".pi" / "mcp.json").resolve() == user_pi_mcp.resolve()
     # The task workspace never receives Skill copies or links; the agent's
     # session config home gets a Skills link to the canonical store instead,
     # so native discovery finds the same directory the user-level roots use.
@@ -304,6 +314,10 @@ def test_local_backend_keeps_agent_config_linked_and_sessions_outside_workspace(
             paths.managed / "sessions" / "proj_001" / "pi" / "default"
         )
     }
+    claude_env = backend.conversation_environment("proj_001", "claudecode")
+    claude_state = Path(claude_env["CLAUDE_CONFIG_DIR"])
+    assert (claude_state / "mcpServers").is_symlink()
+    assert (claude_state / "mcpServers").resolve() == claude_mcp_servers.resolve()
     worker_a = backend.conversation_environment("proj_001", "pi", "worker-a")
     worker_b = backend.conversation_environment("proj_001", "pi", "worker-b")
     assert worker_a != worker_b
@@ -378,7 +392,7 @@ def test_local_graph_snapshot_uses_managed_project_path(tmp_path: Path) -> None:
     )
 
     snapshot = next(
-        (paths.workspaces / "proj_001" / ".redtrace" / "prompts").glob(
+        (paths.workspaces / "proj_001" / "workspace" / ".redtrace" / "prompts").glob(
             "reason_execute-*/graph.yaml"
         )
     )
@@ -406,8 +420,9 @@ def test_local_backend_merges_host_env_with_worker_env(
     process.start()
     result = process.communicate(timeout=20)
 
-    workspace = str((tmp_path / "proj_001").resolve())
+    workspace = str((tmp_path / "proj_001" / "workspace").resolve())
     assert process.env["PWD"] == workspace
+    # Without project_id, TMPDIR falls back to workspace
     assert process.env["TMPDIR"] == workspace
     assert result.stdout.split("|")[0] == "host-worker"
     assert result.stdout.split("|")[2] == workspace
@@ -826,7 +841,7 @@ def test_explore_runs_real_local_cli_end_to_end(tmp_path: Path, monkeypatch) -> 
     assert outcome == "success"
     assert client.concluded == [("proj_001", "i001", "test-worker", "local fake fact")]
     # graph snapshot was materialised on the host under the patched root
-    snapshot_root = tmp_path / "work" / "proj_001" / ".redtrace" / "prompts"
+    snapshot_root = tmp_path / "work" / "proj_001" / "workspace" / ".redtrace" / "prompts"
     assert any(p.name == "graph.yaml" for p in snapshot_root.rglob("*"))
 
 

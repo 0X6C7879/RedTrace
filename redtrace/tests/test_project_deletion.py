@@ -64,7 +64,10 @@ def test_deletion_failure_is_visible_and_retry_finishes_cleanup(
         managed / "log" / "projects" / "other-project" / "worker.log"
     )
     shared_log = managed / "log" / "server.log"
-    workspace = root / "workspaces" / project_id
+    project_root = root / "workspaces" / project_id
+    workspace = project_root / "workspace"
+    cache = project_root / "cache"
+    runtime = project_root / "runtime"
     archive = audit / project_id
     session_file = project_state / "conversations" / "pi" / "session-delete-001.jsonl"
     worker_log = (
@@ -80,6 +83,8 @@ def test_deletion_failure_is_visible_and_retry_finishes_cleanup(
         project_log,
         sibling_log.parent,
         workspace,
+        cache,
+        runtime,
         archive,
         session_file.parent,
         worker_log.parent,
@@ -90,6 +95,8 @@ def test_deletion_failure_is_visible_and_retry_finishes_cleanup(
     sibling_log.write_text("keep", encoding="utf-8")
     shared_log.write_text("keep", encoding="utf-8")
     (workspace / "evidence.txt").write_text("evidence", encoding="utf-8")
+    (cache / "npm-cache").write_text("cache", encoding="utf-8")
+    (runtime / "session.json").write_text("session", encoding="utf-8")
     (archive / "report.txt").write_text("report", encoding="utf-8")
     session_file.write_text("session", encoding="utf-8")
     worker_log.write_text("worker log", encoding="utf-8")
@@ -113,8 +120,8 @@ def test_deletion_failure_is_visible_and_retry_finishes_cleanup(
                 "run-delete-001",
                 project_id,
                 "session-delete-001",
-                str(root / "workspaces" / project_id),
-                str(root / "workspaces" / project_id),
+                str(root / "workspaces" / project_id / "workspace"),
+                str(root / "workspaces" / project_id / "workspace"),
                 utcnow(),
             ),
         )
@@ -173,7 +180,10 @@ def test_deletion_failure_is_visible_and_retry_finishes_cleanup(
     assert not project_log.exists()
     assert sibling_log.read_text(encoding="utf-8") == "keep"
     assert shared_log.read_text(encoding="utf-8") == "keep"
+    assert not project_root.exists()
     assert not workspace.exists()
+    assert not cache.exists()
+    assert not runtime.exists()
     assert not archive.exists()
     assert not session_file.exists()
     assert not worker_log.exists()
@@ -255,7 +265,14 @@ def test_local_workspace_delete_is_idempotent_and_confined(tmp_path: Path) -> No
     root = tmp_path / "workspaces"
     backend = LocalBackend(LocalConfig(workspace_root=str(root)))
     workspace = Path(backend.ensure_running("project-001"))
+    assert workspace.name == "workspace"
+    project_root = workspace.parent
+    assert project_root.name == "project-001"
+    assert (project_root / "cache").is_dir()
+    assert (project_root / "runtime").is_dir()
     (workspace / "evidence.txt").write_text("evidence", encoding="utf-8")
+    (project_root / "cache" / "npm-cache").write_text("cache", encoding="utf-8")
+    (project_root / "runtime" / "session.json").write_text("session", encoding="utf-8")
     shared = tmp_path / "skills"
     shared.mkdir()
     (shared / "SKILL.md").write_text("shared", encoding="utf-8")
@@ -263,6 +280,7 @@ def test_local_workspace_delete_is_idempotent_and_confined(tmp_path: Path) -> No
     assert backend.cleanup_deleted("project-001") is True
     assert backend.cleanup_deleted("project-001") is True
     assert not workspace.exists()
+    assert not project_root.exists()
     assert (shared / "SKILL.md").is_file()
 
 

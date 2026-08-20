@@ -237,6 +237,9 @@ def _cleanup_project_files(project_id: str) -> None:
         contained_path(managed, "log", "projects", project_id),
         contained_path(managed, "sessions", project_id),
         contained_path(workspaces, project_id),
+        contained_path(workspaces, project_id, "workspace"),
+        contained_path(workspaces, project_id, "cache"),
+        contained_path(workspaces, project_id, "runtime"),
         contained_path(audit, project_id),
         contained_path(AUDIT_ROOT, project_id),
     }

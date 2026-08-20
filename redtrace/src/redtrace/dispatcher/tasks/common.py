@@ -521,6 +521,8 @@ def run_worker_process(
         process_options["stdin_text"] = stdin_text
     if live_control is not None:
         process_options["keep_stdin_open"] = True
+    if project_id is not None:
+        process_options["project_id"] = project_id
     process = container_manager.build_exec_process(
         container_name,
         process_env,
