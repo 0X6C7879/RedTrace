@@ -140,6 +140,7 @@ class CreateIntentRequest(BaseModel):
     description: str
     creator: str
     worker: str | None = None
+    max_active_intents: int | None = Field(default=None, gt=0)
 
     model_config = {"populate_by_name": True}
 

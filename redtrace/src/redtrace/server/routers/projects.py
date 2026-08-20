@@ -1,6 +1,6 @@
 import time
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -24,6 +24,7 @@ from redtrace.board.models import (
 from redtrace.paths import PathResolutionError
 from redtrace.server.db import get_conn, wait_for_change
 from redtrace.server.project_cleanup import (
+    compact_after_deletion,
     deletion_status,
     issue_deletion_confirmation,
     report_runtime_cleanup,
@@ -104,13 +105,19 @@ def get_deletion_status(project_id: str):
 
 
 @router.post("/projects/{project_id}/deletion/runtime-cleaned")
-def runtime_cleaned(project_id: str, body: RuntimeCleanupReport):
+def runtime_cleaned(
+    project_id: str,
+    body: RuntimeCleanupReport,
+    background_tasks: BackgroundTasks,
+):
     try:
         completed = report_runtime_cleanup(
             project_id, success=body.success, error=body.error
         )
     except (PathResolutionError, RuntimeError) as exc:
         raise HTTPException(409, str(exc)) from exc
+    if completed:
+        background_tasks.add_task(compact_after_deletion)
     return {"projectId": project_id, "completed": completed}
 
 

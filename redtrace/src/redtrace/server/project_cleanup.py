@@ -192,15 +192,18 @@ def report_runtime_cleanup(
                 "DELETE FROM project_deletions WHERE project_id = ?",
                 (project_id,),
             )
-        try:
-            db.compact()
-        except Exception:
-            LOG.warning("database compaction failed after project deletion", exc_info=True)
         return True
     except Exception as exc:
         LOG.warning("project deletion cleanup failed project=%s", project_id, exc_info=True)
         _mark_failed(project_id, str(exc))
         return False
+
+
+def compact_after_deletion() -> None:
+    try:
+        db.compact()
+    except Exception:
+        LOG.warning("database compaction failed after project deletion", exc_info=True)
 
 
 def _mark_failed(project_id: str, error: str) -> None:

@@ -402,13 +402,16 @@ def write_graph_snapshot_reference(
     return (
         "当前 Task Graph snapshot 位于当前 Workspace 的以下文件：\n\n"
         f"{readable_path}\n\n"
+        "RedTrace 内置 CLI 协议（适用于 Claude Code、Codex 和 Pi）："
+        "`redtrace-blackboard`、`redtrace-resource`、`redtrace-context` 和 "
+        "`redtrace-skill` 都是注入 PATH 的 shell CLI，必须通过当前 Worker 的 "
+        "shell/terminal tool 执行。它们不是 MCP server、MCP tool 或 MCP Resource；"
+        "不得通过任何 MCP 接口调用，也不得为它们构造 URI。\n\n"
         "该文件包含当前 Blackboard 中的 Fact、Hint 和 Intent。"
         "请根据当前规划需要自行决定读取方式：可以直接读取文件，"
-        "也可以通过 shell 命令（Codex 中使用 exec_command）运行 "
-        "`redtrace-blackboard` CLI（例如 `redtrace-blackboard snapshot`），"
+        "也可以通过当前 Worker 的 shell/terminal tool 运行 "
+        "`redtrace-blackboard snapshot` 等 CLI 命令，"
         "对节点、上下文、来源和最新变化进行按需查询。"
-        "`redtrace-blackboard` 不是 MCP server；不要对它调用 read_mcp_resource "
-        "或 list_mcp_resources，也不要构造 blackboard:// URI。"
     )
 
 

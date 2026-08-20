@@ -185,6 +185,116 @@ def test_pi_non_streamed_message_end_keeps_full_text_fallback() -> None:
     assert events[0]["content"] == "hello"
 
 
+def test_codex_streamed_delta_then_completed_item_does_not_duplicate() -> None:
+    state: dict[str, object] = {}
+    delta = normalize_event(
+        "codex",
+        json.dumps(
+            {
+                "method": "item/agentMessage/delta",
+                "params": {"itemId": "msg-1", "delta": "hello"},
+            }
+        ),
+        codex_state=state,
+    )
+    completed = normalize_event(
+        "codex",
+        json.dumps(
+            {
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "id": "msg-1",
+                        "type": "agentMessage",
+                        "text": "hello",
+                    }
+                },
+            }
+        ),
+        codex_state=state,
+    )
+
+    assert len(delta) == 1
+    assert delta[0]["kind"] == "assistant.delta"
+    assert delta[0]["content"] == "hello"
+    assert completed == []
+    assert state["text_streamed"] is False
+
+
+def test_codex_non_streamed_completed_item_keeps_full_text_fallback() -> None:
+    state: dict[str, object] = {}
+    events = normalize_event(
+        "codex",
+        json.dumps(
+            {
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "id": "msg-1",
+                        "type": "agentMessage",
+                        "text": "hello",
+                    }
+                },
+            }
+        ),
+        codex_state=state,
+    )
+
+    assert len(events) == 1
+    assert events[0]["kind"] == "assistant.message"
+    assert events[0]["content"] == "hello"
+
+
+def test_codex_audit_publisher_persists_single_streamed_message(tmp_path: Path) -> None:
+    client = RecordingClient()
+    worker = WorkerConfig.model_validate(
+        {
+            "name": "codex-1",
+            "type": "codex",
+            "max_running": 1,
+            "priority": 0,
+            "env": {},
+        }
+    )
+    publisher = AuditPublisher(
+        client,
+        "proj_001",
+        "i001",
+        worker,
+        "explore_execute",
+        str(tmp_path),
+        "prompt",
+    )
+    text = "VPN 联通预检通过"
+    for payload in (
+        {
+            "method": "item/agentMessage/delta",
+            "params": {"itemId": "msg-1", "delta": text},
+        },
+        {
+            "method": "item/completed",
+            "params": {
+                "item": {
+                    "id": "msg-1",
+                    "type": "agentMessage",
+                    "text": text,
+                }
+            },
+        },
+        {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+    ):
+        publisher.handle_output("stdout", json.dumps(payload, ensure_ascii=False))
+    publisher.finish(ProcessResult(returncode=0, stdout="", stderr=""))
+    publisher.close()
+
+    events = _events_of(client)
+    deltas = [event for event in events if event["kind"] == "assistant.delta"]
+    messages = [event for event in events if event["kind"] == "assistant.message"]
+    assert [event["content"] for event in deltas] == [text]
+    assert [event["content"] for event in messages] == [text]
+    assert messages[0].get("persist_only") is True
+
+
 def test_pi_audit_publisher_persists_single_streamed_message(tmp_path: Path) -> None:
     client = RecordingClient()
     worker = WorkerConfig.model_validate(

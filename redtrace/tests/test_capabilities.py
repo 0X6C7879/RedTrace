@@ -35,6 +35,20 @@ Use the bundled scripts.
 """
 
 
+def test_redtrace_cli_skills_define_one_cross_worker_protocol() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    for relative_path in (
+        "skills/redtrace-blackboard/SKILL.md",
+        "skills/redtrace-resource/SKILL.md",
+        "skills/skill-evolution/SKILL.md",
+    ):
+        content = (repo_root / relative_path).read_text(encoding="utf-8")
+        assert "Claude Code、Codex 和 Pi" in content
+        assert "当前 Worker 的 shell/terminal tool" in content
+        assert "不是 MCP server、MCP tool 或 MCP Resource" in content
+        assert "不要通过任何 MCP 接口调用" in content
+
+
 def _worker(worker_type: str) -> WorkerConfig:
     return WorkerConfig.model_validate(
         {

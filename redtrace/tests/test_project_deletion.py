@@ -3,12 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
+
 from redtrace.board.storage import utcnow
 from redtrace.dispatcher.config import LocalConfig
 from redtrace.dispatcher.runtime.local_backend import LocalBackend
 from redtrace.server import db
 from redtrace.server.app import app
+from redtrace.server.routers import projects as projects_router
 
 
 @pytest.fixture
@@ -46,6 +49,31 @@ def _delete(client: TestClient, project_id: str):
             "actor": "human-ui",
         },
     )
+
+
+def test_runtime_cleanup_defers_database_compaction(monkeypatch) -> None:
+    compacted = []
+    background_tasks = BackgroundTasks()
+    monkeypatch.setattr(
+        projects_router,
+        "report_runtime_cleanup",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        projects_router,
+        "compact_after_deletion",
+        lambda: compacted.append(True),
+    )
+
+    response = projects_router.runtime_cleaned(
+        "proj_001",
+        projects_router.RuntimeCleanupReport(success=True),
+        background_tasks,
+    )
+
+    assert response == {"projectId": "proj_001", "completed": True}
+    assert compacted == []
+    assert len(background_tasks.tasks) == 1
 
 
 def test_deletion_failure_is_visible_and_retry_finishes_cleanup(

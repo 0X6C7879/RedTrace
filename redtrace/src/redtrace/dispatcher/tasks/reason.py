@@ -73,6 +73,8 @@ def run_reason_task(
             for intent in project.intents
             if intent.to is None and intent.state in ("open", "working")
         ]
+        max_active_intents = config.tasks.reason.max_intents
+        available_intent_slots = max(0, max_active_intents - len(open_intents))
         allowed_fact_ids = [fact.id for fact in project.facts if fact.id != "goal"]
         LOG.debug(
             "reason context prepared project=%s worker=%s facts=%s allowed_fact_ids=%s hints=%s open_intents=%s",
@@ -100,7 +102,7 @@ def run_reason_task(
                 "graph_yaml": export_yaml.strip(),
                 "fact_ids": format_fact_ids(allowed_fact_ids),
                 "open_intents": format_open_intents(open_intents),
-                "max_intents": str(config.tasks.reason.max_intents),
+                "max_intents": str(available_intent_slots),
             },
         )
 
@@ -245,7 +247,7 @@ def run_reason_task(
             kind, data = validate_reason_payload(
                 payload,
                 open_intents_empty=not open_intents,
-                max_intents=config.tasks.reason.max_intents,
+                max_intents=available_intent_slots,
             )
         except ProviderError as exc:
             LOG.warning(
@@ -317,12 +319,14 @@ def run_reason_task(
 
         if kind == "intents":
             created = 0
+            at_capacity = False
             for intent_data in data:
                 response = client.create_intent(
                     project.project.id,
                     intent_data["from"],
                     intent_data["description"],
                     worker.name,
+                    max_active_intents=max_active_intents,
                 )
                 if response.status_code == 403:
                     LOG.info(
@@ -333,11 +337,13 @@ def run_reason_task(
                     )
                     return "success"
                 if response.status_code == 409:
+                    at_capacity = True
                     LOG.info(
-                        "reason intent lost race project=%s worker=%s from=%s",
+                        "reason intent capacity reached project=%s worker=%s from=%s limit=%s",
                         project.project.id,
                         worker.name,
                         intent_data["from"],
+                        max_active_intents,
                     )
                     continue
                 if not response.ok:
@@ -367,6 +373,8 @@ def run_reason_task(
                 total_ms,
             )
             if created == 0:
+                if at_capacity:
+                    return "success"
                 LOG.warning(
                     "reason created no intents project=%s worker=%s attempted=%s execute_ms=%s total_ms=%s",
                     project.project.id,

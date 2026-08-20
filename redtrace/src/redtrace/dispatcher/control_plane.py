@@ -242,17 +242,26 @@ class ControlPlaneClient:
         )
 
     def create_intent(
-        self, project_id: str, from_ids: list[str], description: str, creator: str
+        self,
+        project_id: str,
+        from_ids: list[str],
+        description: str,
+        creator: str,
+        *,
+        max_active_intents: int | None = None,
     ) -> ApiResult:
+        payload: dict[str, Any] = {
+            "from": from_ids,
+            "description": description,
+            "creator": creator,
+            "worker": None,
+        }
+        if max_active_intents is not None:
+            payload["max_active_intents"] = max_active_intents
         return self._request_json(
             "POST",
             f"/projects/{project_id}/intents",
-            json={
-                "from": from_ids,
-                "description": description,
-                "creator": creator,
-                "worker": None,
-            },
+            json=payload,
         )
 
     def append_audit_events(

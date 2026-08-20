@@ -23,6 +23,7 @@ _change_generation = 0
 _blackboard_condition = threading.Condition()
 _blackboard_generation = 0
 _last_blackboard_revision = 0
+_compact_lock = threading.Lock()
 
 
 def current_change_generation() -> int:
@@ -475,6 +476,8 @@ CREATE INDEX IF NOT EXISTS idx_resource_audit_resource
 ON resource_audit_events(resource_id, id);
 """
 
+SQLITE_BUSY_TIMEOUT_SECONDS = 30.0
+
 BLACKBOARD_DELETE_TRIGGERS = """\
 DROP TRIGGER IF EXISTS trg_blackboard_fact_removed;
 CREATE TRIGGER trg_blackboard_fact_removed
@@ -553,7 +556,7 @@ def configure(path: Path) -> None:
     _db_path = path
     _db_path.parent.mkdir(parents=True, exist_ok=True)
     _migrate_legacy_storage(_db_path)
-    conn = sqlite3.connect(str(_db_path))
+    conn = sqlite3.connect(str(_db_path), timeout=SQLITE_BUSY_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA secure_delete=ON")
@@ -927,7 +930,7 @@ def _backfill_blackboard_events(conn: sqlite3.Connection) -> None:
 @contextmanager
 def get_conn(*, immediate: bool = False) -> Generator[sqlite3.Connection, None, None]:
     assert _db_path is not None
-    conn = sqlite3.connect(str(_db_path))
+    conn = sqlite3.connect(str(_db_path), timeout=SQLITE_BUSY_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA secure_delete=ON")
@@ -968,14 +971,19 @@ def output_root(category: str) -> Path:
 
 
 def compact() -> None:
-    """Physically release deleted task pages without using the system temp dir."""
+    """Best-effort release of deleted pages, coalescing overlapping requests."""
     assert _db_path is not None
-    conn = sqlite3.connect(str(_db_path), timeout=30)
+    if not _compact_lock.acquire(blocking=False):
+        return
     try:
-        conn.execute("PRAGMA secure_delete=ON")
-        conn.execute("PRAGMA temp_store=MEMORY")
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        conn.execute("VACUUM")
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn = sqlite3.connect(str(_db_path), timeout=SQLITE_BUSY_TIMEOUT_SECONDS)
+        try:
+            conn.execute("PRAGMA secure_delete=ON")
+            conn.execute("PRAGMA temp_store=MEMORY")
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("VACUUM")
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            conn.close()
     finally:
-        conn.close()
+        _compact_lock.release()

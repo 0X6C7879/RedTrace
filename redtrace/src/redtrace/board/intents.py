@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi import HTTPException
+
 from redtrace.board.models import (
     ConcludeRequest,
     ConcludeResponse,
@@ -31,6 +33,23 @@ def create(project_id: str, request: CreateIntentRequest) -> Intent:
         validate_facts_exist(conn, project_id, request.from_)
         validate_goal_not_in_sources(request.from_)
         validate_intent_creator_worker(request.creator, request.worker)
+
+        if request.max_active_intents is not None:
+            active_count = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM intents
+                WHERE project_id = ? AND to_fact_id IS NULL
+                    AND concluded_at IS NULL AND state IN ('open', 'working')
+                """,
+                (project_id,),
+            ).fetchone()[0]
+            if active_count >= request.max_active_intents:
+                raise HTTPException(
+                    409,
+                    "Project active Intent limit reached "
+                    f"({active_count}/{request.max_active_intents})",
+                )
 
         now = utcnow()
         intent_id = next_intent_id(conn, project_id)
@@ -148,5 +167,4 @@ def _load_intent(conn, project_id: str, intent_id: str) -> Intent:
     ).fetchone()
     assert row is not None
     return intent_to_model(conn, row, project_id)
-
 

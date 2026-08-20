@@ -148,7 +148,11 @@ MOCK_ALLOWED_ENV_KEYS = frozenset(
 
 class ReasonTaskConfig(BaseModel):
     timeout: int = Field(gt=0)
-    max_intents: int = Field(gt=0, default=4)
+    max_intents: int = Field(
+        gt=0,
+        default=4,
+        description="Maximum open or working Intents allowed per project",
+    )
 
 
 class ExploreTaskConfig(BaseModel):

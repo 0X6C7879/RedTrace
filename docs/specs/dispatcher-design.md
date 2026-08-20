@@ -202,7 +202,7 @@ Reason 是短时全局判断任务，负责：
 
 1. 判断当前 Fact 是否已经满足 Goal；
 2. 若未满足，判断是否需要创建新 Intent；
-3. 单次 Reason 最多提出 `tasks.reason.max_intents` 个新 Intent；
+3. 每个项目最多同时存在 `tasks.reason.max_intents` 个 `open` 或 `working` Intent；Reason 只补足剩余槽位，写入时再次原子检查上限；
 4. 在已有足够工作时返回空操作，避免重复分支。
 
 Reason 使用项目级租约，避免多个 Reason 同时产生冲突方向。`planning_revision` 在 Fact、Hint 变化或 Intent 断路器打开时递增；Reason 即使返回 No-op 也会持久化 `reason_evaluated_revision`。claim、heartbeat、last-seen 和并发槽位变化不会触发重新规划。

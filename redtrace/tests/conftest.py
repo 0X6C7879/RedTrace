@@ -129,7 +129,15 @@ class FakeClient:
         self.completed.append((project_id, from_ids, description, worker))
         return ApiResult(200, {})
 
-    def create_intent(self, project_id: str, from_ids: list[str], description: str, creator: str) -> ApiResult:
+    def create_intent(
+        self,
+        project_id: str,
+        from_ids: list[str],
+        description: str,
+        creator: str,
+        *,
+        max_active_intents: int | None = None,
+    ) -> ApiResult:
         self.created_intents.append((project_id, from_ids, description, creator))
         return ApiResult(201, {})
 

@@ -144,13 +144,18 @@ def test_write_graph_snapshot_reference_inlines_nothing() -> None:
 
     assert graph not in reference
     assert any(graph == content for _, _, content in manager.writes)
-    assert "redtrace-blackboard" in reference
-    assert "`redtrace-blackboard` CLI" in reference
-    assert "`redtrace-blackboard snapshot`" in reference
-    assert "exec_command" in reference
-    assert "不是 MCP server" in reference
-    assert "不要对它调用 read_mcp_resource" in reference
-    assert "不要构造 blackboard:// URI" in reference
+    for command in (
+        "redtrace-blackboard",
+        "redtrace-resource",
+        "redtrace-context",
+        "redtrace-skill",
+    ):
+        assert command in reference
+    assert "适用于 Claude Code、Codex 和 Pi" in reference
+    assert "当前 Worker 的 shell/terminal tool" in reference
+    assert "不是 MCP server、MCP tool 或 MCP Resource" in reference
+    assert "不得通过任何 MCP 接口调用" in reference
+    assert "不得为它们构造 URI" in reference
     assert "有界" not in reference
     assert "截断" not in reference
 

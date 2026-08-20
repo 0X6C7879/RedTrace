@@ -231,7 +231,8 @@ def test_reason_only_fills_available_open_intent_slots(monkeypatch) -> None:
             0,
             '{"accepted":true,"data":{"intents":['
             '{"from":["f001"],"description":"slot one"},'
-            '{"from":["f001"],"description":"slot two"}]}}',
+            '{"from":["f001"],"description":"slot two"},'
+            '{"from":["f001"],"description":"overflow"}]}}',
             "",
         ),
     )
@@ -251,6 +252,43 @@ def test_reason_only_fills_available_open_intent_slots(monkeypatch) -> None:
         ("proj_001", ["f001"], "slot one", "test-worker"),
         ("proj_001", ["f001"], "slot two", "test-worker"),
     ]
+
+
+def test_reason_at_open_intent_limit_creates_no_more(monkeypatch) -> None:
+    config = make_config()
+    project = make_project(
+        intents=[make_intent("i001"), make_intent("i002"), make_intent("i003")]
+    )
+    client = FakeClient(project)
+    containers = FakeContainerManager()
+    driver = FakeDriver()
+    lease = FakeLease()
+
+    monkeypatch.setattr(reason, "get_driver", lambda *_a, **_k: driver)
+    monkeypatch.setattr(reason.HeartbeatLease, "for_reason", _lease_factory(lease))
+    monkeypatch.setattr(
+        reason,
+        "run_worker_process",
+        lambda *_args, **_kwargs: ProcessResult(
+            0,
+            '{"accepted":true,"data":{"intents":['
+            '{"from":["f001"],"description":"overflow"}]}}',
+            "",
+        ),
+    )
+
+    outcome = reason.run_reason_task(
+        config,
+        client,
+        containers,
+        project,
+        "graph",
+        config.workers[0],
+        TaskCancellation(),
+    )
+
+    assert outcome == "success"
+    assert client.created_intents == []
 
 
 def test_reason_noop_still_commits_evaluated_revision(monkeypatch) -> None:

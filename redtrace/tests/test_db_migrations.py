@@ -6,6 +6,16 @@ from pathlib import Path
 from redtrace.server import db
 
 
+def test_runtime_connections_wait_for_database_maintenance(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(db, "_db_path", None)
+    db.configure(tmp_path / "redtrace.db")
+
+    with db.get_conn() as conn:
+        busy_timeout_ms = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+
+    assert busy_timeout_ms == int(db.SQLITE_BUSY_TIMEOUT_SECONDS * 1000)
+
+
 def test_default_database_migrates_legacy_storage_without_leaving_user_files(
     tmp_path: Path, monkeypatch
 ) -> None:

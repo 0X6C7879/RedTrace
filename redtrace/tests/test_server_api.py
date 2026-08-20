@@ -79,6 +79,38 @@ def test_concurrent_intent_claim_has_exactly_one_winner(client: TestClient) -> N
     assert sorted(response.status_code for response in responses) == [200] + [409] * 7
 
 
+def test_concurrent_reason_intent_creation_respects_active_limit(
+    client: TestClient,
+) -> None:
+    project_id = _create_project(client)
+
+    def create(index: int):
+        return client.post(
+            f"/projects/{project_id}/intents",
+            json={
+                "from": ["origin"],
+                "description": f"parallel work {index}",
+                "creator": "reasoner",
+                "worker": None,
+                "max_active_intents": 2,
+            },
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        responses = list(executor.map(create, range(8)))
+
+    statuses = sorted(response.status_code for response in responses)
+    assert statuses == [201] * 2 + [409] * 6
+    detail = client.get(f"/projects/{project_id}").json()
+    assert len(
+        [
+            intent
+            for intent in detail["intents"]
+            if intent["to"] is None and intent["state"] in {"open", "working"}
+        ]
+    ) == 2
+
+
 def test_dispatcher_change_cursor_advances_on_project_write(
     client: TestClient,
 ) -> None:

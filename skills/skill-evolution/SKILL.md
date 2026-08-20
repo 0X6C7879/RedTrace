@@ -7,7 +7,7 @@ description: Review verified outcomes and evolve Skills with reusable learnings 
 
 任务中产生经验证、可复用的新经验时加载本 Skill。
 
-本 Skill 中的 `redtrace-skill` 是注入 `PATH` 的 shell CLI，不是 MCP server。通过终端执行（Codex 中使用 `exec_command`）；不要把命令名当作 MCP server，也不要为它构造 URI。
+本 Skill 对 Claude Code、Codex 和 Pi 使用同一接口：`redtrace-skill` 是注入 `PATH` 的 shell CLI，必须通过当前 Worker 的 shell/terminal tool 执行。它不是 MCP server、MCP tool 或 MCP Resource；不要通过任何 MCP 接口调用，也不要为它构造 URI。
 
 ## 职责边界
 

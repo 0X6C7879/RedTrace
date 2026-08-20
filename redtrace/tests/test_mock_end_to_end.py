@@ -79,10 +79,26 @@ class InProcessClient:
             {"from": from_ids, "description": description, "worker": worker},
         )
 
-    def create_intent(self, project_id: str, from_ids: list[str], description: str, creator: str) -> ApiResult:
+    def create_intent(
+        self,
+        project_id: str,
+        from_ids: list[str],
+        description: str,
+        creator: str,
+        *,
+        max_active_intents: int | None = None,
+    ) -> ApiResult:
+        payload = {
+            "from": from_ids,
+            "description": description,
+            "creator": creator,
+            "worker": None,
+        }
+        if max_active_intents is not None:
+            payload["max_active_intents"] = max_active_intents
         return self._post(
             f"/projects/{project_id}/intents",
-            {"from": from_ids, "description": description, "creator": creator, "worker": None},
+            payload,
         )
 
     def apply_graph_patch(self, project_id: str, patch: dict[str, Any]) -> ApiResult:

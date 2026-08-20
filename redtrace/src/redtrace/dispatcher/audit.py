@@ -70,6 +70,7 @@ class AuditPublisher:
             "thinking_streamed": False,
             "text_streamed": False,
         }
+        self._codex_state: dict[str, Any] = {"text_streamed": False}
         self._run = {
             "id": self.run_id,
             "project_id": project_id,
@@ -107,6 +108,7 @@ class AuditPublisher:
             self._run["provider"],
             line,
             claude_tool_state=self._claude_tool_blocks,
+            codex_state=self._codex_state,
             pi_state=self._pi_state,
         ):
             event = _enrich_tool_event(event, self._tool_calls)
@@ -292,6 +294,7 @@ def normalize_event(
     line: str,
     *,
     claude_tool_state: dict[int, dict[str, Any]] | None = None,
+    codex_state: dict[str, Any] | None = None,
     pi_state: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     try:
@@ -304,7 +307,7 @@ def normalize_event(
     if provider == "claudecode":
         return _normalize_claude(payload, timestamp, claude_tool_state)
     if provider == "codex":
-        return _normalize_codex(payload, timestamp)
+        return _normalize_codex(payload, timestamp, codex_state)
     if provider == "pi":
         return _normalize_pi(payload, timestamp, pi_state)
     return []
@@ -421,7 +424,11 @@ def _normalize_claude(
     return []
 
 
-def _normalize_codex(payload: dict[str, Any], timestamp: str) -> list[dict[str, Any]]:
+def _normalize_codex(
+    payload: dict[str, Any],
+    timestamp: str,
+    state: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     event_type = payload.get("method") or payload.get("type")
     params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
     item = params.get("item") or payload.get("item") or {}
@@ -438,14 +445,24 @@ def _normalize_codex(payload: dict[str, Any], timestamp: str) -> list[dict[str, 
     if event_type in {"turn.started", "turn/started"}:
         return [_event("turn.started", timestamp)]
     if event_type == "item/agentMessage/delta":
-        return [_event("assistant.delta", timestamp, content=params.get("delta", ""))]
+        delta = params.get("delta", "")
+        if not isinstance(delta, str) or not delta:
+            return []
+        if state is not None:
+            state["text_streamed"] = True
+        return [_event("assistant.delta", timestamp, content=delta)]
     if event_type in {
         "item/reasoning/summaryTextDelta",
         "item/reasoning/textDelta",
     }:
         return [_event("thinking.delta", timestamp, content=params.get("delta", ""))]
     if event_type == "item.delta":
-        return _normalize_codex_delta(item, item_type, timestamp)
+        events = _normalize_codex_delta(item, item_type, timestamp)
+        if state is not None and any(
+            event["kind"] == "assistant.delta" for event in events
+        ):
+            state["text_streamed"] = True
+        return events
     if event_type in {"item.started", "item/started"} and item_type in {
         "command_execution",
         "commandExecution",
@@ -478,6 +495,15 @@ def _normalize_codex(payload: dict[str, Any], timestamp: str) -> list[dict[str, 
                 )
             ]
         if item_type in {"agent_message", "agentMessage"}:
+            streamed = bool(state.get("text_streamed")) if state else False
+            if state is not None:
+                state["text_streamed"] = False
+            if streamed:
+                # The body was already delivered through agent-message deltas
+                # and buffered by AuditPublisher. The completed item only ends
+                # that stream; emitting its full text would duplicate the card
+                # and its durable audit record.
+                return []
             return [
                 _event(
                     "assistant.message",
