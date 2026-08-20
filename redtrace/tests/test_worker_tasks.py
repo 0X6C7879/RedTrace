@@ -336,8 +336,11 @@ def test_explore_early_plain_text_exit_uses_conclude_fallback(monkeypatch) -> No
 
     assert outcome == "success"
     assert client.concluded == [("proj_001", "i001", "test-worker", "confirmed fact")]
-    assert len(containers.writes) == 1
-    assert "/explore_execute-" in containers.writes[0][1]
+    # The task-start tracking reset writes an empty loaded-skills file;
+    # filter it out to assert on the substantive writes only.
+    writes = [w for w in containers.writes if "/loaded-skills-" not in w[1]]
+    assert len(writes) == 1
+    assert "/explore_execute-" in writes[0][1]
     assert len(driver.execute_prompts) == 1
     assert "investigate" in driver.execute_prompts[0]
     assert len(driver.conclude_prompts) == 1

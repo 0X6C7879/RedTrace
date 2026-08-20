@@ -24,7 +24,6 @@ def _layout(root: Path) -> RedTracePaths:
         root=root,
         skills=root / "skills",
         mcp=root / "mcp",
-        plugins=root / "plugins",
         managed=root / ".redtrace",
         workspaces=root / "workspaces",
         audit=root / ".redtrace" / "audit",
@@ -108,11 +107,6 @@ def test_workers_use_native_agent_state_and_shared_capabilities(
         '{"command":"mcp-filesystem","args":["."]}\n',
         encoding="utf-8",
     )
-    layout.plugins.mkdir()
-    (layout.plugins / "manifest.json").write_text(
-        '{"schemaVersion":1,"plugins":[]}\n',
-        encoding="utf-8",
-    )
     empty_home = tmp_path / "home"
     empty_home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: empty_home))
@@ -191,7 +185,6 @@ def test_shared_skill_link_recovers_after_project_move(
         encoding="utf-8",
     )
     layout.mcp.mkdir()
-    layout.plugins.mkdir()
     empty_home = tmp_path / "home"
     empty_home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: empty_home))
@@ -208,7 +201,7 @@ def test_shared_skill_link_recovers_after_project_move(
     assert (skill_link / "portable" / "SKILL.md").is_file()
 
 
-def test_runtime_keeps_skill_memory_outside_the_skill_catalog(
+def test_runtime_defaults_to_per_skill_memory(
     tmp_path: Path,
 ) -> None:
     layout = _layout(tmp_path / "redtrace")
@@ -216,7 +209,6 @@ def test_runtime_keeps_skill_memory_outside_the_skill_catalog(
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text("---\nname: api-security\ndescription: API security\n---\n", encoding="utf-8")
     layout.mcp.mkdir()
-    layout.plugins.mkdir()
     worker = WorkerConfig(
         name="pi",
         type="pi",
@@ -228,10 +220,10 @@ def test_runtime_keeps_skill_memory_outside_the_skill_catalog(
     AgentRuntimeManager(layout, execution="local").initialize([worker])
 
     assert "REDTRACE_GLOBAL_INSTRUCTIONS" not in worker.env
-    assert worker.env["REDTRACE_SKILL_MEMORY_DIR"] == str(
-        layout.managed / "skill-memory"
-    )
-    assert (layout.managed / "skill-memory").is_dir()
+    # REDTRACE_SKILL_MEMORY_DIR is not set by default — skill memory lives
+    # inside each skill's own directory (skills/<name>/memory/).
+    assert "REDTRACE_SKILL_MEMORY_DIR" not in worker.env
+    assert (layout.skills / "api-security" / "memory").is_dir()
     assert not (layout.skills / ".redtrace" / "learning").exists()
     assert worker.env["REDTRACE_TOOLS_DIR"] == str(layout.runtime / "tools")
     assert worker.env["REDTRACE_TOOLS_BIN"] == str(layout.runtime / "tools" / "bin")
@@ -244,7 +236,6 @@ def test_all_native_workers_receive_and_can_invoke_specialist_skills(tmp_path: P
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text("---\nname: api-security\ndescription: API security\n---\n", encoding="utf-8")
     layout.mcp.mkdir()
-    layout.plugins.mkdir()
     workers = [
         WorkerConfig(
             name=worker_type,
@@ -290,23 +281,236 @@ def test_all_native_workers_receive_and_can_invoke_specialist_skills(tmp_path: P
 def test_runtime_migrates_existing_skill_memory_without_deleting_it(
     tmp_path: Path,
 ) -> None:
+    """Old central managed/skill-memory/<name>.jsonl → skills/<name>/memory/records.jsonl."""
     layout = _layout(tmp_path / "redtrace")
-    previous = layout.skills / ".redtrace" / "learning"
-    previous.mkdir(parents=True)
-    (previous / "api-security.jsonl").write_text("legacy\n", encoding="utf-8")
-    current = layout.managed / "skill-memory"
-    current.mkdir(parents=True)
-    (current / "existing.jsonl").write_text("current\n", encoding="utf-8")
+    skill = layout.skills / "api-security"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: api-security\ndescription: API security\n---\n", encoding="utf-8")
+    old_memory = layout.managed / "skill-memory"
+    old_memory.mkdir(parents=True)
+    record = (
+        '{"at":"2026-01-01T00:00:00Z","skill":"api-security","summary":"s",'
+        '"evidence":"e","content":"c","digest":"d1","project":"p","intent":"i","worker":"w"}'
+    )
+    (old_memory / "api-security.jsonl").write_text(record + "\n", encoding="utf-8")
     layout.mcp.mkdir(parents=True)
-    layout.plugins.mkdir(parents=True)
 
     AgentRuntimeManager(layout, execution="local").initialize([])
 
-    assert (layout.managed / "skill-memory" / "api-security.jsonl").read_text(
+    migrated = (layout.skills / "api-security" / "memory" / "records.jsonl").read_text(
         encoding="utf-8"
-    ) == "legacy\n"
-    assert (previous / "api-security.jsonl").is_file()
-    assert (current / "existing.jsonl").read_text(encoding="utf-8") == "current\n"
+    )
+    assert "d1" in migrated
+    # Old source is preserved (not deleted).
+    assert (old_memory / "api-security.jsonl").is_file()
+
+
+def test_runtime_migration_is_idempotent(tmp_path: Path) -> None:
+    """Running initialize twice does not duplicate migrated records."""
+    layout = _layout(tmp_path / "redtrace")
+    skill = layout.skills / "api-security"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: api-security\ndescription: API security\n---\n", encoding="utf-8")
+    old_memory = layout.managed / "skill-memory"
+    old_memory.mkdir(parents=True)
+    record = (
+        '{"at":"2026-01-01T00:00:00Z","skill":"api-security","summary":"s",'
+        '"evidence":"e","content":"c","digest":"d1","project":"p","intent":"i","worker":"w"}'
+    )
+    (old_memory / "api-security.jsonl").write_text(record + "\n", encoding="utf-8")
+    layout.mcp.mkdir(parents=True)
+
+    manager = AgentRuntimeManager(layout, execution="local")
+    manager.initialize([])
+    manager._shared_initialized = False
+    manager.initialize([])
+
+    lines = (layout.skills / "api-security" / "memory" / "records.jsonl").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert len(lines) == 1
+
+
+def test_runtime_migration_splits_central_audit_by_skill(tmp_path: Path) -> None:
+    """Central audit.jsonl entries are split into per-skill audit.jsonl by digest."""
+    layout = _layout(tmp_path / "redtrace")
+    for name in ("api-security", "code-audit"):
+        skill = layout.skills / name
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(f"---\nname: {name}\ndescription: test\n---\n", encoding="utf-8")
+    old_memory = layout.managed / "skill-memory"
+    old_memory.mkdir(parents=True)
+    audit_entries = [
+        '{"at":"2026-01-01T00:00:00Z","skill":"api-security","digest":"a1","project":"p","intent":"i","worker":"w"}',
+        '{"at":"2026-01-01T00:01:00Z","skill":"code-audit","digest":"c1","project":"p","intent":"i","worker":"w"}',
+        '{"at":"2026-01-01T00:02:00Z","skill":"api-security","digest":"a2","project":"p","intent":"i","worker":"w"}',
+    ]
+    (old_memory / "audit.jsonl").write_text("\n".join(audit_entries) + "\n", encoding="utf-8")
+    layout.mcp.mkdir(parents=True)
+
+    AgentRuntimeManager(layout, execution="local").initialize([])
+
+    api_audit = (layout.skills / "api-security" / "memory" / "audit.jsonl").read_text(
+        encoding="utf-8"
+    )
+    code_audit = (layout.skills / "code-audit" / "memory" / "audit.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "a1" in api_audit
+    assert "a2" in api_audit
+    assert "c1" not in api_audit
+    assert "c1" in code_audit
+    assert "a1" not in code_audit
+
+
+def test_runtime_migration_distributes_legacy_notes(tmp_path: Path) -> None:
+    """Legacy .md notes are distributed to matching skills; unmatched go to _legacy-unmatched/."""
+    layout = _layout(tmp_path / "redtrace")
+    skill = layout.skills / "api-security"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: api-security\ndescription: API security\n---\n",
+        encoding="utf-8",
+    )
+    bundled_legacy = layout.root / "redtrace" / "skill-memory" / "legacy"
+    bundled_legacy.mkdir(parents=True)
+    (bundled_legacy / "api-security-note.md").write_text(
+        "This note is about api-security testing.",
+        encoding="utf-8",
+    )
+    (bundled_legacy / "unmatched-note.md").write_text(
+        "This note is about something entirely different.",
+        encoding="utf-8",
+    )
+    layout.mcp.mkdir(parents=True)
+
+    AgentRuntimeManager(layout, execution="local").initialize([])
+
+    # Matching note is distributed to the skill's memory/legacy/.
+    assert (
+        layout.skills / "api-security" / "memory" / "legacy" / "api-security-note.md"
+    ).is_file()
+    # Non-matching note goes to _legacy-unmatched/.
+    assert (
+        layout.skills / "_legacy-unmatched" / "unmatched-note.md"
+    ).is_file()
+    # Migration report is generated.
+    assert (layout.skills / "_legacy-unmatched" / "MIGRATION.md").is_file()
+
+
+def test_runtime_migration_preserves_more_than_retention_cap(tmp_path: Path) -> None:
+    """Migration is lossless: records beyond learn()'s runtime cap survive."""
+    layout = _layout(tmp_path / "redtrace")
+    skill = layout.skills / "api-security"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: api-security\ndescription: API security\n---\n", encoding="utf-8")
+    old_memory = layout.managed / "skill-memory"
+    old_memory.mkdir(parents=True)
+    # 137 records — more than learn()'s MAX_ENTRIES_PER_SKILL of 100.
+    records = [
+        '{"at":"2026-01-01T00:00:00Z","skill":"api-security","summary":"s%d",'
+        '"evidence":"e","content":"c","digest":"d%d","project":"p","intent":"i","worker":"w"}' % (i, i)
+        for i in range(137)
+    ]
+    (old_memory / "api-security.jsonl").write_text("\n".join(records) + "\n", encoding="utf-8")
+    layout.mcp.mkdir(parents=True)
+
+    AgentRuntimeManager(layout, execution="local").initialize([])
+
+    migrated = (layout.skills / "api-security" / "memory" / "records.jsonl").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert len(migrated) == 137
+    assert '"digest":"d0"' in migrated[0]
+    assert '"digest":"d136"' in migrated[-1]
+
+
+def test_runtime_migration_recomputes_missing_digest(tmp_path: Path) -> None:
+    """Legacy records without a digest get one recomputed and are preserved."""
+    import hashlib
+
+    layout = _layout(tmp_path / "redtrace")
+    skill = layout.skills / "api-security"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: api-security\ndescription: API security\n---\n", encoding="utf-8")
+    old_memory = layout.managed / "skill-memory"
+    old_memory.mkdir(parents=True)
+    legacy_record = (
+        '{"at":"2026-01-01T00:00:00Z","skill":"api-security","summary":"legacy summary",'
+        '"evidence":"legacy evidence","content":"legacy content"}'
+    )
+    (old_memory / "api-security.jsonl").write_text(legacy_record + "\n", encoding="utf-8")
+    layout.mcp.mkdir(parents=True)
+
+    AgentRuntimeManager(layout, execution="local").initialize([])
+
+    migrated = (layout.skills / "api-security" / "memory" / "records.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "legacy summary" in migrated
+    # The recomputed digest uses learn()'s canonical form:
+    # skill + summary + evidence + content.
+    expected = hashlib.sha256(
+        b"api-security\nlegacy summary\nlegacy evidence\nlegacy content"
+    ).hexdigest()
+    assert expected in migrated
+
+
+def test_runtime_migration_same_name_legacy_conflict_keeps_both(tmp_path: Path) -> None:
+    """Same-name legacy notes with different content both survive migration."""
+    layout = _layout(tmp_path / "redtrace")
+    skill = layout.skills / "api-security"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: api-security\ndescription: API security\n---\n", encoding="utf-8")
+    bundled_legacy = layout.root / "redtrace" / "skill-memory" / "legacy"
+    bundled_legacy.mkdir(parents=True)
+    (bundled_legacy / "conflict.md").write_text(
+        "bundled version about api-security", encoding="utf-8"
+    )
+    old_memory = layout.managed / "skill-memory"
+    old_legacy = old_memory / "legacy"
+    old_legacy.mkdir(parents=True)
+    (old_legacy / "conflict.md").write_text(
+        "managed runtime version about api-security, different content",
+        encoding="utf-8",
+    )
+    layout.mcp.mkdir(parents=True)
+
+    AgentRuntimeManager(layout, execution="local").initialize([])
+
+    legacy_dir = layout.skills / "api-security" / "memory" / "legacy"
+    files = sorted(path.name for path in legacy_dir.glob("*.md"))
+    # Both versions exist: one under the original name, one with a hash suffix.
+    assert len(files) == 2
+    assert "conflict.md" in files
+    hashed = [name for name in files if name != "conflict.md"]
+    assert hashed[0].startswith("conflict-") and hashed[0].endswith(".md")
+    contents = {path.read_text(encoding="utf-8") for path in legacy_dir.glob("*.md")}
+    assert "bundled version about api-security" in contents
+    assert "managed runtime version about api-security, different content" in contents
+
+
+def test_runtime_migration_identical_legacy_dedups_by_content(tmp_path: Path) -> None:
+    """Identical content in bundled and managed legacy dirs is copied once."""
+    layout = _layout(tmp_path / "redtrace")
+    skill = layout.skills / "api-security"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: api-security\ndescription: API security\n---\n", encoding="utf-8")
+    bundled_legacy = layout.root / "redtrace" / "skill-memory" / "legacy"
+    bundled_legacy.mkdir(parents=True)
+    (bundled_legacy / "same.md").write_text("note about api-security", encoding="utf-8")
+    old_memory = layout.managed / "skill-memory"
+    old_legacy = old_memory / "legacy"
+    old_legacy.mkdir(parents=True)
+    (old_legacy / "same.md").write_text("note about api-security", encoding="utf-8")
+    layout.mcp.mkdir(parents=True)
+
+    AgentRuntimeManager(layout, execution="local").initialize([])
+
+    legacy_dir = layout.skills / "api-security" / "memory" / "legacy"
+    files = list(legacy_dir.glob("*.md"))
+    assert len(files) == 1
+    assert files[0].name == "same.md"
 
 
 def test_local_runtime_auto_disables_and_recovers_mcp_with_missing_command(
@@ -316,7 +520,6 @@ def test_local_runtime_auto_disables_and_recovers_mcp_with_missing_command(
     layout = _layout(tmp_path / "redtrace")
     layout.skills.mkdir(parents=True)
     layout.mcp.mkdir(parents=True)
-    layout.plugins.mkdir(parents=True)
     mcp_file = layout.mcp / "ghost.json"
     mcp_file.write_text(
         json.dumps(

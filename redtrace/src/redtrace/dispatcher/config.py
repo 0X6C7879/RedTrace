@@ -187,7 +187,6 @@ class PathsConfig(BaseModel):
     root: str = "."
     skills: str = "skills"
     mcp: str = "mcp"
-    plugins: str = "plugins"
     managed: str = ".redtrace"
     workspaces: str = "workspaces"
     audit: str = ".redtrace/audit"
@@ -197,7 +196,6 @@ class PathsConfig(BaseModel):
             root=Path(self.root),
             skills=Path(self.skills),
             mcp=Path(self.mcp),
-            plugins=Path(self.plugins),
             managed=Path(self.managed),
             workspaces=Path(self.workspaces),
             audit=Path(self.audit),
@@ -413,7 +411,6 @@ def _resolve_config_paths(config_path: Path, data: Any) -> Any:
     overrides = {
         "skills": "REDTRACE_SKILLS_DIR",
         "mcp": "REDTRACE_MCP_DIR",
-        "plugins": "REDTRACE_PLUGINS_DIR",
         "managed": "REDTRACE_MANAGED_DIR",
         "workspaces": "REDTRACE_WORKSPACE_ROOT",
         "audit": "REDTRACE_AUDIT_ROOT",

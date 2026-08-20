@@ -49,30 +49,16 @@ def _skills_dir() -> Path:
     return Path(raw).resolve()
 
 
-def _memory_dir(skills_dir: Path) -> Path:
-    raw = _env("REDTRACE_SKILL_MEMORY_DIR")
-    root = Path(_env("REDTRACE_ROOT", str(Path.cwd()))).resolve()
-    return Path(raw).resolve() if raw else root / ".redtrace" / "skill-memory"
+def _memory_dir(skills_dir: Path, name: str) -> Path:
+    override = _env("REDTRACE_SKILL_MEMORY_DIR")
+    if override:
+        return Path(override).resolve() / name
+    return skills_dir / name / "memory"
 
 
 def _require_skill_runtime() -> None:
     if _env("REDTRACE_TASK_TYPE").lower() == "reason":
         raise ValueError("Skill runtime is disabled during reason tasks")
-
-
-def _session_loaded_skills() -> set[str]:
-    """Read the session-level loaded skill allowlist."""
-    path = _env("REDTRACE_LOADED_SKILLS_FILE")
-    if not path:
-        return set()
-    try:
-        data = Path(path).read_text(encoding="utf-8")
-        skills = json.loads(data)
-        if isinstance(skills, list):
-            return {str(s) for s in skills}
-    except (OSError, json.JSONDecodeError, TypeError):
-        pass
-    return set()
 
 
 def _track_skill_load(skill_name: str) -> None:
@@ -229,23 +215,20 @@ def learn(args: argparse.Namespace) -> dict[str, Any]:
     _require_skill_runtime()
     skills = _skills_dir()
     name = _skill(skills, args.skill)
-    # Fail-closed: new experience may only be written to a professional skill
-    # that was loaded for this task. The Runtime seeds the loaded-skill
-    # tracking file at task start (decoupled from the provider session id),
-    # so an empty/missing file means "nothing was loaded" — reject rather
-    # than skip validation. This prevents skill-evolution from writing to a
-    # skill the agent never used.
-    loaded = _session_loaded_skills()
-    if name not in loaded:
-        raise ValueError(f"skill '{name}' was not loaded in this task")
+    # Learning decisions belong to the model, constrained by skill-evolution's
+    # two-level thresholds (Level 1: Memory, Level 2: SKILL.md). The Runtime
+    # enforces only mechanical safety: sanitization, dedup, format limits,
+    # reason isolation, canonical skill names. The loaded-skill tracking file
+    # is a pure observation mechanism (debug/audit/analysis) and deliberately
+    # does NOT gate writes.
     summary = _sanitize(_one_line(args.summary, "--summary", 240))
     evidence = _sanitize(_one_line(args.evidence, "--evidence", 500))
     content = _sanitize(_content_file(args.content_file).strip())
     if not content:
         raise ValueError("--content-file is empty")
     digest = hashlib.sha256(f"{name}\n{summary}\n{evidence}\n{content}".encode()).hexdigest()
-    memory = _memory_dir(skills)
-    path = memory / f"{name}.jsonl"
+    memory = _memory_dir(skills, name)
+    path = memory / "records.jsonl"
     with _lock(memory):
         records = _read_records(path)
         if any(item.get("digest") == digest for item in records):
@@ -316,12 +299,12 @@ def recall(args: argparse.Namespace) -> str:
     _require_skill_runtime()
     skills = _skills_dir()
     name = _skill(skills, args.skill)
-    # recall only READS skill memory; it must never modify the loaded-skill
-    # tracking state. Recording a load here would let skill-evolution fake an
-    # unloaded skill into the allowlist (recall api-security -> track-load ->
-    # learn api-security passes), defeating the fail-closed gate.
-    memory = _memory_dir(skills)
-    records = _read_records(memory / f"{name}.jsonl")[-args.limit :]
+    # recall only READS skill memory; it never modifies the loaded-skill
+    # tracking file. Tracking is a pure observation mechanism recording
+    # explicit track-load calls — recall is not a load event, so writing
+    # tracking here would corrupt the audit data.
+    memory = _memory_dir(skills, name)
+    records = _read_records(memory / "records.jsonl")[-args.limit :]
     lines = [f"# RedTrace learnings: {name}"]
     for item in records:
         lines.extend(

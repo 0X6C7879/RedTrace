@@ -331,10 +331,6 @@ class ContainerManager:
                 "bind": "/opt/redtrace/claude-plugin/skills",
                 "mode": "rw",
             },
-            self._host_source(self._paths.managed / "skill-memory"): {
-                "bind": "/opt/redtrace/skill-memory",
-                "mode": "rw",
-            },
             self._host_source(self._paths.mcp): {
                 "bind": "/opt/redtrace/mcp",
                 "mode": "ro",

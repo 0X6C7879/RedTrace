@@ -506,22 +506,22 @@ def run_worker_process(
                 "REDTRACE_BLACKBOARD_CURSOR": str(blackboard_revision),
             }
         )
-        # Skill tracking lifecycle is fully decoupled from the provider
-        # session ID. A deterministic tracking id is derived from the
-        # task identity (project+intent+worker+task_type) so the same file
-        # survives execute -> steering -> conclude regardless of whether
-        # the provider session is known before the first run (Claude seeds
-        # one up front; Codex/Pi only discover it from the output stream).
-        # Reason tasks never create a tracking file.
+        # Skill tracking lifecycle is decoupled from the provider session ID.
+        # A deterministic tracking id is derived from the task identity
+        # (project+intent+worker+task_type) so the same file survives
+        # execute -> steering -> conclude regardless of whether the provider
+        # session is known before the first run. The tracking file is a pure
+        # observation mechanism (debug/audit/analysis): it records only
+        # explicit ``track-load`` calls and deliberately does NOT gate
+        # ``learn()`` — learning decisions belong to the model, mechanical
+        # write safety belongs to the Runtime. Reason tasks never create a
+        # tracking file.
         if task_type != "reason":
             tracking_path = resolve_skill_tracking_path(
                 container_name, task_type, project_id, intent_id, worker.name
             )
             if tracking_path is not None:
                 process_env["REDTRACE_LOADED_SKILLS_FILE"] = str(tracking_path)
-                _seed_loaded_skills(
-                    tracking_path, process_env.get("REDTRACE_SKILL_PATHS", "")
-                )
         server_url = getattr(client, "base_url", None)
         if isinstance(server_url, str) and server_url:
             process_env["REDTRACE_SERVER"] = server_url
@@ -673,59 +673,6 @@ def resolve_skill_tracking_path(
     return Path(f"/home/kali/workspace/.redtrace/loaded-skills-{tracking_id}.json")
 
 
-def _seed_loaded_skills(tracking_path: Path, skill_paths_env: str) -> None:
-    """Pre-populate the tracking file with the professional skills exposed
-    for this task.
-
-    This is the Runtime / capability-exposure layer recording which
-    professional skills are loaded for the task — no LLM prompt, no reliance
-    on the agent remembering to call ``track-load``. ``skill-evolution`` is
-    excluded so ordinary verified experience is not written to it by default;
-    experience belongs to the professional skill that produced it.
-    """
-    try:
-        paths = json.loads(skill_paths_env) if skill_paths_env else []
-    except (json.JSONDecodeError, TypeError):
-        return
-    if not isinstance(paths, list):
-        return
-    names = {
-        Path(path).name
-        for path in paths
-        if isinstance(path, str) and path and Path(path).name
-    }
-    names.discard("skill-evolution")
-    if not names:
-        return
-    try:
-        existing: set[str] = set()
-        if tracking_path.is_file():
-            data = json.loads(tracking_path.read_text(encoding="utf-8"))
-            if isinstance(data, list):
-                existing = {str(s) for s in data}
-        merged = sorted(existing | names)
-        tracking_path.parent.mkdir(parents=True, exist_ok=True)
-        tracking_path.write_text(
-            json.dumps(merged, ensure_ascii=False), encoding="utf-8"
-        )
-    except (OSError, json.JSONDecodeError, TypeError):
-        pass
-
-
-def _read_loaded_skills(tracking_path: Path | None) -> list[str]:
-    """Read loaded skill IDs from a resolved tracking path."""
-    if tracking_path is None:
-        return []
-    try:
-        data = tracking_path.read_text(encoding="utf-8")
-        skills = json.loads(data)
-        if isinstance(skills, list):
-            return [str(s) for s in skills]
-    except (OSError, json.JSONDecodeError, TypeError):
-        pass
-    return []
-
-
 def _cleanup_skill_tracking(tracking_path: Path | None) -> None:
     """Remove the per-task skill tracking file once the task completes."""
     if tracking_path is None:
@@ -743,15 +690,51 @@ def cleanup_skill_tracking(
     intent_id: str | None,
     worker_name: str,
 ) -> None:
-    """Remove the per-task skill tracking file. No LLM call.
+    """Remove the per-task skill tracking file if one was created. No LLM call.
 
-    Uses the task identity (not the provider session id) so the file created
-    at task start is removed at task end even when no session was ever known.
+    Uses the task identity (not the provider session id) so a file created
+    by ``track-load`` during the task is removed at task end. If the agent
+    never called ``track-load`` the file does not exist and this is a no-op.
     """
     tracking_path = resolve_skill_tracking_path(
         container_name, task_type, project_id, intent_id, worker_name
     )
     _cleanup_skill_tracking(tracking_path)
+
+
+def reset_skill_tracking(
+    container_manager,
+    container_name: str,
+    task_type: str,
+    project_id: str | None,
+    intent_id: str | None,
+    worker_name: str,
+) -> None:
+    """Clear stale loaded-skill tracking at the start of a task run.
+
+    The tracking id is deterministic per (project, intent, worker, task_type)
+    so execute/steering/conclude share one file. If a previous run of the
+    same task crashed without its ``finally`` cleanup, that file lingers in
+    the workspace and this run's audit data would be polluted with the
+    previous run's loaded-skill records. Calling this once at task start —
+    NOT before every ``run_worker_process`` — guarantees each run's
+    observation data starts clean while phases still share tracking. Writes
+    an empty ``[]`` through the container manager so both local and
+    container execution are covered.
+    """
+    tracking_path = resolve_skill_tracking_path(
+        container_name, task_type, project_id, intent_id, worker_name
+    )
+    if tracking_path is None:
+        return
+    try:
+        container_manager.write_text_file(
+            container_name, str(tracking_path), "[]"
+        )
+    except (OSError, ValueError):
+        LOG.debug(
+            "could not reset skill tracking file path=%s", tracking_path
+        )
 
 
 def project_allows_conclude_fallback(
