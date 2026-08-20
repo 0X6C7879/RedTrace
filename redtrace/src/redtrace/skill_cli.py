@@ -229,15 +229,15 @@ def learn(args: argparse.Namespace) -> dict[str, Any]:
     _require_skill_runtime()
     skills = _skills_dir()
     name = _skill(skills, args.skill)
-    # Soft check: warn if target skill was not loaded this session.
-    # This prevents skill-evolution from writing to a skill the Agent
-    # never used. Not enforced as hard error until all providers'
-    # Skill-load tracking is verified.
+    # Fail-closed: new experience may only be written to a professional skill
+    # that was loaded for this task. The Runtime seeds the loaded-skill
+    # tracking file at task start (decoupled from the provider session id),
+    # so an empty/missing file means "nothing was loaded" — reject rather
+    # than skip validation. This prevents skill-evolution from writing to a
+    # skill the agent never used.
     loaded = _session_loaded_skills()
-    if loaded and name not in loaded:
-        raise ValueError(
-            f"skill '{name}' was not loaded in this session"
-        )
+    if name not in loaded:
+        raise ValueError(f"skill '{name}' was not loaded in this task")
     summary = _sanitize(_one_line(args.summary, "--summary", 240))
     evidence = _sanitize(_one_line(args.evidence, "--evidence", 500))
     content = _sanitize(_content_file(args.content_file).strip())
@@ -316,7 +316,10 @@ def recall(args: argparse.Namespace) -> str:
     _require_skill_runtime()
     skills = _skills_dir()
     name = _skill(skills, args.skill)
-    _track_skill_load(name)
+    # recall only READS skill memory; it must never modify the loaded-skill
+    # tracking state. Recording a load here would let skill-evolution fake an
+    # unloaded skill into the allowlist (recall api-security -> track-load ->
+    # learn api-security passes), defeating the fail-closed gate.
     memory = _memory_dir(skills)
     records = _read_records(memory / f"{name}.jsonl")[-args.limit :]
     lines = [f"# RedTrace learnings: {name}"]

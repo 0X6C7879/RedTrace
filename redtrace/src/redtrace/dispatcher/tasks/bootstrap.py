@@ -23,7 +23,7 @@ from redtrace.dispatcher.runtime.heartbeat import HeartbeatLease
 from redtrace.dispatcher.tasks.common import (
     best_effort_release,
     cancel_reason,
-    cleanup_skill_tracking_for_session,
+    cleanup_skill_tracking,
     did_timeout,
     preflight_worker,
     ensure_worker_running,
@@ -264,7 +264,9 @@ def run_bootstrap_task(
         return exception_failure_outcome(exc)
     finally:
         if container_name is not None:
-            cleanup_skill_tracking_for_session(container_name, session)
+            cleanup_skill_tracking(
+                container_name, "bootstrap", project.project.id, intent.id, worker.name
+            )
         lease.stop()
 
 

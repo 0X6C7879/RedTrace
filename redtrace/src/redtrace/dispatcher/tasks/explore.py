@@ -20,7 +20,7 @@ from redtrace.dispatcher.tasks.common import (
     BlackboardInbox,
     best_effort_release,
     cancel_reason,
-    cleanup_skill_tracking_for_session,
+    cleanup_skill_tracking,
     did_timeout,
     preflight_worker,
     exception_failure_outcome,
@@ -316,7 +316,9 @@ def run_explore_task(
         return exception_failure_outcome(exc)
     finally:
         if container_name is not None:
-            cleanup_skill_tracking_for_session(container_name, session)
+            cleanup_skill_tracking(
+                container_name, "explore", project.project.id, intent.id, worker.name
+            )
         if inbox is not None:
             inbox.stop()
         lease.stop()

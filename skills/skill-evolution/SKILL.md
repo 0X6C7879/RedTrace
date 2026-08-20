@@ -7,6 +7,14 @@ description: Review verified outcomes and evolve Skills with reusable learnings 
 
 任务中产生经验证、可复用的新经验时加载本 Skill。
 
+## 写入目标（重要）
+
+经验应写入**产生该经验的专业 Skill**（本次实际加载并使用过的专业 Skill）。
+
+- 默认只 `learn` 专业 Skill，例如 `learn api-security`
+- **不要默认 `learn skill-evolution`**：除非当前任务本身就是优化 Skill Evolution 机制，否则不要将普通专业经验写入 `skill-evolution`
+- `learn()` 对未加载的 Skill fail-closed：只有本次被 Runtime 记录为已加载的专业 Skill 才能写入经验
+
 ## 新经验判定
 
 同时满足以下条件：
