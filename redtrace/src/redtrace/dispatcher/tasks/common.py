@@ -506,6 +506,10 @@ def run_worker_process(
                 "REDTRACE_BLACKBOARD_CURSOR": str(blackboard_revision),
             }
         )
+        if task_type != "reason" and session is not None:
+            tracking_path = resolve_session_skill_tracking_path(container_name, session)
+            if tracking_path is not None:
+                process_env["REDTRACE_LOADED_SKILLS_FILE"] = str(tracking_path)
         server_url = getattr(client, "base_url", None)
         if isinstance(server_url, str) and server_url:
             process_env["REDTRACE_SERVER"] = server_url

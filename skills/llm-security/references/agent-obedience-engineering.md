@@ -52,7 +52,7 @@ CORRECT (Agent 执行):
 | "Ready for next step → invoke X" | **NOW**: 立即调用 X，不要等待确认 |
 | "建议加载相关 Skill" | **REQUIRED**: 由宿主原生加载最匹配的一级 Skill |
 | "如果缺工具可以 bootstrap" | **NO EXCUSE**: 缺工具时唯一正确操作是调用 bootstrap，禁止手动安装猜测 |
-| "记得沉淀可复用经验" | **CHECKLIST ENFORCED**: 有已验证新经验时调用 `redtrace-skill learn`，否则不写 |
+| "记得沉淀可复用经验" | **CHECKLIST**: 有已验证新经验时按需加载 `skill-evolution`，否则不写 |
 | "应该..." | **MUST** / **MUST NOT** |
 
 **关键模式**：
@@ -209,8 +209,8 @@ LLM 注意力分布（高→低）：
 □ 我实际执行了行为链中的每一步（没有跳过）
 □ 我没有猜测任何工具路径（都来自 `command -v` 检测）
 □ 我产生了可复现的命令/脚本/报告（不是只描述了步骤）
-□ 我通过 `redtrace-skill learn` 回写了已验证的可复用经验（如有）
-□ 我执行了完成后 Checklist（报告 + 图表 + 经验回写）
+□ 我按需加载了 `skill-evolution` 回写已验证的可复用经验（如有）
+□ 我执行了完成后 Checklist（报告 + 图表）
 ```
 
 ---

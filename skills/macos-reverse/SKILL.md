@@ -7,9 +7,9 @@ description: Use for authorized macOS and Mach-O reverse engineering including c
 
 ## ACTION REQUIRED（读完后立刻执行）
 
-2. `NOW`: 确认目标为 macOS/Mach-O/App bundle（iOS IPA → `mobile-reverse/`）
-3. `NEXT`: `command -v` 检测；jtool2/lldb 等
-4. `ACT`: 签名与装载信息 → 静态 → 动态（lldb/Frida）
+1. `NOW`: 确认目标为 macOS/Mach-O/App bundle（iOS IPA → `mobile-reverse/`）
+2. `NEXT`: `command -v` 检测；jtool2/lldb 等
+3. `ACT`: 签名与装载信息 → 静态 → 动态（lldb/Frida）
 
 ## 适用场景
 

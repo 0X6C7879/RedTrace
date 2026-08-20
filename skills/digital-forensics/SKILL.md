@@ -7,10 +7,10 @@ description: Use for authorized digital forensics including memory dumps, disk t
 
 ## ACTION REQUIRED（读完后立刻执行）
 
-2. `NOW`: 确认是**取证/溯源**而非进攻性扫描
-3. `NOW`: 建立 case；证据只读副本优先（原始介质写保护）
-4. `NEXT`: `command -v` 检测；Volatility 等常手动
-5. `ACT`: 保全哈希 → 时间线 → 关键伪影
+1. `NOW`: 确认是**取证/溯源**而非进攻性扫描
+2. `NOW`: 建立 case；证据只读副本优先（原始介质写保护）
+3. `NEXT`: `command -v` 检测；Volatility 等常手动
+4. `ACT`: 保全哈希 → 时间线 → 关键伪影
 
 ## 适用场景
 

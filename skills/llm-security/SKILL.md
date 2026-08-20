@@ -8,10 +8,10 @@ description: Use for authorized security assessment of LLM applications and AI a
 
 > **Agent Skill 自身安全**：安装或合并外部 Skill/MCP 前审阅来源、权限、网络行为、脚本与固定版本。
 
-2. `NOW`: 确认当前任务是否命中本 skill 的适用范围
-3. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
-4. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
-5. `ACT`: 进入"工作流"第一步并执行，不要停在确认状态
+1. `NOW`: 确认当前任务是否命中本 skill 的适用范围
+2. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
+3. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
+4. `ACT`: 进入"工作流"第一步并执行，不要停在确认状态
 
 > 覆盖 OWASP LLM Top 10 v2.0 + OWASP Agentic AI Top 10（ASI 2026）
 > 当前路由未命中时，联网搜索最新漏洞利用技术。

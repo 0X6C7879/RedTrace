@@ -1,6 +1,6 @@
 # 可泛化攻击模式
 
-只存**可泛化的攻击模式**，不存 CVE / 项目事实堆积。每条模式描述"什么结构 → 优先测什么 → 为什么"。这些模式未来可配合 `redtrace-skill learn blockchain-security` 持续沉淀（沉淀规则见 SKILL.md 与 RedTrace Learning 集成约定）。
+只存**可泛化的攻击模式**，不存 CVE / 项目事实堆积。每条模式描述"什么结构 → 优先测什么 → 为什么"。
 
 ## Accounting / Share
 

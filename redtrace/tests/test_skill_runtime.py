@@ -153,3 +153,145 @@ def test_reason_cannot_recall_or_learn(tmp_path: Path, monkeypatch) -> None:
             assert "disabled during reason" in str(exc)
         else:
             raise AssertionError("reason must not access Skill runtime")
+
+
+def test_learn_rejects_unloaded_skill(tmp_path: Path, monkeypatch) -> None:
+    """learn() should reject a skill not loaded in the current session."""
+    _skills, workspace, _memory = _env(monkeypatch, tmp_path)
+    note = workspace / "note.md"
+    note.write_text("safe", encoding="utf-8")
+
+    # Set up tracking file that only lists "api-security" as loaded
+    tracking = tmp_path / "tracking.json"
+    tracking.write_text('["api-security"]', encoding="utf-8")
+    monkeypatch.setenv("REDTRACE_LOADED_SKILLS_FILE", str(tracking))
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "learn",
+            "api-security",
+            "--summary",
+            "Valid experience",
+            "--evidence",
+            "Confirmed",
+            "--content-file",
+            str(note),
+        ]
+    )
+    # api-security is in the loaded list → should succeed
+    assert learn(args)["status"] == "stored"
+
+
+def test_learn_rejects_skill_not_in_loaded_list(tmp_path: Path, monkeypatch) -> None:
+    """learn() should reject a skill NOT in the loaded list."""
+    _skills, workspace, _memory = _env(monkeypatch, tmp_path)
+    note = workspace / "note.md"
+    note.write_text("safe", encoding="utf-8")
+
+    # Set up tracking file that lists "code-audit" but NOT "api-security"
+    tracking = tmp_path / "tracking.json"
+    tracking.write_text('["code-audit"]', encoding="utf-8")
+    monkeypatch.setenv("REDTRACE_LOADED_SKILLS_FILE", str(tracking))
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "learn",
+            "api-security",
+            "--summary",
+            "Valid experience",
+            "--evidence",
+            "Confirmed",
+            "--content-file",
+            str(note),
+        ]
+    )
+    try:
+        learn(args)
+    except ValueError as exc:
+        assert "was not loaded" in str(exc)
+    else:
+        raise AssertionError("should reject learn for unloaded skill")
+
+
+def test_learn_skips_check_when_no_tracking_file(tmp_path: Path, monkeypatch) -> None:
+    """learn() should work when no tracking file is set (backward compat)."""
+    _skills, workspace, _memory = _env(monkeypatch, tmp_path)
+    note = workspace / "note.md"
+    note.write_text("safe", encoding="utf-8")
+
+    # No REDTRACE_LOADED_SKILLS_FILE set → no validation
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "learn",
+            "api-security",
+            "--summary",
+            "Valid experience",
+            "--evidence",
+            "Confirmed",
+            "--content-file",
+            str(note),
+        ]
+    )
+    assert learn(args)["status"] == "stored"
+
+
+def test_track_load_records_skill(tmp_path: Path, monkeypatch) -> None:
+    """track-load should record a skill to the tracking file."""
+    _skills, _workspace, _memory = _env(monkeypatch, tmp_path)
+    tracking = tmp_path / "tracking.json"
+    monkeypatch.setenv("REDTRACE_LOADED_SKILLS_FILE", str(tracking))
+
+    from redtrace.skill_cli import _track_skill_load
+    _track_skill_load("api-security")
+    _track_skill_load("code-audit")
+
+    data = tracking.read_text(encoding="utf-8")
+    import json
+    assert json.loads(data) == ["api-security", "code-audit"]
+
+
+def test_resolve_session_skill_tracking_path(tmp_path: Path) -> None:
+    """resolve_session_skill_tracking_path should produce a determinstic path."""
+    from redtrace.dispatcher.tasks.common import resolve_session_skill_tracking_path
+
+    path = resolve_session_skill_tracking_path(str(tmp_path), "session-abc")
+    assert path is not None
+    assert path.name.startswith("loaded-skills-")
+    assert path.suffix == ".json"
+    assert ".redtrace" in str(path)
+
+
+def test_non_evolution_skills_contain_no_learning_instructions() -> None:
+    """Non-evolution skills must not contain executive learning instructions.
+
+    Only skills/skill-evolution/ is allowed to control the recall/learn lifecycle.
+    """
+    import glob
+    import re
+
+    patterns = [re.compile(r"redtrace-skill recall"), re.compile(r"redtrace-skill learn")]
+    violations: list[str] = []
+    for ref in glob.glob(
+        "/Users/lxy/Downloads/RedTrace/skills/*/references/*.md"
+    ):
+        if "skill-evolution" in ref:
+            continue
+        content = Path(ref).read_text(encoding="utf-8", errors="replace")
+        for pattern in patterns:
+            if pattern.search(content):
+                violations.append(f"{ref}: {pattern.pattern}")
+
+    for ref in glob.glob(
+        "/Users/lxy/Downloads/RedTrace/skills/*/learned/*.md"
+    ):
+        if "skill-evolution" in ref:
+            continue
+        content = Path(ref).read_text(encoding="utf-8", errors="replace")
+        for pattern in patterns:
+            if pattern.search(content):
+                violations.append(f"{ref}: {pattern.pattern}")
+
+    assert not violations, "\n".join(violations)

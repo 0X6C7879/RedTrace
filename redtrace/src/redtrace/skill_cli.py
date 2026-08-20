@@ -229,6 +229,15 @@ def learn(args: argparse.Namespace) -> dict[str, Any]:
     _require_skill_runtime()
     skills = _skills_dir()
     name = _skill(skills, args.skill)
+    # Soft check: warn if target skill was not loaded this session.
+    # This prevents skill-evolution from writing to a skill the Agent
+    # never used. Not enforced as hard error until all providers'
+    # Skill-load tracking is verified.
+    loaded = _session_loaded_skills()
+    if loaded and name not in loaded:
+        raise ValueError(
+            f"skill '{name}' was not loaded in this session"
+        )
     summary = _sanitize(_one_line(args.summary, "--summary", 240))
     evidence = _sanitize(_one_line(args.evidence, "--evidence", 500))
     content = _sanitize(_content_file(args.content_file).strip())

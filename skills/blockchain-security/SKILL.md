@@ -6,10 +6,10 @@ description: Use for authorized blockchain, smart-contract and DeFi security res
 
 ## ACTION REQUIRED（读完后立刻执行）
 
-2. `NOW`: 确认任务是否命中本 Skill 适用范围（仅限 authorized 的区块链/智能合约/DeFi 安全研究）。
-3. `NEXT`: 运行 `python scripts/detect-stack.py <target>` 识别链 / VM / 语言 / 框架 / 协议类型。
-4. `NEXT`: 按需读取 `references/` 下对应文件（不要一次全读）。
-5. `ACT`: 进入 Phase 1 并执行，不要停留在确认状态。
+1. `NOW`: 确认任务是否命中本 Skill 适用范围（仅限 authorized 的区块链/智能合约/DeFi 安全研究）。
+2. `NEXT`: 运行 `python scripts/detect-stack.py <target>` 识别链 / VM / 语言 / 框架 / 协议类型。
+3. `NEXT`: 按需读取 `references/` 下对应文件（不要一次全读）。
+4. `ACT`: 进入 Phase 1 并执行，不要停留在确认状态。
 
 ## 适用范围
 

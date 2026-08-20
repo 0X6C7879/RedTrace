@@ -14,10 +14,10 @@ metadata:
 
 > 阶段门闩：`references/re-agent-workflow.md`（triage→static→dynamic→synthesis）。社区 RE skill 对照：`../references/community-security-skills.md`。
 
-2. `NOW`: 确认当前任务是否命中本 skill 的适用范围
-3. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
-4. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
-5. `ACT`: 按 re-agent-workflow 推进；进入工作流第一步并执行，不要停在确认状态
+1. `NOW`: 确认当前任务是否命中本 skill 的适用范围
+2. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
+3. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
+4. `ACT`: 按 re-agent-workflow 推进；进入工作流第一步并执行，不要停在确认状态
 
 ## 默认沙盒上下文（Default Sandbox Context）
 

@@ -156,9 +156,8 @@ brew install --cask dotnet-sdk
 
 ### 本仓库已有 .NET 资源（联动）
 
-- `reverse-engineering/tools.md` `.NET Analysis` 段 — dnSpy/ILSpy 工具速查 + Codegate 2013 两阶段 XOR+AES-CBC 模式
+- `reverse-engineering/tools.md` `.NET` Analysis 段 — dnSpy/ILSpy 工具速查 + Codegate 2013 两阶段 XOR+AES-CBC 模式
 - `reverse-engineering/field-notes.md` `.NET` 段 — 工具速记
 - `reverse-engineering/awesome-re-resources.md` — de4dot 入选
-- `redtrace-skill recall dotnet-reverse` — 召回 Unity IL2CPP 等已验证的跨任务经验
 
 .NET 逆向深度内容统一收敛到本模块，`reverse-engineering/` 里保留速查索引即可。

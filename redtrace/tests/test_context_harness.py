@@ -269,6 +269,29 @@ def test_default_prompts_use_chinese_prose_with_english_protocol(name: str) -> N
     assert "Return only one raw JSON object" not in template
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "bootstrap.md",
+        "explore.md",
+    ],
+)
+def test_bootstrap_and_explore_prompts_mention_skill_evolution(name: str) -> None:
+    """Bootstrap/Explore prompts must offer skill-evolution as an option.
+
+    This is the ONLY code path by which the Agent learns about skill-evolution.
+    The reason prompt must NOT contain this line.
+    """
+    template = load_prompt("default", name)
+    assert "skill-evolution" in template
+
+
+def test_reason_prompt_does_not_mention_skill_evolution() -> None:
+    """Reason prompt must NOT mention skill-evolution."""
+    template = load_prompt("default", "reason.md")
+    assert "skill-evolution" not in template
+
+
 def test_local_backend_injects_redtrace_managed_harness_configuration(
     tmp_path: Path,
 ) -> None:

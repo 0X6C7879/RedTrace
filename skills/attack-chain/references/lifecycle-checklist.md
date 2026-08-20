@@ -21,7 +21,6 @@
 | 4 Post-ex（若授权） | cpe/lead | attack-chain 后半 | 不超 out_of_scope |
 | 5 RE 辅助 | cre | ida/apk/js/… | 仅当需要客户端/二进制 |
 | 6 Report | doc | docs-generator | Evidence→Finding→Path |
-| 7 Learning | lead | `redtrace-skill learn` | 脱敏 |
 
 ## 与「给一个域名全自动打穿」类 skill 的差异（特色）
 

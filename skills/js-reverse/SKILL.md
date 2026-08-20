@@ -7,10 +7,10 @@ description: 在使用 js-reverse-mcp 做前端 JavaScript 逆向时使用，适
 
 ## ACTION REQUIRED（读完后立刻执行）
 
-2. `NOW`: 确认当前任务是否命中本 skill 的适用范围
-3. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
-4. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
-5. `ACT`: 进入"工作流"第一步并执行，不要停在确认状态
+1. `NOW`: 确认当前任务是否命中本 skill 的适用范围
+2. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
+3. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
+4. `ACT`: 进入"工作流"第一步并执行，不要停在确认状态
 
 ## 适用范围
 

@@ -7,9 +7,9 @@ description: Use for reverse engineering stripped Go and Rust binaries including
 
 ## ACTION REQUIRED（读完后立刻执行）
 
-2. `NOW`: 确认样本为 Go/Rust 编译产物（`file`/字符串/运行时特征）
-3. `NEXT`: GoReSym / 相关插件是否可用
-4. `ACT`: 运行时识别 → 符号/元数据恢复 → 业务逻辑
+1. `NOW`: 确认样本为 Go/Rust 编译产物（`file`/字符串/运行时特征）
+2. `NEXT`: GoReSym / 相关插件是否可用
+3. `ACT`: 运行时识别 → 符号/元数据恢复 → 业务逻辑
 
 ## 适用场景
 

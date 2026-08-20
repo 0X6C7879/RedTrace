@@ -6,10 +6,10 @@ description: Use for software supply-chain security assessment covering SBOM, SC
 
 ## ACTION REQUIRED（读完后立刻执行）
 
-2. `NOW`: 确认当前任务是否命中本 skill 的适用范围
-3. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
-4. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
-5. `ACT`: 进入"工作流"第一步并执行，不要停在确认状态
+1. `NOW`: 确认当前任务是否命中本 skill 的适用范围
+2. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
+3. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
+4. `ACT`: 进入"工作流"第一步并执行，不要停在确认状态
 
 > SBOM / SCA / CI/CD 管道 / 依赖溯源
 > 法规驱动：美国行政令 SBOM、中国国标、EU CRA

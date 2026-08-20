@@ -7,10 +7,10 @@ description: Use for authorized security testing of desktop thick clients includ
 
 ## ACTION REQUIRED（读完后立刻执行）
 
-2. `NOW`: 确认目标是 **桌面厚客户端**（Win/macOS/Linux GUI 或服务伴生），非纯 Web
-3. `NOW`: case-init；安装包来源与测试账号写入 scope
-4. `NEXT`: 工具（Burp 上游代理、进程监控、逆向工具）
-5. `ACT`: 信任边界图 → 本地面 → 网络面 → 更新/供应链
+1. `NOW`: 确认目标是 **桌面厚客户端**（Win/macOS/Linux GUI 或服务伴生），非纯 Web
+2. `NOW`: case-init；安装包来源与测试账号写入 scope
+3. `NEXT`: 工具（Burp 上游代理、进程监控、逆向工具）
+4. `ACT`: 信任边界图 → 本地面 → 网络面 → 更新/供应链
 
 ## 适用场景
 

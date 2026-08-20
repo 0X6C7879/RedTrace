@@ -53,7 +53,6 @@
 □ Finding：算法/校验逻辑/可利用点
 □ Path：callflow 或 solve 步骤挂 E-*
 □ 报告 docs-generator + 可选图
-□ `redtrace-skill learn reverse-engineering ...` 输入已脱敏
 ```
 
 ## 5. 与「堆 RE skill 插件」的差异

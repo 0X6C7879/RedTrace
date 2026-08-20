@@ -6,12 +6,12 @@ description: Use for authorized multi-stage attack-path planning and orchestrati
 
 ## ACTION REQUIRED（读完后立刻执行）
 
-2. `NOW`: 在当前 RedTrace Workspace 创建或更新 case 与 `scope.md`；授权未明确为 granted 时禁止 ACT
-3. `NOW`: 以 **lead** 角色规划阶段并写入 specialist_roles
-4. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
-5. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
-6. `ACT`: 按 `references/lifecycle-checklist.md` 过阶段门闩；每阶段更新 `timeline.md` + `workitems.md`；发现提升为 Evidence/Finding
-7. 结束：`docs-generator` 报告必须含 Evidence 链
+1. `NOW`: 在当前 RedTrace Workspace 创建或更新 case 与 `scope.md`；授权未明确为 granted 时禁止 ACT
+2. `NOW`: 以 **lead** 角色规划阶段并写入 specialist_roles
+3. `NEXT`: 用 `command -v` 检测工具可用性（不猜路径、不自动安装）
+4. `NEXT`: 缺工具时调用 bootstrap，不要猜路径
+5. `ACT`: 按 `references/lifecycle-checklist.md` 过阶段门闩；每阶段更新 `timeline.md` + `workitems.md`；发现提升为 Evidence/Finding
+6. 结束：`docs-generator` 报告必须含 Evidence 链
 
 > 多阶段攻击路径规划与执行的总指挥。当任务需要"从 A 打到 B"的完整链路时，本 Skill 负责编排各阶段、协调子 Skill、规划攻击路径。
 > 不是"红队专属"——任何需要跨阶段组合的渗透场景都从这里开始。
