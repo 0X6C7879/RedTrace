@@ -32,6 +32,7 @@ from redtrace.dispatcher.tasks.common import (
     preview,
     process_failure_outcome,
     record_session_checkpoint,
+    reset_skill_tracking,
     run_worker_process,
     write_conclude_result,
     write_conclude_result_with_fact_id,
@@ -77,6 +78,18 @@ def run_bootstrap_task(
         if early_result is not None:
             best_effort_release(client, project.project.id, intent.id, worker.name)
             return early_result
+
+        # Clear any tracking file a crashed previous run of this same task
+        # left behind, so a retry starts clean. Must run once at task start
+        # only — execute/steering/conclude share the same tracking file.
+        reset_skill_tracking(
+            container_manager,
+            container_name,
+            "bootstrap",
+            project.project.id,
+            intent.id,
+            worker.name,
+        )
 
         prompt = render_prompt(
             load_prompt_for_mode("bootstrap.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),

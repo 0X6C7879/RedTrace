@@ -701,6 +701,40 @@ def cleanup_skill_tracking(
     _cleanup_skill_tracking(tracking_path)
 
 
+def reset_skill_tracking(
+    container_manager,
+    container_name: str,
+    task_type: str,
+    project_id: str | None,
+    intent_id: str | None,
+    worker_name: str,
+) -> None:
+    """Clear stale loaded-skill tracking at the start of a task run.
+
+    The tracking id is deterministic per (project, intent, worker, task_type)
+    so execute/steering/conclude share one file. If a previous run of the
+    same task crashed without its ``finally`` cleanup, that file lingers in
+    the workspace and a retry would inherit the stale loaded-skill set.
+    Calling this once at task start — NOT before every
+    ``run_worker_process`` — guarantees each run starts clean while phases
+    still share tracking. Writes an empty ``[]`` through the container
+    manager so both local and container execution are covered.
+    """
+    tracking_path = resolve_skill_tracking_path(
+        container_name, task_type, project_id, intent_id, worker_name
+    )
+    if tracking_path is None:
+        return
+    try:
+        container_manager.write_text_file(
+            container_name, str(tracking_path), "[]"
+        )
+    except (OSError, ValueError):
+        LOG.debug(
+            "could not reset skill tracking file path=%s", tracking_path
+        )
+
+
 def project_allows_conclude_fallback(
     client: ControlPlaneClient, project_id: str, *, worker_name: str, intent_id: str
 ) -> bool:

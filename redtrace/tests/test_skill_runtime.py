@@ -416,6 +416,80 @@ def test_cleanup_skill_tracking_noop_when_file_absent(tmp_path: Path) -> None:
     assert not tracking.exists()
 
 
+def test_reset_skill_tracking_clears_stale_file(tmp_path: Path) -> None:
+    """A crashed run's stale tracking is neutralized at task start.
+
+    The tracking id is deterministic per task identity, so a previous run
+    that crashed without its finally-cleanup leaves a stale loaded-skill
+    set behind. reset_skill_tracking overwrites it with an empty list so a
+    retry cannot inherit the previous run's loaded skills.
+    """
+    from redtrace.dispatcher.tasks.common import (
+        reset_skill_tracking,
+        resolve_skill_tracking_path,
+    )
+
+    tracking = resolve_skill_tracking_path(
+        str(tmp_path), "explore", "proj_x", "intent_x", "pi-w"
+    )
+    assert tracking is not None
+    # Simulate the residue of a crashed previous run of the same task.
+    tracking.parent.mkdir(parents=True, exist_ok=True)
+    tracking.write_text(json.dumps(["api-security", "code-audit"]), encoding="utf-8")
+
+    class Manager:
+        def write_text_file(self, container_name: str, path: str, content: str) -> str:
+            target = Path(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            return str(target)
+
+    reset_skill_tracking(
+        Manager(), str(tmp_path), "explore", "proj_x", "intent_x", "pi-w"
+    )
+
+    # The stale loaded-skill set is gone.
+    assert json.loads(tracking.read_text(encoding="utf-8")) == []
+
+
+def test_reset_skill_tracking_rejects_learn_after_reset(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """After a reset, learn() fails closed against the stale loaded set."""
+    from redtrace.dispatcher.tasks.common import (
+        reset_skill_tracking,
+        resolve_skill_tracking_path,
+    )
+
+    _skills, workspace, _memory = _env(monkeypatch, tmp_path)
+    tracking = resolve_skill_tracking_path(
+        str(tmp_path), "explore", "proj_z", "intent_z", "pi-w"
+    )
+    assert tracking is not None
+    tracking.parent.mkdir(parents=True, exist_ok=True)
+    tracking.write_text(json.dumps(["api-security"]), encoding="utf-8")
+    monkeypatch.setenv("REDTRACE_LOADED_SKILLS_FILE", str(tracking))
+    note = workspace / "note.md"
+    note.write_text("safe", encoding="utf-8")
+
+    class Manager:
+        def write_text_file(self, container_name: str, path: str, content: str) -> str:
+            target = Path(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            return str(target)
+
+    reset_skill_tracking(
+        Manager(), str(tmp_path), "explore", "proj_z", "intent_z", "pi-w"
+    )
+    try:
+        learn(_learn_args(note))
+    except ValueError as exc:
+        assert "was not loaded" in str(exc)
+    else:
+        raise AssertionError("reset must clear the stale loaded-skill set")
+
+
 # ---------------------------------------------------------------------------
 # Claude / Codex / Pi: tracking is NOT pre-seeded for any provider
 # ---------------------------------------------------------------------------
