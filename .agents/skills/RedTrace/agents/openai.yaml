@@ -1,0 +1,6 @@
+interface:
+  display_name: "RedTrace"
+  short_description: "Repo-specific patterns and workflows for RedTrace"
+  default_prompt: "Use the RedTrace repo skill to follow existing architecture, testing, and workflow conventions."
+policy:
+  allow_implicit_invocation: true
