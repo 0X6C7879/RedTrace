@@ -21,6 +21,34 @@ description: 用于在西湖论剑平台上解答 CTF 题目。通过平台 AI A
 - 需要查看西湖论剑竞赛规则、公告、得分或排名。
 - 上下文中出现 `exerciseId`、`X-Agent-AccessKey` 或 `/slab-match/api/v1/agent`。
 
+## 竞赛规则要点
+
+完整竞赛规则见 `references/competition_rules.md`。以下为 Agent 必须遵守的关键约束：
+
+### flag 格式
+
+- flag 格式为 `DASCTF{}` 或 `flag{}`
+- **提交时仅需提交 `{}` 内内容**，不要提交 `DASCTF{...}` 或 `flag{...}` 完整字符串
+- 若有特殊格式要求将在题目内注明
+
+### 提交限制
+
+- **每题 flag 最大提交次数为 50 次**，超过 50 次将无法提交
+- 禁止对赛题 flag 进行爆破，违规者取消比赛成绩
+- CLI 的 `submit` 命令内置计数保护（本地文件记录），但 Agent 也应自行控制提交频率
+
+### 计分规则
+
+- 递减模式：题目分数随解题人数增加逐步减少（每次 -1% 初始分，最低 80%）
+- 排名按分数降序，同分按时间升序
+- 影响策略：优先攻克高价值、低解题人数的题目
+
+### Agent 接入限制
+
+- 每支队伍仅允许 **1 个 Agent** 接入平台
+- 必须使用平台提供的大模型网关，所有通信经由授权 API 端点白名单
+- 比赛结束后 flag 无法提交；赛前需提交解题报告
+
 ## 必需配置
 
 从竞赛任务或运行环境中获取：
@@ -148,8 +176,22 @@ python3 scripts/slab_agent_api.py ensure-env 1001 --interval 5 --timeout 600
 得到候选 flag 后：
 
 ```bash
-python3 scripts/slab_agent_api.py submit <exerciseId> 'flag{...}'
+python3 scripts/slab_agent_api.py submit <exerciseId> '<flag_content>'
 ```
+
+**flag 格式要求**：
+
+- flag 格式为 `DASCTF{xxx}` 或 `flag{xxx}`
+- **提交时仅需提交 `{}` 内的内容**，即 `xxx` 部分，不要提交完整格式
+- 若候选 flag 包含 `DASCTF{` 或 `flag{` 前缀，需先提取花括号内内容再提交
+
+**提交限制**：
+
+- 每题最多提交 50 次，CLI 内置计数保护
+- 禁止 flag 爆破，违规取消成绩
+- 应优先通过漏洞分析缩小候选范围，减少无效提交
+
+**成功判定**：
 
 只有同时满足以下条件才能把题目标记为已解：
 
@@ -241,8 +283,11 @@ python3 scripts/slab_agent_api.py ensure-env 1001
 python3 scripts/slab_agent_api.py build 1001
 python3 scripts/slab_agent_api.py recover 1001
 
-# 提交 flag
-python3 scripts/slab_agent_api.py submit 1001 'flag{example}'
+# 提交 flag（自动剥离 DASCTF{}/flag{} 包装，内置 50 次计数保护）
+python3 scripts/slab_agent_api.py submit 1001 'example_content'
+
+# 查询某题已提交次数
+python3 scripts/slab_agent_api.py submit-count 1001
 
 # 公告
 python3 scripts/slab_agent_api.py notices
@@ -272,3 +317,5 @@ Content-Type: application/json
 ```
 
 需要核对原始字段、接口 Schema 或 curl 示例时，读取 `references/api_doc.md`。
+
+需要查阅竞赛规则、计分方式、flag 格式、提交限制等竞赛细节时，读取 `references/competition_rules.md`。

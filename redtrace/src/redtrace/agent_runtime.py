@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -19,6 +21,7 @@ from redtrace.capabilities import (
 )
 from redtrace.config_secrets import atomic_write_text
 from redtrace.dispatcher.config import WorkerConfig
+from redtrace.native_cli_config import _strip_marked_block
 from redtrace.paths import RedTracePaths
 
 _CLI_SOURCES = {
@@ -39,6 +42,19 @@ _CONTAINER_SKILL_DIRS = {
 LOG = logging.getLogger(__name__)
 _AUTO_DISABLED_MARKER = "autoDisabledBy"
 _AUTO_DISABLED_REASON = "missing-command"
+_CODEX_MCP_START = "# >>> RedTrace managed MCP >>>"
+_CODEX_MCP_END = "# <<< RedTrace managed MCP <<<"
+_CODEX_MCP_SECTION_RE = re.compile(
+    r"(?:^|\n)\[mcp_servers\.([^\]\.]+)[^\]]*\]\n(?:[^\[\n][^\n]*\n)*",
+    re.MULTILINE,
+)
+
+
+def _strip_mcp_server_sections(content: str, names: set[str]) -> str:
+    """Remove ``[mcp_servers.X]`` sections whose *X* is in *names*."""
+    def _replace(match: re.Match[str]) -> str:
+        return "" if match.group(1) in names else match.group(0)
+    return _CODEX_MCP_SECTION_RE.sub(_replace, content)
 
 
 class AgentRuntimeManager:
@@ -91,6 +107,7 @@ class AgentRuntimeManager:
             return False
         mcp_records = self._sync_mcp_command_availability(self._store.list_mcp())
         self._write_shared_runtime(mcp_records)
+        self._deploy_user_mcp(mcp_records)
         self._mcp_args_cache = codex_mcp_overrides(mcp_records)
         self._capability_signature_cache = self._capability_signature()
         return True
@@ -286,6 +303,94 @@ class AgentRuntimeManager:
             self.runtime / "pi" / "redtrace-provider.js",
             PI_PROVIDER_EXTENSION,
         )
+
+    # -- User-level MCP deployment -----------------------------------------
+    # Each agent platform reads MCP config from its own user home directory.
+    # This method keeps those files in sync with the canonical mcp/*.json
+    # source definitions so that MCP works both inside RedTrace-managed
+    # sessions and in standalone agent invocations.
+
+    def _deploy_user_mcp(self, mcp_records: list[McpRecord]) -> None:
+        home = Path.home()
+        self._deploy_claude_mcp(home, mcp_records)
+        self._deploy_pi_mcp(home, mcp_records)
+        self._deploy_codex_mcp(home, mcp_records)
+
+    def _deploy_claude_mcp(
+        self, home: Path, mcp_records: list[McpRecord]
+    ) -> None:
+        """Symlink mcp/*.json into ~/.claude/mcpServers/."""
+        target_dir = home / ".claude" / "mcpServers"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        source_dir = self.paths.mcp
+        desired: set[str] = set()
+        for record in mcp_records:
+            if not record.enabled:
+                continue
+            desired.add(record.name)
+            link = target_dir / f"{record.name}.json"
+            source = source_dir / f"{record.name}.json"
+            if link.is_symlink():
+                if link.resolve() == source.resolve():
+                    continue
+                link.unlink()
+            elif link.exists():
+                link.unlink()
+            link.symlink_to(source)
+        # Remove stale symlinks for deleted/disabled servers.
+        for child in target_dir.iterdir():
+            if child.suffix == ".json" and child.stem not in desired:
+                with contextlib.suppress(FileNotFoundError):
+                    child.unlink()
+
+    def _deploy_pi_mcp(
+        self, home: Path, mcp_records: list[McpRecord]
+    ) -> None:
+        """Write merged mcp.json for Pi to ~/.pi/agent/mcp.json."""
+        target = home / ".pi" / "agent" / "mcp.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        content = build_pi_mcp(mcp_records)
+        self._write_text(target, content)
+
+    def _deploy_codex_mcp(
+        self, home: Path, mcp_records: list[McpRecord]
+    ) -> None:
+        """Append managed MCP section to ~/.codex/config.toml."""
+        target = home / ".codex" / "config.toml"
+        if not target.parent.is_dir():
+            return
+        existing = target.read_text(encoding="utf-8") if target.is_file() else ""
+        cleaned = _strip_marked_block(existing, _CODEX_MCP_START, _CODEX_MCP_END)
+        overrides = codex_mcp_overrides(mcp_records)
+        # Group per-server entries from the flat -c key=value list.
+        servers: dict[str, list[str]] = {}
+        key_iter = iter(overrides)
+        for flag in key_iter:
+            if flag == "-c":
+                pair = next(key_iter, "")
+                parts = pair.split(".", 2)
+                eq = pair.find("=")
+                if len(parts) >= 3 and eq > 0:
+                    name = parts[1]
+                    servers.setdefault(name, []).append(parts[2])
+        # Strip existing [mcp_servers.X] sections for servers we are about
+        # to redefine so TOML never contains duplicate section headers.
+        if servers:
+            cleaned = _strip_mcp_server_sections(cleaned, set(servers))
+        if not servers:
+            content = cleaned.rstrip("\n") + "\n" if cleaned else ""
+        else:
+            block_lines = [_CODEX_MCP_START]
+            for name in sorted(servers):
+                block_lines.append(f"[mcp_servers.{name}]")
+                for pair in servers[name]:
+                    key, value = pair.split("=", 1)
+                    block_lines.append(f"{key} = {value}")
+                block_lines.append("")
+            block_lines.append(_CODEX_MCP_END)
+            block = "\n".join(block_lines)
+            content = cleaned.rstrip("\n") + "\n\n" + block + "\n"
+        atomic_write_text(target, content)
 
     def _initialize_worker(self, worker: WorkerConfig) -> None:
         if self.execution == "local":

@@ -7,6 +7,8 @@ description: Query RedTrace Blackboard history, source context, graph paths, and
 
 高级 Blackboard 查询方法。仅在需要跨 Worker 溯源或历史查询时加载。
 
+`redtrace-blackboard` 是注入 `PATH` 的 shell CLI，不是 MCP server。通过终端执行下列命令（Codex 中使用 `exec_command`）；不要调用 `read_mcp_resource` / `list_mcp_resources`，也不要构造 `blackboard://` URI。
+
 ## 命令
 
 - `redtrace-blackboard snapshot` — 完整黑板快照

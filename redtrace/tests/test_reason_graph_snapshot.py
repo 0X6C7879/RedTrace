@@ -145,6 +145,12 @@ def test_write_graph_snapshot_reference_inlines_nothing() -> None:
     assert graph not in reference
     assert any(graph == content for _, _, content in manager.writes)
     assert "redtrace-blackboard" in reference
+    assert "`redtrace-blackboard` CLI" in reference
+    assert "`redtrace-blackboard snapshot`" in reference
+    assert "exec_command" in reference
+    assert "不是 MCP server" in reference
+    assert "不要对它调用 read_mcp_resource" in reference
+    assert "不要构造 blackboard:// URI" in reference
     assert "有界" not in reference
     assert "截断" not in reference
 

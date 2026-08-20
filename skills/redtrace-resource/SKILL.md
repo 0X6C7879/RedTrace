@@ -8,6 +8,8 @@ description: RedTrace shared Resource registry. Hit this the moment you establis
 Resource 是系统当前拥有的运行资产（WebShell、C2 Listener/Session/Payload、Credential、File、Proxy）。
 Blackboard 上的 Fact 是结论；Resource 记录本身不进入 Blackboard，其他 Worker 通过本 registry 发现和复用资产。
 
+`redtrace-resource` 是注入 `PATH` 的 shell CLI，不是 MCP server。通过终端执行下列命令（Codex 中使用 `exec_command`）；不要把命令名当作 MCP server，也不要为它构造 URI。
+
 ## 建立通道后立即注册
 
 新建立的可复用通道默认注册——不注册，其他 Worker 无法发现它：

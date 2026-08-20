@@ -238,6 +238,7 @@ class BlackboardInbox:
             f"{worker_name}:{intent_id or task_type}",
             runtime_dir=runtime_dir,
         )
+        self._runtime_dir = runtime_dir
         self._changes: list[dict[str, Any]] = []
         self._pending: list[dict[str, Any]] = []
         self._signalled_revision = revision
@@ -354,10 +355,14 @@ class BlackboardInbox:
                 "changed": bool(self._changes),
                 "changes": list(self._changes),
             }
+        write_kwargs: dict[str, object] = {}
+        if self._runtime_dir is not None:
+            write_kwargs["runtime_dir"] = self._runtime_dir
         self._container_manager.write_text_file(
             self._container_name,
             self.notice_path,
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            **write_kwargs,
         )
 
     def _should_signal(self, change: dict[str, Any]) -> bool:
@@ -399,7 +404,11 @@ def write_graph_snapshot_reference(
         f"{readable_path}\n\n"
         "该文件包含当前 Blackboard 中的 Fact、Hint 和 Intent。"
         "请根据当前规划需要自行决定读取方式：可以直接读取文件，"
-        "也可以使用 redtrace-blackboard 对节点、上下文、来源和最新变化进行按需查询。"
+        "也可以通过 shell 命令（Codex 中使用 exec_command）运行 "
+        "`redtrace-blackboard` CLI（例如 `redtrace-blackboard snapshot`），"
+        "对节点、上下文、来源和最新变化进行按需查询。"
+        "`redtrace-blackboard` 不是 MCP server；不要对它调用 read_mcp_resource "
+        "或 list_mcp_resources，也不要构造 blackboard:// URI。"
     )
 
 

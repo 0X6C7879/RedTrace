@@ -1,5 +1,7 @@
 # AI Agent API 文档
 
+> 竞赛规则（flag 格式、提交限制、计分方式等）见 `references/competition_rules.md`。
+
 ## 公共约定
 
 ### Base URL
@@ -117,6 +119,8 @@
 
 - `exerciseId` 为题目 ID。
 - `flag` 为待提交答案，最长 256 字符。
+- **flag 格式为 `DASCTF{}` 或 `flag{}`，提交时仅需 `{}` 内内容**（CLI 的 `submit` 命令会自动剥离外层包装）。
+- **每题最多提交 50 次**，超过将无法提交。CLI 内置计数保护。
 - `isCorrect=true` 表示答案正确；答案错误时以返回的 `code` 和 `message` 为准。
 
 ## 4. 查询题目列表
@@ -213,14 +217,26 @@ Query 参数：
 
 | 字段 | 说明 |
 | --- | --- |
+| `id` | 题目 ID |
+| `name` | 题目名称 |
+| `description` | 题目描述 |
+| `hasSolved` | 是否已解出 |
+| `score` | 当前分值（字符串，随解题人数递减） |
+| `difficulty` | 难度等级（如 `EASY`、`MEDIUM`、`HARD`） |
 | `attachment.files[].url` | 附件下载地址 |
+| `attachment.files[].name` | 附件文件名 |
+| `attachment.files[].ext` | 附件扩展名 |
 | `endpoints` | 靶机连接信息 |
 | `endpoints[].exposeIps` | 靶机 IP |
 | `endpoints[].ports` | 开放端口 |
 | `endpoints[].users` | 可用账号密码 |
 | `endpoints[].isProxy` | 是否优先使用代理连接 |
+| `endpoints[].proxyIps` | 代理 IP（`isProxy=true` 时使用） |
 | `endpoints[].portMappings` | 代理端口映射 |
-| `expireTime` | 靶机过期时间，毫秒时间戳 |
+| `endpoints[].expireTime` | 靶机过期时间，毫秒时间戳 |
+| `canRefreshEndpoint` | 是否允许刷新/重建靶机端点 |
+| `endpointType` | 靶机类型（如 `monopoly` 独占） |
+| `currentTime` | 服务器当前时间，毫秒时间戳 |
 | `isNeedInit` | 是否需要先启动环境 |
 | `isNeedCheck` | 环境是否仍在准备中，`true` 时稍后重查详情 |
 
