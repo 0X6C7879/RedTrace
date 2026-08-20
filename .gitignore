@@ -45,6 +45,7 @@ design-qa-*.png
 RedTrace_X/artifacts/
 
 # Skill 运行时依赖（npm install 产物，不入库；需要时在 skills/*/ 下重新安装）
+skills/.system/
 skills/*/node_modules/
 skills/*/package-lock.json
 # Per-skill memory runtime lock (ephemeral, created by learn())
