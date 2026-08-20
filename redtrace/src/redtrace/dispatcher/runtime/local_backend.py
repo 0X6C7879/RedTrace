@@ -98,7 +98,7 @@ class LocalBackend:
             )
         _ensure_directory(project_dir)
         cache_dir = self._cache_dir(project_id)
-        runtime_dir = self._runtime_dir(project_id)
+        runtime_dir = self.runtime_dir(project_id)
         _ensure_directory(cache_dir)
         _ensure_directory(runtime_dir)
         _ensure_directory(marker.parent)
@@ -223,7 +223,7 @@ class LocalBackend:
         )
         if project_id is not None:
             cache_dir = str(self._cache_dir(project_id))
-            runtime_dir = str(self._runtime_dir(project_id))
+            runtime_dir = str(self.runtime_dir(project_id))
             merged_env.update(
                 {
                     "XDG_CACHE_HOME": cache_dir,
@@ -277,7 +277,14 @@ class LocalBackend:
             max_output_chars=self._context_harness.worker_output_chars,
         )
 
-    def write_text_file(self, container_name: str, path: str, content: str) -> str:
+    def write_text_file(
+        self,
+        container_name: str,
+        path: str,
+        content: str,
+        *,
+        runtime_dir: str | None = None,
+    ) -> str:
         workspace = Path(container_name).resolve()
         project_id = safe_project_key(workspace.parent.name)
         if workspace != self._project_dir(project_id):
@@ -286,15 +293,22 @@ class LocalBackend:
             )
         virtual_root = "/home/kali/workspace/"
         if path.startswith(virtual_root):
-            target = contained_path(
-                workspace, *Path(path.removeprefix(virtual_root)).parts
-            )
+            relative = Path(path.removeprefix(virtual_root)).parts
+            if runtime_dir is not None:
+                target = contained_path(
+                    Path(runtime_dir), *relative
+                )
+            else:
+                target = contained_path(workspace, *relative)
         else:
             target = Path(path).resolve()
-            try:
-                target.relative_to(workspace)
-            except ValueError as exc:
-                raise ValueError(f"local file path is outside workspace: {path}") from exc
+            allowed = [workspace]
+            if runtime_dir is not None:
+                allowed.append(Path(runtime_dir).resolve())
+            if not any(
+                target.is_relative_to(root) for root in allowed
+            ):
+                raise ValueError(f"local file path is outside workspace: {path}")
         _ensure_directory(target.parent)
         target.write_text(content, encoding="utf-8")
         return str(target)
@@ -342,7 +356,8 @@ class LocalBackend:
     def _cache_dir(self, project_id: str) -> Path:
         return self._project_root_dir(project_id) / "cache"
 
-    def _runtime_dir(self, project_id: str) -> Path:
+    def runtime_dir(self, project_id: str) -> Path:
+        """Return the runtime directory for a project (temp files, session state)."""
         return self._project_root_dir(project_id) / "runtime"
 
 

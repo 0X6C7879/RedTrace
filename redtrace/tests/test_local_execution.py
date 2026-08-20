@@ -306,6 +306,7 @@ def test_local_backend_keeps_agent_config_linked_and_sessions_outside_workspace(
     # session config home gets a Skills link to the canonical store instead,
     # so native discovery finds the same directory the user-level roots use.
     assert not (workspace / ".pi").exists()
+    assert not (workspace / ".redtrace").exists()
     assert not (workspace / ".agents").exists()
     assert not (workspace / ".claude").exists()
     assert (state / "skills").is_symlink()
@@ -391,10 +392,11 @@ def test_local_graph_snapshot_uses_managed_project_path(tmp_path: Path) -> None:
         handle,
         "facts:\n- id: f001\n",
         phase="reason_execute",
+        runtime_dir=str(backend.runtime_dir("proj_001")),
     )
 
     snapshot = next(
-        (paths.workspaces / "proj_001" / "workspace" / ".redtrace" / "prompts").glob(
+        (paths.workspaces / "proj_001" / "runtime" / ".redtrace" / "prompts").glob(
             "reason_execute-*/graph.yaml"
         )
     )
@@ -842,8 +844,8 @@ def test_explore_runs_real_local_cli_end_to_end(tmp_path: Path, monkeypatch) -> 
 
     assert outcome == "success"
     assert client.concluded == [("proj_001", "i001", "test-worker", "local fake fact")]
-    # graph snapshot was materialised on the host under the patched root
-    snapshot_root = tmp_path / "work" / "proj_001" / "workspace" / ".redtrace" / "prompts"
+    # graph snapshot was materialised on the host under the runtime dir
+    snapshot_root = tmp_path / "work" / "proj_001" / "runtime" / ".redtrace" / "prompts"
     assert any(p.name == "graph.yaml" for p in snapshot_root.rglob("*"))
 
 

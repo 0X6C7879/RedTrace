@@ -63,6 +63,12 @@ def run_explore_task(
         container_name = ensure_worker_running(
             container_manager, project.project.id, worker
         )
+        runtime_dir_fn = getattr(container_manager, "runtime_dir", None)
+        runtime_dir = (
+            str(runtime_dir_fn(project.project.id))
+            if callable(runtime_dir_fn)
+            else None
+        )
 
         early_result = preflight_worker(
             config,
@@ -88,6 +94,7 @@ def run_explore_task(
             project.project.id,
             intent.id,
             worker.name,
+            runtime_dir=runtime_dir,
         )
 
         graph_reference = write_graph_snapshot_reference(
@@ -95,6 +102,7 @@ def run_explore_task(
             container_name,
             export_yaml.strip(),
             phase="explore_execute",
+            runtime_dir=runtime_dir,
         )
         if worker.type != "mock" and callable(
             getattr(client, "wait_for_blackboard", None)
@@ -107,6 +115,7 @@ def run_explore_task(
                 intent_id=intent.id,
                 worker_name=worker.name,
                 revision=project.blackboard_revision,
+                runtime_dir=runtime_dir,
             )
         prompt = render_prompt(
             load_prompt_for_mode("explore.md", prompt_group=config.runtime.prompt_group if worker.type == "mock" else None),
@@ -296,7 +305,8 @@ def run_explore_task(
     finally:
         if container_name is not None:
             cleanup_skill_tracking(
-                container_name, "explore", project.project.id, intent.id, worker.name
+                container_name, "explore", project.project.id, intent.id, worker.name,
+                runtime_dir=runtime_dir,
             )
         if inbox is not None:
             inbox.stop()

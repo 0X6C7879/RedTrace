@@ -193,12 +193,18 @@ def preflight_worker(
     return None
 
 
-def blackboard_notice_path(container_name: str, identity: str) -> str:
+def blackboard_notice_path(
+    container_name: str,
+    identity: str,
+    *,
+    runtime_dir: str | None = None,
+) -> str:
     notice_id = uuid.uuid5(uuid.NAMESPACE_URL, identity).hex[:16]
     relative = f"{BLACKBOARD_NOTICE_ROOT}/{notice_id}.json"
     workspace = Path(container_name)
     if workspace.is_absolute():
-        return str(workspace / relative)
+        base = Path(runtime_dir) if runtime_dir is not None else workspace
+        return str(base / relative)
     return f"/home/kali/workspace/{relative}"
 
 
@@ -216,6 +222,7 @@ class BlackboardInbox:
         worker_name: str,
         revision: int,
         task_type: str = "explore",
+        runtime_dir: str | None = None,
     ):
         self._client = client
         self._container_manager = container_manager
@@ -227,7 +234,9 @@ class BlackboardInbox:
         self._cursor = revision
         self._initial_revision = revision
         self.notice_path = blackboard_notice_path(
-            container_name, f"{worker_name}:{intent_id or task_type}"
+            container_name,
+            f"{worker_name}:{intent_id or task_type}",
+            runtime_dir=runtime_dir,
         )
         self._changes: list[dict[str, Any]] = []
         self._pending: list[dict[str, Any]] = []
@@ -375,9 +384,15 @@ def write_graph_snapshot_reference(
     graph_yaml: str,
     *,
     phase: str,
+    runtime_dir: str | None = None,
 ) -> str:
     path = f"{GRAPH_SNAPSHOT_ROOT}/{phase}-{uuid.uuid4().hex[:12]}/graph.yaml"
-    written_path = container_manager.write_text_file(container_name, path, graph_yaml)
+    write_kwargs: dict[str, object] = {}
+    if runtime_dir is not None:
+        write_kwargs["runtime_dir"] = runtime_dir
+    written_path = container_manager.write_text_file(
+        container_name, path, graph_yaml, **write_kwargs
+    )
     readable_path = written_path or path
     return (
         "当前 Task Graph snapshot 位于当前 Workspace 的以下文件：\n\n"
@@ -415,6 +430,10 @@ def run_worker_process(
         phase,
         timeout_seconds,
     )
+    runtime_dir: str | None = None
+    runtime_dir_fn = getattr(container_manager, "runtime_dir", None)
+    if callable(runtime_dir_fn) and project_id is not None:
+        runtime_dir = str(runtime_dir_fn(project_id))
     process_env = dict(worker.env)
     if env_overrides:
         process_env.update(env_overrides)
@@ -468,7 +487,8 @@ def run_worker_process(
         # tracking file.
         if task_type != "reason":
             tracking_path = resolve_skill_tracking_path(
-                container_name, task_type, project_id, intent_id, worker.name
+                container_name, task_type, project_id, intent_id, worker.name,
+                runtime_dir=runtime_dir,
             )
             if tracking_path is not None:
                 process_env["REDTRACE_LOADED_SKILLS_FILE"] = str(tracking_path)
@@ -481,7 +501,9 @@ def run_worker_process(
             blackboard_inbox.notice_path
             if blackboard_inbox is not None
             else blackboard_notice_path(
-                container_name, f"{worker.name}:{intent_id or phase.split('_', 1)[0]}"
+                container_name,
+                f"{worker.name}:{intent_id or phase.split('_', 1)[0]}",
+                runtime_dir=runtime_dir,
             )
         )
         process_env["REDTRACE_BLACKBOARD_NOTICE"] = notice_path
@@ -495,13 +517,20 @@ def run_worker_process(
                     intent_id=intent_id,
                 )
                 payload["changed"] = current > blackboard_revision
+                notice_write_kwargs: dict[str, object] = {}
+                if runtime_dir is not None:
+                    notice_write_kwargs["runtime_dir"] = runtime_dir
                 container_manager.write_text_file(
                     container_name,
                     notice_path,
                     json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                    **notice_write_kwargs,
                 )
 
             if lease.watch_blackboard(blackboard_revision, publish_blackboard_notice):
+                notice_write_init_kwargs: dict[str, object] = {}
+                if runtime_dir is not None:
+                    notice_write_init_kwargs["runtime_dir"] = runtime_dir
                 container_manager.write_text_file(
                     container_name,
                     notice_path,
@@ -515,6 +544,7 @@ def run_worker_process(
                         },
                         separators=(",", ":"),
                     ),
+                    **notice_write_init_kwargs,
                 )
     process_options: dict[str, object] = {"timeout_seconds": timeout_seconds}
     if stdin_text is not None:
@@ -597,6 +627,8 @@ def resolve_skill_tracking_path(
     project_id: str | None,
     intent_id: str | None,
     worker_name: str,
+    *,
+    runtime_dir: str | None = None,
 ) -> Path | None:
     """Return the per-task loaded-skills tracking file path.
 
@@ -621,7 +653,8 @@ def resolve_skill_tracking_path(
     ).hex[:12]
     workspace = Path(container_name)
     if workspace.is_absolute():
-        return workspace / ".redtrace" / f"loaded-skills-{tracking_id}.json"
+        base = Path(runtime_dir) if runtime_dir is not None else workspace
+        return base / ".redtrace" / f"loaded-skills-{tracking_id}.json"
     return Path(f"/home/kali/workspace/.redtrace/loaded-skills-{tracking_id}.json")
 
 
@@ -641,6 +674,8 @@ def cleanup_skill_tracking(
     project_id: str | None,
     intent_id: str | None,
     worker_name: str,
+    *,
+    runtime_dir: str | None = None,
 ) -> None:
     """Remove the per-task skill tracking file if one was created. No LLM call.
 
@@ -649,7 +684,8 @@ def cleanup_skill_tracking(
     never called ``track-load`` the file does not exist and this is a no-op.
     """
     tracking_path = resolve_skill_tracking_path(
-        container_name, task_type, project_id, intent_id, worker_name
+        container_name, task_type, project_id, intent_id, worker_name,
+        runtime_dir=runtime_dir,
     )
     _cleanup_skill_tracking(tracking_path)
 
@@ -661,6 +697,8 @@ def reset_skill_tracking(
     project_id: str | None,
     intent_id: str | None,
     worker_name: str,
+    *,
+    runtime_dir: str | None = None,
 ) -> None:
     """Clear stale loaded-skill tracking at the start of a task run.
 
@@ -675,13 +713,18 @@ def reset_skill_tracking(
     container execution are covered.
     """
     tracking_path = resolve_skill_tracking_path(
-        container_name, task_type, project_id, intent_id, worker_name
+        container_name, task_type, project_id, intent_id, worker_name,
+        runtime_dir=runtime_dir,
     )
     if tracking_path is None:
         return
     try:
+        write_kwargs: dict[str, object] = {}
+        if runtime_dir is not None:
+            write_kwargs["runtime_dir"] = runtime_dir
         container_manager.write_text_file(
-            container_name, str(tracking_path), "[]"
+            container_name, str(tracking_path), "[]",
+            **write_kwargs,
         )
     except (OSError, ValueError):
         LOG.debug(
