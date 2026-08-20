@@ -7,13 +7,19 @@ description: Review verified outcomes and evolve Skills with reusable learnings 
 
 任务中产生经验证、可复用的新经验时加载本 Skill。
 
+## 职责边界
+
+- **模型**：判断是否产生新经验、经验归属于哪个 Skill、何时将 Memory 提炼为正式规则
+- **skill-evolution（本 Skill）**：提供两级门槛和写入规范约束
+- **Runtime**：只负责机械安全（脱敏、去重、格式校验、Reason 隔离），不替模型做 Learning 决策
+
 ## 写入目标（重要）
 
 经验应写入**产生该经验的专业 Skill**（本次实际加载并使用过的专业 Skill）。
 
 - 默认只 `learn` 专业 Skill，例如 `learn api-security`
 - **不要默认 `learn skill-evolution`**：除非当前任务本身就是优化 Skill Evolution 机制，否则不要将普通专业经验写入 `skill-evolution`
-- `learn()` 对未加载的 Skill fail-closed：只有本次实际加载并通过 `track-load` 记录的专业 Skill 才能写入经验
+- Skill 归属由模型判断；Runtime 只保证写入安全、规范、可追踪，不校验 loaded 状态
 
 ## 新经验判定
 
@@ -22,7 +28,7 @@ description: Review verified outcomes and evolve Skills with reusable learnings 
 - **可复用**：不绑定特定项目/题目/目标，适用于同类场景
 - **已验证**：基于本次实际执行并确认的结果，非猜测或理论推导
 - **非项目事实**：不是当前目标的特有信息（IP、端口、flag、凭据等）
-- **适用 Skill**：适用于本次实际加载过的专业 Skill
+- **适用 Skill**：适用于本次实际使用过的专业 Skill
 
 ## 行动
 
@@ -30,20 +36,33 @@ description: Review verified outcomes and evolve Skills with reusable learnings 
 
 加载后先运行 `redtrace-skill recall <canonical-id>` 消费已有经验，避免重复记录。
 
-### 2. 写入经验
+### 2. Level 1：Memory Learning（低门槛，快速、宽松、自主）
 
-若判定有新经验：
+一次经过验证的可复用经验即可写入 Memory：
 
-1. 对本次任务中**实际加载并使用过**的专业 Skill，运行 `redtrace-skill track-load <canonical-id>` 记录加载（每个 Skill 一次）
-2. 在当前 Workspace 写一份脱敏说明文件
-3. 运行 `redtrace-skill learn <canonical-id> --summary <摘要> --evidence <验证依据> --content-file <文件>`
+1. 在当前 Workspace 写一份脱敏说明文件
+2. 运行 `redtrace-skill learn <canonical-id> --summary <摘要> --evidence <验证依据> --content-file <文件>`
 
 参数要求：
 - `--summary`：一行概括，不超过 240 字符
 - `--evidence`：验证依据，不超过 500 字符
 - `--content-file`：脱敏后的详细说明，不超过 16KB
 
-### 3. 无新经验
+主要依靠模型判断。Memory 是缓冲层：即使偶有一条 Memory 判断偏差，也不会马上污染正式 Skill。
+
+### 3. Level 2：Skill Evolution（高门槛，慢速、谨慎、稳定）
+
+当 Memory 中已积累 **≥3 条一致或互补**的经验时才可升级 Skill 本体：
+
+1. 从 Memory 中抽象出稳定通用规则（不是项目事实的堆砌）
+2. 直接编辑该 Skill 的 SKILL.md，将规则写入
+3. 检查确认没有破坏原 Skill 的结构与意图
+
+```text
+执行结果 → Memory（快速沉淀）→ 反复验证 → SKILL.md（稳定进化）
+```
+
+### 4. 无新经验
 
 直接确认，不写文件，不调用 learn。
 
@@ -66,11 +85,9 @@ description: Review verified outcomes and evolve Skills with reusable learnings 
 
 无需手动检查，直接调用即可。
 
-## Skill 更新条件
+## loaded-skill 记录（可选）
 
-当 Memory 中积累了足够多相关经验（≥3 条），且这些经验可以提炼为通用规则时，可考虑更新 Skill 本体。
-
-更新方式：直接编辑 Skill 的 SKILL.md 文件，将经验总结为规则。
+如需为审计留痕，可运行 `redtrace-skill track-load <canonical-id>` 记录本次实际加载的 Skill。该记录仅用于 Debug / Audit / 分析模型是否频繁向无关 Skill 写经验，不作为学习门禁。
 
 ## 禁止
 

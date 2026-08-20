@@ -510,11 +510,12 @@ def run_worker_process(
         # A deterministic tracking id is derived from the task identity
         # (project+intent+worker+task_type) so the same file survives
         # execute -> steering -> conclude regardless of whether the provider
-        # session is known before the first run. The tracking file is NOT
-        # pre-seeded with all exposed skills — only skills the agent
-        # explicitly records via ``redtrace-skill track-load`` are considered
-        # loaded, so ``learn()``'s fail-closed gate reflects actual usage.
-        # Reason tasks never create a tracking file.
+        # session is known before the first run. The tracking file is a pure
+        # observation mechanism (debug/audit/analysis): it records only
+        # explicit ``track-load`` calls and deliberately does NOT gate
+        # ``learn()`` — learning decisions belong to the model, mechanical
+        # write safety belongs to the Runtime. Reason tasks never create a
+        # tracking file.
         if task_type != "reason":
             tracking_path = resolve_skill_tracking_path(
                 container_name, task_type, project_id, intent_id, worker.name
@@ -714,11 +715,12 @@ def reset_skill_tracking(
     The tracking id is deterministic per (project, intent, worker, task_type)
     so execute/steering/conclude share one file. If a previous run of the
     same task crashed without its ``finally`` cleanup, that file lingers in
-    the workspace and a retry would inherit the stale loaded-skill set.
-    Calling this once at task start — NOT before every
-    ``run_worker_process`` — guarantees each run starts clean while phases
-    still share tracking. Writes an empty ``[]`` through the container
-    manager so both local and container execution are covered.
+    the workspace and this run's audit data would be polluted with the
+    previous run's loaded-skill records. Calling this once at task start —
+    NOT before every ``run_worker_process`` — guarantees each run's
+    observation data starts clean while phases still share tracking. Writes
+    an empty ``[]`` through the container manager so both local and
+    container execution are covered.
     """
     tracking_path = resolve_skill_tracking_path(
         container_name, task_type, project_id, intent_id, worker_name

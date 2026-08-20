@@ -6,13 +6,14 @@ These tests pin the final closure of the Skill learning loop:
   (``skills/<name>/memory/records.jsonl`` and ``audit.jsonl``), not in a
   central store.  The ``REDTRACE_SKILL_MEMORY_DIR`` env var is only an
   optional override; by default it is not set.
-- The loaded-skill tracking file is **not** pre-seeded with all exposed
-  skills at task start.  Only skills the agent explicitly records via
-  ``redtrace-skill track-load`` are considered loaded, so ``learn()``'s
-  fail-closed gate reflects actual usage rather than mere availability.
-- ``recall()`` only reads memory and never fakes a loaded skill.
-- ``learn()`` is fail-closed: it rejects skills not recorded as loaded,
-  including the empty/missing tracking file case.
+- Learning decisions belong to the model: ``learn()`` enforces only
+  mechanical safety (sanitization, dedup, format limits, reason isolation,
+  canonical skill names) and is deliberately independent of the loaded-skill
+  tracking file.
+- The loaded-skill tracking file is a pure observation mechanism: it is NOT
+  pre-seeded with exposed skills, only explicit ``track-load`` calls record
+  entries, and it never gates ``learn()``.
+- ``recall()`` only reads memory and never modifies tracking.
 - Only ``skill-evolution`` controls the recall/learn lifecycle; ordinary
   skills and references must not repeat the executive ``skill-evolution``
   trigger or call ``redtrace-skill recall``/``learn``.
@@ -86,8 +87,6 @@ def _learn_args(note: Path, skill: str = "api-security") -> object:
 
 def test_learning_is_sanitized_deduplicated_and_recalled(tmp_path: Path, monkeypatch) -> None:
     _skills, workspace, memory = _env(monkeypatch, tmp_path)
-    # recall must not fake a loaded skill, so seed the tracking allowlist.
-    _tracking_env(monkeypatch, tmp_path, ["api-security"])
     note = workspace / "note.md"
     note.write_text(
         f"Reusable method from {workspace}; token=supersecret and https://target.example/path",
@@ -120,7 +119,6 @@ def test_learning_is_sanitized_deduplicated_and_recalled(tmp_path: Path, monkeyp
 
 def test_learning_rejects_noncanonical_or_unknown_skill(tmp_path: Path, monkeypatch) -> None:
     _skills, workspace, _memory = _env(monkeypatch, tmp_path)
-    _tracking_env(monkeypatch, tmp_path, ["api-security"])
     note = workspace / "note.md"
     note.write_text("safe", encoding="utf-8")
     args = build_parser().parse_args(
@@ -139,7 +137,6 @@ def test_learning_deduplicates_near_equivalent_wording(
     tmp_path: Path, monkeypatch
 ) -> None:
     _skills, workspace, memory = _env(monkeypatch, tmp_path)
-    _tracking_env(monkeypatch, tmp_path, ["api-security"])
     first = workspace / "first.md"
     second = workspace / "second.md"
     first.write_text(
@@ -219,15 +216,16 @@ def test_reason_cannot_recall_or_learn(tmp_path: Path, monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# recall() must not fake a loaded skill (Point 2)
+# recall() must not modify the observation-only tracking file
 # ---------------------------------------------------------------------------
 
 
 def test_recall_does_not_pollute_loaded_tracking(tmp_path: Path, monkeypatch) -> None:
     """recall() must not record the skill as loaded.
 
-    Before the fix, recall() called _track_skill_load(), which let
-    skill-evolution recall an unloaded skill and then learn() it.
+    Tracking is a pure observation mechanism recording explicit track-load
+    calls; recall is not a load event, so writing tracking here would corrupt
+    the audit data.
     """
     _skills, _workspace, _memory = _env(monkeypatch, tmp_path)
     # Tracking starts empty (nothing loaded yet).
@@ -240,62 +238,38 @@ def test_recall_does_not_pollute_loaded_tracking(tmp_path: Path, monkeypatch) ->
 
 
 # ---------------------------------------------------------------------------
-# learn() is fail-closed (Point 4)
+# learn() is independent of loaded-skill tracking (degraded gate)
 # ---------------------------------------------------------------------------
 
 
-def test_learn_allows_loaded_skill(tmp_path: Path, monkeypatch) -> None:
+def test_learn_is_independent_of_tracking_file(tmp_path: Path, monkeypatch) -> None:
+    """learn() works with no tracking file and no REDTRACE_LOADED_SKILLS_FILE.
+
+    Learning decisions belong to the model (constrained by skill-evolution);
+    the Runtime enforces only mechanical write safety. Tracking is a pure
+    observation mechanism and deliberately does not gate writes.
+    """
     _skills, workspace, _memory = _env(monkeypatch, tmp_path)
-    _tracking_env(monkeypatch, tmp_path, ["api-security"])
+    monkeypatch.delenv("REDTRACE_LOADED_SKILLS_FILE", raising=False)
     note = workspace / "note.md"
     note.write_text("safe", encoding="utf-8")
     assert learn(_learn_args(note))["status"] == "stored"
 
 
-def test_learn_rejects_skill_not_in_loaded_list(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("loaded", [[], ["code-audit"], ["api-security"]])
+def test_learn_succeeds_regardless_of_tracking_contents(
+    tmp_path: Path, monkeypatch, loaded: list[str]
+) -> None:
+    """Tracking contents (empty / unrelated / matching) never affect learn()."""
     _skills, workspace, _memory = _env(monkeypatch, tmp_path)
-    _tracking_env(monkeypatch, tmp_path, ["code-audit"])
+    _tracking_env(monkeypatch, tmp_path, loaded)
     note = workspace / "note.md"
     note.write_text("safe", encoding="utf-8")
-    try:
-        learn(_learn_args(note))
-    except ValueError as exc:
-        assert "was not loaded" in str(exc)
-    else:
-        raise AssertionError("should reject learn for unloaded skill")
-
-
-def test_learn_rejects_when_tracking_empty(tmp_path: Path, monkeypatch) -> None:
-    """Empty tracking file => reject (fail-closed), not skip validation."""
-    _skills, workspace, _memory = _env(monkeypatch, tmp_path)
-    _tracking_env(monkeypatch, tmp_path, [])
-    note = workspace / "note.md"
-    note.write_text("safe", encoding="utf-8")
-    try:
-        learn(_learn_args(note))
-    except ValueError as exc:
-        assert "was not loaded" in str(exc)
-    else:
-        raise AssertionError("empty tracking must reject learn (fail-closed)")
-
-
-def test_learn_rejects_when_no_tracking_file(tmp_path: Path, monkeypatch) -> None:
-    """Missing tracking file => reject (fail-closed)."""
-    _skills, workspace, _memory = _env(monkeypatch, tmp_path)
-    # Deliberately do NOT set REDTRACE_LOADED_SKILLS_FILE.
-    monkeypatch.delenv("REDTRACE_LOADED_SKILLS_FILE", raising=False)
-    note = workspace / "note.md"
-    note.write_text("safe", encoding="utf-8")
-    try:
-        learn(_learn_args(note))
-    except ValueError as exc:
-        assert "was not loaded" in str(exc)
-    else:
-        raise AssertionError("missing tracking must reject learn (fail-closed)")
+    assert learn(_learn_args(note))["status"] == "stored"
 
 
 def test_track_load_records_skill(tmp_path: Path, monkeypatch) -> None:
-    """track-load still records a skill to the tracking file."""
+    """track-load records a skill load for audit purposes."""
     _skills, _workspace, _memory = _env(monkeypatch, tmp_path)
     tracking = _tracking_env(monkeypatch, tmp_path, [])
 
@@ -450,44 +424,6 @@ def test_reset_skill_tracking_clears_stale_file(tmp_path: Path) -> None:
 
     # The stale loaded-skill set is gone.
     assert json.loads(tracking.read_text(encoding="utf-8")) == []
-
-
-def test_reset_skill_tracking_rejects_learn_after_reset(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """After a reset, learn() fails closed against the stale loaded set."""
-    from redtrace.dispatcher.tasks.common import (
-        reset_skill_tracking,
-        resolve_skill_tracking_path,
-    )
-
-    _skills, workspace, _memory = _env(monkeypatch, tmp_path)
-    tracking = resolve_skill_tracking_path(
-        str(tmp_path), "explore", "proj_z", "intent_z", "pi-w"
-    )
-    assert tracking is not None
-    tracking.parent.mkdir(parents=True, exist_ok=True)
-    tracking.write_text(json.dumps(["api-security"]), encoding="utf-8")
-    monkeypatch.setenv("REDTRACE_LOADED_SKILLS_FILE", str(tracking))
-    note = workspace / "note.md"
-    note.write_text("safe", encoding="utf-8")
-
-    class Manager:
-        def write_text_file(self, container_name: str, path: str, content: str) -> str:
-            target = Path(path)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
-            return str(target)
-
-    reset_skill_tracking(
-        Manager(), str(tmp_path), "explore", "proj_z", "intent_z", "pi-w"
-    )
-    try:
-        learn(_learn_args(note))
-    except ValueError as exc:
-        assert "was not loaded" in str(exc)
-    else:
-        raise AssertionError("reset must clear the stale loaded-skill set")
 
 
 # ---------------------------------------------------------------------------
