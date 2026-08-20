@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import shutil
@@ -16,6 +17,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+LOG = logging.getLogger(__name__)
 
 NAME_PATTERN = re.compile(r"^[^\W_][\w-]{0,63}$", re.UNICODE)
 MANIFEST_PATH = ".redtrace/capabilities.json"
@@ -97,13 +100,11 @@ def _positive_env(name: str, default: int) -> int:
 
 def _content_revision(
     content: str,
-    enabled: bool = True,
     trust: str = "trusted",
     successful_reuses: int = 0,
     failure_count: int = 0,
 ) -> str:
     digest = hashlib.sha256()
-    digest.update(b"enabled=1\n" if enabled else b"enabled=0\n")
     digest.update(f"trust={trust}\n".encode())
     digest.update(f"successful_reuses={successful_reuses}\n".encode())
     digest.update(f"failure_count={failure_count}\n".encode())
@@ -176,6 +177,7 @@ class SkillRecord:
     version: int
     revision: str
     updated_at: str | None
+    directory: Path
     trust: str = "trusted"
     successful_reuses: int = 0
     failure_count: int = 0
@@ -226,22 +228,74 @@ class CapabilityStore:
         root: str | Path | None = None,
         *,
         skills_dir: str | Path | None = None,
+        disabled_skills_dir: str | Path | None = None,
         mcp_dir: str | Path | None = None,
     ):
         self.root = resolve_capabilities_root(root)
         self.skills_dir = (
             Path(skills_dir).resolve() if skills_dir else self.root / "skills"
         )
+        # A Skill is enabled by living in ``skills_dir`` and disabled by living
+        # in ``disabled_skills_dir``. Agent-native Skill loaders only ever look
+        # at the linked ``skills_dir``, so the store layout is the single
+        # source of truth for visibility.
+        self.disabled_skills_dir = (
+            Path(disabled_skills_dir).resolve()
+            if disabled_skills_dir
+            else self.skills_dir.parent / "disabled-skills"
+        )
         self.mcp_dir = Path(mcp_dir).resolve() if mcp_dir else self.root / "mcp"
         self.skill_meta_dir = self.skills_dir / ".redtrace"
         self.max_skills = _positive_env("REDTRACE_MAX_SKILLS", DEFAULT_MAX_SKILLS)
         self.max_skill_chars = _positive_env("REDTRACE_MAX_SKILL_CHARS", DEFAULT_MAX_SKILL_CHARS)
         self.history_limit = _positive_env("REDTRACE_SKILL_HISTORY_LIMIT", DEFAULT_HISTORY_LIMIT)
+        self._legacy_state_migrated = False
 
     def ensure(self) -> None:
         self.skills_dir.mkdir(parents=True, exist_ok=True)
+        self.disabled_skills_dir.mkdir(parents=True, exist_ok=True)
         self.mcp_dir.mkdir(parents=True, exist_ok=True)
         self.skill_meta_dir.mkdir(parents=True, exist_ok=True)
+        self._migrate_legacy_enabled_state()
+
+    def _migrate_legacy_enabled_state(self) -> None:
+        """Move Skills disabled through the legacy ``.redtrace.json`` marker.
+
+        Older RedTrace versions stored ``enabled: false`` inside the Skill
+        state file. The directory layout is now authoritative, so those Skills
+        are relocated into ``disabled-skills/`` once and the stale marker is
+        dropped from the state file.
+        """
+        if self._legacy_state_migrated:
+            return
+        self._legacy_state_migrated = True
+        for directory in sorted(self.skills_dir.iterdir(), key=lambda item: item.name):
+            state_path = directory / ".redtrace.json"
+            if not directory.is_dir() or not state_path.is_file():
+                continue
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if not isinstance(state, dict) or state.get("enabled") is not False:
+                continue
+            destination = self.disabled_skills_dir / directory.name
+            if destination.exists():
+                LOG.warning(
+                    "cannot migrate disabled Skill %s: %s already exists",
+                    directory.name,
+                    destination,
+                )
+                continue
+            state.pop("enabled", None)
+            shutil.move(str(directory), str(destination))
+            _atomic_write(
+                destination / ".redtrace.json",
+                json.dumps(state, separators=(",", ":")) + "\n",
+            )
+            LOG.info(
+                "migrated legacy disabled Skill %s to %s", directory.name, destination
+            )
 
     def list_skills(self) -> list[SkillRecord]:
         """Read bounded Skill entrypoint metadata without walking dependencies."""
@@ -258,12 +312,13 @@ class CapabilityStore:
 
     def _list_skills_uncached(self) -> list[SkillRecord]:
         records: list[SkillRecord] = []
-        for directory in sorted(self.skills_dir.iterdir(), key=lambda item: item.name):
-            if not directory.is_dir() or not NAME_PATTERN.fullmatch(directory.name):
-                continue
-            record = self._read_skill(directory, include_files=False)
-            if record is not None:
-                records.append(record)
+        for enabled, root in ((True, self.skills_dir), (False, self.disabled_skills_dir)):
+            for directory in sorted(root.iterdir(), key=lambda item: item.name):
+                if not directory.is_dir() or not NAME_PATTERN.fullmatch(directory.name):
+                    continue
+                record = self._read_skill(directory, include_files=False, enabled=enabled)
+                if record is not None:
+                    records.append(record)
         return records
 
     def _invalidate_skill_list_cache(self) -> None:
@@ -277,19 +332,21 @@ class CapabilityStore:
         include_files: bool = True,
     ) -> SkillRecord:
         name = validate_capability_name(name)
-        record = self._read_skill(
-            self.skills_dir / name,
-            include_files=include_files,
-        )
-        if record is None:
-            raise FileNotFoundError(name)
-        return record
+        for enabled, directory in (
+            (True, self.skills_dir / name),
+            (False, self.disabled_skills_dir / name),
+        ):
+            record = self._read_skill(directory, include_files=include_files, enabled=enabled)
+            if record is not None:
+                return record
+        raise FileNotFoundError(name)
 
     def _read_skill(
         self,
         directory: Path,
         *,
         include_files: bool,
+        enabled: bool,
     ) -> SkillRecord | None:
         entrypoint = directory / "SKILL.md"
         if not directory.is_dir() or not entrypoint.is_file():
@@ -305,7 +362,6 @@ class CapabilityStore:
             except (json.JSONDecodeError, OSError):
                 state = {}
         files = self._list_skill_files(directory) if include_files else ()
-        enabled = bool(state.get("enabled", True))
         try:
             version = max(1, int(state.get("version", 1)))
         except (TypeError, ValueError):
@@ -324,7 +380,6 @@ class CapabilityStore:
         stored_revision = str(state.get("revision") or "")
         observed_revision = _content_revision(
             content,
-            enabled,
             trust,
             successful_reuses,
             failure_count,
@@ -340,7 +395,6 @@ class CapabilityStore:
             provisional_task = "out-of-band"
             stored_revision = _content_revision(
                 content,
-                enabled,
                 trust,
                 successful_reuses,
                 failure_count,
@@ -354,6 +408,7 @@ class CapabilityStore:
             version=version,
             revision=stored_revision or observed_revision,
             updated_at=str(state["updatedAt"]) if state.get("updatedAt") else None,
+            directory=directory,
             trust=trust,
             successful_reuses=successful_reuses,
             failure_count=failure_count,
@@ -444,21 +499,29 @@ class CapabilityStore:
             version = existing.version + 1 if existing else 1
             revision = _content_revision(
                 content,
-                enabled,
                 next_trust,
                 next_reuses,
                 next_failures,
             )
             updated_at = _utc_now()
-            directory = self.skills_dir / name
+            directory = self.skills_dir if enabled else self.disabled_skills_dir
+            directory.mkdir(parents=True, exist_ok=True)
+            if existing and existing.directory != directory:
+                # Toggling moves the Skill between the enabled and disabled
+                # roots; the directory layout is the visibility contract with
+                # the agents' native Skill loaders.
+                if (directory / name).exists():
+                    raise SkillConflictError(
+                        f"skill {name} already exists in both roots"
+                    )
+                shutil.move(str(existing.directory), str(directory / name))
             if existing:
                 self._record_history(existing, actor=actor, reason=reason)
-            _atomic_write(directory / "SKILL.md", content)
+            _atomic_write(directory / name / "SKILL.md", content)
             _atomic_write(
-                directory / ".redtrace.json",
+                directory / name / ".redtrace.json",
                 json.dumps(
                     {
-                        "enabled": enabled,
                         "version": version,
                         "revision": revision,
                         "updatedAt": updated_at,
@@ -519,7 +582,7 @@ class CapabilityStore:
             if record is None:
                 raise FileNotFoundError(name)
             self._record_history(record, actor=actor, reason=reason)
-            shutil.rmtree(self.skills_dir / record.name)
+            shutil.rmtree(record.directory)
             self._invalidate_skill_list_cache()
             self._append_skill_audit(
                 {
@@ -604,10 +667,14 @@ class CapabilityStore:
             self._append_skill_audit(payload)
 
     def _get_skill_direct(self, name: str) -> SkillRecord | None:
-        return self._read_skill(
-            self.skills_dir / name,
-            include_files=False,
-        )
+        for enabled, directory in (
+            (True, self.skills_dir / name),
+            (False, self.disabled_skills_dir / name),
+        ):
+            record = self._read_skill(directory, include_files=False, enabled=enabled)
+            if record is not None:
+                return record
+        return None
 
     @contextmanager
     def _skill_lock(self):
@@ -848,6 +915,13 @@ def _workspace_cli_bytes(path: str) -> bytes:
 
 
 def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
+    """Runtime infrastructure for a task Workspace.
+
+    Skills are deliberately absent: agents load them natively from their
+    user-level Skill directories, which link to the canonical store. The
+    Workspace only receives RedTrace's own CLIs, MCP configs, and the
+    capability snapshot manifest.
+    """
     skills = store.list_skills()
     mcp_records = store.list_mcp()
     files: dict[str, bytes] = {}
@@ -862,15 +936,6 @@ def workspace_payload(store: CapabilityStore) -> tuple[str, dict[str, bytes]]:
             "revision": skill.revision,
             "trust": skill.trust,
         }
-        source_dir = store.skills_dir / skill.name
-        for source in sorted(source_dir.rglob("*")):
-            if not source.is_file() or source.name == ".redtrace.json":
-                continue
-            relative = source.relative_to(source_dir)
-            content = source.read_bytes()
-            for prefix in (".agents/skills", ".claude/skills"):
-                target = PurePosixPath(prefix) / skill.name / PurePosixPath(relative.as_posix())
-                files[str(target)] = content
 
     files[CLAUDE_MCP_PATH] = build_claude_mcp(mcp_records).encode()
     files[PI_MCP_PATH] = build_pi_mcp(mcp_records).encode()
@@ -1005,11 +1070,6 @@ def materialize_local_workspace(store: CapabilityStore, workspace: Path) -> str:
     if previous.get("digest") == digest:
         return digest
 
-    for name in previous.get("skills", []):
-        if not isinstance(name, str) or not NAME_PATTERN.fullmatch(name):
-            continue
-        for prefix in (".agents/skills", ".claude/skills"):
-            shutil.rmtree(workspace / prefix / name, ignore_errors=True)
     for relative, content in files.items():
         target = workspace / Path(relative)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1045,8 +1105,6 @@ def workspace_tar(files: dict[str, bytes]) -> bytes:
                 CONTEXT_CLI_PATH,
             }:
                 info.mode = 0o755
-            elif relative.startswith((".agents/skills/", ".claude/skills/")):
-                info.mode = 0o444
             else:
                 info.mode = 0o644
             info.uid = 1000

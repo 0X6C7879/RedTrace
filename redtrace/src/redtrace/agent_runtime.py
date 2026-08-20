@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 from pathlib import Path
 
 from redtrace.capabilities import (
@@ -29,6 +28,14 @@ _CLI_SOURCES = {
     "redtrace-skill": "skill_cli.py",
 }
 
+# Container workers discover Skills natively at their agent-home Skill
+# directory; ContainerManager bind-mounts the canonical store there.
+_CONTAINER_SKILL_DIRS = {
+    "claudecode": "/home/kali/.claude/skills",
+    "codex": "/home/kali/.codex/skills",
+    "pi": "/home/kali/.pi/agent/skills",
+}
+
 LOG = logging.getLogger(__name__)
 _AUTO_DISABLED_MARKER = "autoDisabledBy"
 _AUTO_DISABLED_REASON = "missing-command"
@@ -47,7 +54,6 @@ class AgentRuntimeManager:
             mcp_dir=paths.mcp,
         )
         self._shared_initialized = False
-        self._skill_paths_cache: list[Path] = []
         self._mcp_args_cache: list[str] = []
         self._capability_signature_cache: tuple[int, ...] | None = None
 
@@ -66,10 +72,9 @@ class AgentRuntimeManager:
                 directory.mkdir(parents=True, exist_ok=True)
             self._shared_initialized = True
         self._refresh_shared_resources(force=self._capability_signature_cache is None)
-        skill_paths = self._skill_paths_cache
         for worker in workers:
             if worker.enabled and worker.type != "mock":
-                self._initialize_worker(worker, skill_paths)
+                self._initialize_worker(worker)
 
     def refresh_capabilities(self, workers: list[WorkerConfig]) -> bool:
         """Refresh only after a cheap capability-generation check changes."""
@@ -77,7 +82,7 @@ class AgentRuntimeManager:
             return False
         for worker in workers:
             if worker.enabled and worker.type != "mock":
-                self._initialize_worker(worker, self._skill_paths_cache)
+                self._initialize_worker(worker)
         return True
 
     def _refresh_shared_resources(self, *, force: bool) -> bool:
@@ -87,7 +92,6 @@ class AgentRuntimeManager:
         mcp_records = self._sync_mcp_command_availability(self._store.list_mcp())
         self._write_shared_runtime(mcp_records)
         self._mcp_args_cache = codex_mcp_overrides(mcp_records)
-        self._skill_paths_cache = self._enabled_skill_paths()
         self._capability_signature_cache = self._capability_signature()
         return True
 
@@ -282,46 +286,18 @@ class AgentRuntimeManager:
             self.runtime / "pi" / "redtrace-provider.js",
             PI_PROVIDER_EXTENSION,
         )
-        self._ensure_claude_plugin()
 
-    def _enabled_skill_paths(self) -> list[Path]:
-        paths: list[Path] = []
-        for directory in sorted(
-            self.paths.skills.iterdir(), key=lambda item: item.name
-        ):
-            if not directory.is_dir() or not (directory / "SKILL.md").is_file():
-                continue
-            state = directory / ".redtrace.json"
-            if state.is_file():
-                try:
-                    if (
-                        json.loads(state.read_text(encoding="utf-8")).get("enabled")
-                        is False
-                    ):
-                        continue
-                except (OSError, json.JSONDecodeError, TypeError):
-                    pass
-            paths.append(directory.resolve())
-        return paths
-
-    def _initialize_worker(
-        self,
-        worker: WorkerConfig,
-        local_skill_paths: list[Path],
-    ) -> None:
+    def _initialize_worker(self, worker: WorkerConfig) -> None:
         if self.execution == "local":
-            skills = [str(path) for path in local_skill_paths]
             runtime = self.runtime
             tools = self.runtime / "tools"
-            plugin_dir = self.runtime / "claude-plugin"
+            skills_dir = self.paths.skills
         else:
-            skills = [
-                f"/opt/redtrace/claude-plugin/skills/{path.name}"
-                for path in local_skill_paths
-            ]
             runtime = Path("/opt/redtrace/runtime")
             tools = Path("/opt/redtrace/tools")
-            plugin_dir = Path("/opt/redtrace/claude-plugin")
+            skills_dir = Path(
+                _CONTAINER_SKILL_DIRS.get(worker.type, "/opt/redtrace/skills")
+            )
 
         resource_args = [*self._mcp_args_cache]
         worker.env.update(
@@ -331,11 +307,7 @@ class AgentRuntimeManager:
                     if self.execution == "local"
                     else "/opt/redtrace"
                 ),
-                "REDTRACE_SKILLS_DIR": (
-                    str(self.paths.skills)
-                    if self.execution == "local"
-                    else "/opt/redtrace/claude-plugin/skills"
-                ),
+                "REDTRACE_SKILLS_DIR": str(skills_dir),
                 "REDTRACE_EXECUTION": self.execution,
                 "REDTRACE_MCP_DIR": (
                     str(self.paths.mcp)
@@ -346,14 +318,14 @@ class AgentRuntimeManager:
                 "REDTRACE_TOOLS_DIR": str(tools),
                 "REDTRACE_TOOLS_BIN": str(tools / "bin"),
                 "REDTRACE_CLAUDE_MCP_CONFIG": str(runtime / "mcp" / "claude.json"),
-                "REDTRACE_CLAUDE_PLUGIN_DIR": str(plugin_dir),
                 "REDTRACE_PI_MCP_EXTENSION": PI_MCP_EXTENSION,
                 "REDTRACE_PI_PROVIDER_EXTENSION": str(
                     runtime / "pi" / "redtrace-provider.js"
                 ),
-                "REDTRACE_SKILL_PATHS": json.dumps(skills),
-                # Codex discovers Skills from the canonical project links in
-                # .agents/skills. Its driver suppresses MCP only for custom
+                # Claude, Codex and Pi all discover Skills natively from their
+                # user-level Skill directories; per-skill Memory lives under
+                # skills/<name>/memory, so no Skill env plumbing is injected.
+                # Codex only receives MCP overrides here, suppressed for custom
                 # Responses providers that cannot accept namespace tools.
                 "REDTRACE_CODEX_RESOURCE_ARGS": json.dumps(resource_args),
             }
@@ -364,57 +336,6 @@ class AgentRuntimeManager:
                 private_cases
                 if self.execution == "local"
                 else "/opt/redtrace/private-code-audit-cases"
-            )
-
-    def _ensure_claude_plugin(self) -> None:
-        plugin = self.runtime / "claude-plugin"
-        self._write_text(
-            plugin / ".claude-plugin" / "plugin.json",
-            json.dumps(
-                {
-                    "name": "redtrace-capabilities",
-                    "version": "1.0.0",
-                    "description": "RedTrace shared Skills",
-                },
-                indent=2,
-            )
-            + "\n",
-        )
-        link = plugin / "skills"
-        target = self.paths.skills.resolve()
-        is_junction = bool(hasattr(link, "is_junction") and link.is_junction())
-        if link.is_symlink() or is_junction:
-            if link.resolve(strict=False) == target:
-                return
-            if link.is_symlink():
-                link.unlink()
-            else:
-                link.rmdir()
-        elif link.exists():
-            raise RuntimeError(
-                f"refusing to replace non-link Claude Skill directory: {link}"
-            )
-        try:
-            link.symlink_to(
-                os.path.relpath(target, start=link.parent),
-                target_is_directory=True,
-            )
-            return
-        except OSError:
-            if os.name != "nt":
-                raise RuntimeError(
-                    f"cannot expose shared Skills to Claude without a directory link: {link}"
-                )
-        completed = subprocess.run(
-            ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode != 0 or not link.is_dir():
-            raise RuntimeError(
-                "cannot create the Claude shared-Skills junction; "
-                "enable Windows Developer Mode or allow directory junctions"
             )
 
     @staticmethod

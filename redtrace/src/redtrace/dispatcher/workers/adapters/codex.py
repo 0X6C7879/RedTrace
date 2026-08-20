@@ -16,7 +16,6 @@ from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_
 from redtrace.dispatcher.workers.live import CodexLiveControl
 from redtrace.dispatcher.workers.codex_compat import codex_compat_base_url
 from redtrace.dispatcher.workers.endpoint_relay import EndpointRelay
-from redtrace.skill_runtime import skill_runtime_enabled
 
 LOG = logging.getLogger(__name__)
 
@@ -285,33 +284,17 @@ class CodexDriver(RegexSessionDriver):
             not isinstance(item, str) for item in value
         ):
             raise ValueError("REDTRACE_CODEX_RESOURCE_ARGS must be a JSON string array")
-        if skill_runtime_enabled(task_type):
-            return value
-        return [
-            item
-            for index, item in enumerate(value)
-            if not (
-                item.startswith("skills.config=")
-                or (
-                    item == "-c"
-                    and index + 1 < len(value)
-                    and value[index + 1].startswith("skills.config=")
-                )
-            )
-        ]
+        return value
 
     @staticmethod
     def _custom_instructions(
         worker: WorkerConfig, task_type: str | None = None
     ) -> str:
-        instructions = "请始终使用中文进行思考、分析和回答。"
-        shared = (
+        instructions = (
             ""
             if task_type == "reason"
             else worker.env.get("REDTRACE_GLOBAL_INSTRUCTIONS", "").strip()
         )
-        if shared:
-            instructions += "\n\n" + shared
         return f"custom_instructions={json.dumps(instructions, ensure_ascii=False)}"
 
     @staticmethod

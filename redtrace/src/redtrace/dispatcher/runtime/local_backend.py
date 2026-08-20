@@ -18,6 +18,7 @@ from redtrace.dispatcher.runtime.backend import (
 )
 from redtrace.dispatcher.runtime.local_process import LocalProcess
 from redtrace.paths import RedTracePaths, contained_path, safe_project_key
+from redtrace.skill_home import ensure_directory_link
 
 LOG = logging.getLogger(__name__)
 
@@ -98,8 +99,6 @@ class LocalBackend:
         _ensure_directory(project_dir)
         _ensure_directory(marker.parent)
         marker.touch(exist_ok=True)
-        if self._capability_store is not None:
-            self._ensure_native_skill_links(project_dir)
         pi_mcp = self._runtime_bin.parent / "mcp" / "pi.json"
         if pi_mcp.is_file():
             target = project_dir / ".pi" / "mcp.json"
@@ -117,21 +116,6 @@ class LocalBackend:
             "local project workdir ready project=%s dir=%s", project_id, project_dir
         )
         return str(project_dir)
-
-    def _ensure_native_skill_links(self, project_dir: Path) -> None:
-        assert self._capability_store is not None
-        roots = (
-            project_dir / ".agents" / "skills",
-            project_dir / ".claude" / "skills",
-        )
-        for root in roots:
-            _ensure_directory(root)
-        for skill in self._capability_store.list_skills():
-            if not skill.enabled:
-                continue
-            source = self._capability_store.skills_dir / skill.name
-            for root in roots:
-                _ensure_link(root / skill.name, source)
 
     def conversation_environment(
         self, project_id: str, worker_type: str, worker_name: str = "default"
@@ -174,6 +158,14 @@ class LocalBackend:
             # build_exec_process (relay URL, auth token, model, etc.).
             _scrub_claude_provider_env(state / "settings.json")
             _ensure_claude_workspace_trust(state)
+        if self._capability_store is not None:
+            # The session directory replaces the agent's config home
+            # (CLAUDE_CONFIG_DIR / CODEX_HOME), so its native Skill discovery
+            # looks for ``<state>/skills``. Link that to the canonical store —
+            # the same directory the user-level Skill roots point at.
+            ensure_directory_link(
+                state / "skills", self._capability_store.skills_dir
+            )
         return {variable: str(state)}
 
     def ensure_worker_running(

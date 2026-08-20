@@ -57,10 +57,19 @@ def test_specialist_skills_are_shared_with_all_workers(
     materialized_catalog: tuple[CapabilityStore, dict[str, bytes]],
 ) -> None:
     store, files = materialized_catalog
-    for name in ("api-security", "code-audit", "ctf-sandbox-orchestrator", "playwright"):
+    for name in ("api-security", "code-audit", "ctf-sandbox-orchestrator", "playwright-skill"):
         assert store.get_skill(name).enabled is True
-        for prefix in (".claude/skills", ".agents/skills"):
-            assert f"{prefix}/{name}/SKILL.md" in files
 
-    assert ".claude/skills/code-audit/scripts/validate-output.cjs" in files
-    assert ".agents/skills/pentest-tools/tools/burp-mcp-full/mcp-bridge.js" in files
+    # Skills are never copied into task workspaces; every agent loads them
+    # natively from its user-level Skill root, which links to the canonical
+    # store (skills/). The payload only carries RedTrace runtime files.
+    assert not any(
+        relative.startswith((".claude/skills/", ".agents/skills/"))
+        for relative in files
+    )
+    assert ".claude/skills/code-audit/scripts/validate-output.cjs" not in files
+    assert ".agents/skills/pentest-tools/tools/burp-mcp-full/mcp-bridge.js" not in files
+    assert (store.skills_dir / "code-audit" / "scripts" / "validate-output.cjs").is_file()
+    assert (
+        store.skills_dir / "pentest-tools" / "tools" / "burp-mcp-full" / "mcp-bridge.js"
+    ).is_file()

@@ -143,7 +143,7 @@ def _build_skill_entries(store: CapabilityStore) -> list[dict[str, Any]]:
     """One walk per package; nested entries inherit enabled from their root."""
     entries: list[dict[str, Any]] = []
     for record in store.list_skills():
-        root_dir = store.skills_dir / record.name
+        root_dir = record.directory
         entries.append(
             {
                 "key": record.name,
@@ -510,6 +510,3 @@ def set_plugin_enabled(plugin_id: str, body: EnabledUpdate):
 @router.delete("/plugins/{plugin_id}", status_code=204)
 def delete_plugin(plugin_id: str):
     raise HTTPException(501, "plugins are no longer supported")
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(400, str(exc)) from exc
-    return Response(status_code=204)

@@ -346,7 +346,7 @@ Web Worker 配置服务使用 SHA-256 revision 做乐观并发控制，支持创
 - MCP 配置转换为各 Agent CLI 的原生参数或配置；
 - 外部插件清单服务于浏览器、Burp 和其他接入端，不与 Agent Skill 混为一层。
 
-`AgentRuntimeManager` 在 Dispatcher 启动和配置变化时准备运行资产。Claude Code 使用插件目录，Codex 使用 `skills.config`，Pi 使用原生扩展/Skill 参数。能力源保持统一，但适配结果符合各 CLI 的原生格式。
+`AgentRuntimeManager` 在 Dispatcher 启动和配置变化时准备运行资产。`RedTrace/skills` 是唯一的 Canonical Skill Store：`skill_home.ensure_agent_skill_roots()` 在启动时把 `~/.claude/skills`、`~/.codex/skills`、`~/.pi/agent/skills` 以根目录 symlink/junction 指向它（容器模式改为直接把 Canonical Store bind-mount 到 Worker 容器内对应的 Agent 原生 Skill 目录）。Claude Code、Codex 和 Pi 全部通过各自的原生用户级 Skill 目录做 discovery，Worker 启动参数不再携带 `--plugin-dir`、`--skill` 或 `skills.config`；Workspace 任务目录也不再复制或链接任何 Skill。能力源保持统一，且与 Agent 原生加载路径一致。
 
 ### 9.2 有预算上下文
 

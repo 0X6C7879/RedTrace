@@ -17,6 +17,7 @@ from redtrace.paths import (
     contained_path,
     resolve_portable_path,
 )
+from redtrace.skill_home import SkillHomeError, ensure_agent_skill_roots
 
 
 def _layout(root: Path) -> RedTracePaths:
@@ -125,25 +126,25 @@ def test_workers_use_native_agent_state_and_shared_capabilities(
         for name in ("pi-a", "pi-b")
     ]
     manager = AgentRuntimeManager(layout, execution="local")
-    scans = 0
-    original_scan = manager._enabled_skill_paths
+    writes = 0
+    original_write = manager._write_shared_runtime
 
-    def counted_scan() -> list[Path]:
-        nonlocal scans
-        scans += 1
-        return original_scan()
+    def counted_write(records) -> None:
+        nonlocal writes
+        writes += 1
+        original_write(records)
 
-    monkeypatch.setattr(manager, "_enabled_skill_paths", counted_scan)
+    monkeypatch.setattr(manager, "_write_shared_runtime", counted_write)
 
     manager.initialize(workers)
     manager.initialize(workers)
 
-    assert scans == 1
+    assert writes == 1
     audit_generation = layout.skills / ".redtrace" / "audit.jsonl"
     audit_generation.write_text('{"action":"toggle"}\n', encoding="utf-8")
     assert manager.refresh_capabilities(workers) is True
     assert manager.refresh_capabilities(workers) is False
-    assert scans == 2
+    assert writes == 2
     assert (layout.runtime / "mcp" / "claude.json").is_file()
     assert (layout.runtime / "mcp" / "pi.json").is_file()
     assert not (layout.managed / "workers").exists()
@@ -155,7 +156,10 @@ def test_workers_use_native_agent_state_and_shared_capabilities(
         "REDTRACE_PI_SESSION_DIR",
     }
     assert all(isolated_keys.isdisjoint(worker.env) for worker in workers)
-    assert json.loads(workers[0].env["REDTRACE_SKILL_PATHS"]) == [str(skill.resolve())]
+    assert "REDTRACE_SKILL_PATHS" not in workers[0].env
+    assert "REDTRACE_CLAUDE_PLUGIN_DIR" not in workers[0].env
+    assert "REDTRACE_SKILL_MEMORY_DIR" not in workers[0].env
+    assert (layout.skills / "recon" / "SKILL.md").is_file()
     resource_args = workers[0].env["REDTRACE_CODEX_RESOURCE_ARGS"]
     assert "mcp_servers.filesystem.command" in resource_args
     assert "skills.config=" not in resource_args
@@ -173,7 +177,7 @@ def test_contained_path_rejects_traversal_and_root_deletion(tmp_path: Path) -> N
         contained_path(Path(Path.cwd().anchor), "project")
 
 
-def test_shared_skill_link_recovers_after_project_move(
+def test_agent_skill_roots_recover_after_project_move(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -189,16 +193,77 @@ def test_shared_skill_link_recovers_after_project_move(
     empty_home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: empty_home))
 
-    AgentRuntimeManager(layout, execution="local").initialize([])
+    ensure_agent_skill_roots(layout.skills)
     moved = tmp_path / "redtrace-after"
     root.rename(moved)
     moved_layout = _layout(moved)
 
-    AgentRuntimeManager(moved_layout, execution="local").initialize([])
+    # A moved checkout leaves stale links; re-running the initializer
+    # repairs them because the old target no longer exists.
+    ensure_agent_skill_roots(moved_layout.skills)
 
-    skill_link = moved_layout.runtime / "claude-plugin" / "skills"
-    assert skill_link.resolve() == moved_layout.skills.resolve()
-    assert (skill_link / "portable" / "SKILL.md").is_file()
+    for relative in ((".claude", "skills"), (".codex", "skills"), (".pi", "agent", "skills")):
+        link = empty_home.joinpath(*relative)
+        assert link.is_symlink()
+        assert link.resolve() == moved_layout.skills.resolve()
+    assert (empty_home / ".claude" / "skills" / "portable" / "SKILL.md").is_file()
+
+
+def test_agent_skill_roots_migrate_existing_user_skills(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "redtrace"
+    layout = _layout(root)
+    (layout.skills / "existing").mkdir(parents=True)
+    (layout.skills / "existing" / "SKILL.md").write_text(
+        "# existing\n", encoding="utf-8"
+    )
+    home = tmp_path / "home"
+    claude_skills = home / ".claude" / "skills"
+    # A distinct user Skill migrates into the canonical store, a duplicate
+    # with identical content is deduplicated, and a conflicting Skill of the
+    # same name is preserved in the pre-link backup instead of overwritten.
+    (claude_skills / "personal").mkdir(parents=True)
+    (claude_skills / "personal" / "SKILL.md").write_text("# personal\n", encoding="utf-8")
+    (claude_skills / "existing").mkdir()
+    (claude_skills / "existing" / "SKILL.md").write_text("# existing\n", encoding="utf-8")
+    (claude_skills / "conflict").mkdir()
+    (claude_skills / "conflict" / "SKILL.md").write_text("# user version\n", encoding="utf-8")
+    (layout.skills / "conflict").mkdir()
+    (layout.skills / "conflict" / "SKILL.md").write_text("# store version\n", encoding="utf-8")
+    (claude_skills / "notes.txt").write_text("not a skill\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    ensure_agent_skill_roots(layout.skills)
+
+    assert claude_skills.is_symlink()
+    assert claude_skills.resolve() == layout.skills.resolve()
+    assert (layout.skills / "personal" / "SKILL.md").read_text(encoding="utf-8") == "# personal\n"
+    backups = sorted((home / ".claude").glob("skills.redtrace-backup-*"))
+    assert len(backups) == 1
+    assert (backups[0] / "conflict" / "SKILL.md").read_text(encoding="utf-8") == "# user version\n"
+    assert (backups[0] / "notes.txt").is_file()
+
+
+def test_agent_skill_roots_refuse_foreign_live_link(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = _layout(tmp_path / "redtrace")
+    (layout.skills / "recon").mkdir(parents=True)
+    (layout.skills / "recon" / "SKILL.md").write_text("# recon\n", encoding="utf-8")
+    other = tmp_path / "other-skills"
+    other.mkdir()
+    home = tmp_path / "home"
+    claude_skills = home / ".claude" / "skills"
+    claude_skills.parent.mkdir(parents=True)
+    claude_skills.symlink_to(other, target_is_directory=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    with pytest.raises(SkillHomeError):
+        ensure_agent_skill_roots(layout.skills)
+    assert claude_skills.resolve() == other.resolve()
 
 
 def test_runtime_defaults_to_per_skill_memory(
@@ -248,7 +313,6 @@ def test_all_native_workers_receive_and_can_invoke_specialist_skills(tmp_path: P
     ]
 
     AgentRuntimeManager(layout, execution="local").initialize(workers)
-    expected_path = str(skill.resolve())
     claude = ClaudeCodeDriver(local=True).build_execute(
         workers[0], "prompt", "session", task_type="explore"
     ).argv
@@ -259,9 +323,12 @@ def test_all_native_workers_receive_and_can_invoke_specialist_skills(tmp_path: P
         workers[2], "prompt", None, task_type="explore"
     ).argv
 
-    assert claude[claude.index("--plugin-dir") + 1].endswith("claude-plugin")
+    # Skills load natively from the agents' user-level Skill directories;
+    # worker startup arguments never carry Skill plumbing.
+    assert "--plugin-dir" not in claude
     assert "skills.config=" not in " ".join(codex)
-    assert pi[pi.index("--skill") + 1] == expected_path
+    assert "--skill" not in pi
+    assert all("REDTRACE_SKILL_PATHS" not in worker.env for worker in workers)
     assert all("REDTRACE_GLOBAL_INSTRUCTIONS" not in worker.env for worker in workers)
 
     reason_claude = ClaudeCodeDriver(local=True).build_execute(
@@ -274,7 +341,7 @@ def test_all_native_workers_receive_and_can_invoke_specialist_skills(tmp_path: P
         workers[2], "prompt", None, task_type="reason"
     ).argv
     assert "--plugin-dir" not in reason_claude
-    assert expected_path not in " ".join(reason_codex)
+    assert "skills.config=" not in " ".join(reason_codex)
     assert "--skill" not in reason_pi
 
 

@@ -11,7 +11,6 @@ from redtrace.capabilities import (
     PI_MCP_EXTENSION,
     PI_MCP_PATH,
     PI_PROVIDER_EXTENSION_PATH,
-    PLUGIN_CATALOG_PATH,
     CapabilityStore,
     build_claude_mcp,
     build_pi_mcp,
@@ -23,7 +22,6 @@ from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.dispatcher.workers.adapters.claudecode import ClaudeCodeDriver
 from redtrace.dispatcher.workers.adapters.codex import CodexDriver
 from redtrace.dispatcher.workers.adapters.pi import PiDriver
-from redtrace.plugin_registry import PluginRegistry
 from redtrace.server.app import app
 
 SKILL = """---
@@ -68,29 +66,21 @@ def test_store_and_materializer_share_native_agent_resources(tmp_path: Path) -> 
             },
         },
     )
-    plugin_dir = tmp_path / "plugins" / "browser"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "manifest.json").write_text("{}\n", encoding="utf-8")
-    PluginRegistry(tmp_path).write_plugin(
-        "browser",
-        {
-            "name": "Browser traffic",
-            "description": "Browser ingress",
-            "kind": "chromium-devtools",
-            "path": "plugins/browser",
-            "entrypoint": "manifest.json",
-            "enabled": True,
-            "agents": ["claude", "codex", "pi"],
-        },
-    )
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     materialize_local_workspace(store, workspace)
 
-    assert (workspace / ".agents" / "skills" / "recon" / "SKILL.md").read_text(encoding="utf-8") == SKILL
-    assert (workspace / ".claude" / "skills" / "recon" / "scripts" / "run.sh").is_file()
-    assert not (workspace / ".agents" / "skills" / "disabled").exists()
+    # Skills load natively from the agents' user-level Skill directories; the
+    # task workspace only receives RedTrace runtime infrastructure.
+    assert not (workspace / ".agents" / "skills" / "recon").exists()
+    assert not (workspace / ".claude" / "skills" / "recon").exists()
+    assert (tmp_path / "skills" / "recon" / "SKILL.md").is_file()
+    assert (tmp_path / "skills" / "recon" / "scripts" / "run.sh").is_file()
+    # The disabled Skill lives in disabled-skills/, invisible to the native
+    # Skill loaders that only look at skills/.
+    assert (tmp_path / "disabled-skills" / "disabled" / "SKILL.md").is_file()
+    assert not (tmp_path / "skills" / "disabled").exists()
 
     claude = json.loads((workspace / CLAUDE_MCP_PATH).read_text(encoding="utf-8"))
     assert claude["mcpServers"]["context7"]["type"] == "stdio"
@@ -104,24 +94,22 @@ def test_store_and_materializer_share_native_agent_resources(tmp_path: Path) -> 
     assert 'pi.registerProvider("redtrace"' in provider_extension
     assert "supportsDeveloperRole: false" in provider_extension
     assert "PI_CODING_AGENT_DIR" not in provider_extension
-    plugins = json.loads((workspace / PLUGIN_CATALOG_PATH).read_text(encoding="utf-8"))
-    assert [plugin["id"] for plugin in plugins["plugins"]] == ["browser"]
-    assert plugins["plugins"][0]["agents"] == ["claude", "codex", "pi"]
 
     overrides = codex_mcp_overrides(store.list_mcp())
     assert "mcp_servers.context7.command=\"npx\"" in overrides
     assert "mcp_servers.context7.startup_timeout_sec=30" in overrides
 
+    # Toggling moves the Skill between the enabled and disabled roots, so the
+    # directory layout stays the single source of visibility truth.
     store.set_skill_enabled("recon", False)
+    assert (tmp_path / "disabled-skills" / "recon" / "SKILL.md").is_file()
+    assert not (tmp_path / "skills" / "recon").exists()
     materialize_local_workspace(store, workspace)
-    assert (workspace / ".agents" / "skills" / "recon").exists()
-    assert (workspace / ".claude" / "skills" / "recon").exists()
+    assert not (workspace / ".agents" / "skills" / "recon").exists()
 
-    next_workspace = tmp_path / "next-workspace"
-    next_workspace.mkdir()
-    materialize_local_workspace(store, next_workspace)
-    assert not (next_workspace / ".agents" / "skills" / "recon").exists()
-    assert not (next_workspace / ".claude" / "skills" / "recon").exists()
+    store.set_skill_enabled("recon", True)
+    assert (tmp_path / "skills" / "recon" / "SKILL.md").is_file()
+    assert not (tmp_path / "disabled-skills" / "recon").exists()
 
 
 def test_mcp_agent_specific_formats_preserve_native_fields(tmp_path: Path) -> None:
@@ -172,7 +160,7 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
         status = client.get("/capabilities")
         assert status.status_code == 200
         assert status.json()["root"] == str(tmp_path)
-        assert status.json()["pluginsDir"] == str(tmp_path / "plugins")
+        assert "pluginsDir" not in status.json()
 
         created = client.post(
             "/capabilities/skills",
@@ -237,9 +225,8 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
         )
         assert invalid.status_code == 400
 
-        plugin_dir = tmp_path / "plugins" / "browser"
-        plugin_dir.mkdir(parents=True)
-        (plugin_dir / "manifest.json").write_text("{}\n", encoding="utf-8")
+        # External plugins are gone: the legacy endpoints are permanent 501
+        # stubs so old clients fail loudly instead of 404ing mid-request.
         plugin = client.post(
             "/capabilities/plugins",
             json={
@@ -254,21 +241,14 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
                 },
             },
         )
-        assert plugin.status_code == 201
-        assert plugin.json()["ready"] is True
-        assert plugin.json()["agents"] == ["claude", "codex", "pi"]
-
-        disabled = client.patch(
-            "/capabilities/plugins/browser/enabled",
-            json={"enabled": False},
-        )
-        assert disabled.status_code == 200
-        assert disabled.json()["enabled"] is False
+        assert plugin.status_code == 501
+        assert client.get("/capabilities/plugins").json() == []
+        assert client.patch(
+            "/capabilities/plugins/browser/enabled", json={"enabled": False}
+        ).status_code == 501
 
         assert client.delete("/capabilities/skills/recon").status_code == 204
         assert client.delete("/capabilities/mcp/filesystem").status_code == 204
-        assert client.delete("/capabilities/plugins/browser").status_code == 204
-        assert plugin_dir.is_dir()
 
 
 def test_skill_list_does_not_walk_dependency_directories(tmp_path: Path) -> None:

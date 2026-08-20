@@ -322,13 +322,21 @@ class ContainerManager:
         pi_home = Path.home() / ".pi"
         pi_home.mkdir(parents=True, exist_ok=True)
         session.mkdir(parents=True, exist_ok=True)
+        # Agents discover Skills natively at their home Skill directory; the
+        # canonical store is bind-mounted there directly (one destination per
+        # worker container, matching AgentRuntimeManager's REDTRACE_SKILLS_DIR).
+        skill_home_binds = {
+            "claudecode": "/home/kali/.claude/skills",
+            "codex": "/home/kali/.codex/skills",
+            "pi": "/home/kali/.pi/agent/skills",
+        }
         bindings = {
             self._host_source(workspace): {
                 "bind": self._WORKSPACE,
                 "mode": "rw",
             },
             self._host_source(self._paths.skills): {
-                "bind": "/opt/redtrace/claude-plugin/skills",
+                "bind": skill_home_binds.get(worker_type, "/opt/redtrace/skills"),
                 "mode": "rw",
             },
             self._host_source(self._paths.mcp): {
@@ -342,10 +350,6 @@ class ContainerManager:
             self._host_source(self._paths.runtime / "tools"): {
                 "bind": "/opt/redtrace/tools",
                 "mode": "rw",
-            },
-            self._host_source(self._paths.runtime / "claude-plugin"): {
-                "bind": "/opt/redtrace/claude-plugin",
-                "mode": "ro",
             },
             self._host_source(self._paths.runtime / "mcp" / "pi.json"): {
                 "bind": "/home/kali/workspace/.pi/mcp.json",

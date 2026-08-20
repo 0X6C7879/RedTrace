@@ -11,6 +11,7 @@ from redtrace.dispatcher.singleton import (
     DispatcherInstanceLock,
 )
 from redtrace.server import db
+from redtrace.skill_home import ensure_agent_skill_roots
 
 
 @click.group()
@@ -64,6 +65,12 @@ def dispatch(config_path: Path, once: bool, startup_healthcheck_only: bool, log_
     configure_logging(log_level, bare=startup_healthcheck_only)
     try:
         config = DispatchConfig.load(config_path)
+        if config.runtime.execution == "local":
+            # The dispatcher process owns machine-level setup: point every
+            # agent's user-level Skill root at the canonical store so Claude,
+            # Codex and Pi load RedTrace Skills natively. Library code and
+            # tests never touch the user home.
+            ensure_agent_skill_roots(config.paths.layout().skills)
         if startup_healthcheck_only:
             loop = DispatcherLoop(config_path)
             loop.run_startup_healthchecks_only()

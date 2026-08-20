@@ -470,8 +470,6 @@ def run_worker_process(
     if task_type == "reason":
         for name in (
             "REDTRACE_SKILLS_DIR",
-            "REDTRACE_SKILL_PATHS",
-            "REDTRACE_SKILL_MEMORY_DIR",
             "REDTRACE_GLOBAL_INSTRUCTIONS",
         ):
             process_env.pop(name, None)

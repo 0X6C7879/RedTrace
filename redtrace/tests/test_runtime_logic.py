@@ -168,11 +168,14 @@ def test_container_mounts_only_current_worker_session_and_native_config(
     targets = {volume["bind"] for volume in volumes.values()}
     assert "/opt/redtrace/workers" not in targets
     assert volumes[str(paths.mcp.resolve())]["bind"] == "/opt/redtrace/mcp"
+    # The canonical Skill store is mounted at the worker agent's native
+    # Skill directory; there is no Claude plugin dir and no per-skill args.
     assert volumes[str(paths.skills.resolve())] == {
-        "bind": "/opt/redtrace/claude-plugin/skills",
+        "bind": "/home/kali/.codex/skills",
         "mode": "rw",
     }
     assert "/opt/redtrace/skill-memory" not in targets
+    assert "/opt/redtrace/claude-plugin" not in targets
     assert volumes[str((paths.runtime / "tools").resolve())] == {
         "bind": "/opt/redtrace/tools",
         "mode": "rw",

@@ -346,8 +346,6 @@ def test_worker_process_receives_read_only_blackboard_context(
     worker.env.update(
         {
             "REDTRACE_SKILLS_DIR": "/skills",
-            "REDTRACE_SKILL_PATHS": '["/skills/example"]',
-            "REDTRACE_SKILL_MEMORY_DIR": "/skill-memory",
             "REDTRACE_GLOBAL_INSTRUCTIONS": "skill policy",
         }
     )
@@ -366,8 +364,6 @@ def test_worker_process_receives_read_only_blackboard_context(
     assert captured["REDTRACE_TASK_TYPE"] == "reason"
     assert not {
         "REDTRACE_SKILLS_DIR",
-        "REDTRACE_SKILL_PATHS",
-        "REDTRACE_SKILL_MEMORY_DIR",
         "REDTRACE_GLOBAL_INSTRUCTIONS",
     } & captured.keys()
 

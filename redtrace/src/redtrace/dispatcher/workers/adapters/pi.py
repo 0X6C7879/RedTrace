@@ -13,7 +13,6 @@ from redtrace.dispatcher.workers.base import DriverResult, WorkerDriver
 from redtrace.dispatcher.workers.endpoint_relay import EndpointRelay
 from redtrace.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
 from redtrace.dispatcher.workers.live import PiLiveControl
-from redtrace.skill_runtime import skill_runtime_enabled
 
 
 class PiDriver(WorkerDriver):
@@ -174,7 +173,6 @@ class PiDriver(WorkerDriver):
             "rpc",
             "--extension",
             worker.env.get("REDTRACE_PI_MCP_EXTENSION", PI_MCP_EXTENSION),
-            *self._skill_args(worker, task_type),
             *self._global_instruction_args(worker, task_type),
         ]
         if session:
@@ -251,26 +249,9 @@ class PiDriver(WorkerDriver):
             ),
             "--extension",
             worker.env.get("REDTRACE_PI_MCP_EXTENSION", PI_MCP_EXTENSION),
-            *cls._skill_args(worker, task_type),
             *cls._global_instruction_args(worker, task_type),
             *pi_argv,
         ]
-
-    @staticmethod
-    def _skill_args(
-        worker: WorkerConfig, task_type: str | None = None
-    ) -> list[str]:
-        if not skill_runtime_enabled(task_type):
-            return []
-        try:
-            paths = json.loads(worker.env.get("REDTRACE_SKILL_PATHS", "[]"))
-        except json.JSONDecodeError as exc:
-            raise ValueError("invalid REDTRACE_SKILL_PATHS") from exc
-        if not isinstance(paths, list) or any(
-            not isinstance(path, str) for path in paths
-        ):
-            raise ValueError("REDTRACE_SKILL_PATHS must be a JSON string array")
-        return [argument for path in paths for argument in ("--skill", path)]
 
     @staticmethod
     def _global_instruction_args(

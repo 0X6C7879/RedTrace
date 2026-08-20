@@ -130,7 +130,6 @@ class ClaudeCodeDriver(SeedSessionDriver):
             *model_args,
             "--mcp-config",
             self._mcp_config(worker),
-            *self._plugin_args(worker, task_type),
             *self._global_instruction_args(worker, task_type),
             "-p",
             "--input-format",
@@ -172,7 +171,6 @@ class ClaudeCodeDriver(SeedSessionDriver):
             *model_args,
             "--mcp-config",
             self._mcp_config(worker),
-            *self._plugin_args(worker, task_type),
             *self._global_instruction_args(worker, task_type),
             "-p",
             "--input-format",
@@ -195,15 +193,6 @@ class ClaudeCodeDriver(SeedSessionDriver):
     @classmethod
     def _mcp_config(cls, worker: WorkerConfig) -> str:
         return worker.env.get("REDTRACE_CLAUDE_MCP_CONFIG", CLAUDE_MCP_PATH)
-
-    @classmethod
-    def _plugin_args(
-        cls, worker: WorkerConfig, task_type: str | None = None
-    ) -> list[str]:
-        if not skill_runtime_enabled(task_type):
-            return []
-        plugin_dir = worker.env.get("REDTRACE_CLAUDE_PLUGIN_DIR")
-        return ["--plugin-dir", plugin_dir] if plugin_dir else []
 
     @staticmethod
     def _global_instruction_args(
