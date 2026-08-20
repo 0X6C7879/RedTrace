@@ -32,7 +32,7 @@ REDTRACE_PLAINTEXT_SECRETS="${REDTRACE_PLAINTEXT_SECRETS:-$DEFAULT_PLAINTEXT_SEC
 export REDTRACE_PLAINTEXT_SECRETS
 BRAVE_SKILL_DIR="$PROJECT_DIR/skills/brave-search"
 GHIDRA_SKILL_DIR="$PROJECT_DIR/skills/ghidra-reverse"
-PLAYWRIGHT_SKILL_DIR="$PROJECT_DIR/skills/playwright"
+PLAYWRIGHT_SKILL_DIR="$PROJECT_DIR/skills/playwright-skill"
 GHIDRA_INSTALL_DIR="${REDTRACE_GHIDRA_HOME:-$PROJECT_DIR/.redtrace/runtime/ghidra}"
 RSACTFTOOL_VENV="${REDTRACE_RSACTFTOOL_VENV:-$PROJECT_DIR/.redtrace/runtime/rsactftool}"
 QILING_VENV="${REDTRACE_QILING_VENV:-$PROJECT_DIR/.redtrace/runtime/qiling}"
@@ -385,15 +385,14 @@ ensure_npm_cli() {
   has "$command" || die "$command installation completed but command is not on PATH"
 }
 
-ensure_playwright_cli_skill() {
-  local wrapper="$PLAYWRIGHT_SKILL_DIR/scripts/playwright_cli.sh"
-  [[ -f "$PLAYWRIGHT_SKILL_DIR/SKILL.md" ]] || die "playwright SKILL.md is missing"
-  [[ -f "$wrapper" ]] || die "playwright CLI wrapper is missing"
-  chmod +x "$wrapper"
-  ensure_npm_cli playwright-cli '@playwright/cli@latest'
-  playwright-cli install-browser chromium
-  "$wrapper" --help >/dev/null
-  log "playwright CLI skill and Chromium are ready"
+ensure_playwright_skill() {
+  [[ -f "$PLAYWRIGHT_SKILL_DIR/SKILL.md" ]] || die "playwright-skill SKILL.md is missing"
+  [[ -f "$PLAYWRIGHT_SKILL_DIR/run.js" ]] || die "playwright-skill run.js is missing"
+  has node || die "node is required for the playwright-skill"
+  has npm || die "npm is required for the playwright-skill"
+  (cd "$PLAYWRIGHT_SKILL_DIR" && npm install)
+  (cd "$PLAYWRIGHT_SKILL_DIR" && npx playwright install chromium)
+  log "playwright-skill dependencies and Chromium are ready"
 }
 
 ensure_uv() {
@@ -1076,7 +1075,7 @@ log "verifying codegraph installation"
 codegraph --version >/dev/null 2>&1 || die "codegraph failed verification"
 codegraph serve --help >/dev/null 2>&1 || die "codegraph MCP entry (serve --mcp) is unavailable"
 ensure_rtk
-ensure_playwright_cli_skill
+ensure_playwright_skill
 ensure_brave_search_skill
 ensure_ghidra_headless_skill
 ensure_nuclei

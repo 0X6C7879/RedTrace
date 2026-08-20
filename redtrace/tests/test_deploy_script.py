@@ -37,9 +37,8 @@ def test_deploy_script_unifies_linux_and_macos_without_legacy_entrypoints() -> N
     assert "@anthropic-ai/claude-code@latest" in script
     assert "@openai/codex@latest" in script
     assert "@earendil-works/pi-coding-agent@latest" in script
-    assert "@playwright/cli@latest" in script
-    assert "ensure_playwright_cli_skill" in script
-    assert "playwright-cli install-browser chromium" in script
+    assert "ensure_playwright_skill" in script
+    assert "npx playwright install chromium" in script
     assert "--with-deps" not in script
     assert "uv sync --frozen" in script
     assert "REDTRACE_LOCAL_PATH_PREPEND" in script
@@ -89,18 +88,27 @@ def test_deploy_script_unifies_linux_and_macos_without_legacy_entrypoints() -> N
     assert 'chmod 600 "$CONFIG_PATH"' in script
 
 
-def test_playwright_cli_skill_is_complete_and_deployable() -> None:
-    skill_dir = REPO_ROOT / "skills" / "playwright"
-    wrapper = skill_dir / "scripts" / "playwright_cli.sh"
+def test_playwright_skill_is_complete_and_deployable() -> None:
+    skill_dir = REPO_ROOT / "skills" / "playwright-skill"
 
     assert (skill_dir / "SKILL.md").is_file()
-    assert (skill_dir / "LICENSE.txt").is_file()
-    assert (skill_dir / "NOTICE.txt").is_file()
-    assert (skill_dir / "references" / "cli.md").is_file()
-    assert (skill_dir / "references" / "workflows.md").is_file()
-    assert wrapper.is_file()
-    assert wrapper.stat().st_mode & 0o111
-    assert "@playwright/cli" in wrapper.read_text(encoding="utf-8")
+    assert (skill_dir / "run.js").is_file()
+    assert (skill_dir / "run.js").stat().st_mode & 0o111
+    assert (skill_dir / "package.json").is_file()
+    assert (skill_dir / "lib" / "helpers.js").is_file()
+    assert (skill_dir / "API_REFERENCE.md").is_file()
+
+    skmd = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    assert 'name: playwright-skill' in skmd
+    assert "$SKILL_DIR" in skmd
+
+    runjs = (skill_dir / "run.js").read_text(encoding="utf-8")
+    assert "playwright" in runjs
+    assert "ensurePlaywright" in runjs
+
+    pkg = (skill_dir / "package.json").read_text(encoding="utf-8")
+    assert '"playwright"' in pkg
+    assert '"node":' in pkg
 
 
 def test_deploy_has_no_router_initializer() -> None:
