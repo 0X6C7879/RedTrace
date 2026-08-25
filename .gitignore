@@ -1,0 +1,57 @@
+.vscode/
+.zcode/
+.DS_Store
+__pycache__/
+.playwright-cli/
+.codex-test-venv/
+output/playwright/
+output/
+.redtrace/
+redtrace.local.yaml
+.venv/
+.venv-*/
+venv/
+env/
+.workbuddy/
+.codegraph/
+datas/
+workspaces/
+proj_002/
+redtrace.yaml
+.redtrace-secrets/
+server.log
+dispatcher.log
+logs/
+data/private/
+# 迁移临时脚本
+tmp_*.ps1
+# 白盒源目录迁移后归档（确认无误后可手工删除）
+白盒skills.migrated-*/
+vendor/*
+!vendor/deepseek-harness
+!vendor/deepseek-harness/
+!vendor/deepseek-harness/**
+nul
+*.stackdump
+
+# 顶层设计文档不提交到公开仓库（docs/ 与 redtrace/tests/ 随代码推送）
+design-qa.md
+design-qa-*.png
+
+# 构建产物/镜像归档（体积过大，不入库）
+RedTrace_X/artifacts/
+
+# Skill 运行时依赖（npm install 产物，不入库；需要时在 skills/*/ 下重新安装）
+skills/.system/
+skills/*/node_modules/
+skills/*/package-lock.json
+packages/redtrace-dsh/lib/
+# Per-skill memory runtime lock (ephemeral, created by learn())
+skills/*/memory/.lock/
+# Playwright 测试产物
+test-results/
+playwright-report/
+skills/pentest-tools/tools/burp-mcp-full/.gradle/
+
+# 根目录 npm 依赖产物（不入库）
+node_modules/

@@ -1,0 +1,20 @@
+{
+  "name": "redtrace-root",
+  "private": true,
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "dsh:check-revision": "node scripts/check-dsh-revision.mjs",
+    "dsh:install": "node scripts/dsh-pnpm.mjs install --frozen-lockfile",
+    "dsh:build:upstream": "node scripts/dsh-pnpm.mjs build",
+    "dsh:build:redtrace": "node scripts/dsh-pnpm.mjs exec tsc -p ../../packages/redtrace-dsh/tsconfig.json",
+    "dsh:build": "npm run dsh:build:upstream && npm run dsh:build:redtrace",
+    "dsh:test": "node --test packages/redtrace-dsh/test/*.test.mjs",
+    "dsh:probe": "node scripts/probe-dsh.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.62.1"
+  }
+}

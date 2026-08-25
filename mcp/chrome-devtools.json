@@ -1,0 +1,23 @@
+{
+  "agents": {
+    "codex": {
+      "startup_timeout_sec": 60
+    }
+  },
+  "args": [
+    "-y",
+    "chrome-devtools-mcp@latest",
+    "--headless",
+    "--isolated",
+    "--executablePath",
+    "/usr/bin/google-chrome",
+    "--no-usage-statistics",
+    "--no-performance-crux"
+  ],
+  "command": "npx",
+  "enabled": true,
+  "env": {
+    "CI": "1"
+  },
+  "transport": "stdio"
+}

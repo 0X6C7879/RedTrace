@@ -1,0 +1,31 @@
+- id: web-server
+  name: '../../vendor/deepseek-harness/packages/host/webserver/lib/index.js'
+  config:
+    host: 127.0.0.1
+    port: 0
+
+- id: llm-deepseek
+  name: '../../vendor/deepseek-harness/packages/llm/llm-deepseek/lib/index.js'
+
+- id: token-meter
+  name: '../../vendor/deepseek-harness/packages/llm/token-meter/lib/index.js'
+
+- id: compaction-basic
+  name: '../../vendor/deepseek-harness/packages/compaction/compaction-basic/lib/index.js'
+
+- id: sessions
+  name: '../../vendor/deepseek-harness/packages/session/session-persistence-jsonl/lib/index.js'
+  config:
+    root: !!js process.env.DSH_SESSION_ROOT
+    compression: none
+
+- id: session-checkpoints
+  name: '../../vendor/deepseek-harness/packages/session/session-checkpoint-policy/lib/index.js'
+
+- id: redtrace-core
+  name: '../../packages/redtrace-dsh/lib/core.js'
+
+# Reason tool permissions: only the contract tools (task type comes from
+# REDTRACE_TASK_TYPE).
+- id: redtrace-contracts
+  name: '../../packages/redtrace-dsh/lib/contracts.js'

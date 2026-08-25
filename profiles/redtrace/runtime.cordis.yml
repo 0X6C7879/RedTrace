@@ -1,0 +1,50 @@
+# RedTrace Cordis composition: the minimal DSH Core plus every RedTrace
+# capability as a separately mounted plugin. The scheduler mounts shell,
+# filesystem, skill, sandbox, contract, and resource plugins per agent.
+- id: web-server
+  name: '../../vendor/deepseek-harness/packages/host/webserver/lib/index.js'
+  config:
+    host: !!js process.env.REDTRACE_DSH_WEB_HOST ?? '127.0.0.1'
+    port: !!js Number(process.env.REDTRACE_DSH_WEB_PORT ?? '8000')
+
+- id: settings
+  name: '../../vendor/deepseek-harness/packages/settings/settings-file/lib/index.js'
+  config:
+    path: !!js process.env.REDTRACE_DSH_SETTINGS ?? require('node:path').join(process.env.DSH_SESSION_ROOT ?? process.cwd(), 'settings.yaml')
+
+- id: llm-deepseek
+  name: '../../vendor/deepseek-harness/packages/llm/llm-deepseek/lib/index.js'
+
+- id: llm-pi-ai
+  name: '../../vendor/deepseek-harness/packages/llm/llm-pi-ai/lib/index.js'
+  config: !!js JSON.parse(process.env.REDTRACE_DSH_PI_AI_CONFIG ?? '{"providers":{}}')
+
+- id: token-meter
+  name: '../../vendor/deepseek-harness/packages/llm/token-meter/lib/index.js'
+
+- id: compaction-basic
+  name: '../../vendor/deepseek-harness/packages/compaction/compaction-basic/lib/index.js'
+
+- id: compaction-tool-result-pruner
+  name: '../../vendor/deepseek-harness/packages/compaction/compaction-tool-result-pruner/lib/index.js'
+
+- id: subprocess
+  name: '../../vendor/deepseek-harness/packages/subprocess/subprocess-local/lib/index.js'
+
+- id: sessions
+  name: '../../vendor/deepseek-harness/packages/session/session-persistence-jsonl/lib/index.js'
+  config:
+    root: !!js process.env.DSH_SESSION_ROOT
+    compression: none
+
+- id: session-checkpoints
+  name: '../../vendor/deepseek-harness/packages/session/session-checkpoint-policy/lib/index.js'
+
+# The RedTrace plugin manager: mounts the DSH Core and every RedTrace feature
+# plugin (prompt, context, contracts, resource, domain, audit, web, scheduler)
+# as child fibers, owns the persistent plugin manifest (start/stop survives
+# restart), and serves the /__redtrace/plugins API behind the Web UI plugins
+# page. Everything below this line is managed there — "everything is a plugin".
+- id: redtrace-plugins
+  name: '../../packages/redtrace-dsh/lib/plugins.js'
+  config: !!js JSON.parse(process.env.REDTRACE_DSH_RUNTIME_CONFIG)
