@@ -31,6 +31,7 @@ def test_platform_wrappers_use_one_shared_start_command() -> None:
     assert ".venv-$PLATFORM" in bash
     assert "Darwin) PLATFORM=macos" in bash
     assert "Linux) PLATFORM=linux" in bash
+    assert "REDTRACE_DSH_ROOT" in bash
     assert ".venv-windows" in windows
     assert "uv sync" in bash
     assert "uv sync" in windows

@@ -254,6 +254,9 @@ def run(*, config: Path | None, host: str, port: int) -> int:
         raise StartupError("--port must be between 1 and 65535")
 
     root = Path(__file__).resolve().parents[3]
+    dsh_root = Path(
+        os.environ.get("REDTRACE_DSH_ROOT", os.environ.get("REDTRACE_DSH_RUNTIME_ROOT", root))
+    ).expanduser().resolve()
     config_path = (config or root / "redtrace.yaml").expanduser().resolve()
     if not config_path.is_file():
         raise StartupError(f"dispatcher config not found: {config_path}")
@@ -267,7 +270,7 @@ def run(*, config: Path | None, host: str, port: int) -> int:
         for worker in dispatch_config.workers
     )
     if dsh_engine:
-        _ensure_dsh_ready(root)
+        _ensure_dsh_ready(dsh_root)
 
     start_timeout = _positive_env("REDTRACE_START_TIMEOUT", 40)
     shutdown_timeout = _positive_env("REDTRACE_SHUTDOWN_TIMEOUT", 8)
@@ -352,11 +355,11 @@ def run(*, config: Path | None, host: str, port: int) -> int:
             assert dispatch_config is not None
             print(f"Starting RedTrace Cordis Runtime with {config_path} ...", flush=True)
             dispatcher = _start_process(
-                ["node", str(root / "scripts" / "run-redtrace-dsh.mjs")],
+                ["node", str(dsh_root / "scripts" / "run-redtrace-dsh.mjs")],
                 root,
                 env=_dsh_environment(
                     dispatch_config,
-                    root,
+                    dsh_root,
                     f"http://127.0.0.1:{api_port}",
                     host,
                     port,

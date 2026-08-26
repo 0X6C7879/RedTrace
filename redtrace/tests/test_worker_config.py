@@ -859,6 +859,11 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     assert 'x-text="webshellSessionLabel()"' in index
     assert 'x-show="webshellUsable()" @submit.prevent="runCommand()"' in index
     assert "当前 WebShell 不可用" in index
+    assert "globalUsage && globalUsage.total > 0" not in index
+    assert "tokenUsage && tokenUsage.total > 0" not in index
+    assert "taskUsage && taskUsage.total > 0" not in index
+    assert "task.token_total ?" not in index
+    assert index.index("formatTokens(tokenUsage?.total)") < index.index("`${project.facts.length} facts`")
 
 
 # ── endpoint normalization ────────────────────────────────────────────────────

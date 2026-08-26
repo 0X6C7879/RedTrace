@@ -6,7 +6,7 @@
 # schedules them. Prerequisites are checked and bootstrapped in order:
 #
 #   1. uv (Python environment)          3. DSH git submodule
-#   2. Node.js >= 22.19 (DSH runtime)   4. DSH build artifacts (auto-built once)
+#   2. Node.js >= 22.19 (DSH runtime)   4. DSH install + build (first run)
 #
 # Configuration lives in redtrace.yaml at the repository root; see
 # redtrace.dsh.example.yaml for the worker-centric providers format.
@@ -61,15 +61,24 @@ if [[ ! -f "$ROOT/vendor/deepseek-harness/package.json" ]]; then
   git -C "$ROOT" submodule update --init --recursive
 fi
 
-# ── 4. DSH build artifacts (built once; re-run with `npm run dsh:build`) ────
-if [[ ! -f "$ROOT/packages/redtrace-dsh/lib/index.js" ]] \
-  || [[ ! -f "$ROOT/vendor/deepseek-harness/packages/boot/app-boot/lib/index.js" ]]; then
-  command -v npm >/dev/null 2>&1 || {
-    printf 'error: DSH build artifacts are missing and npm is unavailable to build them\n' >&2
-    exit 1
-  }
-  printf '==> building the DSH runtime (first run; a few minutes)\n' >&2
-  (cd "$ROOT" && npm run dsh:install && npm run dsh:build)
+# ── 4. DSH install + build (first run only) ────────────────────────────────
+command -v npm >/dev/null 2>&1 || {
+  printf 'error: npm is required for the DSH runtime and was not found\n' >&2
+  exit 1
+}
+if [[ ! -f "$ROOT/vendor/deepseek-harness/packages/boot/app-boot/lib/index.js" ]] \
+  || [[ ! -f "$ROOT/packages/redtrace-dsh/lib/index.js" ]]; then
+  printf '==> first run: installing and building DSH runtime\n' >&2
+  "$ROOT/build-dsh.sh" || exit 1
+fi
+
+if [[ -n "${WSL_DISTRO_NAME:-}" && "$ROOT" == /mnt/* ]]; then
+  DSH_ROOT="${REDTRACE_DSH_ROOT:-${HOME}/redtrace-dsh}"
+  if [[ -f "$DSH_ROOT/scripts/run-redtrace-dsh.mjs" ]]; then
+    export REDTRACE_DSH_ROOT="$DSH_ROOT"
+  else
+    printf 'warning: WSL DSH build not found; using the source runtime (run ./build-dsh.sh to prepare it)\n' >&2
+  fi
 fi
 
 # ── 5. Dispatcher configuration ────────────────────────────────────────────

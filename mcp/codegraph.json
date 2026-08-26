@@ -1,9 +1,12 @@
 {
-  "enabled": true,
-  "transport": "stdio",
+  "args": [
+    "serve",
+    "--mcp"
+  ],
   "command": "codegraph",
-  "args": ["serve", "--mcp"],
+  "enabled": true,
   "env": {
     "CODEGRAPH_DB": ".codegraph/codegraph.db"
-  }
+  },
+  "transport": "stdio"
 }

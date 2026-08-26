@@ -7,7 +7,7 @@ rem runtime that schedules them. Prerequisites are checked and bootstrapped
 rem in order:
 rem
 rem   1. uv (Python environment)          3. DSH git submodule
-rem   2. Node.js >= 22.19 (DSH runtime)   4. DSH build artifacts (auto-built once)
+rem   2. Node.js >= 22.19 (DSH runtime)   4. DSH install + build (first run)
 rem
 rem Configuration lives in redtrace.yaml at the repository root; see
 rem redtrace.dsh.example.yaml for the worker-centric providers format.
@@ -64,27 +64,17 @@ if not exist "%ROOT%\vendor\deepseek-harness\package.json" (
   git -C "%ROOT%" submodule update --init --recursive || exit /b 1
 )
 
-rem -- 4. DSH build artifacts (built once; re-run with `npm run dsh:build`) -
-if not exist "%ROOT%\packages\redtrace-dsh\lib\index.js" (
-  goto :dshBuild
-)
-if not exist "%ROOT%\vendor\deepseek-harness\packages\boot\app-boot\lib\index.js" (
-  goto :dshBuild
-)
-goto :dshBuilt
-
-:dshBuild
+rem -- 4. DSH install + build (first run only) -------------------------------
 where npm >nul 2>nul || (
-  echo error: DSH build artifacts are missing and npm is unavailable to build them 1>&2
+  echo error: npm is required for the DSH runtime and was not found 1>&2
   exit /b 1
 )
-echo ==^> building the DSH runtime ^(first run; a few minutes^) 1>&2
-pushd "%ROOT%" || exit /b 1
-call npm run dsh:install || (popd & exit /b 1)
-call npm run dsh:build || (popd & exit /b 1)
-popd
-
-:dshBuilt
+if not exist "%ROOT%\vendor\deepseek-harness\packages\boot\app-boot\lib\index.js" (
+  if not exist "%ROOT%\packages\redtrace-dsh\lib\index.js" (
+    echo ==^> first run: installing and building DSH runtime 1>&2
+    call "%ROOT%\build-dsh.cmd" || exit /b 1
+  )
+)
 
 rem -- 5. Dispatcher configuration ----------------------------------------
 rem --help is answered by `redtrace start` itself and needs no config file.

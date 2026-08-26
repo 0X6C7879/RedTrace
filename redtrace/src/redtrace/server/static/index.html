@@ -309,8 +309,7 @@
       </div>
       <span class="font-semibold text-slate-700 tracking-tight">RedTrace</span>
     </div>
-    <div x-show="globalUsage && globalUsage.total > 0" x-cloak
-      class="flex shrink-0 items-center gap-2 text-[11px] text-slate-400 tabular-nums"
+    <div class="flex shrink-0 items-center gap-2 text-[11px] text-slate-400 tabular-nums"
       title="全部任务的 Token 消耗:Bootstrap / Reason / Explore / 总计">
       <span class="font-medium uppercase tracking-[0.12em] text-slate-400">Token</span>
       <span class="flex items-center gap-1 provider-bootstrap" title="Bootstrap">
@@ -498,14 +497,8 @@
         x-text="project.project.status"></span>
     </div>
     <div class="flex-1"></div>
-    <div class="flex items-center gap-4 text-xs text-slate-400">
-      <span x-text="`${project.facts.length} facts`"></span>
-      <span x-text="`${project.intents.length} intents`"></span>
-    </div>
-    <div x-show="tokenUsage && tokenUsage.total > 0" x-cloak
-      class="flex shrink-0 items-center gap-2.5 text-xs tabular-nums"
+    <div class="flex shrink-0 items-center gap-2.5 text-xs tabular-nums"
       title="Token 用量:Bootstrap / Reason / Explore / 总计">
-      <span class="h-3 w-px bg-slate-200"></span>
       <span class="flex items-center gap-1 provider-bootstrap" title="Bootstrap">
         <span class="h-1.5 w-1.5 rounded-full provider-dot-bootstrap"></span>
         <span x-text="formatTokens(tokenUsage?.bootstrap)"></span>
@@ -521,6 +514,11 @@
       <span class="font-medium text-slate-500" title="总计">
         共 <span x-text="formatTokens(tokenUsage?.total)"></span>
       </span>
+    </div>
+    <div class="flex items-center gap-4 text-xs text-slate-400">
+      <span class="h-3 w-px bg-slate-200"></span>
+      <span x-text="`${project.facts.length} facts`"></span>
+      <span x-text="`${project.intents.length} intents`"></span>
     </div>
     <div class="flex items-center gap-1.5">
       <template x-if="!replay.active">
@@ -1426,7 +1424,7 @@
             <div class="flex items-center gap-1.5 text-[10px]">
               <span class="h-1.5 w-1.5 rounded-full" :class="task.running_count ? 'bg-indigo-500 audit-pulse' : task.status === 'completed' ? 'bg-emerald-500' : task.status === 'stopped' ? 'bg-amber-500' : 'bg-slate-300'"></span>
               <span :class="task.running_count ? 'text-indigo-600' : 'text-slate-400'" x-text="task.running_count ? '进行中' : task.status"></span>
-              <span class="ml-auto text-slate-300" x-text="task.token_total ? `${task.run_count || 0} runs · ${formatTokens(task.token_total)}` : `${task.run_count || 0} runs`"></span>
+              <span class="ml-auto text-slate-300" x-text="`${task.run_count || 0} runs · ${formatTokens(task.token_total)}`"></span>
             </div>
           </button>
         </template>
@@ -1442,26 +1440,24 @@
             <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-400">
               <span class="font-mono" x-text="selectedTaskId"></span>
               <span x-show="runs.length" x-text="`${runs.length} worker runs`"></span>
-              <template x-if="taskUsage && taskUsage.total > 0">
-                <span class="flex items-center gap-2 tabular-nums"
-                  title="该任务的 Token 消耗:Bootstrap / Reason / Explore / 总计">
-                  <span class="flex items-center gap-1 provider-bootstrap" title="Bootstrap">
-                    <span class="h-1.5 w-1.5 rounded-full provider-dot-bootstrap"></span>
-                    <span x-text="formatTokens(taskUsage.bootstrap)"></span>
-                  </span>
-                  <span class="flex items-center gap-1 provider-reason" title="Reason">
-                    <span class="h-1.5 w-1.5 rounded-full provider-dot-reason"></span>
-                    <span x-text="formatTokens(taskUsage.reason)"></span>
-                  </span>
-                  <span class="flex items-center gap-1 provider-explore" title="Explore">
-                    <span class="h-1.5 w-1.5 rounded-full provider-dot-explore"></span>
-                    <span x-text="formatTokens(taskUsage.explore)"></span>
-                  </span>
-                  <span class="font-medium text-slate-500" title="总计">
-                    共 <span x-text="formatTokens(taskUsage.total)"></span>
-                  </span>
+              <span class="flex items-center gap-2 tabular-nums"
+                title="该任务的 Token 消耗:Bootstrap / Reason / Explore / 总计">
+                <span class="flex items-center gap-1 provider-bootstrap" title="Bootstrap">
+                  <span class="h-1.5 w-1.5 rounded-full provider-dot-bootstrap"></span>
+                  <span x-text="formatTokens(taskUsage?.bootstrap)"></span>
                 </span>
-              </template>
+                <span class="flex items-center gap-1 provider-reason" title="Reason">
+                  <span class="h-1.5 w-1.5 rounded-full provider-dot-reason"></span>
+                  <span x-text="formatTokens(taskUsage?.reason)"></span>
+                </span>
+                <span class="flex items-center gap-1 provider-explore" title="Explore">
+                  <span class="h-1.5 w-1.5 rounded-full provider-dot-explore"></span>
+                  <span x-text="formatTokens(taskUsage?.explore)"></span>
+                </span>
+                <span class="font-medium text-slate-500" title="总计">
+                  共 <span x-text="formatTokens(taskUsage?.total)"></span>
+                </span>
+              </span>
             </div>
           </div>
           <label class="inline-flex items-center gap-2 text-[10px] text-slate-500">
