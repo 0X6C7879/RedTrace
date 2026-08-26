@@ -224,7 +224,7 @@ test('module paths resolve inside a root with a trailing slash', async (t) => {
   await manager.boot()
   // repoRoot from the loader URL carries a trailing slash; in-repo paths must
   // still resolve and out-of-repo paths must still be rejected.
-  assert.equal(manager.resolveModule('plugins/x/index.js'), path.join('plugins', 'x', 'index.js'))
+  assert.equal(manager.resolveModule('plugins/x/index.js'), 'plugins/x/index.js')
   assert.throws(() => manager.resolveModule('../outside.js'), PluginError)
 })
 

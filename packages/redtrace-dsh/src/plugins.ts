@@ -600,7 +600,9 @@ export class PluginManager {
     if (absolute !== this.root && !absolute.startsWith(`${this.root}${path.sep}`)) {
       throw new PluginError('模块路径必须位于仓库内')
     }
-    return path.relative(this.root, absolute)
+    // Normalize to forward slashes so manifest entries stay portable
+    // across platforms (path.relative uses '\' on Windows).
+    return path.relative(this.root, absolute).split(path.sep).join('/')
   }
 }
 
