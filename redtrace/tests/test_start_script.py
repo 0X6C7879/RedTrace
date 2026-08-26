@@ -36,6 +36,18 @@ def test_platform_wrappers_use_one_shared_start_command() -> None:
     assert "uv sync" in windows
 
 
+def test_start_scripts_answer_help_without_config() -> None:
+    bash = BASH_SCRIPT.read_text(encoding="utf-8")
+    windows = WINDOWS_SCRIPT.read_text(encoding="utf-8")
+
+    # CI smoke-tests `start-redtrace --help` on a fresh checkout where
+    # redtrace.yaml does not exist yet, so both launchers must pass --help
+    # through to `redtrace start` before the config check.
+    assert '*" --help "*' in bash
+    assert "redtrace start" in bash
+    assert "!LAUNCHER_ARGS:--help=!" in windows
+
+
 def test_start_command_help_documents_both_components() -> None:
     result = CliRunner().invoke(main, ["start", "--help"])
 

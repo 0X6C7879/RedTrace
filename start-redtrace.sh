@@ -73,6 +73,10 @@ if [[ ! -f "$ROOT/packages/redtrace-dsh/lib/index.js" ]] \
 fi
 
 # ── 5. Dispatcher configuration ────────────────────────────────────────────
+# --help is answered by `redtrace start` itself and needs no config file.
+case " $* " in
+  *" --help "*|*" -h "*) exec uv run --no-sync --project "$PROJECT" redtrace start "$@" ;;
+esac
 if [[ ! -f "$ROOT/redtrace.yaml" ]]; then
   printf 'error: %s/redtrace.yaml not found\n' "$ROOT" >&2
   printf '  copy redtrace.dsh.example.yaml to redtrace.yaml, fill in a provider\n' >&2

@@ -87,6 +87,12 @@ popd
 :dshBuilt
 
 rem -- 5. Dispatcher configuration ----------------------------------------
+rem --help is answered by `redtrace start` itself and needs no config file.
+set "LAUNCHER_ARGS=%*"
+if defined LAUNCHER_ARGS if not "!LAUNCHER_ARGS:--help=!"=="!LAUNCHER_ARGS!" (
+  uv run --no-sync --project "%PROJECT%" redtrace start %*
+  exit /b !errorlevel!
+)
 if not exist "%ROOT%\redtrace.yaml" (
   echo error: %ROOT%\redtrace.yaml not found 1>&2
   echo   copy redtrace.dsh.example.yaml to redtrace.yaml, fill in a provider 1>&2
