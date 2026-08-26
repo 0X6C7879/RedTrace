@@ -71,6 +71,7 @@ def list_all() -> list[ProjectSummary]:
                 reason_circuit_open=bool(row["reason_circuit_open"]),
                 planning_revision=row["planning_revision"],
                 reason_evaluated_revision=row["reason_evaluated_revision"],
+                reason_context_revision=row["reason_context_revision"],
                 fact_count=row["fact_count"],
                 intent_count=row["intent_count"],
                 working_intent_count=row["working_intent_count"],

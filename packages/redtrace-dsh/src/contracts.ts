@@ -13,7 +13,10 @@ export const name = 'redtrace-contracts'
 export const inject = ['tools']
 
 export const CONTRACTS = {
-  reason: ['redtrace_intent_create', 'redtrace_reason_noop', 'redtrace_project_complete'],
+  reason: [
+    'redtrace_intent_create', 'redtrace_reason_noop', 'redtrace_project_complete',
+    'redtrace_graph_node', 'redtrace_graph_context', 'redtrace_graph_path',
+  ],
   bootstrap: ['redtrace_bootstrap_conclude'],
   explore: ['redtrace_explore_conclude'],
 } as const
@@ -90,6 +93,20 @@ export async function request(
   return payload
 }
 
+async function query(task: RuntimeTask, pathname: string, signal?: AbortSignal): Promise<Json> {
+  const response = await fetch(`${server(task)}${pathname}`, {
+    headers: {
+      'X-RedTrace-Worker': task.worker,
+      'X-RedTrace-Task': task.type,
+      ...(task.intentId === undefined ? {} : { 'X-RedTrace-Intent': task.intentId }),
+    },
+    signal,
+  })
+  const payload = await response.json() as Json
+  if (!response.ok) throw new Error(`RedTrace API ${response.status}: ${JSON.stringify(payload)}`)
+  return payload
+}
+
 export function server(task: RuntimeTask): string {
   return task.server ?? runtimeValue('REDTRACE_SERVER')
 }
@@ -159,6 +176,57 @@ function registerReason(ctx: ToolContext): void {
       }, execution.signal)
       execution.concludeTurn?.()
       return committed(task, value)
+    },
+  })
+  register(ctx, {
+    name: 'redtrace_graph_node',
+    description: 'Recall one exact historical Fact, Intent, or Hint from the canonical Blackboard.',
+    parameters: {
+      type: 'object',
+      properties: { node_id: text },
+      required: ['node_id'],
+      additionalProperties: false,
+    },
+    async execute(args, execution) {
+      const task = taskFor(execution, 'reason')
+      return query(task, `/projects/${encodeURIComponent(task.projectId)}/blackboard/nodes/${encodeURIComponent(String(args.node_id))}`, execution.signal)
+    },
+  })
+  register(ctx, {
+    name: 'redtrace_graph_context',
+    description: 'Recall a bounded neighborhood around one Blackboard node when the current delta lacks needed history.',
+    parameters: {
+      type: 'object',
+      properties: {
+        node_id: text,
+        depth: { type: 'integer', minimum: 0, maximum: 3 },
+        limit: { type: 'integer', minimum: 1, maximum: 50 },
+      },
+      required: ['node_id'],
+      additionalProperties: false,
+    },
+    async execute(args, execution) {
+      const task = taskFor(execution, 'reason')
+      const params = new URLSearchParams()
+      if (typeof args.depth === 'number') params.set('depth', String(args.depth))
+      if (typeof args.limit === 'number') params.set('limit', String(args.limit))
+      const suffix = params.size === 0 ? '' : `?${params}`
+      return query(task, `/projects/${encodeURIComponent(task.projectId)}/blackboard/context/${encodeURIComponent(String(args.node_id))}${suffix}`, execution.signal)
+    },
+  })
+  register(ctx, {
+    name: 'redtrace_graph_path',
+    description: 'Recall the directed Blackboard path between two known node ids.',
+    parameters: {
+      type: 'object',
+      properties: { source: text, target: text },
+      required: ['source', 'target'],
+      additionalProperties: false,
+    },
+    async execute(args, execution) {
+      const task = taskFor(execution, 'reason')
+      const params = new URLSearchParams({ source: String(args.source), target: String(args.target) })
+      return query(task, `/projects/${encodeURIComponent(task.projectId)}/blackboard/path?${params}`, execution.signal)
     },
   })
 }

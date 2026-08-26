@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { fetchAllResources, planDispatch, postWithRetry, reasonEligible, resolveLimits } from '../lib/scheduler.js'
+import {
+  activateAgent, fetchAllBlackboardChanges, fetchAllResources, planDispatch, postWithRetry,
+  reasonEligible, reasonSessionId, resolveLimits, sessionIdForTask,
+} from '../lib/scheduler.js'
 import { schedulable } from '../lib/context.js'
 
 function summary(id, overrides = {}) {
@@ -30,6 +33,27 @@ function intent(overrides = {}) {
 }
 
 const LIMS = { maxWorkers: 4, maxProjectWorkers: 2, maxRunningProjects: 2 }
+
+test('Reason has one stable project session while other tasks remain isolated', () => {
+  assert.equal(reasonSessionId('proj_001'), 'rt-proj_001-reason')
+  assert.equal(sessionIdForTask('reason', 'proj_001'), sessionIdForTask('reason', 'proj_001'))
+  assert.notEqual(sessionIdForTask('explore', 'proj_001'), sessionIdForTask('explore', 'proj_001'))
+})
+
+test('activateAgent resumes a durable Reason session and creates a missing one', async () => {
+  const calls = []
+  const handle = { agent: {}, async dispose() {} }
+  const agents = {
+    async create(options) { calls.push(['create', options]); return handle },
+    async resume(options) { calls.push(['resume', options]); return handle },
+  }
+  await activateAgent(agents, 'rt-p-reason', '/workspace/p', { agentOptions: { model: 'm' } }, true)
+  await activateAgent(agents, 'rt-p-reason', '/workspace/p', { agentOptions: { model: 'm' } }, false)
+  assert.deepEqual(calls, [
+    ['resume', { resumeSessionId: 'rt-p-reason', agentOptions: { model: 'm' } }],
+    ['create', { sessionId: 'rt-p-reason', meta: { cwd: '/workspace/p' }, agentOptions: { model: 'm' } }],
+  ])
+})
 
 // ─── Health / cooldown gates ────────────────────────────────────────────────
 
@@ -157,6 +181,33 @@ test('fetchAllResources: a short or empty first page ends immediately', async ()
   assert.deepEqual(one, [{ id: 'r0' }])
   const none = await fetchAllResources(async () => [])
   assert.deepEqual(none, [])
+})
+
+test('fetchAllBlackboardChanges: consumes every page without gaps', async () => {
+  const cursors = []
+  const result = await fetchAllBlackboardChanges(7, async since => {
+    cursors.push(since)
+    if (since === 7) return {
+      since, revision: 11, next_revision: 9, has_more: true,
+      changes: [{ revision: 8 }, { revision: 9 }],
+    }
+    return {
+      since, revision: 11, next_revision: 11, has_more: false,
+      changes: [{ revision: 10 }, { revision: 11 }],
+    }
+  })
+  assert.deepEqual(cursors, [7, 9])
+  assert.deepEqual(result.changes.map(change => change.revision), [8, 9, 10, 11])
+  assert.equal(result.revision, 11)
+})
+
+test('fetchAllBlackboardChanges: rejects a non-advancing cursor', async () => {
+  await assert.rejects(
+    fetchAllBlackboardChanges(7, async since => ({
+      since, revision: 9, next_revision: since, has_more: true, changes: [],
+    })),
+    /did not advance/,
+  )
 })
 
 // ─── Retry semantics ────────────────────────────────────────────────────────

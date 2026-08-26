@@ -350,6 +350,7 @@ def project_meta_from_row(row: sqlite3.Row) -> ProjectMeta:
         reason_circuit_open=bool(row["reason_circuit_open"]),
         planning_revision=row["planning_revision"],
         reason_evaluated_revision=row["reason_evaluated_revision"],
+        reason_context_revision=row["reason_context_revision"],
     )
 
 

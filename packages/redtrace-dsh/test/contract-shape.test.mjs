@@ -10,6 +10,9 @@ test('registers only the contracts allowed for each task', async () => {
       'redtrace_intent_create',
       'redtrace_reason_noop',
       'redtrace_project_complete',
+      'redtrace_graph_node',
+      'redtrace_graph_context',
+      'redtrace_graph_path',
     ],
     bootstrap: ['redtrace_bootstrap_conclude'],
     explore: ['redtrace_explore_conclude'],
@@ -103,3 +106,41 @@ test('bootstrap conclude passes complete_description through; explore never does
   }
 })
 
+test('Reason graph recall queries the canonical Blackboard without ending the turn', async () => {
+  const tools = []
+  await contractsApply({ tools: { register(tool) { tools.push(tool) } } }, { types: ['reason'] })
+  const graphNode = tools.find(tool => tool.name === 'redtrace_graph_node')
+  const previous = {
+    type: process.env.REDTRACE_TASK_TYPE,
+    project: process.env.REDTRACE_PROJECT_ID,
+    worker: process.env.REDTRACE_WORKER,
+    server: process.env.REDTRACE_SERVER,
+    fetch: globalThis.fetch,
+  }
+  process.env.REDTRACE_TASK_TYPE = 'reason'
+  process.env.REDTRACE_PROJECT_ID = 'proj/1'
+  process.env.REDTRACE_WORKER = 'reasoner'
+  process.env.REDTRACE_SERVER = 'http://redtrace.test'
+  let observed
+  globalThis.fetch = async (url, init) => {
+    observed = { url: String(url), init }
+    return { ok: true, async json() { return { found: true, node: { id: 'f 1' } } } }
+  }
+  let concluded = false
+  try {
+    const value = await graphNode.execute({ node_id: 'f 1' }, { concludeTurn() { concluded = true } })
+    assert.deepEqual(value, { found: true, node: { id: 'f 1' } })
+    assert.equal(observed.url, 'http://redtrace.test/projects/proj%2F1/blackboard/nodes/f%201')
+    assert.equal(observed.init.headers['X-RedTrace-Worker'], 'reasoner')
+    assert.equal(concluded, false)
+  } finally {
+    for (const [name, value] of [
+      ['REDTRACE_TASK_TYPE', previous.type], ['REDTRACE_PROJECT_ID', previous.project],
+      ['REDTRACE_WORKER', previous.worker], ['REDTRACE_SERVER', previous.server],
+    ]) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    globalThis.fetch = previous.fetch
+  }
+})

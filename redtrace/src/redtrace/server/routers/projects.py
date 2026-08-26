@@ -2,10 +2,10 @@ import time
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from redtrace.board import projects
-from redtrace.board.storage import get_project_or_404, utcnow
+from redtrace.board.storage import get_blackboard_revision, get_project_or_404, utcnow
 from redtrace.board.models import (
     CompleteRequest,
     CreateProjectRequest,
@@ -141,12 +141,19 @@ class ReasonOutcomeRequest(BaseModel):
     outcome: str
     detail: str = ""
     base_planning_revision: int | None = None
+    context_revision: int | None = Field(default=None, ge=0)
 
 
 @router.post("/projects/{project_id}/reason/outcome")
 def report_reason_outcome(project_id: str, body: ReasonOutcomeRequest):
     with get_conn(immediate=True) as conn:
         row = get_project_or_404(conn, project_id)
+        context_revision = int(row["reason_context_revision"])
+        if body.context_revision is not None:
+            blackboard_revision = get_blackboard_revision(conn, project_id)
+            if body.context_revision > blackboard_revision:
+                raise HTTPException(409, "Reason context revision is ahead of Blackboard")
+            context_revision = max(context_revision, body.context_revision)
         if body.outcome == "success":
             target_revision = body.base_planning_revision
             if target_revision is None:
@@ -156,9 +163,12 @@ def report_reason_outcome(project_id: str, body: ReasonOutcomeRequest):
                 UPDATE projects SET reason_failure_count = 0,
                     reason_failure_signature = NULL, reason_retry_after = NULL,
                     reason_circuit_open = 0,
-                    reason_evaluated_revision = ? WHERE id = ?
+                    reason_evaluated_revision = ?, reason_context_revision = ?,
+                    reason_worker = NULL, reason_trigger = NULL,
+                    reason_started_at = NULL, reason_last_heartbeat_at = NULL
+                    WHERE id = ?
                 """,
-                (target_revision, project_id),
+                (target_revision, context_revision, project_id),
             )
             return {"circuitOpen": False, "failureCount": 0}
         if body.outcome == "cancelled":
@@ -166,9 +176,12 @@ def report_reason_outcome(project_id: str, body: ReasonOutcomeRequest):
                 """
                 UPDATE projects SET reason_failure_count = 0,
                     reason_failure_signature = NULL, reason_retry_after = NULL,
-                    reason_circuit_open = 0 WHERE id = ?
+                    reason_circuit_open = 0, reason_context_revision = ?,
+                    reason_worker = NULL, reason_trigger = NULL,
+                    reason_started_at = NULL, reason_last_heartbeat_at = NULL
+                    WHERE id = ?
                 """,
-                (project_id,),
+                (context_revision, project_id),
             )
             return {"circuitOpen": False, "failureCount": 0}
         count = int(row["reason_failure_count"]) + 1
@@ -180,9 +193,9 @@ def report_reason_outcome(project_id: str, body: ReasonOutcomeRequest):
                     reason_trigger = NULL, reason_started_at = NULL,
                     reason_last_heartbeat_at = NULL, reason_failure_count = ?,
                     reason_failure_signature = ?, reason_retry_after = NULL,
-                    reason_circuit_open = 1 WHERE id = ?
+                    reason_circuit_open = 1, reason_context_revision = ? WHERE id = ?
                 """,
-                (count, signature, project_id),
+                (count, signature, context_revision, project_id),
             )
             conn.execute(
                 """
@@ -199,9 +212,9 @@ def report_reason_outcome(project_id: str, body: ReasonOutcomeRequest):
             UPDATE projects SET reason_worker = NULL, reason_trigger = NULL,
                 reason_started_at = NULL, reason_last_heartbeat_at = NULL,
                 reason_failure_count = ?, reason_failure_signature = ?,
-                reason_retry_after = ? WHERE id = ?
+                reason_retry_after = ?, reason_context_revision = ? WHERE id = ?
             """,
-            (count, signature, retry_after, project_id),
+            (count, signature, retry_after, context_revision, project_id),
         )
         return {"circuitOpen": False, "failureCount": count, "retryAfter": retry_after}
 

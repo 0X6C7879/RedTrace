@@ -78,6 +78,7 @@ class ProjectMeta(BaseModel):
     reason_circuit_open: bool = False
     planning_revision: int = 0
     reason_evaluated_revision: int = 0
+    reason_context_revision: int = 0
 
 
 class ProjectSummary(ProjectMeta):

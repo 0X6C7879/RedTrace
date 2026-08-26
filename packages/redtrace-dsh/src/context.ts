@@ -7,7 +7,7 @@
  * @module redtrace-context
  */
 
-import type { Intent, ProjectDetail, ResourceSummary, RuntimeTask } from './types.js'
+import type { BlackboardChange, Intent, Json, ProjectDetail, ResourceSummary, RuntimeTask } from './types.js'
 
 export const name = 'redtrace-context'
 
@@ -102,6 +102,46 @@ export function taskPrompt(
       ['Resources', resourceLines(resources)],
     ]),
   ].join('\n\n')
+}
+
+function stringValue(node: Record<string, Json>, key: string): string | undefined {
+  const value = node[key]
+  return typeof value === 'string' ? value : undefined
+}
+
+function changeLine(change: BlackboardChange): string {
+  const prefix = `- [r${change.revision}] ${change.kind} ${change.node_id} ${change.action}:`
+  if (change.node === null) return `${prefix} (removed)`
+  if (change.kind === 'fact') return `${prefix} ${stringValue(change.node, 'description') ?? JSON.stringify(change.node)}`
+  if (change.kind === 'hint') return `${prefix} ${stringValue(change.node, 'content') ?? JSON.stringify(change.node)}`
+  if (change.kind === 'intent') {
+    const state = stringValue(change.node, 'state') ?? 'unknown'
+    const description = stringValue(change.node, 'description') ?? JSON.stringify(change.node)
+    const sources = Array.isArray(change.node.from)
+      ? change.node.from.filter((item): item is string => typeof item === 'string')
+      : []
+    const target = stringValue(change.node, 'to')
+    return `${prefix} ${state}: ${description}(from: [${sources.join(', ')}]${target === undefined ? '' : ` → ${target}`})`
+  }
+  return `${prefix} ${JSON.stringify(change.node)}`
+}
+
+/** A continuation prompt for the persistent Reason session. It contains only
+ * Blackboard events after the session's durable revision cursor. */
+export function graphDeltaMessage(
+  task: RuntimeTask,
+  projectTitle: string,
+  since: number,
+  revision: number,
+  changes: BlackboardChange[],
+): string {
+  return [
+    `RedTrace Graph Delta(项目「${projectTitle}」,修订版本 ${since} → ${revision}):`,
+    `当前最多创建 ${task.maxIntents ?? 4} 个活跃 Intent。`,
+    '完整 Graph 由 Blackboard 保存；需要早期事实或关系时使用只读 Graph 工具按需回查。',
+    '## Changes',
+    ...(changes.length === 0 ? ['- 本轮没有新的 Blackboard 事件；继续评估当前 frontier。'] : changes.map(changeLine)),
+  ].join('\n')
 }
 
 /** The runtime update pushed into running workers: newly added human Hints only. */

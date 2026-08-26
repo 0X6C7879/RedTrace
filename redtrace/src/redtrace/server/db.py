@@ -100,7 +100,8 @@ CREATE TABLE IF NOT EXISTS projects (
     reason_retry_after REAL,
     reason_circuit_open INTEGER NOT NULL DEFAULT 0,
     planning_revision INTEGER NOT NULL DEFAULT 0,
-    reason_evaluated_revision INTEGER NOT NULL DEFAULT 0
+    reason_evaluated_revision INTEGER NOT NULL DEFAULT 0,
+    reason_context_revision INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS facts (
@@ -805,6 +806,7 @@ def _ensure_project_columns(conn: sqlite3.Connection) -> None:
         "reason_circuit_open": "INTEGER NOT NULL DEFAULT 0",
         "planning_revision": "INTEGER NOT NULL DEFAULT 0",
         "reason_evaluated_revision": "INTEGER NOT NULL DEFAULT 0",
+        "reason_context_revision": "INTEGER NOT NULL DEFAULT 0",
     }
     planning_revision_added = "planning_revision" not in columns
     for name, definition in additions.items():

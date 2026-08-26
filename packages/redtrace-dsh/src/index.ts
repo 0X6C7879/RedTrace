@@ -38,7 +38,7 @@ export type { RuntimeConfig, RuntimeTask, WorkerSpec }
 export { CONTRACTS, taskFor } from './contracts.js'
 export { eventProjection, reportRun, cleanupSessionArtifacts } from './audit.js'
 export { persona, concludeInstruction } from './prompt.js'
-export { taskPrompt, hintMessage, isBootstrap, isInitial, schedulable } from './context.js'
+export { graphDeltaMessage, taskPrompt, hintMessage, isBootstrap, isInitial, schedulable } from './context.js'
 
 export async function apply(ctx: RuntimeContext, config: RuntimeConfig = {}): Promise<void> {
   if (config.runtime !== true) {

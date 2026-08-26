@@ -813,6 +813,34 @@ def test_live_reason_lease_rejects_competing_worker(client: TestClient) -> None:
     assert "worker-a" in response.json()["detail"]
 
 
+def test_reason_outcome_releases_lease_and_persists_context_revision(
+    client: TestClient,
+) -> None:
+    project_id = _create_project(client)
+    claimed = client.post(
+        f"/projects/{project_id}/reason/claim",
+        json={"worker": "worker-a", "trigger": "bootstrap"},
+    )
+    assert claimed.status_code == 200
+    planning_revision = claimed.json()["planning_revision"]
+
+    outcome = client.post(
+        f"/projects/{project_id}/reason/outcome",
+        json={
+            "worker": "worker-a",
+            "outcome": "success",
+            "base_planning_revision": planning_revision,
+            "context_revision": 2,
+        },
+    )
+
+    assert outcome.status_code == 200
+    project = client.get(f"/projects/{project_id}").json()["project"]
+    assert project["reason"] is None
+    assert project["reason_evaluated_revision"] == planning_revision
+    assert project["reason_context_revision"] == 2
+
+
 def test_project_creation_persists_disabled_bootstrap_and_exports_it(
     client: TestClient,
 ) -> None:

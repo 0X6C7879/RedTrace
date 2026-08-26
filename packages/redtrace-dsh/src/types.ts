@@ -96,6 +96,8 @@ export interface RuntimeTask {
   sessionId?: string
   runId?: string
   revision?: number
+  /** Blackboard revision durably injected into the project Reason session. */
+  contextRevision?: number
   /** Hint ids this worker has already seen: launch prompt + runtime injections. */
   deliveredHints?: Set<string>
   startedAt?: number
@@ -143,7 +145,10 @@ export interface ScopedContext {
 export interface CordisFiber { await(): Promise<unknown>; dispose(): Promise<void> }
 
 export interface RuntimeContext extends ScopedContext {
-  agents: { create(options: Record<string, unknown>): Promise<AgentHandle> }
+  agents: {
+    create(options: Record<string, unknown>): Promise<AgentHandle>
+    resume(options: Record<string, unknown>): Promise<AgentHandle>
+  }
   sessions: { flush(session: unknown): Promise<void> }
   sessionPersistence?: SessionPersistence
   webServer?: {
@@ -192,6 +197,7 @@ export interface ProjectSummary {
   reason: unknown | null
   planning_revision: number
   reason_evaluated_revision: number
+  reason_context_revision: number
   reason_retry_after?: number | null
   reason_circuit_open?: boolean
 }
@@ -225,4 +231,21 @@ export interface ProjectDetail {
   intents: Intent[]
   hints: Array<{ id: string; content: string; creator: string; created_at: string }>
   blackboard_revision: number
+}
+
+export interface BlackboardChange {
+  revision: number
+  kind: string
+  node_id: string
+  action: string
+  created_at?: string
+  node: Record<string, Json> | null
+}
+
+export interface BlackboardChangesPage {
+  since: number
+  revision: number
+  next_revision: number
+  has_more: boolean
+  changes: BlackboardChange[]
 }

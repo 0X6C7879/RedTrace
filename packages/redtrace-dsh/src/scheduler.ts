@@ -3,8 +3,9 @@
  * Bootstrap / Reason / Explore demand it selects an eligible Worker
  * (enabled + task eligibility + per-worker maxRunning capacity, ordered by
  * priority then least-loaded fairness), claims the task under the Worker's
- * real name, and creates a dedicated DSH Agent + Session in the one
- * long-lived Cordis runtime using the Worker's provider/model route.
+ * real name, and activates a DSH Agent in the one long-lived Cordis runtime.
+ * Reason resumes one project-level Session; Bootstrap and Explore keep
+ * isolated per-run Sessions.
  * RedTrace owns worker selection; DSH owns the agent lifecycle.
  * @module redtrace-scheduler
  */
@@ -12,7 +13,7 @@
 import { mkdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import type {
-  Intent, LlmService, ProjectDetail, ProjectSummary, ReasoningPolicy, ResourceSummary,
+  BlackboardChange, BlackboardChangesPage, Intent, LlmService, ProjectDetail, ProjectSummary, ReasoningPolicy, ResourceSummary,
   RuntimeConfig, RuntimeContext, RuntimeOptions, RuntimeSnapshot, RuntimeTask,
   TaskLimits, TaskType, WorkerRoute, WorkerSpec,
 } from './types.js'
@@ -20,7 +21,7 @@ import { api, Domain } from './domain.js'
 import { state } from './state.js'
 import { reportRun, cleanupSessionArtifacts } from './audit.js'
 import { concludeInstruction } from './prompt.js'
-import { hintMessage, isBootstrap, isInitial, schedulable, taskPrompt } from './context.js'
+import { graphDeltaMessage, hintMessage, isBootstrap, isInitial, schedulable, taskPrompt } from './context.js'
 import * as bootstrapPreset from './bootstrap.js'
 import * as reasonPreset from './reason.js'
 import * as explorePreset from './explore.js'
@@ -43,8 +44,49 @@ function safeId(value: string): string {
   return clean || 'project'
 }
 
-function newSessionId(task: TaskType, projectId: string): string {
+function newSessionId(task: Exclude<TaskType, 'reason'>, projectId: string): string {
   return `rt-${safeId(projectId)}-${task}-${crypto.randomUUID().replaceAll('-', '')}`
+}
+
+export function reasonSessionId(projectId: string): string {
+  return `rt-${safeId(projectId)}-reason`
+}
+
+export function sessionIdForTask(task: TaskType, projectId: string): string {
+  return task === 'reason' ? reasonSessionId(projectId) : newSessionId(task, projectId)
+}
+
+export function activateAgent(
+  agents: RuntimeContext['agents'],
+  sessionId: unknown,
+  cwd: string,
+  activation: Record<string, unknown>,
+  resume: boolean,
+): Promise<import('./types.js').AgentHandle> {
+  return resume
+    ? agents.resume({ resumeSessionId: sessionId, ...activation })
+    : agents.create({ sessionId, meta: { cwd }, ...activation })
+}
+
+/** Consume the revision API to exhaustion. A non-advancing page is rejected
+ * instead of silently dropping the tail of the Graph. */
+export async function fetchAllBlackboardChanges(
+  since: number,
+  fetchPage: (cursor: number) => Promise<BlackboardChangesPage>,
+): Promise<{ revision: number; changes: BlackboardChange[] }> {
+  let cursor = since
+  let revision = since
+  const changes: BlackboardChange[] = []
+  for (;;) {
+    const page = await fetchPage(cursor)
+    changes.push(...page.changes)
+    revision = page.next_revision
+    if (!page.has_more) return { revision, changes }
+    if (page.next_revision <= cursor) {
+      throw new Error(`blackboard changes cursor did not advance from revision ${cursor}`)
+    }
+    cursor = page.next_revision
+  }
 }
 
 function message(shared: { messages?: { createUserMessage(value: Record<string, unknown>): unknown } }, text: string): unknown {
@@ -145,8 +187,8 @@ class Scheduler {
   }
 
   /** Runtime context updates push only newly added human Hints into running
-   * workers; Fact/Intent/Resource changes stay pull-based (Reason re-reads
-   * the graph on its next launch, Explore owns its Intent lineage). */
+   * workers; Fact/Intent/Resource changes stay pull-based (Reason consumes
+   * the revision delta on its next turn, Explore owns its Intent lineage). */
   private async injectHints(): Promise<void> {
     for (const task of this.running.values()) {
       if (task.cancelled || task.handle === undefined || task.deliveredHints === undefined) continue
@@ -279,7 +321,7 @@ class Scheduler {
     task.revision = project.blackboard_revision
     task.deliveredHints = new Set(project.hints.map(hint => hint.id))
     task.startedAt = Date.now()
-    task.sessionId = newSessionId(task.type, task.projectId)
+    task.sessionId = sessionIdForTask(task.type, task.projectId)
     task.runId = `run-${crypto.randomUUID()}`
     this.running.set(key, task)
     void this.runTask(task, project, intent).finally(() => { this.running.delete(key) })
@@ -294,9 +336,12 @@ class Scheduler {
     const cwd = path.join(this.config.workspacesDir, safeId(task.projectId))
     await mkdir(cwd, { recursive: true })
     try {
-      task.handle = await this.ctx.agents.create({
-        sessionId: shared.messages.SessionId(task.sessionId!),
-        meta: { cwd },
+      if (task.type === 'reason' && this.ctx.sessionPersistence === undefined) {
+        throw new Error('redtrace runtime: persistent Reason sessions require sessionPersistence')
+      }
+      const persistedReason = task.type === 'reason'
+        && await this.ctx.sessionPersistence!.readRaw(task.sessionId!) !== undefined
+      const activation = {
         agentOptions: {
           provider: task.route.provider,
           model: task.route.model,
@@ -306,7 +351,14 @@ class Scheduler {
         setup: async (scoped: import('./types.js').ScopedContext) => {
           await scoped.plugin(PRESETS[task.type], { task, cwd, skillsDir: this.config.skillsDir }).await()
         },
-      })
+      }
+      task.handle = await activateAgent(
+        this.ctx.agents,
+        shared.messages.SessionId(task.sessionId!),
+        cwd,
+        activation,
+        persistedReason,
+      )
       shared.tasks.set(task.sessionId!, task)
       await reportRun(this.config, task, 'running')
       heartbeat = setInterval(() => {
@@ -320,7 +372,9 @@ class Scheduler {
         })
       }, Math.max(1, this.limits().interval) * 1000)
       const resources = await this.resources(task.projectId, task.type).catch(() => [] as ResourceSummary[])
-      task.handle.agent.followup(message(shared, taskPrompt(task, project, intent, resources)))
+      const turnContext = await this.turnContext(task, project, intent, resources, persistedReason)
+      task.handle.agent.followup(message(shared, turnContext.prompt))
+      task.contextRevision = turnContext.revision
       let waited = await waitIdle(task.handle.agent, limits.timeout)
       if (!task.committed && !task.cancelled) {
         task.handle.agent.followup(message(shared, concludeInstruction(task.type)))
@@ -335,8 +389,14 @@ class Scheduler {
       outcome = task.cancelled ? 'cancelled' : 'runtime_error'
     } finally {
       if (heartbeat !== undefined) clearInterval(heartbeat)
+      let contextPersisted = false
       if (task.handle !== undefined) {
-        await this.ctx.sessions.flush(task.handle.agent.session).catch(error => { this.ctx.logger?.warn(error) })
+        try {
+          await this.ctx.sessions.flush(task.handle.agent.session)
+          contextPersisted = task.contextRevision !== undefined
+        } catch (error) {
+          this.ctx.logger?.warn(error)
+        }
         await task.handle.dispose().catch(error => { this.ctx.logger?.warn(error) })
       }
       if (task.sessionId !== undefined) shared.tasks.delete(task.sessionId)
@@ -348,8 +408,42 @@ class Scheduler {
         worker: task.worker,
         outcome,
         runtime_ms: Math.max(0, Date.now() - (task.startedAt ?? Date.now())),
-        ...(task.type === 'reason' ? { base_planning_revision: project.project.planning_revision } : {}),
+        ...(task.type === 'reason' ? {
+          base_planning_revision: project.project.planning_revision,
+          ...(contextPersisted ? { context_revision: task.contextRevision } : {}),
+        } : {}),
       })
+    }
+  }
+
+  private async turnContext(
+    task: RuntimeTask,
+    project: ProjectDetail,
+    intent: Intent | undefined,
+    resources: ResourceSummary[],
+    persistedReason: boolean,
+  ): Promise<{ prompt: string; revision?: number }> {
+    if (task.type !== 'reason') {
+      return { prompt: taskPrompt(task, project, intent, resources) }
+    }
+    const since = project.project.reason_context_revision
+    if (!persistedReason || since <= 0 || since > project.blackboard_revision) {
+      return { prompt: taskPrompt(task, project), revision: project.blackboard_revision }
+    }
+    const base = `/projects/${encodeURIComponent(task.projectId)}/blackboard/changes`
+    const delta = await fetchAllBlackboardChanges(since, cursor => api<BlackboardChangesPage>(
+      this.config,
+      `${base}?since=${cursor}&limit=100`,
+      {
+        headers: {
+          'X-RedTrace-Worker': task.worker,
+          'X-RedTrace-Task': 'reason',
+        },
+      },
+    ))
+    return {
+      prompt: graphDeltaMessage(task, project.project.title, since, delta.revision, delta.changes),
+      revision: delta.revision,
     }
   }
 

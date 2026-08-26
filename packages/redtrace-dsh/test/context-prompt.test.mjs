@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { hintMessage, taskPrompt } from '../lib/context.js'
+import { graphDeltaMessage, hintMessage, taskPrompt } from '../lib/context.js'
 
 const project = {
   project: { id: 'p1', title: '演示项目', bootstrap_enabled: true, status: 'active' },
@@ -43,6 +43,20 @@ test('reason launch prompt carries the full graph exactly once', () => {
 test('reason maxIntents override reaches the prompt', () => {
   const prompt = taskPrompt({ ...task('reason'), maxIntents: 2 }, project)
   assert.match(prompt, /最多创建 2 个活跃 Intent/)
+})
+
+test('reason continuation prompt carries only ordered graph changes', () => {
+  const prompt = graphDeltaMessage(task('reason'), '演示项目', 7, 10, [
+    { revision: 8, kind: 'fact', node_id: 'f003', action: 'added', node: { id: 'f003', description: '拿到后台凭据' } },
+    { revision: 9, kind: 'intent', node_id: 'i002', action: 'claimed', node: { ...project.intents[1], worker: 'explorer', state: 'working' } },
+    { revision: 10, kind: 'hint', node_id: 'h002', action: 'added', node: { id: 'h002', content: '检查导出接口' } },
+  ])
+  assert.match(prompt, /Graph Delta\(项目「演示项目」,修订版本 7 → 10\)/)
+  assert.match(prompt, /\[r8\] fact f003 added: 拿到后台凭据/)
+  assert.match(prompt, /\[r9\] intent i002 claimed: working: 测试后台弱口令/)
+  assert.match(prompt, /\[r10\] hint h002 added: 检查导出接口/)
+  assert.ok(!prompt.includes('某 CTF 比赛环境入口'))
+  assert.ok(!prompt.includes('SQL 注入点已确认'))
 })
 
 test('bootstrap launch prompt carries Origin/Goal/Hints only', () => {

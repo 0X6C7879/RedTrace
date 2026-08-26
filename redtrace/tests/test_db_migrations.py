@@ -78,6 +78,28 @@ def test_configure_adds_bootstrap_enabled_to_legacy_projects_table(tmp_path, mon
     assert row["bootstrap_enabled"] == 1
 
 
+def test_configure_adds_reason_context_revision_to_legacy_projects(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "legacy-reason-context.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            db.SCHEMA.replace(
+                ",\n    reason_context_revision INTEGER NOT NULL DEFAULT 0", ""
+            )
+        )
+        conn.execute(
+            "INSERT INTO projects (id, title, created_at) VALUES ('proj_001', 'legacy', '2026-01-01T00:00:00Z')"
+        )
+
+    monkeypatch.setattr(db, "_db_path", None)
+    db.configure(path)
+
+    with db.get_conn() as conn:
+        row = conn.execute(
+            "SELECT reason_context_revision FROM projects WHERE id = 'proj_001'"
+        ).fetchone()
+    assert row["reason_context_revision"] == 0
+
+
 def test_configure_adds_dsh_intent_and_audit_columns(tmp_path, monkeypatch) -> None:
     path = tmp_path / "legacy-dsh.db"
     with sqlite3.connect(path) as conn:
