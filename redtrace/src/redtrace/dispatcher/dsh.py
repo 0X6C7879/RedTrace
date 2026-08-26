@@ -9,7 +9,8 @@ Workers, not task-type routes, decide models: every enabled Worker with a
 configured provider becomes a runtime Worker carrying its own eligibility
 flags (bootstrap/reason/explore), concurrency cap, and priority. The provider
 owns the API protocol, endpoint, credential, and model list; each model entry
-carries its own context window, output cap, and thinking format.
+carries capacities, reasoning policy/capabilities, and an optional Chat
+Completions wire-format override.
 """
 
 from __future__ import annotations
@@ -51,6 +52,8 @@ def dsh_workers(config: DispatchConfig) -> list[dict[str, Any]]:
     for worker in config.workers:
         if worker.provider == "mock":
             continue
+        provider = config.providers[worker.provider]
+        model = next(item for item in provider.models if item.id == worker.model)
         workers.append({
             "name": worker.name,
             "enabled": worker.enabled,
@@ -61,6 +64,7 @@ def dsh_workers(config: DispatchConfig) -> list[dict[str, Any]]:
             "explore": worker.explore,
             "maxRunning": worker.max_running,
             "priority": worker.priority,
+            "reasoning": model.reasoning,
         })
     return workers
 
@@ -69,9 +73,8 @@ def dsh_providers(config: DispatchConfig) -> tuple[dict[str, dict[str, Any]], di
     """pi-ai provider profiles plus their ``api_key_env`` -> key values.
 
     One profile per provider referenced by a Worker, carrying every model the
-    provider declares: each model entry owns its context window, output cap
-    (which pi-ai also applies as the per-request default), and thinking
-    format.
+    provider declares: each model entry owns its capacities, reasoning
+    capabilities, and optional wire-compatibility override.
     """
 
     referenced = {worker.provider for worker in config.workers if worker.provider != "mock"}
@@ -89,9 +92,14 @@ def dsh_providers(config: DispatchConfig) -> tuple[dict[str, dict[str, Any]], di
                 "contextWindow": model.context_window,
                 "maxTokens": model.max_tokens,
             }
-            # The thinking-format compat rides the OpenAI-style protocols only;
-            # anthropic-messages carries its own thinking blocks.
-            if model.thinking_format != "none" and provider.api != "anthropic-messages":
+            if model.reasoning_efforts is not None:
+                entry["reasoningEfforts"] = model.reasoning_efforts
+            # pi-ai only exposes thinkingFormat for Chat Completions. Responses
+            # and Anthropic Messages encode reasoning through their adapters.
+            if (
+                model.thinking_format not in {"auto", "none"}
+                and provider.api == "openai-completions"
+            ):
                 entry["compat"] = {"thinkingFormat": model.thinking_format}
             models.append(entry)
         providers[name] = {

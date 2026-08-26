@@ -12,8 +12,9 @@
 import { mkdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import type {
-  Intent, ProjectDetail, ProjectSummary, ResourceSummary, RuntimeConfig, RuntimeContext,
-  RuntimeOptions, RuntimeSnapshot, RuntimeTask, TaskLimits, TaskType, WorkerSpec,
+  Intent, LlmService, ProjectDetail, ProjectSummary, ReasoningPolicy, ResourceSummary,
+  RuntimeConfig, RuntimeContext, RuntimeOptions, RuntimeSnapshot, RuntimeTask,
+  TaskLimits, TaskType, WorkerRoute, WorkerSpec,
 } from './types.js'
 import { api, Domain } from './domain.js'
 import { state } from './state.js'
@@ -29,6 +30,8 @@ export const inject = ['agents', 'sessions', 'sessionPersistence']
 
 const BOOTSTRAP_CREATOR = 'dispatcher.bootstrap'
 const BOOTSTRAP_DESCRIPTION = 'bootstrap'
+/** The per-request cap the resources endpoint enforces (its `le=500`). */
+const RESOURCES_PAGE_SIZE = 500
 const PRESETS = {
   bootstrap: bootstrapPreset,
   reason: reasonPreset,
@@ -135,10 +138,10 @@ class Scheduler {
 
   private async resources(projectId: string, type: TaskType): Promise<ResourceSummary[]> {
     if (type !== 'explore') return []
-    const payload = await api<{ resources: ResourceSummary[] }>(
-      this.config, `/projects/${encodeURIComponent(projectId)}/resources?limit=50`,
-    )
-    return payload.resources ?? []
+    const pathname = `/projects/${encodeURIComponent(projectId)}/resources`
+    return fetchAllResources(offset => api<{ resources: ResourceSummary[] }>(
+      this.config, `${pathname}?limit=${RESOURCES_PAGE_SIZE}&offset=${offset}`,
+    ).then(payload => payload.resources ?? []))
   }
 
   /** Runtime context updates push only newly added human Hints into running
@@ -225,7 +228,7 @@ class Scheduler {
         trigger: `planning_revision:${summary.reason_evaluated_revision}->${summary.planning_revision}`,
       })
       if (claimed) this.launch({
-        type: 'reason', projectId: summary.id, worker: worker.name, route: route(worker),
+        type: 'reason', projectId: summary.id, worker: worker.name, route: workerRoute(worker),
         maxIntents: this.taskLimits('reason')?.max_intents,
         limits: this.taskLimits('reason'),
         committed: false,
@@ -257,7 +260,7 @@ class Scheduler {
       intentId: intent.id,
       executionProfile: intent.execution_profile ?? 'direct',
       worker: worker.name,
-      route: route(worker),
+      route: workerRoute(worker),
       limits: this.taskLimits(type),
       committed: false,
     }, project, intent)
@@ -297,6 +300,7 @@ class Scheduler {
         agentOptions: {
           provider: task.route.provider,
           model: task.route.model,
+          ...await this.reasoningOptions(task.route),
           ...(task.route.maxTokens === undefined ? {} : { maxTokens: task.route.maxTokens }),
         },
         setup: async (scoped: import('./types.js').ScopedContext) => {
@@ -348,12 +352,48 @@ class Scheduler {
       })
     }
   }
+
+  private async reasoningOptions(route: WorkerRoute): Promise<{ reasoningEffort?: string }> {
+    const llm = this.ctx.get('llm') as LlmService | undefined
+    if (llm === undefined || typeof llm.resolveModelInfo !== 'function') {
+      throw new Error('redtrace runtime: llm model capability service is unavailable')
+    }
+    const reasoningEffort = await resolveReasoningEffort(llm, route)
+    return reasoningEffort === undefined ? {} : { reasoningEffort }
+  }
 }
 
-function route(worker: WorkerSpec): { provider: string; model: string; maxTokens?: number } {
+const REASONING_ORDER: readonly Exclude<ReasoningPolicy, 'auto_max'>[] = [
+  'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
+]
+
+/** Resolve RedTrace's policy against the exact model metadata exposed by the
+ * owning DSH adapter. Unknown capability preserves the provider default. */
+export async function resolveReasoningEffort(
+  llm: LlmService,
+  route: WorkerRoute,
+): Promise<string | undefined> {
+  const info = await llm.resolveModelInfo(route.provider, route.model)
+  const supported = info.reasoning?.efforts.map(effort => effort.id)
+  if (route.reasoning === 'auto_max') {
+    if (supported === undefined || supported.length === 0) return undefined
+    const offered = new Set(supported)
+    for (const effort of [...REASONING_ORDER].reverse()) {
+      if (offered.has(effort)) return effort
+    }
+    return [...supported].reverse().find(effort => effort !== 'off')
+  }
+  if (supported?.includes(route.reasoning)) return route.reasoning
+  throw new Error(
+    `provider "${route.provider}" model "${route.model}" does not support configured reasoning effort "${route.reasoning}"`,
+  )
+}
+
+export function workerRoute(worker: WorkerSpec): WorkerRoute {
   return {
-    provider: worker.provider === 'deepseek' ? 'deepseek-official' : worker.provider,
+    provider: worker.provider,
     model: worker.model,
+    reasoning: worker.reasoning ?? 'auto_max',
     ...(worker.maxTokens === undefined ? {} : { maxTokens: worker.maxTokens }),
   }
 }
@@ -396,6 +436,21 @@ export function resolveLimits(
  * is open or the server-set retry deadline is still in the future. */
 export function reasonEligible(summary: ProjectSummary, now: number): boolean {
   return !summary.reason_circuit_open && (summary.reason_retry_after ?? 0) <= now / 1000
+}
+
+/** Read every page of a project's shared resources: pages come back at the
+ * API's cap, a short page ends the walk, and the page ceiling is only an
+ * infinite-loop guard. */
+export async function fetchAllResources(
+  fetchPage: (offset: number) => Promise<ResourceSummary[]>,
+): Promise<ResourceSummary[]> {
+  const resources: ResourceSummary[] = []
+  for (let page = 0; page < 20; page += 1) {
+    const batch = await fetchPage(page * RESOURCES_PAGE_SIZE)
+    resources.push(...batch)
+    if (batch.length < RESOURCES_PAGE_SIZE) break
+  }
+  return resources
 }
 
 /** Plan one dispatch round: rotate the active projects round-robin (cursor)

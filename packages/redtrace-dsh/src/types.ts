@@ -2,6 +2,7 @@ type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 
 export type TaskType = 'reason' | 'explore' | 'bootstrap'
 export type ExecutionProfile = 'direct' | 'isolated'
+export type ReasoningPolicy = 'auto_max' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export type { Json }
 
@@ -18,6 +19,7 @@ export interface WorkerSpec {
   maxRunning: number
   priority: number
   maxTokens?: number
+  reasoning?: ReasoningPolicy
 }
 
 export interface TaskLimits {
@@ -75,6 +77,7 @@ export interface WorkerRoute {
   provider: string
   model: string
   maxTokens?: number
+  reasoning: ReasoningPolicy
 }
 
 export interface RuntimeTask {
@@ -100,8 +103,20 @@ export interface RuntimeTask {
   cancelled?: boolean
   streamedText?: boolean
   streamedThinking?: boolean
+  /** Last system prompt already projected to the audit stream. */
+  projectedSystem?: string
   /** callId → tool name, so tool/result events can carry the tool title. */
   toolNames?: Map<string, string>
+  /** Cumulative provider usage reported on assistant/message events. */
+  usage?: TaskUsage
+}
+
+/** Cumulative provider token usage for one task (sums of disjoint buckets). */
+export interface TaskUsage {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
 }
 
 export interface Agent {
@@ -139,6 +154,15 @@ export interface RuntimeContext extends ScopedContext {
   effect(factory: () => (() => void | Promise<void>), label?: string): void
   logger?: { warn(value: unknown): void }
   get(name: string): unknown
+}
+
+export interface LlmService {
+  resolveModelInfo(provider: string, model: string): Promise<{
+    provider: string
+    id: string
+    name: string
+    reasoning?: { efforts: readonly { id: string; name: string }[] }
+  }>
 }
 
 export interface SessionPersistence {

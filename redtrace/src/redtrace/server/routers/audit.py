@@ -30,6 +30,23 @@ class AuditBatch(BaseModel):
     events: list[dict[str, Any]] = Field(max_length=128)
 
 
+TOKEN_USAGE_COLUMNS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+
+
+def _usage_values(run: dict[str, Any]) -> tuple[int, int, int, int]:
+    """Token usage carried on the run metadata; totals are cumulative."""
+    usage = run.get("usage")
+    if not isinstance(usage, dict):
+        usage = {column: run.get(column) for column in TOKEN_USAGE_COLUMNS}
+    values = []
+    for column in TOKEN_USAGE_COLUMNS:
+        try:
+            values.append(max(0, int(usage.get(column) or 0)))
+        except (TypeError, ValueError):
+            values.append(0)
+    return values[0], values[1], values[2], values[3]
+
+
 @router.post("/events")
 def append_events(body: AuditBatch) -> dict[str, int]:
     run = body.run
@@ -49,6 +66,7 @@ def append_events(body: AuditBatch) -> dict[str, int]:
     if not required.issubset(run):
         raise HTTPException(422, "Incomplete audit run metadata")
     project_id = str(run["project_id"])
+    input_tokens, output_tokens, cache_read_tokens, cache_write_tokens = _usage_values(run)
     live_events: list[dict[str, Any]] = []
     with db.get_conn() as conn:
         get_project_or_404(conn, project_id)
@@ -58,8 +76,9 @@ def append_events(body: AuditBatch) -> dict[str, int]:
                 id, project_id, intent_id, task_type, phase, worker, provider,
                 engine, model, execution_profile, session_id,
                 workspace_kind, workspace_ref, workspace_root,
-                status, started_at, ended_at, exit_code, timed_out, cancelled
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                status, started_at, ended_at, exit_code, timed_out, cancelled,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 session_id = COALESCE(excluded.session_id, audit_runs.session_id),
                 status = CASE
@@ -76,7 +95,11 @@ def append_events(body: AuditBatch) -> dict[str, int]:
                     THEN audit_runs.timed_out ELSE excluded.timed_out END,
                 cancelled = CASE
                     WHEN audit_runs.status != 'running' AND excluded.status = 'running'
-                    THEN audit_runs.cancelled ELSE excluded.cancelled END
+                    THEN audit_runs.cancelled ELSE excluded.cancelled END,
+                input_tokens = MAX(excluded.input_tokens, audit_runs.input_tokens),
+                output_tokens = MAX(excluded.output_tokens, audit_runs.output_tokens),
+                cache_read_tokens = MAX(excluded.cache_read_tokens, audit_runs.cache_read_tokens),
+                cache_write_tokens = MAX(excluded.cache_write_tokens, audit_runs.cache_write_tokens)
             """,
             (
                 run["id"],
@@ -99,6 +122,10 @@ def append_events(body: AuditBatch) -> dict[str, int]:
                 run.get("exit_code"),
                 int(bool(run.get("timed_out"))),
                 int(bool(run.get("cancelled"))),
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
             ),
         )
         persistent = []
@@ -152,15 +179,46 @@ def append_events(body: AuditBatch) -> dict[str, int]:
     return {"accepted": len(body.events)}
 
 
+TOKEN_TOTAL_SQL = (
+    "COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0)"
+)
+
+
+def _usage_aggregate(where: str, params: tuple) -> dict[str, int]:
+    """Token totals per task type; computed from audit_runs so a project
+    deletion (ON DELETE CASCADE) removes its consumption with it."""
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT task_type, {TOKEN_TOTAL_SQL} AS tokens
+            FROM audit_runs {where}
+            GROUP BY task_type
+            """,
+            params,
+        ).fetchall()
+    usage = {"bootstrap": 0, "reason": 0, "explore": 0}
+    for row in rows:
+        usage[row["task_type"]] = usage.get(row["task_type"], 0) + int(row["tokens"])
+    usage["total"] = sum(usage.values())
+    return usage
+
+
+@router.get("/usage")
+def usage_overview() -> dict[str, int]:
+    return _usage_aggregate("", ())
+
+
 @router.get("/tasks")
 def list_tasks() -> list[dict[str, Any]]:
     with db.get_conn() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT p.id, p.title, p.status, p.created_at,
                    COUNT(r.id) AS run_count,
                    MAX(r.started_at) AS last_run_at,
-                   SUM(CASE WHEN r.status = 'running' THEN 1 ELSE 0 END) AS running_count
+                   SUM(CASE WHEN r.status = 'running' THEN 1 ELSE 0 END) AS running_count,
+                   COALESCE(SUM(r.input_tokens + r.output_tokens
+                       + r.cache_read_tokens + r.cache_write_tokens), 0) AS token_total
             FROM projects p
             LEFT JOIN audit_runs r ON r.project_id = p.id
             GROUP BY p.id
@@ -168,6 +226,13 @@ def list_tasks() -> list[dict[str, Any]]:
             """
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+@router.get("/tasks/{project_id}/usage")
+def project_usage(project_id: str) -> dict[str, int]:
+    with db.get_conn() as conn:
+        get_project_or_404(conn, project_id)
+    return _usage_aggregate("WHERE project_id = ?", (project_id,))
 
 
 @router.get("/tasks/{project_id}/runs")

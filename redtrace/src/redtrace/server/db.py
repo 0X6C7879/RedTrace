@@ -308,7 +308,11 @@ CREATE TABLE IF NOT EXISTS audit_runs (
     ended_at TEXT,
     exit_code INTEGER,
     timed_out INTEGER NOT NULL DEFAULT 0,
-    cancelled INTEGER NOT NULL DEFAULT 0
+    cancelled INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_runs_project
@@ -847,6 +851,10 @@ def _ensure_project_columns(conn: sqlite3.Connection) -> None:
         "engine": "TEXT NOT NULL DEFAULT 'legacy'",
         "model": "TEXT",
         "execution_profile": "TEXT NOT NULL DEFAULT 'direct'",
+        "input_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "output_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "cache_read_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "cache_write_tokens": "INTEGER NOT NULL DEFAULT 0",
     }.items():
         if name not in audit_columns:
             conn.execute(f"ALTER TABLE audit_runs ADD COLUMN {name} {definition}")

@@ -229,6 +229,51 @@ def test_explicit_test_and_save_deduplicate_identical_connection_probe(
     assert calls == 1
 
 
+def test_openai_responses_connection_probe_uses_responses_protocol(
+    monkeypatch,
+) -> None:
+    raw = _raw_config()
+    raw["providers"]["gw"]["api"] = "openai-responses"
+    raw["providers"]["gw"]["base_url"] = "https://api.example.test/v1"
+    raw["workers"] = [
+        {
+            "name": "primary",
+            "provider": "gw",
+            "model": "gpt-test",
+            "enabled": True,
+            "bootstrap": False,
+            "reason": True,
+            "explore": True,
+            "max_running": 1,
+            "priority": 0,
+        }
+    ]
+    config = DispatchConfig.model_validate(raw)
+    calls: list[dict] = []
+
+    def post(url, *, headers, json, timeout):
+        calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+        return SimpleNamespace(status_code=400)
+
+    monkeypatch.setattr(worker_config_module.httpx, "post", post)
+
+    result = CONNECTION_TESTER._probe(config, config.workers[0])
+
+    assert result["ok"] is True
+    assert calls == [
+        {
+            "url": "https://api.example.test/v1/responses",
+            "headers": {"authorization": "Bearer sk-gw-secret"},
+            "json": {
+                "model": "gpt-test",
+                "max_output_tokens": 1,
+                "input": "ping",
+            },
+            "timeout": 10.0,
+        }
+    ]
+
+
 
 
 def test_copy_toggle_delete_and_revision_conflicts_are_atomic(
@@ -498,7 +543,9 @@ def test_provider_crud_hot_reload_snapshot_and_secret_handling(
             "id": "claude-test",
             "context_window": 200000,
             "max_tokens": 4096,
-            "thinking_format": "none",
+            "reasoning": "auto_max",
+            "reasoning_efforts": None,
+            "thinking_format": "auto",
         }
     ]
     config = DispatchConfig.load(config_path)
@@ -764,6 +811,11 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     assert 'placeholder="provider-name"' in index
     assert 'placeholder="model-id"' in index
     assert "模型列表" in index
+    assert "推理强度" in index
+    assert "自动最高（推荐）" in index
+    assert "支持的推理档位" in index
+    assert "协议兼容格式" in index
+    assert "思考格式" not in index
     assert "workerModelOptions" in index
     assert "mock（测试引擎）" not in index
     assert "showLocalPrefs" not in index

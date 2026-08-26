@@ -78,13 +78,11 @@ export function taskPrompt(
   ]
   if (task.type === 'reason') {
     const graph = project.facts.filter(fact => fact.id !== 'origin' && fact.id !== 'goal')
-    const intents = project.intents
-      .filter(item => !['blocked', 'dropped', 'superseded'].includes(item.state))
     return [
       ...head,
       ...sections([
         ['Facts', factLines(graph)],
-        [`Intents(最多创建 ${task.maxIntents ?? 4} 个活跃 Intent)`, intents.map(intentLine)],
+        [`Intents(最多创建 ${task.maxIntents ?? 4} 个活跃 Intent)`, project.intents.map(intentLine)],
         ['Hints', hintLines(project.hints)],
       ]),
     ].join('\n\n')

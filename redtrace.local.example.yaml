@@ -56,8 +56,9 @@ common_env:
 
 # Providers own the API protocol, endpoint, credential, and model list;
 # Workers reference them by name with their model, task eligibility,
-# concurrency, and priority. Each model entry carries its own context window
-# (default 1,000,000), output cap (default 128,000), and thinking format.
+# concurrency, and priority. Each model entry carries its own capacities and
+# reasoning policy. Omitted reasoning means auto_max; custom gateways may
+# declare exact reasoning_efforts when DSH has no catalog metadata.
 providers:
   deepseek:
     api: openai-completions
@@ -67,11 +68,15 @@ providers:
       - id: deepseek-reasoner
         context_window: 1000000
         max_tokens: 128000
-        thinking_format: deepseek
+        reasoning: auto_max
+        reasoning_efforts:
+          "off":
+          high: high
+          max: max
       - id: deepseek-chat
         context_window: 1000000
         max_tokens: 128000
-        thinking_format: none
+        reasoning_efforts: false
 
 workers:
   - name: "local-reasoner"

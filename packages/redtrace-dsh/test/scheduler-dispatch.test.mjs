@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { planDispatch, postWithRetry, reasonEligible, resolveLimits } from '../lib/scheduler.js'
+import { fetchAllResources, planDispatch, postWithRetry, reasonEligible, resolveLimits } from '../lib/scheduler.js'
 import { schedulable } from '../lib/context.js'
 
 function summary(id, overrides = {}) {
@@ -125,6 +125,38 @@ test('planDispatch: the distinct-project cap admits running projects but blocks 
   // Lowering the cap to 1 keeps only the already-running project.
   const tight = planDispatch(projects, [{ projectId: 'a' }], { ...LIMS, maxRunningProjects: 1 }, 0)
   assert.deepEqual(tight.candidates.map(p => p.id), ['a'])
+})
+
+// ─── Retry semantics ────────────────────────────────────────────────────────
+
+// ─── Resource pagination ────────────────────────────────────────────────────
+
+test('fetchAllResources: walks pages at the API cap until a short page', async () => {
+  const offsets = []
+  const page = size => Array.from({ length: size }, (_, index) => ({ id: `r${index}`, kind: 'k', name: `n${index}` }))
+  const resources = await fetchAllResources(async offset => {
+    offsets.push(offset)
+    return offset === 0 ? page(500) : offset === 500 ? page(500) : page(3)
+  })
+  assert.equal(resources.length, 1003)
+  assert.deepEqual(offsets, [0, 500, 1000])
+})
+
+test('fetchAllResources: an exact full page still probes one follow-up', async () => {
+  const offsets = []
+  const resources = await fetchAllResources(async offset => {
+    offsets.push(offset)
+    return offset === 0 ? Array.from({ length: 500 }, (_, index) => ({ id: `r${index}` })) : []
+  })
+  assert.equal(resources.length, 500)
+  assert.deepEqual(offsets, [0, 500])
+})
+
+test('fetchAllResources: a short or empty first page ends immediately', async () => {
+  const one = await fetchAllResources(async () => [{ id: 'r0' }])
+  assert.deepEqual(one, [{ id: 'r0' }])
+  const none = await fetchAllResources(async () => [])
+  assert.deepEqual(none, [])
 })
 
 // ─── Retry semantics ────────────────────────────────────────────────────────

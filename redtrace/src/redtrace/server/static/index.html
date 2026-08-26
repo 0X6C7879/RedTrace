@@ -11,7 +11,7 @@
 <script src="/static/vendor/dagre.min.js"></script>
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/vendor/cytoscape-dagre.js"></script>
-<script defer src="/static/audit.js?v=20260826-legacy-cleanup-1"></script>
+<script defer src="/static/audit.js?v=20260826-token-usage-2"></script>
 <script defer src="/static/capabilities.js?v=20260826-legacy-cleanup-1"></script>
 <script defer src="/static/plugins.js?v=20260825-plugins-2"></script>
 <!-- Previous cache key: operations.js?v=20260810-performance-1 -->
@@ -309,6 +309,26 @@
       </div>
       <span class="font-semibold text-slate-700 tracking-tight">RedTrace</span>
     </div>
+    <div x-show="globalUsage && globalUsage.total > 0" x-cloak
+      class="flex shrink-0 items-center gap-2 text-[11px] text-slate-400 tabular-nums"
+      title="全部任务的 Token 消耗:Bootstrap / Reason / Explore / 总计">
+      <span class="font-medium uppercase tracking-[0.12em] text-slate-400">Token</span>
+      <span class="flex items-center gap-1 provider-bootstrap" title="Bootstrap">
+        <span class="h-1.5 w-1.5 rounded-full provider-dot-bootstrap"></span>
+        <span class="font-semibold" x-text="formatTokens(globalUsage?.bootstrap)"></span>
+      </span>
+      <span class="flex items-center gap-1 provider-reason" title="Reason">
+        <span class="h-1.5 w-1.5 rounded-full provider-dot-reason"></span>
+        <span class="font-semibold" x-text="formatTokens(globalUsage?.reason)"></span>
+      </span>
+      <span class="flex items-center gap-1 provider-explore" title="Explore">
+        <span class="h-1.5 w-1.5 rounded-full provider-dot-explore"></span>
+        <span class="font-semibold" x-text="formatTokens(globalUsage?.explore)"></span>
+      </span>
+      <span class="flex items-center gap-1 font-semibold text-slate-600" title="总计">
+        共 <span x-text="formatTokens(globalUsage?.total)"></span>
+      </span>
+    </div>
     <div class="flex-1"></div>
     <div class="flex items-center gap-3 text-[11px] text-slate-400">
       <span class="inline-flex items-center gap-1.5 shrink-0" title="全部项目">
@@ -481,6 +501,26 @@
     <div class="flex items-center gap-4 text-xs text-slate-400">
       <span x-text="`${project.facts.length} facts`"></span>
       <span x-text="`${project.intents.length} intents`"></span>
+    </div>
+    <div x-show="tokenUsage && tokenUsage.total > 0" x-cloak
+      class="flex shrink-0 items-center gap-2.5 text-xs tabular-nums"
+      title="Token 用量:Bootstrap / Reason / Explore / 总计">
+      <span class="h-3 w-px bg-slate-200"></span>
+      <span class="flex items-center gap-1 provider-bootstrap" title="Bootstrap">
+        <span class="h-1.5 w-1.5 rounded-full provider-dot-bootstrap"></span>
+        <span x-text="formatTokens(tokenUsage?.bootstrap)"></span>
+      </span>
+      <span class="flex items-center gap-1 provider-reason" title="Reason">
+        <span class="h-1.5 w-1.5 rounded-full provider-dot-reason"></span>
+        <span x-text="formatTokens(tokenUsage?.reason)"></span>
+      </span>
+      <span class="flex items-center gap-1 provider-explore" title="Explore">
+        <span class="h-1.5 w-1.5 rounded-full provider-dot-explore"></span>
+        <span x-text="formatTokens(tokenUsage?.explore)"></span>
+      </span>
+      <span class="font-medium text-slate-500" title="总计">
+        共 <span x-text="formatTokens(tokenUsage?.total)"></span>
+      </span>
     </div>
     <div class="flex items-center gap-1.5">
       <template x-if="!replay.active">
@@ -1301,7 +1341,7 @@
             <div class="flex items-center gap-1.5 text-[10px]">
               <span class="h-1.5 w-1.5 rounded-full" :class="task.running_count ? 'bg-indigo-500 audit-pulse' : task.status === 'completed' ? 'bg-emerald-500' : task.status === 'stopped' ? 'bg-amber-500' : 'bg-slate-300'"></span>
               <span :class="task.running_count ? 'text-indigo-600' : 'text-slate-400'" x-text="task.running_count ? '进行中' : task.status"></span>
-              <span class="ml-auto text-slate-300" x-text="`${task.run_count || 0} runs`"></span>
+              <span class="ml-auto text-slate-300" x-text="task.token_total ? `${task.run_count || 0} runs · ${formatTokens(task.token_total)}` : `${task.run_count || 0} runs`"></span>
             </div>
           </button>
         </template>
@@ -1314,9 +1354,29 @@
         <div class="flex min-w-0 items-center gap-3">
           <div class="min-w-0 flex-1">
             <h2 class="truncate text-[15px] font-semibold tracking-tight text-slate-800" x-text="selectedTask()?.title || '审计日志'"></h2>
-            <div class="mt-1 flex items-center gap-2 text-[10px] text-slate-400">
+            <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-400">
               <span class="font-mono" x-text="selectedTaskId"></span>
               <span x-show="runs.length" x-text="`${runs.length} worker runs`"></span>
+              <template x-if="taskUsage && taskUsage.total > 0">
+                <span class="flex items-center gap-2 tabular-nums"
+                  title="该任务的 Token 消耗:Bootstrap / Reason / Explore / 总计">
+                  <span class="flex items-center gap-1 provider-bootstrap" title="Bootstrap">
+                    <span class="h-1.5 w-1.5 rounded-full provider-dot-bootstrap"></span>
+                    <span x-text="formatTokens(taskUsage.bootstrap)"></span>
+                  </span>
+                  <span class="flex items-center gap-1 provider-reason" title="Reason">
+                    <span class="h-1.5 w-1.5 rounded-full provider-dot-reason"></span>
+                    <span x-text="formatTokens(taskUsage.reason)"></span>
+                  </span>
+                  <span class="flex items-center gap-1 provider-explore" title="Explore">
+                    <span class="h-1.5 w-1.5 rounded-full provider-dot-explore"></span>
+                    <span x-text="formatTokens(taskUsage.explore)"></span>
+                  </span>
+                  <span class="font-medium text-slate-500" title="总计">
+                    共 <span x-text="formatTokens(taskUsage.total)"></span>
+                  </span>
+                </span>
+              </template>
             </div>
           </div>
           <label class="inline-flex items-center gap-2 text-[10px] text-slate-500">
@@ -1367,6 +1427,14 @@
                   <details class="audit-terminal audit-thinking overflow-hidden" :open="isThinkingOpen(event)">
                     <summary @click.prevent="toggleThinking(event)" :aria-expanded="isThinkingOpen(event)" class="flex cursor-pointer list-none items-center gap-2 px-3 py-2 font-mono text-[11px]">
                       <span class="text-sky-400">›</span><span class="audit-command-text min-w-0 flex-1">思考</span>
+                    </summary>
+                    <pre class="max-h-72 overflow-auto whitespace-pre-wrap border-t border-white/10 px-3 py-2 text-[11px] leading-relaxed text-slate-300" x-text="displayText(event.content)"></pre>
+                  </details>
+                </template>
+                <template x-if="isSystemPrompt(event)">
+                  <details class="audit-terminal overflow-hidden">
+                    <summary class="flex cursor-pointer list-none items-center gap-2 px-3 py-2 font-mono text-[11px]">
+                      <span class="text-amber-400">§</span><span class="audit-command-text min-w-0 flex-1">系统提示词</span>
                     </summary>
                     <pre class="max-h-72 overflow-auto whitespace-pre-wrap border-t border-white/10 px-3 py-2 text-[11px] leading-relaxed text-slate-300" x-text="displayText(event.content)"></pre>
                   </details>
@@ -2089,16 +2157,30 @@
         </div>
         <div class="grid gap-2">
           <template x-for="(model, index) in providerForm.models" :key="index">
-            <div class="grid gap-2 rounded-xl bg-slate-50/70 p-3 sm:grid-cols-[minmax(0,1.4fr)_110px_110px_130px_32px] sm:items-end">
-              <label class="block"><span class="mb-1 block text-[10px] font-medium text-slate-400">模型 ID</span><input x-model.trim="model.id" required maxlength="256" autocomplete="off" placeholder="model-id" class="h-9 w-full rounded-lg border border-slate-200 bg-white px-2.5 font-mono text-xs text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
-              <label class="block"><span class="mb-1 block text-[10px] font-medium text-slate-400">上下文窗口</span><input x-model.number="model.context_window" type="number" min="1" placeholder="1000000" class="h-9 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
-              <label class="block"><span class="mb-1 block text-[10px] font-medium text-slate-400">最大输出</span><input x-model.number="model.max_tokens" type="number" min="1" placeholder="128000" class="h-9 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
-              <label class="block"><span class="mb-1 block text-[10px] font-medium text-slate-400">思考格式</span><select x-model="model.thinking_format" :disabled="providerForm.api === 'anthropic-messages'" class="h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50 disabled:bg-slate-100 disabled:text-slate-400"><option value="deepseek">deepseek</option><option value="openai">openai</option><option value="none">none</option></select></label>
-              <button type="button" @click="providerForm.models.splice(index, 1)" :disabled="providerForm.models.length <= 1" class="h-9 rounded-lg text-base leading-none text-slate-300 transition hover:bg-rose-50 hover:text-rose-500 disabled:cursor-not-allowed disabled:opacity-30" aria-label="移除模型">&times;</button>
+            <div class="rounded-xl bg-slate-50/70 p-3">
+              <div class="grid gap-2 sm:grid-cols-[minmax(0,1.4fr)_110px_110px_150px_32px] sm:items-end">
+                <label class="block"><span class="mb-1 block text-[10px] font-medium text-slate-400">模型 ID</span><input x-model.trim="model.id" required maxlength="256" autocomplete="off" placeholder="model-id" class="h-9 w-full rounded-lg border border-slate-200 bg-white px-2.5 font-mono text-xs text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
+                <label class="block"><span class="mb-1 block text-[10px] font-medium text-slate-400">上下文窗口</span><input x-model.number="model.context_window" type="number" min="1" placeholder="1000000" class="h-9 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
+                <label class="block"><span class="mb-1 block text-[10px] font-medium text-slate-400">最大输出</span><input x-model.number="model.max_tokens" type="number" min="1" placeholder="128000" class="h-9 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
+                <label class="block"><span class="mb-1 block text-[10px] font-medium text-slate-400">推理强度</span><select x-model="model.reasoning" class="h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><option value="auto_max">自动最高（推荐）</option><option value="max">Max</option><option value="xhigh">XHigh</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option><option value="minimal">Minimal</option><option value="off">关闭</option></select></label>
+                <button type="button" @click="providerForm.models.splice(index, 1)" :disabled="providerForm.models.length <= 1" class="h-9 rounded-lg text-base leading-none text-slate-300 transition hover:bg-rose-50 hover:text-rose-500 disabled:cursor-not-allowed disabled:opacity-30" aria-label="移除模型">&times;</button>
+              </div>
+              <details class="mt-2 border-t border-slate-200/70 pt-2">
+                <summary class="cursor-pointer text-[10px] font-medium text-slate-400">高级兼容设置</summary>
+                <div class="mt-2 grid gap-3 sm:grid-cols-2">
+                  <label class="block"><span class="mb-1 block text-[10px] font-medium text-slate-400">推理能力来源</span><select x-model="model.reasoning_capability" class="h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none"><option value="catalog">自动读取 DSH catalog</option><option value="custom">手动声明支持档位</option><option value="none">模型不支持推理</option></select></label>
+                  <label class="block"><span class="mb-1 block text-[10px] font-medium text-slate-400">协议兼容格式</span><select x-model="model.thinking_format" :disabled="providerForm.api !== 'openai-completions'" class="h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none disabled:bg-slate-100 disabled:text-slate-400"><option value="auto">自动（推荐）</option><option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option></select></label>
+                  <div x-show="model.reasoning_capability === 'custom'" class="sm:col-span-2">
+                    <span class="mb-1.5 block text-[10px] font-medium text-slate-400">支持的推理档位</span>
+                    <div class="flex flex-wrap gap-x-3 gap-y-2"><template x-for="level in reasoningLevelOptions" :key="level"><label class="inline-flex items-center gap-1.5 text-[10px] text-slate-500"><input type="checkbox" :value="level" x-model="model.reasoning_levels" class="h-3.5 w-3.5 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span x-text="level"></span></label></template></div>
+                    <p class="mt-1.5 text-[10px] leading-4 text-slate-400">自定义网关请按其文档声明真实能力；已有 YAML 的线路值映射会原样保留。</p>
+                  </div>
+                </div>
+              </details>
             </div>
           </template>
         </div>
-        <p class="mt-1.5 text-[11px] text-slate-400">留空使用默认值：上下文 1000000、最大输出 128000。</p>
+        <p class="mt-1.5 text-[11px] text-slate-400">留空使用默认容量；推理默认选择模型声明或 DSH catalog 中的最高可用档位。</p>
       </div>
     </div>
     <div class="flex items-center justify-end gap-2 border-t border-slate-100 px-6 py-4">
@@ -2201,6 +2283,8 @@ function redtraceApp() {
     view: 'list',
     projects: [],
     project: null,
+    tokenUsage: null,
+    globalUsage: null,
     selectedProjectId: '',
     polling: true,
     pollTimer: null,
@@ -2255,7 +2339,8 @@ function redtraceApp() {
     showProviderEditor: false,
     providerEditingName: '',
     providerSaveBusy: false,
-    providerForm: { name: '', api: 'openai-completions', base_url: '', api_key: '', api_key_env: '', models: [{ id: '', context_window: null, max_tokens: null, thinking_format: 'deepseek' }] },
+    reasoningLevelOptions: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    providerForm: { name: '', api: 'openai-completions', base_url: '', api_key: '', api_key_env: '', models: [{ id: '', context_window: null, max_tokens: null, reasoning: 'auto_max', reasoning_capability: 'catalog', reasoning_levels: [], reasoning_efforts: null, thinking_format: 'auto' }] },
     deleteConfirm: { id: '', title: '' },
     isDeletingProject: false,
     yamlPreviewTitle: '',
@@ -2463,7 +2548,13 @@ function redtraceApp() {
     },
 
     async loadProjects() {
-      try { this.projects = await this.api('GET', '/projects'); } catch(e) { console.error(e); }
+      const results = await Promise.allSettled([
+        this.api('GET', '/projects'),
+        this.api('GET', '/audit/usage'),
+      ]);
+      if (results[0].status === 'fulfilled') this.projects = results[0].value;
+      else console.error(results[0].reason);
+      this.globalUsage = results[1].status === 'fulfilled' ? results[1].value : null;
     },
 
     rememberProjectListScroll() {
@@ -2752,7 +2843,7 @@ function redtraceApp() {
           provider => ({
             ...provider,
             models: (provider.models || []).map(model => (typeof model === 'string'
-              ? { id: model, context_window: 1000000, max_tokens: 128000, thinking_format: 'deepseek' }
+              ? { id: model, context_window: 1000000, max_tokens: 128000, reasoning: 'auto_max', reasoning_efforts: null, thinking_format: 'auto' }
               : model)),
             referenced: provider.referenced ?? false,
           }),
@@ -2845,8 +2936,34 @@ function redtraceApp() {
       return (this.workerConfig.providers || []).filter(provider => provider.referenced).length;
     },
 
+    providerModelForm(model = {}) {
+      const efforts = model.reasoning_efforts;
+      const capability = efforts === false ? 'none'
+        : efforts && typeof efforts === 'object' ? 'custom' : 'catalog';
+      return {
+        id: model.id || '',
+        context_window: model.context_window ?? null,
+        max_tokens: model.max_tokens ?? null,
+        reasoning: model.reasoning || 'auto_max',
+        reasoning_capability: capability,
+        reasoning_levels: capability === 'custom' ? Object.keys(efforts) : [],
+        reasoning_efforts: capability === 'custom' ? { ...efforts } : null,
+        thinking_format: ['deepseek', 'openai'].includes(model.thinking_format)
+          ? model.thinking_format : 'auto',
+      };
+    },
+
+    providerModelReasoningEfforts(model) {
+      if (model.reasoning_capability === 'none') return false;
+      if (model.reasoning_capability !== 'custom') return null;
+      return Object.fromEntries((model.reasoning_levels || []).map(level => [
+        level,
+        model.reasoning_efforts?.[level] ?? (level === 'off' ? null : level),
+      ]));
+    },
+
     addProviderModel() {
-      this.providerForm.models.push({ id: '', context_window: null, max_tokens: null, thinking_format: 'deepseek' });
+      this.providerForm.models.push(this.providerModelForm());
     },
 
     openProviderEditor(provider = null) {
@@ -2857,19 +2974,14 @@ function redtraceApp() {
         base_url: provider.base_url || '',
         api_key: '',
         api_key_env: provider.api_key_env || '',
-        models: (provider.models || []).map(model => ({
-          id: model.id,
-          context_window: model.context_window ?? null,
-          max_tokens: model.max_tokens ?? null,
-          thinking_format: model.thinking_format || 'deepseek',
-        })),
+        models: (provider.models || []).map(model => this.providerModelForm(model)),
       } : {
         name: '',
         api: 'openai-completions',
         base_url: '',
         api_key: '',
         api_key_env: '',
-        models: [{ id: '', context_window: null, max_tokens: null, thinking_format: 'deepseek' }],
+        models: [this.providerModelForm()],
       };
       this.showProviderEditor = true;
     },
@@ -2893,7 +3005,10 @@ function redtraceApp() {
           id: model.id,
           context_window: Number(model.context_window) || 1000000,
           max_tokens: Number(model.max_tokens) || 128000,
-          thinking_format: model.thinking_format || 'deepseek',
+          reasoning: model.reasoning || 'auto_max',
+          reasoning_efforts: this.providerModelReasoningEfforts(model),
+          thinking_format: form.api === 'openai-completions'
+            ? (model.thinking_format || 'auto') : 'auto',
         })),
       };
     },
@@ -3077,7 +3192,23 @@ function redtraceApp() {
     },
 
     async loadProject(id) {
-      try { this.project = await this.api('GET', `/projects/${id}`); } catch(e) { this.showToast(e.message, 'error'); }
+      const results = await Promise.allSettled([
+        this.api('GET', `/projects/${id}`),
+        this.api('GET', `/audit/tasks/${encodeURIComponent(id)}/usage`),
+      ]);
+      if (results[0].status === 'fulfilled') this.project = results[0].value;
+      else this.showToast(results[0].reason.message, 'error');
+      this.tokenUsage = results[1].status === 'fulfilled' ? results[1].value : null;
+    },
+
+    formatTokens(value) {
+      const n = Number(value) || 0;
+      if (n < 1000) return `${n}`;
+      if (n < 1000000) {
+        const k = n / 1000;
+        return `${(k >= 100 ? Math.round(k) : Math.round(k * 10) / 10)}k`;
+      }
+      return `${Math.round((n / 1000000) * 100) / 100}M`;
     },
 
     async toggleProjectStop() {
@@ -3607,6 +3738,7 @@ function redtraceApp() {
       this.view = 'list';
       this.shouldRestoreProjectListScroll = true;
       this.project = null;
+      this.tokenUsage = null;
       this.selectedProjectId = '';
       this.selectedNode = null;
       this.selectedFacts = [];

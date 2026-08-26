@@ -35,6 +35,8 @@ class ProviderModelView(BaseModel):
     id: str
     context_window: int
     max_tokens: int
+    reasoning: str
+    reasoning_efforts: dict[str, str | None] | bool | None = None
     thinking_format: str
 
 
@@ -93,7 +95,9 @@ class ProviderModelMutation(BaseModel):
     id: str
     context_window: int = Field(default=1_000_000, gt=0)
     max_tokens: int = Field(default=128_000, gt=0)
-    thinking_format: str = "deepseek"
+    reasoning: str = "auto_max"
+    reasoning_efforts: dict[str, str | None] | bool | None = None
+    thinking_format: str = "auto"
 
 
 class ProviderMutation(BaseModel):

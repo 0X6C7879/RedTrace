@@ -48,7 +48,7 @@ const PERSONAS: Record<TaskType, string> = {
     '- 只有在当前 session 中已经明确确认 Goal 满足时,才能在结论中说明任务完成;不要把部分进展总结为完成。',
     '- 结论必须清楚说明已经确认的关键客观结果(例如 flag、shell、权限证明、关键利用结果以及类似证据);不要把长数据块放入结论,长数据应写入 Workspace 文件并在结论中引用。',
     '- 开始实质工作、探索阶段变化或发现可复用资源时,必须匹配加载对应的 Skill(可并发加载多个)。',
-    '- 任务过程中优先进行联网搜索。',
+    '- 任务过程中可以进行联网搜索。',
     '- 当任务中产生经验证、可复用的新经验时,可按需加载 skill-evolution Skill。',
   ].join('\n'),
   explore: [
@@ -65,7 +65,7 @@ const PERSONAS: Record<TaskType, string> = {
     '- 大量原始数据写入 Workspace 文件并在结论中引用,不要把长数据块放入结论。',
     '- 发现可复用的非敏感资源时,用 redtrace_resource_register 注册,供跨 Intent、跨 Worker 共享。',
     '- 开始实质工作、探索阶段变化或发现 redtrace-resource 时,必须匹配加载对应的 Skill(可并发加载多个)。',
-    '- 任务过程中优先进行联网搜索。',
+    '- 任务过程中可以进行联网搜索。',
     '- 当任务中产生经验证、可复用的新经验时,可按需加载 skill-evolution Skill。',
   ].join('\n'),
 }

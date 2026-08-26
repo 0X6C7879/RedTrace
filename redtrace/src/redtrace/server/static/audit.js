@@ -7,11 +7,13 @@ function auditPage() {
     runs: [],
     events: [],
     selectedTaskId: '',
+    taskUsage: null,
     selectedProvider: 'all',
     selectedWorker: 'all',
     taskQuery: '',
     autoFollow: true,
     source: null,
+    usageTimer: 0,
     workspacePath: '',
     workspaceSource: '',
     workspaceEntries: [],
@@ -97,9 +99,11 @@ function auditPage() {
       this.workspaceEntries = [];
       this.selectedFile = null;
       this.error = '';
+      this.taskUsage = null;
       const results = await Promise.allSettled([
         this.request(`/audit/tasks/${encodeURIComponent(projectId)}/runs`),
         this.request(`/audit/tasks/${encodeURIComponent(projectId)}/events?limit=500`),
+        this.request(`/audit/tasks/${encodeURIComponent(projectId)}/usage`),
         this.loadWorkspace(''),
       ]);
       if (results[0].status === 'fulfilled') this.runs = results[0].value;
@@ -108,6 +112,7 @@ function auditPage() {
         this.reindexEvents();
         if (this.events.length < 500) this._hasServerMore = false;
       }
+      if (results[2].status === 'fulfilled') this.taskUsage = results[2].value;
       if (results[1].status === 'rejected') this.error = results[1].reason.message;
       if (this.active) this.connectStream();
       this.$nextTick(() => this.scrollToBottom());
@@ -180,6 +185,39 @@ function auditPage() {
         this.refreshRuns();
         this.loadTasks();
       }
+      // Durable assistant output is where provider usage lands on the run row.
+      if (event.kind === 'assistant.message' || event.kind === 'thinking.message') {
+        this.scheduleUsageRefresh();
+      }
+    },
+
+    scheduleUsageRefresh() {
+      // Coalesce bursts of assistant messages into one trailing refresh so the
+      // counters stay live without a request per streaming step.
+      if (this.usageTimer) return;
+      this.usageTimer = setTimeout(() => {
+        this.usageTimer = 0;
+        this.refreshUsage();
+      }, 2000);
+    },
+
+    async refreshUsage() {
+      if (!this.selectedTaskId) return;
+      try {
+        this.taskUsage = await this.request(
+          `/audit/tasks/${encodeURIComponent(this.selectedTaskId)}/usage`
+        );
+      } catch (_) {}
+    },
+
+    formatTokens(value) {
+      const n = Number(value) || 0;
+      if (n < 1000) return `${n}`;
+      if (n < 1000000) {
+        const k = n / 1000;
+        return `${(k >= 100 ? Math.round(k) : Math.round(k * 10) / 10)}k`;
+      }
+      return `${Math.round((n / 1000000) * 100) / 100}M`;
     },
 
     eventKey(event) {
@@ -338,6 +376,7 @@ function auditPage() {
         'assistant.delta': '助手',
         'thinking.message': '思考',
         'thinking.delta': '思考',
+        'system.prompt': '系统提示词',
         'tool.started': event.title || '工具',
         'tool.completed': this.toolTitle(event) || '工具结果',
         'command.started': '执行',
@@ -359,6 +398,10 @@ function auditPage() {
 
     isThinking(event) {
       return ['thinking.message', 'thinking.delta'].includes(event.kind);
+    },
+
+    isSystemPrompt(event) {
+      return event.kind === 'system.prompt';
     },
 
     isTool(event) {

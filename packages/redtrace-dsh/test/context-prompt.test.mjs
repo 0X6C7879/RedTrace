@@ -35,8 +35,8 @@ test('reason launch prompt carries the full graph exactly once', () => {
   assert.match(prompt, /\[i002\] open: 测试后台弱口令\(from: \[f001\]\)/)
   assert.match(prompt, /\[i001\] concluded: bootstrap\(from: \[origin\] → f001\)/)
   assert.match(prompt, /## Hints\n- \[h001\] 优先检查 \/admin/)
-  // dropped intents stay out; no resources for reason
-  assert.ok(!prompt.includes('已放弃的方向'))
+  // every intent state stays visible — reason reads the unfiltered graph; no resources for reason
+  assert.match(prompt, /\[i003\] dropped: 已放弃的方向\(from: \[f002\]\)/)
   assert.ok(!prompt.includes('Resources'))
 })
 

@@ -17,7 +17,9 @@ server: "http://127.0.0.1:8000"
 # ${REDTRACE_SECRET:...} reference is resolved from the secret store) or an
 # api_key_env name resolved from the launching environment. Each model entry
 # carries its own context window (default 1,000,000), output cap (default
-# 128,000), and thinking format (deepseek | openai | none).
+# 128,000), and reasoning policy. Omitted reasoning defaults to auto_max:
+# DSH selects the highest level the exact model reports. A custom gateway
+# model that is absent from DSH's catalog can declare reasoning_efforts.
 providers:
   deepseek:
     api: openai-completions
@@ -27,11 +29,15 @@ providers:
       - id: deepseek-reasoner
         context_window: 1000000
         max_tokens: 128000
-        thinking_format: deepseek
+        reasoning: auto_max
+        reasoning_efforts:
+          "off":
+          high: high
+          max: max
       - id: deepseek-chat
         context_window: 1000000
         max_tokens: 128000
-        thinking_format: none
+        reasoning_efforts: false
 
 runtime:
   execution: local

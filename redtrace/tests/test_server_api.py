@@ -363,6 +363,82 @@ def test_audit_events_carry_run_identity_and_render_in_session_order(
         assert event["provider"] == "glm"
 
 
+def _post_run(client: TestClient, run: dict) -> None:
+    assert client.post("/audit/events", json={"run": run, "events": []}).status_code == 200
+
+
+def _run_body(project_id: str, run_id: str, task_type: str, **extra: dict) -> dict:
+    run = {
+        "id": run_id,
+        "project_id": project_id,
+        "task_type": task_type,
+        "phase": task_type,
+        "worker": f"{task_type}-1",
+        "provider": "dsh",
+        "engine": "dsh",
+        "workspace_kind": "local",
+        "workspace_ref": "/tmp/w",
+        "workspace_root": "/tmp/w",
+        "status": "running",
+        "started_at": "2026-01-01T00:00:00Z",
+    }
+    run.update(extra)
+    return run
+
+
+def test_token_usage_aggregates_per_task_type_and_follows_deletion(
+    client: TestClient,
+) -> None:
+    project_id = _create_project(client)
+    other_id = _create_project(client)
+
+    # Cumulative upsert: the same run reports growing totals, then a stale
+    # zero-usage POST must not clobber what already landed.
+    _post_run(client, _run_body(project_id, "run-b1", "bootstrap", input_tokens=100, output_tokens=40))
+    _post_run(client, _run_body(project_id, "run-b1", "bootstrap", input_tokens=300, output_tokens=100,
+                                cache_read_tokens=10, cache_write_tokens=5))
+    _post_run(client, _run_body(project_id, "run-b1", "bootstrap"))
+    _post_run(client, _run_body(project_id, "run-r1", "reason", input_tokens=500, output_tokens=200))
+    _post_run(client, _run_body(project_id, "run-x1", "explore", input_tokens=50, output_tokens=20,
+                                status="completed"))
+    # A nested usage object is accepted as an alternative to flat columns.
+    _post_run(client, _run_body(other_id, "run-o1", "reason",
+                                usage={"input_tokens": 10, "output_tokens": 5}))
+
+    usage = client.get(f"/audit/tasks/{project_id}/usage").json()
+    assert usage == {"bootstrap": 415, "reason": 700, "explore": 70, "total": 1185}
+    assert client.get(f"/audit/tasks/{other_id}/usage").json() == {
+        "bootstrap": 0, "reason": 15, "explore": 0, "total": 15,
+    }
+    assert client.get("/audit/usage").json() == {
+        "bootstrap": 415, "reason": 715, "explore": 70, "total": 1200,
+    }
+
+    tasks = {task["id"]: task for task in client.get("/audit/tasks").json()}
+    assert tasks[project_id]["token_total"] == 1185
+    assert tasks[other_id]["token_total"] == 15
+
+    stored = client.get(f"/audit/tasks/{project_id}/runs").json()
+    assert {run["id"]: run["input_tokens"] for run in stored}["run-b1"] == 300
+
+    confirmation = client.post(
+        f"/projects/{project_id}/deletion/confirmation"
+    ).json()["confirmationToken"]
+    assert client.request(
+        "DELETE",
+        f"/projects/{project_id}",
+        json={"confirmation_token": confirmation, "actor": "human-ui"},
+    ).status_code == 202
+    assert client.post(
+        f"/projects/{project_id}/deletion/runtime-cleaned", json={"success": True}
+    ).status_code == 200
+
+    assert client.get("/audit/usage").json() == {
+        "bootstrap": 0, "reason": 15, "explore": 0, "total": 15,
+    }
+    assert client.get("/audit/tasks").json()[0]["token_total"] == 15
+
+
 def test_project_workflow_create_conclude_complete_and_reopen(
     client: TestClient,
 ) -> None:

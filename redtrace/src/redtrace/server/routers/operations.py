@@ -328,6 +328,7 @@ def list_resources(
     resource_status: str | None = Query(default=None, alias="status"),
     q: str = "",
     limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     context: QueryContext = Depends(query_context),
 ):
     with get_conn() as conn:
@@ -345,10 +346,9 @@ def list_resources(
             clauses.append("(name LIKE ? OR target LIKE ? OR summary LIKE ?)")
             needle = f"%{q.strip()}%"
             params.extend([needle, needle, needle])
-        params.append(limit)
         rows = conn.execute(
-            f"SELECT * FROM shared_resources {'WHERE ' + ' AND '.join(clauses) if clauses else ''} ORDER BY updated_at DESC LIMIT ?",
-            params,
+            f"SELECT * FROM shared_resources {'WHERE ' + ' AND '.join(clauses) if clauses else ''} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
         ).fetchall()
         if context.worker != "unknown":
             audit_event(

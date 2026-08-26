@@ -37,7 +37,18 @@ NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 TASK_TYPES = frozenset({"bootstrap", "reason", "explore"})
 TASK_TYPES_ORDER = ("bootstrap", "reason", "explore")
 PROVIDER_APIS = ("openai-completions", "openai-responses", "anthropic-messages")
-PROVIDER_THINKING_FORMATS = ("deepseek", "openai", "none")
+PROVIDER_THINKING_FORMATS = ("auto", "deepseek", "openai", "none")
+PROVIDER_REASONING_POLICIES = (
+    "auto_max",
+    "max",
+    "xhigh",
+    "high",
+    "medium",
+    "low",
+    "minimal",
+    "off",
+)
+PROVIDER_REASONING_EFFORTS = frozenset(PROVIDER_REASONING_POLICIES[1:])
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 HTTP_URL_PATTERN = re.compile(r"^https?://\S+$")
 LOCK_TIMEOUT_SECONDS = 10.0
@@ -228,7 +239,39 @@ def _provider_model_payload(
         raise WorkerConfigError(
             f"models[{index}].id must not exceed 256 characters"
         )
-    thinking_format = str(payload.get("thinking_format") or "deepseek").strip()
+    reasoning = str(payload.get("reasoning") or "auto_max").strip()
+    if reasoning not in PROVIDER_REASONING_POLICIES:
+        raise WorkerConfigError(
+            f"models[{index}].reasoning must be one of: "
+            + ", ".join(PROVIDER_REASONING_POLICIES)
+        )
+    raw_efforts = payload.get("reasoning_efforts")
+    reasoning_efforts: dict[str, str | None] | bool | None
+    if raw_efforts is None or raw_efforts is False:
+        reasoning_efforts = raw_efforts
+    elif isinstance(raw_efforts, dict) and raw_efforts:
+        unknown = set(raw_efforts) - PROVIDER_REASONING_EFFORTS
+        if unknown:
+            raise WorkerConfigError(
+                f"models[{index}].reasoning_efforts has unknown levels: "
+                + ", ".join(sorted(unknown))
+            )
+        reasoning_efforts = {}
+        for level, value in raw_efforts.items():
+            if level == "off" and value is None:
+                reasoning_efforts[level] = None
+                continue
+            wire_value = str(value or "").strip()
+            if not wire_value:
+                raise WorkerConfigError(
+                    f"models[{index}].reasoning_efforts.{level} must be non-empty"
+                )
+            reasoning_efforts[level] = wire_value
+    else:
+        raise WorkerConfigError(
+            f"models[{index}].reasoning_efforts must be an object, false, or null"
+        )
+    thinking_format = str(payload.get("thinking_format") or "auto").strip()
     if thinking_format not in PROVIDER_THINKING_FORMATS:
         raise WorkerConfigError(
             f"models[{index}].thinking_format must be one of: "
@@ -238,6 +281,12 @@ def _provider_model_payload(
         "id": model_id,
         "context_window": _positive_int(payload, "context_window", 1_000_000),
         "max_tokens": _positive_int(payload, "max_tokens", 128_000),
+        "reasoning": reasoning,
+        **(
+            {"reasoning_efforts": reasoning_efforts}
+            if reasoning_efforts is not None
+            else {}
+        ),
         "thinking_format": thinking_format,
     }
 
@@ -249,8 +298,9 @@ def _provider_payload(
 ) -> tuple[str, dict[str, Any]]:
     """Validate one provider entry; returns ``(name, body)`` for the YAML map.
 
-    The provider owns its model list; each model entry carries its own context
-    window, output cap, and thinking format. Credential semantics: a missing
+    The provider owns its model list; each model entry carries capacities,
+    reasoning policy/capabilities, and a protocol override. Credential
+    semantics: a missing
     ``api_key``/``api_key_env`` inherits the existing entry's value (so a UI
     edit can leave the secret untouched) while an empty string clears it; at
     least one credential must remain.
@@ -470,6 +520,14 @@ class WorkerConnectionTester:
                 "max_tokens": 1,
                 "messages": [{"role": "user", "content": "ping"}],
             }
+        elif provider.api == "openai-responses":
+            url = f"{provider.base_url.rstrip('/')}/responses"
+            headers = {"authorization": f"Bearer {key}"}
+            body = {
+                "model": worker.model,
+                "max_output_tokens": 1,
+                "input": "ping",
+            }
         else:
             url = f"{provider.base_url.rstrip('/')}/chat/completions"
             headers = {"authorization": f"Bearer {key}"}
@@ -559,7 +617,13 @@ class WorkerConfigService:
                             "id": model.id,
                             "context_window": model.context_window,
                             "max_tokens": model.max_tokens,
-                            "thinking_format": model.thinking_format,
+                            "reasoning": model.reasoning,
+                            "reasoning_efforts": model.reasoning_efforts,
+                            "thinking_format": (
+                                "auto"
+                                if model.thinking_format == "none"
+                                else model.thinking_format
+                            ),
                         }
                         for model in provider.models
                     ],

@@ -20,6 +20,12 @@ TaskType = Literal["reason", "explore", "bootstrap"]
 CompletedAction = Literal["remove", "stop"]
 WorkerHealthcheckMode = Literal["startup_and_task", "startup_only", "disabled"]
 ExecutionMode = Literal["container", "local"]
+ReasoningEffort = Literal[
+    "off", "minimal", "low", "medium", "high", "xhigh", "max"
+]
+ReasoningPolicy = Literal[
+    "auto_max", "off", "minimal", "low", "medium", "high", "xhigh", "max"
+]
 
 
 DEFAULT_PROMPT_REQUIRED_TOKENS: dict[str, tuple[str, ...]] = {
@@ -194,7 +200,7 @@ class WorkerConfig(BaseModel):
 
     The Worker decides who executes (provider, model, task eligibility,
     concurrency, priority); the provider's model entry owns the context
-    window, output cap, and thinking format. ``mock`` is the deterministic
+    window, output cap, and reasoning configuration. ``mock`` is the deterministic
     test engine.
     """
 
@@ -249,7 +255,8 @@ class WorkerConfig(BaseModel):
 class ProviderModelConfig(BaseModel):
     """One model served by a provider: identity plus its own capacities.
 
-    The model entry owns the context window, output cap, and thinking format;
+    The model entry owns capacities, reasoning policy/capabilities, and any
+    protocol compatibility override;
     Workers reference a model by id and carry no per-model duplicates.
     """
 
@@ -258,7 +265,62 @@ class ProviderModelConfig(BaseModel):
     id: str = Field(min_length=1, max_length=256)
     context_window: int = Field(default=1_000_000, gt=0)
     max_tokens: int = Field(default=128_000, gt=0)
-    thinking_format: Literal["deepseek", "openai", "none"] = "deepseek"
+    reasoning: ReasoningPolicy = "auto_max"
+    reasoning_efforts: dict[ReasoningEffort, str | None] | Literal[False] | None = None
+    # Legacy ``none`` remains readable and has the same meaning as ``auto``.
+    # This is a wire-format override for OpenAI Chat Completions, not a
+    # reasoning-strength control.
+    thinking_format: Literal["auto", "deepseek", "openai", "none"] = "auto"
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_yaml_reasoning_keys(cls, data: Any) -> Any:
+        # YAML 1.1 loaders parse an unquoted ``off:`` key as boolean False.
+        # Accept the human-friendly spelling used by DSH examples without
+        # letting that loader quirk escape into the validated capability map.
+        if not isinstance(data, dict) or not isinstance(data.get("reasoning_efforts"), dict):
+            return data
+        efforts = data["reasoning_efforts"]
+        if False not in efforts or "off" in efforts:
+            return data
+        normalized = dict(data)
+        normalized_efforts = dict(efforts)
+        normalized_efforts["off"] = normalized_efforts.pop(False)
+        normalized["reasoning_efforts"] = normalized_efforts
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_reasoning(self) -> "ProviderModelConfig":
+        efforts = self.reasoning_efforts
+        if efforts is False:
+            if self.reasoning != "auto_max":
+                raise ValueError(
+                    "a non-reasoning model must use reasoning='auto_max'"
+                )
+            return self
+        if efforts is None:
+            return self
+        if not efforts:
+            raise ValueError(
+                "reasoning_efforts must declare supported levels, be false, or be omitted"
+            )
+        if not any(level != "off" for level in efforts):
+            raise ValueError(
+                "reasoning_efforts must include at least one thinking level"
+            )
+        for level, wire_value in efforts.items():
+            if level == "off":
+                if wire_value == "":
+                    raise ValueError("reasoning_efforts.off must be null or non-empty")
+            elif not isinstance(wire_value, str) or not wire_value:
+                raise ValueError(
+                    f"reasoning_efforts.{level} needs a non-empty wire value"
+                )
+        if self.reasoning != "auto_max" and self.reasoning not in efforts:
+            raise ValueError(
+                f"reasoning '{self.reasoning}' is not declared in reasoning_efforts"
+            )
+        return self
 
 
 class ProviderConfig(BaseModel):
@@ -268,7 +330,7 @@ class ProviderConfig(BaseModel):
     any number of Workers. The credential is either an inline ``api_key``
     (may be a ``${REDTRACE_SECRET:...}`` reference) or an ``api_key_env``
     name resolved from the launching environment. Each model's context
-    window, output cap, and thinking format live on its ``models`` entry.
+    capacities and reasoning configuration live on its ``models`` entry.
     """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)

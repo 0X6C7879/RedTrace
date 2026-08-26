@@ -117,9 +117,79 @@ def test_dsh_workers_is_the_worker_centric_routing_view() -> None:
         "explore": True,
         "maxRunning": 1,
         "priority": 0,
+        "reasoning": "auto_max",
     }
     assert by_name["primary"]["reason"] is True
     assert by_name["primary"]["maxRunning"] == 2
+
+
+def test_reasoning_policy_and_declared_capabilities_reach_dsh() -> None:
+    raw = _raw_config()
+    raw["providers"]["gw"]["models"][0].update(
+        {
+            "reasoning": "auto_max",
+            "reasoning_efforts": {
+                "off": None,
+                "high": "high",
+                "max": "ultra",
+            },
+        }
+    )
+    raw["providers"]["anthropic-gw"]["models"][0].update(
+        {
+            "reasoning": "xhigh",
+            "reasoning_efforts": {
+                "off": None,
+                "high": "high",
+                "xhigh": "xhigh",
+            },
+        }
+    )
+    raw["workers"] = [_gw_worker(), _claude_worker()]
+
+    config = DispatchConfig.model_validate(raw)
+    workers = {worker["name"]: worker for worker in dsh_workers(config)}
+    providers, _ = dsh_providers(config)
+    models = {
+        provider: {model["id"]: model for model in profile["models"]}
+        for provider, profile in providers.items()
+    }
+
+    assert workers["primary"]["reasoning"] == "auto_max"
+    assert workers["claude"]["reasoning"] == "xhigh"
+    assert models["gw"]["deepseek-reasoner"]["reasoningEfforts"] == {
+        "off": None,
+        "high": "high",
+        "max": "ultra",
+    }
+    assert models["anthropic-gw"]["claude-model"]["reasoningEfforts"] == {
+        "off": None,
+        "high": "high",
+        "xhigh": "xhigh",
+    }
+    assert "compat" not in models["anthropic-gw"]["claude-model"]
+
+
+def test_reasoning_defaults_to_auto_max_and_protocol_format_defaults_to_auto() -> None:
+    raw = _raw_config()
+    model = raw["providers"]["gw"]["models"][0]
+    model.pop("thinking_format")
+    raw["workers"] = [_gw_worker()]
+
+    config = DispatchConfig.model_validate(raw)
+
+    assert config.providers["gw"].models[0].reasoning == "auto_max"
+    assert config.providers["gw"].models[0].thinking_format == "auto"
+
+
+def test_thinking_format_only_applies_to_openai_completions() -> None:
+    raw = _raw_config()
+    raw["providers"]["gw"]["api"] = "openai-responses"
+    raw["workers"] = [_gw_worker()]
+
+    providers, _ = dsh_providers(DispatchConfig.model_validate(raw))
+
+    assert "compat" not in providers["gw"]["models"][0]
 
 
 def test_dsh_workers_skip_mock_and_disabled_workers_stay_visible() -> None:

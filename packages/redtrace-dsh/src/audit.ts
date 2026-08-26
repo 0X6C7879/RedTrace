@@ -8,7 +8,7 @@
 
 import { mkdir, rm, rmdir } from 'node:fs/promises'
 import path from 'node:path'
-import type { AuditRun, RuntimeConfig, RuntimeOptions, RuntimeTask, RuntimeContext, SessionEvent, SessionPersistence } from './types.js'
+import type { AuditRun, RuntimeConfig, RuntimeOptions, RuntimeTask, RuntimeContext, SessionEvent, SessionPersistence, TaskUsage } from './types.js'
 import { state } from './state.js'
 
 export const name = 'redtrace-audit'
@@ -41,10 +41,40 @@ export async function reportRun(
         status, started_at: new Date(task.startedAt).toISOString(),
         ended_at: status === 'running' ? null : new Date().toISOString(),
         cancelled: status === 'cancelled', timed_out: status === 'timeout',
+        ...usageBody(task.usage),
       },
       events,
     }),
   })
+}
+
+/** Cumulative usage for the run metadata; totals are what the server stores. */
+function usageBody(usage: TaskUsage | undefined): Record<string, number> {
+  if (usage === undefined) return {}
+  return {
+    input_tokens: usage.inputTokens,
+    output_tokens: usage.outputTokens,
+    cache_read_tokens: usage.cacheReadTokens,
+    cache_write_tokens: usage.cacheWriteTokens,
+  }
+}
+
+/**
+ * Fold one session event's provider usage into the task's cumulative totals.
+ * assistant/message carries the step's TokenUsage when the adapter reported
+ * accounting; buckets are disjoint so plain addition cannot double-count.
+ */
+export function accumulateUsage(task: RuntimeTask, event: SessionEvent): void {
+  if (event.type !== 'assistant/message') return
+  const usage = (event.data ?? {}).usage as Partial<TaskUsage> | undefined
+  if (usage === undefined || usage === null) return
+  const current = task.usage ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+  task.usage = {
+    inputTokens: current.inputTokens + (usage.inputTokens ?? 0),
+    outputTokens: current.outputTokens + (usage.outputTokens ?? 0),
+    cacheReadTokens: current.cacheReadTokens + (usage.cacheReadTokens ?? 0),
+    cacheWriteTokens: current.cacheWriteTokens + (usage.cacheWriteTokens ?? 0),
+  }
 }
 
 function textBlocksOf(blocks: Array<{ type?: string; text?: string }> | undefined): string {
@@ -67,6 +97,15 @@ export function eventProjection(task: RuntimeTask, event: SessionEvent): Record<
     event_uid: `${task.sessionId}-${event.seq ?? crypto.randomUUID()}`,
     run_sequence: event.seq ?? 0,
     timestamp: event.ts ?? new Date().toISOString(),
+  }
+  if (event.type === 'request/header') {
+    // The request header carries the exact system prompt the model received;
+    // it is logged on the first step and whenever the assembly changes. A
+    // config/tool-only change re-logs the same prompt, so dedupe per task.
+    const system = (data.header as { system?: string } | undefined)?.system ?? ''
+    if (system === '' || system === task.projectedSystem) return []
+    task.projectedSystem = system
+    return [{ ...base, kind: 'system.prompt', role: 'system', content: system }]
   }
   if (event.type === 'user/message') {
     // Plugin-owned messages (runtime-context refreshes) are bookkeeping, not
@@ -184,6 +223,7 @@ export function apply(ctx: RuntimeContext): void {
     const session = String(value.id ?? '')
     const task = shared?.tasks.get(session)
     if (shared === undefined || task === undefined) return
+    accumulateUsage(task, event)
     const events = eventProjection(task, event)
     if (events.length === 0) return
     const next = (chains.get(session) ?? Promise.resolve())

@@ -294,6 +294,32 @@ def test_resource_registration_never_creates_facts(client: TestClient) -> None:
     assert [fact["id"] for fact in final] == [fact["id"] for fact in before]
 
 
+def test_resource_listing_paginates_with_offset_and_filters_by_status(client: TestClient) -> None:
+    project_id = create_project(client)
+    for index in range(3):
+        registered = client.post(
+            f"/projects/{project_id}/resources",
+            json={
+                "kind": "file",
+                "name": f"loot-{index}.txt",
+                "status": "available" if index < 2 else "archived",
+                "actor": "tester",
+            },
+        )
+        assert registered.status_code == 201
+
+    full = [item["name"] for item in client.get(f"/projects/{project_id}/resources").json()["resources"]]
+    assert sorted(full) == ["loot-0.txt", "loot-1.txt", "loot-2.txt"]
+
+    # Offset paging walks the same server-side order the full listing uses.
+    page_one = [item["name"] for item in client.get(f"/projects/{project_id}/resources?limit=2").json()["resources"]]
+    page_two = [item["name"] for item in client.get(f"/projects/{project_id}/resources?limit=2&offset=2").json()["resources"]]
+    assert page_one + page_two == full
+
+    by_status = client.get(f"/projects/{project_id}/resources?status=archived")
+    assert [item["name"] for item in by_status.json()["resources"]] == ["loot-2.txt"]
+
+
 def test_reverse_listener_creates_global_interactive_session(client: TestClient) -> None:
     project_id = create_project(client)
     probe = socket.socket()
