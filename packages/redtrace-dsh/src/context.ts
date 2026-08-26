@@ -1,12 +1,13 @@
 /**
- * RedTrace Context plugin: serializes the RedTrace domain state (graph,
- * resources) into the dynamic part of an agent's context. The stable part
- * (persona + Rules) lives in the prompt plugin; this module builds the
- * task directive and the injected context messages.
+ * RedTrace Context plugin: renders each task's single launch prompt — the
+ * context slice the task type needs (Reason: the full graph; Bootstrap:
+ * Origin/Goal/Hints; Explore: the claimed Intent's lineage plus shared
+ * resources) — and the runtime hint injection. Stable rules live in the
+ * prompt plugin's personas; this module carries dynamic content only.
  * @module redtrace-context
  */
 
-import type { Intent, ProjectDetail, ResourceSummary, RuntimeTask, TaskType } from './types.js'
+import type { Intent, ProjectDetail, ResourceSummary, RuntimeTask } from './types.js'
 
 export const name = 'redtrace-context'
 
@@ -31,74 +32,83 @@ export function schedulable(intent: Intent): boolean {
     && !intent.circuit_open && (intent.retry_after == null || intent.retry_after <= Date.now() / 1000)
 }
 
-/** The graph slice an agent sees: every fact/hint for planning, the claimed intent's lineage for execution. */
-export function graph(project: ProjectDetail, intent?: Intent): string {
-  const wanted = intent === undefined ? undefined : new Set(['origin', 'goal', ...intent.from])
-  return JSON.stringify({
-    project: { title: project.project.title, bootstrap_enabled: project.project.bootstrap_enabled },
-    facts: project.facts.filter(fact => wanted === undefined || wanted.has(fact.id)),
-    hints: project.hints,
-    intents: intent === undefined
-      ? project.intents.filter(item => !['blocked', 'dropped', 'superseded'].includes(item.state))
-      : [intent],
-  })
+type Fact = { id: string; description: string }
+type Hint = { id: string; content: string }
+
+function factLines(facts: Fact[]): string[] {
+  return facts.map(fact => `- [${fact.id}] ${fact.description}`)
 }
 
-/** Compact, non-secret summary of the resources shared across the project. */
-export function resourceSummary(resources: ResourceSummary[]): string {
-  if (resources.length === 0) return '(当前没有已注册的共享资源)'
-  return resources
-    .map(resource => `- [${resource.kind}] ${resource.name}${resource.target ? ` (${resource.target})` : ''}${resource.summary ? ` — ${resource.summary}` : ''} <id: ${resource.id}>`)
-    .join('\n')
+function hintLines(hints: Hint[]): string[] {
+  return hints.map(hint => `- [${hint.id}] ${hint.content}`)
 }
 
-/** The dynamic task directive sent as the first user message. */
-export function taskPrompt(task: RuntimeTask, project: ProjectDetail, intent?: Intent): string {
-  const context = graph(project, intent)
-  if (task.type === 'reason') return [
-    '分析当前 RedTrace 任务图,判断 Goal 是否已经完成,或提出下一个高价值的前沿 Intent。',
-    `最多创建 ${task.maxIntents ?? 4} 个活跃 Intent,只能引用现有 Fact id 作为来源;只能通过 redtrace_intent_create、redtrace_project_complete 或 redtrace_reason_noop 提交决策,不要输出 JSON 或散文替代。`,
-    context,
-  ].join('\n\n')
-  if (task.type === 'bootstrap') return [
-    '从 Origin、Goal 与 Hints 出发自举本项目:理解起点与已掌握的信息,成为该领域专家并稳步推进。只执行安全、合规的操作,工作目录为分配的 Workspace。',
-    '确认初始证据后,调用 redtrace_bootstrap_conclude(恰好一次)提交结论;大量原始数据写入 Workspace 文件并在结论中引用。',
-    context,
-  ].join('\n\n')
-  return [
-    '只执行 Current Intent 所指定的探索方向,推动任务朝 Goal 前进。按需使用 Shell、文件系统、Skill、MCP 与 RedTrace 资源工具。',
-    '大量证据保存在 Workspace 中并在结论中引用;可复用的非敏感资源用 redtrace_resource_register 注册。完成后调用 redtrace_explore_conclude(恰好一次),只提交本次新确认的客观事实。',
-    context,
-  ].join('\n\n')
+function intentLine(intent: Intent): string {
+  const target = intent.to == null ? '' : ` → ${intent.to}`
+  return `- [${intent.id}] ${intent.state}: ${intent.description}(from: [${intent.from.join(', ')}]${target})`
 }
 
-/** The full context injected at launch and on graph revision updates. */
-export function contextMessage(
+function resourceLines(resources: ResourceSummary[]): string[] {
+  return resources.map(resource =>
+    `- [${resource.kind}] ${resource.name}${resource.target ? ` (${resource.target})` : ''}${resource.summary ? ` — ${resource.summary}` : ''} <id: ${resource.id}>`)
+}
+
+function sections(parts: Array<[title: string, lines: string[]]>): string[] {
+  return parts.filter(([, lines]) => lines.length > 0).map(([title, lines]) => [`## ${title}`, ...lines].join('\n'))
+}
+
+/**
+ * The launch prompt: the task's whole context slice as one user message.
+ * Reason reads the full graph; Bootstrap reads only Origin/Goal/Hints;
+ * Explore reads its Intent's lineage, every Hint, and the shared resources.
+ */
+export function taskPrompt(
   task: RuntimeTask,
   project: ProjectDetail,
-  intent: Intent | undefined,
-  resources: ResourceSummary[],
+  intent?: Intent,
+  resources: ResourceSummary[] = [],
 ): string {
-  const parts = [`RedTrace 上下文(修订版本 ${project.blackboard_revision}):\n${graph(project, intent)}`]
-  if (task.type !== 'reason') {
-    parts.push(`共享资源摘要(完整信息用 redtrace_resource_get 获取):\n${resourceSummary(resources)}`)
+  const facts = new Map(project.facts.map(fact => [fact.id, fact]))
+  const origin = facts.get('origin')
+  const goal = facts.get('goal')
+  const head = [
+    `RedTrace 任务上下文(项目「${project.project.title}」,修订版本 ${project.blackboard_revision}):`,
+    ...(origin === undefined ? [] : [`## Origin\n${origin.description}`]),
+    ...(goal === undefined ? [] : [`## Goal\n${goal.description}`]),
+  ]
+  if (task.type === 'reason') {
+    const graph = project.facts.filter(fact => fact.id !== 'origin' && fact.id !== 'goal')
+    const intents = project.intents
+      .filter(item => !['blocked', 'dropped', 'superseded'].includes(item.state))
+    return [
+      ...head,
+      ...sections([
+        ['Facts', factLines(graph)],
+        [`Intents(最多创建 ${task.maxIntents ?? 4} 个活跃 Intent)`, intents.map(intentLine)],
+        ['Hints', hintLines(project.hints)],
+      ]),
+    ].join('\n\n')
   }
-  return parts.join('\n\n')
+  if (task.type === 'bootstrap') {
+    return [...head, ...sections([['Hints', hintLines(project.hints)]])].join('\n\n')
+  }
+  const lineage = (intent?.from ?? [])
+    .map(id => facts.get(id))
+    .filter((fact): fact is Fact => fact !== undefined && fact.id !== 'origin' && fact.id !== 'goal')
+  return [
+    ...head,
+    ...sections([
+      ['Source Facts', factLines(lineage)],
+      ['Hints', hintLines(project.hints)],
+      ['Current Intent', intent === undefined ? [] : [intentLine(intent)]],
+      ['Resources', resourceLines(resources)],
+    ]),
+  ].join('\n\n')
 }
 
-/** The graph-revision update injected into a running agent's session. */
-export function revisionMessage(
-  type: TaskType,
-  revision: number,
-  project: ProjectDetail,
-  intent: Intent | undefined,
-  resources: ResourceSummary[],
-): string {
-  const parts = [`RedTrace 上下文已更新(修订版本 ${revision}):\n${graph(project, intent)}`]
-  if (type !== 'reason') {
-    parts.push(`共享资源摘要(完整信息用 redtrace_resource_get 获取):\n${resourceSummary(resources)}`)
-  }
-  return parts.join('\n\n')
+/** The runtime update pushed into running workers: newly added human Hints only. */
+export function hintMessage(hints: ReadonlyArray<Hint>): string {
+  return ['RedTrace 新增 Hint:', ...hints.map(hint => `- [${hint.id}] ${hint.content}`)].join('\n')
 }
 
 export function apply(): void {

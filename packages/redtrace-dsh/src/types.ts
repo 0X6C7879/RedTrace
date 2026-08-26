@@ -93,6 +93,8 @@ export interface RuntimeTask {
   sessionId?: string
   runId?: string
   revision?: number
+  /** Hint ids this worker has already seen: launch prompt + runtime injections. */
+  deliveredHints?: Set<string>
   startedAt?: number
   handle?: AgentHandle
   cancelled?: boolean

@@ -19,7 +19,7 @@ import { api, Domain } from './domain.js'
 import { state } from './state.js'
 import { reportRun, cleanupSessionArtifacts } from './audit.js'
 import { concludeInstruction } from './prompt.js'
-import { contextMessage, isBootstrap, isInitial, revisionMessage, schedulable, taskPrompt } from './context.js'
+import { hintMessage, isBootstrap, isInitial, schedulable, taskPrompt } from './context.js'
 import * as bootstrapPreset from './bootstrap.js'
 import * as reasonPreset from './reason.js'
 import * as explorePreset from './explore.js'
@@ -114,7 +114,7 @@ class Scheduler {
       await this.domain.refresh().catch(error => { this.ctx.logger?.warn(error) })
       const summaries = await api<ProjectSummary[]>(this.config, '/projects')
       await this.cancelInactive(summaries)
-      await this.injectChanges()
+      await this.injectHints()
       await this.cleanupDeleting(summaries)
       await this.dispatch(summaries)
     } catch (error) {
@@ -134,25 +134,26 @@ class Scheduler {
   }
 
   private async resources(projectId: string, type: TaskType): Promise<ResourceSummary[]> {
-    if (type === 'reason') return []
+    if (type !== 'explore') return []
     const payload = await api<{ resources: ResourceSummary[] }>(
       this.config, `/projects/${encodeURIComponent(projectId)}/resources?limit=50`,
     )
     return payload.resources ?? []
   }
 
-  private async injectChanges(): Promise<void> {
+  /** Runtime context updates push only newly added human Hints into running
+   * workers; Fact/Intent/Resource changes stay pull-based (Reason re-reads
+   * the graph on its next launch, Explore owns its Intent lineage). */
+  private async injectHints(): Promise<void> {
     for (const task of this.running.values()) {
-      if (task.cancelled || task.handle === undefined) continue
+      if (task.cancelled || task.handle === undefined || task.deliveredHints === undefined) continue
       const project = await api<ProjectDetail>(this.config, `/projects/${encodeURIComponent(task.projectId)}`)
       if ((task.revision ?? 0) >= project.blackboard_revision) continue
       task.revision = project.blackboard_revision
-      const intent = task.intentId === undefined ? undefined : project.intents.find(item => item.id === task.intentId)
-      const resources = await this.resources(task.projectId, task.type).catch(() => [])
-      task.handle.agent.inject(message(
-        this.shared!,
-        revisionMessage(task.type, project.blackboard_revision, project, intent, resources),
-      ))
+      const fresh = project.hints.filter(hint => !task.deliveredHints!.has(hint.id))
+      if (fresh.length === 0) continue
+      for (const hint of fresh) task.deliveredHints!.add(hint.id)
+      task.handle.agent.inject(message(this.shared!, hintMessage(fresh)))
     }
   }
 
@@ -273,6 +274,7 @@ class Scheduler {
     if (this.running.has(key)) return
     task.server = this.config.server
     task.revision = project.blackboard_revision
+    task.deliveredHints = new Set(project.hints.map(hint => hint.id))
     task.startedAt = Date.now()
     task.sessionId = newSessionId(task.type, task.projectId)
     task.runId = `run-${crypto.randomUUID()}`
@@ -314,8 +316,7 @@ class Scheduler {
         })
       }, Math.max(1, this.limits().interval) * 1000)
       const resources = await this.resources(task.projectId, task.type).catch(() => [] as ResourceSummary[])
-      task.handle.agent.inject(message(shared, contextMessage(task, project, intent, resources)))
-      task.handle.agent.followup(message(shared, taskPrompt(task, project, intent)))
+      task.handle.agent.followup(message(shared, taskPrompt(task, project, intent, resources)))
       let waited = await waitIdle(task.handle.agent, limits.timeout)
       if (!task.committed && !task.cancelled) {
         task.handle.agent.followup(message(shared, concludeInstruction(task.type)))

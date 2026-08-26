@@ -10,7 +10,7 @@
  *                      /__redtrace/plugins API (owns the composition below)
  * - redtrace-domain    RedTrace FastAPI client + hot-reload + MCP
  * - redtrace-prompt    Chinese persona + Rules (Cairn restored)
- * - redtrace-context   graph/resource serialization and injection
+ * - redtrace-context   launch-prompt rendering + runtime hint injection
  * - redtrace-contracts contract tools (mounted per agent by the presets)
  * - redtrace-resource  shared-resource tools (mounted per agent)
  * - redtrace-bootstrap / redtrace-reason / redtrace-explore  task presets
@@ -38,7 +38,7 @@ export type { RuntimeConfig, RuntimeTask, WorkerSpec }
 export { CONTRACTS, taskFor } from './contracts.js'
 export { eventProjection, reportRun, cleanupSessionArtifacts } from './audit.js'
 export { persona, concludeInstruction } from './prompt.js'
-export { graph, taskPrompt, isBootstrap, isInitial, schedulable } from './context.js'
+export { taskPrompt, hintMessage, isBootstrap, isInitial, schedulable } from './context.js'
 
 export async function apply(ctx: RuntimeContext, config: RuntimeConfig = {}): Promise<void> {
   if (config.runtime !== true) {
