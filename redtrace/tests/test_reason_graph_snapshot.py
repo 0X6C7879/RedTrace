@@ -151,7 +151,6 @@ def test_write_graph_snapshot_reference_inlines_nothing() -> None:
         "redtrace-skill",
     ):
         assert command in reference
-    assert "适用于 Claude Code、Codex 和 Pi" in reference
     assert "当前 Worker 的 shell/terminal tool" in reference
     assert "不是 MCP server、MCP tool 或 MCP Resource" in reference
     assert "不得通过任何 MCP 接口调用" in reference

@@ -72,7 +72,6 @@ def test_config_paths_are_anchored_to_config_file_not_cwd(
     payload["paths"] = {"root": "."}
     payload["runtime"]["execution"] = "local"
     payload["container"] = None
-    payload["local"] = {"completed_action": "keep"}
     config_path = root / "redtrace.yaml"
     config_path.write_text(
         yaml.safe_dump(payload, sort_keys=False),

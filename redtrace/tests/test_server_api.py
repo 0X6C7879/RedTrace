@@ -549,13 +549,12 @@ def test_settings_and_export_are_backed_by_the_same_database(
 ) -> None:
     project_id = _create_project(client)
 
-    response = client.put(
-        "/settings", json={"intent_timeout": 30, "reason_timeout": 45}
-    )
-    assert response.status_code == 200
-    assert client.get("/settings").json() == {
-        "intent_timeout": 30,
-        "reason_timeout": 45,
+    # Settings are read-only defaults now (the legacy PUT endpoint is gone).
+    settings = client.get("/settings")
+    assert settings.status_code == 200
+    assert settings.json() == {
+        "intent_timeout": 15,
+        "reason_timeout": 15,
     }
 
     exported = client.get(f"/projects/{project_id}/export?format=yaml")

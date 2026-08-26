@@ -1,33 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from redtrace.dispatcher.runtime.process import ExecProcess
-
-
-
-def session_file_checkpoint(root: Path, session_id: str) -> dict[str, Any]:
-    latest: tuple[int, Path, int] | None = None
-    for path in root.rglob(f"*{session_id}*"):
-        try:
-            stat = path.stat()
-        except OSError:
-            continue
-        if not path.is_file():
-            continue
-        candidate = (stat.st_mtime_ns, path, stat.st_size)
-        if latest is None or candidate[0] > latest[0]:
-            latest = candidate
-    if latest is None:
-        return {"path": "", "exists": False, "size_bytes": 0, "mtime_ns": 0}
-    mtime_ns, path, size = latest
-    return {
-        "path": str(path.resolve()),
-        "exists": True,
-        "size_bytes": size,
-        "mtime_ns": mtime_ns,
-    }
 
 
 @runtime_checkable
@@ -60,10 +35,6 @@ class ExecutionBackend(Protocol):
     def worker_conversation_environment(
         self, project_id: str, worker_type: str, worker_name: str
     ) -> dict[str, str]: ...
-
-    def session_checkpoint(
-        self, project_id: str, worker_type: str, worker_name: str, session_id: str
-    ) -> dict[str, Any]: ...
 
     def build_exec_process(
         self,

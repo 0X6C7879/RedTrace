@@ -12,9 +12,6 @@ from pathlib import Path
 
 from redtrace.capabilities import CapabilityStore
 from redtrace.dispatcher.config import LocalConfig
-from redtrace.dispatcher.runtime.backend import (
-    session_file_checkpoint,
-)
 from redtrace.dispatcher.runtime.local_process import LocalProcess
 from redtrace.paths import RedTracePaths, contained_path, safe_project_key
 
@@ -102,19 +99,6 @@ class LocalBackend:
         _ensure_directory(runtime_dir)
         _ensure_directory(marker.parent)
         marker.touch(exist_ok=True)
-        # MCP config lives at user level (~/.pi/agent/mcp.json), symlink
-        # into the runtime directory so Pi discovers it without polluting workspace.
-        user_pi_mcp = Path.home() / ".pi" / "agent" / "mcp.json"
-        if user_pi_mcp.is_file():
-            target = runtime_dir / ".pi" / "mcp.json"
-            _ensure_directory(target.parent)
-            if target.is_symlink() and target.resolve(strict=False) != user_pi_mcp.resolve():
-                with contextlib.suppress(FileNotFoundError):
-                    target.unlink()
-            elif target.exists() and not target.is_symlink():
-                with contextlib.suppress(FileNotFoundError):
-                    target.unlink()
-            _ensure_link(target, user_pi_mcp)
         LOG.debug(
             "local project workdir ready project=%s dir=%s", project_id, project_dir
         )
@@ -136,17 +120,6 @@ class LocalBackend:
         self, project_id: str, worker_type: str, worker_name: str
     ) -> dict[str, str]:
         return self.conversation_environment(project_id, worker_type, worker_name)
-
-    def session_checkpoint(
-        self, project_id: str, worker_type: str, worker_name: str, session_id: str
-    ) -> dict[str, object]:
-        root = contained_path(
-            self._session_root,
-            safe_project_key(project_id),
-            worker_type,
-            safe_project_key(worker_name),
-        )
-        return session_file_checkpoint(root, session_id)
 
     def build_exec_process(
         self,
@@ -189,25 +162,6 @@ class LocalBackend:
                     "TEMP": workspace,
                 }
             )
-        if all(
-            (env or {}).get(key)
-            for key in (
-                "ANTHROPIC_BASE_URL",
-                "ANTHROPIC_AUTH_TOKEN",
-                "ANTHROPIC_MODEL",
-            )
-        ):
-            # Claude's alternate host-level provider selectors must not outrank an
-            # explicit Worker override. HOME and ~/.claude remain untouched.
-            for key in (
-                "ANTHROPIC_API_KEY",
-                "ANTHROPIC_OAUTH_TOKEN",
-                "CLAUDE_CODE_USE_BEDROCK",
-                "CLAUDE_CODE_USE_VERTEX",
-                "CLAUDE_CODE_USE_FOUNDRY",
-            ):
-                if key not in (env or {}):
-                    merged_env.pop(key, None)
         cli_dir = str(self._runtime_bin)
         tools_bin = str(self._tools_dir / "bin")
         merged_env["PATH"] = os.pathsep.join(
@@ -349,29 +303,5 @@ def _ensure_directory(path: Path) -> None:
     if last_error is not None:
         raise last_error
     raise FileNotFoundError(errno.ENOENT, "managed directory missing", str(path))
-
-
-def _ensure_link(link: Path, target: Path) -> None:
-    if link.exists() or link.is_symlink():
-        return
-    try:
-        link.symlink_to(target, target_is_directory=target.is_dir())
-        return
-    except OSError:
-        if os.name != "nt":
-            raise
-        if target.is_file():
-            shutil.copy2(target, link)
-            return
-        if not target.is_dir():
-            raise
-    completed = subprocess.run(
-        ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(f"cannot create Agent runtime link: {target}")
 
 

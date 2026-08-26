@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dependency-free project resource client shared by Claude Code, Codex, and Pi."""
+"""Dependency-free project resource client for RedTrace task workspaces."""
 
 from __future__ import annotations
 

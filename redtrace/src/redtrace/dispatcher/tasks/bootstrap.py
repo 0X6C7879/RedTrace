@@ -115,19 +115,9 @@ def run_bootstrap_task(
             timeout_seconds=config.tasks.bootstrap.timeout,
             lease=lease,
             cancellation=cancellation,
-            live_control=execute.live_control,
-            session=session,
-            
-            env_overrides=execute.env,
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
         session = driver.extract_session(session, first.stdout, first.stderr)
-        if execute.live_control is not None:
-            session = (
-                getattr(execute.live_control, "session_file", None)
-                or getattr(execute.live_control, "session_id", None)
-                or session
-            )
         cancelled = cancel_reason(first, cancellation)
         if cancelled is not None:
             LOG.info(
@@ -358,10 +348,6 @@ def _try_conclude_fallback(
         timeout_seconds=config.tasks.bootstrap.conclude_timeout,
         lease=lease,
         cancellation=cancellation,
-        live_control=conclude.live_control,
-        session=session,
-        
-        env_overrides=conclude.env,
     )
     conclude_ms = int((time.perf_counter() - conclude_started) * 1000)
     cancelled = cancel_reason(result, cancellation)

@@ -33,7 +33,9 @@ def test_redtrace_cli_skills_define_one_cross_worker_protocol() -> None:
         "skills/skill-evolution/SKILL.md",
     ):
         content = (repo_root / relative_path).read_text(encoding="utf-8")
-        assert "Claude Code、Codex 和 Pi" in content
+        # The protocol speaks to the current Worker's shell only; no
+        # CLI-agent names may leak back into the contract.
+        assert "Claude Code" not in content
         assert "当前 Worker 的 shell/terminal tool" in content
         assert "不是 MCP server、MCP tool 或 MCP Resource" in content
         assert "不要通过任何 MCP 接口调用" in content
@@ -137,7 +139,7 @@ def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
             },
         )
         assert server.status_code == 201
-        assert server.json()["agents"] == ["claude", "codex", "pi"]
+        assert server.json()["agents"] == ["dsh"]
 
         invalid = client.post(
             "/capabilities/mcp",

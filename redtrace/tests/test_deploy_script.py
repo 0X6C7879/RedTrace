@@ -36,9 +36,12 @@ def test_deploy_script_unifies_linux_and_macos_without_legacy_entrypoints() -> N
     assert "mirrors.aliyun.com/pypi/simple" in script
     assert 'if has "$command"; then' in script
     assert "rtk gain" in script
-    assert "@anthropic-ai/claude-code@latest" in script
-    assert "@openai/codex@latest" in script
-    assert "@earendil-works/pi-coding-agent@latest" in script
+    # CLI-agent installs are gone: the DSH runtime calls providers over
+    # HTTP; nothing spawns claude/codex/pi binaries anymore.
+    assert "@anthropic-ai/claude-code@latest" not in script
+    assert "@openai/codex@latest" not in script
+    assert "@earendil-works/pi-coding-agent@latest" not in script
+    assert "pi-mcp-extension" not in script
     assert "ensure_playwright_skill" in script
     assert "npx playwright install chromium" in script
     assert "--with-deps" not in script

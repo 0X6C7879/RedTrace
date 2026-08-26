@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -8,17 +7,6 @@ from typing import Any
 
 from redtrace.dispatcher.config import WorkerConfig
 from redtrace.dispatcher.workers.health import HealthResult
-
-REDTRACE_OUTPUT_SCHEMA_OBJECT = {
-    "type": "object",
-    "properties": {
-        "accepted": {"type": "boolean"},
-        "data": {"type": "object"},
-    },
-    "required": ["accepted", "data"],
-    "additionalProperties": False,
-}
-
 
 class ProviderError(RuntimeError):
     """Raised when a worker's upstream provider returns a runtime or API
@@ -52,8 +40,6 @@ class DriverResult:
     argv: list[str]
     session: str | None = None
     stdin: str | None = None
-    live_control: Any | None = None
-    env: dict[str, str] | None = None
 
 
 class WorkerDriver(ABC):
@@ -111,15 +97,3 @@ class WorkerDriver(ABC):
 class SeedSessionDriver(WorkerDriver):
     def prepare_session(self) -> str | None:
         return str(uuid.uuid4())
-
-
-class RegexSessionDriver(WorkerDriver):
-    session_pattern = re.compile(r"session id:\s*(?P<id>[0-9a-fA-F-]+)")
-
-    def extract_session(
-        self, session: str | None, stdout: str, stderr: str
-    ) -> str | None:
-        if session:
-            return session
-        match = self.session_pattern.search(stderr)
-        return match.group("id") if match else None

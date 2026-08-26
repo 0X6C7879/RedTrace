@@ -43,6 +43,10 @@ app = FastAPI(
     description="Agent-driven security research orchestration and evidence graph runtime",
     version=__version__,
     lifespan=lifespan,
+    # The UI is served by the Cordis web layer; FastAPI is a headless API.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 app.include_router(settings.router)

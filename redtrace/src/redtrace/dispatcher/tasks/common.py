@@ -360,7 +360,7 @@ def write_graph_snapshot_reference(
     return (
         "当前 Task Graph snapshot 位于当前 Workspace 的以下文件：\n\n"
         f"{readable_path}\n\n"
-        "RedTrace 内置 CLI 协议（适用于 Claude Code、Codex 和 Pi）："
+        "RedTrace 内置 CLI 协议："
         "`redtrace-blackboard`、`redtrace-resource`、`redtrace-context` 和 "
         "`redtrace-skill` 都是注入 PATH 的 shell CLI，必须通过当前 Worker 的 "
         "shell/terminal tool 执行。它们不是 MCP server、MCP tool 或 MCP Resource；"
@@ -389,9 +389,6 @@ def run_worker_process(
     lease: HeartbeatLease | None = None,
     cancellation: TaskCancellation | None = None,
     blackboard_inbox: BlackboardInbox | None = None,
-    live_control: Any | None = None,
-    session: str | None = None,
-    env_overrides: dict[str, str] | None = None,
 ) -> ProcessResult:
     LOG.info(
         "starting container exec container=%s worker=%s phase=%s timeout=%ss",
@@ -405,8 +402,6 @@ def run_worker_process(
     if callable(runtime_dir_fn) and project_id is not None:
         runtime_dir = str(runtime_dir_fn(project_id))
     process_env = dict(worker.env)
-    if env_overrides:
-        process_env.update(env_overrides)
     task_type = phase.split("_", 1)[0]
     if task_type == "reason":
         for name in (
@@ -510,8 +505,6 @@ def run_worker_process(
     process_options: dict[str, object] = {"timeout_seconds": timeout_seconds}
     if stdin_text is not None:
         process_options["stdin_text"] = stdin_text
-    if live_control is not None:
-        process_options["keep_stdin_open"] = True
     if project_id is not None:
         process_options["project_id"] = project_id
     process = container_manager.build_exec_process(
@@ -520,31 +513,14 @@ def run_worker_process(
         argv,
         **process_options,
     )
-    output_handlers = [
-        handler
-        for handler in (live_control.handle_output if live_control is not None else None,)
-        if handler is not None
-    ]
-    set_output_handler = getattr(process, "set_output_handler", None)
-    if callable(set_output_handler) and output_handlers:
-
-        def handle_output(channel: str, line: str) -> None:
-            for handler in output_handlers:
-                handler(channel, line)
-
-        set_output_handler(handle_output)
     try:
-        if live_control is not None:
-            live_control.attach(process)
         process.start()
         if lease is not None:
             lease.attach_process(process)
         if cancellation is not None:
             cancellation.attach_process(process)
         if blackboard_inbox is not None:
-            blackboard_inbox.on_process_attached(
-                live_control.send_signal if live_control is not None else None
-            )
+            blackboard_inbox.on_process_attached(None)
         result = process.communicate(timeout=communicate_timeout(timeout_seconds))
         return result
     except Exception as exc:
@@ -570,9 +546,8 @@ def resolve_skill_tracking_path(
     Decoupled from the provider session ID: the tracking id is derived
     from the task identity (project + intent + worker + task_type), so the
     same file is reused across execute / steering / conclude for one task
-    even when the provider session is unknown until after the first run
-    (Codex thread id, Pi session id are only extracted from the output
-    stream). Reason tasks never create a tracking file.
+    even when the provider session is unknown until after the first run.
+    Reason tasks never create a tracking file.
     """
     if (
         not container_name

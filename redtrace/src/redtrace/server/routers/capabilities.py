@@ -189,22 +189,10 @@ def get_capabilities():
         "mcp": {"total": len(servers), "enabled": sum(server.enabled for server in servers)},
         "agents": [
             {
-                "id": "claude",
+                "id": "dsh",
                 "skills": str(store.skills_dir),
                 "runtimeSnapshot": None,
-                "mcp": "--mcp-config",
-            },
-            {
-                "id": "codex",
-                "skills": str(store.skills_dir),
-                "runtimeSnapshot": None,
-                "mcp": "mcp_servers config",
-            },
-            {
-                "id": "pi",
-                "skills": str(store.skills_dir),
-                "runtimeSnapshot": None,
-                "mcp": "worker-managed mcp.json",
+                "mcp": "mcpConfigs (runtime config)",
             },
         ],
     }

@@ -314,24 +314,6 @@ CREATE TABLE IF NOT EXISTS audit_runs (
 CREATE INDEX IF NOT EXISTS idx_audit_runs_project
 ON audit_runs(project_id, started_at);
 
-CREATE TABLE IF NOT EXISTS session_checkpoints (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    intent_id TEXT,
-    worker TEXT NOT NULL,
-    provider TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    stage TEXT NOT NULL,
-    path TEXT NOT NULL,
-    exists_flag INTEGER NOT NULL,
-    size_bytes INTEGER NOT NULL,
-    mtime_ns INTEGER NOT NULL,
-    created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_session_checkpoints_session
-ON session_checkpoints(project_id, session_id, id);
-
 CREATE TABLE IF NOT EXISTS audit_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_uid TEXT NOT NULL UNIQUE,

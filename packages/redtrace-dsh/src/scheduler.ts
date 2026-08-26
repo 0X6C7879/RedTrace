@@ -99,13 +99,7 @@ class Scheduler {
   }
 
   private limits(): { maxWorkers: number; maxRunningProjects: number; maxProjectWorkers: number; interval: number } {
-    const fallback = this.snapshot?.limits
-    return {
-      maxWorkers: fallback?.maxWorkers ?? this.config.maxWorkers ?? 1,
-      maxRunningProjects: fallback?.maxRunningProjects ?? this.config.maxRunningProjects ?? 1,
-      maxProjectWorkers: fallback?.maxProjectWorkers ?? this.config.maxProjectWorkers ?? 1,
-      interval: fallback?.interval ?? this.config.interval ?? 2,
-    }
+    return resolveLimits(this.snapshot, this.config)
   }
 
   private schedule(): void {
@@ -187,15 +181,13 @@ class Scheduler {
   }
 
   private async dispatch(summaries: ProjectSummary[]): Promise<void> {
-    const { maxWorkers } = this.limits()
-    if (this.running.size >= maxWorkers) return
-    const active = summaries.filter(summary => summary.status === 'active').sort((a, b) => a.id.localeCompare(b.id))
-    if (active.length === 0) return
-    const offset = this.cursor % active.length
-    const rotated = active.slice(offset).concat(active.slice(0, offset))
-    this.cursor += 1
-    for (const summary of rotated) {
-      if (this.running.size >= maxWorkers) break
+    const limits = this.limits()
+    const { candidates, nextCursor } = planDispatch(summaries, [...this.running.values()], limits, this.cursor)
+    this.cursor = nextCursor
+    for (const summary of candidates) {
+      // Re-check the live caps before every launch: dispatching one project
+      // mutates the running set within this same round.
+      if (this.running.size >= this.limits().maxWorkers) break
       if (this.projectCount(summary.id) >= this.limits().maxProjectWorkers) continue
       const runningProjects = new Set([...this.running.values()].map(task => task.projectId))
       if (!runningProjects.has(summary.id) && runningProjects.size >= this.limits().maxRunningProjects) continue
@@ -224,7 +216,7 @@ class Scheduler {
     }
     if (summary.planning_revision > summary.reason_evaluated_revision) {
       if (!this.presetEnabled('reason')) return
-      if (summary.reason_circuit_open || (summary.reason_retry_after ?? 0) > Date.now() / 1000) return
+      if (!reasonEligible(summary, Date.now())) return
       const worker = selectWorker(this.snapshot?.workers ?? [], name => this.workerRunning(name), 'reason')
       if (worker === undefined) return
       const claimed = await this.tryPost(`/projects/${encodeURIComponent(summary.id)}/reason/claim`, {
@@ -271,18 +263,9 @@ class Scheduler {
   }
 
   private async tryPost(pathname: string, body: Record<string, unknown>): Promise<boolean> {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        const response = await fetch(`${this.config.server}${pathname}`, {
-          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
-        })
-        if (response.ok || response.status < 500) return response.ok
-      } catch (error) {
-        if (attempt === 2) this.ctx.logger?.warn(error)
-      }
-      await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)))
-    }
-    return false
+    return postWithRetry(`${this.config.server}${pathname}`, body, {
+      onError: error => { this.ctx.logger?.warn(error) },
+    })
   }
 
   private launch(task: RuntimeTask, project: ProjectDetail, intent?: Intent): void {
@@ -391,6 +374,80 @@ export function selectWorker(
       (a.priority - b.priority)
       || (runningOf(a.name) - runningOf(b.name))
       || a.name.localeCompare(b.name))[0]
+}
+
+/** Resolve the scheduling limits: hot-reloaded snapshot over config over
+ * defaults. Every cap floors at 1; the tick interval defaults to 2s. */
+export function resolveLimits(
+  snapshot: RuntimeSnapshot | undefined,
+  config: Pick<RuntimeConfig, 'maxWorkers' | 'maxRunningProjects' | 'maxProjectWorkers' | 'interval'>,
+): { maxWorkers: number; maxRunningProjects: number; maxProjectWorkers: number; interval: number } {
+  const fallback = snapshot?.limits
+  return {
+    maxWorkers: fallback?.maxWorkers ?? config.maxWorkers ?? 1,
+    maxRunningProjects: fallback?.maxRunningProjects ?? config.maxRunningProjects ?? 1,
+    maxProjectWorkers: fallback?.maxProjectWorkers ?? config.maxProjectWorkers ?? 1,
+    interval: fallback?.interval ?? config.interval ?? 2,
+  }
+}
+
+/** The project-level Reason cooldown: not eligible while the failure circuit
+ * is open or the server-set retry deadline is still in the future. */
+export function reasonEligible(summary: ProjectSummary, now: number): boolean {
+  return !summary.reason_circuit_open && (summary.reason_retry_after ?? 0) <= now / 1000
+}
+
+/** Plan one dispatch round: rotate the active projects round-robin (cursor)
+ * for cross-project fairness, then drop projects already at their per-project
+ * cap or that would exceed the distinct-project cap. Caps are evaluated
+ * against the passed running snapshot; the caller re-checks live state before
+ * each launch because dispatching mutates the running set. */
+export function planDispatch(
+  summaries: readonly ProjectSummary[],
+  running: readonly { projectId: string }[],
+  limits: { maxWorkers: number; maxProjectWorkers: number; maxRunningProjects: number },
+  cursor: number,
+): { candidates: ProjectSummary[]; nextCursor: number } {
+  if (running.length >= limits.maxWorkers) return { candidates: [], nextCursor: cursor }
+  const active = summaries
+    .filter(summary => summary.status === 'active')
+    .sort((a, b) => a.id.localeCompare(b.id))
+  if (active.length === 0) return { candidates: [], nextCursor: cursor }
+  const offset = cursor % active.length
+  const rotated = active.slice(offset).concat(active.slice(0, offset))
+  const runningProjects = new Set(running.map(task => task.projectId))
+  const candidates = rotated.filter(summary => {
+    if (running.filter(task => task.projectId === summary.id).length >= limits.maxProjectWorkers) return false
+    return runningProjects.has(summary.id) || runningProjects.size < limits.maxRunningProjects
+  })
+  return { candidates, nextCursor: cursor + 1 }
+}
+
+/** POST with up to 3 attempts and linear backoff (100/200/300ms). Retries
+ * only network errors and HTTP >= 500; any 4xx answers immediately. */
+export async function postWithRetry(
+  url: string,
+  body: Record<string, unknown>,
+  options: {
+    fetchFn?: typeof fetch
+    sleep?: (ms: number) => Promise<void>
+    onError?: (error: unknown) => void
+  } = {},
+): Promise<boolean> {
+  const doFetch = options.fetchFn ?? fetch
+  const sleep = options.sleep ?? (ms => new Promise<void>(resolve => { setTimeout(resolve, ms) }))
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await doFetch(url, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      })
+      if (response.ok || response.status < 500) return response.ok
+    } catch (error) {
+      if (attempt === 2) options.onError?.(error)
+    }
+    await sleep(100 * (attempt + 1))
+  }
+  return false
 }
 
 export async function apply(ctx: RuntimeContext, config: RuntimeConfig = {}): Promise<void> {

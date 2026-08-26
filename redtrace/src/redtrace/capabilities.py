@@ -30,7 +30,6 @@ WORKSPACE_CLI_PATHS = {
     RESOURCE_CLI_PATH,
     SKILL_CLI_PATH,
 }
-PI_MCP_EXTENSION = "npm:pi-mcp-extension@1.5.0"
 DEFAULT_MAX_SKILLS = 256
 DEFAULT_MAX_SKILL_CHARS = 65_536
 DEFAULT_HISTORY_LIMIT = 12
@@ -169,7 +168,7 @@ class McpRecord:
             "transport": transport,
             "command": common.get("command"),
             "url": common.get("url"),
-            "agents": ["claude", "codex", "pi"],
+            "agents": ["dsh"],
             "config": self.config,
         }
 
@@ -781,69 +780,23 @@ def _common_mcp_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def mcp_config_for(record: McpRecord, agent: str) -> dict[str, Any]:
+    """Project an MCP record into the config shape one agent runtime uses.
+
+    The DSH Cordis runtime is the only consumer; ``agent`` stays a parameter
+    so per-agent overrides in stored configs keep working.
+    """
     result = _common_mcp_config(record.config)
     overrides = record.config.get("agents", {})
     if isinstance(overrides, dict) and isinstance(overrides.get(agent), dict):
         result.update(overrides[agent])
 
     transport = str(result.get("transport") or result.get("type") or "").lower()
-    if agent == "claude":
-        if transport in {"streamable-http", "http"} or result.get("url"):
-            result["type"] = "http"
-        elif transport == "sse":
-            result["type"] = "sse"
-        else:
-            result["type"] = "stdio"
-        result.pop("transport", None)
-        result.pop("lifecycle", None)
-    elif agent in {"pi", "dsh"}:
-        if transport == "http":
-            result["transport"] = "streamable-http"
-        elif not transport:
-            result["transport"] = "stdio"
-        result.pop("type", None)
-    elif agent == "codex":
-        result.pop("type", None)
-        result.pop("transport", None)
-        result.pop("lifecycle", None)
-        if "headers" in result and "http_headers" not in result:
-            result["http_headers"] = result.pop("headers")
+    if transport == "http":
+        result["transport"] = "streamable-http"
+    elif not transport:
+        result["transport"] = "stdio"
+    result.pop("type", None)
     return result
-
-
-
-
-def _toml_literal(value: Any) -> str:
-    if value is None:
-        raise ValueError("null is not supported by Codex config")
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
-    if isinstance(value, list):
-        return "[" + ",".join(_toml_literal(item) for item in value) + "]"
-    if isinstance(value, dict):
-        entries = (
-            f"{json.dumps(str(key), ensure_ascii=False)}={_toml_literal(item)}"
-            for key, item in value.items()
-            if item is not None
-        )
-        return "{" + ",".join(entries) + "}"
-    raise ValueError(f"unsupported Codex config value: {type(value).__name__}")
-
-
-def codex_mcp_overrides(records: Iterable[McpRecord]) -> list[str]:
-    overrides: list[str] = []
-    for record in records:
-        config = mcp_config_for(record, "codex")
-        config["enabled"] = record.enabled
-        for key, value in config.items():
-            if value is None:
-                continue
-            overrides.extend(["-c", f"mcp_servers.{record.name}.{key}={_toml_literal(value)}"])
-    return overrides
 
 
 def _workspace_cli_bytes(path: str) -> bytes:

@@ -7,7 +7,7 @@ description: Review verified outcomes and evolve Skills with reusable learnings 
 
 任务中产生经验证、可复用的新经验时加载本 Skill。
 
-本 Skill 对 Claude Code、Codex 和 Pi 使用同一接口：`redtrace-skill` 是注入 `PATH` 的 shell CLI，必须通过当前 Worker 的 shell/terminal tool 执行。它不是 MCP server、MCP tool 或 MCP Resource；不要通过任何 MCP 接口调用，也不要为它构造 URI。
+`redtrace-skill` 是注入 `PATH` 的 shell CLI，必须通过当前 Worker 的 shell/terminal tool 执行。它不是 MCP server、MCP tool 或 MCP Resource；不要通过任何 MCP 接口调用，也不要为它构造 URI。
 
 ## 职责边界
 
@@ -57,12 +57,14 @@ description: Review verified outcomes and evolve Skills with reusable learnings 
 当 Memory 中已积累 **≥3 条一致或互补**的经验时才可升级 Skill 本体：
 
 1. 从 Memory 中抽象出稳定通用规则（不是项目事实的堆砌）
-2. 直接编辑该 Skill 的 SKILL.md，将规则写入
+2. 直接编辑**仓库根目录 `skills/`** 下该 Skill 的 `SKILL.md`（`skills/<canonical-id>/SKILL.md`），将规则写入；不创建新的 Skill 目录，不改动 `skills/` 之外的任何文件
 3. 检查确认没有破坏原 Skill 的结构与意图
 
 ```text
 执行结果 → Memory（快速沉淀）→ 反复验证 → SKILL.md（稳定进化）
 ```
+
+Skill Evolution 始终在**当前任务的 Session 内**完成：不启动独立的 Learning Session，不切换任务类型，不派生新 Worker。
 
 ### 4. 无新经验
 
@@ -93,9 +95,9 @@ description: Review verified outcomes and evolve Skills with reusable learnings 
 
 ## 禁止
 
+- 不得创建独立的 Learning Session、新的 Agent Session 或 Worker
 - 不得修改 Skill Memory 索引或 Agent 用户配置
 - 不得继续攻击、扫描或扩大任务范围
-- 不得创建新的 Agent Session 或 Worker
 
 ## 控制权
 

@@ -11,9 +11,6 @@ import docker
 from docker.errors import APIError, DockerException, NotFound
 from docker.models.containers import Container
 from redtrace.dispatcher.config import ContainerConfig
-from redtrace.dispatcher.runtime.backend import (
-    session_file_checkpoint,
-)
 from redtrace.dispatcher.runtime.process import ManagedProcess
 from redtrace.paths import RedTracePaths, contained_path, safe_project_key
 
@@ -273,20 +270,6 @@ class ContainerManager:
     ) -> dict[str, str]:
         return self.conversation_environment(project_id, worker_type, worker_name)
 
-    def session_checkpoint(
-        self, project_id: str, worker_type: str, worker_name: str, session_id: str
-    ) -> dict[str, object]:
-        if self._paths is None:
-            return {"path": "", "exists": False, "size_bytes": 0, "mtime_ns": 0}
-        root = contained_path(
-            self._paths.managed,
-            "sessions",
-            safe_project_key(project_id),
-            worker_type,
-            safe_project_key(worker_name),
-        )
-        return session_file_checkpoint(root, session_id)
-
     def _shared_volumes(
         self, project_id: str, worker_name: str, worker_type: str
     ) -> dict[str, dict[str, str]]:
@@ -321,10 +304,6 @@ class ContainerManager:
             self._host_source(self._paths.runtime / "tools"): {
                 "bind": "/opt/redtrace/tools",
                 "mode": "rw",
-            },
-            self._host_source(self._paths.runtime / "mcp" / "pi.json"): {
-                "bind": "/home/kali/workspace/.pi/mcp.json",
-                "mode": "ro",
             },
         }
         private_cases = os.environ.get("REDTRACE_PRIVATE_CASES_DIR")

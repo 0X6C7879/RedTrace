@@ -123,19 +123,10 @@ def run_reason_task(
             timeout_seconds=config.tasks.reason.timeout,
             lease=lease,
             cancellation=cancellation,
-            live_control=command.live_control,
-            session=None,
-            env_overrides=command.env,
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
         total_ms = int((time.perf_counter() - task_started) * 1000)
         session = driver.extract_session(session, result.stdout, result.stderr)
-        if command.live_control is not None:
-            session = (
-                getattr(command.live_control, "session_file", None)
-                or getattr(command.live_control, "session_id", None)
-                or session
-            )
         cancelled = cancel_reason(result, cancellation)
         if cancelled is not None:
             LOG.info(
@@ -190,8 +181,6 @@ def run_reason_task(
                 ),
                 lease=lease,
                 cancellation=cancellation,
-                session=None,
-                env_overrides=recovery_command.env,
             )
             cancelled = cancel_reason(result, cancellation)
             if cancelled is not None:

@@ -139,16 +139,6 @@ def heartbeat(project_id: str, intent_id: str, body: HeartbeatRequest):
 
 
 @router.post(
-    "/projects/{project_id}/intents/{intent_id}/facts",
-)
-def submit_fact(project_id: str, intent_id: str, body: ConcludeRequest):
-    raise HTTPException(
-        409,
-        "Incremental Fact submission is disabled; use session/workspace for intermediate results and submit formal Facts via conclude",
-    )
-
-
-@router.post(
     "/projects/{project_id}/intents/{intent_id}/release",
     response_model=Intent,
 )

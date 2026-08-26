@@ -20,14 +20,6 @@ TaskType = Literal["reason", "explore", "bootstrap"]
 CompletedAction = Literal["remove", "stop"]
 WorkerHealthcheckMode = Literal["startup_and_task", "startup_only", "disabled"]
 ExecutionMode = Literal["container", "local"]
-LocalCompletedAction = Literal["keep", "remove"]
-
-MODEL_CONTEXT_1M = 1_048_576
-DEFAULT_PI_MODEL_CONTEXT_WINDOW = 128_000
-
-
-def model_auto_compact_token_limit(context_length: int) -> int:
-    return context_length * 9 // 10
 
 
 DEFAULT_PROMPT_REQUIRED_TOKENS: dict[str, tuple[str, ...]] = {
@@ -161,7 +153,6 @@ class ContainerConfig(BaseModel):
 
 class LocalConfig(BaseModel):
     workspace_root: str | None = None
-    completed_action: LocalCompletedAction = "keep"
 
 
 class PathsConfig(BaseModel):

@@ -13,12 +13,3 @@ def read() -> Settings:
         return Settings(
             intent_timeout=row["intent_timeout"], reason_timeout=row["reason_timeout"]
         )
-
-
-def replace(settings: Settings) -> Settings:
-    with get_conn(immediate=True) as conn:
-        conn.execute(
-            "UPDATE settings SET intent_timeout = ?, reason_timeout = ? WHERE rowid = 1",
-            (settings.intent_timeout, settings.reason_timeout),
-        )
-    return settings

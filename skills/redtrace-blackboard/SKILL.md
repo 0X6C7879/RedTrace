@@ -7,7 +7,7 @@ description: Query RedTrace Blackboard history, source context, graph paths, and
 
 高级 Blackboard 查询方法。仅在需要跨 Worker 溯源或历史查询时加载。
 
-本 Skill 对 Claude Code、Codex 和 Pi 使用同一接口：`redtrace-blackboard` 是注入 `PATH` 的 shell CLI，必须通过当前 Worker 的 shell/terminal tool 执行。它不是 MCP server、MCP tool 或 MCP Resource；不要通过任何 MCP 接口调用，也不要构造 `blackboard://` URI。
+`redtrace-blackboard` 是注入 `PATH` 的 shell CLI，必须通过当前 Worker 的 shell/terminal tool 执行。它不是 MCP server、MCP tool 或 MCP Resource；不要通过任何 MCP 接口调用，也不要构造 `blackboard://` URI。
 
 ## 命令
 

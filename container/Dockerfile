@@ -1,9 +1,6 @@
 FROM kalilinux/kali-rolling:latest
 
 ARG TARGETARCH
-ARG CODEX_VERSION=0.146.0
-ARG CLAUDE_CODE_VERSION=2.1.220
-ARG PI_CODING_AGENT_VERSION=0.83.0
 ARG PLAYWRIGHT_CLI_VERSION=0.1.17
 ARG CODEGRAPH_VERSION=1.5.0
 
@@ -86,12 +83,6 @@ RUN command -v fd >/dev/null 2>&1 || sudo ln -s /usr/bin/fdfind /usr/local/bin/f
     
 RUN sudo pip3 install tccli awscli --break-system-packages && \
     sudo bash -c "$(curl -fsSL https://aliyuncli.alicdn.com/install.sh)"
-
-RUN sudo npm install -g "@openai/codex@${CODEX_VERSION}"
-RUN sudo npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
-RUN sudo npm install -g "@earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION}" --ignore-scripts && \
-    sudo env HOME=/home/kali /usr/local/bin/pi install npm:pi-mcp-extension@1.5.0 && \
-    sudo chown -R kali:kali /home/kali
 
 RUN sudo npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
     codegraph --version && \
@@ -212,12 +203,9 @@ RUN printf '%s\n' 'PS1="${PS1%\\n*} \[\033[0;36m\]\D{%y-%m-%d} - \t\[\033[;32m\]
 ENV TZ=Asia/Shanghai
 ENV PATH="/home/kali/.solc-select:${PATH}"
 ENV PLAYWRIGHT_MCP_BROWSER=chromium
-ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 ENV PYTHONUNBUFFERED=1
 
 COPY ./.agents /home/kali/workspace/.agents
-COPY ./.agents /home/kali/workspace/.claude
 COPY ./AGENTS.md /home/kali/workspace/AGENTS.md
-COPY ./AGENTS.md /home/kali/workspace/CLAUDE.md
 
 WORKDIR /home/kali/workspace

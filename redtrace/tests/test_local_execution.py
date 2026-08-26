@@ -331,7 +331,7 @@ def test_local_backend_write_text_file_writes_to_host(tmp_path: Path) -> None:
 
 def test_local_backend_keep_leaves_dir_and_reports_no_cleanup(tmp_path: Path) -> None:
     backend = LocalBackend(
-        LocalConfig(workspace_root=str(tmp_path), completed_action="keep")
+        LocalConfig(workspace_root=str(tmp_path))
     )
     handle = backend.ensure_running("proj_001")
 
@@ -344,7 +344,7 @@ def test_local_backend_completion_preserves_workspace_until_deletion(
     tmp_path: Path
 ) -> None:
     backend = LocalBackend(
-        LocalConfig(workspace_root=str(tmp_path), completed_action="remove")
+        LocalConfig(workspace_root=str(tmp_path))
     )
     handle = backend.ensure_running("proj_001")
 
@@ -427,19 +427,17 @@ def test_local_execution_needs_no_container_or_worker_env() -> None:
 
     assert config.container is None
     assert config.local is not None
-    assert config.local.completed_action == "keep"
     assert all(worker.env == {} for worker in config.workers)
     assert {worker.provider for worker in config.workers} == {"gw"}
 
 
 def test_local_workspace_root_is_optional_and_defaults_null() -> None:
     payload = _local_payload()
-    payload["local"] = {"completed_action": "remove"}
+    payload["local"] = {}
     config = DispatchConfig.model_validate(payload)
 
     assert config.local is not None
     assert config.local.workspace_root is None
-    assert config.local.completed_action == "remove"
 
 
 def test_container_execution_requires_container_block() -> None:

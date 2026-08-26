@@ -172,7 +172,6 @@ def test_plaintext_debug_mode_skips_encrypted_secret_store(
     secrets_dir = tmp_path / "secrets"
     raw = _raw_config()
     raw["runtime"]["worker_healthcheck"] = "disabled"
-    raw["local"] = {"completed_action": "keep"}
     _write_config(config_path, raw)
     monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(secrets_dir))
     monkeypatch.setenv("REDTRACE_PLAINTEXT_SECRETS", "1")
@@ -353,7 +352,6 @@ def test_dsh_worker_view_derives_from_workers_for_hot_reload(
     config_path = tmp_path / "redtrace.yaml"
     raw = _raw_config()
     raw["runtime"].update({"execution": "local"})
-    raw["local"] = {"completed_action": "keep"}
     raw["container"] = None
     raw["providers"]["gw"]["models"].append(
         {"id": "gpt-test-next", "context_window": 131072, "max_tokens": 8192}
@@ -827,3 +825,18 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
 
 
 
+
+
+def test_shipped_example_configs_all_validate() -> None:
+    """Acceptance: every shipped example config parses into a valid
+    DispatchConfig — no example may ship in a state the loader rejects."""
+    import glob
+
+    from redtrace.dispatcher.config import DispatchConfig
+
+    repo_root = Path(__file__).resolve().parents[2]
+    examples = sorted(glob.glob(str(repo_root / "redtrace.*.example.yaml")))
+    assert len(examples) >= 4, "expected the dsh/mock/local/container examples"
+    for name in examples:
+        config = DispatchConfig.load(Path(name))
+        assert config.workers, f"{name}: no workers defined"

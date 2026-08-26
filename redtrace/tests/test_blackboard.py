@@ -320,10 +320,6 @@ def test_worker_process_receives_read_only_blackboard_context(
     assert "/.redtrace/blackboard-notices/" in captured["REDTRACE_BLACKBOARD_NOTICE"]
     assert captured["REDTRACE_BLACKBOARD_NOTICE"].endswith(".json")
     assert captured["REDTRACE_TEST_CONVERSATION_HOME"] == worker_type
-    if worker_type == "claudecode":
-        assert captured["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "1048576"
-    elif worker_type == "pi":
-        assert captured["PI_MODEL_CONTEXT_WINDOW"] == "1048576"
 
     worker.env.update(
         {
@@ -650,44 +646,3 @@ def test_inbox_signals_only_new_hints(tmp_path: Path) -> None:
         inbox.stop()
 
 
-def test_explore_turn_does_not_restart_process_for_fact_signal(monkeypatch) -> None:
-    calls = []
-
-    def fake_run(*args, **kwargs):
-        calls.append((args, kwargs))
-        return ProcessResult(0, '{"status":"success","description":"done"}', "")
-
-    class Driver:
-        def extract_session(self, session, _stdout, _stderr):
-            return session
-
-    control = SimpleNamespace(session_id="session-1")
-    monkeypatch.setattr(explore, "_run_process", fake_run)
-    worker = WorkerConfig.model_validate(
-        {"name": "codex-1", "provider": "codex", "max_running": 1, "priority": 0}
-    )
-    result, session = explore._run_with_steering(
-        Driver(),
-        SimpleNamespace(),
-        "proj_001",
-        "i002",
-        SimpleNamespace(),
-        "workspace",
-        worker,
-        SimpleNamespace(
-            argv=["execute"],
-            stdin="initial",
-            session=None,
-            live_control=control,
-        ),
-        session=None,
-        phase="explore_execute",
-        timeout=30,
-        lease=SimpleNamespace(),
-        cancellation=SimpleNamespace(),
-        inbox=SimpleNamespace(),
-    )
-    assert result.returncode == 0
-    assert session == "session-1"
-    assert len(calls) == 1
-    assert calls[0][1]["live_control"] is control

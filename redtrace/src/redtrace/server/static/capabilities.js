@@ -325,7 +325,7 @@ window.mcpPage = function mcpPage() {
           enabled: saved.enabled,
           raw: JSON.stringify(saved.config, null, 2),
         };
-        this.setMessage('已保存，Claude、Codex、Pi 将在下一个任务中使用新配置。', 'success');
+        this.setMessage('已保存，将在下一个任务中使用新配置。', 'success');
         await this.refreshList();
       } catch (error) {
         this.setMessage(error instanceof SyntaxError ? `JSON 语法错误：${error.message}` : error.message, 'error');

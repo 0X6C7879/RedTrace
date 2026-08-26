@@ -55,9 +55,6 @@ tasks:
     conclude_timeout: 300
 
 
-local:
-  completed_action: keep
-
 workers:
 - name: reasoner
   enabled: true

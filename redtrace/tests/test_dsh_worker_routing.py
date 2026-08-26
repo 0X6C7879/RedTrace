@@ -29,7 +29,6 @@ def _raw_config() -> dict:
             "reason": {"timeout": 20, "max_intents": 3},
             "explore": {"timeout": 20, "conclude_timeout": 10},
         },
-        "local": {"completed_action": "keep"},
         "providers": {
             "gw": {
                 "api": "openai-completions",

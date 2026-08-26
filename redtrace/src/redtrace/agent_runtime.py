@@ -5,7 +5,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import shutil
 from pathlib import Path
 
@@ -16,19 +15,6 @@ from redtrace.paths import RedTracePaths
 LOG = logging.getLogger(__name__)
 _AUTO_DISABLED_MARKER = "autoDisabledBy"
 _AUTO_DISABLED_REASON = "missing-command"
-_CODEX_MCP_START = "# >>> RedTrace managed MCP >>>"
-_CODEX_MCP_END = "# <<< RedTrace managed MCP <<<"
-_CODEX_MCP_SECTION_RE = re.compile(
-    r"(?:^|\n)\[mcp_servers\.([^\]\.]+)[^\]]*\]\n(?:[^\[\n][^\n]*\n)*",
-    re.MULTILINE,
-)
-
-
-def _strip_mcp_server_sections(content: str, names: set[str]) -> str:
-    """Remove ``[mcp_servers.X]`` sections whose *X* is in *names*."""
-    def _replace(match: re.Match[str]) -> str:
-        return "" if match.group(1) in names else match.group(0)
-    return _CODEX_MCP_SECTION_RE.sub(_replace, content)
 
 
 class AgentRuntimeManager:

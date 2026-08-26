@@ -276,14 +276,6 @@ class ControlPlaneClient:
         )
         response.raise_for_status()
 
-    def record_session_checkpoint(self, checkpoint: dict[str, Any]) -> None:
-        response = self._session().post(
-            self._url("/audit/session-checkpoints"),
-            json=checkpoint,
-            timeout=self._timeout,
-        )
-        response.raise_for_status()
-
     def _request_json(self, method: str, path: str, json: dict[str, Any]) -> ApiResult:
         try:
             response = self._session().request(

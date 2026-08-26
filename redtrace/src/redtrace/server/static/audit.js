@@ -313,9 +313,6 @@ function auditPage() {
         reason: 'Reason',
         explore: 'Explore',
         dsh: 'DSH',
-        claudecode: 'Claude Code',
-        codex: 'Codex',
-        pi: 'Pi',
         mock: 'Mock',
       }[provider] || provider;
     },

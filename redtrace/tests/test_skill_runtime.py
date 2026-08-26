@@ -533,3 +533,56 @@ def test_skill_evolution_documents_write_target() -> None:
     # skill-evolution by default.
     assert "skill-evolution" in content
     assert "专业 Skill" in content
+
+
+# ---------------------------------------------------------------------------
+# Skill Evolution closure: no dedicated Learning Session, writes confined to
+# the repository-root skills/ directory.
+# ---------------------------------------------------------------------------
+
+
+def test_no_learning_session_or_task_type_exists() -> None:
+    """Skill evolution runs inside the current bootstrap/explore session.
+
+    There is no dedicated Learning Session kind anywhere: neither the Python
+    dispatcher nor the DSH runtime may define a fourth task type.
+    """
+    from redtrace.skill_runtime import SKILL_TASK_TYPES
+    from redtrace.worker_config import TASK_TYPES
+
+    assert TASK_TYPES == frozenset({"bootstrap", "reason", "explore"})
+    assert SKILL_TASK_TYPES == frozenset({"bootstrap", "explore"})
+
+    ts_sources = sorted((REPO_ROOT / "packages" / "redtrace-dsh" / "src").rglob("*.ts"))
+    assert ts_sources, "DSH sources not found — repo root resolution is broken"
+    for path in ts_sources:
+        content = path.read_text(encoding="utf-8", errors="replace")
+        assert "'learning'" not in content and '"learning"' not in content, (
+            f"{path}: the DSH runtime must not define a learning task/session type"
+        )
+
+
+def test_skill_evolution_stays_in_the_current_session() -> None:
+    """SKILL.md must forbid spawning a separate session for evolution."""
+    content = (SKILLS_ROOT / "skill-evolution" / "SKILL.md").read_text(encoding="utf-8")
+    assert "不得创建独立的 Learning Session" in content
+    assert "当前任务的 Session 内" in content
+
+
+def test_skill_evolution_level_2_targets_root_skills_dir() -> None:
+    """Level-2 evolution edits only the repo-root skills/<id>/SKILL.md."""
+    content = (SKILLS_ROOT / "skill-evolution" / "SKILL.md").read_text(encoding="utf-8")
+    assert "仓库根目录 `skills/`" in content
+    assert "skills/<canonical-id>/SKILL.md" in content
+    assert "不创建新的 Skill 目录" in content
+
+
+def test_skill_evolution_documents_no_cli_era_agents() -> None:
+    """The evolution contract speaks to the current Worker shell only.
+
+    Claude Code / Codex / Pi adapters are gone; their names must not leak
+    back into the skill contract.
+    """
+    content = (SKILLS_ROOT / "skill-evolution" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Claude Code、Codex" not in content
+    assert "当前 Worker 的 shell/terminal tool" in content

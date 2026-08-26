@@ -48,12 +48,14 @@ def test_dockerfiles_are_kali_based_and_architecture_neutral() -> None:
     assert "@openai/codex" not in app_dockerfile
     assert "@anthropic-ai/claude-code" not in app_dockerfile
     assert "pi-coding-agent" not in app_dockerfile
-    assert "ARG CODEX_VERSION=0.146.0" in worker_dockerfile
-    assert "ARG CLAUDE_CODE_VERSION=2.1.220" in worker_dockerfile
-    assert "ARG PI_CODING_AGENT_VERSION=0.83.0" in worker_dockerfile
+    # The worker image carries no CLI agents: the DSH runtime calls
+    # providers over HTTP; claude/codex/pi binaries are never spawned.
+    assert "@openai/codex" not in worker_dockerfile
+    assert "@anthropic-ai/claude-code" not in worker_dockerfile
+    assert "pi-coding-agent" not in worker_dockerfile
+    assert "pi-mcp-extension" not in worker_dockerfile
+    assert "CLAUDE" not in worker_dockerfile
     assert "ARG PLAYWRIGHT_CLI_VERSION=0.1.17" in worker_dockerfile
-    assert "@earendil-works/pi-coding-agent" in worker_dockerfile
-    assert "@mariozechner/pi-coding-agent" not in worker_dockerfile
 
 
 def test_shipped_docker_config_uses_local_image_and_named_network() -> None:

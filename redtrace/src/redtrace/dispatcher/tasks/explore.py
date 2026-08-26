@@ -146,7 +146,6 @@ def run_explore_task(
             cancellation=cancellation,
             blackboard_revision=project.blackboard_revision,
             inbox=inbox,
-            env_overrides=execute.env,
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
         session = driver.extract_session(session, first.stdout, first.stderr)
@@ -391,7 +390,6 @@ def _try_conclude_fallback(
         lease=lease,
         cancellation=cancellation,
         inbox=inbox,
-        env_overrides=conclude.env,
     )
     conclude_ms = int((time.perf_counter() - conclude_started) * 1000)
     cancelled = cancel_reason(result, cancellation)
@@ -490,9 +488,6 @@ def _run_process(
     cancellation: TaskCancellation,
     blackboard_revision: int = 0,
     inbox: BlackboardInbox | None = None,
-    live_control=None,
-    session: str | None = None,
-    env_overrides: dict[str, str] | None = None,
 ):
     return run_worker_process(
         container_manager,
@@ -509,9 +504,6 @@ def _run_process(
         lease=lease,
         cancellation=cancellation,
         blackboard_inbox=inbox,
-        live_control=live_control,
-        session=session,
-        env_overrides=env_overrides,
     )
 
 
@@ -532,7 +524,6 @@ def _run_with_steering(
     cancellation: TaskCancellation,
     blackboard_revision: int = 0,
     inbox: BlackboardInbox | None = None,
-    env_overrides: dict[str, str] | None = None,
 ):
     result = _run_process(
         client,
@@ -549,16 +540,6 @@ def _run_with_steering(
         cancellation=cancellation,
         blackboard_revision=blackboard_revision,
         inbox=inbox,
-        live_control=getattr(invocation, "live_control", None),
-        session=session,
-        env_overrides=env_overrides,
     )
     session = driver.extract_session(session, result.stdout, result.stderr)
-    control = getattr(invocation, "live_control", None)
-    if control is not None:
-        session = (
-            getattr(control, "session_file", None)
-            or getattr(control, "session_id", None)
-            or session
-        )
     return result, session

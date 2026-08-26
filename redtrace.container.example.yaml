@@ -1,12 +1,16 @@
 # RedTrace container deployment example.
-# RedTrace server API endpoint.
+#
+# Container execution hosts the mock test engine only: provider Workers run
+# on the DSH Cordis runtime with native local execution (see
+# redtrace.dsh.example.yaml). This file documents the containerized mock
+# deployment shape.
 server: "http://redtrace-server:8000"
 
 # Shared environment variables merged into every worker.
 common_env:
   TSEC_SERVER_HOST: "<SERVER_HOST>:8000"
   TSEC_AGENT_TOKEN: "xxx"
-  BRAVE_API_KEY: "replace-me"  # fallback after native Claude/Codex web search
+  BRAVE_API_KEY: "replace-me"  # web search fallback
 
 runtime:
   # Docker mode is explicit so this file cannot silently become a host-local deployment.
@@ -25,7 +29,7 @@ runtime:
   # "startup_only" checks only at startup. "disabled" skips automatic worker checks.
   worker_healthcheck: "startup_only"
   # Prompt set loaded from redtrace/src/redtrace/dispatcher/prompts/.
-  prompt_group: "default"
+  prompt_group: "mock"
 
 tasks:
   bootstrap:
@@ -44,9 +48,8 @@ tasks:
     # Time budget for conclude fallback used to summarize confirmed findings from the same session.
     conclude_timeout: 300
 
-
 container:
-  # Built locally by docker compose. The dispatcher execs agent commands inside
+  # Built locally by docker compose. The dispatcher execs worker commands inside
   # one Kali Linux container per project.
   image: "redtrace-worker-container:latest"
   # Shared named bridge works on Linux Engine and Docker Desktop for Windows/macOS.
@@ -58,51 +61,22 @@ container:
   #   - "NET_RAW"
   #   - "NET_ADMIN"
 
-
-# Providers own the API protocol, endpoint, credential, and model list;
-# Workers reference them by name and add scheduling identity. Each model
-# entry carries its own context window, output cap, and thinking format.
-providers:
-  deepseek-anthropic:
-    api: anthropic-messages
-    base_url: https://api.deepseek.com/anthropic
-    api_key: sk-xxx
-    models:
-      - id: deepseek-v4-pro
-        context_window: 1000000
-        max_tokens: 128000
-        thinking_format: none
-  dashscope:
-    api: openai-completions
-    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-    api_key: sk-xxx
-    models:
-      - id: qwen3.6-plus
-        context_window: 1000000
-        max_tokens: 128000
-        thinking_format: openai
+# The mock provider is the deterministic test engine and needs no provider
+# entry; provider Workers (deepseek, glm, ...) run on the DSH runtime and
+# require local execution (see redtrace.dsh.example.yaml).
 
 workers:
   # Worker priority is ascending: lower numbers are preferred first.
   # max_running is per-worker concurrency. bootstrap/reason/explore gate the
   # task types this Worker may run.
-  - name: "claudecode_deepseek-v4-pro"
-    provider: "deepseek-anthropic"
-    model: "deepseek-v4-pro"
+  - name: "mock-observer-1"
+    provider: "mock"
     bootstrap: true
     reason: true
     explore: true
     max_running: 2
     priority: 0
 
-  # - name: "qwen-reasoner"
-  #   provider: "dashscope"
-  #   model: "qwen3.6-plus"
-  #   bootstrap: true
-  #   reason: true
-  #   explore: true
-  #   max_running: 2
-  #   priority: 0
 paths:
   root: .
   skills: skills

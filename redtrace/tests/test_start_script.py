@@ -92,7 +92,7 @@ def test_startup_supervises_and_stops_both_components(
         "  bootstrap: {timeout: 1, conclude_timeout: 1}\n"
         "  reason: {timeout: 1, max_intents: 1}\n"
         "  explore: {timeout: 1, conclude_timeout: 1}\n"
-        "local: {completed_action: keep}\n"
+        "local: {}\n"
         "workers:\n"
         "  - {name: mock-1, provider: mock, max_running: 1, priority: 0}\n",
         encoding="utf-8",

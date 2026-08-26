@@ -417,15 +417,6 @@ ensure_rtk() {
   has rtk && rtk gain >/dev/null 2>&1 || die "RTK installation failed"
 }
 
-ensure_pi_mcp_extension() {
-  pi list 2>/dev/null | grep -Fq 'pi-mcp-extension' && {
-    log "Pi MCP extension already configured"
-    return
-  }
-  log "installing missing Pi MCP extension"
-  pi install npm:pi-mcp-extension@1.5.0
-}
-
 configure_native_build_env() {
   local openssl libffi gmp mpfr mpc zlib zbar
   openssl="$(brew --prefix openssl@3)"
@@ -1067,9 +1058,6 @@ else
 fi
 
 ensure_uv
-ensure_npm_cli claude '@anthropic-ai/claude-code@latest'
-ensure_npm_cli codex '@openai/codex@latest'
-ensure_npm_cli pi '@earendil-works/pi-coding-agent@latest' --ignore-scripts
 ensure_npm_cli codegraph "@colbymchenry/codegraph@${CODEGRAPH_VERSION}"
 log "verifying codegraph installation"
 codegraph --version >/dev/null 2>&1 || die "codegraph failed verification"
