@@ -826,7 +826,14 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     assert "rankDir: 'TB'" in index
     assert 'class="max-h-72 overflow-auto whitespace-pre-wrap break-words' in index
     assert "c2Expanded: false" in index
-    assert 'operations.js?v=20260813-payload-library-1' in index
+    assert 'operations.js?v=20260826-c2-ledgers-1' in index
+    assert 'operations.css?v=20260826-c2-ledgers-1' in index
+    assert 'x-show="pageMode === \'c2-tasks\'"' in index
+    assert 'aria-label="C2 任务队列"' in index
+    assert 'x-show="pageMode === \'c2-events\'"' in index
+    assert 'aria-label="C2 事件时间线"' in index
+    assert "!['c2-payloads','c2-tasks','c2-events'].includes(pageMode)" in index
+    assert "isDedicatedLedgerPage()" in operations
     assert "window.redtraceConfirm" in index
     assert "window.confirm" not in operations
     assert '@click="setAppPage(\'c2-listeners\')" aria-label="打开 C2"' in index

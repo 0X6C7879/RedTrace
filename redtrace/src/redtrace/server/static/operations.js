@@ -68,6 +68,8 @@ function operationsPage() {
     payloadUploadSummary: '',
     payloadUploadBusy: false,
     payloadCopiedId: '',
+    taskStatusFilter: 'all',
+    eventStatusFilter: 'all',
     pollTimer: null,
     lastProjectId: '',
     kindOptions: [
@@ -151,6 +153,10 @@ function operationsPage() {
       return this.modeKind();
     },
 
+    isDedicatedLedgerPage() {
+      return ['c2-tasks', 'c2-events'].includes(this.pageMode);
+    },
+
     canCreateForPage() {
       return ['webshell', 'c2-listeners', 'c2-sessions', 'c2-profiles', 'c2-credentials'].includes(this.pageMode);
     },
@@ -203,6 +209,7 @@ function operationsPage() {
       if (pageChanged) {
         this.selectedResourceId = '';
         this.detail = null;
+        this.query = '';
         this.tab = pageMode === 'c2-events' ? 'audit' : 'resources';
       }
       const scopedProjectId = projectId || '_global';
@@ -259,7 +266,7 @@ function operationsPage() {
             this.detail = { ...(this.detail || {}), resource: current };
           }
         }
-        if (!this.selectedResourceId && this.filteredResources().length) {
+        if (!this.isDedicatedLedgerPage() && !this.selectedResourceId && this.filteredResources().length) {
           await this.selectResource(this.filteredResources()[0].id);
         }
         this.initialized = true;
@@ -362,6 +369,55 @@ function operationsPage() {
       return this.tasks.filter((task) => task.resource_id === this.selectedResourceId);
     },
 
+    resourceForId(resourceId) {
+      return this.resources.find((item) => item.id === resourceId) || null;
+    },
+
+    c2Tasks() {
+      const sessionIds = new Set(
+        this.resources.filter((item) => item.kind === 'c2_session').map((item) => item.id)
+      );
+      const needle = this.query.trim().toLowerCase();
+      return this.tasks.filter((task) => {
+        if (!sessionIds.has(task.resource_id)) return false;
+        if (this.taskStatusFilter !== 'all' && task.status !== this.taskStatusFilter) return false;
+        if (!needle) return true;
+        const resource = this.resourceForId(task.resource_id);
+        return [
+          task.id,
+          task.action,
+          task.actor,
+          task.output_summary,
+          resource?.name,
+          resource?.target,
+        ].some((value) => String(value || '').toLowerCase().includes(needle));
+      });
+    },
+
+    c2TaskCount(statuses) {
+      const wanted = Array.isArray(statuses) ? statuses : [statuses];
+      return this.tasks.filter((task) => {
+        const resource = this.resourceForId(task.resource_id);
+        return resource?.kind === 'c2_session' && wanted.includes(task.status);
+      }).length;
+    },
+
+    taskRiskLabel(risk) {
+      return {
+        low: '低风险',
+        medium: '中风险',
+        high: '高风险',
+        critical: '关键风险',
+      }[risk] || risk || '未标记';
+    },
+
+    taskInputSummary(task) {
+      const input = task?.input || {};
+      const keys = Object.keys(input);
+      if (!keys.length) return '无输入参数';
+      return keys.slice(0, 3).map((key) => `${key}=${String(input[key])}`).join(' · ');
+    },
+
     visibleAudit() {
       if (this.pageMode === 'c2-events') {
         const c2Ids = new Set(
@@ -373,6 +429,59 @@ function operationsPage() {
       }
       if (!this.selectedResourceId) return this.audit;
       return this.audit.filter((item) => item.resource_id === this.selectedResourceId);
+    },
+
+    isC2AuditEvent(event) {
+      if (String(event.action || '').startsWith('c2.')) return true;
+      const resource = this.resourceForId(event.resource_id);
+      if (resource && String(resource.kind || '').startsWith('c2_')) return true;
+      const task = this.tasks.find((item) => item.id === event.task_id);
+      return Boolean(task && this.resourceForId(task.resource_id)?.kind === 'c2_session');
+    },
+
+    c2Events() {
+      const needle = this.query.trim().toLowerCase();
+      return this.audit.filter((event) => {
+        if (!this.isC2AuditEvent(event)) return false;
+        if (this.eventStatusFilter !== 'all' && event.status !== this.eventStatusFilter) return false;
+        if (!needle) return true;
+        const resource = this.resourceForId(event.resource_id);
+        return [
+          event.action,
+          event.actor,
+          event.status,
+          event.task_id,
+          event.detail?.summary,
+          event.detail?.error,
+          event.detail?.reason,
+          resource?.name,
+          resource?.target,
+        ].some((value) => String(value || '').toLowerCase().includes(needle));
+      });
+    },
+
+    c2EventCount(statuses = null) {
+      const wanted = statuses == null ? null : (Array.isArray(statuses) ? statuses : [statuses]);
+      return this.audit.filter((event) => this.isC2AuditEvent(event) && (!wanted || wanted.includes(event.status))).length;
+    },
+
+    c2EventActorCount() {
+      return new Set(this.audit.filter((event) => this.isC2AuditEvent(event)).map((event) => `${event.actor_type}:${event.actor}`)).size;
+    },
+
+    eventCategory(event) {
+      const action = String(event?.action || '');
+      if (action.startsWith('operation.')) return '任务';
+      if (action.startsWith('c2.session')) return '会话';
+      if (action.startsWith('c2.listener')) return '监听器';
+      if (action.startsWith('c2.payload')) return 'Payload';
+      if (action.startsWith('resource.')) return '资源';
+      return '系统';
+    },
+
+    eventDetailText(event) {
+      const detail = event?.detail || {};
+      return detail.summary || detail.error || detail.reason || detail.decision || '';
     },
 
     pendingApprovals() {
