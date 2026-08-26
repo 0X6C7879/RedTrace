@@ -504,6 +504,105 @@ def test_project_workflow_create_conclude_complete_and_reopen(
     assert payload["intent"]["to"] == "f002"
 
 
+def test_bootstrap_conclude_with_completion_ends_project_and_reopens(
+    client: TestClient,
+) -> None:
+    project_id = _create_project(client)
+    created = client.post(
+        f"/projects/{project_id}/intents",
+        json={
+            "from": ["origin"],
+            "description": "bootstrap",
+            "creator": "dispatcher.bootstrap",
+            "worker": None,
+        },
+    )
+    assert created.status_code == 201
+    intent_id = created.json()["id"]
+    assert (
+        client.post(
+            f"/projects/{project_id}/intents/{intent_id}/claim",
+            json={"worker": "boot"},
+        ).status_code
+        == 200
+    )
+
+    concluded = client.post(
+        f"/projects/{project_id}/intents/{intent_id}/conclude",
+        json={
+            "worker": "boot",
+            "description": "flag captured: FLAG{ok}",
+            "complete_description": "flag 已确认,Goal 满足",
+        },
+    )
+    assert concluded.status_code == 200
+    assert concluded.json()["completed"] is True
+    fact_id = concluded.json()["fact"]["id"]
+
+    detail = client.get(f"/projects/{project_id}").json()
+    assert detail["project"]["status"] == "completed"
+    completion = [
+        intent
+        for intent in detail["intents"]
+        if intent["to"] == "goal"
+    ]
+    assert len(completion) == 1
+    assert completion[0]["from"] == [fact_id]
+    assert completion[0]["description"] == "flag 已确认,Goal 满足"
+
+    outcome = client.post(
+        f"/projects/{project_id}/intents/{intent_id}/outcome",
+        json={"worker": "boot", "outcome": "success"},
+    )
+    assert outcome.status_code == 200
+
+    reopened = client.post(
+        f"/projects/{project_id}/reopen",
+        json={"description": "human correction", "creator": "human"},
+    )
+    assert reopened.status_code == 200
+    payload = reopened.json()
+    assert payload["project"]["status"] == "active"
+    assert payload["intent"]["from"] == [fact_id]
+
+
+def test_conclude_with_completion_rejected_for_non_bootstrap_intents(
+    client: TestClient,
+) -> None:
+    project_id = _create_project(client)
+    created = client.post(
+        f"/projects/{project_id}/intents",
+        json={
+            "from": ["origin"],
+            "description": "investigate",
+            "creator": "reasoner",
+            "worker": None,
+        },
+    )
+    assert created.status_code == 201
+    intent_id = created.json()["id"]
+    assert (
+        client.post(
+            f"/projects/{project_id}/intents/{intent_id}/claim",
+            json={"worker": "explorer"},
+        ).status_code
+        == 200
+    )
+
+    rejected = client.post(
+        f"/projects/{project_id}/intents/{intent_id}/conclude",
+        json={
+            "worker": "explorer",
+            "description": "found something",
+            "complete_description": "goal reached",
+        },
+    )
+    assert rejected.status_code == 422
+
+    detail = client.get(f"/projects/{project_id}").json()
+    assert detail["project"]["status"] == "active"
+
+
 def test_admin_can_force_release_and_conclude_owned_intents(
     client: TestClient,
 ) -> None:

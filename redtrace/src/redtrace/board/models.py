@@ -222,10 +222,23 @@ class ReasonClaimRequest(BaseModel):
 class ConcludeRequest(BaseModel):
     worker: str
     description: str
+    # Bootstrap only: conclude the Intent as a Fact and complete the Project
+    # from that Fact in the same transaction.
+    complete_description: str | None = None
 
     @field_validator("worker", "description")
     @classmethod
     def validate_non_empty_text(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("must not be empty")
+        return text
+
+    @field_validator("complete_description")
+    @classmethod
+    def validate_optional_non_empty_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         text = value.strip()
         if not text:
             raise ValueError("must not be empty")
@@ -262,6 +275,7 @@ class CompleteRequest(BaseModel):
 class ConcludeResponse(BaseModel):
     fact: Fact
     intent: Intent
+    completed: bool = False
 
 
 class UpdateProjectStatusRequest(BaseModel):

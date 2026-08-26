@@ -129,24 +129,22 @@ export function eventProjection(task: RuntimeTask, event: SessionEvent): Record<
   if (event.type === 'assistant/message') {
     const value = data.message as { content?: Array<{ type?: string; text?: string }> } | undefined
     const blocks = value?.content ?? []
-    const projected: Record<string, unknown>[] = []
-    if (task.streamedThinking) {
-      task.streamedThinking = false
-      const reasoning = reasoningBlocksOf(blocks)
-      if (reasoning !== '') projected.push({ ...base, kind: 'thinking.message', content: reasoning, persist_only: true })
-    } else {
-      const reasoning = reasoningBlocksOf(blocks)
-      if (reasoning !== '') projected.push({ ...base, kind: 'thinking.message', content: reasoning })
-    }
+    const reasoning = reasoningBlocksOf(blocks)
     const content = textBlocksOf(blocks)
-    if (task.streamedText) {
-      task.streamedText = false
-      if (content !== '') {
-        projected.push({ ...base, kind: 'assistant.message', role: 'assistant', content, persist_only: true })
-      }
-    } else if (content !== '') {
-      projected.push({ ...base, kind: 'assistant.message', role: 'assistant', content })
+    // One assistant/message can project two durable rows (reasoning + text).
+    // The store dedupes by event_uid, so the text row needs its own id
+    // whenever it shares this session event with a reasoning row; the
+    // reasoning row keeps the bare id so existing rows stay stable.
+    const textUid = reasoning !== '' ? `${base.event_uid}-text` : base.event_uid
+    const projected: Record<string, unknown>[] = []
+    if (reasoning !== '') {
+      projected.push({ ...base, kind: 'thinking.message', content: reasoning, ...(task.streamedThinking ? { persist_only: true } : {}) })
     }
+    task.streamedThinking = false
+    if (content !== '') {
+      projected.push({ ...base, event_uid: textUid, kind: 'assistant.message', role: 'assistant', content, ...(task.streamedText ? { persist_only: true } : {}) })
+    }
+    task.streamedText = false
     return projected
   }
   if (event.type === 'tool/call') {

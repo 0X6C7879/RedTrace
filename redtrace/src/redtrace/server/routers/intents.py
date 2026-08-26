@@ -3,6 +3,7 @@ import time
 from fastapi import APIRouter, HTTPException
 
 from redtrace.board import intents
+from redtrace.board.intents import BOOTSTRAP_CREATOR
 from redtrace.board.models import (
     ConcludeRequest,
     ConcludeResponse,
@@ -14,7 +15,7 @@ from redtrace.board.models import (
 )
 from redtrace.board.storage import (
     bump_planning_revision,
-    check_project_active,
+    get_project_or_404,
     utcnow,
 )
 from redtrace.server.db import get_conn
@@ -22,7 +23,6 @@ from redtrace.server.db import get_conn
 router = APIRouter(tags=["intents"])
 RETRY_DELAYS = (5, 15, 60)
 MAX_FAILURES = len(RETRY_DELAYS)
-BOOTSTRAP_CREATOR = "dispatcher.bootstrap"
 
 
 @router.post(
@@ -57,7 +57,15 @@ def claim(project_id: str, intent_id: str, body: HeartbeatRequest):
 @router.post("/projects/{project_id}/intents/{intent_id}/outcome")
 def report_outcome(project_id: str, intent_id: str, body: TaskOutcomeRequest):
     with get_conn(immediate=True) as conn:
-        check_project_active(conn, project_id)
+        project = get_project_or_404(conn, project_id)
+        # Success/cancelled outcomes may arrive after the Project itself was
+        # completed (e.g. bootstrap concluded with completion); only failure
+        # retries require an active Project.
+        if (
+            project["status"] != "active"
+            and body.outcome not in {"success", "cancelled"}
+        ):
+            raise HTTPException(403, f"Project is {project['status']}")
         row = conn.execute(
             "SELECT * FROM intents WHERE id = ? AND project_id = ?",
             (intent_id, project_id),

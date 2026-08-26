@@ -41,3 +41,65 @@ test('registers shared-resource tools; explore may register, bootstrap reads onl
     assert.equal(tool.parameters.type, 'object')
   }
 })
+
+test('bootstrap conclude passes complete_description through; explore never does', async () => {
+  const bootstrap = []
+  await contractsApply({ tools: { register(tool) { bootstrap.push(tool) } } }, { types: ['bootstrap'] })
+  const bootstrapConclude = bootstrap.find(tool => tool.name === 'redtrace_bootstrap_conclude')
+  assert.deepEqual(Object.keys(bootstrapConclude.parameters.properties).sort(), ['complete_description', 'description'])
+  assert.deepEqual(bootstrapConclude.parameters.required, ['description'])
+
+  const explore = []
+  await contractsApply({ tools: { register(tool) { explore.push(tool) } } }, { types: ['explore'] })
+  const exploreConclude = explore.find(tool => tool.name === 'redtrace_explore_conclude')
+  assert.deepEqual(Object.keys(exploreConclude.parameters.properties), ['description'])
+
+  const previous = {
+    type: process.env.REDTRACE_TASK_TYPE,
+    project: process.env.REDTRACE_PROJECT_ID,
+    worker: process.env.REDTRACE_WORKER,
+    server: process.env.REDTRACE_SERVER,
+    fetch: globalThis.fetch,
+  }
+  process.env.REDTRACE_TASK_TYPE = 'bootstrap'
+  process.env.REDTRACE_PROJECT_ID = 'proj/1'
+  process.env.REDTRACE_WORKER = 'boot'
+  process.env.REDTRACE_SERVER = 'http://redtrace.test'
+  process.env.REDTRACE_INTENT_ID = 'i001'
+  const observed = []
+  globalThis.fetch = async (url, init) => {
+    observed.push({ url: String(url), body: JSON.parse(init.body) })
+    return { ok: true, async json() { return { fact: { id: 'f001' }, intent: {}, completed: true } } }
+  }
+  let concluded = false
+  try {
+    await bootstrapConclude.execute(
+      { description: 'flag captured', complete_description: 'goal satisfied' },
+      { concludeTurn() { concluded = true } },
+    )
+    assert.equal(observed.length, 1)
+    assert.equal(observed[0].url, 'http://redtrace.test/projects/proj%2F1/intents/i001/conclude')
+    assert.deepEqual(observed[0].body, {
+      worker: 'boot',
+      description: 'flag captured',
+      complete_description: 'goal satisfied',
+    })
+    assert.equal(concluded, true)
+
+    process.env.REDTRACE_TASK_TYPE = 'explore'
+    await exploreConclude.execute({ description: 'found something' }, { concludeTurn() {} })
+    assert.equal(observed.length, 2)
+    assert.deepEqual(observed[1].body, { worker: 'boot', description: 'found something' })
+  } finally {
+    delete process.env.REDTRACE_INTENT_ID
+    for (const [name, value] of [
+      ['REDTRACE_TASK_TYPE', previous.type], ['REDTRACE_PROJECT_ID', previous.project],
+      ['REDTRACE_WORKER', previous.worker], ['REDTRACE_SERVER', previous.server],
+    ]) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    globalThis.fetch = previous.fetch
+  }
+})
+

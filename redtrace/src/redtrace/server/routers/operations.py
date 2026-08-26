@@ -37,6 +37,7 @@ from redtrace.server.operations import (
     shell_broker,
     store_result,
     task_id,
+    TERMINAL_TASK_STATES,
     utcnow,
     verify_token,
 )
@@ -1175,6 +1176,52 @@ def cancel_operation(project_id: str, operation_id: str, body: CancelRequest):
         return {"task": public_task(updated)}
 
 
+# Mirrors the C2 ledger page predicate: events tied to C2 resources, C2 actions,
+# or tasks bound to a C2 session. Kept in sync with isC2AuditEvent in operations.js.
+_C2_EVENT_PREDICATE = """
+    action LIKE 'c2.%'
+    OR resource_id IN (SELECT id FROM shared_resources WHERE kind LIKE 'c2\\_%' ESCAPE '\\')
+    OR task_id IN (
+        SELECT task.id FROM operation_tasks task
+        JOIN shared_resources resource ON resource.id = task.resource_id
+        WHERE resource.kind = 'c2_session'
+    )
+"""
+
+
+@router.delete("/projects/{project_id}/operations/tasks/{operation_id}", status_code=204)
+def delete_operation_task(project_id: str, operation_id: str):
+    with get_conn() as conn:
+        task = _task_or_404(conn, project_id, operation_id)
+        if task["status"] not in TERMINAL_TASK_STATES:
+            raise HTTPException(409, "Cancel the task before deleting it")
+        conn.execute("DELETE FROM operation_tasks WHERE id = ?", (operation_id,))
+    return Response(status_code=204)
+
+
+@router.delete("/projects/{project_id}/operations/tasks")
+def clear_operation_tasks(project_id: str):
+    with get_conn() as conn:
+        _resolve_global_project(conn, project_id)
+        terminal = tuple(TERMINAL_TASK_STATES)
+        placeholders = ", ".join("?" for _ in terminal)
+        deleted = conn.execute(
+            f"""
+            DELETE FROM operation_tasks
+            WHERE status IN ({placeholders})
+              AND resource_id IN (SELECT id FROM shared_resources WHERE kind = 'c2_session')
+            """,
+            terminal,
+        ).rowcount
+        remaining = conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM operation_tasks
+            WHERE resource_id IN (SELECT id FROM shared_resources WHERE kind = 'c2_session')
+            """
+        ).fetchone()["count"]
+        return {"deleted": deleted, "remaining": remaining}
+
+
 @router.get("/projects/{project_id}/operations/results/{result_id}")
 def get_operation_result(project_id: str, result_id: str):
     with get_conn() as conn:
@@ -1234,6 +1281,29 @@ def list_operation_audit(
             "has_more": cursor < latest_cursor,
             "events": [public_audit(row) for row in rows],
         }
+
+
+@router.delete("/projects/{project_id}/operations/audit/{event_id}", status_code=204)
+def delete_operation_audit_event(project_id: str, event_id: int):
+    with get_conn() as conn:
+        _resolve_global_project(conn, project_id)
+        row = conn.execute(
+            "SELECT id FROM resource_audit_events WHERE id = ?", (event_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "Audit event not found")
+        conn.execute("DELETE FROM resource_audit_events WHERE id = ?", (event_id,))
+    return Response(status_code=204)
+
+
+@router.delete("/projects/{project_id}/operations/audit")
+def clear_operation_audit(project_id: str):
+    with get_conn() as conn:
+        _resolve_global_project(conn, project_id)
+        deleted = conn.execute(
+            f"DELETE FROM resource_audit_events WHERE {_C2_EVENT_PREDICATE}"
+        ).rowcount
+        return {"deleted": deleted}
 
 
 def _listener_for_token(conn, listener_id: str, token: str):

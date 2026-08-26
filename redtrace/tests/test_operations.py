@@ -1423,3 +1423,87 @@ def test_human_can_pause_lock_cancel_and_audit_worker_operations(client: TestCli
     audit = client.get(f"/projects/{project_id}/operations/audit").json()["events"]
     actions = {event["action"] for event in audit}
     assert {"resource.worker_pause", "resource.worker_resume", "resource.lock"} <= actions
+
+
+def test_c2_ledger_deletes_single_and_clears_scoped_tasks_and_events(client: TestClient) -> None:
+    project_id = create_project(client)
+    session = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "c2_session",
+            "name": "beacon session",
+            "target": "host-01",
+            "actor": "Alice",
+        },
+    ).json()["resource"]
+    webshell = client.post(
+        f"/projects/{project_id}/resources",
+        json={
+            "kind": "webshell",
+            "name": "plain shell",
+            "target": "https://example.invalid/shell.php",
+            "actor": "Alice",
+        },
+    ).json()["resource"]
+
+    active = client.post(
+        f"/projects/{project_id}/resources/{session['id']}/tasks",
+        json={"action": "command", "arguments": {"command": "whoami"}, "actor": "Alice"},
+    ).json()["task"]
+    assert active["status"] == "queued"
+
+    # Active tasks refuse deletion until they reach a terminal state.
+    assert client.delete(f"/projects/{project_id}/operations/tasks/{active['id']}").status_code == 409
+    client.post(
+        f"/projects/{project_id}/operations/tasks/{active['id']}/cancel",
+        json={"actor": "Alice"},
+    )
+    assert client.delete(f"/projects/{project_id}/operations/tasks/{active['id']}").status_code == 204
+    task_ids = {task["id"] for task in client.get(f"/projects/{project_id}/operations/tasks").json()["tasks"]}
+    assert active["id"] not in task_ids
+
+    # Clear-all removes finished C2 tasks only; other resources keep their history.
+    finished = client.post(
+        f"/projects/{project_id}/resources/{session['id']}/tasks",
+        json={"action": "upload", "arguments": {}, "actor": "Alice"},
+    ).json()["task"]
+    client.post(
+        f"/projects/{project_id}/operations/tasks/{finished['id']}/cancel",
+        json={"actor": "Alice"},
+    )
+    worker_headers = {"X-RedTrace-Worker": "claude-1", "X-RedTrace-Task": "explore"}
+    foreign = client.post(
+        f"/projects/{project_id}/resources/{webshell['id']}/tasks",
+        headers=worker_headers,
+        json={"action": "command", "arguments": {}, "actor_type": "worker", "actor": "claude-1", "risk": "high"},
+    ).json()["task"]
+    assert foreign["status"] == "awaiting_approval"
+    client.post(
+        f"/projects/{project_id}/operations/tasks/{foreign['id']}/approval",
+        json={"actor": "Alice", "decision": "reject"},
+    )
+    cleared = client.delete(f"/projects/{project_id}/operations/tasks")
+    assert cleared.status_code == 200
+    assert cleared.json() == {"deleted": 1, "remaining": 0}
+    task_ids = {task["id"] for task in client.get(f"/projects/{project_id}/operations/tasks").json()["tasks"]}
+    assert task_ids == {foreign["id"]}
+
+    # Single event deletion is idempotent-fail after removal.
+    events = client.get(f"/projects/{project_id}/operations/audit").json()["events"]
+    session_event = next(event for event in events if event["resource_id"] == session["id"])
+    assert client.delete(f"/projects/{project_id}/operations/audit/{session_event['id']}").status_code == 204
+    assert client.delete(f"/projects/{project_id}/operations/audit/{session_event['id']}").status_code == 404
+    event_ids = {event["id"] for event in client.get(f"/projects/{project_id}/operations/audit").json()["events"]}
+    assert session_event["id"] not in event_ids
+
+    # Scoped clear removes C2-related events while the webshell trail survives.
+    audit_clear = client.delete(f"/projects/{project_id}/operations/audit")
+    assert audit_clear.status_code == 200
+    assert audit_clear.json()["deleted"] >= 1
+    remaining_events = client.get(f"/projects/{project_id}/operations/audit").json()["events"]
+    c2_task_ids = {active["id"], finished["id"]}
+    for event in remaining_events:
+        assert not event["action"].startswith("c2.")
+        assert event["resource_id"] != session["id"]
+        assert event["task_id"] not in c2_task_ids
+    assert any(event["resource_id"] == webshell["id"] for event in remaining_events)

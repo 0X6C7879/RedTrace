@@ -52,7 +52,27 @@ test('projects streamed thinking and its durable copy', () => {
     event_uid: 'rt-test-2', run_sequence: 2, timestamp: '2026-01-01T00:00:00Z',
     kind: 'thinking.message', content: '思考', persist_only: true,
   }, {
-    event_uid: 'rt-test-2', run_sequence: 2, timestamp: '2026-01-01T00:00:00Z',
+    event_uid: 'rt-test-2-text', run_sequence: 2, timestamp: '2026-01-01T00:00:00Z',
+    kind: 'assistant.message', role: 'assistant', content: '结论',
+  }])
+})
+
+test('reasoning and text rows carry distinct durable ids', () => {
+  // The store dedupes by event_uid, so sharing one id between the two rows
+  // projected from a single assistant/message silently drops the text copy.
+  const task = { sessionId: 'rt-test', type: 'reason', projectId: 'proj_test', worker: 'reasoner', committed: false }
+  const rows = eventProjection(task, {
+    type: 'assistant/message', seq: 5, ts: '2026-01-01T00:00:00Z',
+    data: { message: { content: [{ type: 'reasoning', text: '思考' }, { type: 'text', text: '结论' }] } },
+  })
+  assert.equal(rows.length, 2)
+  assert.notEqual(rows[0].event_uid, rows[1].event_uid)
+  // A text-only message keeps the bare id: it never shares the session event.
+  assert.deepEqual(eventProjection(task, {
+    type: 'assistant/message', seq: 6, ts: '2026-01-01T00:00:01Z',
+    data: { message: { content: [{ type: 'text', text: '结论' }] } },
+  }), [{
+    event_uid: 'rt-test-6', run_sequence: 6, timestamp: '2026-01-01T00:00:01Z',
     kind: 'assistant.message', role: 'assistant', content: '结论',
   }])
 })

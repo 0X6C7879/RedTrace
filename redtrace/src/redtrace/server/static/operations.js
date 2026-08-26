@@ -1364,6 +1364,86 @@ function operationsPage() {
       await this.refresh(false);
     },
 
+    async deleteTask(task) {
+      if (!await window.redtraceConfirm?.({
+        title: '删除 C2 任务',
+        description: '任务记录及其结果引用将被移除，事件时间线中的历史记录保持不变。',
+        subject: `${task.action} · ${task.id}`,
+        note: '此操作不可撤销。',
+        confirmLabel: '删除任务',
+      })) return;
+      try {
+        await this.api(
+          `/projects/${encodeURIComponent(this.projectId())}/operations/tasks/${encodeURIComponent(task.id)}`,
+          { method: 'DELETE' }
+        );
+        await this.refresh(false);
+      } catch (error) {
+        this.error = error.message;
+      }
+    },
+
+    async clearC2Tasks() {
+      const deletable = this.c2TaskCount(['succeeded', 'failed', 'cancelled', 'rejected']);
+      if (!deletable) return;
+      if (!await window.redtraceConfirm?.({
+        title: '清空 C2 任务记录',
+        description: `将删除 ${deletable} 条已结束的任务及其结果引用，执行中或待审批的任务会被保留。`,
+        subject: 'C2 任务队列',
+        note: '此操作不可撤销。',
+        confirmLabel: '清空任务',
+      })) return;
+      try {
+        await this.api(
+          `/projects/${encodeURIComponent(this.projectId())}/operations/tasks`,
+          { method: 'DELETE' }
+        );
+        await this.refresh(false);
+      } catch (error) {
+        this.error = error.message;
+      }
+    },
+
+    async deleteEvent(event) {
+      if (!await window.redtraceConfirm?.({
+        title: '删除 C2 事件',
+        description: '该事件将从时间线中移除，其余记录不受影响。',
+        subject: `${event.action} · ${this.relativeTime(event.created_at)}`,
+        note: '此操作不可撤销。',
+        confirmLabel: '删除事件',
+      })) return;
+      try {
+        await this.api(
+          `/projects/${encodeURIComponent(this.projectId())}/operations/audit/${encodeURIComponent(event.id)}`,
+          { method: 'DELETE' }
+        );
+        await this.refresh(false);
+      } catch (error) {
+        this.error = error.message;
+      }
+    },
+
+    async clearC2Events() {
+      const total = this.c2EventCount();
+      if (!total) return;
+      if (!await window.redtraceConfirm?.({
+        title: '清空 C2 事件记录',
+        description: `将删除 ${total} 条 C2 相关事件，其他资源与操作的审计记录保持不变。`,
+        subject: 'C2 事件时间线',
+        note: '此操作不可撤销。',
+        confirmLabel: '清空事件',
+      })) return;
+      try {
+        await this.api(
+          `/projects/${encodeURIComponent(this.projectId())}/operations/audit`,
+          { method: 'DELETE' }
+        );
+        await this.refresh(false);
+      } catch (error) {
+        this.error = error.message;
+      }
+    },
+
     async toggleLock() {
       const resource = this.currentResource();
       if (!resource) return;

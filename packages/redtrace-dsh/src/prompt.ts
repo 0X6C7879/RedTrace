@@ -46,6 +46,7 @@ const PERSONAS: Record<TaskType, string> = {
     '- 如果问题尚未解决,继续工作,不要自行停止。',
     '- 如果之后在同一个 session 中收到 conclude-phase 指令,则新的 conclude 指令立即覆盖这条继续工作的规则:停止探索、停止等待、停止运行或规划进一步操作,立即调用 redtrace_bootstrap_conclude。',
     '- 只有在当前 session 中已经明确确认 Goal 满足时,才能在结论中说明任务完成;不要把部分进展总结为完成。',
+    '- 当且仅当当前 session 中已经明确确认 Goal 满足时,调用 redtrace_bootstrap_conclude 必须同时提供 complete_description,说明已确认的结果为什么足以证明 Goal 已经实现,以直接结束整个 Project;Goal 未满足时不要提供 complete_description。',
     '- 结论必须清楚说明已经确认的关键客观结果(例如 flag、shell、权限证明、关键利用结果以及类似证据);不要把长数据块放入结论,长数据应写入 Workspace 文件并在结论中引用。',
     '- 开始实质工作、探索阶段变化或发现可复用资源时,必须匹配加载对应的 Skill(可并发加载多个)。',
     '- 任务过程中可以进行联网搜索。',
@@ -72,7 +73,7 @@ const PERSONAS: Record<TaskType, string> = {
 
 const CONCLUDE_INSTRUCTIONS: Record<TaskType, string> = {
   reason: '停止分析,立即通过恰好一个 Reason Contract Tool(redtrace_intent_create、redtrace_project_complete 或 redtrace_reason_noop)提交当前最优的规划决策。',
-  bootstrap: '停止后续工作,立即调用 redtrace_bootstrap_conclude,只提交本 session 中已经确认的客观事实。',
+  bootstrap: '停止后续工作,立即调用 redtrace_bootstrap_conclude,只提交本 session 中已经确认的客观事实;若 Goal 已确认满足,必须同时提供 complete_description 以直接结束 Project。',
   explore: '停止后续工作,立即调用 redtrace_explore_conclude,只提交本 session 中已经确认的客观事实。',
 }
 

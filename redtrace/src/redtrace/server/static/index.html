@@ -6,7 +6,7 @@
 <title>RedTrace</title>
 <link rel="icon" href="/static/favicon.svg?v=20260727-logo3" type="image/svg+xml">
 <link rel="stylesheet" href="/static/audit.css?v=20260825-dsh-agents-2">
-<link rel="stylesheet" href="/static/operations.css?v=20260826-c2-ledgers-1">
+<link rel="stylesheet" href="/static/operations.css?v=20260826-c2-ledger-delete-1">
 <script src="/static/vendor/tailwindcss.js"></script>
 <script src="/static/vendor/dagre.min.js"></script>
 <script src="/static/vendor/cytoscape.min.js"></script>
@@ -15,7 +15,7 @@
 <script defer src="/static/capabilities.js?v=20260826-legacy-cleanup-1"></script>
 <script defer src="/static/plugins.js?v=20260825-plugins-2"></script>
 <!-- Previous cache key: operations.js?v=20260810-performance-1 -->
-<script defer src="/static/operations.js?v=20260826-c2-ledgers-1"></script>
+<script defer src="/static/operations.js?v=20260826-c2-ledger-delete-1"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
 <style>
   [x-cloak] { display: none !important; }
@@ -996,6 +996,7 @@
             <div class="operations-ledger-filters">
               <label><span class="sr-only">搜索任务</span><input x-model="query" placeholder="搜索任务、会话、目标或操作者"></label>
               <label><span class="sr-only">任务状态</span><select x-model="taskStatusFilter"><option value="all">全部状态</option><option value="awaiting_approval">待审批</option><option value="queued">等待执行</option><option value="running">执行中</option><option value="succeeded">成功</option><option value="failed">失败</option><option value="cancelled">已取消</option><option value="rejected">已拒绝</option></select></label>
+              <button type="button" class="operations-ledger-clear" x-show="c2TaskCount(['succeeded','failed','cancelled','rejected'])" @click="clearC2Tasks()">清空任务</button>
             </div>
           </header>
           <div class="operations-task-table-head"><span>任务</span><span>Session / 目标</span><span>风险</span><span>状态</span><span>时间</span><span>操作</span></div>
@@ -1013,7 +1014,9 @@
                     <button x-show="task.status === 'awaiting_approval'" class="is-danger" @click="decideTask(task, 'reject')">拒绝</button>
                     <button x-show="['queued','running'].includes(task.status)" @click="cancelTask(task)">取消</button>
                     <button x-show="task.result_ref" @click="loadResult(task)">查看结果</button>
-                    <span x-show="!['awaiting_approval','queued','running'].includes(task.status) && !task.result_ref">—</span>
+                    <button type="button" class="is-danger is-icon" x-show="['succeeded','failed','cancelled','rejected'].includes(task.status)" @click="deleteTask(task)" title="删除任务" aria-label="删除任务">
+                      <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>
+                    </button>
                   </div>
                 </div>
                 <div class="operations-task-context">
@@ -1043,6 +1046,7 @@
             <div class="operations-ledger-filters">
               <label><span class="sr-only">搜索事件</span><input x-model="query" placeholder="搜索动作、资源、操作者或详情"></label>
               <label><span class="sr-only">事件状态</span><select x-model="eventStatusFilter"><option value="all">全部状态</option><option value="succeeded">成功</option><option value="failed">失败</option><option value="awaiting_approval">待审批</option><option value="cancelled">已取消</option><option value="rejected">已拒绝</option><option value="available">可用</option><option value="offline">离线</option></select></label>
+              <button type="button" class="operations-ledger-clear" x-show="c2EventCount()" @click="clearC2Events()">清空事件</button>
             </div>
           </header>
           <div class="operations-event-list">
@@ -1050,7 +1054,7 @@
               <article class="operations-event-row">
                 <div class="operations-event-axis"><span :class="statusClass(event.status)"></span></div>
                 <div class="operations-event-body">
-                  <div class="operations-event-heading"><span class="operations-event-category" x-text="eventCategory(event)"></span><strong x-text="event.action"></strong><span class="operations-status-badge" :class="statusClass(event.status)" x-text="statusLabel(event.status)"></span><time x-text="relativeTime(event.created_at)"></time></div>
+                  <div class="operations-event-heading"><span class="operations-event-category" x-text="eventCategory(event)"></span><strong x-text="event.action"></strong><span class="operations-status-badge" :class="statusClass(event.status)" x-text="statusLabel(event.status)"></span><time x-text="relativeTime(event.created_at)"></time><button type="button" class="operations-event-delete" @click="deleteEvent(event)" title="删除事件" aria-label="删除事件"><svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg></button></div>
                   <div class="operations-event-meta"><span x-text="`${event.actor_type}: ${event.actor}`"></span><span x-show="resourceForId(event.resource_id)" x-text="`${resourceForId(event.resource_id)?.name} · ${resourceForId(event.resource_id)?.target || event.resource_id}`"></span><span x-show="!resourceForId(event.resource_id) && event.resource_id" class="font-mono" x-text="event.resource_id"></span><span x-show="event.task_id" class="font-mono" x-text="`任务 ${event.task_id}`"></span></div>
                   <p x-show="eventDetailText(event)" x-text="eventDetailText(event)"></p>
                 </div>

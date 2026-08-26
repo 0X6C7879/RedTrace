@@ -164,12 +164,21 @@ function registerReason(ctx: ToolContext): void {
 }
 
 function registerConclude(ctx: ToolContext, type: 'bootstrap' | 'explore'): void {
+  // Bootstrap may end the Project in the same commit: when the Goal is
+  // confirmed satisfied it passes complete_description and the server
+  // concludes the Intent as a Fact and completes the Project from it
+  // atomically. Explore conclusions never carry completion.
+  const bootstrap = type === 'bootstrap'
   register(ctx, {
-    name: type === 'bootstrap' ? 'redtrace_bootstrap_conclude' : 'redtrace_explore_conclude',
-    description: `Atomically conclude the ${type} Intent as a formal Fact.`,
+    name: bootstrap ? 'redtrace_bootstrap_conclude' : 'redtrace_explore_conclude',
+    description: bootstrap
+      ? 'Atomically conclude the bootstrap Intent as a formal Fact. When the Goal is confirmed satisfied, also pass complete_description (why the confirmed results prove the Goal) to complete the Project directly.'
+      : `Atomically conclude the ${type} Intent as a formal Fact.`,
     parameters: {
       type: 'object',
-      properties: { description: text },
+      properties: bootstrap
+        ? { description: text, complete_description: text }
+        : { description: text },
       required: ['description'],
       additionalProperties: false,
     },
@@ -179,7 +188,13 @@ function registerConclude(ctx: ToolContext, type: 'bootstrap' | 'explore'): void
       const value = await request(
         server(task),
         `/projects/${encodeURIComponent(task.projectId)}/intents/${encodeURIComponent(task.intentId)}/conclude`,
-        { worker: task.worker, description: args.description },
+        {
+          worker: task.worker,
+          description: args.description,
+          ...(bootstrap && typeof args.complete_description === 'string'
+            ? { complete_description: args.complete_description }
+            : {}),
+        },
         execution.signal,
       )
       execution.concludeTurn?.()

@@ -26,6 +26,8 @@ from redtrace.board.storage import (
 )
 from redtrace.server.db import get_conn
 
+BOOTSTRAP_CREATOR = "dispatcher.bootstrap"
+
 
 def create(project_id: str, request: CreateIntentRequest) -> Intent:
     """Create an intent and all of its source edges atomically."""
@@ -153,12 +155,23 @@ def conclude(
     their own records; their link to the produced Fact is tracked through
     shared_resources.fact_id so resource payloads never enter Blackboard
     context.
+
+    Bootstrap intents may also pass complete_description: the Fact is
+    written, the Intent concluded, and the Project completed from that Fact
+    atomically, so a satisfied Goal ends the Project without a Reason round.
     """
     with get_conn(immediate=True) as conn:
         check_project_active(conn, project_id)
-        get_releasable_open_intent_or_404(
+        intent_row = get_releasable_open_intent_or_404(
             conn, project_id, intent_id, request.worker
         )
+        if (
+            request.complete_description is not None
+            and intent_row["creator"] != BOOTSTRAP_CREATOR
+        ):
+            raise HTTPException(
+                422, "Only bootstrap intents can conclude with completion"
+            )
         now = utcnow()
         fact_id = next_fact_id(conn, project_id)
         conn.execute(
@@ -173,9 +186,40 @@ def conclude(
             "UPDATE shared_resources SET fact_id = ? WHERE project_id = ? AND intent_id = ?",
             (fact_id, project_id, intent_id),
         )
+        completed = False
+        if request.complete_description is not None:
+            completion_intent_id = next_intent_id(conn, project_id)
+            conn.execute(
+                "INSERT INTO intents (id, project_id, to_fact_id, description, creator, worker, last_heartbeat_at, created_at, concluded_at, state) VALUES (?, ?, 'goal', ?, ?, ?, ?, ?, ?, 'concluded')",
+                (
+                    completion_intent_id,
+                    project_id,
+                    request.complete_description,
+                    request.worker,
+                    request.worker,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO intent_sources (intent_id, project_id, fact_id) VALUES (?, ?, ?)",
+                (completion_intent_id, project_id, fact_id),
+            )
+            conn.execute(
+                """
+                UPDATE projects
+                SET status = 'completed', reason_worker = NULL, reason_trigger = NULL,
+                    reason_started_at = NULL, reason_last_heartbeat_at = NULL
+                WHERE id = ?
+                """,
+                (project_id,),
+            )
+            completed = True
         return ConcludeResponse(
             fact=Fact(id=fact_id, description=request.description),
             intent=_load_intent(conn, project_id, intent_id),
+            completed=completed,
         )
 
 

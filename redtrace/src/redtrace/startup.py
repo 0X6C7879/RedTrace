@@ -21,6 +21,50 @@ class StartupError(RuntimeError):
     pass
 
 
+def _detect_parent_shell() -> str | None:
+    """Detect the shell that launched this process.
+
+    Returns an absolute path on Unix (e.g. /bin/zsh) or a command name on
+    Windows (e.g. cmd.exe).  Returns None when detection fails so callers
+    can fall back to platform defaults.
+    """
+    import platform as _platform
+    import subprocess as _sp
+
+    if _platform.system() == "Windows":
+        # ComSpec is almost always cmd.exe; PSModulePath signals PowerShell.
+        if os.environ.get("PSModulePath"):
+            return "powershell.exe"
+        return os.environ.get("ComSpec") or "cmd.exe"
+
+    # Unix: probe the parent process first (most reliable).
+    try:
+        ppid = os.getppid()
+        result = _sp.run(
+            ["ps", "-p", str(ppid), "-o", "comm="],
+            capture_output=True, text=True, timeout=2,
+        )
+        if result.returncode == 0:
+            name = result.stdout.strip()
+            if name:
+                # ps may return a bare name ("zsh") or an absolute path.
+                if name.startswith("/"):
+                    return name
+                for candidate in (f"/bin/{name}", f"/usr/bin/{name}"):
+                    if os.path.isfile(candidate):
+                        return candidate
+                return name
+    except (OSError, _sp.SubprocessError, _sp.TimeoutExpired):
+        pass
+
+    # Fallback: $SHELL (login shell, may differ from the invoking shell).
+    shell = os.environ.get("SHELL")
+    if shell and os.path.isfile(shell):
+        return shell
+
+    return None
+
+
 def _ensure_dsh_ready(root: Path) -> None:
     if not (root / "vendor" / "deepseek-harness" / "package.json").is_file():
         raise StartupError(
@@ -232,6 +276,12 @@ def run(*, config: Path | None, host: str, port: int) -> int:
     temporary.mkdir(parents=True, exist_ok=True)
     (root / "output" / "webshell").mkdir(parents=True, exist_ok=True)
     (root / "output" / "c2").mkdir(parents=True, exist_ok=True)
+    # Detect the invoking shell so the DSH runtime can spawn child processes
+    # with the same shell instead of hardcoding "bash".
+    detected = _detect_parent_shell()
+    if detected is not None:
+        os.environ["DSH_SHELL"] = detected
+
     os.environ.update(
         {
             "REDTRACE_ROOT": str(root),
