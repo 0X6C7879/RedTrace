@@ -11,6 +11,7 @@
     "--isolated",
     "--executablePath",
     "/usr/bin/google-chrome",
+    "--chromeArg=--no-sandbox",
     "--no-usage-statistics",
     "--no-performance-crux"
   ],

@@ -17,6 +17,25 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT="$ROOT/redtrace"
 
+# Preserve the shell that invoked this launcher. The launcher itself is Bash,
+# so inspecting the Python/Node parent later would otherwise always report
+# Bash even when the user started RedTrace from zsh.
+if [[ -z "${REDTRACE_PARENT_SHELL:-}" ]] && command -v ps >/dev/null 2>&1; then
+  parent_shell_name="$(ps -p "$PPID" -o comm= 2>/dev/null | sed 's/^[[:space:]-]*//; s/[[:space:]]*$//')"
+  case "${parent_shell_name##*/}" in
+    bash|zsh|sh|dash|ksh|fish)
+      if parent_shell_path="$(command -v "${parent_shell_name##*/}" 2>/dev/null)"; then
+        export REDTRACE_PARENT_SHELL="$parent_shell_path"
+      fi
+      ;;
+  esac
+fi
+
+# `uv run` replaces PATH/VIRTUAL_ENV for the RedTrace process. Keep the
+# invoking shell's Python environment so only the DSH Worker can restore it.
+export REDTRACE_PARENT_PATH="${REDTRACE_PARENT_PATH:-$PATH}"
+export REDTRACE_PARENT_VIRTUAL_ENV="${REDTRACE_PARENT_VIRTUAL_ENV-${VIRTUAL_ENV-}}"
+
 # ── 1. Python environment (uv) ─────────────────────────────────────────────
 command -v uv >/dev/null 2>&1 || {
   printf 'error: uv is not installed or not on PATH\n' >&2

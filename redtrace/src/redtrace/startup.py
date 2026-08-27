@@ -177,6 +177,19 @@ def _free_loopback_port() -> int:
         return int(listener.getsockname()[1])
 
 
+def _restore_parent_python_environment(env: dict[str, str]) -> None:
+    parent_path = env.pop("REDTRACE_PARENT_PATH", None)
+    parent_virtual_env = env.pop("REDTRACE_PARENT_VIRTUAL_ENV", None)
+    if parent_path is None:
+        return
+    env["PATH"] = parent_path
+    if parent_virtual_env:
+        env["VIRTUAL_ENV"] = parent_virtual_env
+    else:
+        env.pop("VIRTUAL_ENV", None)
+    env.pop("UV_PROJECT_ENVIRONMENT", None)
+
+
 def _dsh_environment(config, root: Path, api_url: str, host: str, port: int) -> dict[str, str]:
     from redtrace.agent_runtime import AgentRuntimeManager
     from redtrace.dispatcher.dsh import dsh_providers
@@ -184,6 +197,7 @@ def _dsh_environment(config, root: Path, api_url: str, host: str, port: int) -> 
     paths = config.paths.layout()
     providers, api_keys = dsh_providers(config)
     child_env = dict(os.environ)
+    _restore_parent_python_environment(child_env)
     for name, value in api_keys.items():
         child_env[name] = value
     for name, value in config.common_env.items():
@@ -292,9 +306,11 @@ def run(*, config: Path | None, host: str, port: int) -> int:
     (root / "output" / "webshell").mkdir(parents=True, exist_ok=True)
     (root / "output" / "c2").mkdir(parents=True, exist_ok=True)
     # Detect the invoking shell so the DSH runtime can spawn child processes
-    # with the same shell instead of hardcoding "bash".
-    detected = _detect_parent_shell()
+    # with the same shell instead of hardcoding "bash". The launcher exports
+    # REDTRACE_PARENT_SHELL because its own immediate parent is always Bash.
+    detected = os.environ.get("REDTRACE_PARENT_SHELL") or _detect_parent_shell()
     if detected is not None:
+        os.environ["REDTRACE_PARENT_SHELL"] = detected
         os.environ["DSH_SHELL"] = detected
 
     os.environ.update(

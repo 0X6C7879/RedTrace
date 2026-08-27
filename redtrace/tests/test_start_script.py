@@ -70,6 +70,23 @@ def test_detect_parent_shell_falls_back_to_platform_default(monkeypatch: pytest.
     assert startup._detect_parent_shell() is None
 
 
+def test_dsh_restores_the_python_environment_from_before_uv_run() -> None:
+    env = {
+        "PATH": "/repo/.venv-linux/bin:/usr/bin",
+        "VIRTUAL_ENV": "/repo/.venv-linux",
+        "UV_PROJECT_ENVIRONMENT": "/repo/.venv-linux",
+        "REDTRACE_PARENT_PATH": "/root/miniconda3/bin:/usr/bin",
+        "REDTRACE_PARENT_VIRTUAL_ENV": "",
+    }
+
+    startup._restore_parent_python_environment(env)
+
+    assert env["PATH"] == "/root/miniconda3/bin:/usr/bin"
+    assert "VIRTUAL_ENV" not in env
+    assert "UV_PROJECT_ENVIRONMENT" not in env
+    assert not any(name.startswith("REDTRACE_PARENT_") for name in env)
+
+
 def test_platform_wrappers_use_one_shared_start_command() -> None:
     bash = BASH_SCRIPT.read_text(encoding="utf-8")
     windows = WINDOWS_SCRIPT.read_text(encoding="utf-8")
@@ -80,6 +97,8 @@ def test_platform_wrappers_use_one_shared_start_command() -> None:
     assert "Darwin) PLATFORM=macos" in bash
     assert "Linux) PLATFORM=linux" in bash
     assert "REDTRACE_DSH_ROOT" in bash
+    assert "REDTRACE_PARENT_PATH" in bash
+    assert "REDTRACE_PARENT_VIRTUAL_ENV" in bash
     assert ".venv-windows" in windows
     assert "uv sync" in bash
     assert "uv sync" in windows

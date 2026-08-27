@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import {
   activateAgent, fetchAllBlackboardChanges, fetchAllResources, planDispatch, postWithRetry,
-  reasonEligible, reasonSessionId, resolveLimits, sessionIdForTask,
+  reasonEligible, reasonSessionId, resolveLimits, sessionIdForTask, taskTurn,
 } from '../lib/scheduler.js'
 import { schedulable } from '../lib/context.js'
 
@@ -53,6 +53,23 @@ test('activateAgent resumes a durable Reason session and creates a missing one',
     ['resume', { resumeSessionId: 'rt-p-reason', agentOptions: { model: 'm' } }],
     ['create', { sessionId: 'rt-p-reason', meta: { cwd: '/workspace/p' }, agentOptions: { model: 'm' } }],
   ])
+})
+
+test('conclude retries use each task short prompt and conclude timeout', () => {
+  for (const type of ['bootstrap', 'reason', 'explore']) {
+    const turn = taskTurn(type, 'conclude', 'LONG LAUNCH PROMPT', {
+      timeout: 300,
+      conclude_timeout: 17,
+    })
+    assert.equal(turn.timeout, 17)
+    assert.ok(!turn.prompt.includes('LONG LAUNCH PROMPT'))
+    assert.match(turn.prompt, /停止/)
+  }
+})
+
+test('stopped tasks resume with only the short continue prompt', () => {
+  const turn = taskTurn('explore', 'resume', 'LONG LAUNCH PROMPT', { timeout: 300 })
+  assert.deepEqual(turn, { prompt: '继续', timeout: 300 })
 })
 
 // ─── Health / cooldown gates ────────────────────────────────────────────────

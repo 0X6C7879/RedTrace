@@ -57,6 +57,21 @@ export function sessionIdForTask(task: TaskType, projectId: string): string {
   return task === 'reason' ? reasonSessionId(projectId) : newSessionId(task, projectId)
 }
 
+export function taskTurn(
+  type: TaskType,
+  phase: 'execute' | 'resume' | 'conclude',
+  launchPrompt: string,
+  limits: TaskLimits,
+): { prompt: string; timeout: number } {
+  if (phase === 'resume') return { prompt: '继续', timeout: limits.timeout }
+  return phase === 'conclude'
+    ? {
+        prompt: concludeInstruction(type),
+        timeout: limits.conclude_timeout ?? Math.min(60, limits.timeout),
+      }
+    : { prompt: launchPrompt, timeout: limits.timeout }
+}
+
 export function activateAgent(
   agents: RuntimeContext['agents'],
   sessionId: unknown,
@@ -111,6 +126,10 @@ async function waitIdle(agent: import('./types.js').Agent, seconds: number): Pro
 class Scheduler {
   private readonly running = new Map<string, RuntimeTask>()
   private readonly completions = new Map<string, Promise<void>>()
+  // ponytail: recovery handoff is process-local; persist it with task outcomes if restart-safe retries become necessary.
+  private readonly concludeRecoveries = new Map<string, { projectId: string; sessionId: string }>()
+  // ponytail: pause recovery is process-local; persist it if stop/resume must survive a DSH restart.
+  private readonly pausedSessions = new Map<string, { projectId: string; sessionId: string }>()
   private timer?: ReturnType<typeof setTimeout>
   private closing = false
   private cursor = 0
@@ -177,10 +196,21 @@ class Scheduler {
 
   private async cancelInactive(summaries: ProjectSummary[]): Promise<void> {
     const states = new Map(summaries.map(summary => [summary.id, summary.status]))
+    for (const [key, recovery] of this.concludeRecoveries) {
+      if (states.get(recovery.projectId) !== 'active') this.concludeRecoveries.delete(key)
+    }
+    for (const [key, recovery] of this.pausedSessions) {
+      if (!['active', 'stopped'].includes(states.get(recovery.projectId) ?? '')) this.pausedSessions.delete(key)
+    }
     for (const task of this.running.values()) {
-      if (states.get(task.projectId) === 'active') continue
+      const status = states.get(task.projectId)
+      if (status === 'active') continue
+      if (status === 'stopped' && task.sessionId !== undefined) {
+        const key = `${task.projectId}:${task.type}:${task.intentId ?? ''}`
+        this.pausedSessions.set(key, { projectId: task.projectId, sessionId: task.sessionId })
+      }
       task.cancelled = true
-      task.handle?.agent.cancel({ kind: 'hook', reason: `project ${states.get(task.projectId) ?? 'deleted'}` })
+      task.handle?.agent.cancel({ kind: 'hook', reason: `project ${status ?? 'deleted'}` })
     }
   }
 
@@ -327,7 +357,11 @@ class Scheduler {
     task.revision = project.blackboard_revision
     task.deliveredHints = new Set(project.hints.map(hint => hint.id))
     task.startedAt = Date.now()
-    task.sessionId = sessionIdForTask(task.type, task.projectId)
+    const paused = this.pausedSessions.get(key)
+    const recovery = this.concludeRecoveries.get(key)
+    task.sessionId = paused?.sessionId ?? recovery?.sessionId ?? sessionIdForTask(task.type, task.projectId)
+    task.resumeOnly = paused !== undefined
+    task.concludeOnly = paused === undefined && recovery !== undefined
     task.runId = `run-${crypto.randomUUID()}`
     this.running.set(key, task)
     const completion = this.runTask(task, project, intent).finally(() => {
@@ -340,6 +374,7 @@ class Scheduler {
   private async runTask(task: RuntimeTask, project: ProjectDetail, intent?: Intent): Promise<void> {
     const shared = this.shared
     if (shared === undefined || shared.messages === undefined || task.route === undefined) return
+    const recoveryKey = `${task.projectId}:${task.type}:${task.intentId ?? ''}`
     let outcome = 'failure'
     let heartbeat: ReturnType<typeof setInterval> | undefined
     let skillView: SkillView | undefined
@@ -350,8 +385,22 @@ class Scheduler {
       if (task.type === 'reason' && this.ctx.sessionPersistence === undefined) {
         throw new Error('redtrace runtime: persistent Reason sessions require sessionPersistence')
       }
-      const persistedReason = task.type === 'reason'
-        && await this.ctx.sessionPersistence!.readRaw(task.sessionId!) !== undefined
+      let concludeOnly = task.concludeOnly === true
+      let resumeOnly = task.resumeOnly === true
+      let persistedSession = this.ctx.sessionPersistence === undefined
+        ? false
+        : await this.ctx.sessionPersistence.readRaw(task.sessionId!) !== undefined
+      if ((resumeOnly || concludeOnly) && !persistedSession) {
+        this.pausedSessions.delete(recoveryKey)
+        this.concludeRecoveries.delete(recoveryKey)
+        resumeOnly = false
+        concludeOnly = false
+        task.resumeOnly = false
+        task.concludeOnly = false
+        task.sessionId = sessionIdForTask(task.type, task.projectId)
+        persistedSession = task.type === 'reason' && this.ctx.sessionPersistence !== undefined
+          && await this.ctx.sessionPersistence.readRaw(task.sessionId) !== undefined
+      }
       if (task.type === 'explore') {
         if (intent === undefined || intent.capabilities.length === 0) {
           throw new Error('Explore Intent must declare at least one Capability')
@@ -388,7 +437,7 @@ class Scheduler {
         shared.messages.SessionId(task.sessionId!),
         cwd,
         activation,
-        persistedReason,
+        resumeOnly || concludeOnly || (task.type === 'reason' && persistedSession),
       )
       shared.tasks.set(task.sessionId!, task)
       await reportRun(this.config, task, 'running')
@@ -402,19 +451,43 @@ class Scheduler {
           task.handle?.agent.cancel({ kind: 'hook', reason: 'heartbeat lease lost' })
         })
       }, Math.max(1, this.limits().interval) * 1000)
-      const resources = await this.resources(task.projectId, task.type).catch(() => [] as ResourceSummary[])
-      const turnContext = await this.turnContext(task, project, intent, resources, persistedReason)
-      task.handle.agent.followup(message(shared, turnContext.prompt))
-      task.contextRevision = turnContext.revision
-      let waited = await waitIdle(task.handle.agent, limits.timeout)
-      if (!task.committed && !task.cancelled) {
-        task.handle.agent.followup(message(shared, concludeInstruction(task.type)))
-        waited = await waitIdle(task.handle.agent, limits.conclude_timeout ?? Math.min(60, limits.timeout))
+      let phase: 'execute' | 'resume' | 'conclude' = resumeOnly ? 'resume' : concludeOnly ? 'conclude' : 'execute'
+      let launchPrompt = ''
+      if (!resumeOnly && !concludeOnly) {
+        const resources = await this.resources(task.projectId, task.type).catch(() => [] as ResourceSummary[])
+        const turnContext = await this.turnContext(
+          task,
+          project,
+          intent,
+          resources,
+          task.type === 'reason' && persistedSession,
+        )
+        launchPrompt = turnContext.prompt
+        task.contextRevision = turnContext.revision
+      }
+      let turn = taskTurn(task.type, phase, launchPrompt, limits)
+      task.handle.agent.followup(message(shared, turn.prompt))
+      if (resumeOnly) this.pausedSessions.delete(recoveryKey)
+      let waited = await waitIdle(task.handle.agent, turn.timeout)
+      if (!task.committed && !task.cancelled && phase !== 'conclude') {
+        phase = 'conclude'
+        turn = taskTurn(task.type, phase, launchPrompt, limits)
+        task.handle.agent.followup(message(shared, turn.prompt))
+        waited = await waitIdle(task.handle.agent, turn.timeout)
+      }
+      if (!task.committed && !task.cancelled && phase === 'conclude' && waited === 'timeout') {
+        this.concludeRecoveries.set(recoveryKey, {
+          projectId: task.projectId,
+          sessionId: task.sessionId!,
+        })
+      } else {
+        this.concludeRecoveries.delete(recoveryKey)
       }
       outcome = task.committed ? 'success'
         : task.cancelled ? 'cancelled'
           : waited === 'timeout' ? 'timeout' : 'contract_error'
     } catch (error) {
+      this.concludeRecoveries.delete(recoveryKey)
       this.ctx.logger?.warn(error)
       process.stderr.write(`[redtrace-dsh] task ${task.type} failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`)
       outcome = task.cancelled ? 'cancelled' : 'internal_error'

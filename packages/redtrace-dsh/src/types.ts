@@ -106,6 +106,10 @@ export interface RuntimeTask {
   committed: boolean
   server?: string
   sessionId?: string
+  /** Resume this timed-out session directly in its conclude phase. */
+  concludeOnly?: boolean
+  /** Resume a session interrupted by stopping its Project. */
+  resumeOnly?: boolean
   runId?: string
   revision?: number
   /** Blackboard revision durably injected into the project Reason session. */
