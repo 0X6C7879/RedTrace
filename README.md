@@ -1,6 +1,6 @@
 # RedTrace
 
-RedTrace 是一个面向授权安全研究、代码审计与复杂技术调查的多 Agent 协同平台。它把目标、已验证证据、待验证方向和人工提示组织成持续演进的证据图谱，再由独立 Dispatcher 将工作分配给 Claude Code、Codex、Pi 或 Mock Worker。
+RedTrace 是一个面向授权安全研究、代码审计与复杂技术调查的多 Agent 协同平台。它把目标、已验证证据、待验证方向和人工提示组织成持续演进的证据图谱，再由独立的调度器把工作分配给声明了各自模型与资格的异构 Worker。
 
 RedTrace 关注的不是一次对话能否给出答案，而是一个长任务能否被并行推进、持续校正、失败恢复并完整审计。每次执行都有明确输入、结构化输出、运行记录和 Workspace；新的可靠结论会进入共享证据面，供正在运行的其他 Worker 在关键决策点增量获取。
 
@@ -9,32 +9,33 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 ## 核心能力
 
 - **Trace Loop 任务闭环**：通过 `bootstrap → reason → explore` 循环完成初始突破、全局判断和并行验证，直到目标完成、人工停止或暂时没有可执行方向。
-- **证据图谱**：用 `Project`、`Fact`、`Intent`、`Hint`、`Observation` 区分目标、正式事实、调查方向、人工输入和中间观察，避免把模型的临时推测当成结论。
-- **异构 Worker 协同**：任意数量 Worker 各自声明 Provider、模型、任务资格、并发与优先级，在同一条 DSH 流水线上并行推进安全任务。
-- **运行中知识同步**：Graph 修订会通过 `agent.inject()` 增量送达正在运行的 Agent；共享 Resource 摘要随上下文注入，完整信息按需查询。
-- **统一 Agent 运行时**：所有真实 Worker 运行在同一个常驻 DSH/Cordis 运行时中，每个任务获得独立 Agent 与 Session；Shell、文件系统、Skill、MCP、沙箱按任务动态挂载。
-- **上下文预算治理**：DSH 原生 Session Compaction 与 Tool Result Pruner 控制上下文压力，Graph 按需注入而不是无限堆进 Prompt。
-- **资源与操作面**：统一管理 WebShell、C2 Listener、Session、Payload、外部插件和操作结果；Resource 保留可变运行状态，不会隐式生成 Fact。
-- **可观测与可恢复**：任务、会话、工具事件、输出、心跳、超时、取消和资源操作均可审计；Server 或 Dispatcher 重启后可以恢复未完成状态。
-- **Web 控制台与插件接入**：内置项目图谱、运行记录、Workspace、Worker 与能力管理界面，并提供浏览器扩展、Burp Suite 和兼容插件 API。
+- **证据图谱**：用 `Project`、`Fact`、`Intent`、`Hint`、`Observation` 区分目标、正式事实、调查方向、人工输入和中间观察，避免把模型的临时推测当成结论。所有结论只能通过契约工具原子提交，不允许直写。
+- **异构 Worker 协同（Worker 即路由）**：任意数量 Worker 各自声明 Provider、模型、任务资格（bootstrap/reason/explore）、并发与优先级。调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务——路由完全由 Worker 派生，而非按任务类型写死。
+- **统一 DSH Agent 运行时**：所有真实 Worker 运行在同一个常驻 DSH/Cordis 运行时中，每个任务获得独立 Agent 与 Session；Shell、文件系统、Skill、MCP、沙箱按任务动态挂载。运行时自身也由插件组成——编排、审计、资源、Web 托管全部是可独立启停的 Cordis 插件（见 `packages/redtrace-dsh/`）。
+- **运行中知识同步**：证据图谱修订会通过 `agent.inject()` 增量送达正在运行的 Agent；共享 Resource 摘要随上下文注入，完整信息按需查询。
+- **上下文预算治理**：DSH 原生 Session Compaction 与 Tool Result Pruner 控制上下文压力，Graph 按需注入而不是无限堆进 Prompt；完整输出落盘为可追溯 Artifact。
+- **资源与操作面**：统一管理 WebShell、C2 Listener、Session、Payload、凭证、外部插件和操作结果；MSF、Sliver、Cobalt Strike 与自定义 C2 通过同一个 Adapter 合约接入。Resource 保留可变运行状态，不会隐式生成 Fact。
+- **可观测与可恢复**：任务、会话、工具事件、输出、心跳、超时、取消和资源操作均可审计，Token 用量按运行累计汇总；Server 或运行时重启后可以恢复未完成状态。
+- **Web 控制台与插件接入**：内置证据图谱可视化、运行记录、Workspace、Skill 与 MCP 管理、Worker 设置、插件管理页，并提供浏览器扩展、Burp Suite 和兼容插件 API。
 
 ## 工作方式
 
+系统分为三层：**控制面**是 Python（FastAPI + SQLite）的 RedTrace Server，负责领域状态、租约、审计与配置；**执行面**是常驻 DSH/Cordis 运行时（TypeScript），其内的 Scheduler 插件负责 worker-centric 派发与任务编排，每个任务在运行时中激活独立 Agent；**能力层**由共享 Skill（92 个，其中 40 个为攻防竞赛专项）、共享 MCP 配置和 Context Harness 组成，按任务类型动态挂载。
+
 ```mermaid
 flowchart LR
-    U[用户 / Web / CLI / 插件] --> S[RedTrace Server]
-    S --> E[(证据图谱与操作记录)]
-    D[Dispatcher] <--> S
-    D --> B[Bootstrap]
-    D --> R[Reason]
-    D --> X[Explore]
-    B --> RT[Local 或 Container Runtime]
-    R --> RT
-    X --> RT
-    RT --> W[Claude Code / Codex / Pi / Mock]
-    W --> A[审计事件与结构化结果]
+    U[用户 / Web / CLI / 插件] --> W[DSH Web Server :8000]
+    W -->|域 API 反代| S[RedTrace Server<br/>FastAPI + SQLite]
+    S --> E[(证据图谱与审计记录)]
+    D[Scheduler 插件<br/>worker-centric 派发] <--> S
+    D --> RT[常驻 Cordis 运行时<br/>每任务独立 Agent + Session]
+    RT --> WA[Worker A<br/>provider + model]
+    RT --> WB[Worker B<br/>provider + model]
+    RT --> WM[Mock Worker<br/>确定性测试引擎]
+    WA --> A[审计事件与结构化结果]
+    WB --> A
     A --> S
-    S -. 增量证据通知 .-> W
+    S -. 增量证据通知 .-> RT
 ```
 
 一次典型任务会经历：
@@ -56,15 +57,15 @@ flowchart LR
 
 ### 并行而不失控
 
-Dispatcher 同时约束全局并发、活动项目数、单项目并发和单 Worker 配额。任务派发还会考虑 Worker 能力、健康状态、优先级、当前负载和失败冷却窗口，从而让多个模型与多个项目共享资源时保持可预测性。
+调度同时约束全局并发、活动项目数、单项目并发和单 Worker 配额。任务派发还会考虑 Worker 能力、健康状态、优先级、当前负载和失败冷却窗口，从而让多个模型与多个项目共享资源时保持可预测性。
 
 ### 长任务中的实时协同
 
-正在运行的 Worker 不必等到下一次任务启动才看到新证据。RedTrace 会监视证据修订，通过 Claude Code、Codex 和 Pi 的原生双向协议发送精简更新；完整内容继续按需读取，避免无边界地扩张 Prompt。
+正在运行的 Worker 不必等到下一次任务启动才看到新证据。RedTrace 会监视证据修订，通过运行时的原生注入通道发送精简更新；完整内容继续按需读取，避免无边界地扩张 Prompt。
 
 ### 执行面可替换，控制面保持稳定
 
-Server 负责协议与持久状态，Dispatcher 负责调度与生命周期，Runtime 负责进程和隔离，Worker Adapter 负责供应商差异。切换模型、CLI 或执行后端时，项目协议和审计结构无需随之重写。
+Server 负责协议与持久状态，Scheduler 负责派发与生命周期，DSH 运行时负责进程和隔离，Provider Profile 负责供应商差异。切换模型或执行后端时，项目协议和审计结构无需随之重写；DSH 上游以子模块形式 pin 住版本，由每周定时任务检测漂移并自动开出升级 PR。
 
 ## 快速开始
 
@@ -107,13 +108,13 @@ cp redtrace.dsh.example.yaml redtrace.yaml
 ./start-redtrace.sh
 ```
 
-复制后编辑 `redtrace.yaml`：填入 `providers.<name>.api_key`，按需调整 `workers`。两个入口都是真正的"一键"：首次运行会自动同步 Python 依赖、初始化 DSH 子模块（`vendor/deepseek-harness`）并构建 DSH 运行时，之后直接启动。它们都接受 `--config`、`--host` 和 `--port`；`Ctrl+C` 会停止本次启动的全部进程。各平台使用独立虚拟环境，允许 Windows 与 WSL 安全地共用同一检出目录。
+复制后编辑 `redtrace.yaml`：填入 `providers.<name>.api_key`，按需调整 `workers`。两个入口都是真正的“一键”：首次运行会自动同步 Python 依赖、初始化 DSH 子模块（`vendor/deepseek-harness`）并构建 DSH 运行时，之后直接启动。它们都接受 `--config`、`--host` 和 `--port`；`Ctrl+C` 会停止本次启动的全部进程。各平台使用独立虚拟环境，允许 Windows 与 WSL 安全地共用同一检出目录。
 
 ### 运行时模型
 
-启动后只有一个入口进程 `redtrace start`：它同时监管 RedTrace API Server 与 DSH Cordis 运行时。Provider Worker（真实模型）由常驻的 Cordis 运行时调度，每个任务在其中创建独立 Agent 与 Session；Web UI 由 Cordis Web 服务器直接提供（默认 `http://127.0.0.1:8000`），域 API 由内置代理转发到 RedTrace Server。`mock` Worker（`provider: mock`）走进程内确定性测试引擎，用于开发与自动化测试。
+启动后只有一个入口进程 `redtrace start`：它同时监管 RedTrace API Server 与常驻 DSH Cordis 运行时。真实 Provider Worker 由 Cordis 运行时调度，每个任务在其中创建独立 Agent 与 Session，模型经 OpenAI/Anthropic 兼容端点调用；Web UI 由 Cordis Web 服务器直接提供（默认 `http://127.0.0.1:8000`），域 API 由内置代理转发到 RedTrace Server。`mock` Worker（`provider: mock`）走进程内确定性测试引擎，用于开发与自动化测试。
 
-Worker 即路由：每个 Worker 独立声明 `provider`、`model`、`bootstrap/reason/explore` 资格、`max_running` 并发与 `priority`；调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务。修改 Worker 后新任务自动生效，无需重启。
+Worker 即路由：每个 Worker 独立声明 `provider`、`model`、`bootstrap/reason/explore` 资格、`max_running` 并发与 `priority`；调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务。Worker 修改后对新任务自动生效，无需重启——设置页与直改配置文件都走同一条热加载链路，任何配置变更都不要求重启进程。
 
 Agent 继承启动用户的宿主机权限；isolated 执行 profile 可按 Intent 启用沙箱。请只在已隔离且获得授权的环境中使用。
 
@@ -146,11 +147,12 @@ uv run --project redtrace redtrace dispatch --config redtrace.yaml
 
 ## 配置概览
 
-三个可直接复制的配置模板：
+四个可直接复制的配置模板：
 
 | 文件 | 用途 |
 |---|---|
-| `redtrace.local.example.yaml` | 宿主机直接运行 Claude Code、Codex 或 Pi |
+| `redtrace.dsh.example.yaml` | DSH 运行时 + Provider Worker（推荐起点） |
+| `redtrace.local.example.yaml` | 宿主机直跑 Worker |
 | `redtrace.container.example.yaml` | Docker/Compose 与项目级容器隔离 |
 | `redtrace.mock.example.yaml` | 无外部模型的开发和自动化测试 |
 
@@ -158,14 +160,15 @@ uv run --project redtrace redtrace dispatch --config redtrace.yaml
 
 | 配置域 | 说明 |
 |---|---|
+| `providers` | API 协议（OpenAI/Anthropic 兼容）、endpoint、密钥与模型列表（context window、max tokens、reasoning 策略） |
+| `workers` | 类型、启用状态、任务资格、优先级、并发和供应商环境变量 |
 | `runtime` | 执行后端、全局/项目并发、调度周期、健康检查和 Prompt 组 |
 | `tasks` | Bootstrap、Reason、Explore 的主阶段与收尾超时，及 Intent 上限 |
 | `context_harness` | 工件目录、内联/可见/查询/解析预算与 Worker 输出上限 |
 | `container` / `local` | 容器镜像、网络、完成策略或本地 Workspace 根目录 |
-| `workers` | 类型、启用状态、任务能力、优先级、并发和供应商环境变量 |
 | `paths` | Skills、MCP、Plugins、托管状态、Workspace 与审计目录 |
 
-Dispatcher 支持配置快照与安全热加载：新任务使用新配置，已经运行的任务继续使用启动时快照。Web 设置页可创建、复制、启停和测试 Worker；写入使用 revision 做乐观并发控制，API Key 不会在查询响应中回显。
+配置支持快照与热加载：新任务使用新配置，已经运行的任务继续使用启动时快照。Web 设置页可创建、复制、启停和测试 Worker；写入使用 revision 做乐观并发控制，API Key 不会在查询响应中回显。
 
 运行数据只写当前项目：`.redtrace/` 保存数据库、日志、锁和共享运行时，`workspaces/<project_id>/` 保存 Worker 会话、提示与工件，`output/webshell/` 和 `output/c2/` 保存人工审计需要长期保留的落地结果。删除工作台任务会删除对应 Workspace 和任务对话，并物理压缩数据库；WebShell/C2 资产及其操作记录继续保留。
 
@@ -178,6 +181,16 @@ redtrace serve --host 127.0.0.1 --port 8000
 redtrace dispatch --config redtrace.yaml
 redtrace dispatch --config redtrace.yaml --once
 redtrace dispatch --config redtrace.yaml --startup-healthcheck-only
+```
+
+### DSH 运行时构建与测试
+
+```bash
+npm run dsh:install        # 安装 DSH 上游依赖（vendor/deepseek-harness 子模块）
+npm run dsh:build          # 构建上游 + RedTrace DSH 扩展包
+npm run dsh:test           # 运行 TypeScript 侧测试
+npm run dsh:probe          # 探针检查运行时装配
+npm run dsh:check-revision # 校验 DSH 上游 revision pin
 ```
 
 ### 增量证据查询
@@ -236,13 +249,18 @@ Context Harness 会把完整输出保存到 `.redtrace/artifacts/context`，同�
 | 路径 | 内容 |
 |---|---|
 | `redtrace/src/redtrace/server/` | FastAPI 控制面、SQLite、REST/SSE、静态 Web UI |
-| `redtrace/src/redtrace/dispatcher/` | 配置、调度循环、任务编排、运行时与 Worker Adapter |
+| `redtrace/src/redtrace/dispatcher/` | 配置、调度循环、任务编排、运行时与 Mock Worker Adapter |
 | `redtrace/src/redtrace/board/` | Project、Fact、Intent、Hint 的领域模型与存储访问 |
 | `redtrace/src/redtrace/capabilities.py` | Skill/MCP 能力发现、启停、版本与 Workspace 物化 |
 | `redtrace/src/redtrace/worker_config.py` | Worker 配置服务、连接测试和原生 CLI 配置同步 |
-| `skills/` | 多 Worker 共享的一级原生 Skill；由 Claude/Codex/Pi 按需直接加载 |
+| `packages/redtrace-dsh/` | RedTrace DSH 扩展包：Scheduler、契约工具、插件管理、审计投影、Web 托管等 Cordis 插件 |
+| `vendor/deepseek-harness/` | DSH/Cordis 运行时上游（git 子模块，revision pin） |
+| `profiles/redtrace/` | Cordis 运行时组装配置（runtime/direct/reason/isolated） |
+| `skills/` | 多 Worker 共享的一级原生 Skill；由 Agent 按需直接加载 |
 | `mcp/` | 共享 MCP 配置与服务入口 |
 | `container/` | Worker 容器镜像与运行资产 |
+| `scripts/` | DSH 构建、revision 校验与探针辅助脚本 |
+| `.github/workflows/` | 三平台 CI（dsh-mainline）与 DSH 上游周度升级机器人（dsh-upstream） |
 | `.redtrace/` | 项目级数据库、日志、锁和内部运行状态（不提交） |
 | `workspaces/` | 按任务隔离的 Worker 会话、提示、临时文件和工件（不提交） |
 | `output/webshell/`、`output/c2/` | 供人工审计的 WebShell/C2 落地文件（不提交） |
@@ -253,10 +271,13 @@ Context Harness 会把完整输出保存到 `.redtrace/artifacts/context`，同�
 ```bash
 uv sync --project redtrace --locked --group dev
 uv run --project redtrace pytest -q
+npm run dsh:test
 docker compose config -q
 ```
 
-测试套件覆盖 Server API、数据库迁移、调度策略、任务协议、Worker Adapter、实时控制、本地与容器运行时、项目删除、能力管理、上下文工件、部署脚本和 Mock 端到端流程。
+Python 测试套件（340+ 用例）覆盖 Server API、数据库迁移、调度策略、任务协议、Worker 路由、实时控制、本地与容器运行时、项目删除、能力管理、上下文工件、部署脚本和 Mock 端到端流程；TypeScript 侧用 `node:test` 覆盖 DSH 扩展包。
+
+CI 在 Windows、macOS 与 Ubuntu 三个平台上运行全链：依赖同步 → DSH revision 校验 → 构建 → TS 测试 → 探针 → 全量 pytest → 启动脚本冒烟。另有每周一定时任务检测 DSH 上游漂移，自动提交子模块指针更新并开出升级 PR。
 
 ## 安全边界
 
