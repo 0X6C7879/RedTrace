@@ -1,7 +1,7 @@
 interface:
   display_name: "CTF Sandbox Orchestrator"
-  short_description: "Primary sandbox router for CTF and high-grade challenge ops"
-  default_prompt: "Use $ctf-sandbox-orchestrator as the default entrypoint, enforce sandbox assumptions, and self-route to the right specialist path for this challenge."
+  short_description: "Competition Profile rules for sandbox assumptions and evidence"
+  default_prompt: "This Skill is a runtime-injected Competition Profile rule source; apply its sandbox, passive-first, and evidence rules when the profile is active."
 
 policy:
-  allow_implicit_invocation: true
+  allow_implicit_invocation: false

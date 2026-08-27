@@ -1,11 +1,15 @@
 ---
 name: competition-relay-coercion-chain
-description: Internal downstream skill for ctf-sandbox-orchestrator. CTF-sandbox workflow for forced-auth coercion, relay chains, target selection, NTLM or related acceptance paths, and coercion-to-privilege transitions. Use when the user asks to trace a coercion primitive, follow a relay path, analyze forced authentication, determine which service accepts relayed auth, or connect a coercion step to resulting privilege, enrollment, or code execution. Use only after `$ctf-sandbox-orchestrator` has already established sandbox assumptions and routed here.
+description: Competition skill. CTF-sandbox workflow for forced-auth coercion, relay chains, target selection, NTLM or related acceptance paths, and coercion-to-privilege transitions. Use when the user asks to trace a coercion primitive, follow a relay path, analyze forced authentication, determine which service accepts relayed auth, or connect a coercion step to resulting privilege, enrollment, or code execution. Use directly when this Capability matches; the active Competition Profile supplies sandbox assumptions and evidence priorities.
+metadata:
+  redtrace:
+    capabilities: [ad]
+    competition: true
 ---
 
 # Competition Relay Coercion Chain
 
-Use this skill only as a downstream specialization after `$ctf-sandbox-orchestrator` is already active and has established sandbox assumptions, node ownership, and evidence priorities. If that has not happened yet, return to `$ctf-sandbox-orchestrator` first.
+Use this skill directly for the matching challenge surface. The active Competition Profile supplies sandbox assumptions, node ownership, and evidence priorities.
 
 Use this skill when the hard part is proving the full chain from forced authentication to a service that actually accepts the relayed identity.
 

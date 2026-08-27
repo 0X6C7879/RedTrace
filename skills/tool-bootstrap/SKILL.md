@@ -1,6 +1,10 @@
 ---
 name: tool-bootstrap
 description: Missing tool installation workflow — find equivalents, verify OS/arch, install to managed tools directory.
+metadata:
+  redtrace:
+    capabilities: [common]
+    competition: false
 ---
 
 # Tool Bootstrap

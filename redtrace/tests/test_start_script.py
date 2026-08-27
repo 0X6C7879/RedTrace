@@ -22,6 +22,54 @@ def test_start_script_is_valid_bash() -> None:
     subprocess.run(["bash", "-n", str(BASH_SCRIPT)], check=True)
 
 
+class _FakeCompleted:
+    def __init__(self, stdout: str) -> None:
+        self.stdout = stdout
+        self.returncode = 0
+
+
+def _fake_parent_comm(monkeypatch: pytest.MonkeyPatch, comm: str) -> None:
+    monkeypatch.setattr(startup.os, "getppid", lambda: 4242)
+
+    def fake_run(argv: list[str], **_kwargs: object) -> _FakeCompleted:
+        assert "comm=" in argv, f"unexpected probe: {argv}"
+        return _FakeCompleted(comm + "\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix parent-shell probe")
+def test_detect_parent_shell_rejects_launcher_parents(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `uv run redtrace start` makes uv the parent process; it must not become DSH_SHELL.
+    _fake_parent_comm(monkeypatch, "uv")
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    assert startup._detect_parent_shell() == "/bin/zsh"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix parent-shell probe")
+def test_detect_parent_shell_rejects_other_launcher_parents(monkeypatch: pytest.MonkeyPatch) -> None:
+    for comm in ("npm", "node", "make", "/opt/homebrew/bin/python3.14"):
+        _fake_parent_comm(monkeypatch, comm)
+        monkeypatch.setenv("SHELL", "/bin/bash")
+        assert startup._detect_parent_shell() == "/bin/bash", comm
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix parent-shell probe")
+def test_detect_parent_shell_accepts_real_shell_parents(monkeypatch: pytest.MonkeyPatch) -> None:
+    for comm in ("zsh", "-zsh", "/bin/bash", "fish"):
+        _fake_parent_comm(monkeypatch, comm)
+        monkeypatch.setenv("SHELL", "/bin/bash")
+        detected = startup._detect_parent_shell()
+        assert startup._looks_like_shell(detected.rsplit("/", 1)[-1]), comm
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix parent-shell probe")
+def test_detect_parent_shell_falls_back_to_platform_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_parent_comm(monkeypatch, "uv")
+    monkeypatch.delenv("SHELL", raising=False)
+    assert startup._detect_parent_shell() is None
+
+
 def test_platform_wrappers_use_one_shared_start_command() -> None:
     bash = BASH_SCRIPT.read_text(encoding="utf-8")
     windows = WINDOWS_SCRIPT.read_text(encoding="utf-8")

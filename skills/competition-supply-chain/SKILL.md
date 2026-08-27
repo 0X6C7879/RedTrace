@@ -1,11 +1,15 @@
 ---
 name: competition-supply-chain
-description: Internal downstream skill for ctf-sandbox-orchestrator. CTF-sandbox workflow for CI/CD, registry, dependency drift, artifact provenance, image build, release pipeline, and runtime consumer challenges. Use when the user asks to trace dependency drift, registry pulls, malicious packages, build or release tampering, CI execution, artifact signing, or which shipped artifact the runtime actually consumes. Use only after `$ctf-sandbox-orchestrator` has already established sandbox assumptions and routed here.
+description: Competition skill. CTF-sandbox workflow for CI/CD, registry, dependency drift, artifact provenance, image build, release pipeline, and runtime consumer challenges. Use when the user asks to trace dependency drift, registry pulls, malicious packages, build or release tampering, CI execution, artifact signing, or which shipped artifact the runtime actually consumes. Use directly when this Capability matches; the active Competition Profile supplies sandbox assumptions and evidence priorities.
+metadata:
+  redtrace:
+    capabilities: [supply-chain]
+    competition: true
 ---
 
 # Competition Supply Chain
 
-Use this skill only as a downstream specialization after `$ctf-sandbox-orchestrator` is already active and has established sandbox assumptions, node ownership, and evidence priorities. If that has not happened yet, return to `$ctf-sandbox-orchestrator` first.
+Use this skill directly for the matching challenge surface. The active Competition Profile supplies sandbox assumptions, node ownership, and evidence priorities.
 
 Use this skill when the challenge is really about provenance, dependency drift, build output, release flow, or what runtime artifact actually got shipped.
 

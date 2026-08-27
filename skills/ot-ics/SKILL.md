@@ -1,6 +1,10 @@
 ---
 name: ot-ics
 description: Use for authorized OT/ICS security assessment covering Purdue model zoning, PLC/SCADA exposure, industrial protocol discovery, and safe passive-first evaluation.
+metadata:
+  redtrace:
+    capabilities: [ot-ics]
+    competition: false
 ---
 
 # OT / ICS Security

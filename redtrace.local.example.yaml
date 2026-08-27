@@ -53,6 +53,9 @@ common_env:
 #   https_proxy: "http://127.0.0.1:7897"
 #   http_proxy: "http://127.0.0.1:7897"
 #   all_proxy: "http://127.0.0.1:7897"
+  # TSec Benchmark 跑分凭证（skills/tsecbench-api）——从平台创建跑分任务后下发，手工填写
+  # BENCHMARK_BASE_URL: "https://benchmark.example.com"
+  # BENCHMARK_TOKEN: "replace-me"
 
 # Providers own the API protocol, endpoint, credential, and model list;
 # Workers reference them by name with their model, task eligibility,

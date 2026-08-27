@@ -18,7 +18,7 @@ from redtrace.dispatcher.runtime.process import ProcessResult
 from redtrace.dispatcher.scheduler.loop import DispatcherLoop
 from redtrace.server import db
 from redtrace.server.app import app
-from redtrace.board.models import ProjectDetail, ProjectSummary, Settings
+from redtrace.board.models import ProjectDetail, ProjectSummary, Settings, SECURITY_CAPABILITIES
 
 
 class InProcessClient:
@@ -86,6 +86,7 @@ class InProcessClient:
         description: str,
         creator: str,
         *,
+        capabilities: list[str] | None = None,
         max_active_intents: int | None = None,
     ) -> ApiResult:
         payload = {
@@ -93,6 +94,9 @@ class InProcessClient:
             "description": description,
             "creator": creator,
             "worker": None,
+            "capabilities": list(
+                capabilities if capabilities is not None else SECURITY_CAPABILITIES
+            ),
         }
         if max_active_intents is not None:
             payload["max_active_intents"] = max_active_intents

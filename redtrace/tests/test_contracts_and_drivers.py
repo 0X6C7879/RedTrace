@@ -28,14 +28,28 @@ def test_reason_payload_normalizes_legacy_intents() -> None:
             "accepted": True,
             "data": {
                 "intents": [
-                    {"from": ["f001"], "description": "one"},
+                    {"from": ["f001"], "description": "one", "capabilities": ["web"]},
                 ]
             },
         },
     )
 
     assert kind == "intents"
-    assert data == [{"from": ["f001"], "description": "one"}]
+    assert data == [{"from": ["f001"], "description": "one", "capabilities": ["web"]}]
+
+
+def test_reason_payload_rejects_intent_without_capabilities() -> None:
+    with pytest.raises(ValueError, match="capabilities must be a non-empty array"):
+        validate_reason_payload(
+            {
+                "accepted": True,
+                "data": {
+                    "intents": [
+                        {"from": ["f001"], "description": "one"},
+                    ]
+                },
+            },
+        )
 
 
 def test_reason_payload_accepts_empty_data_as_noop() -> None:

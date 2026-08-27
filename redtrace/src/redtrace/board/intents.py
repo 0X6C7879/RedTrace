@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from fastapi import HTTPException
 
 from redtrace.board.models import (
@@ -9,6 +10,7 @@ from redtrace.board.models import (
     Fact,
     Intent,
     UpdateIntentExecutionProfileRequest,
+    UpdateIntentCapabilitiesRequest,
 )
 from redtrace.board.storage import (
     check_project_active,
@@ -36,6 +38,13 @@ def create(project_id: str, request: CreateIntentRequest) -> Intent:
         validate_facts_exist(conn, project_id, request.from_)
         validate_goal_not_in_sources(request.from_)
         validate_intent_creator_worker(request.creator, request.worker)
+        is_bootstrap = (
+            request.creator == BOOTSTRAP_CREATOR
+            and request.description == "bootstrap"
+            and request.from_ == ["origin"]
+        )
+        if not is_bootstrap and not request.capabilities:
+            raise HTTPException(422, "capabilities must contain at least one direction")
 
         if request.max_active_intents is not None:
             active_count = conn.execute(
@@ -58,7 +67,7 @@ def create(project_id: str, request: CreateIntentRequest) -> Intent:
         intent_id = next_intent_id(conn, project_id)
         claimed = request.worker is not None
         conn.execute(
-            "INSERT INTO intents (id, project_id, to_fact_id, description, creator, worker, execution_profile, last_heartbeat_at, created_at, concluded_at, state) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?)",
+            "INSERT INTO intents (id, project_id, to_fact_id, description, creator, worker, execution_profile, capabilities, last_heartbeat_at, created_at, concluded_at, state) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
             (
                 intent_id,
                 project_id,
@@ -66,6 +75,7 @@ def create(project_id: str, request: CreateIntentRequest) -> Intent:
                 request.creator,
                 request.worker,
                 request.execution_profile,
+                json.dumps(request.capabilities),
                 now if claimed else None,
                 now,
                 "working" if claimed else "open",
@@ -84,6 +94,7 @@ def create(project_id: str, request: CreateIntentRequest) -> Intent:
             creator=request.creator,
             worker=request.worker,
             execution_profile=request.execution_profile,
+            capabilities=request.capabilities,
             last_heartbeat_at=now if claimed else None,
             created_at=now,
             concluded_at=None,
@@ -103,6 +114,22 @@ def update_execution_profile(
         conn.execute(
             "UPDATE intents SET execution_profile = ? WHERE id = ? AND project_id = ?",
             (request.execution_profile, intent_id, project_id),
+        )
+        return _load_intent(conn, project_id, intent_id)
+
+
+def update_capabilities(
+    project_id: str,
+    intent_id: str,
+    request: UpdateIntentCapabilitiesRequest,
+) -> Intent:
+    """Change the direction set only before an Intent is claimed."""
+    with get_conn(immediate=True) as conn:
+        check_project_active(conn, project_id)
+        get_unclaimed_open_intent_or_404(conn, project_id, intent_id)
+        conn.execute(
+            "UPDATE intents SET capabilities = ? WHERE id = ? AND project_id = ?",
+            (json.dumps(request.capabilities), intent_id, project_id),
         )
         return _load_intent(conn, project_id, intent_id)
 

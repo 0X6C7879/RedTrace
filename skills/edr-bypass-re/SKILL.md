@@ -7,6 +7,10 @@ description: |
   Tartarus Gate、ETW patch、AMSI patch、call stack spoofing、hardware breakpoint Blindside、MITRE T1562、
   ntdll unhook、kernel callback、CrowdStrike 绕过、Defender 绕过、Sentinel One 绕过、Elastic Defend、
   Sysmon 规避、PPID spoof、Sleep mask、Process Hollowing、Reflective DLL。
+metadata:
+  redtrace:
+    capabilities: [malware]
+    competition: false
 ---
 
 ## ACTION REQUIRED（读完后立刻执行）

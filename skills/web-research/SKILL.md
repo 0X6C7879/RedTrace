@@ -1,6 +1,10 @@
 ---
 name: web-research
 description: Web research strategy — provider priority, URL retention, and when to re-research based on new evidence.
+metadata:
+  redtrace:
+    capabilities: [exploit-research]
+    competition: false
 ---
 
 # Web Research Strategy

@@ -1,6 +1,10 @@
 ---
 name: radio-sdr
 description: Use for authorized RF/SDR security research including signal identification, replay feasibility study in shielded labs, and wireless protocol analysis outside classic Wi-Fi.
+metadata:
+  redtrace:
+    capabilities: [radio-sdr]
+    competition: false
 ---
 
 # RF / SDR Security Research

@@ -1,6 +1,10 @@
 ---
 name: protocol-reverse
 description: Use for authorized reverse engineering of custom binary protocols, Protobuf/gRPC, WebSocket frames, and PCAP-driven protocol recovery.
+metadata:
+  redtrace:
+    capabilities: [network]
+    competition: false
 ---
 
 # Protocol Reverse Engineering

@@ -29,6 +29,7 @@ const task = type => ({ type, projectId: 'p1', worker: 'w1', committed: false })
 test('reason launch prompt carries the full graph exactly once', () => {
   const prompt = taskPrompt(task('reason'), project)
   assert.match(prompt, /## Origin\n某 CTF 比赛环境入口/)
+  assert.ok(!prompt.includes('本 session 只对下方 Current Intent 负责'))
   assert.match(prompt, /## Goal\n拿到最终 flag/)
   assert.match(prompt, /## Facts\n- \[f001\] 发现 \/admin 登录页\n- \[f002\] SQL 注入点已确认/)
   assert.match(prompt, /## Intents\(最多创建 4 个活跃 Intent\)/)
@@ -62,6 +63,7 @@ test('reason continuation prompt carries only ordered graph changes', () => {
 test('bootstrap launch prompt carries Origin/Goal/Hints only', () => {
   const prompt = taskPrompt(task('bootstrap'), project)
   assert.match(prompt, /## Origin\n某 CTF 比赛环境入口/)
+  assert.ok(!prompt.includes('本 session 只对下方 Current Intent 负责'))
   assert.match(prompt, /## Goal\n拿到最终 flag/)
   assert.match(prompt, /## Hints\n- \[h001\] 优先检查 \/admin/)
   assert.ok(!prompt.includes('## Facts'))
@@ -75,6 +77,7 @@ test('explore launch prompt carries the Intent local context', () => {
   const prompt = taskPrompt(task('explore'), project, intent, resources)
   assert.match(prompt, /## Origin\n某 CTF 比赛环境入口/)
   assert.match(prompt, /## Goal\n拿到最终 flag/)
+  assert.match(prompt, /本 session 只对下方 Current Intent 负责/)
   assert.match(prompt, /## Source Facts\n- \[f001\] 发现 \/admin 登录页/)
   assert.match(prompt, /## Current Intent\n- \[i002\] open: 测试后台弱口令\(from: \[f001\]\)/)
   assert.match(prompt, /## Resources\n- \[credential\] 后台账号 \(admin:admin\) — 有效凭据 <id: r001>/)

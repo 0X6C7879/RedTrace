@@ -20,6 +20,7 @@ export interface PresetConfig {
   task: RuntimeTask
   cwd: string
   skillsDir: string
+  competitionRules?: string
 }
 
 export async function apply(scoped: ScopedContext, config: PresetConfig): Promise<void> {
@@ -27,6 +28,18 @@ export async function apply(scoped: ScopedContext, config: PresetConfig): Promis
     scoped = scoped.isolate(service)
   }
   scoped.systemPrompt.section({ name: 'redtrace:persona', order: 0, text: persona('explore') })
+  scoped.systemPrompt.section({
+    name: 'redtrace:workspace',
+    order: 1,
+    text: `Workspace 目录:${config.cwd}。任务产生的文件都放在该目录下。`,
+  })
+  if (config.competitionRules?.trim()) {
+    scoped.systemPrompt.section({
+      name: 'redtrace:competition-profile',
+      order: 2,
+      text: `Competition Profile 通用规则:\n${config.competitionRules.trim()}`,
+    })
+  }
   if (config.task.executionProfile === 'isolated') {
     await mount(scoped, 'vendor/deepseek-harness/packages/sandbox/sandbox-local/lib/index.js')
     await mount(scoped, 'vendor/deepseek-harness/packages/sandbox/sandbox-policy/lib/index.js', { mode: 'workspace-write', workspaceRoot: config.cwd })

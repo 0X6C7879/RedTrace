@@ -8,9 +8,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from redtrace.capabilities import CapabilityStore, SkillConflictError, _frontmatter
+from redtrace.board.models import ALL_CAPABILITIES, CapabilityName, SkillProfile
+from redtrace.capabilities import CapabilityStore, SkillCatalogError, SkillConflictError, _frontmatter
 
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
 
@@ -45,6 +46,18 @@ class RollbackRequest(BaseModel):
     expected_revision: str | None = None
 
 
+class CatalogResolveRequest(BaseModel):
+    capabilities: list[CapabilityName] = Field(min_length=1)
+    skill_profile: SkillProfile = "standard"
+
+    @field_validator("capabilities")
+    @classmethod
+    def validate_capabilities(cls, value: list[CapabilityName]) -> list[CapabilityName]:
+        if len(set(value)) != len(value):
+            raise ValueError("capabilities must not contain duplicates")
+        return value
+
+
 def _store() -> CapabilityStore:
     return CapabilityStore()
 
@@ -64,6 +77,10 @@ def _nested_skill_payload(parent: str, root: Path, entrypoint: Path) -> dict[str
     content = entrypoint.read_text(encoding="utf-8")
     relative = entrypoint.relative_to(root).as_posix()
     metadata = _frontmatter(content)
+    parent_metadata = _frontmatter((root / "SKILL.md").read_text(encoding="utf-8"))
+    parent_redtrace = parent_metadata.get("metadata", {}).get("redtrace", {})
+    if not isinstance(parent_redtrace, dict):
+        parent_redtrace = {}
     return {
         "key": f"{parent}:{relative}",
         "parent": parent,
@@ -72,6 +89,8 @@ def _nested_skill_payload(parent: str, root: Path, entrypoint: Path) -> dict[str
         "description": metadata.get("description", ""),
         "depth": len(PurePosixPath(relative).parts) - 1,
         "nested": True,
+        "capabilities": parent_redtrace.get("capabilities", []),
+        "competition": parent_redtrace.get("competition", False),
     }
 
 
@@ -147,6 +166,8 @@ def _build_skill_entries(store: CapabilityStore) -> list[dict[str, Any]]:
                 "enabled": record.enabled,
                 "depth": 0,
                 "trust": record.trust,
+                "capabilities": list(record.capabilities),
+                "competition": record.competition,
             }
         )
         for entrypoint in _iter_nested_entrypoints(root_dir):
@@ -168,6 +189,11 @@ def _build_skill_entries(store: CapabilityStore) -> list[dict[str, Any]]:
                     "readonly": True,
                     "enabled": record.enabled,
                     "depth": len(PurePosixPath(relative).parts) - 1,
+                    # Nested entries are displayed in the same catalog tree;
+                    # inherit the top-level classification so Capability and
+                    # Profile filters remain useful for package contents.
+                    "capabilities": list(record.capabilities),
+                    "competition": record.competition,
                 }
             )
     return entries
@@ -196,6 +222,27 @@ def get_capabilities():
             },
         ],
     }
+
+
+@router.get("/catalog")
+def get_skill_catalog_diagnostics():
+    """Return the classification snapshot without resolving a Session."""
+    store = _store()
+    return {
+        "capabilities": list(ALL_CAPABILITIES),
+        "skills": store.classify_skills(),
+    }
+
+
+@router.post("/resolve")
+def resolve_skill_catalog(body: CatalogResolveRequest):
+    """Resolve the bounded Skill list for one Explore Session."""
+    try:
+        return _store().resolve_skill_catalog(body.capabilities, body.skill_profile)
+    except SkillCatalogError as exc:
+        raise HTTPException(422, {"message": str(exc), "diagnostics": exc.diagnostics}) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.get("/skills")

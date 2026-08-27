@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const shimDir = mkdtempSync(join(tmpdir(), 'redtrace-corepack-'))
 writeFileSync(join(shimDir, 'pnpm'), '#!/bin/sh\nexec corepack pnpm@11.7.0 "$@"\n')
@@ -13,7 +14,7 @@ try {
   const repositoryRoot = new URL('..', import.meta.url)
   const dshRoot = process.env.REDTRACE_DSH_ROOT
     ? resolve(process.env.REDTRACE_DSH_ROOT)
-    : resolve(new URL('vendor/deepseek-harness', repositoryRoot))
+    : resolve(fileURLToPath(new URL('vendor/deepseek-harness', repositoryRoot)))
   const command = process.argv[2]
   const pnpmOptions = command === 'install' ? [] : ['--config.frozen-lockfile=false']
   result = spawnSync(

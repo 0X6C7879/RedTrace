@@ -76,6 +76,7 @@ def test_blackboard_status_changes_node_path_context_and_audit(
     created = client.post(
         f"/projects/{project_id}/intents",
         json={
+            "capabilities": ["web"],
             "from": ["origin"],
             "description": "investigate",
             "creator": "codex-1",
@@ -452,6 +453,7 @@ def test_fact_source_exposes_worker_conversation(client: TestClient) -> None:
     created = client.post(
         f"/projects/{project_id}/intents",
         json={
+            "capabilities": ["web"],
             "from": ["origin"],
             "description": "inspect https://target.test/login",
             "creator": "worker-a",
@@ -530,6 +532,7 @@ def test_intent_ownership_changes_are_coordination_events(client: TestClient) ->
     intent = client.post(
         f"/projects/{project_id}/intents",
         json={
+            "capabilities": ["web"],
             "from": ["origin"],
             "description": "inspect target",
             "creator": "reason",

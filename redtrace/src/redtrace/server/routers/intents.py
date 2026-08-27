@@ -12,6 +12,7 @@ from redtrace.board.models import (
     Intent,
     TaskOutcomeRequest,
     UpdateIntentExecutionProfileRequest,
+    UpdateIntentCapabilitiesRequest,
 )
 from redtrace.board.storage import (
     bump_planning_revision,
@@ -44,6 +45,18 @@ def update_execution_profile(
     body: UpdateIntentExecutionProfileRequest,
 ):
     return intents.update_execution_profile(project_id, intent_id, body)
+
+
+@router.patch(
+    "/projects/{project_id}/intents/{intent_id}/capabilities",
+    response_model=Intent,
+)
+def update_capabilities(
+    project_id: str,
+    intent_id: str,
+    body: UpdateIntentCapabilitiesRequest,
+):
+    return intents.update_capabilities(project_id, intent_id, body)
 
 
 @router.post(

@@ -77,7 +77,7 @@ def _publish_blackboard_revision(revision: int) -> None:
         _blackboard_condition.notify_all()
 
 
-SCHEMA = """\
+_SCHEMA_HEAD = """\
 CREATE TABLE IF NOT EXISTS settings (
     intent_timeout INTEGER NOT NULL DEFAULT 15,
     reason_timeout INTEGER NOT NULL DEFAULT 15
@@ -90,6 +90,8 @@ CREATE TABLE IF NOT EXISTS projects (
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
     bootstrap_enabled INTEGER NOT NULL DEFAULT 1,
+    skill_profile TEXT NOT NULL DEFAULT 'standard'
+        CHECK (skill_profile IN ('standard', 'competition')),
     created_at TEXT NOT NULL,
     reason_worker TEXT,
     reason_trigger TEXT,
@@ -120,6 +122,7 @@ CREATE TABLE IF NOT EXISTS intents (
     worker TEXT,
     execution_profile TEXT NOT NULL DEFAULT 'direct'
         CHECK (execution_profile IN ('direct', 'isolated')),
+    capabilities TEXT NOT NULL DEFAULT '[]',
     last_heartbeat_at TEXT,
     created_at TEXT NOT NULL,
     concluded_at TEXT,
@@ -247,12 +250,13 @@ BEGIN
     INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
     VALUES (NEW.project_id, 'intent', NEW.id, 'added', NEW.created_at);
 END;
+"""
 
-DROP TRIGGER IF EXISTS trg_blackboard_intent_state_changed;
+_INTENT_STATE_CHANGED_TRIGGER = """\
 CREATE TRIGGER trg_blackboard_intent_state_changed
 AFTER UPDATE OF worker, to_fact_id, concluded_at, priority, state,
     goal_id, superseded_by, invalidated_by, drop_reason, attempt_count,
-    cumulative_runtime_ms, fact_yield, last_progress_at ON intents
+    cumulative_runtime_ms, fact_yield, last_progress_at, capabilities ON intents
 WHEN OLD.worker IS NOT NEW.worker
   OR OLD.to_fact_id IS NOT NEW.to_fact_id
   OR OLD.concluded_at IS NOT NEW.concluded_at
@@ -266,6 +270,7 @@ WHEN OLD.worker IS NOT NEW.worker
   OR OLD.cumulative_runtime_ms IS NOT NEW.cumulative_runtime_ms
   OR OLD.fact_yield IS NOT NEW.fact_yield
   OR OLD.last_progress_at IS NOT NEW.last_progress_at
+  OR OLD.capabilities IS NOT NEW.capabilities
 BEGIN
     INSERT INTO blackboard_events (project_id, kind, node_id, action, created_at)
     VALUES (
@@ -281,7 +286,9 @@ BEGIN
         strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     );
 END;
+"""
 
+_SCHEMA_TAIL = """\
 CREATE TRIGGER IF NOT EXISTS trg_blackboard_hint_added
 AFTER INSERT ON hints
 BEGIN
@@ -467,6 +474,13 @@ ON resource_audit_events(project_id, id);
 CREATE INDEX IF NOT EXISTS idx_resource_audit_resource
 ON resource_audit_events(resource_id, id);
 """
+
+SCHEMA = (
+    _SCHEMA_HEAD
+    + "DROP TRIGGER IF EXISTS trg_blackboard_intent_state_changed;\n"
+    + _INTENT_STATE_CHANGED_TRIGGER
+    + _SCHEMA_TAIL
+)
 
 SQLITE_BUSY_TIMEOUT_SECONDS = 30.0
 
@@ -800,6 +814,7 @@ def _ensure_project_columns(conn: sqlite3.Connection) -> None:
                 "UPDATE projects SET bootstrap_enabled = CASE WHEN bootstrap_mode = 'disabled' THEN 0 ELSE 1 END"
             )
     additions = {
+        "skill_profile": "TEXT NOT NULL DEFAULT 'standard'",
         "reason_failure_count": "INTEGER NOT NULL DEFAULT 0",
         "reason_failure_signature": "TEXT",
         "reason_retry_after": "REAL",
@@ -812,6 +827,12 @@ def _ensure_project_columns(conn: sqlite3.Connection) -> None:
     for name, definition in additions.items():
         if name not in columns:
             conn.execute(f"ALTER TABLE projects ADD COLUMN {name} {definition}")
+    # Legacy databases had no profile constraint; normalize any malformed
+    # values before ProjectMeta is materialized through the Literal type.
+    conn.execute(
+        "UPDATE projects SET skill_profile = 'standard' "
+        "WHERE skill_profile IS NULL OR skill_profile NOT IN ('standard', 'competition')"
+    )
     if planning_revision_added:
         conn.execute(
             """
@@ -843,6 +864,7 @@ def _ensure_project_columns(conn: sqlite3.Connection) -> None:
         "fact_yield": "INTEGER NOT NULL DEFAULT 0",
         "last_progress_at": "TEXT",
         "execution_profile": "TEXT NOT NULL DEFAULT 'direct'",
+        "capabilities": "TEXT NOT NULL DEFAULT '[]'",
     }.items():
         if name not in intent_columns:
             conn.execute(f"ALTER TABLE intents ADD COLUMN {name} {definition}")
@@ -872,6 +894,35 @@ def _ensure_project_columns(conn: sqlite3.Connection) -> None:
           AND (to_fact_id IS NOT NULL OR worker IS NOT NULL)
         """
     )
+    # Older active Intents had no direction metadata. Preserve their ability
+    # to run during the one-time migration by assigning every current
+    # security direction; all newly-created Intents are validated strictly.
+    # The intent-state trigger is detached so this metadata migration stays
+    # invisible on the blackboard timeline.
+    legacy_capabilities = json.dumps(
+        [
+            "web", "api", "database", "thick-client", "supply-chain",
+            "exploit-research", "network", "internal", "pivoting",
+            "windows-privesc", "linux-privesc", "ad", "post-exploitation",
+            "c2", "reverse", "pwn", "malware", "crypto", "mobile", "cloud",
+            "blockchain", "firmware-iot", "hardware", "wireless", "radio-sdr",
+            "ot-ics", "identity", "email", "ai-security", "forensics",
+            "threat-hunting",
+        ]
+    )
+    conn.execute("DROP TRIGGER IF EXISTS trg_blackboard_intent_state_changed")
+    conn.execute(
+        """
+        UPDATE intents
+        SET capabilities = ?
+        WHERE capabilities = '[]'
+          AND to_fact_id IS NULL
+          AND creator != 'dispatcher.bootstrap'
+          AND state NOT IN ('concluded', 'dropped', 'superseded')
+        """,
+        (legacy_capabilities,),
+    )
+    conn.execute(_INTENT_STATE_CHANGED_TRIGGER)
 
 
 def _ensure_deletion_columns(conn: sqlite3.Connection) -> None:

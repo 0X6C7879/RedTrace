@@ -261,6 +261,21 @@ Bootstrap、Reason 和 Explore 都先通过 Server 完成原子认领，再向�
 
 项目并发与 Worker 并发只在认领成功后计数；任务结束、拒绝、取消或异常时统一释放。
 
+### 5.4 Capability 驱动的 Skill Catalog
+
+Reason 只在 `redtrace_intent_create` 中声明一个或多个固定 Capability；它
+不选择具体 Skill。Explore 启动前，Dispatcher 读取项目启动时的
+`skill_profile` 快照，并通过 Capability Resolver 合并七个 `common` Skill
+与 Intent 方向 Skill。`competition` Profile 额外加入同方向的
+`competition-*` Skill，同时注入 `ctf-sandbox-orchestrator` 的短规则正文；该
+文件不可由模型调用，也不承担路由职责。
+
+Resolver 为每个 Explore Session 在
+`.redtrace/runtime/skill-views/<session-id>/` 原子创建指向根 `skills/<name>`
+的目录链接。链接视图只挂载到当前 Agent，Session 结束、取消、超时或异常
+时在 `finally` 中清理，因此同一水平化 Worker 的并发 Session 可以拥有不同
+方向而互不污染。Bootstrap 继续挂载完整根目录；Reason 没有 Skill 能力。
+
 ## 6. 实时证据协同
 
 ### 6.1 修订与增量读取

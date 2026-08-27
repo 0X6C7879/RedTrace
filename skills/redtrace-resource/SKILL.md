@@ -1,6 +1,10 @@
 ---
 name: redtrace-resource
 description: RedTrace shared Resource registry. Hit this the moment you establish a reusable access channel — write/upload a WebShell, catch a reverse/bind shell, start a listener, bring a C2 session/beacon online — and register it so other Workers can discover it; also for reusing an existing WebShell/C2 session/credential/proxy/file instead of rebuilding, and for on-demand queries of shared assets. 触发词：WebShell、反弹 shell、reverse shell、bind shell、监听器、listener、C2 上线、session、beacon、复用通道、共享资产、注册 Resource。
+metadata:
+  redtrace:
+    capabilities: [common]
+    competition: false
 ---
 
 # RedTrace Resource

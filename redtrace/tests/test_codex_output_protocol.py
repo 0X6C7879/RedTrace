@@ -43,7 +43,7 @@ def test_normal_explore_accepted_passes_contract() -> None:
 def test_normal_reason_accepted_passes_contract() -> None:
     payload = {
         "accepted": True,
-        "data": {"intents": [{"from": ["f1"], "description": "desc"}]},
+        "data": {"intents": [{"from": ["f1"], "description": "desc", "capabilities": ["web"]}]},
     }
     kind, intents = validate_reason_payload(payload)
     assert kind == "intents"
@@ -159,7 +159,7 @@ def test_reason_unwrapped_json_without_provider_schema() -> None:
     payload = {
         "accepted": True,
         "data": {
-            "intents": [{"from": ["f1"], "description": "new intent"}],
+            "intents": [{"from": ["f1"], "description": "new intent", "capabilities": ["web"]}],
         },
     }
     kind, intents = validate_reason_payload(payload)

@@ -28,7 +28,7 @@ def _project(client: TestClient) -> str:
 def _intent(client: TestClient, project_id: str, description: str) -> dict:
     response = client.post(
         f"/projects/{project_id}/intents",
-        json={"from": ["origin"], "description": description, "creator": "reasoner"},
+        json={"from": ["origin"], "description": description, "creator": "reasoner", "capabilities": ["web"]},
     )
     assert response.status_code == 201
     return response.json()
@@ -147,6 +147,7 @@ def test_bootstrap_failures_keep_the_cairn_retry_path_open(
             "from": ["origin"],
             "description": "bootstrap",
             "creator": "dispatcher.bootstrap",
+            "capabilities": [],
         },
     ).json()
     before = _revision(client, project_id)

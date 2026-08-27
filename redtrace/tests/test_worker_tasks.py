@@ -38,7 +38,7 @@ def test_reason_inlines_graph_snapshot_and_creates_intent(monkeypatch) -> None:
         "run_worker_process",
         lambda *_args, **_kwargs: ProcessResult(
             0,
-            '{"accepted":true,"data":{"intents":[{"from":["f001"],"description":"next step"}]}}',
+            '{"accepted":true,"data":{"intents":[{"from":["f001"],"description":"next step","capabilities":["web"]}]}}',
             "",
         ),
     )
@@ -54,7 +54,9 @@ def test_reason_inlines_graph_snapshot_and_creates_intent(monkeypatch) -> None:
     )
 
     assert outcome == "success"
-    assert client.created_intents == [("proj_001", ["f001"], "next step", "test-worker")]
+    assert client.created_intents == [
+        ("proj_001", ["f001"], "next step", "test-worker", ["web"])
+    ]
     assert client.released_reasons == [("proj_001", "test-worker")]
     assert lease.started and lease.stopped
     assert containers.writes == []
@@ -79,7 +81,7 @@ def test_reason_uses_initial_environment_sensing_without_bootstrap(monkeypatch) 
         "run_worker_process",
         lambda *_args, **_kwargs: ProcessResult(
             0,
-            '{"accepted":true,"data":{"intents":[{"from":["origin"],"description":"inspect environment"}]}}',
+            '{"accepted":true,"data":{"intents":[{"from":["origin"],"description":"inspect environment","capabilities":["network","api"]}]}}',
             "",
         ),
     )
@@ -95,7 +97,9 @@ def test_reason_uses_initial_environment_sensing_without_bootstrap(monkeypatch) 
     )
 
     assert outcome == "success"
-    assert client.created_intents == [("proj_001", ["origin"], "inspect environment", "test-worker")]
+    assert client.created_intents == [
+        ("proj_001", ["origin"], "inspect environment", "test-worker", ["network", "api"])
+    ]
 
 
 def test_bootstrap_timeout_uses_cairn_conclude_fallback(monkeypatch) -> None:
@@ -188,7 +192,7 @@ def test_reason_timeout_recovers_with_same_session(monkeypatch) -> None:
             ProcessResult(124, "partial planning", "", timed_out=True),
             ProcessResult(
                 0,
-                '{"accepted":true,"data":{"intents":[{"from":["f001"],"description":"recovered"}]}}',
+                '{"accepted":true,"data":{"intents":[{"from":["f001"],"description":"recovered","capabilities":["reverse"]}]}}',
                 "",
             ),
         ]
@@ -210,7 +214,9 @@ def test_reason_timeout_recovers_with_same_session(monkeypatch) -> None:
     )
 
     assert outcome == "success"
-    assert client.created_intents == [("proj_001", ["f001"], "recovered", "test-worker")]
+    assert client.created_intents == [
+        ("proj_001", ["f001"], "recovered", "test-worker", ["reverse"])
+    ]
     assert len(driver.conclude_prompts) == 1
 
 
@@ -230,9 +236,9 @@ def test_reason_only_fills_available_open_intent_slots(monkeypatch) -> None:
         lambda *_args, **_kwargs: ProcessResult(
             0,
             '{"accepted":true,"data":{"intents":['
-            '{"from":["f001"],"description":"slot one"},'
-            '{"from":["f001"],"description":"slot two"},'
-            '{"from":["f001"],"description":"overflow"}]}}',
+            '{"from":["f001"],"description":"slot one","capabilities":["web"]},'
+            '{"from":["f001"],"description":"slot two","capabilities":["api"]},'
+            '{"from":["f001"],"description":"overflow","capabilities":["web"]}]}}',
             "",
         ),
     )
@@ -249,8 +255,8 @@ def test_reason_only_fills_available_open_intent_slots(monkeypatch) -> None:
 
     assert outcome == "success"
     assert client.created_intents == [
-        ("proj_001", ["f001"], "slot one", "test-worker"),
-        ("proj_001", ["f001"], "slot two", "test-worker"),
+        ("proj_001", ["f001"], "slot one", "test-worker", ["web"]),
+        ("proj_001", ["f001"], "slot two", "test-worker", ["api"]),
     ]
 
 
@@ -272,7 +278,7 @@ def test_reason_at_open_intent_limit_creates_no_more(monkeypatch) -> None:
         lambda *_args, **_kwargs: ProcessResult(
             0,
             '{"accepted":true,"data":{"intents":['
-            '{"from":["f001"],"description":"overflow"}]}}',
+            '{"from":["f001"],"description":"overflow","capabilities":["web"]}]}}',
             "",
         ),
     )
@@ -535,7 +541,7 @@ def test_reason_startup_only_mode_skips_task_healthcheck(monkeypatch) -> None:
         "run_worker_process",
         lambda *_args, **_kwargs: ProcessResult(
             0,
-            '{"accepted":true,"data":{"intents":[{"from":["f001"],"description":"next"}]}}',
+            '{"accepted":true,"data":{"intents":[{"from":["f001"],"description":"next","capabilities":["forensics"]}]}}',
             "",
         ),
     )
@@ -551,7 +557,9 @@ def test_reason_startup_only_mode_skips_task_healthcheck(monkeypatch) -> None:
     )
 
     assert outcome == "success"
-    assert client.created_intents == [("proj_001", ["f001"], "next", "test-worker")]
+    assert client.created_intents == [
+        ("proj_001", ["f001"], "next", "test-worker", ["forensics"])
+    ]
 
 
 def test_access_channel_claim_concludes_without_resource_registration(

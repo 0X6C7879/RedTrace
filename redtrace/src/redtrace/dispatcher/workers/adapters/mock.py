@@ -79,10 +79,16 @@ if phase=="reason":
         print(json.dumps({"accepted":True,"data":{"complete":{"from":from_ids,"description":f"mock complete from {from_ids[0]}"}}}, ensure_ascii=False))
     elif outcome=="intent":
         count=random.randint(1,max(1,max_i))
+        capability_names=("common","web","api","database","thick-client","supply-chain",
+            "exploit-research","network","internal","pivoting","windows-privesc",
+            "linux-privesc","ad","post-exploitation","c2","reverse","pwn","malware",
+            "crypto","mobile","cloud","blockchain","firmware-iot","hardware","wireless",
+            "radio-sdr","ot-ics","identity","email","ai-security","forensics","threat-hunting")
         intents=[]
         for idx in range(count):
             fi=[random.choice(fact_ids)] if fact_ids else []
-            intents.append({"from":fi,"description":f"mock intent {idx+1} from {fi[0] if fi else 'none'}"})
+            caps=random.sample(capability_names, random.randint(1,2))
+            intents.append({"from":fi,"description":f"mock intent {idx+1} from {fi[0] if fi else 'none'}","capabilities":caps})
         print(json.dumps({"accepted":True,"data":{"intents":intents}}, ensure_ascii=False))
     elif outcome=="noop":
         print(json.dumps({"accepted":True,"data":{}}, ensure_ascii=False))

@@ -7,7 +7,7 @@ from typing import Any
 
 import requests
 from pydantic import TypeAdapter
-from redtrace.board.models import ProjectDetail, ProjectSummary, Settings
+from redtrace.board.models import ProjectDetail, ProjectSummary, SECURITY_CAPABILITIES, Settings
 from requests.adapters import HTTPAdapter
 
 LOG = logging.getLogger(__name__)
@@ -248,6 +248,7 @@ class ControlPlaneClient:
         description: str,
         creator: str,
         *,
+        capabilities: list[str] | None = None,
         max_active_intents: int | None = None,
     ) -> ApiResult:
         payload: dict[str, Any] = {
@@ -255,6 +256,7 @@ class ControlPlaneClient:
             "description": description,
             "creator": creator,
             "worker": None,
+            "capabilities": list(capabilities if capabilities is not None else SECURITY_CAPABILITIES),
         }
         if max_active_intents is not None:
             payload["max_active_intents"] = max_active_intents

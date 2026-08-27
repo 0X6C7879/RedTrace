@@ -1,6 +1,10 @@
 ---
 name: mobile-reverse
 description: Use for authorized Android or iOS application reverse engineering and security testing, including APK or IPA analysis, runtime instrumentation, SSL pinning, and platform protection checks.
+metadata:
+  redtrace:
+    capabilities: [mobile]
+    competition: false
 ---
 # Mobile Reverse Engineering
 

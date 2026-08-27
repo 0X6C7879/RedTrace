@@ -2,6 +2,10 @@
 name: <skill-name>
 description: >-
   <one-paragraph summary of what this skill covers and when to use it>
+metadata:
+  redtrace:
+    capabilities: [common]
+    competition: false
 ---
 
 # RedTrace Skill Template

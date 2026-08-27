@@ -1,6 +1,10 @@
 ---
 name: supply-chain-security
 description: Use for software supply-chain security assessment covering SBOM, SCA, CI/CD pipelines, container images, build integrity, dependency provenance, and vulnerability reachability.
+metadata:
+  redtrace:
+    capabilities: [supply-chain]
+    competition: false
 ---
 # Supply Chain Security Testing
 

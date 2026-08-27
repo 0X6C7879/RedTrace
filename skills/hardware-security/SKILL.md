@@ -1,6 +1,10 @@
 ---
 name: hardware-security
 description: Use for authorized hardware and embedded interface security research including UART/JTAG discovery, debug pad triage, secure boot overview, and offline firmware extraction support.
+metadata:
+  redtrace:
+    capabilities: [hardware]
+    competition: false
 ---
 
 # Hardware / Embedded Interface Security

@@ -21,6 +21,17 @@ class StartupError(RuntimeError):
     pass
 
 
+def _looks_like_shell(name: str) -> bool:
+    """Whether a process name is a real shell (zsh/bash/sh/dash/ksh/fish/pwsh...).
+
+    Launchers such as ``uv run``/``npm``/``make`` sit between the invoking shell
+    and this process; accepting them as DSH_SHELL would make every worker bash
+    command spawn ``uv -c ...`` instead of a shell.
+    """
+    base = name.rstrip("/").rsplit("/", 1)[-1].lower()
+    return "sh" in base
+
+
 def _detect_parent_shell() -> str | None:
     """Detect the shell that launched this process.
 
@@ -37,7 +48,8 @@ def _detect_parent_shell() -> str | None:
             return "powershell.exe"
         return os.environ.get("ComSpec") or "cmd.exe"
 
-    # Unix: probe the parent process first (most reliable).
+    # Unix: probe the parent process first (most reliable). The parent may be a
+    # launcher (uv/npm/...) rather than a shell, so only accept shell-like names.
     try:
         ppid = os.getppid()
         result = _sp.run(
@@ -45,8 +57,8 @@ def _detect_parent_shell() -> str | None:
             capture_output=True, text=True, timeout=2,
         )
         if result.returncode == 0:
-            name = result.stdout.strip()
-            if name:
+            name = result.stdout.strip().lstrip("-")
+            if name and _looks_like_shell(name):
                 # ps may return a bare name ("zsh") or an absolute path.
                 if name.startswith("/"):
                     return name

@@ -1,6 +1,10 @@
 ---
 name: llm-security
 description: Use for authorized security assessment of LLM applications and AI agents, including prompt injection, tool abuse, RAG exposure, memory poisoning, and model supply-chain risks.
+metadata:
+  redtrace:
+    capabilities: [ai-security]
+    competition: false
 ---
 # LLM / AI 安全测试
 

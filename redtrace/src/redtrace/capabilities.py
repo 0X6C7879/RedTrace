@@ -18,6 +18,10 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import yaml
+
+from redtrace.board.models import ALL_CAPABILITIES
+
 LOG = logging.getLogger(__name__)
 
 NAME_PATTERN = re.compile(r"^[^\W_][\w-]{0,63}$", re.UNICODE)
@@ -108,18 +112,28 @@ def _atomic_write(path: Path, content: str) -> None:
         raise
 
 
-def _frontmatter(content: str) -> dict[str, str]:
-    if not content.startswith("---"):
+def _frontmatter(content: str) -> dict[str, Any]:
+    """Parse a complete YAML frontmatter block.
+
+    Skill metadata is deliberately read with a YAML parser rather than a
+    line-oriented approximation: ``metadata.redtrace`` contains lists and
+    booleans, and malformed metadata must be diagnosable by the resolver.
+    """
+    if not content.startswith("---\n"):
         return {}
-    parts = content.split("---", 2)
-    if len(parts) < 3:
+    match = re.match(r"^---\n(.*?)\n---(?:\n|$)", content, re.DOTALL)
+    if match is None:
         return {}
-    values: dict[str, str] = {}
-    for line in parts[1].splitlines():
-        key, separator, value = line.partition(":")
-        if separator and key.strip() in {"name", "description"}:
-            values[key.strip()] = value.strip().strip("\"'")
-    return values
+    try:
+        values = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return {}
+    return values if isinstance(values, dict) else {}
+
+
+def _strip_frontmatter(content: str) -> str:
+    match = re.match(r"^---\n.*?\n---(?:\n|$)", content, re.DOTALL)
+    return content[match.end():] if match is not None else content
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +151,8 @@ class SkillRecord:
     successful_reuses: int = 0
     failure_count: int = 0
     provisional_task: str | None = None
+    capabilities: tuple[str, ...] = ()
+    competition: Any = False
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -150,7 +166,21 @@ class SkillRecord:
             "trust": self.trust,
             "successfulReuses": self.successful_reuses,
             "failureCount": self.failure_count,
+            "capabilities": list(self.capabilities),
+            "competition": self.competition,
         }
+
+
+class SkillCatalogError(ValueError):
+    """Raised when an enabled top-level Skill has invalid classification."""
+
+    def __init__(self, diagnostics: list[dict[str, Any]]):
+        self.diagnostics = diagnostics
+        details = "; ".join(
+            f"{item.get('skill', '?')}: {item.get('message', 'invalid metadata')}"
+            for item in diagnostics
+        )
+        super().__init__(details or "invalid Skill catalog metadata")
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,6 +338,14 @@ class CapabilityStore:
             return None
         content = entrypoint.read_text(encoding="utf-8")
         metadata = _frontmatter(content)
+        redtrace_metadata = metadata.get("metadata", {}).get("redtrace", {}) if isinstance(metadata.get("metadata"), dict) else {}
+        raw_capabilities = redtrace_metadata.get("capabilities", []) if isinstance(redtrace_metadata, dict) else []
+        skill_capabilities = tuple(
+            item.strip().lower() if isinstance(item, str) and item.strip()
+            else f"<invalid:{type(item).__name__}>"
+            for item in raw_capabilities
+        ) if isinstance(raw_capabilities, list) else ()
+        competition = redtrace_metadata.get("competition", False) if isinstance(redtrace_metadata, dict) else False
         state_path = directory / ".redtrace.json"
         state: dict[str, Any] = {}
         if state_path.is_file():
@@ -368,7 +406,108 @@ class CapabilityStore:
             successful_reuses=successful_reuses,
             failure_count=failure_count,
             provisional_task=provisional_task,
+            capabilities=skill_capabilities,
+            competition=competition,
         )
+
+    def classify_skills(self) -> list[dict[str, Any]]:
+        """Return deterministic classification diagnostics for enabled roots."""
+        classifications: list[dict[str, Any]] = []
+        for record in self.list_skills():
+            if not record.enabled:
+                continue
+            diagnostics: list[str] = []
+            if not record.capabilities:
+                diagnostics.append("metadata.redtrace.capabilities is required")
+            unknown = sorted(set(record.capabilities) - set(ALL_CAPABILITIES))
+            if unknown:
+                diagnostics.append(f"unknown capability(s): {', '.join(unknown)}")
+            if len(set(record.capabilities)) != len(record.capabilities):
+                diagnostics.append("capabilities must not contain duplicates")
+            if not isinstance(record.competition, bool):
+                diagnostics.append("metadata.redtrace.competition must be boolean")
+            classifications.append({
+                "name": record.name,
+                "capabilities": list(record.capabilities),
+                "competition": record.competition,
+                "valid": not diagnostics,
+                "diagnostics": diagnostics,
+            })
+        return classifications
+
+    def resolve_skill_catalog(
+        self,
+        capabilities: Iterable[str],
+        skill_profile: str = "standard",
+    ) -> dict[str, Any]:
+        """Resolve a Session catalog from Intent directions and project profile.
+
+        The resolver fails closed on any invalid enabled top-level Skill. It
+        never falls back to exposing the complete root, which keeps a bad
+        metadata edit from silently reintroducing the old 90-Skill catalog.
+        """
+        requested = [str(item).strip().lower() for item in capabilities]
+        if not requested:
+            raise ValueError("at least one capability is required")
+        if len(set(requested)) != len(requested):
+            raise ValueError("capabilities must not contain duplicates")
+        unknown_requested = sorted(set(requested) - set(ALL_CAPABILITIES))
+        if unknown_requested:
+            raise ValueError(f"unknown capability(s): {', '.join(unknown_requested)}")
+        if skill_profile not in {"standard", "competition"}:
+            raise ValueError("skill_profile must be standard or competition")
+
+        diagnostics = [
+            {
+                "skill": item["name"],
+                "message": message,
+            }
+            for item in self.classify_skills()
+            for message in item["diagnostics"]
+        ]
+        if diagnostics:
+            raise SkillCatalogError(diagnostics)
+
+        requested_set = set(requested)
+        selected: list[str] = []
+        for record in self.list_skills():
+            if not record.enabled or record.name == "ctf-sandbox-orchestrator":
+                continue
+            record_caps = set(record.capabilities)
+            if record.competition:
+                if skill_profile == "competition" and record_caps & requested_set:
+                    selected.append(record.name)
+            elif "common" in record_caps or record_caps & requested_set:
+                selected.append(record.name)
+
+        profile_rules = ""
+        if skill_profile == "competition":
+            try:
+                orchestrator = self.get_skill("ctf-sandbox-orchestrator", include_files=False)
+            except FileNotFoundError as exc:
+                raise SkillCatalogError([{
+                    "skill": "ctf-sandbox-orchestrator",
+                    "message": "Competition Profile rules source is missing",
+                }]) from exc
+            if not orchestrator.enabled:
+                raise SkillCatalogError([{
+                    "skill": "ctf-sandbox-orchestrator",
+                    "message": "Competition Profile rules source is disabled",
+                }])
+            profile_rules = _strip_frontmatter(orchestrator.content).strip()
+            if not profile_rules:
+                raise SkillCatalogError([{
+                    "skill": "ctf-sandbox-orchestrator",
+                    "message": "Competition Profile rules source is empty",
+                }])
+
+        return {
+            "skills": sorted(set(selected)),
+            "capabilities": requested,
+            "skillProfile": skill_profile,
+            "diagnostics": [],
+            "competitionRules": profile_rules,
+        }
 
     def _list_skill_files(self, directory: Path) -> tuple[str, ...]:
         files: list[str] = []
@@ -410,6 +549,7 @@ class CapabilityStore:
         content = content.rstrip() + "\n"
         if len(content) > self.max_skill_chars:
             raise ValueError(f"SKILL.md exceeds {self.max_skill_chars} characters")
+        self._validate_skill_metadata(name, content, enabled=enabled)
         if trust is not None and trust not in SKILL_TRUST_STATES:
             raise ValueError("Skill trust must be provisional, trusted, or retired")
         with self._skill_lock():
@@ -510,6 +650,32 @@ class CapabilityStore:
             )
             self._prune_history(name)
         return self.get_skill(name)
+
+    @staticmethod
+    def _validate_skill_metadata(name: str, content: str, *, enabled: bool) -> None:
+        """Validate the classification contract before an enabled Skill write."""
+        if not enabled:
+            return
+        metadata = _frontmatter(content)
+        redtrace = metadata.get("metadata", {}).get("redtrace") if isinstance(metadata.get("metadata"), dict) else None
+        if not isinstance(redtrace, dict):
+            raise ValueError("enabled Skill requires metadata.redtrace")
+        capabilities = redtrace.get("capabilities")
+        if not isinstance(capabilities, list) or not capabilities:
+            raise ValueError("metadata.redtrace.capabilities must be a non-empty list")
+        normalized = [item.strip().lower() for item in capabilities if isinstance(item, str)]
+        if len(normalized) != len(capabilities) or len(set(normalized)) != len(normalized):
+            raise ValueError("metadata.redtrace.capabilities must contain unique strings")
+        unknown = sorted(set(normalized) - set(ALL_CAPABILITIES))
+        if unknown:
+            raise ValueError(f"unknown capability(s): {', '.join(unknown)}")
+        competition = redtrace.get("competition")
+        if not isinstance(competition, bool):
+            raise ValueError("metadata.redtrace.competition must be boolean")
+        if name.startswith("competition-") and competition is not True:
+            raise ValueError("competition-* Skills must set metadata.redtrace.competition: true")
+        if name == "ctf-sandbox-orchestrator" and competition is not True:
+            raise ValueError("ctf-sandbox-orchestrator must set metadata.redtrace.competition: true")
 
     def set_skill_enabled(self, name: str, enabled: bool) -> SkillRecord:
         record = self.get_skill(name)

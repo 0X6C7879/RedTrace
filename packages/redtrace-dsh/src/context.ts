@@ -45,7 +45,8 @@ function hintLines(hints: Hint[]): string[] {
 
 function intentLine(intent: Intent): string {
   const target = intent.to == null ? '' : ` → ${intent.to}`
-  return `- [${intent.id}] ${intent.state}: ${intent.description}(from: [${intent.from.join(', ')}]${target})`
+  const capabilities = intent.capabilities?.length ? `; capabilities: [${intent.capabilities.join(', ')}]` : ''
+  return `- [${intent.id}] ${intent.state}: ${intent.description}(from: [${intent.from.join(', ')}]${target}${capabilities})`
 }
 
 function resourceLines(resources: ResourceSummary[]): string[] {
@@ -95,6 +96,7 @@ export function taskPrompt(
     .filter((fact): fact is Fact => fact !== undefined && fact.id !== 'origin' && fact.id !== 'goal')
   return [
     ...head,
+    '注:Origin 描述整个任务的背景,仅供理解上下文;本 session 只对下方 Current Intent 负责,朝 Goal 推进,不推进 Intent 之外的方向。',
     ...sections([
       ['Source Facts', factLines(lineage)],
       ['Hints', hintLines(project.hints)],
@@ -121,7 +123,11 @@ function changeLine(change: BlackboardChange): string {
       ? change.node.from.filter((item): item is string => typeof item === 'string')
       : []
     const target = stringValue(change.node, 'to')
-    return `${prefix} ${state}: ${description}(from: [${sources.join(', ')}]${target === undefined ? '' : ` → ${target}`})`
+    const capabilities = Array.isArray(change.node.capabilities)
+      ? change.node.capabilities.filter((item): item is string => typeof item === 'string')
+      : []
+    const capabilityText = capabilities.length ? `; capabilities: [${capabilities.join(', ')}]` : ''
+    return `${prefix} ${state}: ${description}(from: [${sources.join(', ')}]${target === undefined ? '' : ` → ${target}`}${capabilityText})`
   }
   return `${prefix} ${JSON.stringify(change.node)}`
 }

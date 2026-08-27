@@ -6,7 +6,7 @@
  * @module redtrace-contracts
  */
 
-import type { Json, RuntimeTask, TaskType } from './types.js'
+import type { CapabilityName, Json, RuntimeTask, TaskType } from './types.js'
 import { state } from './state.js'
 
 export const name = 'redtrace-contracts'
@@ -48,6 +48,22 @@ const stringList = {
   type: 'array',
   items: { type: 'string' },
 } as const
+
+export const CAPABILITY_NAMES = [
+  'common', 'web', 'api', 'database', 'thick-client', 'supply-chain',
+  'exploit-research', 'network', 'internal', 'pivoting', 'windows-privesc',
+  'linux-privesc', 'ad', 'post-exploitation', 'c2', 'reverse', 'pwn',
+  'malware', 'crypto', 'mobile', 'cloud', 'blockchain', 'firmware-iot',
+  'hardware', 'wireless', 'radio-sdr', 'ot-ics', 'identity', 'email',
+  'ai-security', 'forensics', 'threat-hunting',
+] as const satisfies readonly CapabilityName[]
+
+const capabilityList: Json = {
+  type: 'array',
+  items: { type: 'string', enum: [...CAPABILITY_NAMES] as string[] },
+  minItems: 1,
+  uniqueItems: true,
+}
 
 function runtimeValue(name: string): string {
   const value = process.env[name]?.trim()
@@ -132,8 +148,8 @@ function registerReason(ctx: ToolContext): void {
     description: 'Create one validated RedTrace Intent from existing Fact ids.',
     parameters: {
       type: 'object',
-      properties: { from: stringList, description: text },
-      required: ['from', 'description'],
+      properties: { from: stringList, description: text, capabilities: capabilityList },
+      required: ['from', 'description', 'capabilities'],
       additionalProperties: false,
     },
     async execute(args, execution) {
@@ -141,6 +157,7 @@ function registerReason(ctx: ToolContext): void {
       const value = await request(server(task), `/projects/${encodeURIComponent(task.projectId)}/intents`, {
         from: args.from,
         description: args.description,
+        capabilities: args.capabilities,
         creator: task.worker,
         worker: null,
         ...(task.maxIntents === undefined ? {} : { max_active_intents: task.maxIntents }),

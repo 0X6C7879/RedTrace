@@ -93,6 +93,7 @@ def _export_yaml(conn, project_id: str) -> str:
             "origin": origin_desc,
             "goal": goal_desc,
             "bootstrap_enabled": bool(proj["bootstrap_enabled"]),
+            "skill_profile": proj["skill_profile"] if "skill_profile" in proj.keys() else "standard",
         }
     }
 
@@ -113,6 +114,7 @@ def _export_yaml(conn, project_id: str) -> str:
         entry: dict = {
             "from": sources_by_intent.get(i["id"], []),
             "to": i["to_fact_id"],
+            "capabilities": json.loads(i["capabilities"] or "[]") if "capabilities" in i.keys() else [],
             "description": i["description"],
             "creator": i["creator"],
             "worker": i["worker"],
@@ -206,9 +208,15 @@ def _export_timeline(conn, project_id: str) -> str:
     for i in intents:
         src = sources_by_intent.get(i["id"], [])
         from_str = ", ".join(src)
+        try:
+            capabilities = json.loads(i["capabilities"] or "[]") if "capabilities" in i.keys() else []
+        except (TypeError, json.JSONDecodeError):
+            capabilities = []
 
         ts = format_export_timestamp(i["created_at"]) or ""
         meta = f"  from: {from_str}"
+        if capabilities:
+            meta += f"\n  capabilities: {', '.join(str(capability) for capability in capabilities)}"
         if i["worker"] and not i["concluded_at"]:
             meta += f"\n  worker: {i['worker']} (in progress)"
         block = f"[{ts}] INTENT DECLARED {i['id']} by {i['creator']}\n{meta}\n  {i['description']}"

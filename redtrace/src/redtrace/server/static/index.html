@@ -12,7 +12,7 @@
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/vendor/cytoscape-dagre.js"></script>
 <script defer src="/static/audit.js?v=20260826-token-usage-2"></script>
-<script defer src="/static/capabilities.js?v=20260826-legacy-cleanup-1"></script>
+<script defer src="/static/capabilities.js?v=20260827-capability-catalog-1"></script>
 <script defer src="/static/plugins.js?v=20260825-plugins-2"></script>
 <!-- Previous cache key: operations.js?v=20260810-performance-1 -->
 <script defer src="/static/operations.js?v=20260826-c2-ledger-delete-1"></script>
@@ -381,6 +381,7 @@
             <span class="px-1.5 py-0.5 rounded-full text-[9px] font-semibold uppercase tracking-[0.12em]"
               :class="projectStatusBadgeClass(p.status)"
               x-text="p.status"></span>
+            <span class="rounded-full px-1.5 py-0.5 text-[9px] font-semibold" :class="p.skill_profile === 'competition' ? 'bg-violet-50 text-violet-700' : 'bg-slate-100 text-slate-500'" x-text="p.skill_profile || 'standard'"></span>
           </div>
           <div class="mb-3 flex-1">
             <div class="title-action-trigger flex items-start gap-2">
@@ -495,6 +496,10 @@
       <span class="px-1.5 py-0.5 rounded-full text-[9px] font-semibold uppercase tracking-[0.12em] shrink-0"
         :class="projectStatusBadgeClass(project.project.status)"
         x-text="project.project.status"></span>
+      <select x-model="project.project.skill_profile" @change="updateSkillProfile()" class="h-7 rounded-lg border border-slate-200 bg-white px-2 text-[10px] font-medium text-slate-600 outline-none" aria-label="Skill Profile">
+        <option value="standard">standard Skills</option>
+        <option value="competition">competition Profile</option>
+      </select>
     </div>
     <div class="flex-1"></div>
     <div class="flex shrink-0 items-center gap-2.5 text-xs tabular-nums"
@@ -774,6 +779,7 @@
               <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="selectedIntentRecord().description"></p>
               <div class="pt-4 border-t border-slate-100 space-y-3 text-xs">
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">From</span><span class="font-mono text-slate-600 text-right break-all" x-text="factDisplayList(selectedIntentRecord().from)"></span></div>
+                <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Capability</span><span class="flex flex-wrap justify-end gap-1"><template x-for="capability in (selectedIntentRecord().capabilities || [])" :key="capability"><span class="rounded-md bg-brand-50 px-1.5 py-0.5 text-[10px] text-brand-700" x-text="capability"></span></template></span></div>
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">To</span><span class="font-mono text-slate-600 text-right break-all" x-text="selectedIntentRecord().to || '—'"></span></div>
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Creator</span><span class="text-slate-600 text-right break-all" x-text="selectedIntentRecord().creator"></span></div>
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Worker</span><span class="text-slate-600 text-right break-all" x-text="selectedIntentRecord().worker || '—'"></span></div>
@@ -1617,13 +1623,23 @@
             <svg class="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-300" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
             <input x-model="query" placeholder="搜索 Skills" class="h-8 w-full rounded-lg border border-slate-200 bg-slate-50/70 pl-8 pr-3 text-xs text-slate-600 outline-none transition focus:border-brand-300 focus:bg-white focus:ring-2 focus:ring-brand-50">
           </label>
+          <div class="mt-2 flex gap-2">
+            <select x-model="capabilityFilter" class="h-7 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 text-[10px] text-slate-500 outline-none" aria-label="按 Capability 筛选">
+              <option value="">全部 Capability</option>
+              <template x-for="capability in (catalog?.capabilities || [])" :key="capability"><option :value="capability" x-text="capability"></option></template>
+            </select>
+            <select x-model="profileFilter" class="h-7 rounded-lg border border-slate-200 bg-white px-2 text-[10px] text-slate-500 outline-none" aria-label="按 Skill Profile 筛选"><option value="all">全部 Profile</option><option value="standard">普通</option><option value="competition">Competition</option></select>
+          </div>
         </div>
         <div x-show="message" class="mx-3 mb-1 break-all rounded-lg px-3 py-2 text-[10px] leading-relaxed" :class="messageType === 'error' ? 'bg-red-50 text-red-600' : 'bg-teal-50 text-teal-600'" x-text="message"></div>
+        <div x-show="catalogDiagnostics.length" class="mx-3 mb-1 rounded-lg bg-amber-50 px-3 py-2 text-[10px] leading-relaxed text-amber-700">
+          <span class="font-semibold">Skill 分类错误：</span><span x-text="catalogDiagnostics.join('；')"></span>
+        </div>
         <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
           <template x-for="skill in filteredItems" :key="skill.key">
             <button type="button" @click="select(skill)" class="capability-press mb-1 flex w-full items-start gap-2.5 rounded-xl py-2.5 pr-3 text-left" :class="[selectedName === skill.key ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50', skill.nested ? 'pl-7' : 'pl-3']">
               <span class="mt-1 h-2 w-2 shrink-0 rounded-full" :class="skill.nested ? 'bg-sky-400' : (skill.enabled ? 'bg-teal-500 shadow-[0_0_0_3px_rgba(20,184,166,.10)]' : 'bg-slate-300')"></span>
-              <span class="min-w-0 flex-1"><span class="flex items-center gap-1.5"><span class="min-w-0 flex-1 truncate text-xs font-semibold" x-text="skill.name"></span><span x-show="skill.nested" class="rounded bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600">包内</span><span x-show="!skill.nested" class="rounded px-1.5 py-0.5 text-[9px] font-medium" :class="skill.trust === 'trusted' ? 'bg-teal-50 text-teal-600' : (skill.trust === 'retired' ? 'bg-slate-100 text-slate-400' : 'bg-amber-50 text-amber-600')" x-text="skill.trust || 'trusted'"></span></span><span class="mt-1 block line-clamp-2 text-[10px] leading-relaxed text-slate-400" x-text="skill.description || skill.path || '暂无描述'"></span></span>
+              <span class="min-w-0 flex-1"><span class="flex items-center gap-1.5"><span class="min-w-0 flex-1 truncate text-xs font-semibold" x-text="skill.name"></span><span x-show="skill.nested" class="rounded bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600">包内</span><span x-show="!skill.nested" class="rounded px-1.5 py-0.5 text-[9px] font-medium" :class="skill.trust === 'trusted' ? 'bg-teal-50 text-teal-600' : (skill.trust === 'retired' ? 'bg-slate-100 text-slate-400' : 'bg-amber-50 text-amber-600')" x-text="skill.trust || 'trusted'"></span><span class="rounded px-1.5 py-0.5 text-[9px] font-medium" :class="skill.competition ? 'bg-violet-50 text-violet-600' : 'bg-slate-100 text-slate-500'" x-text="skill.competition ? 'competition' : 'standard'"></span></span><span class="mt-1 flex flex-wrap gap-1"><template x-for="capability in (skill.capabilities || [])" :key="capability"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-500" x-text="capability"></span></template></span><span class="mt-1 block line-clamp-2 text-[10px] leading-relaxed text-slate-400" x-text="skill.description || skill.path || '暂无描述'"></span></span>
             </button>
           </template>
           <div x-show="!loading && filteredItems.length === 0" class="px-4 py-12 text-center text-xs leading-relaxed text-slate-400">没有匹配的 Skill。<br>创建一个即可被三个 agent 原生发现。</div>
@@ -1644,6 +1660,8 @@
             <button x-show="!draft.nested" @click="save()" :disabled="saving || !draft.name || !draft.content" class="capability-press h-8 rounded-lg bg-brand-500 px-4 text-xs font-medium text-white shadow-sm shadow-brand-100 hover:bg-brand-600 disabled:opacity-40" x-text="saving ? '保存中…' : '保存'"></button>
           </div>
           <div x-show="!isNew && !draft.nested" class="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/70 px-5 py-2 text-[10px] text-slate-500">
+            <template x-for="capability in (draft.capabilities || [])" :key="capability"><span class="rounded-md bg-slate-200 px-2 py-1 font-semibold text-slate-600" x-text="capability"></span></template>
+            <span class="rounded-md px-2 py-1 font-semibold" :class="draft.competition ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'" x-text="draft.competition ? 'competition' : 'standard'"></span>
             <span class="rounded-md px-2 py-1 font-semibold" :class="draft.trust === 'trusted' ? 'bg-teal-50 text-teal-700' : (draft.trust === 'retired' ? 'bg-slate-200 text-slate-500' : 'bg-amber-50 text-amber-700')" x-text="draft.trust || 'trusted'"></span>
             <span x-text="`${draft.successfulReuses || 0} 次独立复用`"></span>
             <span>·</span>
@@ -2030,6 +2048,13 @@
         <input type="checkbox" x-model="newProject.bootstrap" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200">
         <span>运行 bootstrap 探查</span>
       </label>
+      <label class="block text-[11px] text-slate-500 font-medium">
+        Skill Profile
+        <select x-model="newProject.skill_profile" class="mt-1 w-full px-3 py-2 border border-slate-200 rounded-xl bg-white text-sm text-slate-700">
+          <option value="standard">standard（普通 Skills）</option>
+          <option value="competition">competition（包含对应 competition-* Skills）</option>
+        </select>
+      </label>
 
       <div>
         <div class="flex items-center justify-between mb-2">
@@ -2074,15 +2099,23 @@
           <option value="isolated">Isolated</option>
         </select>
       </label>
+      <div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
+        <div class="mb-2 flex items-center justify-between"><span class="text-[11px] font-medium text-slate-500">Capability 方向（至少一个）</span><span class="text-[10px] text-slate-400" x-text="`${intentForm.capabilities.length} 已选`"></span></div>
+        <div class="max-h-48 space-y-2 overflow-y-auto pr-1">
+          <template x-for="group in capabilityGroups" :key="group.label">
+            <div><div class="mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400" x-text="group.label"></div><div class="flex flex-wrap gap-1.5"><template x-for="capability in group.items" :key="capability.id"><label class="inline-flex cursor-pointer items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-600 hover:border-brand-200"><input type="checkbox" :value="capability.id" x-model="intentForm.capabilities" class="h-3 w-3 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span x-text="capability.id"></span></label></template></div></div>
+          </template>
+        </div>
+      </div>
       <div class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-500">
         Actor: <span class="font-medium text-slate-700" x-text="actorName()"></span>
       </div>
     </div>
     <div class="flex justify-end gap-2 mt-5">
       <button @click="showIntentModal = false" class="px-4 py-2 text-sm text-slate-500 hover:bg-slate-50 rounded-xl transition">取消</button>
-      <button @click="createIntent(false)" :disabled="!intentForm.description"
+      <button @click="createIntent(false)" :disabled="!intentForm.description || !intentForm.capabilities.length"
         class="px-5 py-2 text-sm border border-slate-200 text-slate-600 rounded-xl font-medium hover:bg-slate-50 transition disabled:opacity-30">声明</button>
-      <button @click="createIntent(true)" :disabled="!intentForm.description"
+      <button @click="createIntent(true)" :disabled="!intentForm.description || !intentForm.capabilities.length"
         class="px-5 py-2 text-sm bg-brand-500 text-white rounded-xl font-medium hover:bg-brand-600 transition disabled:opacity-30 shadow-sm shadow-brand-200">声明 &amp; 认领</button>
     </div>
   </div>
@@ -2392,8 +2425,18 @@ function redtraceApp() {
     dangerConfirm: { open: false, tone: 'danger', title: '', description: '', subject: '', note: '', confirmLabel: '' },
     _dangerConfirmResolve: null,
 
-    newProject: { title: '', origin: '', goal: '', bootstrap: false, hints: [{ content: '' }] },
-    intentForm: { description: '', execution_profile: 'direct' },
+    newProject: { title: '', origin: '', goal: '', bootstrap: false, skill_profile: 'standard', hints: [{ content: '' }] },
+    intentForm: { description: '', execution_profile: 'direct', capabilities: [] },
+    capabilityGroups: [
+      { label: 'Base', items: [{ id: 'common' }] },
+      { label: 'Application', items: ['web', 'api', 'database', 'thick-client', 'supply-chain'].map(id => ({ id })) },
+      { label: 'Vulnerability Research', items: [{ id: 'exploit-research' }] },
+      { label: 'Infrastructure', items: ['network', 'internal', 'pivoting', 'windows-privesc', 'linux-privesc', 'ad', 'post-exploitation', 'c2'].map(id => ({ id })) },
+      { label: 'Binary', items: ['reverse', 'pwn', 'malware', 'crypto'].map(id => ({ id })) },
+      { label: 'Platform / Device', items: ['mobile', 'cloud', 'blockchain', 'firmware-iot', 'hardware', 'wireless', 'radio-sdr', 'ot-ics'].map(id => ({ id })) },
+      { label: 'Identity / Communication', items: ['identity', 'email'].map(id => ({ id })) },
+      { label: 'AI / Defensive', items: ['ai-security', 'forensics', 'threat-hunting'].map(id => ({ id })) },
+    ],
     concludeForm: { description: '', intentId: '' },
     completeForm: { description: '' },
     hintForm: { content: '' },
@@ -2600,12 +2643,15 @@ function redtraceApp() {
     },
 
     openIntentNodeLabel(intent) {
-      return this.isBootstrapIntent(intent) ? 'bootstrap' : '?';
+      if (this.isBootstrapIntent(intent)) return 'bootstrap';
+      const capabilities = Array.isArray(intent.capabilities) ? intent.capabilities : [];
+      return capabilities.length ? `? · ${capabilities.join(' · ')}` : '?';
     },
 
     openIntentNodeSize(intent) {
       if (this.isBootstrapIntent(intent)) return { width: 82, height: 30 };
-      return { width: 22, height: 22 };
+      const label = this.openIntentNodeLabel(intent);
+      return { width: Math.min(132, Math.max(42, label.length * 6 + 18)), height: 28 };
     },
 
     projectIsActive() {
@@ -3859,7 +3905,10 @@ function redtraceApp() {
         }});
       }
       for (const intent of this.project.intents) {
-        const lbl = intent.description;
+        const capabilities = Array.isArray(intent.capabilities) ? intent.capabilities : [];
+        const lbl = capabilities.length
+          ? `${intent.description} · [${capabilities.join(', ')}]`
+          : intent.description;
         if (intent.to) {
           for (const src of intent.from) {
             edges.push({ data: { id: `${intent.id}_${src}`, source: src, target: intent.to, intentId: intent.id, label: lbl, status: 'concluded' }});
@@ -3872,6 +3921,7 @@ function redtraceApp() {
             id: phId,
             label: this.openIntentNodeLabel(intent),
             description: intent.description,
+            capabilities: intent.capabilities || [],
             nodeType,
             intentId: intent.id,
             width: nodeSize.width,
@@ -3917,8 +3967,8 @@ function redtraceApp() {
         { selector: 'node[nodeType="fact"]', style: { ...common, shape:'round-rectangle','background-color':'#0c1a28','background-opacity':0.98,label:'data(label)',color:'#dbeeff','font-size':'11px','font-weight':'bold','text-wrap':'wrap','text-max-width':'116px','text-overflow-wrap':'anywhere',width:'data(width)',height:'data(height)','border-width':1.8,'border-color':'#2c9ed0' }},
         { selector: 'node[nodeType="fact"][label ^= "Target"]', style: { 'background-color':'#321115','border-color':'#ff585b','color':'#ffe5e5' }},
         { selector: 'node[nodeType="fact"][label ^= "[resource:"]', style: { 'background-color':'#19122f','border-color':'#a783ff','color':'#eee6ff' }},
-        { selector: 'node[nodeType="in_progress"]', style: { ...common, shape:'ellipse','background-color':'#2b1c08','background-opacity':0.95,label:'?',color:'#ffe6ae','font-size':'12px','font-weight':'bold',width:24,height:24,'border-width':2,'border-color':'#ffb82e' }},
-        { selector: 'node[nodeType="unclaimed"]', style: { ...common, shape:'ellipse','background-color':'#101722','background-opacity':0.7,label:'?',color:'#8595ab','font-size':'12px','font-weight':'bold',width:22,height:22,'border-width':1.5,'border-color':'#526279','border-style':'dashed' }},
+        { selector: 'node[nodeType="in_progress"]', style: { ...common, shape:'round-rectangle','background-color':'#2b1c08','background-opacity':0.95,label:'data(label)',color:'#ffe6ae','font-size':'10px','font-weight':'bold',width:'data(width)',height:'data(height)','border-width':2,'border-color':'#ffb82e','text-wrap':'wrap','text-max-width':'112px' }},
+        { selector: 'node[nodeType="unclaimed"]', style: { ...common, shape:'round-rectangle','background-color':'#101722','background-opacity':0.7,label:'data(label)',color:'#8595ab','font-size':'10px','font-weight':'bold',width:'data(width)',height:'data(height)','border-width':1.5,'border-color':'#526279','border-style':'dashed','text-wrap':'wrap','text-max-width':'112px' }},
         { selector: 'node[nodeType="bootstrap_pending"]', style: { ...common, shape:'round-rectangle','background-color':'#19122f','background-opacity':0.96,label:'data(label)',color:'#e4d9ff','font-size':'11px','font-weight':'bold',width:'data(width)',height:'data(height)','border-width':1.7,'border-color':'#a783ff','border-style':'dashed','text-wrap':'wrap','text-max-width':'70px' }},
         { selector: 'node[nodeType="bootstrap_running"]', style: { ...common, shape:'round-rectangle','background-color':'#352008','background-opacity':0.96,label:'data(label)',color:'#fff0c8','font-size':'11px','font-weight':'bold',width:'data(width)',height:'data(height)','border-width':2,'border-color':'#ffb82e','text-wrap':'wrap','text-max-width':'70px' }},
 
@@ -4609,7 +4659,7 @@ function redtraceApp() {
           timestamp: intent.created_at,
           actor: intent.creator,
           title: intent.description,
-          meta: [intent.id, `from ${intent.from.join(', ')}`],
+          meta: [intent.id, `from ${intent.from.join(', ')}`, ...(intent.capabilities || []).map(capability => `capability:${capability}`)],
           targetType: 'intent',
           targetId: intent.id,
           order: order++,
@@ -4627,7 +4677,7 @@ function redtraceApp() {
             timestamp: intent.concluded_at,
             actor: intent.worker || intent.creator,
             title: intent.description,
-            meta: [intent.id, `from ${intent.from.join(', ')}`],
+            meta: [intent.id, `from ${intent.from.join(', ')}`, ...(intent.capabilities || []).map(capability => `capability:${capability}`)],
             targetType: 'fact',
             targetId: 'goal',
             order: order++,
@@ -4645,7 +4695,7 @@ function redtraceApp() {
           timestamp: intent.concluded_at,
           actor: intent.worker || intent.creator,
           title: fact ? fact.description : intent.description,
-          meta: [intent.id, `produced ${intent.to}`, `from ${intent.from.join(', ')}`],
+          meta: [intent.id, `produced ${intent.to}`, `from ${intent.from.join(', ')}`, ...(intent.capabilities || []).map(capability => `capability:${capability}`)],
           targetType: 'fact',
           targetId: intent.to,
           order: order++,
@@ -4943,13 +4993,14 @@ function redtraceApp() {
           title: this.newProject.title,
           origin: this.newProject.origin,
           goal: this.newProject.goal,
-          bootstrap_enabled: this.newProject.bootstrap
+          bootstrap_enabled: this.newProject.bootstrap,
+          skill_profile: this.newProject.skill_profile,
         };
         const hints = hintContents.map(h => ({ content: h.content.trim(), creator: actor }));
         if (hints.length > 0) body.hints = hints;
         const data = await this.api('POST', '/projects', body);
         this.showNewProject = false;
-        this.newProject = { title:'', origin:'', goal:'', bootstrap: false, hints: [{ content:'' }] };
+        this.newProject = { title:'', origin:'', goal:'', bootstrap: false, skill_profile: 'standard', hints: [{ content:'' }] };
         await this.loadProjects();
         await this.openProject(data.project.id);
         this.showToast('项目已创建');
@@ -4958,7 +5009,7 @@ function redtraceApp() {
 
     openCreateIntent() {
       if (!this.canActOnSelectedFacts()) return;
-      this.intentForm = { description:'', execution_profile:'direct' };
+      this.intentForm = { description:'', execution_profile:'direct', capabilities: [] };
       this.showIntentModal = true;
     },
 
@@ -4971,6 +5022,7 @@ function redtraceApp() {
           creator: actor,
           worker: claim ? actor : null,
           execution_profile: this.intentForm.execution_profile,
+          capabilities: this.intentForm.capabilities,
         });
         this.showIntentModal = false;
         await this.loadProject(this.selectedProjectId);
@@ -4989,6 +5041,22 @@ function redtraceApp() {
         this.updateGraph();
         this.showToast(`Intent 隔离模式：${execution_profile}`);
       } catch(e) { this.showToast(e.message, 'error'); }
+    },
+
+    async updateSkillProfile() {
+      if (!this.project?.project?.id) return;
+      try {
+        const updated = await this.api('PUT', `/projects/${this.project.project.id}/skill-profile`, {
+          skill_profile: this.project.project.skill_profile,
+        });
+        this.project.project.skill_profile = updated.skill_profile;
+        const summary = this.projects.find(item => item.id === this.project.project.id);
+        if (summary) summary.skill_profile = updated.skill_profile;
+        this.showToast('Skill Profile 已更新；仅影响后续 Session');
+      } catch (e) {
+        this.showToast(e.message, 'error');
+        await this.loadProject(this.project.project.id);
+      }
     },
 
     async sendHeartbeatForSelectedIntent() {

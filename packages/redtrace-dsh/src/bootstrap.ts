@@ -26,6 +26,11 @@ export async function apply(scoped: ScopedContext, config: PresetConfig): Promis
     scoped = scoped.isolate(service)
   }
   scoped.systemPrompt.section({ name: 'redtrace:persona', order: 0, text: persona('bootstrap') })
+  scoped.systemPrompt.section({
+    name: 'redtrace:workspace',
+    order: 1,
+    text: `Workspace 目录:${config.cwd}。任务产生的文件都放在该目录下。`,
+  })
   if (config.task.executionProfile === 'isolated') {
     await mount(scoped, 'vendor/deepseek-harness/packages/sandbox/sandbox-local/lib/index.js')
     await mount(scoped, 'vendor/deepseek-harness/packages/sandbox/sandbox-policy/lib/index.js', { mode: 'workspace-write', workspaceRoot: config.cwd })

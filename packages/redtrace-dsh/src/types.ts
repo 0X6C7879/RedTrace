@@ -2,6 +2,15 @@ type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 
 export type TaskType = 'reason' | 'explore' | 'bootstrap'
 export type ExecutionProfile = 'direct' | 'isolated'
+export type SkillProfile = 'standard' | 'competition'
+export type CapabilityName =
+  | 'common' | 'web' | 'api' | 'database' | 'thick-client' | 'supply-chain'
+  | 'exploit-research' | 'network' | 'internal' | 'pivoting'
+  | 'windows-privesc' | 'linux-privesc' | 'ad' | 'post-exploitation' | 'c2'
+  | 'reverse' | 'pwn' | 'malware' | 'crypto' | 'mobile' | 'cloud'
+  | 'blockchain' | 'firmware-iot' | 'hardware' | 'wireless' | 'radio-sdr'
+  | 'ot-ics' | 'identity' | 'email' | 'ai-security' | 'forensics'
+  | 'threat-hunting'
 export type ReasoningPolicy = 'auto_max' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export type { Json }
@@ -89,6 +98,9 @@ export interface RuntimeTask {
   worker: string
   /** Model route captured from the selected Worker at launch. */
   route?: WorkerRoute
+  /** Session-isolated symlink view of the capability-filtered Skill catalog. */
+  skillViewDir?: string
+  competitionRules?: string
   limits?: TaskLimits
   maxIntents?: number
   committed: boolean
@@ -193,7 +205,10 @@ export interface AuditRun { session_id?: string | null }
 
 export interface ProjectSummary {
   id: string
+  title?: string
   status: 'active' | 'stopped' | 'completed' | 'deleting'
+  bootstrap_enabled?: boolean
+  skill_profile: SkillProfile
   reason: unknown | null
   planning_revision: number
   reason_evaluated_revision: number
@@ -210,6 +225,7 @@ export interface Intent {
   creator: string
   worker?: string | null
   execution_profile?: ExecutionProfile
+  capabilities: CapabilityName[]
   created_at: string
   state: string
   retry_after?: number | null

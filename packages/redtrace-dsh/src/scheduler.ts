@@ -21,6 +21,7 @@ import { api, Domain } from './domain.js'
 import { state } from './state.js'
 import { reportRun, cleanupSessionArtifacts } from './audit.js'
 import { concludeInstruction } from './prompt.js'
+import { createSkillView, resolveSkillCatalog, type SkillView } from './capability.js'
 import { graphDeltaMessage, hintMessage, isBootstrap, isInitial, schedulable, taskPrompt } from './context.js'
 import * as bootstrapPreset from './bootstrap.js'
 import * as reasonPreset from './reason.js'
@@ -109,6 +110,7 @@ async function waitIdle(agent: import('./types.js').Agent, seconds: number): Pro
 
 class Scheduler {
   private readonly running = new Map<string, RuntimeTask>()
+  private readonly completions = new Map<string, Promise<void>>()
   private timer?: ReturnType<typeof setTimeout>
   private closing = false
   private cursor = 0
@@ -126,12 +128,16 @@ class Scheduler {
   async close(): Promise<void> {
     this.closing = true
     if (this.timer !== undefined) clearTimeout(this.timer)
-    await Promise.all([...this.running.values()].map(async task => {
+    for (const task of this.running.values()) {
       task.cancelled = true
       task.handle?.agent.cancel({ kind: 'disposed' })
-      await task.handle?.agent.whenIdle()
-    }))
-    await Promise.all([...this.running.values()].map(task => task.handle?.dispose()))
+    }
+    // runTask owns Agent disposal and Skill-view cleanup in its finally block.
+    // Wait for those completions so shutdown never returns with a derived view
+    // still mounted on disk.
+    await Promise.all([...this.completions.values()].map(completion => completion.catch(error => {
+      this.ctx.logger?.warn(error)
+    })))
   }
 
   private get shared() { return state() }
@@ -253,7 +259,7 @@ class Scheduler {
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             from: ['origin'], description: BOOTSTRAP_DESCRIPTION,
-            creator: BOOTSTRAP_CREATOR, worker: null,
+            creator: BOOTSTRAP_CREATOR, worker: null, capabilities: [],
           }),
         })
       }
@@ -324,7 +330,11 @@ class Scheduler {
     task.sessionId = sessionIdForTask(task.type, task.projectId)
     task.runId = `run-${crypto.randomUUID()}`
     this.running.set(key, task)
-    void this.runTask(task, project, intent).finally(() => { this.running.delete(key) })
+    const completion = this.runTask(task, project, intent).finally(() => {
+      this.running.delete(key)
+      this.completions.delete(key)
+    })
+    this.completions.set(key, completion)
   }
 
   private async runTask(task: RuntimeTask, project: ProjectDetail, intent?: Intent): Promise<void> {
@@ -332,6 +342,7 @@ class Scheduler {
     if (shared === undefined || shared.messages === undefined || task.route === undefined) return
     let outcome = 'failure'
     let heartbeat: ReturnType<typeof setInterval> | undefined
+    let skillView: SkillView | undefined
     const limits = task.limits ?? { timeout: 300 }
     const cwd = path.join(this.config.workspacesDir, safeId(task.projectId))
     await mkdir(cwd, { recursive: true })
@@ -341,6 +352,19 @@ class Scheduler {
       }
       const persistedReason = task.type === 'reason'
         && await this.ctx.sessionPersistence!.readRaw(task.sessionId!) !== undefined
+      if (task.type === 'explore') {
+        if (intent === undefined || intent.capabilities.length === 0) {
+          throw new Error('Explore Intent must declare at least one Capability')
+        }
+        const catalog = await resolveSkillCatalog(
+          this.config,
+          intent.capabilities,
+          project.project.skill_profile,
+        )
+        skillView = await createSkillView(this.config, task.sessionId!, catalog)
+        task.skillViewDir = skillView.directory
+        task.competitionRules = catalog.competitionRules
+      }
       const activation = {
         agentOptions: {
           provider: task.route.provider,
@@ -349,7 +373,14 @@ class Scheduler {
           ...(task.route.maxTokens === undefined ? {} : { maxTokens: task.route.maxTokens }),
         },
         setup: async (scoped: import('./types.js').ScopedContext) => {
-          await scoped.plugin(PRESETS[task.type], { task, cwd, skillsDir: this.config.skillsDir }).await()
+          await scoped.plugin(PRESETS[task.type], {
+            task,
+            cwd,
+            skillsDir: task.skillViewDir ?? this.config.skillsDir,
+            ...(task.type === 'explore' && task.competitionRules
+              ? { competitionRules: task.competitionRules }
+              : {}),
+          }).await()
         },
       }
       task.handle = await activateAgent(
@@ -386,7 +417,7 @@ class Scheduler {
     } catch (error) {
       this.ctx.logger?.warn(error)
       process.stderr.write(`[redtrace-dsh] task ${task.type} failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`)
-      outcome = task.cancelled ? 'cancelled' : 'runtime_error'
+      outcome = task.cancelled ? 'cancelled' : 'internal_error'
     } finally {
       if (heartbeat !== undefined) clearInterval(heartbeat)
       let contextPersisted = false
@@ -400,6 +431,11 @@ class Scheduler {
         await task.handle.dispose().catch(error => { this.ctx.logger?.warn(error) })
       }
       if (task.sessionId !== undefined) shared.tasks.delete(task.sessionId)
+      if (skillView !== undefined) {
+        await skillView.cleanup().catch(error => { this.ctx.logger?.warn(error) })
+        task.skillViewDir = undefined
+        task.competitionRules = undefined
+      }
       await reportRun(this.config, task, outcome).catch(error => { this.ctx.logger?.warn(error) })
       const endpoint = task.type === 'reason'
         ? `/projects/${encodeURIComponent(task.projectId)}/reason/outcome`

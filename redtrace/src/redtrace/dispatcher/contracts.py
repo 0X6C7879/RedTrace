@@ -9,6 +9,15 @@ FENCED_JSON_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+CAPABILITY_NAMES = frozenset({
+    "common", "web", "api", "database", "thick-client", "supply-chain",
+    "exploit-research", "network", "internal", "pivoting", "windows-privesc",
+    "linux-privesc", "ad", "post-exploitation", "c2", "reverse", "pwn",
+    "malware", "crypto", "mobile", "cloud", "blockchain", "firmware-iot",
+    "hardware", "wireless", "radio-sdr", "ot-ics", "identity", "email",
+    "ai-security", "forensics", "threat-hunting",
+})
+
 
 def parse_json_output(stdout: str) -> dict[str, Any]:
     decoder = json.JSONDecoder()
@@ -136,6 +145,7 @@ def validate_reason_payload(
             if not isinstance(intent, dict) or "from" not in intent or "description" not in intent:
                 raise ValueError(f"invalid intent at index {i}")
             _validate_reason_sources(intent.get("from"), None)
+            _validate_reason_capabilities(intent.get("capabilities"))
         if not intents and open_intents_empty:
             raise ValueError("intents must not be empty when open_intents is empty")
         intents = intents[:max_intents]
@@ -158,6 +168,15 @@ def _validate_reason_sources(value: Any, valid_fact_ids: set[str] | None) -> Non
     invalid = sorted(set(value) - valid_fact_ids)
     if invalid:
         raise ValueError(f"from contains invalid fact IDs: {', '.join(invalid)}")
+
+
+def _validate_reason_capabilities(value: Any) -> None:
+    if not isinstance(value, list) or not value:
+        raise ValueError("capabilities must be a non-empty array")
+    if any(not isinstance(item, str) or item not in CAPABILITY_NAMES for item in value):
+        raise ValueError("capabilities contains an unknown direction")
+    if len(set(value)) != len(value):
+        raise ValueError("capabilities must not contain duplicates")
 
 
 def validate_bootstrap_execute_payload(payload: dict[str, Any]) -> tuple[str, dict[str, str] | None]:

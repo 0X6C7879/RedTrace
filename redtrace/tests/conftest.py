@@ -112,7 +112,7 @@ class FakeClient:
     project: ProjectDetail
     concluded: list[tuple[str, str, str, str]] = field(default_factory=list)
     completed: list[tuple[str, list[str], str, str]] = field(default_factory=list)
-    created_intents: list[tuple[str, list[str], str, str]] = field(default_factory=list)
+    created_intents: list[tuple[str, list[str], str, str, list[str]]] = field(default_factory=list)
     released: list[tuple[str, str, str]] = field(default_factory=list)
     released_reasons: list[tuple[str, str]] = field(default_factory=list)
     patched: list[tuple[str, dict]] = field(default_factory=list)
@@ -135,9 +135,12 @@ class FakeClient:
         description: str,
         creator: str,
         *,
+        capabilities: list[str] | None = None,
         max_active_intents: int | None = None,
     ) -> ApiResult:
-        self.created_intents.append((project_id, from_ids, description, creator))
+        self.created_intents.append(
+            (project_id, from_ids, description, creator, list(capabilities or []))
+        )
         return ApiResult(201, {})
 
     def apply_graph_patch(self, project_id: str, patch: dict) -> ApiResult:

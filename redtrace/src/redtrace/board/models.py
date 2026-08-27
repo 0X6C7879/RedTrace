@@ -7,6 +7,77 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 ExecutionProfile = Literal["direct", "isolated"]
+SkillProfile = Literal["standard", "competition"]
+CapabilityName = Literal[
+    "common",
+    "web",
+    "api",
+    "database",
+    "thick-client",
+    "supply-chain",
+    "exploit-research",
+    "network",
+    "internal",
+    "pivoting",
+    "windows-privesc",
+    "linux-privesc",
+    "ad",
+    "post-exploitation",
+    "c2",
+    "reverse",
+    "pwn",
+    "malware",
+    "crypto",
+    "mobile",
+    "cloud",
+    "blockchain",
+    "firmware-iot",
+    "hardware",
+    "wireless",
+    "radio-sdr",
+    "ot-ics",
+    "identity",
+    "email",
+    "ai-security",
+    "forensics",
+    "threat-hunting",
+]
+
+ALL_CAPABILITIES: tuple[str, ...] = (
+    "common",
+    "web",
+    "api",
+    "database",
+    "thick-client",
+    "supply-chain",
+    "exploit-research",
+    "network",
+    "internal",
+    "pivoting",
+    "windows-privesc",
+    "linux-privesc",
+    "ad",
+    "post-exploitation",
+    "c2",
+    "reverse",
+    "pwn",
+    "malware",
+    "crypto",
+    "mobile",
+    "cloud",
+    "blockchain",
+    "firmware-iot",
+    "hardware",
+    "wireless",
+    "radio-sdr",
+    "ot-ics",
+    "identity",
+    "email",
+    "ai-security",
+    "forensics",
+    "threat-hunting",
+)
+SECURITY_CAPABILITIES: tuple[str, ...] = ALL_CAPABILITIES[1:]
 
 
 class Settings(BaseModel):
@@ -27,6 +98,7 @@ class Intent(BaseModel):
     creator: str
     worker: str | None = None
     execution_profile: ExecutionProfile = "direct"
+    capabilities: list[CapabilityName] = Field(default_factory=list)
     last_heartbeat_at: str | None = None
     created_at: str
     concluded_at: str | None = None
@@ -70,6 +142,7 @@ class ProjectMeta(BaseModel):
     title: str
     status: Literal["active", "stopped", "completed", "deleting"]
     bootstrap_enabled: bool
+    skill_profile: SkillProfile = "standard"
     created_at: str
     reason: ProjectReason | None = None
     reason_failure_count: int = 0
@@ -115,6 +188,7 @@ class CreateProjectRequest(BaseModel):
     origin: str
     goal: str
     bootstrap_enabled: bool = False
+    skill_profile: SkillProfile = "standard"
     hints: list[CreateHintInline] | None = None
 
     @field_validator("title", "origin", "goal")
@@ -145,6 +219,7 @@ class CreateIntentRequest(BaseModel):
     creator: str
     worker: str | None = None
     execution_profile: ExecutionProfile = "direct"
+    capabilities: list[CapabilityName] = Field(..., min_length=0)
     max_active_intents: int | None = Field(default=None, gt=0)
 
     model_config = {"populate_by_name": True}
@@ -170,9 +245,27 @@ class CreateIntentRequest(BaseModel):
             cleaned.append(text)
         return cleaned
 
+    @field_validator("capabilities")
+    @classmethod
+    def validate_capabilities(cls, value: list[CapabilityName]) -> list[CapabilityName]:
+        if len(set(value)) != len(value):
+            raise ValueError("capabilities must not contain duplicates")
+        return value
+
 
 class UpdateIntentExecutionProfileRequest(BaseModel):
     execution_profile: ExecutionProfile
+
+
+class UpdateIntentCapabilitiesRequest(BaseModel):
+    capabilities: list[CapabilityName] = Field(min_length=1)
+
+    @field_validator("capabilities")
+    @classmethod
+    def validate_capabilities(cls, value: list[CapabilityName]) -> list[CapabilityName]:
+        if len(set(value)) != len(value):
+            raise ValueError("capabilities must not contain duplicates")
+        return value
 
 
 class HeartbeatRequest(BaseModel):
@@ -293,6 +386,10 @@ class UpdateProjectTitleRequest(BaseModel):
         if not text:
             raise ValueError("must not be empty")
         return text
+
+
+class UpdateProjectSkillProfileRequest(BaseModel):
+    skill_profile: SkillProfile
 
 
 class ReopenRequest(BaseModel):

@@ -1,6 +1,10 @@
 ---
 name: ghidra-reverse
 description: Use for free/open reverse engineering with Ghidra (headless or GUI), including decompile, cross-refs, and optional Ghidra MCP workflows when IDA is unavailable.
+metadata:
+  redtrace:
+    capabilities: [reverse]
+    competition: false
 ---
 
 # Ghidra Reverse Engineering

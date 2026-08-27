@@ -252,6 +252,7 @@ def test_intent_retry_budget_persists_and_opens_circuit(client: TestClient) -> N
     intent = client.post(
         f"/projects/{project_id}/intents",
         json={
+            "capabilities": ["web"],
             "from": ["origin"],
             "description": "deterministic failure",
             "creator": "reasoner",

@@ -1,6 +1,10 @@
 ---
 name: browser-extension-reverse
 description: Use for authorized reverse engineering of browser extensions (Chrome/Firefox) including manifest analysis, background workers, and extension-based credential or traffic logic recovery.
+metadata:
+  redtrace:
+    capabilities: [thick-client]
+    competition: false
 ---
 
 # Browser Extension Reverse Engineering

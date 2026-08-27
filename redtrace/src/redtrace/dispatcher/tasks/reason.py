@@ -68,6 +68,7 @@ def run_reason_task(
             {
                 "from": intent.from_,
                 "description": intent.description,
+                "capabilities": intent.capabilities,
             }
             for intent in project.intents
             if intent.to is None and intent.state in ("open", "working")
@@ -291,6 +292,7 @@ def run_reason_task(
                     intent_data["from"],
                     intent_data["description"],
                     worker.name,
+                    capabilities=intent_data["capabilities"],
                     max_active_intents=max_active_intents,
                 )
                 if response.status_code == 403:

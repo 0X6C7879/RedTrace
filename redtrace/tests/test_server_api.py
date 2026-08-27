@@ -59,6 +59,7 @@ def test_concurrent_intent_claim_has_exactly_one_winner(client: TestClient) -> N
     response = client.post(
         f"/projects/{project_id}/intents",
         json={
+            "capabilities": ["web"],
             "from": ["origin"],
             "description": "parallel work",
             "creator": "reasoner",
@@ -86,6 +87,7 @@ def test_intent_execution_profile_defaults_edits_and_freezes_on_claim(
     created = client.post(
         f"/projects/{project_id}/intents",
         json={
+            "capabilities": ["web"],
             "from": ["origin"],
             "description": "isolated work",
             "creator": "reasoner",
@@ -117,6 +119,7 @@ def test_concurrent_reason_intent_creation_respects_active_limit(
         return client.post(
             f"/projects/{project_id}/intents",
             json={
+                "capabilities": ["web"],
                 "from": ["origin"],
                 "description": f"parallel work {index}",
                 "creator": "reasoner",
@@ -163,6 +166,7 @@ def test_delete_project_cascades_without_blackboard_trigger_failure(
     intent = client.post(
         f"/projects/{project_id}/intents",
         json={
+            "capabilities": ["web"],
             "from": ["origin"],
             "description": "investigate",
             "creator": "reasoner",
@@ -447,6 +451,7 @@ def test_project_workflow_create_conclude_complete_and_reopen(
     response = client.post(
         f"/projects/{project_id}/intents",
         json={
+            "capabilities": ["web"],
             "from": ["origin"],
             "description": "investigate",
             "creator": "reasoner",
@@ -515,6 +520,7 @@ def test_bootstrap_conclude_with_completion_ends_project_and_reopens(
             "description": "bootstrap",
             "creator": "dispatcher.bootstrap",
             "worker": None,
+            "capabilities": [],
         },
     )
     assert created.status_code == 201
@@ -573,6 +579,7 @@ def test_conclude_with_completion_rejected_for_non_bootstrap_intents(
     created = client.post(
         f"/projects/{project_id}/intents",
         json={
+            "capabilities": ["web"],
             "from": ["origin"],
             "description": "investigate",
             "creator": "reasoner",
@@ -610,6 +617,7 @@ def test_admin_can_force_release_and_conclude_owned_intents(
     created = client.post(
         f"/projects/{project_id}/intents",
         json={
+            "capabilities": ["web"],
             "from": ["origin"],
             "description": "investigate",
             "creator": "worker-a",
@@ -650,6 +658,7 @@ def test_stopping_project_releases_claims_and_reason_but_keeps_hints_writable(
     client.post(
         f"/projects/{project_id}/intents",
         json={
+            "capabilities": ["web"],
             "from": ["origin"],
             "description": "work",
             "creator": "worker-a",
@@ -678,6 +687,7 @@ def test_stopping_project_releases_claims_and_reason_but_keeps_hints_writable(
         client.post(
             f"/projects/{project_id}/intents",
             json={
+                "capabilities": ["web"],
                 "from": ["origin"],
                 "description": "blocked",
                 "creator": "reasoner",
@@ -697,6 +707,7 @@ def test_intent_creation_rejects_goal_source_and_mismatched_initial_worker(
         client.post(
             f"/projects/{project_id}/intents",
             json={
+                "capabilities": ["web"],
                 "from": ["goal"],
                 "description": "invalid",
                 "creator": "reasoner",
@@ -709,6 +720,7 @@ def test_intent_creation_rejects_goal_source_and_mismatched_initial_worker(
         client.post(
             f"/projects/{project_id}/intents",
             json={
+                "capabilities": ["web"],
                 "from": ["origin"],
                 "description": "invalid",
                 "creator": "reasoner",
@@ -746,6 +758,7 @@ def test_expired_intent_and_reason_leases_can_be_reclaimed(client: TestClient) -
     client.post(
         f"/projects/{project_id}/intents",
         json={
+            "capabilities": ["web"],
             "from": ["origin"],
             "description": "work",
             "creator": "worker-a",

@@ -1,6 +1,10 @@
 ---
 name: skill-evolution
 description: Review verified outcomes and evolve Skills with reusable learnings from the current session.
+metadata:
+  redtrace:
+    capabilities: [common]
+    competition: false
 ---
 
 # Skill Evolution
@@ -58,7 +62,8 @@ description: Review verified outcomes and evolve Skills with reusable learnings 
 
 1. 从 Memory 中抽象出稳定通用规则（不是项目事实的堆砌）
 2. 直接编辑**仓库根目录 `skills/`** 下该 Skill 的 `SKILL.md`（`skills/<canonical-id>/SKILL.md`），将规则写入；不创建新的 Skill 目录，不改动 `skills/` 之外的任何文件
-3. 检查确认没有破坏原 Skill 的结构与意图
+3. 保留并校验顶层 frontmatter 的 `metadata.redtrace.capabilities` 与 `metadata.redtrace.competition`；分类缺失或非法时不得保存
+4. 检查确认没有破坏原 Skill 的结构与意图
 
 ```text
 执行结果 → Memory（快速沉淀）→ 反复验证 → SKILL.md（稳定进化）

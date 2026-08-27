@@ -1,6 +1,10 @@
 ---
 name: redtrace-blackboard
 description: Query RedTrace Blackboard history, source context, graph paths, and cross-worker evidence when the current task needs information beyond the provided graph snapshot.
+metadata:
+  redtrace:
+    capabilities: [common]
+    competition: false
 ---
 
 # RedTrace Blackboard

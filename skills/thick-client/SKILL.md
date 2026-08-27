@@ -1,6 +1,10 @@
 ---
 name: thick-client
 description: Use for authorized security testing of desktop thick clients including local storage, update channels, IPC, traffic, and client-side trust boundaries.
+metadata:
+  redtrace:
+    capabilities: [thick-client]
+    competition: false
 ---
 
 # Thick Client Security Testing

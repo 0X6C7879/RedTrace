@@ -6,6 +6,10 @@ description: |
   Ensure to use this skill when the user wants to analyze any binary file, regardless of whether they explicitly mention "IDA" or "reverse engineering". This includes requests like "看看这个exe", "分析这个dll", "帮我破解", "找一下密码", "这个软件怎么注册", etc.
 
   Use the bundled scripts (scripts/start.ps1, scripts/open.ps1) for deterministic server management and file opening — do NOT write ad-hoc PowerShell commands for these operations.
+metadata:
+  redtrace:
+    capabilities: [reverse]
+    competition: false
 ---
 
 # IDA Pro 逆向分析技能

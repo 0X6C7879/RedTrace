@@ -702,6 +702,7 @@ class DispatcherLoop:
             ["origin"],
             project_policy.BOOTSTRAP_DESCRIPTION,
             project_policy.BOOTSTRAP_CREATOR,
+            capabilities=[],
         )
         if response.status_code == 403:
             LOG.info(

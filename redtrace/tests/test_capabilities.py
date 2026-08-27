@@ -17,6 +17,10 @@ from redtrace.server.app import app
 SKILL = """---
 name: recon
 description: Run a focused reconnaissance workflow.
+metadata:
+  redtrace:
+    capabilities: [web]
+    competition: false
 ---
 
 # Recon

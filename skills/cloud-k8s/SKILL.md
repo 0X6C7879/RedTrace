@@ -1,6 +1,10 @@
 ---
 name: cloud-k8s
 description: Use for authorized cloud, container, and Kubernetes security assessment including metadata SSRF, IAM misconfig, container escape paths, and cluster RBAC review.
+metadata:
+  redtrace:
+    capabilities: [cloud]
+    competition: false
 ---
 
 # Cloud / Container / Kubernetes Security

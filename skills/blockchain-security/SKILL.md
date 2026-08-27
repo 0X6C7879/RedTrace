@@ -1,6 +1,10 @@
 ---
 name: blockchain-security
 description: Use for authorized blockchain, smart-contract and DeFi security research, including Solidity/EVM, Solana, Move, Cairo, TON, Cosmos and Substrate; protocol logic, asset flow, access control, cross-contract interactions, economic attacks, invariant violations and exploit validation.
+metadata:
+  redtrace:
+    capabilities: [blockchain]
+    competition: false
 ---
 # 区块链漏洞挖掘
 

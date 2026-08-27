@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -276,6 +277,12 @@ def intent_to_model(
         "SELECT fact_id FROM intent_sources WHERE intent_id = ? AND project_id = ? ORDER BY rowid",
         (row["id"], project_id),
     ).fetchall()
+    try:
+        capabilities = json.loads(row["capabilities"] or "[]") if "capabilities" in row.keys() else []
+    except (TypeError, json.JSONDecodeError):
+        capabilities = []
+    if not isinstance(capabilities, list):
+        capabilities = []
     return Intent(
         id=row["id"],
         **{"from": [s["fact_id"] for s in sources]},
@@ -288,6 +295,7 @@ def intent_to_model(
             if "execution_profile" in row.keys()
             else "direct"
         ),
+        capabilities=capabilities,
         last_heartbeat_at=row["last_heartbeat_at"],
         created_at=row["created_at"],
         concluded_at=row["concluded_at"],
@@ -342,6 +350,7 @@ def project_meta_from_row(row: sqlite3.Row) -> ProjectMeta:
         title=row["title"],
         status=row["status"],
         bootstrap_enabled=bool(row["bootstrap_enabled"]),
+        skill_profile=row["skill_profile"] if "skill_profile" in row.keys() else "standard",
         created_at=row["created_at"],
         reason=project_reason_from_row(row),
         reason_failure_count=row["reason_failure_count"],

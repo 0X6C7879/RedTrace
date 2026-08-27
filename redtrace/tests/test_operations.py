@@ -190,6 +190,7 @@ def test_intent_fact_stays_decoupled_from_its_resources(client: TestClient) -> N
     intent = client.post(
         f"/projects/{project_id}/intents",
         json={
+            "capabilities": ["web"],
             "from": ["origin"],
             "description": "inspect service",
             "creator": "reasoner",
@@ -236,6 +237,7 @@ def test_conclude_without_resource_id_is_accepted(client: TestClient) -> None:
     intent = client.post(
         f"/projects/{project_id}/intents",
         json={
+            "capabilities": ["web"],
             "from": ["origin"],
             "description": "inspect service",
             "creator": "reasoner",
@@ -770,7 +772,7 @@ def test_releasing_leaf_fact_and_blocking_used_facts(
     project_id = create_project(client)
     leaf_intent = client.post(
         f"/projects/{project_id}/intents",
-        json={"from": ["origin"], "description": "leaf", "creator": "admin", "worker": "admin"},
+        json={"from": ["origin"], "description": "leaf", "creator": "admin", "worker": "admin", "capabilities": ["web"]},
     ).json()
     leaf = client.post(
         f"/projects/{project_id}/intents/{leaf_intent['id']}/conclude",
@@ -782,7 +784,7 @@ def test_releasing_leaf_fact_and_blocking_used_facts(
 
     parent_intent = client.post(
         f"/projects/{project_id}/intents",
-        json={"from": ["origin"], "description": "parent", "creator": "admin", "worker": "admin"},
+        json={"from": ["origin"], "description": "parent", "creator": "admin", "worker": "admin", "capabilities": ["web"]},
     ).json()
     parent = client.post(
         f"/projects/{project_id}/intents/{parent_intent['id']}/conclude",
@@ -790,7 +792,7 @@ def test_releasing_leaf_fact_and_blocking_used_facts(
     ).json()["fact"]
     client.post(
         f"/projects/{project_id}/intents",
-        json={"from": [parent["id"]], "description": "child", "creator": "admin"},
+        json={"from": [parent["id"]], "description": "child", "creator": "admin", "capabilities": ["web"]},
     )
     assert client.delete(f"/projects/{project_id}/blackboard/facts/{parent['id']}").status_code == 409
 
@@ -804,6 +806,7 @@ def test_resource_delete_preserves_linked_fact_and_intent(client: TestClient) ->
             "description": "produce linked fact",
             "creator": "admin",
             "worker": "admin",
+            "capabilities": ["web"],
         },
     ).json()
     fact = client.post(
