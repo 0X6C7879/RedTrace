@@ -14,22 +14,9 @@
     "types": ["node"]
   },
   "include": [
-    // Source-subpath test imports can arrive through workspace links whose
-    // realpath semantics vary by host. Load package CSS declarations directly.
     "packages/client/*/src/css-modules.d.ts",
-    "packages/client/*/tests/**/*.ts",
-    "packages/client/*/tests/**/*.tsx",
-    "packages/*/*/tests/**/*.client.spec.ts",
-    "packages/*/*/tests/**/*.client.spec.tsx",
-    "packages/*/*/tests/**/*.client.tsx",
-    "packages/*/*/tests/**/*.client.ts",
-    // Client package outside packages/client with a local CSS module face.
     "packages/extensions/ui-cordis/src/css-modules.d.ts",
-    "packages/client/tsdown.client.ts",
-    "scripts/client-build-environment.ts",
-    "scripts/*.client.spec.ts",
-    "scripts/client-bundle-css.spec.ts",
-    "scripts/client-bundle-purity.spec.ts"
+    "packages/client/tsdown.client.ts"
   ],
   // A `*.host.spec.ts` covers the Host half of a split client package and
   // belongs to the host aggregate, which excludes this program's `*.client.*`
@@ -95,7 +82,6 @@
     { "path": "./packages/client/ui-settings-plugin-inventory" },
     { "path": "./packages/client/locale" },
     { "path": "./packages/client/ui-renderer" },
-    { "path": "./packages/client/web" },
-    { "path": "./apps/web" }
+    { "path": "./packages/client/web" }
   ]
 }
