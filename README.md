@@ -254,13 +254,13 @@ Context Harness 会把完整输出保存到 `.redtrace/artifacts/context`，同�
 | `redtrace/src/redtrace/capabilities.py` | Skill/MCP 能力发现、启停、版本与 Workspace 物化 |
 | `redtrace/src/redtrace/worker_config.py` | Worker 配置服务、连接测试和原生 CLI 配置同步 |
 | `packages/redtrace-dsh/` | RedTrace DSH 扩展包：Scheduler、契约工具、插件管理、审计投影、Web 托管等 Cordis 插件 |
-| `vendor/deepseek-harness/` | DSH/Cordis 运行时上游（git 子模块，revision pin） |
+| `vendor/deepseek-harness/` | DSH/Cordis 运行时（vendored，本地维护为主，不跟随上游） |
 | `profiles/redtrace/` | Cordis 运行时组装配置（runtime/direct/reason/isolated） |
 | `skills/` | 多 Worker 共享的一级原生 Skill；由 Agent 按需直接加载 |
 | `mcp/` | 共享 MCP 配置与服务入口 |
 | `container/` | Worker 容器镜像与运行资产 |
-| `scripts/` | DSH 构建、revision 校验与探针辅助脚本 |
-| `.github/workflows/` | 三平台 CI（dsh-mainline）与 DSH 上游周度升级机器人（dsh-upstream） |
+| `scripts/` | DSH 构建与探针辅助脚本 |
+| `.github/workflows/` | 三平台 CI（dsh-mainline） |
 | `.redtrace/` | 项目级数据库、日志、锁和内部运行状态（不提交） |
 | `workspaces/` | 按任务隔离的 Worker 会话、提示、临时文件和工件（不提交） |
 | `output/webshell/`、`output/c2/` | 供人工审计的 WebShell/C2 落地文件（不提交） |

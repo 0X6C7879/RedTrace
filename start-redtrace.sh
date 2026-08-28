@@ -5,7 +5,7 @@
 # when provider Workers are configured, the long-lived DSH Cordis runtime that
 # schedules them. Prerequisites are checked and bootstrapped in order:
 #
-#   1. uv (Python environment)          3. DSH git submodule
+#   1. uv (Python environment)          3. DSH vendored runtime tree
 #   2. Node.js >= 22.19 (DSH runtime)   4. DSH install + build (first run)
 #
 # Configuration lives in redtrace.yaml at the repository root; see
@@ -70,14 +70,10 @@ if [[ "$NODE_MAJOR" -lt 22 ]] || { [[ "$NODE_MAJOR" -eq 22 ]] && [[ "$NODE_MINOR
   exit 1
 fi
 
-# ── 3. DSH submodule ───────────────────────────────────────────────────────
+# ── 3. DSH vendored runtime tree ───────────────────────────────────────────
 if [[ ! -f "$ROOT/vendor/deepseek-harness/package.json" ]]; then
-  command -v git >/dev/null 2>&1 || {
-    printf 'error: the DSH submodule is missing and git is unavailable to fetch it\n' >&2
-    exit 1
-  }
-  printf '==> initializing the DSH submodule (first run)\n' >&2
-  git -C "$ROOT" submodule update --init --recursive
+  printf 'error: vendor/deepseek-harness is missing from the checkout\n' >&2
+  exit 1
 fi
 
 # ── 4. DSH install + build (first run only) ────────────────────────────────

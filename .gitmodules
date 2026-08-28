@@ -1,6 +1,0 @@
-[submodule "deepseek-harness"]
-	path = vendor/deepseek-harness
-	url = https://github.com/deepseek-ai/deepseek-harness
-[submodule "vendor/deepseek-harness"]
-	path = vendor/deepseek-harness
-	url = https://github.com/deepseek-ai/deepseek-harness

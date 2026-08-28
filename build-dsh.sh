@@ -2,7 +2,8 @@
 # RedTrace DSH build script (Linux/macOS).
 #
 # Installs DSH dependencies and compiles the server runtime artifacts.
-# Run this once after cloning, and again after pulling upstream changes.
+# Run this once after cloning, and again after pulling changes that touch
+# vendor/deepseek-harness or packages/redtrace-dsh.
 #
 #   ./build-dsh.sh            full install + build
 #   ./build-dsh.sh --rebuild  delete node_modules and reinstall before building

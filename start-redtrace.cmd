@@ -6,7 +6,7 @@ rem plus, when provider Workers are configured, the long-lived DSH Cordis
 rem runtime that schedules them. Prerequisites are checked and bootstrapped
 rem in order:
 rem
-rem   1. uv (Python environment)          3. DSH git submodule
+rem   1. uv (Python environment)          3. DSH vendored runtime tree
 rem   2. Node.js >= 22.19 (DSH runtime)   4. DSH install + build (first run)
 rem
 rem Configuration lives in redtrace.yaml at the repository root; see
@@ -54,14 +54,10 @@ exit /b 1
 
 :nodeOk
 
-rem -- 3. DSH submodule ---------------------------------------------------
+rem -- 3. DSH vendored runtime tree ----------------------------------------
 if not exist "%ROOT%\vendor\deepseek-harness\package.json" (
-  where git >nul 2>nul || (
-    echo error: the DSH submodule is missing and git is unavailable to fetch it 1>&2
-    exit /b 1
-  )
-  echo ==^> initializing the DSH submodule ^(first run^) 1>&2
-  git -C "%ROOT%" submodule update --init --recursive || exit /b 1
+  echo error: vendor\deepseek-harness is missing from the checkout 1>&2
+  exit /b 1
 )
 
 rem -- 4. DSH install + build (first run only) -------------------------------

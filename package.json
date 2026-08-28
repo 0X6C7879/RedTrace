@@ -6,7 +6,6 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "dsh:check-revision": "node scripts/check-dsh-revision.mjs",
     "dsh:install": "node scripts/dsh-pnpm.mjs install --frozen-lockfile",
     "dsh:build:upstream": "node scripts/dsh-pnpm.mjs build",
     "dsh:build:redtrace": "node scripts/dsh-pnpm.mjs exec tsc -p ../../packages/redtrace-dsh/tsconfig.json",
