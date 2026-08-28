@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import {
   activateAgent, fetchAllResources, planDispatch, postWithRetry,
-  reasonEligible, resolveLimits, sessionIdForTask, sessionPlan, taskTurn,
+  reasonEligible, recoverableExploreSession, resolveLimits, sessionIdForTask, sessionPlan, taskTurn,
 } from '../lib/scheduler.js'
 import { schedulable } from '../lib/context.js'
 
@@ -84,6 +84,20 @@ test('conclude retries use each task short prompt and conclude timeout', () => {
 test('stopped tasks resume with only the short continue prompt', () => {
   const turn = taskTurn('explore', 'resume', 'LONG LAUNCH PROMPT', { timeout: 300 })
   assert.deepEqual(turn, { prompt: '继续', timeout: 300 })
+})
+
+test('Explore recovers the latest interrupted persisted session after a process restart', () => {
+  assert.equal(recoverableExploreSession([
+    { task_type: 'explore', intent_id: 'i1', engine: 'dsh', status: 'running', session_id: 'current' },
+    { task_type: 'explore', intent_id: 'i1', engine: 'dsh', status: 'cancelled', session_id: 'older' },
+  ], 'i1'), 'current')
+  assert.equal(recoverableExploreSession([
+    { task_type: 'explore', intent_id: 'i1', engine: 'dsh', status: 'cancelled', session_id: 'stopped' },
+  ], 'i1'), 'stopped')
+  assert.equal(recoverableExploreSession([
+    { task_type: 'explore', intent_id: 'i1', engine: 'dsh', status: 'success', session_id: 'done' },
+    { task_type: 'explore', intent_id: 'i1', engine: 'dsh', status: 'cancelled', session_id: 'stale' },
+  ], 'i1'), undefined)
 })
 
 // ─── Health / cooldown gates ────────────────────────────────────────────────

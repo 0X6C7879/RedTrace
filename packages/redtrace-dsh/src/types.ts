@@ -207,7 +207,13 @@ export interface MessageFactory {
   SessionId(value: string): unknown
 }
 
-export interface AuditRun { session_id?: string | null }
+export interface AuditRun {
+  engine?: string
+  intent_id?: string | null
+  session_id?: string | null
+  status?: string
+  task_type?: string
+}
 
 export interface ProjectSummary {
   id: string

@@ -13,7 +13,7 @@
 import { mkdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import type {
-  Intent, LlmService, ProjectDetail, ProjectSummary, ReasoningPolicy, ResourceSummary,
+  AuditRun, Intent, LlmService, ProjectDetail, ProjectSummary, ReasoningPolicy, ResourceSummary,
   RuntimeConfig, RuntimeContext, RuntimeOptions, RuntimeSnapshot, RuntimeTask,
   TaskLimits, TaskType, WorkerRoute, WorkerSpec,
 } from './types.js'
@@ -71,6 +71,15 @@ export function sessionPlan(
   }
 }
 
+/** The audit API returns newest runs first. Only the latest run for this
+ * Intent may be resumed; an older interruption must not outlive a newer run. */
+export function recoverableExploreSession(runs: readonly AuditRun[], intentId: string): string | undefined {
+  const latest = runs.find(run => run.task_type === 'explore' && run.intent_id === intentId)
+  return latest?.engine === 'dsh' && ['running', 'cancelled'].includes(latest.status ?? '')
+    ? latest.session_id || undefined
+    : undefined
+}
+
 export function taskTurn(
   type: TaskType,
   phase: 'execute' | 'resume' | 'conclude',
@@ -121,7 +130,7 @@ class Scheduler {
   private readonly completions = new Map<string, Promise<void>>()
   // ponytail: recovery handoff is process-local; persist it with task outcomes if restart-safe retries become necessary.
   private readonly concludeRecoveries = new Map<string, { projectId: string; sessionId: string }>()
-  // ponytail: pause recovery is process-local; persist it if stop/resume must survive a DSH restart.
+  // Fast path for stop/resume in one process; runTask falls back to durable audit state after a restart.
   private readonly pausedSessions = new Map<string, { projectId: string; sessionId: string }>()
   private timer?: ReturnType<typeof setTimeout>
   private closing = false
@@ -382,6 +391,18 @@ class Scheduler {
     try {
       let concludeOnly = task.concludeOnly === true
       let resumeOnly = task.resumeOnly === true
+      if (task.type === 'explore' && !resumeOnly && !concludeOnly && task.intentId !== undefined) {
+        const runs = await api<AuditRun[]>(
+          this.config,
+          `/audit/tasks/${encodeURIComponent(task.projectId)}/runs`,
+        )
+        const sessionId = recoverableExploreSession(runs, task.intentId)
+        if (sessionId !== undefined) {
+          task.sessionId = sessionId
+          task.resumeOnly = true
+          resumeOnly = true
+        }
+      }
       const persistedSession = this.ctx.sessionPersistence === undefined
         ? false
         : await this.ctx.sessionPersistence.readRaw(task.sessionId!) !== undefined

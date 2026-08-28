@@ -4,7 +4,7 @@
     "--mcp"
   ],
   "command": "codegraph",
-  "enabled": true,
+  "enabled": false,
   "env": {
     "CODEGRAPH_DB": ".codegraph/codegraph.db"
   },

@@ -10,7 +10,10 @@
     "--headless",
     "--isolated",
     "--no-usage-statistics",
-    "--no-performance-crux"
+    "--no-performance-crux",
+    "--chromeArg=--no-sandbox",
+    "--chromeArg=--disable-dev-shm-usage",
+    "--chromeArg=--disable-gpu"
   ],
   "command": "npx",
   "enabled": true,
