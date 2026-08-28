@@ -5,7 +5,6 @@ description: >-
 metadata:
   redtrace:
     capabilities: [common]
-    competition: false
 ---
 
 # RedTrace Skill Template

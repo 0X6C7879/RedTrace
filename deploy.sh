@@ -726,7 +726,7 @@ value = (raw.get("common_env") or {}).get("BRAVE_API_KEY")
 if secret_id_from_reference(value):
     raise SystemExit(0)
 if isinstance(value, str) and value:
-    WorkerConfigService(sys.argv[1]).set_common_env_secret("BRAVE_API_KEY", value)
+    WorkerConfigService(sys.argv[1]).set_common_env_value("BRAVE_API_KEY", value)
     raise SystemExit(0)
 raise SystemExit(1)
 PY
@@ -744,7 +744,7 @@ import sys
 
 from redtrace.worker_config import WorkerConfigService
 
-WorkerConfigService(sys.argv[1]).set_common_env_secret(
+WorkerConfigService(sys.argv[1]).set_common_env_value(
     "BRAVE_API_KEY",
     os.environ["BRAVE_API_KEY"],
 )

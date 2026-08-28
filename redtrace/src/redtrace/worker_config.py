@@ -590,6 +590,16 @@ class WorkerConfigService:
         secrets = self.secrets.load()
         config = _validate_config(raw, secrets)
         workers = [self._view(worker) for worker in config.workers]
+        dsh_snapshot = (
+            dsh.runtime_config(config)
+            if any(worker.provider != "mock" for worker in config.workers)
+            else None
+        )
+        if dsh_snapshot is not None:
+            # The scheduler-only runtime endpoint needs these resolved values;
+            # the admin settings snapshot must never send them to the browser.
+            dsh_snapshot.pop("env", None)
+            dsh_snapshot.pop("commonEnv", None)
         return {
             "revision": revision,
             "engine": (
@@ -605,6 +615,13 @@ class WorkerConfigService:
                 "max_project_workers": config.runtime.max_project_workers,
             },
             "tasks": config.tasks.model_dump(),
+            "common_env": [
+                {
+                    "name": name,
+                    "value": value,
+                }
+                for name, value in sorted(config.common_env.items())
+            ],
             "providers": [
                 {
                     "name": name,
@@ -633,11 +650,7 @@ class WorkerConfigService:
                 }
                 for name, provider in sorted(config.providers.items())
             ],
-            "dsh": (
-                dsh.runtime_config(config)
-                if any(worker.provider != "mock" for worker in config.workers)
-                else None
-            ),
+            "dsh": dsh_snapshot,
             "workers": workers,
         }
 
@@ -674,6 +687,52 @@ class WorkerConfigService:
         _validate_config(raw, secrets)
         self._commit(raw, revision, secrets=secrets)
         return self.snapshot()
+
+    def update_common_env(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raw, revision = _read_raw(self.path)
+        self._check_revision(revision, str(payload.get("expected_revision") or ""))
+        entries = payload.get("entries")
+        if not isinstance(entries, list):
+            raise WorkerConfigError("common_env entries must be an array")
+        common_env: dict[str, str] = {}
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                raise WorkerConfigError(f"common_env entries[{index}] must be an object")
+            name = str(entry.get("name") or "").strip()
+            if not ENV_NAME_PATTERN.fullmatch(name):
+                raise WorkerConfigError(
+                    f"common_env entries[{index}].name must match ^[A-Z][A-Z0-9_]*$"
+                )
+            if name in common_env:
+                raise WorkerConfigError(f"duplicate common_env name: {name}")
+            value = entry.get("value")
+            if not isinstance(value, str):
+                raise WorkerConfigError(f"common_env {name} value is required")
+            common_env[name] = value
+
+        raw["common_env"] = common_env
+        secrets = self.secrets.load()
+        _validate_config(raw, secrets)
+        self._commit(raw, revision, secrets=secrets)
+        return self.snapshot()
+
+    def set_common_env_value(self, name: str, value: str) -> None:
+        """Set one plaintext common environment value for deployment helpers."""
+        normalized = str(name or "").strip()
+        if not ENV_NAME_PATTERN.fullmatch(normalized):
+            raise WorkerConfigError(
+                "common_env name must match ^[A-Z][A-Z0-9_]*$"
+            )
+        if not isinstance(value, str):
+            raise WorkerConfigError("common_env value must be a string")
+        raw, revision = _read_raw(self.path)
+        common_env = raw.setdefault("common_env", {})
+        if not isinstance(common_env, dict):
+            raise WorkerConfigError("dispatcher config common_env must be an object")
+        common_env[normalized] = value
+        secrets = self.secrets.load()
+        _validate_config(raw, secrets)
+        self._commit(raw, revision, secrets=secrets)
 
     def create_provider(self, payload: dict[str, Any]) -> dict[str, Any]:
         raw, revision = _read_raw(self.path)

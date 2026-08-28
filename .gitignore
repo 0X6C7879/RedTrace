@@ -55,3 +55,7 @@ skills/pentest-tools/tools/burp-mcp-full/.gradle/
 
 # 根目录 npm 依赖产物（不入库）
 node_modules/
+
+# 本地 agent 工具状态（freebuff/mimocode CLI）
+.freebuff/
+.mimocode/

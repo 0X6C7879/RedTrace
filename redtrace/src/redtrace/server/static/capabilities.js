@@ -17,7 +17,6 @@ window.skillsPage = function skillsPage() {
     items: [],
     query: '',
     capabilityFilter: '',
-    profileFilter: 'all',
     catalog: null,
     selectedName: '',
     draft: null,
@@ -43,8 +42,6 @@ window.skillsPage = function skillsPage() {
         (!needle || `${item.name} ${item.description || ''} ${item.parent || ''} ${item.path || ''}`
           .toLowerCase().includes(needle))
         && (!this.capabilityFilter || (item.capabilities || []).includes(this.capabilityFilter))
-        && (this.profileFilter === 'all'
-          || (this.profileFilter === 'competition' ? item.competition === true : item.competition !== true))
       );
     },
 
@@ -136,7 +133,7 @@ window.skillsPage = function skillsPage() {
         name: '',
         enabled: true,
         files: [],
-        content: '---\nname: skill-name\ndescription: Describe when this skill should be used.\nmetadata:\n  redtrace:\n    capabilities: [common]\n    competition: false\n---\n\n# Skill name\n\nAdd the workflow and any required rules here.\n',
+        content: '---\nname: skill-name\ndescription: Describe when this skill should be used.\nmetadata:\n  redtrace:\n    capabilities: [common]\n---\n\n# Skill name\n\nAdd the workflow and any required rules here.\n',
       };
       this.versions = [];
       this.rollbackVersion = '';

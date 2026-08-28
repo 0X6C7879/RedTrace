@@ -4,7 +4,6 @@ description: Use for software supply-chain security assessment covering SBOM, SC
 metadata:
   redtrace:
     capabilities: [supply-chain]
-    competition: false
 ---
 # Supply Chain Security Testing
 

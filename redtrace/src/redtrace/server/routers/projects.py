@@ -19,7 +19,6 @@ from redtrace.board.models import (
     ReopenResponse,
     UpdateProjectStatusRequest,
     UpdateProjectTitleRequest,
-    UpdateProjectSkillProfileRequest,
     TaskOutcomeRequest,
 )
 from redtrace.paths import PathResolutionError
@@ -125,13 +124,6 @@ def runtime_cleaned(
 @router.put("/projects/{project_id}/title", response_model=ProjectMeta)
 def update_project_title(project_id: str, body: UpdateProjectTitleRequest):
     return projects.rename(project_id, body.title)
-
-
-@router.put("/projects/{project_id}/skill-profile", response_model=ProjectMeta)
-def update_project_skill_profile(
-    project_id: str, body: UpdateProjectSkillProfileRequest
-):
-    return projects.update_skill_profile(project_id, body.skill_profile)
 
 
 @router.put("/projects/{project_id}/status", response_model=ProjectMeta)

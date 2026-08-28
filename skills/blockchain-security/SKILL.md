@@ -4,7 +4,6 @@ description: Use for authorized blockchain, smart-contract and DeFi security res
 metadata:
   redtrace:
     capabilities: [blockchain]
-    competition: false
 ---
 # 区块链漏洞挖掘
 

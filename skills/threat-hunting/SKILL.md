@@ -4,7 +4,6 @@ description: Use for blue-team threat hunting, detection engineering with Sigma/
 metadata:
   redtrace:
     capabilities: [threat-hunting]
-    competition: false
 ---
 
 # Threat Hunting & Detection Engineering

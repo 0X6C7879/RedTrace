@@ -1,4 +1,4 @@
-# CTF Reverse - Competition-Specific Patterns (Part 2)
+# Reverse Engineering Specialized Patterns (Part 2)
 
 ## Table of Contents
 - [Multi-Layer Self-Decrypting Binary (DiceCTF 2026)](#multi-layer-self-decrypting-binary-dicectf-2026)

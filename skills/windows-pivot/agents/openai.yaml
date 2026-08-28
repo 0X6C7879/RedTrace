@@ -1,0 +1,7 @@
+interface:
+  display_name: "Windows Pivot"
+  short_description: "Trace Kerberos replay, Windows pivots, and ticket acceptance"
+  default_prompt: "Use $windows-pivot to trace the Kerberos or Windows host pivot chain and prove which service accepted the credential or ticket."
+
+policy:
+  allow_implicit_invocation: false

@@ -154,3 +154,66 @@ def test_startup_healthcheck_failure_summary_includes_worker_details() -> None:
     assert summary == (
         "startup healthchecks failed for all workers: worker-a(http=401, detail=unauthorized)"
     )
+
+
+def test_dsh_environment_forwards_common_env_with_scrub_allowlist(
+    tmp_path, monkeypatch
+) -> None:
+    from redtrace import startup
+    from redtrace.dispatcher.config import DispatchConfig
+
+    manager = type("Manager", (), {"dsh_mcp_configs": staticmethod(lambda: [])})()
+    monkeypatch.setattr(
+        "redtrace.agent_runtime.AgentRuntimeManager", lambda *a, **k: manager
+    )
+
+    config = DispatchConfig.model_validate(
+        {
+            "server": "http://127.0.0.1:8000",
+            "paths": {"root": str(tmp_path)},
+            "runtime": {
+                "execution": "local",
+                "interval": 3,
+                "max_workers": 1,
+                "max_running_projects": 1,
+                "max_project_workers": 1,
+                "healthcheck_timeout": 5,
+                "prompt_group": "default",
+            },
+            "tasks": {
+                "bootstrap": {"timeout": 20, "conclude_timeout": 10},
+                "reason": {"timeout": 20},
+                "explore": {"timeout": 20, "conclude_timeout": 10},
+            },
+            "common_env": {
+                "BENCHMARK_BASE_URL": "https://benchmark.example.test",
+                "BENCHMARK_TOKEN": "benchmark-secret",
+            },
+            "providers": {
+                "gw": {
+                    "api": "openai-completions",
+                    "base_url": "https://api.example.test",
+                    "api_key": "sk-test",
+                    "models": [{"id": "m1", "context_window": 8192, "max_tokens": 1024}],
+                }
+            },
+            "workers": [
+                {
+                    "name": "w1",
+                    "provider": "gw",
+                    "model": "m1",
+                    "bootstrap": True,
+                    "reason": True,
+                    "explore": True,
+                }
+            ],
+        }
+    )
+
+    child_env = startup._dsh_environment(config, tmp_path, "http://127.0.0.1:8000", "127.0.0.1", 8100)
+
+    assert child_env["BENCHMARK_TOKEN"] == "benchmark-secret"
+    assert child_env["BENCHMARK_BASE_URL"] == "https://benchmark.example.test"
+    # The allowlist is what carries credential-shaped names past the DSH
+    # subprocess scrub into worker shells.
+    assert child_env["DSH_FORWARD_ENV"] == "BENCHMARK_BASE_URL,BENCHMARK_TOKEN"

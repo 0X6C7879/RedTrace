@@ -4,7 +4,6 @@ description: 在使用 js-reverse-mcp 做前端 JavaScript 逆向时使用，适
 metadata:
   redtrace:
     capabilities: [web]
-    competition: false
 ---
 
 # MCP 前端 JS 逆向作业规范

@@ -381,7 +381,6 @@
             <span class="px-1.5 py-0.5 rounded-full text-[9px] font-semibold uppercase tracking-[0.12em]"
               :class="projectStatusBadgeClass(p.status)"
               x-text="p.status"></span>
-            <span class="rounded-full px-1.5 py-0.5 text-[9px] font-semibold" :class="p.skill_profile === 'competition' ? 'bg-violet-50 text-violet-700' : 'bg-slate-100 text-slate-500'" x-text="p.skill_profile || 'standard'"></span>
           </div>
           <div class="mb-3 flex-1">
             <div class="title-action-trigger flex items-start gap-2">
@@ -496,10 +495,6 @@
       <span class="px-1.5 py-0.5 rounded-full text-[9px] font-semibold uppercase tracking-[0.12em] shrink-0"
         :class="projectStatusBadgeClass(project.project.status)"
         x-text="project.project.status"></span>
-      <select x-model="project.project.skill_profile" @change="updateSkillProfile()" class="h-7 rounded-lg border border-slate-200 bg-white px-2 text-[10px] font-medium text-slate-600 outline-none" aria-label="Skill Profile">
-        <option value="standard">standard Skills</option>
-        <option value="competition">competition Profile</option>
-      </select>
     </div>
     <div class="flex-1"></div>
     <div class="flex shrink-0 items-center gap-2.5 text-xs tabular-nums"
@@ -1616,19 +1611,18 @@
         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新建 Skill
       </button>
     </header>
-    <div class="flex min-h-0 flex-1">
-      <aside class="flex w-72 shrink-0 flex-col border-r border-slate-200/70 bg-white">
+    <div class="flex min-h-0 flex-1 flex-col lg:flex-row">
+      <aside class="flex h-[45%] w-full shrink-0 flex-col border-b border-slate-200/70 bg-white lg:h-auto lg:w-72 lg:border-b-0 lg:border-r">
         <div class="p-3">
           <label class="relative block">
             <svg class="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-300" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
             <input x-model="query" placeholder="搜索 Skills" class="h-8 w-full rounded-lg border border-slate-200 bg-slate-50/70 pl-8 pr-3 text-xs text-slate-600 outline-none transition focus:border-brand-300 focus:bg-white focus:ring-2 focus:ring-brand-50">
           </label>
-          <div class="mt-2 flex gap-2">
+          <div class="mt-2">
             <select x-model="capabilityFilter" class="h-7 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 text-[10px] text-slate-500 outline-none" aria-label="按 Capability 筛选">
               <option value="">全部 Capability</option>
               <template x-for="capability in (catalog?.capabilities || [])" :key="capability"><option :value="capability" x-text="capability"></option></template>
             </select>
-            <select x-model="profileFilter" class="h-7 rounded-lg border border-slate-200 bg-white px-2 text-[10px] text-slate-500 outline-none" aria-label="按 Skill Profile 筛选"><option value="all">全部 Profile</option><option value="standard">普通</option><option value="competition">Competition</option></select>
           </div>
         </div>
         <div x-show="message" class="mx-3 mb-1 break-all rounded-lg px-3 py-2 text-[10px] leading-relaxed" :class="messageType === 'error' ? 'bg-red-50 text-red-600' : 'bg-teal-50 text-teal-600'" x-text="message"></div>
@@ -1639,7 +1633,7 @@
           <template x-for="skill in filteredItems" :key="skill.key">
             <button type="button" @click="select(skill)" class="capability-press mb-1 flex w-full items-start gap-2.5 rounded-xl py-2.5 pr-3 text-left" :class="[selectedName === skill.key ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50', skill.nested ? 'pl-7' : 'pl-3']">
               <span class="mt-1 h-2 w-2 shrink-0 rounded-full" :class="skill.nested ? 'bg-sky-400' : (skill.enabled ? 'bg-teal-500 shadow-[0_0_0_3px_rgba(20,184,166,.10)]' : 'bg-slate-300')"></span>
-              <span class="min-w-0 flex-1"><span class="flex items-center gap-1.5"><span class="min-w-0 flex-1 truncate text-xs font-semibold" x-text="skill.name"></span><span x-show="skill.nested" class="rounded bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600">包内</span><span x-show="!skill.nested" class="rounded px-1.5 py-0.5 text-[9px] font-medium" :class="skill.trust === 'trusted' ? 'bg-teal-50 text-teal-600' : (skill.trust === 'retired' ? 'bg-slate-100 text-slate-400' : 'bg-amber-50 text-amber-600')" x-text="skill.trust || 'trusted'"></span><span class="rounded px-1.5 py-0.5 text-[9px] font-medium" :class="skill.competition ? 'bg-violet-50 text-violet-600' : 'bg-slate-100 text-slate-500'" x-text="skill.competition ? 'competition' : 'standard'"></span></span><span class="mt-1 flex flex-wrap gap-1"><template x-for="capability in (skill.capabilities || [])" :key="capability"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-500" x-text="capability"></span></template></span><span class="mt-1 block line-clamp-2 text-[10px] leading-relaxed text-slate-400" x-text="skill.description || skill.path || '暂无描述'"></span></span>
+              <span class="min-w-0 flex-1"><span class="flex items-center gap-1.5"><span class="min-w-0 flex-1 truncate text-xs font-semibold" x-text="skill.name"></span><span x-show="skill.nested" class="rounded bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600">包内</span><span x-show="!skill.nested" class="rounded px-1.5 py-0.5 text-[9px] font-medium" :class="skill.trust === 'trusted' ? 'bg-teal-50 text-teal-600' : (skill.trust === 'retired' ? 'bg-slate-100 text-slate-400' : 'bg-amber-50 text-amber-600')" x-text="skill.trust || 'trusted'"></span></span><span class="mt-1 flex flex-wrap gap-1"><template x-for="capability in (skill.capabilities || [])" :key="capability"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-500" x-text="capability"></span></template></span><span class="mt-1 block line-clamp-2 text-[10px] leading-relaxed text-slate-400" x-text="skill.description || skill.path || '暂无描述'"></span></span>
             </button>
           </template>
           <div x-show="!loading && filteredItems.length === 0" class="px-4 py-12 text-center text-xs leading-relaxed text-slate-400">没有匹配的 Skill。<br>创建一个即可被三个 agent 原生发现。</div>
@@ -1661,7 +1655,6 @@
           </div>
           <div x-show="!isNew && !draft.nested" class="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/70 px-5 py-2 text-[10px] text-slate-500">
             <template x-for="capability in (draft.capabilities || [])" :key="capability"><span class="rounded-md bg-slate-200 px-2 py-1 font-semibold text-slate-600" x-text="capability"></span></template>
-            <span class="rounded-md px-2 py-1 font-semibold" :class="draft.competition ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'" x-text="draft.competition ? 'competition' : 'standard'"></span>
             <span class="rounded-md px-2 py-1 font-semibold" :class="draft.trust === 'trusted' ? 'bg-teal-50 text-teal-700' : (draft.trust === 'retired' ? 'bg-slate-200 text-slate-500' : 'bg-amber-50 text-amber-700')" x-text="draft.trust || 'trusted'"></span>
             <span x-text="`${draft.successfulReuses || 0} 次独立复用`"></span>
             <span>·</span>
@@ -1926,6 +1919,33 @@
       </div>
     </form>
 
+    <form @submit.prevent="saveCommonEnv()" @input="commonEnvDirty = true" class="mt-6 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm shadow-slate-100/60">
+      <div class="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 class="text-sm font-semibold text-slate-700">通用环境变量</h2>
+          <p class="mt-1 text-[11px] leading-relaxed text-slate-400">注入所有 Worker；保存后，新启动的任务会动态使用最新值。</p>
+        </div>
+        <div class="flex shrink-0 items-center gap-2">
+          <button type="button" @click="addCommonEnvRow()" class="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:bg-slate-50">新增变量</button>
+          <button type="submit" :disabled="commonEnvBusy || !commonEnvDirty" class="h-9 rounded-xl bg-slate-800 px-4 text-xs font-medium text-white shadow-sm transition hover:bg-slate-900 active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-35" x-text="commonEnvBusy ? '保存中…' : '保存并热加载'"></button>
+        </div>
+      </div>
+
+      <div class="px-5 py-5">
+        <div x-show="commonEnvForm.length === 0" class="rounded-xl border border-dashed border-slate-200 px-5 py-8 text-center text-xs text-slate-400">尚未配置通用环境变量。</div>
+        <div class="grid gap-3">
+          <template x-for="(entry, index) in commonEnvForm" :key="entry.localId">
+            <div class="grid gap-3 rounded-xl bg-slate-50/70 p-3 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)_auto] sm:items-end">
+              <label class="block"><span class="mb-1.5 block text-[10px] font-medium text-slate-400">变量名</span><input x-model="entry.name" @input="entry.name = entry.name.toUpperCase()" placeholder="VARIABLE_NAME" pattern="[A-Z][A-Z0-9_]*" required class="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 font-mono text-xs text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
+              <label class="block"><span class="mb-1.5 block text-[10px] font-medium text-slate-400">变量值</span><input x-model="entry.value" type="text" placeholder="value" autocomplete="off" class="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 font-mono text-xs text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
+              <button type="button" @click="removeCommonEnvRow(index)" class="h-9 rounded-lg px-3 text-xs text-rose-500 transition hover:bg-rose-50">删除</button>
+            </div>
+          </template>
+        </div>
+        <p class="mt-3 text-[10px] leading-relaxed text-slate-400">变量值按原文保存到 redtrace.yaml。删除或改名会影响之后启动的 Worker 任务，不中断正在运行的任务。</p>
+      </div>
+    </form>
+
     <div class="mt-8 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-end">
       <div>
         <h2 class="text-sm font-semibold text-slate-700">Provider 模型服务</h2>
@@ -2048,14 +2068,6 @@
         <input type="checkbox" x-model="newProject.bootstrap" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200">
         <span>运行 bootstrap 探查</span>
       </label>
-      <label class="block text-[11px] text-slate-500 font-medium">
-        Skill Profile
-        <select x-model="newProject.skill_profile" class="mt-1 w-full px-3 py-2 border border-slate-200 rounded-xl bg-white text-sm text-slate-700">
-          <option value="standard">standard（普通 Skills）</option>
-          <option value="competition">competition（包含对应 competition-* Skills）</option>
-        </select>
-      </label>
-
       <div>
         <div class="flex items-center justify-between mb-2">
           <span class="text-[11px] text-slate-400 font-medium uppercase tracking-wider">提示（可选）</span>
@@ -2425,7 +2437,7 @@ function redtraceApp() {
     dangerConfirm: { open: false, tone: 'danger', title: '', description: '', subject: '', note: '', confirmLabel: '' },
     _dangerConfirmResolve: null,
 
-    newProject: { title: '', origin: '', goal: '', bootstrap: false, skill_profile: 'standard', hints: [{ content: '' }] },
+    newProject: { title: '', origin: '', goal: '', bootstrap: false, hints: [{ content: '' }] },
     intentForm: { description: '', execution_profile: 'direct', capabilities: [] },
     capabilityGroups: [
       { label: 'Base', items: [{ id: 'common' }] },
@@ -2454,6 +2466,10 @@ function redtraceApp() {
     },
     runtimeSettingsDirty: false,
     runtimeSettingsBusy: false,
+    commonEnvForm: [],
+    commonEnvDirty: false,
+    commonEnvBusy: false,
+    commonEnvNextId: 1,
     workerEditingName: '',
     workerActionBusy: '',
     workerSaveBusy: false,
@@ -2951,7 +2967,14 @@ function redtraceApp() {
       if (this.workerConfigLoading || (!force && this.workerConfig.revision)) return;
       this.workerConfigLoading = true;
       try {
-        this.applyWorkerSnapshot(await this.api('GET', '/worker-config'));
+        const snapshot = await this.api('GET', '/worker-config');
+        if (!Array.isArray(snapshot.common_env)) {
+          const runtimeSnapshot = await this.api('GET', '/runtime/config');
+          snapshot.common_env = Object.entries(runtimeSnapshot.commonEnv || {})
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([name, value]) => ({ name, value: String(value ?? '') }));
+        }
+        this.applyWorkerSnapshot(snapshot);
       } catch(e) {
         this.showToast(e.message, 'error');
       } finally {
@@ -2982,6 +3005,13 @@ function redtraceApp() {
           runtime: snapshot.runtime,
           tasks: snapshot.tasks,
         });
+      }
+      if (!this.commonEnvDirty) {
+        this.commonEnvForm = (Array.isArray(snapshot.common_env) ? snapshot.common_env : []).map(entry => ({
+          localId: this.commonEnvNextId++,
+          name: entry.name || '',
+          value: entry.value ?? '',
+        }));
       }
     },
 
@@ -3026,6 +3056,48 @@ function redtraceApp() {
         }
       } finally {
         this.runtimeSettingsBusy = false;
+      }
+    },
+
+    addCommonEnvRow() {
+      this.commonEnvForm.push({
+        localId: this.commonEnvNextId++,
+        name: '',
+        value: '',
+      });
+      this.commonEnvDirty = true;
+    },
+
+    removeCommonEnvRow(index) {
+      this.commonEnvForm.splice(index, 1);
+      this.commonEnvDirty = true;
+    },
+
+    commonEnvPayload() {
+      return {
+        expected_revision: this.workerConfig.revision,
+        entries: this.commonEnvForm.map(entry => ({
+          name: String(entry.name || '').trim().toUpperCase(),
+          value: String(entry.value ?? ''),
+        })),
+      };
+    },
+
+    async saveCommonEnv() {
+      this.commonEnvBusy = true;
+      try {
+        const snapshot = await this.api('PUT', '/worker-config/common-env', this.commonEnvPayload());
+        this.commonEnvDirty = false;
+        this.applyWorkerSnapshot(snapshot);
+        this.showToast('通用环境变量已保存；新任务将自动使用最新值');
+      } catch(e) {
+        this.showToast(e.message, 'error');
+        if (e.message.includes('reload before saving')) {
+          this.commonEnvDirty = false;
+          await this.loadWorkerConfig(true);
+        }
+      } finally {
+        this.commonEnvBusy = false;
       }
     },
 
@@ -4994,13 +5066,12 @@ function redtraceApp() {
           origin: this.newProject.origin,
           goal: this.newProject.goal,
           bootstrap_enabled: this.newProject.bootstrap,
-          skill_profile: this.newProject.skill_profile,
         };
         const hints = hintContents.map(h => ({ content: h.content.trim(), creator: actor }));
         if (hints.length > 0) body.hints = hints;
         const data = await this.api('POST', '/projects', body);
         this.showNewProject = false;
-        this.newProject = { title:'', origin:'', goal:'', bootstrap: false, skill_profile: 'standard', hints: [{ content:'' }] };
+        this.newProject = { title:'', origin:'', goal:'', bootstrap: false, hints: [{ content:'' }] };
         await this.loadProjects();
         await this.openProject(data.project.id);
         this.showToast('项目已创建');
@@ -5041,22 +5112,6 @@ function redtraceApp() {
         this.updateGraph();
         this.showToast(`Intent 隔离模式：${execution_profile}`);
       } catch(e) { this.showToast(e.message, 'error'); }
-    },
-
-    async updateSkillProfile() {
-      if (!this.project?.project?.id) return;
-      try {
-        const updated = await this.api('PUT', `/projects/${this.project.project.id}/skill-profile`, {
-          skill_profile: this.project.project.skill_profile,
-        });
-        this.project.project.skill_profile = updated.skill_profile;
-        const summary = this.projects.find(item => item.id === this.project.project.id);
-        if (summary) summary.skill_profile = updated.skill_profile;
-        this.showToast('Skill Profile 已更新；仅影响后续 Session');
-      } catch (e) {
-        this.showToast(e.message, 'error');
-        await this.loadProject(this.project.project.id);
-      }
     },
 
     async sendHeartbeatForSelectedIntent() {

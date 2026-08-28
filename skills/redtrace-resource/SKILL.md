@@ -4,7 +4,6 @@ description: RedTrace shared Resource registry. Hit this the moment you establis
 metadata:
   redtrace:
     capabilities: [common]
-    competition: false
 ---
 
 # RedTrace Resource

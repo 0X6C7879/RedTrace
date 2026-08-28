@@ -4,7 +4,6 @@ description: Use for authorized hardware and embedded interface security researc
 metadata:
   redtrace:
     capabilities: [hardware]
-    competition: false
 ---
 
 # Hardware / Embedded Interface Security

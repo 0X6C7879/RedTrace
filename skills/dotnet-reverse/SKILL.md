@@ -8,7 +8,6 @@ metadata:
   user-invocable: "false"
   redtrace:
     capabilities: [thick-client]
-    competition: false
 ---
 
 # .NET / C# 逆向作业规范

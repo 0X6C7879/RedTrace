@@ -1,0 +1,7 @@
+interface:
+  display_name: "Lsass Ticket Material"
+  short_description: "Trace LSASS secrets, tickets, caches, and replayable material"
+  default_prompt: "Use $lsass-ticket-material to trace LSASS-resident secrets, ticket material, cache artifacts, and the replayable credential edge in this task."
+
+policy:
+  allow_implicit_invocation: false

@@ -1,7 +1,0 @@
-interface:
-  display_name: "Competition Ssrf Metadata Pivot"
-  short_description: "Trace SSRF paths, metadata pivots, and accepted credential edges"
-  default_prompt: "Use $competition-ssrf-metadata-pivot to trace SSRF reachability, metadata pivots, and the accepted credential edge."
-
-policy:
-  allow_implicit_invocation: false

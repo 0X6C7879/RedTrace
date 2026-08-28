@@ -4,7 +4,6 @@ description: Use for authorized assessment of federated identity systems includi
 metadata:
   redtrace:
     capabilities: [identity]
-    competition: false
 ---
 
 # Identity Federation (SAML / OIDC / OAuth)

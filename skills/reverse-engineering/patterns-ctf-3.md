@@ -1,4 +1,4 @@
-# CTF Reverse - Competition-Specific Patterns (Part 3)
+# Reverse Engineering Specialized Patterns (Part 3)
 
 ## Table of Contents
 - [Z3 for Single-Line Python Boolean Circuit (BearCatCTF 2026)](#z3-for-single-line-python-boolean-circuit-bearcatctf-2026)

@@ -1,4 +1,4 @@
-import type { MessageFactory, RuntimeOptions, RuntimeSnapshot, RuntimeTask, TaskType } from './types.js'
+import type { Json, MessageFactory, RuntimeOptions, RuntimeSnapshot, RuntimeTask, TaskType } from './types.js'
 
 /**
  * State shared by the RedTrace Cordis plugins of the one long-lived runtime:
@@ -13,6 +13,10 @@ export class RedTraceState {
   readonly presets = new Set<TaskType>(['bootstrap', 'reason', 'explore'])
   snapshot?: RuntimeSnapshot
   messages?: MessageFactory
+  /** Signature of the currently mounted MCP configs; the domain plugin owns
+   * the fibers and swaps them when a refreshed snapshot carries new configs. */
+  mcpSignature = ''
+  remountMcp?: (configs: Array<Record<string, Json>>) => Promise<void>
   constructor(readonly config: RuntimeOptions) {}
 }
 

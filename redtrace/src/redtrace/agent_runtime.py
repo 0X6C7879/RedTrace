@@ -263,6 +263,24 @@ class AgentRuntimeManager:
             path.chmod(0o755)
 
 
+def dsh_mcp_configs_for(paths: RedTracePaths, *, execution: str) -> list[dict]:
+    """Fresh enabled MCP configs in the DSH mount shape.
+
+    Re-reads the MCP directory on every call — no capability-signature cache
+    and no skill-memory migration — so ``GET /runtime/config`` sees direct
+    file edits immediately. Command-availability syncing matches
+    ``AgentRuntimeManager.dsh_mcp_configs``.
+    """
+
+    manager = AgentRuntimeManager(paths, execution=execution)
+    records = manager._sync_mcp_command_availability(manager._store.list_mcp())
+    return [
+        {"serverName": record.name, **mcp_config_for(record, "dsh")}
+        for record in records
+        if record.enabled
+    ]
+
+
 def _read_jsonl(path: Path) -> list[dict]:
     """Read a JSONL file, skipping malformed lines."""
     if not path.is_file():

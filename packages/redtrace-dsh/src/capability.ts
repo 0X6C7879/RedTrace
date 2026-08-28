@@ -2,15 +2,13 @@
 
 import { mkdir, rename, rm, stat, symlink } from 'node:fs/promises'
 import path from 'node:path'
-import type { CapabilityName, RuntimeOptions, SkillProfile } from './types.js'
+import type { CapabilityName, RuntimeOptions } from './types.js'
 import { api } from './domain.js'
 
 export interface SkillCatalog {
   skills: string[]
   capabilities: CapabilityName[]
-  skillProfile: SkillProfile
   diagnostics: Array<Record<string, unknown>>
-  competitionRules: string
 }
 
 export interface SkillView {
@@ -35,12 +33,11 @@ function assertSkillName(name: string): void {
 export async function resolveSkillCatalog(
   config: RuntimeOptions,
   capabilities: CapabilityName[],
-  skillProfile: SkillProfile,
 ): Promise<SkillCatalog> {
   const catalog = await api<SkillCatalog>(config, '/capabilities/resolve', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ capabilities, skill_profile: skillProfile }),
+    body: JSON.stringify({ capabilities }),
   })
   if (!Array.isArray(catalog.skills) || catalog.skills.length === 0) {
     throw new Error('Capability Resolver returned an empty Skill catalog')

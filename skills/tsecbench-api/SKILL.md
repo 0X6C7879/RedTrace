@@ -9,7 +9,6 @@ description: >-
 metadata:
   redtrace:
     capabilities: [common]
-    competition: false
 ---
 # Tsecbench API
 

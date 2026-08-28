@@ -6,13 +6,11 @@ import test from 'node:test'
 
 import { createSkillView } from '../lib/capability.js'
 
-function catalog(skills, skillProfile = 'standard') {
+function catalog(skills) {
   return {
     skills,
     capabilities: ['web'],
-    skillProfile,
     diagnostics: [],
-    competitionRules: '',
   }
 }
 

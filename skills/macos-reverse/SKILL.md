@@ -4,7 +4,6 @@ description: Use for authorized macOS and Mach-O reverse engineering including c
 metadata:
   redtrace:
     capabilities: [thick-client]
-    competition: false
 ---
 
 # macOS / Mach-O Reverse Engineering

@@ -202,6 +202,11 @@ def _dsh_environment(config, root: Path, api_url: str, host: str, port: int) -> 
         child_env[name] = value
     for name, value in config.common_env.items():
         child_env[name] = value
+    # Ambient credential-shaped names (…TOKEN/KEY/…) are scrubbed from worker
+    # children by the DSH subprocess service; the allowlist marks common_env
+    # as deliberately forwarded. The runtime refresh keeps it in sync.
+    if config.common_env:
+        child_env["DSH_FORWARD_ENV"] = ",".join(sorted(config.common_env))
 
     manager = AgentRuntimeManager(paths, execution="local")
     runtime_config = {

@@ -152,6 +152,7 @@ def test_worker_config_encrypts_keys_and_never_returns_them(
     assert created["workers"][0]["model"] == "gpt-test"
     assert [provider["name"] for provider in created["providers"]] == ["gw"]
     assert created["providers"][0]["api_key_configured"] is True
+    assert secret not in repr(created)
     persisted = config_path.read_text(encoding="utf-8")
     assert secret not in persisted
     raw = yaml.safe_load(persisted)
@@ -388,6 +389,118 @@ def test_runtime_tasks_persist_and_hot_reload_without_interrupting_running_tasks
     rejected = reloader.refresh()
     assert rejected is not None and rejected.error is not None
     assert reloader.config.workers[0].name == "disabled-two"
+
+
+def test_common_env_crud_preserves_plaintext_and_hot_reloads(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "redtrace.yaml"
+    raw = _raw_config()
+    raw["common_env"] = {
+        "PLAIN_VALUE": "visible",
+        "EXISTING_TOKEN": "keep-me",
+        "LEGACY_API_KEY": "migrate-me",
+    }
+    _write_config(config_path, raw)
+    monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(tmp_path / "secrets"))
+    service = WorkerConfigService(config_path)
+    service.set_common_env_value("EXISTING_TOKEN", "keep-me")
+    reloader = DispatchConfigReloader(config_path)
+
+    initial = service.snapshot()
+    assert initial["common_env"] == [
+        {"name": "EXISTING_TOKEN", "value": "keep-me"},
+        {"name": "LEGACY_API_KEY", "value": "migrate-me"},
+        {"name": "PLAIN_VALUE", "value": "visible"},
+    ]
+
+    updated = service.update_common_env(
+        {
+            "expected_revision": initial["revision"],
+            "entries": [
+                {"name": "EXISTING_TOKEN", "value": "keep-me"},
+                {"name": "LEGACY_API_KEY", "value": "migrate-me"},
+                {
+                    "name": "BENCHMARK_BASE_URL",
+                    "value": "https://benchmark.test",
+                },
+                {"name": "NEW_TOKEN", "value": "fresh-value"},
+            ],
+        }
+    )
+
+    persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert "PLAIN_VALUE" not in persisted["common_env"]
+    assert persisted["common_env"]["BENCHMARK_BASE_URL"] == "https://benchmark.test"
+    assert persisted["common_env"]["EXISTING_TOKEN"] == "keep-me"
+    assert persisted["common_env"]["LEGACY_API_KEY"] == "migrate-me"
+    assert persisted["common_env"]["NEW_TOKEN"] == "fresh-value"
+    assert updated["common_env"] == [
+        {
+            "name": "BENCHMARK_BASE_URL",
+            "value": "https://benchmark.test",
+        },
+        {"name": "EXISTING_TOKEN", "value": "keep-me"},
+        {"name": "LEGACY_API_KEY", "value": "migrate-me"},
+        {"name": "NEW_TOKEN", "value": "fresh-value"},
+    ]
+
+    refreshed = reloader.refresh()
+    assert refreshed is not None and refreshed.config is not None
+    assert refreshed.config.common_env == {
+        "EXISTING_TOKEN": "keep-me",
+        "LEGACY_API_KEY": "migrate-me",
+        "BENCHMARK_BASE_URL": "https://benchmark.test",
+        "NEW_TOKEN": "fresh-value",
+    }
+    from redtrace.dispatcher.dsh import runtime_config
+
+    assert runtime_config(refreshed.config)["commonEnv"] == refreshed.config.common_env
+
+
+def test_common_env_api_validates_names_and_revision(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "redtrace.yaml"
+    _write_config(config_path, _raw_config())
+    monkeypatch.setenv("REDTRACE_DISPATCH_CONFIG", str(config_path))
+    monkeypatch.setenv("REDTRACE_CONFIG_SECRETS_DIR", str(tmp_path / "secrets"))
+    app = FastAPI()
+    app.include_router(worker_router)
+
+    with TestClient(app) as client:
+        initial = client.get("/worker-config").json()
+        response = client.put(
+            "/worker-config/common-env",
+            json={
+                "expected_revision": initial["revision"],
+                "entries": [
+                    {"name": "lowercase", "value": "bad"}
+                ],
+            },
+        )
+        assert response.status_code == 400
+        assert "must match" in response.json()["detail"]
+
+        saved = client.put(
+            "/worker-config/common-env",
+            json={
+                "expected_revision": initial["revision"],
+                "entries": [{"name": "SHARED", "value": "one"}],
+            },
+        )
+        assert saved.status_code == 200
+        assert saved.json()["common_env"] == [
+            {"name": "SHARED", "value": "one"}
+        ]
+
+        conflict = client.put(
+            "/worker-config/common-env",
+            json={
+                "expected_revision": initial["revision"],
+                "entries": [],
+            },
+        )
+        assert conflict.status_code == 409
 
 
 def test_dsh_worker_view_derives_from_workers_for_hot_reload(
@@ -798,6 +911,12 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
 
     assert "Worker 配置" in index
     assert "保存并热加载" in index
+    assert "通用环境变量" in index
+    assert "/worker-config/common-env" in index
+    assert "runtimeSnapshot.commonEnv" in index
+    assert "commonEnvForm" in index
+    assert "configuredSecret" not in index
+    assert "敏感值" not in index
     assert "最大运行项目" in index
     assert "Conclude 超时" in index
     assert "task_types" in index

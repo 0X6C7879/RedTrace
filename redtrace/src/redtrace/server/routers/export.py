@@ -93,7 +93,6 @@ def _export_yaml(conn, project_id: str) -> str:
             "origin": origin_desc,
             "goal": goal_desc,
             "bootstrap_enabled": bool(proj["bootstrap_enabled"]),
-            "skill_profile": proj["skill_profile"] if "skill_profile" in proj.keys() else "standard",
         }
     }
 

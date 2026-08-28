@@ -9,15 +9,18 @@ export async function load(relative: string): Promise<any> {
   return import(pathToFileURL(path.join(repoRoot, relative)).href)
 }
 
-/** Mount a plugin by repo-relative module path and wait for its fiber. */
+/** Mount a plugin by repo-relative module path and wait for its fiber.
+ * Returns the fiber so callers can dispose the mount later. */
 export async function mount(
   scoped: ScopedContext,
   relative: string,
   config?: Record<string, any>,
-): Promise<void> {
+): Promise<CordisFiber> {
   try {
     const module = await load(relative) as { default?: unknown }
-    await scoped.plugin(module.default ?? module, config).await()
+    const fiber = scoped.plugin(module.default ?? module, config)
+    await fiber.await()
+    return fiber
   } catch (error) {
     throw new Error(`failed to mount ${relative}: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
   }

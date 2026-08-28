@@ -4,7 +4,6 @@ description: Web search and content extraction via Brave Search API. Use for sea
 metadata:
   redtrace:
     capabilities: [exploit-research]
-    competition: false
 ---
 
 # Brave Search

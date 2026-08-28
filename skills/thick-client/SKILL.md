@@ -4,7 +4,6 @@ description: Use for authorized security testing of desktop thick clients includ
 metadata:
   redtrace:
     capabilities: [thick-client]
-    competition: false
 ---
 
 # Thick Client Security Testing

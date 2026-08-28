@@ -65,7 +65,7 @@ def test_deploy_script_unifies_linux_and_macos_without_legacy_entrypoints() -> N
     assert "searchsploit" not in script
     assert "cysignals==1.12.6" in script
     assert "verify_security_toolchain" in script
-    assert "set_common_env_secret" in script
+    assert "set_common_env_value" in script
     assert "test_brave_search_skill" in script
     assert "REDTRACE_SKIP_BRAVE_TEST" in script
     assert 'chmod 600 "$CONFIG_PATH"' in script

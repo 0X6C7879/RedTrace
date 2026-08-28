@@ -90,8 +90,6 @@ CREATE TABLE IF NOT EXISTS projects (
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
     bootstrap_enabled INTEGER NOT NULL DEFAULT 1,
-    skill_profile TEXT NOT NULL DEFAULT 'standard'
-        CHECK (skill_profile IN ('standard', 'competition')),
     created_at TEXT NOT NULL,
     reason_worker TEXT,
     reason_trigger TEXT,
@@ -814,7 +812,6 @@ def _ensure_project_columns(conn: sqlite3.Connection) -> None:
                 "UPDATE projects SET bootstrap_enabled = CASE WHEN bootstrap_mode = 'disabled' THEN 0 ELSE 1 END"
             )
     additions = {
-        "skill_profile": "TEXT NOT NULL DEFAULT 'standard'",
         "reason_failure_count": "INTEGER NOT NULL DEFAULT 0",
         "reason_failure_signature": "TEXT",
         "reason_retry_after": "REAL",
@@ -827,12 +824,8 @@ def _ensure_project_columns(conn: sqlite3.Connection) -> None:
     for name, definition in additions.items():
         if name not in columns:
             conn.execute(f"ALTER TABLE projects ADD COLUMN {name} {definition}")
-    # Legacy databases had no profile constraint; normalize any malformed
-    # values before ProjectMeta is materialized through the Literal type.
-    conn.execute(
-        "UPDATE projects SET skill_profile = 'standard' "
-        "WHERE skill_profile IS NULL OR skill_profile NOT IN ('standard', 'competition')"
-    )
+    if "skill_profile" in columns:
+        conn.execute("ALTER TABLE projects DROP COLUMN skill_profile")
     if planning_revision_added:
         conn.execute(
             """

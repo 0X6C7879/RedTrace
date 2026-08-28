@@ -2,7 +2,6 @@ type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 
 export type TaskType = 'reason' | 'explore' | 'bootstrap'
 export type ExecutionProfile = 'direct' | 'isolated'
-export type SkillProfile = 'standard' | 'competition'
 export type CapabilityName =
   | 'common' | 'web' | 'api' | 'database' | 'thick-client' | 'supply-chain'
   | 'exploit-research' | 'network' | 'internal' | 'pivoting'
@@ -79,6 +78,10 @@ export interface RuntimeSnapshot {
   }
   providers?: Record<string, Record<string, Json>>
   env?: Record<string, string>
+  /** Worker-facing common_env from redtrace.yaml; forwarded into worker shell processes. */
+  commonEnv?: Record<string, string>
+  /** Fresh MCP mount shapes; the domain plugin remounts clients on change. */
+  mcpConfigs?: Array<Record<string, Json>>
 }
 
 /** The model route a task captured from its selected Worker at launch. */
@@ -100,7 +103,6 @@ export interface RuntimeTask {
   route?: WorkerRoute
   /** Session-isolated symlink view of the capability-filtered Skill catalog. */
   skillViewDir?: string
-  competitionRules?: string
   limits?: TaskLimits
   maxIntents?: number
   committed: boolean
@@ -212,7 +214,6 @@ export interface ProjectSummary {
   title?: string
   status: 'active' | 'stopped' | 'completed' | 'deleting'
   bootstrap_enabled?: boolean
-  skill_profile: SkillProfile
   reason: unknown | null
   planning_revision: number
   reason_evaluated_revision: number

@@ -8,7 +8,6 @@ metadata:
   version: "5.0.0"
   redtrace:
     capabilities: [web]
-    competition: false
 allowed-tools: Bash(node:*) Bash(npm:*) Read Write
 ---
 

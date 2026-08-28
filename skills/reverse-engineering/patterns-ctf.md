@@ -1,4 +1,4 @@
-# CTF Reverse - Competition-Specific Patterns (Part 1)
+# Reverse Engineering Specialized Patterns (Part 1)
 
 ## Table of Contents
 - [Hidden Emulator Opcodes + LD_PRELOAD Key Extraction (0xFun 2026)](#hidden-emulator-opcodes--ld_preload-key-extraction-0xfun-2026)

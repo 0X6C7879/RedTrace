@@ -131,11 +131,6 @@ def _frontmatter(content: str) -> dict[str, Any]:
     return values if isinstance(values, dict) else {}
 
 
-def _strip_frontmatter(content: str) -> str:
-    match = re.match(r"^---\n.*?\n---(?:\n|$)", content, re.DOTALL)
-    return content[match.end():] if match is not None else content
-
-
 @dataclass(frozen=True, slots=True)
 class SkillRecord:
     name: str
@@ -152,7 +147,6 @@ class SkillRecord:
     failure_count: int = 0
     provisional_task: str | None = None
     capabilities: tuple[str, ...] = ()
-    competition: Any = False
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -167,7 +161,6 @@ class SkillRecord:
             "successfulReuses": self.successful_reuses,
             "failureCount": self.failure_count,
             "capabilities": list(self.capabilities),
-            "competition": self.competition,
         }
 
 
@@ -345,7 +338,6 @@ class CapabilityStore:
             else f"<invalid:{type(item).__name__}>"
             for item in raw_capabilities
         ) if isinstance(raw_capabilities, list) else ()
-        competition = redtrace_metadata.get("competition", False) if isinstance(redtrace_metadata, dict) else False
         state_path = directory / ".redtrace.json"
         state: dict[str, Any] = {}
         if state_path.is_file():
@@ -407,7 +399,6 @@ class CapabilityStore:
             failure_count=failure_count,
             provisional_task=provisional_task,
             capabilities=skill_capabilities,
-            competition=competition,
         )
 
     def classify_skills(self) -> list[dict[str, Any]]:
@@ -424,12 +415,9 @@ class CapabilityStore:
                 diagnostics.append(f"unknown capability(s): {', '.join(unknown)}")
             if len(set(record.capabilities)) != len(record.capabilities):
                 diagnostics.append("capabilities must not contain duplicates")
-            if not isinstance(record.competition, bool):
-                diagnostics.append("metadata.redtrace.competition must be boolean")
             classifications.append({
                 "name": record.name,
                 "capabilities": list(record.capabilities),
-                "competition": record.competition,
                 "valid": not diagnostics,
                 "diagnostics": diagnostics,
             })
@@ -438,9 +426,8 @@ class CapabilityStore:
     def resolve_skill_catalog(
         self,
         capabilities: Iterable[str],
-        skill_profile: str = "standard",
     ) -> dict[str, Any]:
-        """Resolve a Session catalog from Intent directions and project profile.
+        """Resolve a Session catalog solely from Intent directions.
 
         The resolver fails closed on any invalid enabled top-level Skill. It
         never falls back to exposing the complete root, which keeps a bad
@@ -454,9 +441,6 @@ class CapabilityStore:
         unknown_requested = sorted(set(requested) - set(ALL_CAPABILITIES))
         if unknown_requested:
             raise ValueError(f"unknown capability(s): {', '.join(unknown_requested)}")
-        if skill_profile not in {"standard", "competition"}:
-            raise ValueError("skill_profile must be standard or competition")
-
         diagnostics = [
             {
                 "skill": item["name"],
@@ -471,42 +455,16 @@ class CapabilityStore:
         requested_set = set(requested)
         selected: list[str] = []
         for record in self.list_skills():
-            if not record.enabled or record.name == "ctf-sandbox-orchestrator":
+            if not record.enabled:
                 continue
             record_caps = set(record.capabilities)
-            if record.competition:
-                if skill_profile == "competition" and record_caps & requested_set:
-                    selected.append(record.name)
-            elif "common" in record_caps or record_caps & requested_set:
+            if "common" in record_caps or record_caps & requested_set:
                 selected.append(record.name)
-
-        profile_rules = ""
-        if skill_profile == "competition":
-            try:
-                orchestrator = self.get_skill("ctf-sandbox-orchestrator", include_files=False)
-            except FileNotFoundError as exc:
-                raise SkillCatalogError([{
-                    "skill": "ctf-sandbox-orchestrator",
-                    "message": "Competition Profile rules source is missing",
-                }]) from exc
-            if not orchestrator.enabled:
-                raise SkillCatalogError([{
-                    "skill": "ctf-sandbox-orchestrator",
-                    "message": "Competition Profile rules source is disabled",
-                }])
-            profile_rules = _strip_frontmatter(orchestrator.content).strip()
-            if not profile_rules:
-                raise SkillCatalogError([{
-                    "skill": "ctf-sandbox-orchestrator",
-                    "message": "Competition Profile rules source is empty",
-                }])
 
         return {
             "skills": sorted(set(selected)),
             "capabilities": requested,
-            "skillProfile": skill_profile,
             "diagnostics": [],
-            "competitionRules": profile_rules,
         }
 
     def _list_skill_files(self, directory: Path) -> tuple[str, ...]:
@@ -669,13 +627,6 @@ class CapabilityStore:
         unknown = sorted(set(normalized) - set(ALL_CAPABILITIES))
         if unknown:
             raise ValueError(f"unknown capability(s): {', '.join(unknown)}")
-        competition = redtrace.get("competition")
-        if not isinstance(competition, bool):
-            raise ValueError("metadata.redtrace.competition must be boolean")
-        if name.startswith("competition-") and competition is not True:
-            raise ValueError("competition-* Skills must set metadata.redtrace.competition: true")
-        if name == "ctf-sandbox-orchestrator" and competition is not True:
-            raise ValueError("ctf-sandbox-orchestrator must set metadata.redtrace.competition: true")
 
     def set_skill_enabled(self, name: str, enabled: bool) -> SkillRecord:
         record = self.get_skill(name)

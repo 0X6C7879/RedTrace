@@ -4,7 +4,6 @@ description: Reverse JavaScript-based custom DSL/VM interpreters, non-standard W
 metadata:
   redtrace:
     capabilities: [reverse]
-    competition: false
 ---
 
 # 🔄 DSL 自定义虚拟机逆向（DSL VM Reverse Engineering）

@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 
-from redtrace.board.models import ALL_CAPABILITIES, CapabilityName, SkillProfile
+from redtrace.board.models import ALL_CAPABILITIES, CapabilityName
 from redtrace.capabilities import CapabilityStore, SkillCatalogError, SkillConflictError, _frontmatter
 
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
@@ -48,7 +48,6 @@ class RollbackRequest(BaseModel):
 
 class CatalogResolveRequest(BaseModel):
     capabilities: list[CapabilityName] = Field(min_length=1)
-    skill_profile: SkillProfile = "standard"
 
     @field_validator("capabilities")
     @classmethod
@@ -90,7 +89,6 @@ def _nested_skill_payload(parent: str, root: Path, entrypoint: Path) -> dict[str
         "depth": len(PurePosixPath(relative).parts) - 1,
         "nested": True,
         "capabilities": parent_redtrace.get("capabilities", []),
-        "competition": parent_redtrace.get("competition", False),
     }
 
 
@@ -167,7 +165,6 @@ def _build_skill_entries(store: CapabilityStore) -> list[dict[str, Any]]:
                 "depth": 0,
                 "trust": record.trust,
                 "capabilities": list(record.capabilities),
-                "competition": record.competition,
             }
         )
         for entrypoint in _iter_nested_entrypoints(root_dir):
@@ -190,10 +187,9 @@ def _build_skill_entries(store: CapabilityStore) -> list[dict[str, Any]]:
                     "enabled": record.enabled,
                     "depth": len(PurePosixPath(relative).parts) - 1,
                     # Nested entries are displayed in the same catalog tree;
-                    # inherit the top-level classification so Capability and
-                    # Profile filters remain useful for package contents.
+                    # inherit the top-level classification so Capability
+                    # filters remain useful for package contents.
                     "capabilities": list(record.capabilities),
-                    "competition": record.competition,
                 }
             )
     return entries
@@ -238,7 +234,7 @@ def get_skill_catalog_diagnostics():
 def resolve_skill_catalog(body: CatalogResolveRequest):
     """Resolve the bounded Skill list for one Explore Session."""
     try:
-        return _store().resolve_skill_catalog(body.capabilities, body.skill_profile)
+        return _store().resolve_skill_catalog(body.capabilities)
     except SkillCatalogError as exc:
         raise HTTPException(422, {"message": str(exc), "diagnostics": exc.diagnostics}) from exc
     except ValueError as exc:

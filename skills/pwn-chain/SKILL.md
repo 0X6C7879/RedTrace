@@ -9,7 +9,6 @@ description: |
 metadata:
   redtrace:
     capabilities: [pwn]
-    competition: false
 ---
 
 ## ACTION REQUIRED（读完后立刻执行）

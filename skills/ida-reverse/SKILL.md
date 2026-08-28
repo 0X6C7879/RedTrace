@@ -9,7 +9,6 @@ description: |
 metadata:
   redtrace:
     capabilities: [reverse]
-    competition: false
 ---
 
 # IDA Pro 逆向分析技能

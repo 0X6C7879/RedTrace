@@ -4,7 +4,6 @@ description: Use for authorized Active Directory and Windows identity attacks in
 metadata:
   redtrace:
     capabilities: [ad]
-    competition: false
 ---
 
 # Windows / Active Directory Security

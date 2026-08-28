@@ -31,7 +31,7 @@ def test_skill_catalog_is_flat_and_well_formed() -> None:
     names = {directory.name for directory in directories}
 
     assert len(directories) >= 80
-    assert {"api-security", "attack-chain", "blockchain-security", "ctf-sandbox-orchestrator"} <= names
+    assert {"api-security", "attack-chain", "blockchain-security", "web-runtime"} <= names
     for directory in directories:
         entrypoint = directory / "SKILL.md"
         assert entrypoint.is_file(), f"{directory.name} has no top-level SKILL.md"
@@ -57,7 +57,7 @@ def test_specialist_skills_are_shared_with_all_workers(
     materialized_catalog: tuple[CapabilityStore, dict[str, bytes]],
 ) -> None:
     store, files = materialized_catalog
-    for name in ("api-security", "blockchain-security", "ctf-sandbox-orchestrator", "playwright-skill"):
+    for name in ("api-security", "blockchain-security", "web-runtime", "playwright-skill"):
         assert store.get_skill(name).enabled is True
 
     # Skills are never copied into task workspaces; every agent loads them

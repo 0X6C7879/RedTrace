@@ -4,7 +4,6 @@ description: Use for authorized Android or iOS application reverse engineering a
 metadata:
   redtrace:
     capabilities: [mobile]
-    competition: false
 ---
 # Mobile Reverse Engineering
 

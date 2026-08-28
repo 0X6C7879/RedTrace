@@ -20,7 +20,6 @@ description: Run a focused reconnaissance workflow.
 metadata:
   redtrace:
     capabilities: [web]
-    competition: false
 ---
 
 # Recon

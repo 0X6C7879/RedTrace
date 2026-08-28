@@ -8,7 +8,6 @@ description: |
 metadata:
   redtrace:
     capabilities: [web]
-    competition: false
 ---
 
 # 自动化操作 (Desktop & Browser Automation)

@@ -6,7 +6,6 @@ level: 2
 metadata:
   redtrace:
     capabilities: [web]
-    competition: false
 ---
 
 ## ACTION REQUIRED（读完后立刻执行）

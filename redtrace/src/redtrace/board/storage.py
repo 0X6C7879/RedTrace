@@ -350,7 +350,6 @@ def project_meta_from_row(row: sqlite3.Row) -> ProjectMeta:
         title=row["title"],
         status=row["status"],
         bootstrap_enabled=bool(row["bootstrap_enabled"]),
-        skill_profile=row["skill_profile"] if "skill_profile" in row.keys() else "standard",
         created_at=row["created_at"],
         reason=project_reason_from_row(row),
         reason_failure_count=row["reason_failure_count"],

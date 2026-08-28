@@ -4,7 +4,6 @@ description: Use for authorized cloud, container, and Kubernetes security assess
 metadata:
   redtrace:
     capabilities: [cloud]
-    competition: false
 ---
 
 # Cloud / Container / Kubernetes Security
@@ -86,7 +85,7 @@ kubectl get clusterrolebindings
 ## 参考
 
 - `references/k8s-cloud-checklist.md`
-- CTF 对照：`../../CTF-Sandbox-Orchestrator/competition-agent-cloud/`
+- Agent/Cloud 专项流程：`../agent-cloud/`
 - `../supply-chain-security/` `../pentest-tools/`
 
 ## 路由上下文

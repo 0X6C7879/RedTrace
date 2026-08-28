@@ -8,7 +8,6 @@ description: |
 metadata:
   redtrace:
     capabilities: [exploit-research]
-    competition: false
 ---
 
 # 跨版本符号迁移 (Binary Diff)

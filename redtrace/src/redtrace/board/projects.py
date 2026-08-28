@@ -63,7 +63,6 @@ def list_all() -> list[ProjectSummary]:
                 title=row["title"],
                 status=row["status"],
                 bootstrap_enabled=bool(row["bootstrap_enabled"]),
-                skill_profile=row["skill_profile"] if "skill_profile" in row.keys() else "standard",
                 created_at=row["created_at"],
                 reason=project_reason_from_row(row),
                 reason_failure_count=row["reason_failure_count"],
@@ -88,8 +87,8 @@ def create(request: CreateProjectRequest) -> ProjectDetail:
         project_id = next_project_id(conn)
         now = utcnow()
         conn.execute(
-            "INSERT INTO projects (id, title, status, bootstrap_enabled, skill_profile, created_at) VALUES (?, ?, 'active', ?, ?, ?)",
-            (project_id, request.title, request.bootstrap_enabled, request.skill_profile, now),
+            "INSERT INTO projects (id, title, status, bootstrap_enabled, created_at) VALUES (?, ?, 'active', ?, ?)",
+            (project_id, request.title, request.bootstrap_enabled, now),
         )
         conn.executemany(
             "INSERT INTO facts (id, project_id, description) VALUES (?, ?, ?)",
@@ -151,20 +150,6 @@ def rename(project_id: str, title: str) -> ProjectMeta:
     with get_conn(immediate=True) as conn:
         get_project_or_404(conn, project_id)
         conn.execute("UPDATE projects SET title = ? WHERE id = ?", (title, project_id))
-        return _load_project(conn, project_id)
-
-
-def update_skill_profile(project_id: str, skill_profile: str) -> ProjectMeta:
-    if skill_profile not in {"standard", "competition"}:
-        raise HTTPException(422, "skill_profile must be standard or competition")
-    with get_conn(immediate=True) as conn:
-        current = get_project_or_404(conn, project_id)
-        if current["status"] == "deleting":
-            raise HTTPException(409, "Deleting projects cannot change skill profile")
-        conn.execute(
-            "UPDATE projects SET skill_profile = ? WHERE id = ?",
-            (skill_profile, project_id),
-        )
         return _load_project(conn, project_id)
 
 

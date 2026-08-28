@@ -4,7 +4,6 @@ description: Use for authorized database security assessment covering PostgreSQL
 metadata:
   redtrace:
     capabilities: [database]
-    competition: false
 ---
 
 # Database Security Assessment

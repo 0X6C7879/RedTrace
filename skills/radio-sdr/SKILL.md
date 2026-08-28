@@ -4,7 +4,6 @@ description: Use for authorized RF/SDR security research including signal identi
 metadata:
   redtrace:
     capabilities: [radio-sdr]
-    competition: false
 ---
 
 # RF / SDR Security Research

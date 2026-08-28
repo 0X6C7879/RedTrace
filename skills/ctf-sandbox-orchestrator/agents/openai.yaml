@@ -1,7 +1,0 @@
-interface:
-  display_name: "CTF Sandbox Orchestrator"
-  short_description: "Competition Profile rules for sandbox assumptions and evidence"
-  default_prompt: "This Skill is a runtime-injected Competition Profile rule source; apply its sandbox, passive-first, and evidence rules when the profile is active."
-
-policy:
-  allow_implicit_invocation: false

@@ -4,7 +4,6 @@ description: Use for authorized reverse engineering of browser extensions (Chrom
 metadata:
   redtrace:
     capabilities: [thick-client]
-    competition: false
 ---
 
 # Browser Extension Reverse Engineering

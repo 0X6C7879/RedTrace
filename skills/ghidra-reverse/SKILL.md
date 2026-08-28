@@ -4,7 +4,6 @@ description: Use for free/open reverse engineering with Ghidra (headless or GUI)
 metadata:
   redtrace:
     capabilities: [reverse]
-    competition: false
 ---
 
 # Ghidra Reverse Engineering

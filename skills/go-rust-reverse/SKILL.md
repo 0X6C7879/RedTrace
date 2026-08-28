@@ -4,7 +4,6 @@ description: Use for reverse engineering stripped Go and Rust binaries including
 metadata:
   redtrace:
     capabilities: [reverse]
-    competition: false
 ---
 
 # Go / Rust Binary Reverse Engineering

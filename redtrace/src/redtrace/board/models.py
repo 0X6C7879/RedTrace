@@ -7,7 +7,6 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 ExecutionProfile = Literal["direct", "isolated"]
-SkillProfile = Literal["standard", "competition"]
 CapabilityName = Literal[
     "common",
     "web",
@@ -142,7 +141,6 @@ class ProjectMeta(BaseModel):
     title: str
     status: Literal["active", "stopped", "completed", "deleting"]
     bootstrap_enabled: bool
-    skill_profile: SkillProfile = "standard"
     created_at: str
     reason: ProjectReason | None = None
     reason_failure_count: int = 0
@@ -188,7 +186,6 @@ class CreateProjectRequest(BaseModel):
     origin: str
     goal: str
     bootstrap_enabled: bool = False
-    skill_profile: SkillProfile = "standard"
     hints: list[CreateHintInline] | None = None
 
     @field_validator("title", "origin", "goal")
@@ -386,10 +383,6 @@ class UpdateProjectTitleRequest(BaseModel):
         if not text:
             raise ValueError("must not be empty")
         return text
-
-
-class UpdateProjectSkillProfileRequest(BaseModel):
-    skill_profile: SkillProfile
 
 
 class ReopenRequest(BaseModel):

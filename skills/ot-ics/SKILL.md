@@ -4,7 +4,6 @@ description: Use for authorized OT/ICS security assessment covering Purdue model
 metadata:
   redtrace:
     capabilities: [ot-ics]
-    competition: false
 ---
 
 # OT / ICS Security

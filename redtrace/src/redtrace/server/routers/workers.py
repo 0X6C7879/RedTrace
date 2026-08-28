@@ -56,6 +56,11 @@ class RuntimeSettings(BaseModel):
     max_project_workers: int = Field(gt=0)
 
 
+class CommonEnvView(BaseModel):
+    name: str
+    value: str
+
+
 class WorkerConfigSnapshot(BaseModel):
     revision: str
     engine: str
@@ -63,6 +68,7 @@ class WorkerConfigSnapshot(BaseModel):
     runtime_max_workers: int
     runtime: RuntimeSettings
     tasks: TasksConfig
+    common_env: list[CommonEnvView]
     providers: list[ProviderView]
     dsh: dict | None = None
     workers: list[WorkerView]
@@ -72,6 +78,16 @@ class RuntimeTaskMutation(BaseModel):
     expected_revision: str = Field(min_length=64, max_length=64)
     runtime: RuntimeSettings
     tasks: TasksConfig
+
+
+class CommonEnvEntryMutation(BaseModel):
+    name: str
+    value: str
+
+
+class CommonEnvMutation(BaseModel):
+    expected_revision: str = Field(min_length=64, max_length=64)
+    entries: list[CommonEnvEntryMutation]
 
 
 class WorkerMutation(BaseModel):
@@ -153,6 +169,14 @@ def get_worker_config():
 def update_runtime_tasks(body: RuntimeTaskMutation):
     try:
         return _service().update_runtime_tasks(body.model_dump())
+    except WorkerConfigError as exc:
+        _raise_http(exc)
+
+
+@router.put("/common-env", response_model=WorkerConfigSnapshot)
+def update_common_env(body: CommonEnvMutation):
+    try:
+        return _service().update_common_env(body.model_dump())
     except WorkerConfigError as exc:
         _raise_http(exc)
 

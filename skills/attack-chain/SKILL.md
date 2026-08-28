@@ -4,7 +4,6 @@ description: Use for authorized multi-stage attack-path planning and orchestrati
 metadata:
   redtrace:
     capabilities: [internal]
-    competition: false
 ---
 # Attack Chain Orchestration Skill
 

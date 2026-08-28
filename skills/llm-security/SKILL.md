@@ -4,7 +4,6 @@ description: Use for authorized security assessment of LLM applications and AI a
 metadata:
   redtrace:
     capabilities: [ai-security]
-    competition: false
 ---
 # LLM / AI 安全测试
 

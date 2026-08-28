@@ -4,8 +4,8 @@
  * (enabled + task eligibility + per-worker maxRunning capacity, ordered by
  * priority then least-loaded fairness), claims the task under the Worker's
  * real name, and activates a DSH Agent in the one long-lived Cordis runtime.
- * Reason resumes one project-level Session; Bootstrap and Explore keep
- * isolated per-run Sessions.
+ * Reason starts a fresh Session with the full Graph on every wake;
+ * Bootstrap/Explore retain their task-local pause/conclude recovery.
  * RedTrace owns worker selection; DSH owns the agent lifecycle.
  * @module redtrace-scheduler
  */
@@ -13,7 +13,7 @@
 import { mkdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import type {
-  BlackboardChange, BlackboardChangesPage, Intent, LlmService, ProjectDetail, ProjectSummary, ReasoningPolicy, ResourceSummary,
+  Intent, LlmService, ProjectDetail, ProjectSummary, ReasoningPolicy, ResourceSummary,
   RuntimeConfig, RuntimeContext, RuntimeOptions, RuntimeSnapshot, RuntimeTask,
   TaskLimits, TaskType, WorkerRoute, WorkerSpec,
 } from './types.js'
@@ -22,7 +22,7 @@ import { state } from './state.js'
 import { reportRun, cleanupSessionArtifacts } from './audit.js'
 import { concludeInstruction } from './prompt.js'
 import { createSkillView, resolveSkillCatalog, type SkillView } from './capability.js'
-import { graphDeltaMessage, hintMessage, isBootstrap, isInitial, schedulable, taskPrompt } from './context.js'
+import { hintMessage, isBootstrap, isInitial, schedulable, taskPrompt } from './context.js'
 import * as bootstrapPreset from './bootstrap.js'
 import * as reasonPreset from './reason.js'
 import * as explorePreset from './explore.js'
@@ -45,16 +45,30 @@ function safeId(value: string): string {
   return clean || 'project'
 }
 
-function newSessionId(task: Exclude<TaskType, 'reason'>, projectId: string): string {
+function newSessionId(task: TaskType, projectId: string): string {
   return `rt-${safeId(projectId)}-${task}-${crypto.randomUUID().replaceAll('-', '')}`
 }
 
-export function reasonSessionId(projectId: string): string {
-  return `rt-${safeId(projectId)}-reason`
+export function sessionIdForTask(task: TaskType, projectId: string): string {
+  return newSessionId(task, projectId)
 }
 
-export function sessionIdForTask(task: TaskType, projectId: string): string {
-  return task === 'reason' ? reasonSessionId(projectId) : newSessionId(task, projectId)
+/** Resolve one wake's Session lifecycle. Reason never resumes an earlier
+ * planning context; Bootstrap/Explore keep their pause/conclude recovery. */
+export function sessionPlan(
+  task: TaskType,
+  projectId: string,
+  pausedSessionId?: string,
+  concludeSessionId?: string,
+): { sessionId: string; resumeOnly: boolean; concludeOnly: boolean } {
+  if (task === 'reason') {
+    return { sessionId: sessionIdForTask(task, projectId), resumeOnly: false, concludeOnly: false }
+  }
+  return {
+    sessionId: pausedSessionId ?? concludeSessionId ?? sessionIdForTask(task, projectId),
+    resumeOnly: pausedSessionId !== undefined,
+    concludeOnly: pausedSessionId === undefined && concludeSessionId !== undefined,
+  }
 }
 
 export function taskTurn(
@@ -82,27 +96,6 @@ export function activateAgent(
   return resume
     ? agents.resume({ resumeSessionId: sessionId, ...activation })
     : agents.create({ sessionId, meta: { cwd }, ...activation })
-}
-
-/** Consume the revision API to exhaustion. A non-advancing page is rejected
- * instead of silently dropping the tail of the Graph. */
-export async function fetchAllBlackboardChanges(
-  since: number,
-  fetchPage: (cursor: number) => Promise<BlackboardChangesPage>,
-): Promise<{ revision: number; changes: BlackboardChange[] }> {
-  let cursor = since
-  let revision = since
-  const changes: BlackboardChange[] = []
-  for (;;) {
-    const page = await fetchPage(cursor)
-    changes.push(...page.changes)
-    revision = page.next_revision
-    if (!page.has_more) return { revision, changes }
-    if (page.next_revision <= cursor) {
-      throw new Error(`blackboard changes cursor did not advance from revision ${cursor}`)
-    }
-    cursor = page.next_revision
-  }
 }
 
 function message(shared: { messages?: { createUserMessage(value: Record<string, unknown>): unknown } }, text: string): unknown {
@@ -205,7 +198,7 @@ class Scheduler {
     for (const task of this.running.values()) {
       const status = states.get(task.projectId)
       if (status === 'active') continue
-      if (status === 'stopped' && task.sessionId !== undefined) {
+      if (status === 'stopped' && task.type !== 'reason' && task.sessionId !== undefined) {
         const key = `${task.projectId}:${task.type}:${task.intentId ?? ''}`
         this.pausedSessions.set(key, { projectId: task.projectId, sessionId: task.sessionId })
       }
@@ -223,8 +216,8 @@ class Scheduler {
   }
 
   /** Runtime context updates push only newly added human Hints into running
-   * workers; Fact/Intent/Resource changes stay pull-based (Reason consumes
-   * the revision delta on its next turn, Explore owns its Intent lineage). */
+   * workers; Fact/Intent/Resource changes stay pull-based (Reason receives a
+   * fresh full Graph on its next wake, Explore owns its Intent lineage). */
   private async injectHints(): Promise<void> {
     for (const task of this.running.values()) {
       if (task.cancelled || task.handle === undefined || task.deliveredHints === undefined) continue
@@ -359,9 +352,14 @@ class Scheduler {
     task.startedAt = Date.now()
     const paused = this.pausedSessions.get(key)
     const recovery = this.concludeRecoveries.get(key)
-    task.sessionId = paused?.sessionId ?? recovery?.sessionId ?? sessionIdForTask(task.type, task.projectId)
-    task.resumeOnly = paused !== undefined
-    task.concludeOnly = paused === undefined && recovery !== undefined
+    const plan = sessionPlan(task.type, task.projectId, paused?.sessionId, recovery?.sessionId)
+    task.sessionId = plan.sessionId
+    task.resumeOnly = plan.resumeOnly
+    task.concludeOnly = plan.concludeOnly
+    if (task.type === 'reason') {
+      this.pausedSessions.delete(key)
+      this.concludeRecoveries.delete(key)
+    }
     task.runId = `run-${crypto.randomUUID()}`
     this.running.set(key, task)
     const completion = this.runTask(task, project, intent).finally(() => {
@@ -382,12 +380,9 @@ class Scheduler {
     const cwd = path.join(this.config.workspacesDir, safeId(task.projectId))
     await mkdir(cwd, { recursive: true })
     try {
-      if (task.type === 'reason' && this.ctx.sessionPersistence === undefined) {
-        throw new Error('redtrace runtime: persistent Reason sessions require sessionPersistence')
-      }
       let concludeOnly = task.concludeOnly === true
       let resumeOnly = task.resumeOnly === true
-      let persistedSession = this.ctx.sessionPersistence === undefined
+      const persistedSession = this.ctx.sessionPersistence === undefined
         ? false
         : await this.ctx.sessionPersistence.readRaw(task.sessionId!) !== undefined
       if ((resumeOnly || concludeOnly) && !persistedSession) {
@@ -398,8 +393,6 @@ class Scheduler {
         task.resumeOnly = false
         task.concludeOnly = false
         task.sessionId = sessionIdForTask(task.type, task.projectId)
-        persistedSession = task.type === 'reason' && this.ctx.sessionPersistence !== undefined
-          && await this.ctx.sessionPersistence.readRaw(task.sessionId) !== undefined
       }
       if (task.type === 'explore') {
         if (intent === undefined || intent.capabilities.length === 0) {
@@ -408,11 +401,9 @@ class Scheduler {
         const catalog = await resolveSkillCatalog(
           this.config,
           intent.capabilities,
-          project.project.skill_profile,
         )
         skillView = await createSkillView(this.config, task.sessionId!, catalog)
         task.skillViewDir = skillView.directory
-        task.competitionRules = catalog.competitionRules
       }
       const activation = {
         agentOptions: {
@@ -426,9 +417,6 @@ class Scheduler {
             task,
             cwd,
             skillsDir: task.skillViewDir ?? this.config.skillsDir,
-            ...(task.type === 'explore' && task.competitionRules
-              ? { competitionRules: task.competitionRules }
-              : {}),
           }).await()
         },
       }
@@ -437,7 +425,7 @@ class Scheduler {
         shared.messages.SessionId(task.sessionId!),
         cwd,
         activation,
-        resumeOnly || concludeOnly || (task.type === 'reason' && persistedSession),
+        resumeOnly || concludeOnly,
       )
       shared.tasks.set(task.sessionId!, task)
       await reportRun(this.config, task, 'running')
@@ -460,7 +448,6 @@ class Scheduler {
           project,
           intent,
           resources,
-          task.type === 'reason' && persistedSession,
         )
         launchPrompt = turnContext.prompt
         task.contextRevision = turnContext.revision
@@ -475,7 +462,7 @@ class Scheduler {
         task.handle.agent.followup(message(shared, turn.prompt))
         waited = await waitIdle(task.handle.agent, turn.timeout)
       }
-      if (!task.committed && !task.cancelled && phase === 'conclude' && waited === 'timeout') {
+      if (task.type !== 'reason' && !task.committed && !task.cancelled && phase === 'conclude' && waited === 'timeout') {
         this.concludeRecoveries.set(recoveryKey, {
           projectId: task.projectId,
           sessionId: task.sessionId!,
@@ -507,7 +494,6 @@ class Scheduler {
       if (skillView !== undefined) {
         await skillView.cleanup().catch(error => { this.ctx.logger?.warn(error) })
         task.skillViewDir = undefined
-        task.competitionRules = undefined
       }
       await reportRun(this.config, task, outcome).catch(error => { this.ctx.logger?.warn(error) })
       const endpoint = task.type === 'reason'
@@ -530,30 +516,11 @@ class Scheduler {
     project: ProjectDetail,
     intent: Intent | undefined,
     resources: ResourceSummary[],
-    persistedReason: boolean,
   ): Promise<{ prompt: string; revision?: number }> {
     if (task.type !== 'reason') {
       return { prompt: taskPrompt(task, project, intent, resources) }
     }
-    const since = project.project.reason_context_revision
-    if (!persistedReason || since <= 0 || since > project.blackboard_revision) {
-      return { prompt: taskPrompt(task, project), revision: project.blackboard_revision }
-    }
-    const base = `/projects/${encodeURIComponent(task.projectId)}/blackboard/changes`
-    const delta = await fetchAllBlackboardChanges(since, cursor => api<BlackboardChangesPage>(
-      this.config,
-      `${base}?since=${cursor}&limit=100`,
-      {
-        headers: {
-          'X-RedTrace-Worker': task.worker,
-          'X-RedTrace-Task': 'reason',
-        },
-      },
-    ))
-    return {
-      prompt: graphDeltaMessage(task, project.project.title, since, delta.revision, delta.changes),
-      revision: delta.revision,
-    }
+    return { prompt: taskPrompt(task, project), revision: project.blackboard_revision }
   }
 
   private async reasoningOptions(route: WorkerRoute): Promise<{ reasoningEffort?: string }> {

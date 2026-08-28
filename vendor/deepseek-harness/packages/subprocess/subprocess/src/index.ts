@@ -44,23 +44,50 @@ export type {
 export const SENSITIVE_ENV_PATTERN = /KEY|PASSWORD|SECRET|TOKEN/i
 
 /**
+ * Comma-separated ambient names the embedding runtime declares as deliberately
+ * forwarded to children (`BENCHMARK_TOKEN`-style business credentials that
+ * agent shells are meant to see). Validated per name so a stray value can
+ * never widen the scrub beyond well-formed environment names.
+ */
+const FORWARD_ENV_NAME = /^[A-Z][A-Z0-9_]*$/
+const FORWARD_ENV_LIST_KEY = `${DSH_ENV_PREFIX}FORWARD_ENV`
+
+function forwardedEnvNames(raw: string | undefined): Set<string> {
+  const names = new Set<string>()
+  if (raw === undefined) return names
+  for (const name of raw.split(',')) {
+    const trimmed = name.trim()
+    if (trimmed !== '' && FORWARD_ENV_NAME.test(trimmed)) names.add(trimmed)
+  }
+  return names
+}
+
+/**
  * The ambient parent environment minus credential-shaped names and minus all
  * `DSH_*` names — the canonical base every harness child starts from. `PATH`,
  * `HOME`, locale, and proxy variables survive, so child CLIs run normally;
  * harness identity never leaks implicitly (a deliberately forwarded
  * credential or current `DSH_*` fact goes through the spec's explicit `env`,
- * which merges after this scrub). Both scrubs match case-insensitively:
- * Windows environment names are case-insensitive, so a parent `dsh_*` entry
- * would otherwise survive and read back as `$env:DSH_*` in the child;
- * deliberate lowercase `dsh_*` names on POSIX are implausible. Exported as a plain function so spawners
+ * which merges after this scrub, or through the `DSH_FORWARD_ENV` allowlist
+ * for ambient names that are credential-shaped on purpose). Both scrubs match
+ * case-insensitively: Windows environment names are case-insensitive, so a
+ * parent `dsh_*` entry would otherwise survive and read back as
+ * `$env:DSH_*` in the child; deliberate lowercase `dsh_*` names on POSIX are
+ * implausible. Exported as a plain function so spawners
  * that cannot route through the service (node-pty backends, SDK-managed
  * transports) share the one scrub definition.
  * @returns a fresh environment object safe to hand to a child spawn.
  */
 export function scrubbedParentEnv(): Record<string, string> {
+  const forwarded = forwardedEnvNames(process.env[FORWARD_ENV_LIST_KEY])
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && !SENSITIVE_ENV_PATTERN.test(key) && !key.toUpperCase().startsWith(DSH_ENV_PREFIX)) env[key] = value
+    if (value === undefined) continue
+    if (forwarded.has(key)) {
+      env[key] = value
+      continue
+    }
+    if (!SENSITIVE_ENV_PATTERN.test(key) && !key.toUpperCase().startsWith(DSH_ENV_PREFIX)) env[key] = value
   }
   return env
 }

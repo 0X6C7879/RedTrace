@@ -5,7 +5,6 @@ description: |
 metadata:
   redtrace:
     capabilities: [reverse]
-    competition: false
 ---
 
 # radare2

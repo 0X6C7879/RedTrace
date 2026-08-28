@@ -174,7 +174,7 @@ const MANAGED: readonly ManagedEntry[] = [
   {
     id: 'redtrace-domain', label: 'Domain', category: 'feature', module: domain,
     needsRuntimeConfig: true, description: '后端 API 桥接与热加载',
-    intro: '连接后端 API 的桥:拉取热加载的运行时配置(Worker、任务限额、Provider),挂载 MCP 客户端,并把 Provider 配置同步给模型层。',
+    intro: '连接后端 API 的桥:拉取热加载的运行时配置(Worker、任务限额、Provider),挂载并热重载 MCP 客户端,并把 Provider 配置同步给模型层。',
   },
   {
     id: 'redtrace-audit', label: 'Audit', category: 'feature', module: audit,

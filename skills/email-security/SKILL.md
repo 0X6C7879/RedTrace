@@ -4,7 +4,6 @@ description: Use for authorized email security review including phishing analysi
 metadata:
   redtrace:
     capabilities: [email]
-    competition: false
 ---
 
 # Email Security & Phishing Analysis

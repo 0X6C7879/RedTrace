@@ -113,8 +113,15 @@ def dsh_providers(config: DispatchConfig) -> tuple[dict[str, dict[str, Any]], di
     return providers, keys
 
 
-def runtime_config(config: DispatchConfig) -> dict[str, Any]:
-    """The hot-reloadable worker-centric runtime config served at ``GET /runtime/config``."""
+def runtime_config(
+    config: DispatchConfig,
+    mcp_configs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """The hot-reloadable worker-centric runtime config served at ``GET /runtime/config``.
+
+    ``mcp_configs`` carries the fresh MCP mount shapes; when provided the
+    scheduler remounts MCP clients on change without a runtime restart.
+    """
 
     providers, env = dsh_providers(config)
     payload: dict[str, Any] = {
@@ -128,7 +135,13 @@ def runtime_config(config: DispatchConfig) -> dict[str, Any]:
         },
         "providers": providers,
         "env": env,
+        # Worker-facing common_env, kept separate from `env` (provider API
+        # keys): the runtime forwards only commonEnv entries into worker
+        # shell processes, so provider credentials never reach agents.
+        "commonEnv": dict(config.common_env),
     }
+    if mcp_configs is not None:
+        payload["mcpConfigs"] = mcp_configs
     payload["revision"] = hashlib.sha256(
         json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
     ).hexdigest()

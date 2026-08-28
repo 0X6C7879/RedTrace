@@ -1,0 +1,7 @@
+interface:
+  display_name: "Pcap Protocol"
+  short_description: "Rebuild sessions, decode protocols, and tie packets to behavior"
+  default_prompt: "Use $pcap-protocol to reconstruct sessions from this PCAP, decode the application protocol, and tie packet evidence to the task behavior."
+
+policy:
+  allow_implicit_invocation: false

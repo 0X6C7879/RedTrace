@@ -4,7 +4,6 @@ description: Use for authorized reverse engineering of custom binary protocols, 
 metadata:
   redtrace:
     capabilities: [network]
-    competition: false
 ---
 
 # Protocol Reverse Engineering

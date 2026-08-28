@@ -4,7 +4,6 @@ description: Use for authorized security assessment of REST, GraphQL, WebSocket,
 metadata:
   redtrace:
     capabilities: [api]
-    competition: false
 ---
 # API 安全测试
 

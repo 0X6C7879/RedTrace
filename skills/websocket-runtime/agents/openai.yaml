@@ -1,0 +1,7 @@
+interface:
+  display_name: "Websocket Runtime"
+  short_description: "Trace WebSocket handshakes, frames, subscriptions, and state"
+  default_prompt: "Use $websocket-runtime to trace this WebSocket or SSE handshake, subscription flow, frame stream, and resulting runtime state."
+
+policy:
+  allow_implicit_invocation: false

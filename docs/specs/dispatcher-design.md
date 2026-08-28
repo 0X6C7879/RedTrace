@@ -264,11 +264,9 @@ Bootstrap、Reason 和 Explore 都先通过 Server 完成原子认领，再向�
 ### 5.4 Capability 驱动的 Skill Catalog
 
 Reason 只在 `redtrace_intent_create` 中声明一个或多个固定 Capability；它
-不选择具体 Skill。Explore 启动前，Dispatcher 读取项目启动时的
-`skill_profile` 快照，并通过 Capability Resolver 合并七个 `common` Skill
-与 Intent 方向 Skill。`competition` Profile 额外加入同方向的
-`competition-*` Skill，同时注入 `ctf-sandbox-orchestrator` 的短规则正文；该
-文件不可由模型调用，也不承担路由职责。
+不选择具体 Skill。Explore 启动前，Dispatcher 通过 Capability Resolver
+合并所有 `common` Skill 与 Intent 方向 Skill。Capability 是唯一选择维度，
+项目没有额外的 Skills 模式，也不再按任务类型隐式注入第二套规则。
 
 Resolver 为每个 Explore Session 在
 `.redtrace/runtime/skill-views/<session-id>/` 原子创建指向根 `skills/<name>`

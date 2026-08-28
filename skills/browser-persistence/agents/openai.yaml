@@ -1,0 +1,7 @@
+interface:
+  display_name: "Browser Persistence"
+  short_description: "Inspect cookies, storage, service workers, and cached state"
+  default_prompt: "Use $browser-persistence to inspect browser cookies, storage, service workers, caches, and replay the smallest stateful path in this task."
+
+policy:
+  allow_implicit_invocation: false

@@ -10,7 +10,6 @@ description: |
 metadata:
   redtrace:
     capabilities: [malware]
-    competition: false
 ---
 
 ## ACTION REQUIRED（读完后立刻执行）

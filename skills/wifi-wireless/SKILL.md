@@ -4,7 +4,6 @@ description: Use for authorized wireless security assessment including Wi-Fi cap
 metadata:
   redtrace:
     capabilities: [wireless]
-    competition: false
 ---
 
 # Wi-Fi / Wireless Security

@@ -4,7 +4,6 @@ description: Query RedTrace Blackboard history, source context, graph paths, and
 metadata:
   redtrace:
     capabilities: [common]
-    competition: false
 ---
 
 # RedTrace Blackboard

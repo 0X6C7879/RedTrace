@@ -7,7 +7,6 @@ description: |
 metadata:
   redtrace:
     capabilities: [common]
-    competition: false
 ---
 
 # Technical Documentation

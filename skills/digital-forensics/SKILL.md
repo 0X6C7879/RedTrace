@@ -4,7 +4,6 @@ description: Use for authorized digital forensics including memory dumps, disk t
 metadata:
   redtrace:
     capabilities: [forensics]
-    competition: false
 ---
 
 # Digital Forensics & IR Artifacts

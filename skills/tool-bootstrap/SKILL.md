@@ -4,7 +4,6 @@ description: Missing tool installation workflow — find equivalents, verify OS/
 metadata:
   redtrace:
     capabilities: [common]
-    competition: false
 ---
 
 # Tool Bootstrap

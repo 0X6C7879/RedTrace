@@ -4,7 +4,6 @@ description: generate, refine, validate, and render diagrams from natural langua
 metadata:
   redtrace:
     capabilities: [common]
-    competition: false
 ---
 
 # Diagram Generator

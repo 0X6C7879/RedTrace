@@ -4,7 +4,6 @@ description: Web research strategy — provider priority, URL retention, and whe
 metadata:
   redtrace:
     capabilities: [exploit-research]
-    competition: false
 ---
 
 # Web Research Strategy

@@ -4,7 +4,6 @@ description: 在 CLI 环境下做 Android APK 逆向时使用。适用于 APK �
 metadata:
   redtrace:
     capabilities: [mobile]
-    competition: false
 ---
 
 ## ACTION REQUIRED（读完后立刻执行）
