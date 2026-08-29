@@ -918,6 +918,7 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     assert "configuredSecret" not in index
     assert "敏感值" not in index
     assert "最大运行项目" in index
+    assert ':max="runtimeTaskForm.runtime.max_workers"' not in index
     assert "Conclude 超时" in index
     assert "task_types" in index
     assert "任务资格" in index

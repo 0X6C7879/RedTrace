@@ -7,16 +7,13 @@
   "args": [
     "-y",
     "chrome-devtools-mcp@latest",
-    "--headless",
-    "--isolated",
+    "--browserUrl",
+    "http://127.0.0.1:9222",
     "--no-usage-statistics",
-    "--no-performance-crux",
-    "--chromeArg=--no-sandbox",
-    "--chromeArg=--disable-dev-shm-usage",
-    "--chromeArg=--disable-gpu"
+    "--no-performance-crux"
   ],
   "command": "npx",
-  "enabled": true,
+  "enabled": false,
   "env": {
     "CI": "1"
   },

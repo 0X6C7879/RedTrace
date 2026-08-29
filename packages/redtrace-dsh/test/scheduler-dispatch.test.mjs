@@ -3,9 +3,12 @@ import test from 'node:test'
 
 import {
   activateAgent, fetchAllResources, planDispatch, postWithRetry,
-  reasonEligible, recoverableExploreSession, resolveLimits, sessionIdForTask, sessionPlan, taskTurn,
+  reasonEligible, recoverableExploreSession, resolveLimits, sessionIdForTask, sessionPlan,
+  taskSkillCapabilities, taskTurn,
 } from '../lib/scheduler.js'
 import { schedulable } from '../lib/context.js'
+import { CONTRACTS } from '../lib/contracts.js'
+import * as reasonPreset from '../lib/reason.js'
 
 function summary(id, overrides = {}) {
   return {
@@ -52,6 +55,43 @@ test('Reason ignores paused and conclude recovery sessions while Explore keeps r
   assert.deepEqual(sessionPlan('explore', 'proj_001', undefined, 'conclude-explore'), {
     sessionId: 'conclude-explore', resumeOnly: false, concludeOnly: true,
   })
+})
+
+test('Reason gets command execution and only common Skills for planning probes', async () => {
+  assert.deepEqual(taskSkillCapabilities('reason'), ['common'])
+  assert.deepEqual(taskSkillCapabilities('explore', intent({ capabilities: ['web'] })), ['web'])
+  assert.equal(taskSkillCapabilities('bootstrap'), undefined)
+
+  const mounted = []
+  const restrictions = []
+  const isolates = []
+  const prompts = []
+  const scoped = {
+    isolate(service) { isolates.push(service); return this },
+    systemPrompt: { section(value) { prompts.push(value.text) } },
+    tools: { restrict(filter) { restrictions.push(filter); return () => {} } },
+    plugin(module, config) {
+      mounted.push({ module, config })
+      return { async await() {} }
+    },
+  }
+  await reasonPreset.apply(scoped, {
+    task: { type: 'reason' }, cwd: '/workspace/project', skillsDir: '/skills/common-view',
+  })
+
+  assert.deepEqual(isolates, ['shell', 'shellEnv', 'skills'])
+  assert.match(prompts.join('\n'), /主要职责始终是任务编排/)
+  assert.match(prompts.join('\n'), /不得直接完成应由 Explore 承担的任务/)
+  assert.equal(mounted.length, 6)
+  assert.deepEqual(mounted[4].config, {
+    includeDefaultRoots: false,
+    customSkillDirs: ['/skills/common-view'],
+  })
+  assert.deepEqual(restrictions, [{
+    allow: [
+      ...CONTRACTS.reason, process.platform === 'win32' ? 'pwsh' : 'bash', 'skill',
+    ],
+  }])
 })
 
 test('activateAgent resumes a recovered session and creates a missing one', async () => {

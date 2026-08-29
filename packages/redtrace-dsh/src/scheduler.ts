@@ -13,7 +13,7 @@
 import { mkdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import type {
-  AuditRun, Intent, LlmService, ProjectDetail, ProjectSummary, ReasoningPolicy, ResourceSummary,
+  AuditRun, CapabilityName, Intent, LlmService, ProjectDetail, ProjectSummary, ReasoningPolicy, ResourceSummary,
   RuntimeConfig, RuntimeContext, RuntimeOptions, RuntimeSnapshot, RuntimeTask,
   TaskLimits, TaskType, WorkerRoute, WorkerSpec,
 } from './types.js'
@@ -51,6 +51,15 @@ function newSessionId(task: TaskType, projectId: string): string {
 
 export function sessionIdForTask(task: TaskType, projectId: string): string {
   return newSessionId(task, projectId)
+}
+
+export function taskSkillCapabilities(type: TaskType, intent?: Intent): CapabilityName[] | undefined {
+  if (type === 'reason') return ['common']
+  if (type !== 'explore') return undefined
+  if (intent === undefined || intent.capabilities.length === 0) {
+    throw new Error('Explore Intent must declare at least one Capability')
+  }
+  return intent.capabilities
 }
 
 /** Resolve one wake's Session lifecycle. Reason never resumes an earlier
@@ -415,14 +424,9 @@ class Scheduler {
         task.concludeOnly = false
         task.sessionId = sessionIdForTask(task.type, task.projectId)
       }
-      if (task.type === 'explore') {
-        if (intent === undefined || intent.capabilities.length === 0) {
-          throw new Error('Explore Intent must declare at least one Capability')
-        }
-        const catalog = await resolveSkillCatalog(
-          this.config,
-          intent.capabilities,
-        )
+      const capabilities = taskSkillCapabilities(task.type, intent)
+      if (capabilities !== undefined) {
+        const catalog = await resolveSkillCatalog(this.config, capabilities)
         skillView = await createSkillView(this.config, task.sessionId!, catalog)
         task.skillViewDir = skillView.directory
       }

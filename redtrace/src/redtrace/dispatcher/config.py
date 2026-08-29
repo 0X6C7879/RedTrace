@@ -404,8 +404,6 @@ class DispatchConfig(BaseModel):
         names = [worker.name for worker in self.workers]
         if len(set(names)) != len(names):
             raise ValueError("worker names must be unique")
-        if self.runtime.max_project_workers > self.runtime.max_workers:
-            raise ValueError("max_project_workers cannot exceed max_workers")
         return self
 
     @model_validator(mode="after")

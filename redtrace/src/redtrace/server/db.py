@@ -522,23 +522,10 @@ BEGIN
 END;
 
 DROP TRIGGER IF EXISTS trg_planning_fact_removed;
-CREATE TRIGGER trg_planning_fact_removed
-AFTER DELETE ON facts
-WHEN EXISTS (SELECT 1 FROM projects WHERE id = OLD.project_id)
-BEGIN
-    UPDATE projects
-    SET planning_revision = planning_revision + 1
-    WHERE id = OLD.project_id;
-END;
-
 DROP TRIGGER IF EXISTS trg_planning_hint_added;
-CREATE TRIGGER trg_planning_hint_added
-AFTER INSERT ON hints
-BEGIN
-    UPDATE projects
-    SET planning_revision = planning_revision + 1
-    WHERE id = NEW.project_id;
-END;
+
+-- Reason wakes only for newly added Facts. Hints are injected into active
+-- workers, and releasing a Fact does not create new work to plan.
 
 -- Clean up legacy resource planning triggers from old databases.
 -- Resource add/change/remove must NOT bump planning_revision.

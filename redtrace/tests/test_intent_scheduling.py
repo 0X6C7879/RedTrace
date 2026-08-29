@@ -40,6 +40,32 @@ def _revision(client: TestClient, project_id: str) -> int:
     ]
 
 
+def test_only_new_facts_advance_planning_revision(client: TestClient) -> None:
+    project_id = _project(client)
+    initial = _revision(client, project_id)
+
+    assert client.post(
+        f"/projects/{project_id}/hints",
+        json={"content": "new context", "creator": "human"},
+    ).status_code == 201
+    assert _revision(client, project_id) == initial
+
+    intent = _intent(client, project_id, "produce one fact")
+    concluded = client.post(
+        f"/projects/{project_id}/intents/{intent['id']}/conclude",
+        json={"worker": "explorer", "description": "confirmed fact"},
+    )
+    assert concluded.status_code == 200
+    fact_revision = _revision(client, project_id)
+    assert fact_revision == initial + 1
+
+    fact_id = concluded.json()["fact"]["id"]
+    assert client.delete(
+        f"/projects/{project_id}/blackboard/facts/{fact_id}"
+    ).status_code == 204
+    assert _revision(client, project_id) == fact_revision
+
+
 def test_scheduler_prefers_newest_unclaimed_intent() -> None:
     newer = make_intent("i-new")
     newer.worker = None

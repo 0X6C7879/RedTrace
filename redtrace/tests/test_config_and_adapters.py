@@ -45,22 +45,28 @@ def test_dispatch_config_defaults_worker_healthcheck_and_rejects_unknown_mode() 
 
 
 
-def test_dispatch_config_rejects_duplicate_workers_and_excess_project_parallelism() -> (
-    None
-):
+def test_dispatch_config_rejects_duplicate_workers() -> None:
     payload = make_config().model_dump()
     payload["workers"].append(dict(payload["workers"][0]))
     with pytest.raises(ValidationError, match="worker names must be unique"):
         DispatchConfig.model_validate(payload)
 
+
+def test_runtime_limits_are_independently_configurable() -> None:
     payload = make_config().model_dump()
-    payload["runtime"]["max_project_workers"] = 3
-    with pytest.raises(
-        ValidationError, match="max_project_workers cannot exceed max_workers"
-    ):
-        DispatchConfig.model_validate(payload)
+    payload["runtime"].update(
+        max_workers=6,
+        max_running_projects=7,
+        max_project_workers=8,
+    )
+    payload["tasks"]["reason"]["max_intents"] = 9
 
+    config = DispatchConfig.model_validate(payload)
 
+    assert config.runtime.max_workers == 6
+    assert config.runtime.max_running_projects == 7
+    assert config.runtime.max_project_workers == 8
+    assert config.tasks.reason.max_intents == 9
 
 
 def test_mock_worker_rejects_unknown_phase_configuration() -> None:
