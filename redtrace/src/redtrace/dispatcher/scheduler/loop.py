@@ -387,6 +387,14 @@ class DispatcherLoop:
     def _dispatch_reason(
         self, project: ProjectDetail, export_yaml: str, trigger: str
     ) -> bool:
+        if (
+            sum(
+                intent.to is None and intent.state in ("open", "working")
+                for intent in project.intents
+            )
+            >= self.config.tasks.reason.max_intents
+        ):
+            return False
         if self._task_retry_blocked((project.project.id, "reason", None)):
             return False
         selection = self._select_worker(project.project.id, "reason")

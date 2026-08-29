@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import {
   activateAgent, fetchAllResources, planDispatch, postWithRetry,
-  reasonEligible, recoverableExploreSession, resolveLimits, sessionIdForTask, sessionPlan,
+  reasonAtIntentCapacity, reasonEligible, recoverableExploreSession, resolveLimits, sessionIdForTask, sessionPlan,
   taskSkillCapabilities, taskTurn,
 } from '../lib/scheduler.js'
 import { schedulable } from '../lib/context.js'
@@ -173,6 +173,18 @@ test('reasonEligible: the project-level reason cooldown mirrors the intent gate'
   assert.equal(reasonEligible(summary('p', { reason_retry_after: (now + 60_000) / 1000 }), now), false)
   assert.equal(reasonEligible(summary('p', { reason_retry_after: (now - 1_000) / 1000 }), now), true)
   assert.equal(reasonEligible(summary('p'), now), true)
+})
+
+test('Reason is skipped when active Intents reach max_intents', () => {
+  const project = { intents: [
+    intent(),
+    intent({ id: 'intent-2', state: 'working', worker: 'explorer' }),
+    intent({ id: 'intent-3', circuit_open: true }),
+    intent({ id: 'intent-4', state: 'concluded', to: 'fact-1' }),
+  ] }
+  assert.equal(reasonAtIntentCapacity(project, 3), true)
+  assert.equal(reasonAtIntentCapacity(project, 4), false)
+  assert.equal(reasonAtIntentCapacity(project), false)
 })
 
 // ─── Limits resolution ──────────────────────────────────────────────────────

@@ -311,6 +311,8 @@ class Scheduler {
       return
     }
     if (summary.planning_revision > summary.reason_evaluated_revision) {
+      const reasonLimits = this.taskLimits('reason')
+      if (reasonAtIntentCapacity(project, reasonLimits?.max_intents)) return
       if (!this.presetEnabled('reason')) return
       if (!reasonEligible(summary, Date.now())) return
       const worker = selectWorker(this.snapshot?.workers ?? [], name => this.workerRunning(name), 'reason')
@@ -321,8 +323,8 @@ class Scheduler {
       })
       if (claimed) this.launch({
         type: 'reason', projectId: summary.id, worker: worker.name, route: workerRoute(worker),
-        maxIntents: this.taskLimits('reason')?.max_intents,
-        limits: this.taskLimits('reason'),
+        maxIntents: reasonLimits?.max_intents,
+        limits: reasonLimits,
         committed: false,
       }, project)
       return
@@ -633,6 +635,11 @@ export function resolveLimits(
  * is open or the server-set retry deadline is still in the future. */
 export function reasonEligible(summary: ProjectSummary, now: number): boolean {
   return !summary.reason_circuit_open && (summary.reason_retry_after ?? 0) <= now / 1000
+}
+
+export function reasonAtIntentCapacity(project: ProjectDetail, maxIntents?: number): boolean {
+  return maxIntents !== undefined && project.intents.filter(intent =>
+    intent.to == null && (intent.state === 'open' || intent.state === 'working')).length >= maxIntents
 }
 
 /** Read every page of a project's shared resources: pages come back at the

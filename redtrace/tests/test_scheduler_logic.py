@@ -226,6 +226,21 @@ def test_planning_revision_dispatches_reason_before_ready_intent() -> None:
     assert dispatched == [("reason", "planning_revision:3->4")]
 
 
+def test_reason_does_not_dispatch_at_active_intent_limit() -> None:
+    loop = _loop()
+    loop.config = make_config()
+    intents = [make_intent(f"i{index:03d}") for index in range(3)]
+    intents[1].state = "working"
+    intents[1].worker = "explorer"
+    intents[2].circuit_open = True
+    project = make_project(intents=intents)
+    loop._select_worker = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("Reason worker must not be selected at the Intent limit")
+    )
+
+    assert not loop._dispatch_reason(project, "graph", "planning_revision:3->4")
+
+
 def test_ready_intent_waits_when_pending_reason_cannot_dispatch() -> None:
     loop = _loop()
     loop.config = make_config()
