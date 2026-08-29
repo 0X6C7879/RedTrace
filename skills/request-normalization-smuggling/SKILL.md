@@ -3,7 +3,7 @@ name: request-normalization-smuggling
 description: Security workflow for parser differentials, HTTP normalization gaps, ambiguous headers, path decoding drift, transfer-framing mismatches, and request smuggling routes. Use when the user asks to trace proxy and backend parse differences, conflicting path normalization, Host or forwarded-header ambiguity, CL/TE issues, or routing outcomes that differ across hops. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [network]
+    capabilities: [pentest]
 ---
 
 # Request Normalization Smuggling

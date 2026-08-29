@@ -3,7 +3,7 @@ name: supply-chain
 description: Security workflow for CI/CD, registry, dependency drift, artifact provenance, image build, release pipeline, and runtime consumer tasks. Use when the user asks to trace dependency drift, registry pulls, malicious packages, build or release tampering, CI execution, artifact signing, or which shipped artifact the runtime actually consumes. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [supply-chain]
+    capabilities: [web]
 ---
 
 # Supply Chain

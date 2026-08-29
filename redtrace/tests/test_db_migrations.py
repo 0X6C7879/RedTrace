@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
+
+import pytest
 
 from redtrace.server import db
 
@@ -14,6 +17,58 @@ def test_runtime_connections_wait_for_database_maintenance(tmp_path, monkeypatch
         busy_timeout_ms = conn.execute("PRAGMA busy_timeout").fetchone()[0]
 
     assert busy_timeout_ms == int(db.SQLITE_BUSY_TIMEOUT_SECONDS * 1000)
+
+
+def test_wsl_database_path_uses_ext4_home_only_for_drvfs_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = Path("/mnt/d/AI/RedTrace")
+    home = tmp_path / "home"
+    assert db.default_database_path(
+        root, {"WSL_DISTRO_NAME": "kali-linux", "HOME": str(home)}
+    ) == home / ".redtrace" / "redtrace.db"
+    monkeypatch.setattr("redtrace.paths.is_wsl", lambda _environ=None: False)
+    assert db.default_database_path(root, {"HOME": str(home)}) == root / ".redtrace" / "redtrace.db"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlink support")
+def test_prepare_wsl_database_migrates_and_links_without_overwriting(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "repo"
+    project_db = root / ".redtrace" / "redtrace.db"
+    actual_db = tmp_path / "home" / ".redtrace" / "redtrace.db"
+    project_db.parent.mkdir(parents=True)
+    with sqlite3.connect(project_db) as conn:
+        conn.executescript(db.SCHEMA)
+        conn.execute(
+            "INSERT INTO projects (id, title, created_at) VALUES (?, ?, ?)",
+            ("proj_001", "preserved", "2026-01-01T00:00:00Z"),
+        )
+    actual_db.parent.mkdir(parents=True)
+    actual_db.touch()
+    monkeypatch.setattr(db, "default_database_path", lambda _root: actual_db)
+
+    assert db.prepare_database_path(root) == actual_db
+    assert project_db.is_symlink()
+    assert project_db.resolve() == actual_db.resolve()
+    assert (actual_db.parent / "redtrace.db.pre-wsl-empty").is_file()
+    assert (root / ".redtrace" / "redtrace.db.pre-wsl").is_file()
+    with sqlite3.connect(actual_db) as conn:
+        assert conn.execute("SELECT title FROM projects").fetchone()[0] == "preserved"
+
+
+def test_project_root_stays_with_checkout_when_database_is_in_wsl_home(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "repo"
+    actual_db = tmp_path / "home" / ".redtrace" / "redtrace.db"
+    monkeypatch.setenv("REDTRACE_ROOT", str(root))
+    monkeypatch.setattr(db, "DEFAULT_DB", actual_db)
+    monkeypatch.setattr(db, "_db_path", actual_db)
+    monkeypatch.setattr(db, "default_database_path", lambda _root: actual_db)
+
+    assert db.project_root() == root
 
 
 def test_default_database_migrates_legacy_storage_without_leaving_user_files(

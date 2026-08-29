@@ -37,7 +37,7 @@ for (const profile of ['reason', 'direct', 'isolated']) {
 // fast, which still exercises composition, audit, and the outcome path).
 const taskLimits = {
   bootstrap: { timeout: 2, conclude_timeout: 2 },
-  reason: { timeout: 2, max_intents: 2 },
+  reason: { timeout: 2, conclude_timeout: 2, max_intents: 2 },
   explore: { timeout: 2, conclude_timeout: 2 },
 }
 const project = {

@@ -3,7 +3,7 @@ name: bundle-sourcemap-recovery
 description: Security workflow for source maps, build manifests, chunk registries, emitted bundles, obfuscated loader flow, and frontend runtime recovery. Use when the user asks to reconstruct served JavaScript structure, inspect source maps or chunk maps, trace bundle loading, recover hidden routes or APIs from emitted assets, or explain runtime behavior from built frontend artifacts. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [reverse]
+    capabilities: [binary]
 ---
 
 # Bundle Sourcemap Recovery

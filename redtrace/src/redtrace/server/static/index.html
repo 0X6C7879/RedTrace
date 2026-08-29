@@ -1887,10 +1887,11 @@
       </div>
 
       <div class="px-5 py-5">
-        <div class="grid gap-4 sm:grid-cols-3">
+        <div class="grid gap-4 sm:grid-cols-4">
           <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">最大 Worker 数</span><input x-model.number="runtimeTaskForm.runtime.max_workers" type="number" min="1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
           <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">最大运行项目</span><input x-model.number="runtimeTaskForm.runtime.max_running_projects" type="number" min="1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
           <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">单项目最大 Worker</span><input x-model.number="runtimeTaskForm.runtime.max_project_workers" type="number" min="1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
+          <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">未完成 Intent 上限</span><input x-model.number="runtimeTaskForm.tasks.reason.max_intents" type="number" min="1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
         </div>
 
         <div class="mt-5 grid gap-3 border-t border-slate-100 pt-5 lg:grid-cols-3">
@@ -1905,7 +1906,7 @@
             <legend class="px-1 text-xs font-semibold text-slate-600">Reason</legend>
             <div class="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
               <label class="block"><span class="mb-1.5 block text-[10px] font-medium text-slate-400">任务超时（秒）</span><input x-model.number="runtimeTaskForm.tasks.reason.timeout" type="number" min="1" required class="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
-              <label class="block"><span class="mb-1.5 block text-[10px] font-medium text-slate-400">未完成 Intent 上限</span><input x-model.number="runtimeTaskForm.tasks.reason.max_intents" type="number" min="1" required class="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
+              <label class="block"><span class="mb-1.5 block text-[10px] font-medium text-slate-400">Conclude 超时（秒）</span><input x-model.number="runtimeTaskForm.tasks.reason.conclude_timeout" type="number" min="1" required class="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
             </div>
           </fieldset>
           <fieldset class="rounded-xl bg-slate-50/70 p-4">
@@ -2460,7 +2461,7 @@ function redtraceApp() {
       runtime: { max_workers: 30, max_running_projects: 10, max_project_workers: 3 },
       tasks: {
         bootstrap: { timeout: 300, conclude_timeout: 120 },
-        reason: { timeout: 300, max_intents: 3 },
+        reason: { timeout: 300, conclude_timeout: 180, max_intents: 3 },
         explore: { timeout: 900, conclude_timeout: 300 },
       },
     },
@@ -3031,6 +3032,7 @@ function redtraceApp() {
           },
           reason: {
             timeout: Number(value.tasks.reason.timeout),
+            conclude_timeout: Number(value.tasks.reason.conclude_timeout),
             max_intents: Number(value.tasks.reason.max_intents),
           },
           explore: {

@@ -8,7 +8,7 @@ description: |
   Use the bundled scripts (scripts/start.ps1, scripts/open.ps1) for deterministic server management and file opening — do NOT write ad-hoc PowerShell commands for these operations.
 metadata:
   redtrace:
-    capabilities: [reverse]
+    capabilities: [binary]
 ---
 
 # IDA Pro 逆向分析技能

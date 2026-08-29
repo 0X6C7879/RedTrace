@@ -3,13 +3,8 @@ type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 export type TaskType = 'reason' | 'explore' | 'bootstrap'
 export type ExecutionProfile = 'direct' | 'isolated'
 export type CapabilityName =
-  | 'common' | 'web' | 'api' | 'database' | 'thick-client' | 'supply-chain'
-  | 'exploit-research' | 'network' | 'internal' | 'pivoting'
-  | 'windows-privesc' | 'linux-privesc' | 'ad' | 'post-exploitation' | 'c2'
-  | 'reverse' | 'pwn' | 'malware' | 'crypto' | 'mobile' | 'cloud'
-  | 'blockchain' | 'firmware-iot' | 'hardware' | 'wireless' | 'radio-sdr'
-  | 'ot-ics' | 'identity' | 'email' | 'ai-security' | 'forensics'
-  | 'threat-hunting'
+  | 'common' | 'web' | 'pentest' | 'binary' | 'crypto' | 'cloud'
+  | 'blockchain' | 'hardware' | 'ai-security' | 'defense'
 export type ReasoningPolicy = 'auto_max' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export type { Json }

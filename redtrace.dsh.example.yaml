@@ -55,6 +55,7 @@ tasks:
     conclude_timeout: 300
   reason:
     timeout: 300
+    conclude_timeout: 300
     max_intents: 4
   explore:
     timeout: 1800

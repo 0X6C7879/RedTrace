@@ -42,12 +42,16 @@ test('every Reason wake receives a fresh session just like other tasks', () => {
   assert.notEqual(sessionIdForTask('explore', 'proj_001'), sessionIdForTask('explore', 'proj_001'))
 })
 
-test('Reason ignores paused and conclude recovery sessions while Explore keeps recovery', () => {
+test('Reason resumes conclude recovery while normal wakes stay fresh', () => {
   const reason = sessionPlan('reason', 'proj_001', 'paused-reason', 'conclude-reason')
-  assert.notEqual(reason.sessionId, 'paused-reason')
-  assert.notEqual(reason.sessionId, 'conclude-reason')
+  assert.equal(reason.sessionId, 'conclude-reason')
   assert.equal(reason.resumeOnly, false)
-  assert.equal(reason.concludeOnly, false)
+  assert.equal(reason.concludeOnly, true)
+
+  const fresh = sessionPlan('reason', 'proj_001')
+  assert.notEqual(fresh.sessionId, 'conclude-reason')
+  assert.equal(fresh.resumeOnly, false)
+  assert.equal(fresh.concludeOnly, false)
 
   assert.deepEqual(sessionPlan('explore', 'proj_001', 'paused-explore', 'conclude-explore'), {
     sessionId: 'paused-explore', resumeOnly: true, concludeOnly: false,
@@ -57,10 +61,11 @@ test('Reason ignores paused and conclude recovery sessions while Explore keeps r
   })
 })
 
-test('Reason gets command execution and only common Skills for planning probes', async () => {
+test('every DSH worker gets common Skills and Explore adds Intent directions', async () => {
+  assert.deepEqual(taskSkillCapabilities('bootstrap'), ['common'])
   assert.deepEqual(taskSkillCapabilities('reason'), ['common'])
-  assert.deepEqual(taskSkillCapabilities('explore', intent({ capabilities: ['web'] })), ['web'])
-  assert.equal(taskSkillCapabilities('bootstrap'), undefined)
+  assert.deepEqual(taskSkillCapabilities('explore', intent({ capabilities: ['web'] })), ['common', 'web'])
+  assert.deepEqual(taskSkillCapabilities('explore', intent({ capabilities: ['common', 'web'] })), ['common', 'web'])
 
   const mounted = []
   const restrictions = []
@@ -69,7 +74,12 @@ test('Reason gets command execution and only common Skills for planning probes',
   const scoped = {
     isolate(service) { isolates.push(service); return this },
     systemPrompt: { section(value) { prompts.push(value.text) } },
-    tools: { restrict(filter) { restrictions.push(filter); return () => {} } },
+    tools: { restrict(filter) {
+      const names = [...filter.allow ?? [], ...filter.deny ?? []]
+      assert.ok(names.every(name => !['bash', 'pwsh', 'skill'].includes(name)), 'scope-local tool in global restriction')
+      restrictions.push(filter)
+      return () => {}
+    } },
     plugin(module, config) {
       mounted.push({ module, config })
       return { async await() {} }
@@ -87,11 +97,7 @@ test('Reason gets command execution and only common Skills for planning probes',
     includeDefaultRoots: false,
     customSkillDirs: ['/skills/common-view'],
   })
-  assert.deepEqual(restrictions, [{
-    allow: [
-      ...CONTRACTS.reason, process.platform === 'win32' ? 'pwsh' : 'bash', 'skill',
-    ],
-  }])
+  assert.deepEqual(restrictions, [{ allow: [...CONTRACTS.reason] }])
 })
 
 test('activateAgent resumes a recovered session and creates a missing one', async () => {

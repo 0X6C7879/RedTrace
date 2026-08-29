@@ -3,7 +3,7 @@ name: runtime-routing
 description: Security workflow for reverse proxies, Host headers, forwarded headers, vhost routing, websocket upgrades, path-prefix rewriting, base-URL derivation, and multi-node route resolution. Use when the user asks which host or container serves a route, why a public-looking domain still is within the authorized scope, how headers or proxies change behavior, or how a route resolves across proxy, container, and worker boundaries. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [network]
+    capabilities: [pentest]
 ---
 
 # Runtime Routing

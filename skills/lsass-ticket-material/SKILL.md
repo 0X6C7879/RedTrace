@@ -3,7 +3,7 @@ name: lsass-ticket-material
 description: Security workflow for LSASS-resident secrets, Windows logon sessions, Kerberos ticket caches, DPAPI-backed material, SSP artifacts, and replayable credential extraction. Use when the user asks to inspect LSASS memory, recover tickets or logon sessions, trace DPAPI or SSP material, distinguish which credential artifacts are replayable, or connect host-resident credential material to an accepted pivot or privilege edge. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [post-exploitation]
+    capabilities: [pentest]
 ---
 
 # LSASS Ticket Material

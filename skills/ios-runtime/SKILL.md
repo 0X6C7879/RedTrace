@@ -3,7 +3,7 @@ name: ios-runtime
 description: Security workflow for IPA runtime analysis, Frida hooks, Objective-C or Swift method tracing, Keychain inspection, SSL pinning bypass, URL scheme handling, and iOS request-signing recovery. Use when the user asks to hook an IPA, trace Objective-C or Swift runtime behavior, inspect Keychain or plist state, bypass pinning, analyze deeplinks or universal links, or replay accepted iOS requests. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [mobile]
+    capabilities: [binary]
 ---
 
 # iOS Runtime

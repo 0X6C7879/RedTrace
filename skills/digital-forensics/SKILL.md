@@ -3,7 +3,7 @@ name: digital-forensics
 description: Use for authorized digital forensics including memory dumps, disk timelines, PCAP investigation, artifact triage, and IR evidence preservation.
 metadata:
   redtrace:
-    capabilities: [forensics]
+    capabilities: [defense]
 ---
 
 # Digital Forensics & IR Artifacts

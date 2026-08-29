@@ -3,7 +3,7 @@ name: macos-reverse
 description: Use for authorized macOS and Mach-O reverse engineering including codesign, Objective-C/Swift recovery, endpoint security surfaces, and Apple platform malware analysis.
 metadata:
   redtrace:
-    capabilities: [thick-client]
+    capabilities: [binary]
 ---
 
 # macOS / Mach-O Reverse Engineering

@@ -12,9 +12,9 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-from redtrace.paths import redtrace_root
+from redtrace.paths import default_database_path, redtrace_root
 
-DEFAULT_DB = redtrace_root() / ".redtrace" / "redtrace.db"
+DEFAULT_DB = default_database_path()
 LEGACY_ROOT = Path.home() / ".local" / "share" / "redtrace"
 
 _db_path: Path | None = None
@@ -572,6 +572,71 @@ def configure(path: Path) -> None:
         conn.close()
 
 
+def prepare_database_path(root: Path) -> Path:
+    """Use an ext4-backed database for WSL checkouts on ``/mnt``."""
+    project_db = root / ".redtrace" / "redtrace.db"
+    actual_db = default_database_path(root)
+    if actual_db == project_db:
+        return project_db
+
+    actual_db.parent.mkdir(parents=True, exist_ok=True)
+    project_db.parent.mkdir(parents=True, exist_ok=True)
+    if project_db.is_symlink():
+        if project_db.resolve() != actual_db.resolve():
+            raise OSError(
+                f"{project_db} already links to a different database"
+            )
+        return actual_db
+
+    if project_db.exists() and actual_db.exists():
+        if not actual_db.is_file() or actual_db.stat().st_size != 0:
+            raise OSError(
+                f"both WSL database locations exist; refusing to overwrite {actual_db}"
+            )
+        empty_backup = actual_db.with_name(actual_db.name + ".pre-wsl-empty")
+        if empty_backup.exists():
+            raise OSError(f"database backup already exists: {empty_backup}")
+        actual_db.replace(empty_backup)
+
+    backup = project_db.with_name(project_db.name + ".pre-wsl")
+    if project_db.is_file():
+        if backup.exists():
+            raise OSError(f"database backup already exists: {backup}")
+        _copy_database(project_db, actual_db)
+        project_db.replace(backup)
+        for suffix in ("-wal", "-shm"):
+            sidecar = project_db.with_name(project_db.name + suffix)
+            if sidecar.exists():
+                sidecar.replace(backup.with_name(backup.name + suffix))
+
+    project_db.symlink_to(actual_db)
+    return actual_db
+
+
+def _copy_database(source: Path, target: Path) -> None:
+    fd, temporary = tempfile.mkstemp(prefix=".redtrace-copy-", dir=target.parent)
+    os.close(fd)
+    temporary_path = Path(temporary)
+    source_conn: sqlite3.Connection | None = None
+    target_conn: sqlite3.Connection | None = None
+    try:
+        source_conn = sqlite3.connect(f"{source.resolve().as_uri()}?mode=ro", uri=True)
+        target_conn = sqlite3.connect(str(temporary_path))
+        source_conn.backup(target_conn)
+        if target_conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise OSError("database integrity check failed during WSL migration")
+        target_conn.commit()
+        os.replace(temporary_path, target)
+    except sqlite3.Error as exc:
+        raise OSError(f"could not migrate database to {target}: {exc}") from exc
+    finally:
+        if source_conn is not None:
+            source_conn.close()
+        if target_conn is not None:
+            target_conn.close()
+        temporary_path.unlink(missing_ok=True)
+
+
 def _migrate_legacy_storage(path: Path) -> None:
     if (
         path.resolve() != DEFAULT_DB.resolve()
@@ -881,13 +946,8 @@ def _ensure_project_columns(conn: sqlite3.Connection) -> None:
     # invisible on the blackboard timeline.
     legacy_capabilities = json.dumps(
         [
-            "web", "api", "database", "thick-client", "supply-chain",
-            "exploit-research", "network", "internal", "pivoting",
-            "windows-privesc", "linux-privesc", "ad", "post-exploitation",
-            "c2", "reverse", "pwn", "malware", "crypto", "mobile", "cloud",
-            "blockchain", "firmware-iot", "hardware", "wireless", "radio-sdr",
-            "ot-ics", "identity", "email", "ai-security", "forensics",
-            "threat-hunting",
+            "web", "pentest", "binary", "crypto", "cloud", "blockchain",
+            "hardware", "ai-security", "defense",
         ]
     )
     conn.execute("DROP TRIGGER IF EXISTS trg_blackboard_intent_state_changed")
@@ -998,6 +1058,9 @@ def get_conn(*, immediate: bool = False) -> Generator[sqlite3.Connection, None, 
 def project_root() -> Path:
     """Resolve the root that owns the configured database and output tree."""
     path = (_db_path or DEFAULT_DB).resolve()
+    root = redtrace_root()
+    if path == default_database_path(root).resolve():
+        return root
     return path.parent.parent if path.parent.name == ".redtrace" else path.parent
 
 

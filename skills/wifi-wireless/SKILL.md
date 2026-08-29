@@ -3,7 +3,7 @@ name: wifi-wireless
 description: Use for authorized wireless security assessment including Wi-Fi capture, WPA handshake analysis, rogue AP detection research, and lab-only deauth testing.
 metadata:
   redtrace:
-    capabilities: [wireless]
+    capabilities: [hardware]
 ---
 
 # Wi-Fi / Wireless Security

@@ -3,7 +3,7 @@ name: firmware-layout
 description: Security workflow for firmware images, partition tables, boot chains, update packages, extracted filesystems, embedded configs, and device-facing trust boundaries. Use when the user asks to unpack firmware, map partition layout, inspect bootloader or init chains, recover update keys or credentials, trace config loading, or explain how a device surface reaches the decisive artifact. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [firmware-iot]
+    capabilities: [hardware]
 ---
 
 # Firmware Layout

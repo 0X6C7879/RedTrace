@@ -3,7 +3,7 @@ name: oauth-oidc-chain
 description: Security workflow for OAuth, OIDC, redirect flows, state or nonce handling, PKCE, token exchange, refresh logic, claim mapping, and accepted login paths. Use when the user asks to trace redirects, callback parameters, scopes, state, nonce, PKCE, refresh tokens, consent, or explain how an OAuth or OIDC chain turns into accepted identity or privilege. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [identity]
+    capabilities: [web]
 ---
 
 # OAuth OIDC Chain

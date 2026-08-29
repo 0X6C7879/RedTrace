@@ -3,7 +3,7 @@ name: jwt-claim-confusion
 description: Security workflow for JWT, JWS, and JWE validation paths, header parsing, key selection, claim acceptance, audience and issuer checks, role derivation, and token-to-identity confusion bugs. Use when the user asks to inspect JWT headers or claims, key lookup, `kid` handling, `alg` confusion, audience or issuer validation, role claims, or explain how a token becomes accepted identity or privilege. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [identity]
+    capabilities: [web]
 ---
 
 # JWT Claim Confusion

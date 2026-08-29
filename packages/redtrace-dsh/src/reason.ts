@@ -35,7 +35,5 @@ export async function apply(scoped: ScopedContext, config: PresetConfig): Promis
     customSkillDirs: [config.skillsDir],
   })
   await mount(scoped, 'vendor/deepseek-harness/packages/skill/tool-skill/lib/index.js')
-  scoped.tools.restrict({
-    allow: [...contracts.CONTRACTS.reason, process.platform === 'win32' ? 'pwsh' : 'bash', 'skill'],
-  })
+  scoped.tools.restrict({ allow: [...contracts.CONTRACTS.reason] })
 }

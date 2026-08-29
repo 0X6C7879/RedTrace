@@ -7,7 +7,7 @@ allowed-tools: Bash Read Write Edit Glob Grep Task WebFetch WebSearch
 metadata:
   user-invocable: "false"
   redtrace:
-    capabilities: [thick-client]
+    capabilities: [binary]
 ---
 
 # .NET / C# 逆向作业规范

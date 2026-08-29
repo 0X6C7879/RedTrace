@@ -7,7 +7,7 @@ description: |
   触发关键词：符号迁移、bindiff、跨版本、PDB 缺失、函数偏移迁移、symbol migration、binary diff、版本对比。
 metadata:
   redtrace:
-    capabilities: [exploit-research]
+    capabilities: [pentest]
 ---
 
 # 跨版本符号迁移 (Binary Diff)

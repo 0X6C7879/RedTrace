@@ -3,7 +3,7 @@ name: custom-protocol-replay
 description: Security workflow for custom binary or text protocol recovery, handshake reconstruction, framing, sequence control, checksums, stateful replay, and accepted-session reproduction. Use when the user asks to decode an unknown protocol, recover custom framing, build a replay harness, satisfy sequence or checksum rules, replay a captured session, or prove the smallest message order that reaches an accepted branch. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [network]
+    capabilities: [pentest]
 ---
 
 # Custom Protocol Replay

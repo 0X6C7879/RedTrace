@@ -3,7 +3,7 @@ name: go-rust-reverse
 description: Use for reverse engineering stripped Go and Rust binaries including runtime recognition, pclntab/moduel data recovery, panic strings, and idiomatic decompilation recovery.
 metadata:
   redtrace:
-    capabilities: [reverse]
+    capabilities: [binary]
 ---
 
 # Go / Rust Binary Reverse Engineering

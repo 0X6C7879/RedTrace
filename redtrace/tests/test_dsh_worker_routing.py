@@ -27,7 +27,7 @@ def _raw_config() -> dict:
         },
         "tasks": {
             "bootstrap": {"timeout": 20, "conclude_timeout": 10},
-            "reason": {"timeout": 20, "max_intents": 3},
+            "reason": {"timeout": 20, "conclude_timeout": 10, "max_intents": 3},
             "explore": {"timeout": 20, "conclude_timeout": 10},
         },
         "providers": {

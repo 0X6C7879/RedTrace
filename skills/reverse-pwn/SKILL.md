@@ -3,7 +3,7 @@ name: reverse-pwn
 description: Security workflow for reverse engineering, malware, DFIR, firmware, pwnable, and native exploit tasks. Use when the user asks to reverse a binary, unpack a sample, inspect a memory dump or PCAP, recover malware behavior, debug a crash, or build or verify an exploit chain within the authorized scope. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [reverse, pwn]
+    capabilities: [binary]
 ---
 
 # Reverse Pwn

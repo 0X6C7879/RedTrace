@@ -9,7 +9,7 @@ description: |
   Sysmon 规避、PPID spoof、Sleep mask、Process Hollowing、Reflective DLL。
 metadata:
   redtrace:
-    capabilities: [malware]
+    capabilities: [binary]
 ---
 
 ## ACTION REQUIRED（读完后立刻执行）

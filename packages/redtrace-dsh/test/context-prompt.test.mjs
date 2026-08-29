@@ -46,6 +46,18 @@ test('reason maxIntents override reaches the prompt', () => {
   assert.match(prompt, /最多创建 2 个活跃 Intent/)
 })
 
+test('reason launch prompt makes an empty planning graph explicit', () => {
+  const prompt = taskPrompt(task('reason'), {
+    ...project,
+    facts: project.facts.slice(0, 2),
+    intents: [],
+    hints: [],
+  })
+  assert.match(prompt, /## Facts\n- 无/)
+  assert.match(prompt, /## Intents\(最多创建 4 个活跃 Intent\)\n- 无/)
+  assert.match(prompt, /## Hints\n- 无/)
+})
+
 test('reason continuation prompt carries only ordered graph changes', () => {
   const prompt = graphDeltaMessage(task('reason'), '演示项目', 7, 10, [
     { revision: 8, kind: 'fact', node_id: 'f003', action: 'added', node: { id: 'f003', description: '拿到后台凭据' } },

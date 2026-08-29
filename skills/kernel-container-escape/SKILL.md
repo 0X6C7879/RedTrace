@@ -3,7 +3,7 @@ name: kernel-container-escape
 description: Security workflow for kernel attack surface, namespace and cgroup boundaries, container isolation assumptions, syscall paths, and escape primitive verification. Use when the user asks to analyze container-to-host escape paths, kernel exploit prerequisites, namespace crossover, capability misuse, or prove whether an exploit primitive crosses the authorized environment boundary. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [linux-privesc]
+    capabilities: [pentest]
 ---
 
 # Kernel Container Escape

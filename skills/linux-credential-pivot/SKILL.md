@@ -3,7 +3,7 @@ name: linux-credential-pivot
 description: Security workflow for Linux credential artifacts, service tokens, SSH material, cloud and container secrets, socket-level trust, and host-to-host pivot chains. Use when the user asks to trace Linux auth artifacts, accepted token or key replay, socket or service-account trust edges, sudo or capability abuse, or explain lateral movement across Linux in-scope nodes. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [pivoting]
+    capabilities: [pentest]
 ---
 
 # Linux Credential Pivot

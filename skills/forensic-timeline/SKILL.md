@@ -3,7 +3,7 @@ name: forensic-timeline
 description: Security workflow for DFIR chronology, cross-artifact correlation, persistence chains, and incident timeline reconstruction. Use when the user asks to build a forensic timeline, correlate EVTX, PCAP, registry, disk, memory, mailbox, or browser artifacts, explain the order of attacker actions, or pinpoint the stage where the decisive artifact appears. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [forensics]
+    capabilities: [defense]
 ---
 
 # Forensic Timeline

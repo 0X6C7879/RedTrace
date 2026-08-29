@@ -182,7 +182,7 @@ def test_dsh_environment_forwards_common_env_with_scrub_allowlist(
             },
             "tasks": {
                 "bootstrap": {"timeout": 20, "conclude_timeout": 10},
-                "reason": {"timeout": 20},
+                "reason": {"timeout": 20, "conclude_timeout": 10},
                 "explore": {"timeout": 20, "conclude_timeout": 10},
             },
             "common_env": {

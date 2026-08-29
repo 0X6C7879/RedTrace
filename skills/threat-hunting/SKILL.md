@@ -3,7 +3,7 @@ name: threat-hunting
 description: Use for blue-team threat hunting, detection engineering with Sigma/YARA, SIEM query design, and incident detection validation.
 metadata:
   redtrace:
-    capabilities: [threat-hunting]
+    capabilities: [defense]
 ---
 
 # Threat Hunting & Detection Engineering

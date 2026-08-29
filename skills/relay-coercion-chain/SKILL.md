@@ -3,7 +3,7 @@ name: relay-coercion-chain
 description: Security workflow for forced-auth coercion, relay chains, target selection, NTLM or related acceptance paths, and coercion-to-privilege transitions. Use when the user asks to trace a coercion primitive, follow a relay path, analyze forced authentication, determine which service accepts relayed auth, or connect a coercion step to resulting privilege, enrollment, or code execution. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [ad]
+    capabilities: [pentest]
 ---
 
 # Relay Coercion Chain

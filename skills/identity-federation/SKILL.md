@@ -3,7 +3,7 @@ name: identity-federation
 description: Use for authorized assessment of federated identity systems including SAML, OIDC, OAuth2 flows, SSO misconfiguration, and token confusion issues.
 metadata:
   redtrace:
-    capabilities: [identity]
+    capabilities: [web]
 ---
 
 # Identity Federation (SAML / OIDC / OAuth)

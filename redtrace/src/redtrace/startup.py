@@ -11,6 +11,8 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import ProxyHandler, build_opener
 
+from redtrace.server import db
+
 # Readiness probes target loopback services; routing them through an
 # http_proxy would make startup depend on the proxy process being up.
 _LOOPBACK_OPENER = build_opener(ProxyHandler({}))
@@ -306,6 +308,10 @@ def run(*, config: Path | None, host: str, port: int) -> int:
     start_timeout = _positive_env("REDTRACE_START_TIMEOUT", 40)
     shutdown_timeout = _positive_env("REDTRACE_SHUTDOWN_TIMEOUT", 8)
     data = root / ".redtrace"
+    try:
+        database = db.prepare_database_path(root)
+    except OSError as exc:
+        raise StartupError(f"database setup failed: {exc}") from exc
     temporary = data / "tmp"
     temporary.mkdir(parents=True, exist_ok=True)
     (root / "output" / "webshell").mkdir(parents=True, exist_ok=True)
@@ -360,7 +366,7 @@ def run(*, config: Path | None, host: str, port: int) -> int:
                     "redtrace",
                     "serve",
                     "--db-path",
-                    str(data / "redtrace.db"),
+                    str(database),
                     "--host",
                     "127.0.0.1" if dsh_engine else host,
                     "--port",

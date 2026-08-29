@@ -3,7 +3,7 @@ name: race-condition-state-drift
 description: Security workflow for race windows, ordering bugs, idempotency failures, lock gaps, concurrent worker drift, and state inconsistencies that produce decisive effects. Use when the user asks to reproduce timing-sensitive bugs, concurrent state corruption, duplicate actions, stale reads, or privilege or balance drift caused by request ordering. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [api]
+    capabilities: [web]
 ---
 
 # Race Condition State Drift

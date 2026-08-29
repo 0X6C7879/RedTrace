@@ -3,7 +3,7 @@ name: kerberos-delegation
 description: Security workflow for Kerberos delegation, SPN trust edges, S4U abuse, RBCD, constrained or unconstrained delegation, and service-ticket acceptance. Use when the user asks about constrained delegation, unconstrained delegation, RBCD, S4U, SPNs, ticket acceptance, or how a Kerberos trust edge turns into effective privilege within the authorized scope. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [ad]
+    capabilities: [pentest]
 ---
 
 # Kerberos Delegation

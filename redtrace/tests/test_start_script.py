@@ -158,7 +158,7 @@ def test_startup_supervises_and_stops_both_components(
         "  prompt_group: mock\n"
         "tasks:\n"
         "  bootstrap: {timeout: 1, conclude_timeout: 1}\n"
-        "  reason: {timeout: 1, max_intents: 1}\n"
+        "  reason: {timeout: 1, conclude_timeout: 1, max_intents: 1}\n"
         "  explore: {timeout: 1, conclude_timeout: 1}\n"
         "local: {}\n"
         "workers:\n"
@@ -194,6 +194,11 @@ def test_startup_supervises_and_stops_both_components(
 
     monkeypatch.setattr(startup, "_server_is_ready", lambda _url: next(readiness))
     monkeypatch.setattr(startup, "_start_process", start)
+    monkeypatch.setattr(
+        startup.db,
+        "prepare_database_path",
+        lambda root: root / ".redtrace" / "redtrace.db",
+    )
     monkeypatch.setattr(
         startup,
         "_stop_process",

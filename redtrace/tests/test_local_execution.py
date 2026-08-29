@@ -381,7 +381,7 @@ def _local_payload() -> dict:
         },
         "tasks": {
             "bootstrap": {"timeout": 10, "conclude_timeout": 5},
-            "reason": {"timeout": 10, "max_intents": 3},
+            "reason": {"timeout": 10, "conclude_timeout": 5, "max_intents": 3},
             "explore": {"timeout": 10, "conclude_timeout": 5},
         },
         "providers": {
@@ -508,7 +508,7 @@ def _local_config_for_worker(name: str, worker_type: str) -> DispatchConfig:
             },
             "tasks": {
                 "bootstrap": {"timeout": 30, "conclude_timeout": 10},
-                "reason": {"timeout": 30, "max_intents": 3},
+                "reason": {"timeout": 30, "conclude_timeout": 10, "max_intents": 3},
                 "explore": {"timeout": 30, "conclude_timeout": 10},
             },
             "workers": [
@@ -537,7 +537,6 @@ def _install_fake_cli(tmp_path: Path, monkeypatch, name: str, body: str) -> None
         script.write_text(f"#!/bin/sh\n{body}\n")
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-
 
 
 

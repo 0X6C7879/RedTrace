@@ -3,7 +3,7 @@ name: graphql-rpc-drift
 description: Security workflow for GraphQL schemas, persisted queries, RPC manifests, generated clients, OpenAPI drift, hidden operations, and contract-to-handler mismatches. Use when the user asks to inspect GraphQL or RPC requests, compare client contracts to live handlers, recover hidden operations, trace generated clients, or explain how schema or contract drift produces the decisive behavior. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [api]
+    capabilities: [web]
 ---
 
 # Graphql Rpc Drift

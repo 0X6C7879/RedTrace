@@ -4,19 +4,14 @@ import json
 import re
 from typing import Any
 
+from redtrace.board.models import ALL_CAPABILITIES
+
 FENCED_JSON_RE = re.compile(
     r"```(?:json)?\s*\n?(.*?)```",
     re.IGNORECASE | re.DOTALL,
 )
 
-CAPABILITY_NAMES = frozenset({
-    "common", "web", "api", "database", "thick-client", "supply-chain",
-    "exploit-research", "network", "internal", "pivoting", "windows-privesc",
-    "linux-privesc", "ad", "post-exploitation", "c2", "reverse", "pwn",
-    "malware", "crypto", "mobile", "cloud", "blockchain", "firmware-iot",
-    "hardware", "wireless", "radio-sdr", "ot-ics", "identity", "email",
-    "ai-security", "forensics", "threat-hunting",
-})
+CAPABILITY_NAMES = frozenset(ALL_CAPABILITIES)
 
 
 def parse_json_output(stdout: str) -> dict[str, Any]:

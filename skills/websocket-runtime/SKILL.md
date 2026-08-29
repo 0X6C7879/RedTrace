@@ -3,7 +3,7 @@ name: websocket-runtime
 description: Security workflow for WebSocket and SSE handshakes, auth material, subscription state, realtime message schemas, reconnect behavior, and frame-driven runtime effects. Use when the user asks to inspect a WebSocket or SSE handshake, decode frames, trace subscriptions, follow reconnect logic, inspect auth material sent during realtime setup, or explain how live frames change rendered or persisted state. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [api]
+    capabilities: [web]
 ---
 
 # WebSocket Runtime

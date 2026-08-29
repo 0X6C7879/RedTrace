@@ -668,7 +668,7 @@ class WorkerConfigService:
         )
         task_fields = {
             "bootstrap": ("timeout", "conclude_timeout"),
-            "reason": ("timeout", "max_intents"),
+            "reason": ("timeout", "conclude_timeout", "max_intents"),
             "explore": ("timeout", "conclude_timeout"),
         }
         if any(field not in runtime for field in runtime_fields):

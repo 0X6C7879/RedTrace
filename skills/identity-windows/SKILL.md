@@ -3,7 +3,7 @@ name: identity-windows
 description: Security workflow for Active Directory, Kerberos, LDAP, OAuth, enterprise messaging, Windows host forensics, credential material, and lateral-movement tasks. Use when the user asks to trace tickets or tokens, inspect mailbox rules, analyze Windows host evidence, understand an AD trust path, or explain a lateral-movement chain across in-scope nodes. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [ad]
+    capabilities: [pentest]
 ---
 
 # Identity Windows

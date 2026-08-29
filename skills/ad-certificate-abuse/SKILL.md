@@ -3,7 +3,7 @@ name: ad-certificate-abuse
 description: Security workflow for AD CS, certificate templates, enrollment rights, EKUs, SAN controls, PKINIT, certificate mapping, and cert-based privilege paths. Use when the user asks about ESC-style abuse, certificate templates, enrollment agents, EKUs, SAN or subject controls, smartcard or PKINIT logon, CA policy, or how an issued cert turns into accepted privilege. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [ad]
+    capabilities: [pentest]
 ---
 
 # AD Certificate Abuse

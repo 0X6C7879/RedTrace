@@ -54,22 +54,25 @@ export function sessionIdForTask(task: TaskType, projectId: string): string {
 }
 
 export function taskSkillCapabilities(type: TaskType, intent?: Intent): CapabilityName[] | undefined {
-  if (type === 'reason') return ['common']
+  if (type === 'bootstrap' || type === 'reason') return ['common']
   if (type !== 'explore') return undefined
   if (intent === undefined || intent.capabilities.length === 0) {
     throw new Error('Explore Intent must declare at least one Capability')
   }
-  return intent.capabilities
+  return ['common', ...intent.capabilities.filter(capability => capability !== 'common')]
 }
 
-/** Resolve one wake's Session lifecycle. Reason never resumes an earlier
- * planning context; Bootstrap/Explore keep their pause/conclude recovery. */
+/** Resolve one wake's Session lifecycle. Normal Reason wakes are fresh, while
+ * conclude recovery stays in the timed-out session like Bootstrap/Explore. */
 export function sessionPlan(
   task: TaskType,
   projectId: string,
   pausedSessionId?: string,
   concludeSessionId?: string,
 ): { sessionId: string; resumeOnly: boolean; concludeOnly: boolean } {
+  if (task === 'reason' && concludeSessionId !== undefined) {
+    return { sessionId: concludeSessionId, resumeOnly: false, concludeOnly: true }
+  }
   if (task === 'reason') {
     return { sessionId: sessionIdForTask(task, projectId), resumeOnly: false, concludeOnly: false }
   }
@@ -376,7 +379,6 @@ class Scheduler {
     task.concludeOnly = plan.concludeOnly
     if (task.type === 'reason') {
       this.pausedSessions.delete(key)
-      this.concludeRecoveries.delete(key)
     }
     task.runId = `run-${crypto.randomUUID()}`
     this.running.set(key, task)
@@ -487,7 +489,7 @@ class Scheduler {
         task.handle.agent.followup(message(shared, turn.prompt))
         waited = await waitIdle(task.handle.agent, turn.timeout)
       }
-      if (task.type !== 'reason' && !task.committed && !task.cancelled && phase === 'conclude' && waited === 'timeout') {
+      if (!task.committed && !task.cancelled && phase === 'conclude') {
         this.concludeRecoveries.set(recoveryKey, {
           projectId: task.projectId,
           sessionId: task.sessionId!,

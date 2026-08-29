@@ -8,7 +8,7 @@ description: |
   触发关键词：pwn、栈溢出、堆溢出、ROP、ret2libc、ret2csu、one_gadget、libc-database、堆利用、tcache、fastbin、unsorted bin、kernel pwn、kROP、SMEP、SMAP、KASLR、modprobe_path、pwntools、GEF、pwndbg。
 metadata:
   redtrace:
-    capabilities: [pwn]
+    capabilities: [binary]
 ---
 
 ## ACTION REQUIRED（读完后立刻执行）

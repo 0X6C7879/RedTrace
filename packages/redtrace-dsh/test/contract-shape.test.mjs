@@ -144,3 +144,98 @@ test('Reason graph recall queries the canonical Blackboard without ending the tu
     globalThis.fetch = previous.fetch
   }
 })
+
+test('Reason Intent creation returns API validation errors for a retry', async () => {
+  const tools = []
+  await contractsApply({ tools: { register(tool) { tools.push(tool) } } }, { types: ['reason'] })
+  const intentCreate = tools.find(tool => tool.name === 'redtrace_intent_create')
+  assert.match(intentCreate.parameters.properties.intents.items.properties.from.description, /never include goal/)
+  const previous = {
+    type: process.env.REDTRACE_TASK_TYPE,
+    project: process.env.REDTRACE_PROJECT_ID,
+    worker: process.env.REDTRACE_WORKER,
+    server: process.env.REDTRACE_SERVER,
+    fetch: globalThis.fetch,
+  }
+  process.env.REDTRACE_TASK_TYPE = 'reason'
+  process.env.REDTRACE_PROJECT_ID = 'proj/1'
+  process.env.REDTRACE_WORKER = 'reasoner'
+  process.env.REDTRACE_SERVER = 'http://redtrace.test'
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 400,
+    async json() { return { detail: 'goal cannot be used in from' } },
+  })
+  let concluded = false
+  try {
+    const value = await intentCreate.execute(
+      { from: ['goal'], description: 'invalid direction', capabilities: ['common'] },
+      { concludeTurn() { concluded = true } },
+    )
+    assert.deepEqual(value, {
+      accepted: false,
+      error: 'RedTrace API 400: {"detail":"goal cannot be used in from"}',
+    })
+    assert.equal(concluded, false)
+  } finally {
+    for (const [name, value] of [
+      ['REDTRACE_TASK_TYPE', previous.type], ['REDTRACE_PROJECT_ID', previous.project],
+      ['REDTRACE_WORKER', previous.worker], ['REDTRACE_SERVER', previous.server],
+    ]) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    globalThis.fetch = previous.fetch
+  }
+})
+
+test('Reason Intent creation submits parallel directions in one contract call', async () => {
+  const tools = []
+  await contractsApply({ tools: { register(tool) { tools.push(tool) } } }, { types: ['reason'] })
+  const intentCreate = tools.find(tool => tool.name === 'redtrace_intent_create')
+  assert.deepEqual(intentCreate.parameters.required, ['intents'])
+  assert.equal(intentCreate.parameters.properties.intents.items.type, 'object')
+
+  const previous = {
+    type: process.env.REDTRACE_TASK_TYPE,
+    project: process.env.REDTRACE_PROJECT_ID,
+    worker: process.env.REDTRACE_WORKER,
+    server: process.env.REDTRACE_SERVER,
+    fetch: globalThis.fetch,
+  }
+  process.env.REDTRACE_TASK_TYPE = 'reason'
+  process.env.REDTRACE_PROJECT_ID = 'proj/1'
+  process.env.REDTRACE_WORKER = 'reasoner'
+  process.env.REDTRACE_SERVER = 'http://redtrace.test'
+  const bodies = []
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(JSON.parse(init.body))
+    return { ok: true, status: 201, async json() { return { id: `i00${bodies.length}` } } }
+  }
+  let concluded = false
+  try {
+    const value = await intentCreate.execute({
+      intents: [
+        { from: ['origin'], description: 'web one', capabilities: ['web'] },
+        { from: ['origin'], description: 'web two', capabilities: ['web'] },
+        { from: ['origin'], description: 'web three', capabilities: ['web'] },
+      ],
+    }, { concludeTurn() { concluded = true } })
+    assert.equal(bodies.length, 3)
+    assert.deepEqual(bodies.map(body => body.capabilities), [['web'], ['web'], ['web']])
+    assert.deepEqual(value, {
+      accepted: true,
+      data: { intents: [{ id: 'i001' }, { id: 'i002' }, { id: 'i003' }] },
+    })
+    assert.equal(concluded, true)
+  } finally {
+    for (const [name, value] of [
+      ['REDTRACE_TASK_TYPE', previous.type], ['REDTRACE_PROJECT_ID', previous.project],
+      ['REDTRACE_WORKER', previous.worker], ['REDTRACE_SERVER', previous.server],
+    ]) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    globalThis.fetch = previous.fetch
+  }
+})

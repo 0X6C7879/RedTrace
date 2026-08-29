@@ -81,7 +81,7 @@ def test_reason_uses_initial_environment_sensing_without_bootstrap(monkeypatch) 
         "run_worker_process",
         lambda *_args, **_kwargs: ProcessResult(
             0,
-            '{"accepted":true,"data":{"intents":[{"from":["origin"],"description":"inspect environment","capabilities":["network","api"]}]}}',
+            '{"accepted":true,"data":{"intents":[{"from":["origin"],"description":"inspect environment","capabilities":["pentest","web"]}]}}',
             "",
         ),
     )
@@ -98,7 +98,7 @@ def test_reason_uses_initial_environment_sensing_without_bootstrap(monkeypatch) 
 
     assert outcome == "success"
     assert client.created_intents == [
-        ("proj_001", ["origin"], "inspect environment", "test-worker", ["network", "api"])
+        ("proj_001", ["origin"], "inspect environment", "test-worker", ["pentest", "web"])
     ]
 
 
@@ -192,7 +192,7 @@ def test_reason_timeout_recovers_with_same_session(monkeypatch) -> None:
             ProcessResult(124, "partial planning", "", timed_out=True),
             ProcessResult(
                 0,
-                '{"accepted":true,"data":{"intents":[{"from":["f001"],"description":"recovered","capabilities":["reverse"]}]}}',
+                '{"accepted":true,"data":{"intents":[{"from":["f001"],"description":"recovered","capabilities":["binary"]}]}}',
                 "",
             ),
         ]
@@ -215,7 +215,7 @@ def test_reason_timeout_recovers_with_same_session(monkeypatch) -> None:
 
     assert outcome == "success"
     assert client.created_intents == [
-        ("proj_001", ["f001"], "recovered", "test-worker", ["reverse"])
+        ("proj_001", ["f001"], "recovered", "test-worker", ["binary"])
     ]
     assert len(driver.conclude_prompts) == 1
 
@@ -237,7 +237,7 @@ def test_reason_only_fills_available_open_intent_slots(monkeypatch) -> None:
             0,
             '{"accepted":true,"data":{"intents":['
             '{"from":["f001"],"description":"slot one","capabilities":["web"]},'
-            '{"from":["f001"],"description":"slot two","capabilities":["api"]},'
+            '{"from":["f001"],"description":"slot two","capabilities":["pentest"]},'
             '{"from":["f001"],"description":"overflow","capabilities":["web"]}]}}',
             "",
         ),
@@ -256,7 +256,7 @@ def test_reason_only_fills_available_open_intent_slots(monkeypatch) -> None:
     assert outcome == "success"
     assert client.created_intents == [
         ("proj_001", ["f001"], "slot one", "test-worker", ["web"]),
-        ("proj_001", ["f001"], "slot two", "test-worker", ["api"]),
+        ("proj_001", ["f001"], "slot two", "test-worker", ["pentest"]),
     ]
 
 
@@ -541,7 +541,7 @@ def test_reason_startup_only_mode_skips_task_healthcheck(monkeypatch) -> None:
         "run_worker_process",
         lambda *_args, **_kwargs: ProcessResult(
             0,
-            '{"accepted":true,"data":{"intents":[{"from":["f001"],"description":"next","capabilities":["forensics"]}]}}',
+            '{"accepted":true,"data":{"intents":[{"from":["f001"],"description":"next","capabilities":["defense"]}]}}',
             "",
         ),
     )
@@ -558,7 +558,7 @@ def test_reason_startup_only_mode_skips_task_healthcheck(monkeypatch) -> None:
 
     assert outcome == "success"
     assert client.created_intents == [
-        ("proj_001", ["f001"], "next", "test-worker", ["forensics"])
+        ("proj_001", ["f001"], "next", "test-worker", ["defense"])
     ]
 
 

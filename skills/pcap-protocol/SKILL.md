@@ -3,7 +3,7 @@ name: pcap-protocol
 description: Security workflow for packet capture analysis, session reconstruction, application-protocol decoding, stream reassembly, beacon timing, and packet-to-process correlation. Use when the user asks to analyze a PCAP, rebuild TCP or UDP sessions, decode HTTP, WebSocket, DNS, custom C2, or binary protocols, extract transferred artifacts, or tie packet sequences to host or malware behavior. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [network]
+    capabilities: [pentest]
 ---
 
 # PCAP Protocol

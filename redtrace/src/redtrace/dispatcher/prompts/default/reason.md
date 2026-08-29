@@ -20,7 +20,7 @@
 
 如果 Goal 尚未满足，并且当前应该提出新的 Intent，返回：
 ```json
-{"accepted": true, "data": {"intents": [{"from": ["f001"], "description": "...", "capabilities": ["web"]}, {"from": ["f002", "f003"], "description": "...", "capabilities": ["api", "identity"]}]}}
+{"accepted": true, "data": {"intents": [{"from": ["f001"], "description": "...", "capabilities": ["web"]}, {"from": ["f002", "f003"], "description": "...", "capabilities": ["cloud", "pentest"]}]}}
 ```
 
 如果 Goal 尚未满足，并且当前不需要提出新的 Intent，返回：
@@ -38,7 +38,7 @@
 - 每个 Intent 都应该是高价值的探索方向。它不需要过于详细，应聚焦核心洞察和明确方向。不要过于宽泛，不要输出无助于推进 Goal 的冗余细节，也不要过度具体。主要要求是：每个 Intent 都是一条独立、清晰定义且高价值的方向。
 - 一个 Intent 可以来源于多个 Fact。
 - 不同 Intent 应覆盖不同的探索维度，并避免重复或严重重叠。
-- 每个新 Intent 必须包含 `capabilities` 数组（至少一个、不可重复），只选择需要的 Capability 方向，不选择具体 Skill。可从以下固定 32 项中选择：`common`（通用基础能力）、`web`（Web 应用安全）、`api`（API/GraphQL/WebSocket）、`database`（数据库安全）、`thick-client`（桌面端）、`supply-chain`（软件供应链）、`exploit-research`（CVE/补丁/PoC/Exploit）、`network`（网络与服务）、`internal`（内网渗透）、`pivoting`（隧道/代理/横向跳转）、`windows-privesc`（Windows 提权）、`linux-privesc`（Linux 提权）、`ad`（Active Directory/Kerberos/AD CS）、`post-exploitation`（后渗透）、`c2`（C2/Shell/会话）、`reverse`（逆向工程）、`pwn`（二进制利用）、`malware`（恶意代码分析）、`crypto`（密码学/编解码）、`mobile`（Android/iOS）、`cloud`（AWS/Azure/GCP/Docker/Kubernetes）、`blockchain`（区块链/Web3/智能合约）、`firmware-iot`（固件/IoT）、`hardware`（硬件安全）、`wireless`（Wi-Fi/无线）、`radio-sdr`（SDR/射频）、`ot-ics`（OT/ICS/SCADA/PLC）、`identity`（OAuth/OIDC/SAML/SSO/IAM）、`email`（邮件/SMTP）、`ai-security`（LLM/Agent/Prompt Injection/RAG）、`forensics`（数字取证/DFIR）、`threat-hunting`（威胁狩猎/Sigma/YARA/SIEM）。
+- 每个新 Intent 必须包含 `capabilities` 数组（至少一个、不可重复），只选择需要的大方向，不选择具体 Skill。可从以下固定 10 项中选择：`common`（通用基础能力）、`web`（Web/API/数据库/身份/邮件/供应链应用安全）、`pentest`（网络、内网、AD、提权、横向、后渗透、C2、漏洞利用）、`binary`（逆向、Pwn、恶意代码、桌面端、移动端）、`crypto`（密码学/编解码/隐写）、`cloud`（AWS/Azure/GCP/容器/Kubernetes）、`blockchain`（区块链/Web3/智能合约）、`hardware`（固件、IoT、硬件、Wi-Fi/无线、SDR/射频、OT/ICS/SCADA/PLC）、`ai-security`（LLM/Agent/Prompt Injection/RAG）、`defense`（数字取证、DFIR、威胁狩猎、Sigma/YARA/SIEM）。
 
 ## 上下文
 ### Graph

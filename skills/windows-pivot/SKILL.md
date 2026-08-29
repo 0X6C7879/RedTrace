@@ -3,7 +3,7 @@ name: windows-pivot
 description: Security workflow for Kerberos, WinRM, SMB, RDP, Windows credential material, replayable tickets, delegation edges, and host-to-host pivot chains. Use when the user asks to replay Kerberos material, trace a WinRM, SMB, or RDP pivot, understand host-to-host privilege movement, or prove which Windows service accepted a credential or ticket. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [pivoting]
+    capabilities: [pentest]
 ---
 
 # Windows Pivot

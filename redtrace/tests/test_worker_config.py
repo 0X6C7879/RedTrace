@@ -49,7 +49,7 @@ def _raw_config() -> dict:
         },
         "tasks": {
             "bootstrap": {"timeout": 20, "conclude_timeout": 10},
-            "reason": {"timeout": 20, "max_intents": 3},
+            "reason": {"timeout": 20, "conclude_timeout": 10, "max_intents": 3},
             "explore": {"timeout": 20, "conclude_timeout": 10},
         },
         "container": {
@@ -353,7 +353,7 @@ def test_runtime_tasks_persist_and_hot_reload_without_interrupting_running_tasks
             },
             "tasks": {
                 "bootstrap": {"timeout": 300, "conclude_timeout": 120},
-                "reason": {"timeout": 300, "max_intents": 3},
+                "reason": {"timeout": 300, "conclude_timeout": 120, "max_intents": 3},
                 "explore": {"timeout": 900, "conclude_timeout": 300},
             },
         }

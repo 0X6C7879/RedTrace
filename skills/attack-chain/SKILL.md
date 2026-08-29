@@ -3,7 +3,7 @@ name: attack-chain
 description: Use for authorized multi-stage attack-path planning and orchestration when a task spans reconnaissance, initial access, privilege escalation, lateral movement, or impact assessment. Route single-stage tasks directly to their specialist skill.
 metadata:
   redtrace:
-    capabilities: [internal]
+    capabilities: [pentest]
 ---
 # Attack Chain Orchestration Skill
 

@@ -10,73 +10,57 @@ ExecutionProfile = Literal["direct", "isolated"]
 CapabilityName = Literal[
     "common",
     "web",
-    "api",
-    "database",
-    "thick-client",
-    "supply-chain",
-    "exploit-research",
-    "network",
-    "internal",
-    "pivoting",
-    "windows-privesc",
-    "linux-privesc",
-    "ad",
-    "post-exploitation",
-    "c2",
-    "reverse",
-    "pwn",
-    "malware",
+    "pentest",
+    "binary",
     "crypto",
-    "mobile",
     "cloud",
     "blockchain",
-    "firmware-iot",
     "hardware",
-    "wireless",
-    "radio-sdr",
-    "ot-ics",
-    "identity",
-    "email",
     "ai-security",
-    "forensics",
-    "threat-hunting",
+    "defense",
 ]
 
 ALL_CAPABILITIES: tuple[str, ...] = (
     "common",
     "web",
-    "api",
-    "database",
-    "thick-client",
-    "supply-chain",
-    "exploit-research",
-    "network",
-    "internal",
-    "pivoting",
-    "windows-privesc",
-    "linux-privesc",
-    "ad",
-    "post-exploitation",
-    "c2",
-    "reverse",
-    "pwn",
-    "malware",
+    "pentest",
+    "binary",
     "crypto",
-    "mobile",
     "cloud",
     "blockchain",
-    "firmware-iot",
     "hardware",
-    "wireless",
-    "radio-sdr",
-    "ot-ics",
-    "identity",
-    "email",
     "ai-security",
-    "forensics",
-    "threat-hunting",
+    "defense",
 )
 SECURITY_CAPABILITIES: tuple[str, ...] = ALL_CAPABILITIES[1:]
+
+_LEGACY_CAPABILITY_MAP = {
+    "api": "web",
+    "database": "web",
+    "identity": "web",
+    "email": "web",
+    "supply-chain": "web",
+    "network": "pentest",
+    "internal": "pentest",
+    "pivoting": "pentest",
+    "windows-privesc": "pentest",
+    "linux-privesc": "pentest",
+    "ad": "pentest",
+    "post-exploitation": "pentest",
+    "c2": "pentest",
+    "exploit-research": "pentest",
+    "thick-client": "binary",
+    "reverse": "binary",
+    "pwn": "binary",
+    "malware": "binary",
+    "mobile": "binary",
+    "firmware-iot": "hardware",
+    "wireless": "hardware",
+    "radio-sdr": "hardware",
+    "ot-ics": "hardware",
+    "forensics": "defense",
+    "threat-hunting": "defense",
+}
 
 
 class Settings(BaseModel):
@@ -120,6 +104,22 @@ class Intent(BaseModel):
     last_progress_at: str | None = None
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("capabilities", mode="before")
+    @classmethod
+    def normalize_legacy_capabilities(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return value
+        normalized: list[object] = []
+        for item in value:
+            mapped = (
+                _LEGACY_CAPABILITY_MAP.get(item, item)
+                if isinstance(item, str)
+                else item
+            )
+            if mapped not in normalized:
+                normalized.append(mapped)
+        return normalized
 
 
 class Hint(BaseModel):

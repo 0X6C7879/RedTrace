@@ -7,7 +7,7 @@ allowed-tools: Bash Read Write Edit Glob Grep Task WebFetch WebSearch
 metadata:
   user-invocable: "false"
   redtrace:
-    capabilities: [reverse]
+    capabilities: [binary]
 ---
 
 # Reverse Engineering

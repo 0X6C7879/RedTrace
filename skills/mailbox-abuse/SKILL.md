@@ -3,7 +3,7 @@ name: mailbox-abuse
 description: Security workflow for enterprise mail abuse, OAuth consent, inbox or forwarding rules, transport rules, shared mailbox access, phishing chains, and token-to-mailbox side effects. Use when the user asks to trace mailbox rules, OAuth consent grants, forwarding or delegate abuse, shared mailbox access, message-trace evidence, or explain how mail artifacts turn into persistence, exfiltration, or privilege. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [email]
+    capabilities: [web]
 ---
 
 # Mailbox Abuse

@@ -40,6 +40,8 @@ tasks:
   reason:
     # Reason decides whether the goal is met and whether new intents should be proposed.
     timeout: 300
+    # Time budget for conclude fallback in the same Reason session.
+    conclude_timeout: 300
     # Max new Intents proposed per single Reason call.
     max_intents: 5
   explore:

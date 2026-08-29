@@ -3,7 +3,7 @@ name: android-hooking
 description: Security workflow for Android APK hooking, Frida tracing, request-signing recovery, SSL pinning bypass, JNI boundary inspection, and app trust-boundary analysis. Use when the user asks to hook an APK, inspect signer logic, trace Java or native boundaries, bypass pinning or root checks, inspect shared prefs or app databases, or replay accepted mobile requests. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [mobile]
+    capabilities: [binary]
 ---
 
 # Android Hooking

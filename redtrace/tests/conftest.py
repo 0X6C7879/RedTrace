@@ -23,7 +23,7 @@ def make_config() -> DispatchConfig:
             },
             "tasks": {
                 "bootstrap": {"timeout": 10, "conclude_timeout": 5},
-                "reason": {"timeout": 10, "max_intents": 3},
+                "reason": {"timeout": 10, "conclude_timeout": 5, "max_intents": 3},
                 "explore": {"timeout": 10, "conclude_timeout": 5},
             },
             "container": {

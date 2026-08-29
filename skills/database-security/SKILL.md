@@ -3,7 +3,7 @@ name: database-security
 description: Use for authorized database security assessment covering PostgreSQL/MySQL/MSSQL/Mongo/Redis exposure, authz, UDF/command paths, and misconfiguration review.
 metadata:
   redtrace:
-    capabilities: [database]
+    capabilities: [web]
 ---
 
 # Database Security Assessment

@@ -15,13 +15,28 @@ from redtrace.server.app import app
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-WEB_SKILLS = ["browser-automation", "js-reverse", "playwright-skill", "src-hunter"]
-
-SPECIALIZED_WEB_SKILLS = [
+WEB_SKILLS = [
+    "api-security",
+    "browser-automation",
     "browser-persistence",
+    "database-security",
+    "email-security",
     "file-parser-chain",
+    "graphql-rpc-drift",
+    "identity-federation",
+    "js-reverse",
+    "jwt-claim-confusion",
+    "mailbox-abuse",
+    "oauth-oidc-chain",
+    "playwright-skill",
+    "queue-worker-drift",
+    "race-condition-state-drift",
+    "src-hunter",
+    "supply-chain",
+    "supply-chain-security",
     "template-render-path",
     "web-runtime",
+    "websocket-runtime",
 ]
 
 
@@ -57,13 +72,21 @@ def _create_project(client: TestClient) -> str:
 # ── Fixed Capability vocabulary ────────────────────────────────────────────
 
 
-def test_capability_enum_is_fixed_at_32_directions() -> None:
-    assert len(ALL_CAPABILITIES) == 32
-    assert len(set(ALL_CAPABILITIES)) == 32
-    assert "code-audit" not in ALL_CAPABILITIES
-    assert ALL_CAPABILITIES[0] == "common"
+def test_capability_enum_is_fixed_at_10_directions() -> None:
+    assert ALL_CAPABILITIES == (
+        "common",
+        "web",
+        "pentest",
+        "binary",
+        "crypto",
+        "cloud",
+        "blockchain",
+        "hardware",
+        "ai-security",
+        "defense",
+    )
     assert SECURITY_CAPABILITIES == tuple(ALL_CAPABILITIES[1:])
-    assert len(SECURITY_CAPABILITIES) == 31
+    assert len(SECURITY_CAPABILITIES) == 9
     assert set(DISPATCH_CAPABILITY_NAMES) == set(ALL_CAPABILITIES)
 
 
@@ -80,6 +103,7 @@ def test_capability_lists_agree_across_prompt_and_dsh_contracts() -> None:
     ).read_text(encoding="utf-8")
     for name in ALL_CAPABILITIES:
         assert name in prompt, f"reason prompt is missing capability: {name}"
+    assert "固定 10 项" in prompt
 
     contracts_ts = (
         REPO_ROOT / "packages" / "redtrace-dsh" / "src" / "contracts.ts"
@@ -103,6 +127,12 @@ def test_capability_lists_agree_across_prompt_and_dsh_contracts() -> None:
     assert union is not None
     ts_type_names = set(re.findall(r"'([^']+)'", union.group(1)))
     assert ts_type_names == set(ALL_CAPABILITIES)
+
+    dsh_prompt = (
+        REPO_ROOT / "packages" / "redtrace-dsh" / "src" / "prompt.ts"
+    ).read_text(encoding="utf-8")
+    for name in ALL_CAPABILITIES:
+        assert name in dsh_prompt, f"DSH Reason prompt is missing capability: {name}"
 
 
 # ── Repository Skill classification ────────────────────────────────────────
@@ -142,21 +172,19 @@ def test_skills_carry_no_profile_classification_or_prerequisite_text() -> None:
 def test_web_catalog_is_common_plus_all_matching_web_skills() -> None:
     store = _repo_store()
     catalog = store.resolve_skill_catalog(["web"])
-    assert set(catalog["skills"]) == (
-        _common_names(store) | set(WEB_SKILLS) | set(SPECIALIZED_WEB_SKILLS)
-    )
+    assert set(catalog["skills"]) == _common_names(store) | set(WEB_SKILLS)
     assert catalog["capabilities"] == ["web"]
     assert set(catalog) == {"skills", "capabilities", "diagnostics"}
 
 
 def test_multi_capability_catalog_is_deduped_union() -> None:
     store = _repo_store()
-    union = store.resolve_skill_catalog(["web", "api"])["skills"]
+    union = store.resolve_skill_catalog(["web", "pentest"])["skills"]
     assert union == sorted(set(union))
-    assert union == store.resolve_skill_catalog(["api", "web"])["skills"]
+    assert union == store.resolve_skill_catalog(["pentest", "web"])["skills"]
     web_only = set(store.resolve_skill_catalog(["web"])["skills"])
-    api_only = set(store.resolve_skill_catalog(["api"])["skills"])
-    assert set(union) == web_only | api_only
+    pentest_only = set(store.resolve_skill_catalog(["pentest"])["skills"])
+    assert set(union) == web_only | pentest_only
 
 
 def test_every_single_capability_catalog_keeps_the_common_skills() -> None:
@@ -209,9 +237,7 @@ def test_resolve_endpoint_returns_catalog_and_rejects_bad_requests(
         json={"capabilities": ["web"]},
     )
     assert resolved.status_code == 200
-    assert set(resolved.json()["skills"]) == (
-        _common_names(_repo_store()) | set(WEB_SKILLS) | set(SPECIALIZED_WEB_SKILLS)
-    )
+    assert set(resolved.json()["skills"]) == _common_names(_repo_store()) | set(WEB_SKILLS)
 
     unknown = client.post(
         "/capabilities/resolve",
@@ -242,6 +268,7 @@ def test_intent_creation_validates_capabilities(client: TestClient) -> None:
     base = {"from": ["origin"], "description": "direction", "creator": "reasoner"}
     assert create({**base, "capabilities": []}) == 422
     assert create({**base, "capabilities": ["web", "web"]}) == 422
+    assert create({**base, "capabilities": ["api"]}) == 422
     assert create({**base, "capabilities": ["code-audit"]}) == 422
     assert create({**base, "capabilities": ["web"]}) == 201
 
@@ -284,10 +311,11 @@ def test_intent_capabilities_editable_until_claimed(client: TestClient) -> None:
 
     assert update({"capabilities": []}) == 422
     assert update({"capabilities": ["web", "web"]}) == 422
+    assert update({"capabilities": ["api"]}) == 422
     assert update({"capabilities": ["code-audit"]}) == 422
-    assert update({"capabilities": ["web", "api"]}) == 200
+    assert update({"capabilities": ["web", "pentest"]}) == 200
     detail = client.get(f"/projects/{project_id}").json()
-    assert detail["intents"][0]["capabilities"] == ["web", "api"]
+    assert detail["intents"][0]["capabilities"] == ["web", "pentest"]
 
     assert (
         client.post(
@@ -296,7 +324,41 @@ def test_intent_capabilities_editable_until_claimed(client: TestClient) -> None:
         ).status_code
         == 200
     )
-    assert update({"capabilities": ["pwn"]}) == 409
+    assert update({"capabilities": ["binary"]}) == 409
+
+
+def test_legacy_intent_capabilities_normalize_on_read(client: TestClient) -> None:
+    project_id = _create_project(client)
+    created = client.post(
+        f"/projects/{project_id}/intents",
+        json={
+            "from": ["origin"],
+            "description": "resume legacy intent",
+            "creator": "reasoner",
+            "capabilities": ["web"],
+        },
+    )
+    intent_id = created.json()["id"]
+    with db.get_conn(immediate=True) as conn:
+        conn.execute(
+            "UPDATE intents SET capabilities = ? WHERE id = ? AND project_id = ?",
+            (
+                json.dumps(
+                    ["api", "identity", "ad", "pwn", "firmware-iot", "forensics"]
+                ),
+                intent_id,
+                project_id,
+            ),
+        )
+
+    detail = client.get(f"/projects/{project_id}").json()
+    assert detail["intents"][0]["capabilities"] == [
+        "web",
+        "pentest",
+        "binary",
+        "hardware",
+        "defense",
+    ]
 
 
 def test_project_has_no_skill_profile_contract(client: TestClient) -> None:

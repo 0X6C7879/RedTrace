@@ -82,9 +82,9 @@ export function taskPrompt(
     return [
       ...head,
       ...sections([
-        ['Facts', factLines(graph)],
-        [`Intents(最多创建 ${task.maxIntents ?? 4} 个活跃 Intent)`, project.intents.map(intentLine)],
-        ['Hints', hintLines(project.hints)],
+        ['Facts', graph.length === 0 ? ['- 无'] : factLines(graph)],
+        [`Intents(最多创建 ${task.maxIntents ?? 4} 个活跃 Intent)`, project.intents.length === 0 ? ['- 无'] : project.intents.map(intentLine)],
+        ['Hints', project.hints.length === 0 ? ['- 无'] : hintLines(project.hints)],
       ]),
     ].join('\n\n')
   }

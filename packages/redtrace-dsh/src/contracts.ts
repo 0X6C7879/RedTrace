@@ -49,13 +49,14 @@ const stringList = {
   items: { type: 'string' },
 } as const
 
+const intentSourceList = {
+  ...stringList,
+  description: 'Existing source Fact ids only; never include goal. Initial projects use origin.',
+} as const
+
 export const CAPABILITY_NAMES = [
-  'common', 'web', 'api', 'database', 'thick-client', 'supply-chain',
-  'exploit-research', 'network', 'internal', 'pivoting', 'windows-privesc',
-  'linux-privesc', 'ad', 'post-exploitation', 'c2', 'reverse', 'pwn',
-  'malware', 'crypto', 'mobile', 'cloud', 'blockchain', 'firmware-iot',
-  'hardware', 'wireless', 'radio-sdr', 'ot-ics', 'identity', 'email',
-  'ai-security', 'forensics', 'threat-hunting',
+  'common', 'web', 'pentest', 'binary', 'crypto', 'cloud', 'blockchain',
+  'hardware', 'ai-security', 'defense',
 ] as const satisfies readonly CapabilityName[]
 
 const capabilityList: Json = {
@@ -63,6 +64,13 @@ const capabilityList: Json = {
   items: { type: 'string', enum: [...CAPABILITY_NAMES] as string[] },
   minItems: 1,
   uniqueItems: true,
+}
+
+const intentInput: Json = {
+  type: 'object',
+  properties: { from: intentSourceList, description: text, capabilities: capabilityList },
+  required: ['from', 'description', 'capabilities'],
+  additionalProperties: false,
 }
 
 function runtimeValue(name: string): string {
@@ -145,25 +153,43 @@ function register(ctx: ToolContext, definition: Omit<ToolDefinition, 'output'>):
 function registerReason(ctx: ToolContext): void {
   register(ctx, {
     name: 'redtrace_intent_create',
-    description: 'Create one validated RedTrace Intent from existing Fact ids.',
+    description: 'Create one or more validated RedTrace Intents in one planning decision from existing Fact ids; use the intents array for parallel directions, and never use goal as a source.',
     parameters: {
       type: 'object',
-      properties: { from: stringList, description: text, capabilities: capabilityList },
-      required: ['from', 'description', 'capabilities'],
+      properties: { intents: { type: 'array', items: intentInput, minItems: 1 } },
+      required: ['intents'],
       additionalProperties: false,
     },
     async execute(args, execution) {
       const task = taskFor(execution, 'reason')
-      const value = await request(server(task), `/projects/${encodeURIComponent(task.projectId)}/intents`, {
-        from: args.from,
-        description: args.description,
-        capabilities: args.capabilities,
-        creator: task.worker,
-        worker: null,
-        ...(task.maxIntents === undefined ? {} : { max_active_intents: task.maxIntents }),
-      }, execution.signal)
-      execution.concludeTurn?.()
-      return committed(task, value)
+      const batch = Array.isArray(args.intents)
+      const inputs: Json[] = batch ? args.intents as Json[] : [args]
+      const created: Json[] = []
+      try {
+        for (const input of inputs) {
+          if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+            throw new Error('redtrace_intent_create intents must contain objects')
+          }
+          created.push(await request(server(task), `/projects/${encodeURIComponent(task.projectId)}/intents`, {
+            from: input.from,
+            description: input.description,
+            capabilities: input.capabilities,
+            creator: task.worker,
+            worker: null,
+            ...(task.maxIntents === undefined ? {} : { max_active_intents: task.maxIntents }),
+          }, execution.signal))
+        }
+        execution.concludeTurn?.()
+        return committed(task, batch ? { accepted: true, data: { intents: created } } : created[0])
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        if (detail.startsWith('RedTrace API ')) {
+          return batch
+            ? { accepted: false, error: detail, data: { intents: created } }
+            : { accepted: false, error: detail }
+        }
+        throw error
+      }
     },
   })
   register(ctx, {

@@ -30,7 +30,6 @@ from redtrace.dispatcher.tasks.common import (
 from redtrace.dispatcher.workers.registry import get_driver
 
 LOG = logging.getLogger(__name__)
-RECOVERY_TIMEOUT_SECONDS = 60
 
 
 def run_reason_task(
@@ -177,9 +176,7 @@ def run_reason_task(
                 project_id=project.project.id,
                 blackboard_revision=project.blackboard_revision,
                 phase="reason_timeout_recovery",
-                timeout_seconds=min(
-                    config.tasks.reason.timeout, RECOVERY_TIMEOUT_SECONDS
-                ),
+                timeout_seconds=config.tasks.reason.conclude_timeout,
                 lease=lease,
                 cancellation=cancellation,
             )

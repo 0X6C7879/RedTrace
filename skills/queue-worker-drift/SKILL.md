@@ -3,7 +3,7 @@ name: queue-worker-drift
 description: Security workflow for queues, async workers, cron jobs, delayed tasks, retry behavior, worker-only config drift, and payload-to-side-effect chains. Use when the user asks to trace a queue payload, inspect async job execution, explain worker-only behavior, follow retries or dead-letter handling, or connect an enqueued item to a later file, cache, email, or privilege-bearing side effect. Use directly when this Capability matches.
 metadata:
   redtrace:
-    capabilities: [api]
+    capabilities: [web]
 ---
 
 # Queue Worker Drift

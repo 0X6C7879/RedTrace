@@ -261,7 +261,7 @@ def _config(
             },
             "tasks": {
                 "bootstrap": {"timeout": 2, "conclude_timeout": 2},
-                "reason": {"timeout": 2, "max_intents": 1},
+                "reason": {"timeout": 2, "conclude_timeout": 2, "max_intents": 1},
                 "explore": {"timeout": 2, "conclude_timeout": 2},
             },
             "container": {
@@ -522,7 +522,7 @@ def _failover_config() -> DispatchConfig:
             },
             "tasks": {
                 "bootstrap": {"timeout": 2, "conclude_timeout": 2},
-                "reason": {"timeout": 2, "max_intents": 1},
+                "reason": {"timeout": 2, "conclude_timeout": 2, "max_intents": 1},
                 "explore": {"timeout": 2, "conclude_timeout": 2},
             },
             "container": {"image": "unused", "network_mode": "host", "completed_action": "stop"},
