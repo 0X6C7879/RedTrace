@@ -10,6 +10,7 @@ test('registers only the contracts allowed for each task', async () => {
       'redtrace_intent_create',
       'redtrace_reason_noop',
       'redtrace_project_complete',
+      'redtrace_graph_changes',
       'redtrace_graph_node',
       'redtrace_graph_context',
       'redtrace_graph_path',
@@ -142,6 +143,42 @@ test('Reason graph recall queries the canonical Blackboard without ending the tu
       else process.env[name] = value
     }
     globalThis.fetch = previous.fetch
+  }
+})
+
+test('Reason Graph changes advance only the Fact checkpoint actually read', async () => {
+  const { initState, disposeState } = await import('../lib/state.js')
+  const tools = []
+  await contractsApply({ tools: { register(tool) { tools.push(tool) } } }, { types: ['reason'] })
+  const graphChanges = tools.find(tool => tool.name === 'redtrace_graph_changes')
+  const task = {
+    type: 'reason', projectId: 'proj/1', worker: 'reasoner', committed: false,
+    server: 'http://redtrace.test', planningRevision: 3, contextRevision: 7,
+    pendingPlanningRevision: 4, pendingContextRevision: 9,
+  }
+  const shared = initState({ server: 'http://redtrace.test' })
+  shared.tasks.set('agent-1', task)
+  const previousFetch = globalThis.fetch
+  let observed
+  globalThis.fetch = async (url, init) => {
+    observed = { url: String(url), init }
+    return {
+      ok: true,
+      async json() {
+        return { since: 7, revision: 9, next_revision: 9, has_more: false, changes: [{ revision: 9 }] }
+      },
+    }
+  }
+  try {
+    await graphChanges.execute({ since: 7 }, { agent: { id: 'agent-1' } })
+    assert.equal(observed.url, 'http://redtrace.test/projects/proj%2F1/blackboard/changes?since=7&limit=100')
+    assert.equal(task.contextRevision, 9)
+    assert.equal(task.planningRevision, 4)
+    assert.equal(task.pendingPlanningRevision, undefined)
+    assert.equal(task.pendingContextRevision, undefined)
+  } finally {
+    globalThis.fetch = previousFetch
+    disposeState()
   }
 })
 

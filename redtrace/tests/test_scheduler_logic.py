@@ -241,7 +241,7 @@ def test_reason_does_not_dispatch_at_active_intent_limit() -> None:
     assert not loop._dispatch_reason(project, "graph", "planning_revision:3->4")
 
 
-def test_ready_intent_waits_when_pending_reason_cannot_dispatch() -> None:
+def test_ready_intent_dispatches_when_pending_reason_cannot_dispatch() -> None:
     loop = _loop()
     loop.config = make_config()
     project = make_project(intents=[make_intent()])
@@ -261,8 +261,8 @@ def test_ready_intent_waits_when_pending_reason_cannot_dispatch() -> None:
     summary.planning_revision = 4
     summary.reason_evaluated_revision = 3
 
-    assert not loop._try_dispatch_project(summary)
-    assert dispatched == ["reason"]
+    assert loop._try_dispatch_project(summary)
+    assert dispatched == ["reason", "explore"]
 
 
 def test_idle_explore_capacity_does_not_trigger_reason() -> None:

@@ -109,6 +109,11 @@ export interface RuntimeTask {
   resumeOnly?: boolean
   runId?: string
   revision?: number
+  /** Latest planning revision actually delivered through the launch prompt or Graph changes tool. */
+  planningRevision?: number
+  /** New Fact checkpoint announced to a running Reason but not read through the Graph changes tool yet. */
+  pendingPlanningRevision?: number
+  pendingContextRevision?: number
   /** Blackboard revision durably injected into the project Reason session. */
   contextRevision?: number
   /** Hint ids this worker has already seen: launch prompt + runtime injections. */

@@ -107,6 +107,18 @@ export function taskTurn(
     : { prompt: launchPrompt, timeout: limits.timeout }
 }
 
+/** Tell a running Reason that Facts changed without pushing their contents.
+ * The Graph changes contract advances the durable checkpoint after reading. */
+export function reasonFactSignal(task: RuntimeTask, project: ProjectDetail): string | undefined {
+  if (task.type !== 'reason' || task.committed) return undefined
+  const planningRevision = project.project.planning_revision
+  if (planningRevision <= (task.planningRevision ?? project.project.reason_evaluated_revision)) return undefined
+  if (planningRevision <= (task.pendingPlanningRevision ?? -1)) return undefined
+  task.pendingPlanningRevision = planningRevision
+  task.pendingContextRevision = project.blackboard_revision
+  return `[RedTrace Fact signal] planning_revision ${task.planningRevision ?? 0}→${planningRevision}。Blackboard 有新 Fact；结束前调用 redtrace_graph_changes({"since":${task.contextRevision ?? 0}}) 读取增量并纳入本轮规划。`
+}
+
 export function activateAgent(
   agents: RuntimeContext['agents'],
   sessionId: unknown,
@@ -236,14 +248,15 @@ class Scheduler {
     ).then(payload => payload.resources ?? []))
   }
 
-  /** Runtime context updates push only newly added human Hints into running
-   * workers; Fact/Intent/Resource changes stay pull-based (Reason receives a
-   * fresh full Graph on its next wake, Explore owns its Intent lineage). */
+  /** Runtime updates push human Hints, plus a short signal asking a running
+   * Reason to pull newly added Facts through its Graph changes contract. */
   private async injectHints(): Promise<void> {
     for (const task of this.running.values()) {
       if (task.cancelled || task.handle === undefined || task.deliveredHints === undefined) continue
       const project = await api<ProjectDetail>(this.config, `/projects/${encodeURIComponent(task.projectId)}`)
       if ((task.revision ?? 0) >= project.blackboard_revision) continue
+      const factSignal = reasonFactSignal(task, project)
+      if (factSignal !== undefined) task.handle.agent.inject(message(this.shared!, factSignal))
       task.revision = project.blackboard_revision
       const fresh = project.hints.filter(hint => !task.deliveredHints!.has(hint.id))
       if (fresh.length === 0) continue
@@ -292,7 +305,6 @@ class Scheduler {
   }
 
   private async dispatchProject(summary: ProjectSummary): Promise<void> {
-    if (summary.reason !== null) return
     const project = await api<ProjectDetail>(this.config, `/projects/${encodeURIComponent(summary.id)}`)
     if (project.project.status !== 'active') return
     if (isInitial(project) && project.project.bootstrap_enabled && this.presetEnabled('bootstrap')) {
@@ -310,24 +322,30 @@ class Scheduler {
       if (schedulable(intent)) await this.claimAndRun('bootstrap', project, intent)
       return
     }
-    if (summary.planning_revision > summary.reason_evaluated_revision) {
+    if (summary.reason === null && summary.planning_revision > summary.reason_evaluated_revision) {
       const reasonLimits = this.taskLimits('reason')
-      if (reasonAtIntentCapacity(project, reasonLimits?.max_intents)) return
-      if (!this.presetEnabled('reason')) return
-      if (!reasonEligible(summary, Date.now())) return
-      const worker = selectWorker(this.snapshot?.workers ?? [], name => this.workerRunning(name), 'reason')
-      if (worker === undefined) return
-      const claimed = await this.tryPost(`/projects/${encodeURIComponent(summary.id)}/reason/claim`, {
-        worker: worker.name,
-        trigger: `planning_revision:${summary.reason_evaluated_revision}->${summary.planning_revision}`,
-      })
-      if (claimed) this.launch({
-        type: 'reason', projectId: summary.id, worker: worker.name, route: workerRoute(worker),
-        maxIntents: reasonLimits?.max_intents,
-        limits: reasonLimits,
-        committed: false,
-      }, project)
-      return
+      if (
+        !reasonAtIntentCapacity(project, reasonLimits?.max_intents)
+        && this.presetEnabled('reason')
+        && reasonEligible(summary, Date.now())
+      ) {
+        const worker = selectWorker(this.snapshot?.workers ?? [], name => this.workerRunning(name), 'reason')
+        if (worker !== undefined) {
+          const claimed = await this.tryPost(`/projects/${encodeURIComponent(summary.id)}/reason/claim`, {
+            worker: worker.name,
+            trigger: `planning_revision:${summary.reason_evaluated_revision}->${summary.planning_revision}`,
+          })
+          if (claimed) {
+            this.launch({
+              type: 'reason', projectId: summary.id, worker: worker.name, route: workerRoute(worker),
+              maxIntents: reasonLimits?.max_intents,
+              limits: reasonLimits,
+              committed: false,
+            }, project)
+            return
+          }
+        }
+      }
     }
     const intent = project.intents
       .filter(item => schedulable(item) && !isBootstrap(item))
@@ -371,6 +389,7 @@ class Scheduler {
     if (this.running.has(key)) return
     task.server = this.config.server
     task.revision = project.blackboard_revision
+    task.planningRevision = project.project.planning_revision
     task.deliveredHints = new Set(project.hints.map(hint => hint.id))
     task.startedAt = Date.now()
     const paused = this.pausedSessions.get(key)
@@ -533,7 +552,7 @@ class Scheduler {
         outcome,
         runtime_ms: Math.max(0, Date.now() - (task.startedAt ?? Date.now())),
         ...(task.type === 'reason' ? {
-          base_planning_revision: project.project.planning_revision,
+          base_planning_revision: task.planningRevision ?? project.project.planning_revision,
           ...(contextPersisted ? { context_revision: task.contextRevision } : {}),
         } : {}),
       })

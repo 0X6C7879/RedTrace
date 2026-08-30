@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import {
   activateAgent, fetchAllResources, planDispatch, postWithRetry,
-  reasonAtIntentCapacity, reasonEligible, recoverableExploreSession, resolveLimits, sessionIdForTask, sessionPlan,
+  reasonAtIntentCapacity, reasonEligible, reasonFactSignal, recoverableExploreSession, resolveLimits, sessionIdForTask, sessionPlan,
   taskSkillCapabilities, taskTurn,
 } from '../lib/scheduler.js'
 import { schedulable } from '../lib/context.js'
@@ -185,6 +185,24 @@ test('Reason is skipped when active Intents reach max_intents', () => {
   assert.equal(reasonAtIntentCapacity(project, 3), true)
   assert.equal(reasonAtIntentCapacity(project, 4), false)
   assert.equal(reasonAtIntentCapacity(project), false)
+})
+
+test('running Reason receives only a short signal for each newer Fact checkpoint', () => {
+  const task = {
+    type: 'reason', projectId: 'p', worker: 'reasoner', committed: false,
+    planningRevision: 3, contextRevision: 7,
+  }
+  const project = {
+    project: { planning_revision: 4, reason_evaluated_revision: 3 },
+    blackboard_revision: 9,
+  }
+  assert.equal(
+    reasonFactSignal(task, project),
+    '[RedTrace Fact signal] planning_revision 3→4。Blackboard 有新 Fact；结束前调用 redtrace_graph_changes({"since":7}) 读取增量并纳入本轮规划。',
+  )
+  assert.equal(reasonFactSignal(task, project), undefined)
+  assert.equal(task.pendingPlanningRevision, 4)
+  assert.equal(task.pendingContextRevision, 9)
 })
 
 // ─── Limits resolution ──────────────────────────────────────────────────────

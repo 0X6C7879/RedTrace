@@ -15,7 +15,7 @@ export const inject = ['tools']
 export const CONTRACTS = {
   reason: [
     'redtrace_intent_create', 'redtrace_reason_noop', 'redtrace_project_complete',
-    'redtrace_graph_node', 'redtrace_graph_context', 'redtrace_graph_path',
+    'redtrace_graph_changes', 'redtrace_graph_node', 'redtrace_graph_context', 'redtrace_graph_path',
   ],
   bootstrap: ['redtrace_bootstrap_conclude'],
   explore: ['redtrace_explore_conclude'],
@@ -219,6 +219,41 @@ function registerReason(ctx: ToolContext): void {
       }, execution.signal)
       execution.concludeTurn?.()
       return committed(task, value)
+    },
+  })
+  register(ctx, {
+    name: 'redtrace_graph_changes',
+    description: 'Read Blackboard changes after a runtime Fact signal. Continue from next_revision while has_more is true before making the planning decision.',
+    parameters: {
+      type: 'object',
+      properties: { since: { type: 'integer', minimum: 0 } },
+      required: ['since'],
+      additionalProperties: false,
+    },
+    async execute(args, execution) {
+      const task = taskFor(execution, 'reason')
+      const since = Number(args.since)
+      const value = await query(
+        task,
+        `/projects/${encodeURIComponent(task.projectId)}/blackboard/changes?since=${since}&limit=100`,
+        execution.signal,
+      )
+      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+        const nextRevision = Number(value.next_revision)
+        if (Number.isInteger(nextRevision) && nextRevision >= 0) {
+          task.contextRevision = Math.max(task.contextRevision ?? 0, nextRevision)
+          if (
+            task.pendingPlanningRevision !== undefined
+            && task.pendingContextRevision !== undefined
+            && nextRevision >= task.pendingContextRevision
+          ) {
+            task.planningRevision = Math.max(task.planningRevision ?? 0, task.pendingPlanningRevision)
+            task.pendingPlanningRevision = undefined
+            task.pendingContextRevision = undefined
+          }
+        }
+      }
+      return value
     },
   })
   register(ctx, {

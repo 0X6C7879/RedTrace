@@ -269,8 +269,6 @@ class DispatcherLoop:
         planning_pending = (
             summary.planning_revision > summary.reason_evaluated_revision
         )
-        if summary.reason is not None:
-            return False
         if not planning_pending and summary.unclaimed_intent_count == 0:
             return False
 
@@ -311,13 +309,16 @@ class DispatcherLoop:
                 project.project.reason_retry_after is not None
                 and project.project.reason_retry_after > time.time()
             )
-            if reason_blocked:
-                return False
-            return self._dispatch_reason(
-                project,
-                self._reason_graph_snapshot(project),
-                self._planning_trigger(project),
-            )
+            if (
+                project.project.reason is None
+                and not reason_blocked
+                and self._dispatch_reason(
+                    project,
+                    self._reason_graph_snapshot(project),
+                    self._planning_trigger(project),
+                )
+            ):
+                return True
         running_intent_ids = self._project_running_explore_intents(summary.id)
         newest_intent = project_policy.newest_unclaimed_intent(
             project, running_intent_ids
