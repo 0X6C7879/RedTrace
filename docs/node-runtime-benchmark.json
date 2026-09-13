@@ -1,0 +1,113 @@
+{
+  "measured_at": "2026-09-12T08:51:31.751Z",
+  "platform": "win32/x64",
+  "node": "24.21.0",
+  "rounds": 3,
+  "task": "deterministic local mock bootstrap completion",
+  "summary": {
+    "legacy": {
+      "startup_ms": 1839,
+      "rss_mb": 163.4,
+      "processes": 2,
+      "task_ms": 1232,
+      "success_rate": 1,
+      "tokens": 0
+    },
+    "node-lean": {
+      "startup_ms": 862,
+      "rss_mb": 106.3,
+      "processes": 1,
+      "task_ms": 142,
+      "success_rate": 1,
+      "tokens": 0
+    },
+    "node-compat": {
+      "startup_ms": 2057,
+      "rss_mb": 145.5,
+      "processes": 1,
+      "task_ms": 126,
+      "success_rate": 1,
+      "tokens": 0
+    }
+  },
+  "samples": {
+    "legacy": [
+      {
+        "startup_ms": 1873,
+        "rss_mb": 163.4,
+        "processes": 2,
+        "task_ms": 1269,
+        "success": true,
+        "tokens": 0
+      },
+      {
+        "startup_ms": 1839,
+        "rss_mb": 163.4,
+        "processes": 2,
+        "task_ms": 1232,
+        "success": true,
+        "tokens": 0
+      },
+      {
+        "startup_ms": 1834,
+        "rss_mb": 163.4,
+        "processes": 2,
+        "task_ms": 1090,
+        "success": true,
+        "tokens": 0
+      }
+    ],
+    "node-lean": [
+      {
+        "startup_ms": 845,
+        "rss_mb": 106,
+        "processes": 1,
+        "task_ms": 135,
+        "success": true,
+        "tokens": 0
+      },
+      {
+        "startup_ms": 862,
+        "rss_mb": 106.4,
+        "processes": 1,
+        "task_ms": 142,
+        "success": true,
+        "tokens": 0
+      },
+      {
+        "startup_ms": 896,
+        "rss_mb": 106.3,
+        "processes": 1,
+        "task_ms": 142,
+        "success": true,
+        "tokens": 0
+      }
+    ],
+    "node-compat": [
+      {
+        "startup_ms": 2141,
+        "rss_mb": 145.4,
+        "processes": 1,
+        "task_ms": 133,
+        "success": true,
+        "tokens": 0
+      },
+      {
+        "startup_ms": 2057,
+        "rss_mb": 146.3,
+        "processes": 1,
+        "task_ms": 126,
+        "success": true,
+        "tokens": 0
+      },
+      {
+        "startup_ms": 2049,
+        "rss_mb": 145.5,
+        "processes": 1,
+        "task_ms": 121,
+        "success": true,
+        "tokens": 0
+      }
+    ]
+  }
+}

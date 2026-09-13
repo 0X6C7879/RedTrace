@@ -23,7 +23,7 @@ if [[ -n "${WSL_DISTRO_NAME:-}" && "$ROOT" == /mnt/* ]]; then
   export http_proxy="${http_proxy:-$HTTP_PROXY}" https_proxy="${https_proxy:-$HTTPS_PROXY}"
   export all_proxy="${all_proxy:-$ALL_PROXY}"
 else
-  DSH_ROOT="$ROOT"
+  DSH_ROOT="$ROOT/vendor/deepseek-harness"
   RUNTIME_ROOT="$ROOT"
 fi
 

@@ -11,7 +11,7 @@
 <script src="/static/vendor/dagre.min.js"></script>
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/vendor/cytoscape-dagre.js"></script>
-<script defer src="/static/audit.js?v=20260826-token-usage-2"></script>
+<script defer src="/static/audit.js?v=20260913-conversation-1"></script>
 <script defer src="/static/capabilities.js?v=20260827-capability-catalog-1"></script>
 <script defer src="/static/plugins.js?v=20260825-plugins-2"></script>
 <!-- Previous cache key: operations.js?v=20260810-performance-1 -->
@@ -479,7 +479,7 @@
 <!-- ═══════════ GRAPH VIEW ═══════════ -->
 <template x-if="view === 'graph'">
 <div class="flex-1 flex flex-col overflow-hidden">
-  <header class="bg-white/80 backdrop-blur border-b border-slate-200/60 px-4 py-2.5 flex items-center gap-3 shrink-0 z-20">
+  <header :class="{'fgs-header': !!fgs?.nodes}" class="bg-white/80 backdrop-blur border-b border-slate-200/60 px-4 py-2.5 flex items-center gap-3 shrink-0 z-20">
     <button @click="backToList()" class="p-1.5 rounded-lg hover:bg-slate-100 transition text-slate-400 hover:text-slate-600">
       <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7"/></svg>
     </button>
@@ -517,8 +517,9 @@
     </div>
     <div class="flex items-center gap-4 text-xs text-slate-400">
       <span class="h-3 w-px bg-slate-200"></span>
-      <span x-text="`${project.facts.length} facts`"></span>
-      <span x-text="`${project.intents.length} intents`"></span>
+      <span x-text="`${fgs?.nodes ? fgs.facts.filter(f => f.id !== 'origin').length : project.facts.length} facts`"></span>
+      <span x-text="`${project.intents.length} ${fgs?.nodes ? 'steps' : 'intents'}`"></span>
+      <span x-show="fgs" x-text="`${fgs?.goals?.length || 0} goals · ${fgs?.findings?.length || 0} findings`"></span>
     </div>
     <div class="flex items-center gap-1.5">
       <template x-if="!replay.active">
@@ -576,10 +577,14 @@
     </div>
   </header>
 
-  <div class="flex-1 flex overflow-hidden" id="graphLayout">
+  <div class="flex-1 flex overflow-hidden" id="graphLayout" :class="{'fgs-native': !!fgs?.nodes, 'fgs-panel-open': fgsPanelOpen}">
     <!-- Graph -->
     <div class="flex-1 relative min-w-0">
-      <div class="absolute top-3 left-3 z-10 flex items-center gap-1.5">
+      <div class="absolute top-3 left-3 z-10 flex items-center gap-1.5 fgs-toolbar">
+        <template x-if="fgs?.nodes"><div class="flex items-center gap-2">
+          <select aria-label="聚焦目标" :value="fgsFocusGoal" @change="focusFgsGoal($event.target.value)" class="max-w-40 rounded border px-2 py-1 text-xs"><option value="">完整图</option><template x-for="goal in fgs.goals" :key="goal.id"><option :value="goal.id" x-text="`${goal.id} · ${goal.description.slice(0, 16)}`"></option></template></select>
+          <button type="button" @click="fgsPanelOpen = !fgsPanelOpen" class="fgs-drawer-toggle rounded border px-2 py-1 text-xs" aria-label="切换图详情">详情 / 执行</button>
+        </div></template>
         <button @click="fitGraph()" class="h-7 w-7 bg-white/90 backdrop-blur rounded-lg shadow-sm border border-slate-200/60 text-slate-500 hover:text-slate-700 hover:bg-white transition inline-flex items-center justify-center" title="适配" aria-label="适配">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
         </button>
@@ -612,7 +617,7 @@
         </div>
       </template>
 
-      <div class="absolute top-3 right-3 z-10 flex flex-wrap justify-end gap-2">
+      <div x-show="!fgs?.nodes" class="absolute top-3 right-3 z-10 flex flex-wrap justify-end gap-2">
         <div class="flex gap-1.5" x-show="projectIsActive()">
           <button @click="openCreateIntent()" :disabled="!canActOnSelectedFacts()"
             class="px-3 py-1.5 bg-white/90 backdrop-blur border border-brand-200 text-brand-600 rounded-lg shadow-sm text-xs font-medium hover:bg-brand-50 transition disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1">
@@ -645,27 +650,80 @@
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.25 3H7.5A2.25 2.25 0 0 0 5.25 5.25v13.5A2.25 2.25 0 0 0 7.5 21h9a2.25 2.25 0 0 0 2.25-2.25V8.25L14.25 3Z"/><path d="M14.25 3v5.25h4.5"/><path d="M9 13.5 10.875 15.375 15 11.25"/></svg>
             结论
           </button>
+          <button @click="deleteSelectedIntent()" :disabled="!selectedDeletableIntentRecord()"
+            class="px-3 py-1.5 bg-white/90 backdrop-blur border border-rose-200 text-rose-600 rounded-lg shadow-sm text-xs font-medium hover:bg-rose-50 transition disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4.5 7.5h15"/><path d="M9.75 11.25v4.5m4.5-4.5v4.5M6.75 7.5l.75 12h9l.75-12M9 7.5V4.875h6V7.5"/></svg>
+            删除
+          </button>
         </div>
       </div>
 
-      <div id="cy" class="relative z-0 flex-1 h-full"></div>
+      <div x-show="fgs?.nodes" class="absolute bottom-2 left-3 z-10 text-[10px] text-slate-400">实线：产出 / 支撑 / 验收　虚线：范围 / 目标归属<span x-show="fgs?.historyIncomplete"> · 旧历史缺少创建快照</span></div>
+      <div id="cy" role="img" :aria-label="fgs?.nodes ? `FGS 图：${fgs.nodes.length} 个节点，${fgs.edges.length} 条关系` : '任务图'" class="relative z-0 flex-1 h-full"></div>
     </div>
 
-    <div @pointerdown.prevent="startPanelResize($event)" class="w-2 shrink-0 cursor-col-resize group flex items-stretch justify-center touch-none relative z-20">
+    <div @pointerdown.prevent="startPanelResize($event)" class="fgs-resize-handle w-2 shrink-0 cursor-col-resize group flex items-stretch justify-center touch-none relative z-20">
       <div class="w-px bg-slate-200/70 transition group-hover:bg-brand-300" :class="{ 'bg-brand-400': isResizingPanel }"></div>
     </div>
 
     <!-- Side panel -->
-    <div class="border-l border-slate-200/60 bg-white flex flex-col overflow-hidden shrink-0 relative z-20" :style="{ width: sidePanelWidth + 'px', minWidth: sidePanelWidth + 'px', flexBasis: sidePanelWidth + 'px' }">
+    <div class="fgs-side-panel border-l border-slate-200/60 bg-white flex flex-col overflow-hidden shrink-0 relative z-20" :style="{ width: sidePanelWidth + 'px', minWidth: sidePanelWidth + 'px', flexBasis: sidePanelWidth + 'px' }">
       <div class="flex border-b border-slate-100 shrink-0">
+        <button x-show="fgs?.nodes" @click="sideTab = 'steps'; fgsPanelOpen = true" class="px-3 py-2.5 text-xs" :class="sideTab === 'steps' ? 'text-brand-600 border-b-2 border-brand-500' : 'text-slate-400'">执行</button>
         <button @click="sideTab = 'detail'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
           :class="sideTab === 'detail' ? 'text-brand-600 border-b-2 border-brand-500' : 'text-slate-400 hover:text-slate-600'">详情</button>
         <button @click="sideTab = 'hints'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
           :class="sideTab === 'hints' ? 'text-brand-600 border-b-2 border-brand-500' : 'text-slate-400 hover:text-slate-600'">
           提示 <span class="ml-0.5 text-[10px] opacity-60" x-text="project.hints.length"></span>
         </button>
+        <button @click="sideTab = 'fgs'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
+          :class="sideTab === 'fgs' ? 'text-brand-600 border-b-2 border-brand-500' : 'text-slate-400 hover:text-slate-600'">FGS</button>
         <button @click="sideTab = 'log'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
           :class="sideTab === 'log' ? 'text-brand-600 border-b-2 border-brand-500' : 'text-slate-400 hover:text-slate-600'">日志</button>
+      </div>
+
+
+      <div x-show="['fgs', 'steps'].includes(sideTab) && (fgsSelection || fgsEdgeSelection)" class="fgs-selection shrink-0 overflow-y-auto p-3 space-y-2 border-b" style="max-height:45%">
+        <template x-if="fgsSelectionRecord()"><section data-testid="fgs-node-detail" class="space-y-2">
+          <strong class="text-xs" x-text="`${fgsSelection.type} · ${fgsSelection.id}`"></strong>
+          <p class="text-xs whitespace-pre-wrap break-words" x-text="fgsSelectionRecord().description"></p>
+          <p class="text-xs" x-text="fgsSelectionRecord().status || ''"></p>
+          <div class="flex flex-wrap gap-2" x-show="!replay.active && project.project.status === 'active'">
+            <button x-show="fgsSelection.type === 'goal' && fgsSelectionRecord().status === 'open'" @click="setFgsStatus('achieved')" class="border rounded px-2 py-1 text-xs">Achieve</button>
+            <button x-show="['goal','step'].includes(fgsSelection.type) && fgsSelection.id !== 'goal' && !['achieved','done','cancelled'].includes(fgsSelectionRecord().status)" @click="setFgsStatus('cancelled')" class="border rounded px-2 py-1 text-xs">Cancel</button>
+            <button x-show="fgsSelection.type === 'step' && ['blocked','cancelled'].includes(fgsSelectionRecord().status)" @click="setFgsStatus('pending')" class="border rounded px-2 py-1 text-xs">重试</button>
+          </div>
+          <template x-if="fgsSelection.type === 'step'"><div class="text-xs space-y-2">
+            <p x-text="`来源：${fgsSelectionRecord().sourceIds.join(', ')} → 目标：${fgsSelectionRecord().goalId}`"></p>
+            <p x-text="`全部产出：${fgsSelectionRecord().factIds.join(', ') || '尚无 Fact'}`"></p>
+            <p x-text="`Worker：${fgsSelectionRecord().worker || '未领取'} · ${fgsSelectionRecord().executionProfile}`"></p>
+            <p x-text="fgsSelectionRecord().failure || ''"></p>
+            <div class="flex flex-wrap gap-2" x-show="!replay.active && projectIsActive()">
+              <button @click="sendHeartbeatForSelectedIntent()" :disabled="!selectedActionableOpenIntentRecord()" class="border rounded px-2 py-1" x-text="selectedIntentPrimaryActionLabel()"></button>
+              <button @click="releaseSelectedGraphNode()" :disabled="!selectedReleasableOpenIntentRecord()" class="border rounded px-2 py-1">释放</button>
+              <button @click="selectedOpenIntentRecord() && openConclude(selectedOpenIntentRecord())" :disabled="!selectedOpenIntentRecord()" class="border rounded px-2 py-1">结论</button>
+              <button @click="toggleSelectedIntentExecutionProfile()" :disabled="!selectedEditableIntentProfileRecord()" class="border rounded px-2 py-1">隔离设置</button>
+              <button @click="deleteSelectedIntent()" :disabled="!selectedDeletableIntentRecord()" class="border rounded px-2 py-1">删除</button>
+            </div>
+            <button x-show="!replay.active" @click="openIntentLog(fgsSelection.id)" class="border rounded px-2 py-1">执行日志</button>
+            <select x-show="fgsRuns.length" aria-label="执行会话" x-model="fgsRunId" @change="loadFgsRunLog()" class="w-full border rounded"><template x-for="run in fgsRuns" :key="run.id"><option :value="run.id" x-text="`${run.worker} · ${run.status} · ${run.id}`"></option></template></select>
+            <button x-show="fgsRunHasMore" @click="loadFgsRunLog(true)" class="underline">更早日志</button>
+            <template x-for="event in fgsRunEvents" :key="event.id"><article class="border-t pt-2"><strong x-text="event.kind"></strong><pre class="whitespace-pre-wrap break-words" x-text="event.content || event.title || JSON.stringify(event.data || {})"></pre></article></template>
+          </div></template>
+          <template x-if="fgsSelection.type === 'fact'"><div class="text-xs"><span x-show="!fgsSelectionRecord().stepId">生产 Step 未记录</span><template x-for="(evidence, index) in (fgsSelectionRecord().evidence || [])" :key="index"><p class="break-words" x-text="`${evidence.description} ${evidence.path || ''}`"></p></template></div></template>
+        </section></template>
+        <template x-for="edge in fgsRelatedEdges()" :key="edge.id"><div class="flex flex-wrap gap-1 text-xs"><button class="underline" @click="fgsOpenReference(edge.source)" x-text="factDisplayId(edge.source)"></button><span x-text="`—${fgsRelationLabel(edge.relation)}→`"></span><button class="underline" @click="fgsOpenReference(edge.target)" x-text="factDisplayId(edge.target)"></button></div></template>
+        <template x-for="step in fgsRelatedSteps()" :key="step.id"><button class="block border rounded p-2 text-left text-xs w-full" @click="selectFgsNode('step', step.id)" x-text="`${step.id} · ${step.status} · ${step.description}`"></button></template>
+      </div>
+      <div x-show="sideTab === 'steps'" class="flex-1 overflow-y-auto p-4 space-y-3">
+        <select aria-label="按目标筛选执行" x-model="fgsStepFilter" class="w-full border rounded p-2 text-xs"><option value="">所有目标的执行</option><template x-for="goal in (fgs?.goals || [])" :key="goal.id"><option :value="goal.id" x-text="`${goal.id} · ${goal.description}`"></option></template></select>
+        <section>
+          <div class="mb-2 flex items-center justify-between"><h3 class="text-[10px] font-semibold uppercase tracking-widest text-amber-600">Step</h3><div class="flex items-center gap-2"><span class="text-[10px] text-slate-400" x-text="fgs?.steps?.length || 0"></span><button type="button" x-show="!replay.active && project.project.status === 'active'" @click="createFgs('step')" class="rounded-md border border-amber-200 bg-white px-1.5 py-0.5 text-[10px] text-amber-700" aria-label="Add step">＋</button></div></div>
+          <div class="space-y-2"><template x-for="step in fgsVisibleSteps()" :key="step.id"><button type="button" @click="selectFgsNode('step', step.id)" class="block w-full rounded-xl border border-amber-200 bg-white p-3 text-left shadow-sm">
+            <div class="flex items-center justify-between gap-2"><span class="font-mono text-[10px] text-slate-400" x-text="step.id"></span><span class="text-[9px] uppercase text-amber-700" x-text="step.status"></span></div>
+            <p class="mt-1 text-xs leading-relaxed text-slate-700" x-text="step.description"></p><p class="mt-1 text-[10px] text-slate-400" x-text="`${step.executionProfile} · ${(step.capabilities || []).join(', ') || 'generic'}`"></p>
+          </button></template></div>
+        </section>
       </div>
 
       <!-- Detail -->
@@ -789,6 +847,26 @@
         </template>
       </div>
 
+      <div x-show="sideTab === 'fgs'" class="flex-1 overflow-y-auto p-4 space-y-5 bg-slate-50/40">
+        <section>
+          <div class="mb-2 flex items-center justify-between"><h3 class="text-[10px] font-semibold uppercase tracking-widest text-rose-500">Goal / Sub Goal</h3><div class="flex items-center gap-2"><span class="text-[10px] text-slate-400" x-text="fgs?.goals?.length || 0"></span><button type="button" x-show="!replay.active && project.project.status === 'active'" @click="createFgs('goal')" class="rounded-md border border-rose-200 bg-white px-1.5 py-0.5 text-[10px] text-rose-600" aria-label="Add sub goal">＋</button></div></div>
+          <div class="space-y-2">
+            <template x-for="goal in (fgs?.goals || [])" :key="goal.id"><button type="button" @click="selectFgsNode('goal', goal.id)" class="block w-full rounded-xl border bg-white p-3 text-left shadow-sm" :class="goal.status === 'achieved' ? 'border-teal-200' : goal.status === 'cancelled' ? 'border-slate-200 opacity-60' : 'border-rose-200'">
+              <div class="flex items-center justify-between gap-2"><span class="font-mono text-[10px] text-slate-400" x-text="goal.id"></span><span class="rounded-full px-1.5 py-0.5 text-[9px] uppercase" :class="goal.status === 'achieved' ? 'bg-teal-50 text-teal-700' : 'bg-rose-50 text-rose-600'" x-text="goal.status"></span></div>
+              <p class="mt-1 text-xs leading-relaxed text-slate-700" :style="`padding-left:${goal.parentId ? 12 : 0}px`" x-text="goal.description"></p>
+            </button></template>
+          </div>
+        </section>
+
+        <section>
+          <div class="mb-2 flex items-center justify-between"><h3 class="text-[10px] font-semibold uppercase tracking-widest text-violet-600">Finding</h3><div class="flex items-center gap-2"><span class="text-[10px] text-slate-400" x-text="fgs?.findings?.length || 0"></span><button type="button" x-show="!replay.active && project.project.status === 'active'" @click="createFgs('finding')" class="rounded-md border border-violet-200 bg-white px-1.5 py-0.5 text-[10px] text-violet-700" aria-label="Add finding">＋</button></div></div>
+          <div class="space-y-2"><template x-for="finding in (fgs?.findings || [])" :key="finding.id"><button type="button" @click="selectFgsNode('finding', finding.id)" class="block w-full rounded-xl border border-violet-200 bg-white p-3 text-left shadow-sm">
+            <div class="flex items-center justify-between gap-2"><span class="text-xs font-semibold text-violet-700" x-text="finding.title"></span><span class="font-mono text-[9px] text-slate-400" x-text="finding.id"></span></div><p class="mt-1 text-xs leading-relaxed text-slate-600" x-text="finding.description"></p>
+          </button></template></div>
+        </section>
+
+      </div>
+
       <!-- Hints -->
       <div x-show="sideTab === 'hints'" class="relative flex-1 min-h-0 bg-amber-50/25">
         <div class="h-full overflow-y-auto p-4 pb-20 space-y-3">
@@ -798,21 +876,27 @@
             </div>
           </template>
           <template x-for="h in project.hints" :key="h.id">
-            <button type="button" @click="openHintTimelineEntry(h.id)"
-              class="hint-card w-full text-left rounded-2xl border border-amber-200/80 bg-white shadow-sm overflow-hidden transition hover:bg-amber-50/40">
+            <article class="hint-card w-full text-left rounded-2xl border border-amber-200/80 bg-white shadow-sm overflow-hidden transition hover:bg-amber-50/40">
               <div class="hint-card-header px-4 py-3 border-b border-amber-100 bg-amber-50/80">
                 <div class="flex items-center justify-between gap-3 text-[11px]">
                   <div class="flex items-center gap-2 min-w-0">
                     <span class="w-2 h-2 rounded-full bg-amber-400 shrink-0"></span>
                     <span class="font-medium text-amber-800 truncate" x-text="h.creator"></span>
                   </div>
-                  <span class="text-amber-600/80 shrink-0 tabular-nums" x-text="formatTime(h.created_at)"></span>
+                  <div class="flex items-center gap-2 shrink-0">
+                    <span class="text-amber-600/80 tabular-nums" x-text="formatTime(h.created_at)"></span>
+                    <button x-show="projectCanWriteHints()" type="button" @click="deleteHint(h)"
+                      class="rounded-md p-1 text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition"
+                      title="删除提示" aria-label="删除提示">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4.5 7.5h15"/><path d="M9.75 11.25v4.5m4.5-4.5v4.5M6.75 7.5l.75 12h9l.75-12M9 7.5V4.875h6V7.5"/></svg>
+                    </button>
+                  </div>
                 </div>
               </div>
-              <div class="hint-card-body p-4">
+              <button type="button" @click="openHintTimelineEntry(h.id)" class="hint-card-body block w-full p-4 text-left">
                 <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="h.content"></p>
-              </div>
-            </button>
+              </button>
+            </article>
           </template>
         </div>
         <button x-show="projectCanWriteHints()" type="button" @click="openHintModal()"
@@ -2402,14 +2486,18 @@
   <span x-text="toast.message"></span>
 </div>
 
+<script src="/static/fgs-view.js"></script>
 <script>
 function redtraceApp() {
   return {
+    ...window.redtraceFgsView,
     appPage: 'workspace',
     c2Expanded: false,
     view: 'list',
     projects: [],
     project: null,
+    fgs: null,
+    fgsSelection: null,
     tokenUsage: null,
     globalUsage: null,
     selectedProjectId: '',
@@ -3393,13 +3481,62 @@ function redtraceApp() {
     },
 
     async loadProject(id) {
+      const replay = this.replay;
       const results = await Promise.allSettled([
         this.api('GET', `/projects/${id}`),
         this.api('GET', `/audit/tasks/${encodeURIComponent(id)}/usage`),
+        this.api('GET', `/v2/projects/${id}/graph`),
       ]);
+      if (id !== this.selectedProjectId || this.replay !== replay || this.replay.active) return;
       if (results[0].status === 'fulfilled') this.project = results[0].value;
       else this.showToast(results[0].reason.message, 'error');
       this.tokenUsage = results[1].status === 'fulfilled' ? results[1].value : null;
+      if (results[2].status === 'fulfilled') {
+        this.fgs = results[2].value;
+        if (this.fgs.nodes) { const reason = this.project?.project?.reason; this.project = this.nativeProject(this.fgs); this.project.project.reason = reason || null; }
+      } else if (this.fgs?.project?.id !== id) this.fgs = null;
+    },
+
+    selectFgsNode(type, id) { this.selectNativeFgsNode(type, id); },
+    fgsSelectionRecord() {
+      if (!this.fgsSelection || !this.fgs) return null;
+      const source = this.fgsSelection.type === 'goal' ? this.fgs.goals : this.fgsSelection.type === 'step' ? this.fgs.steps : this.fgsSelection.type === 'finding' ? this.fgs.findings : this.fgs.facts;
+      return source?.find(item => item.id === this.fgsSelection.id) || null;
+    },
+    async createFgs(type) {
+      const project = encodeURIComponent(this.project.project.id);
+      try {
+        let payload;
+        if (type === 'goal') {
+          const description = prompt('Sub Goal'); if (!description?.trim()) return;
+          const parentId = prompt('Parent Goal ID（留空使用根 Goal）', this.fgs?.goals?.[0]?.id || 'goal')?.trim() || undefined;
+          payload = { description: description.trim(), parentId, creator: 'human' };
+        } else if (type === 'step') {
+          const description = prompt('Step'); if (!description?.trim()) return;
+          const sourceIds = (prompt('Source Scope / Fact / Finding IDs（逗号分隔）', this.fgs?.facts?.at(-1)?.id || 'origin') || '').split(',').map(v => v.trim()).filter(Boolean); if (!sourceIds.length) return;
+          const goalId = prompt('Goal ID（可留空）', this.fgs?.goals?.[0]?.id || 'goal')?.trim() || undefined;
+          payload = { description: description.trim(), sourceIds, goalId, creator: 'human', executionProfile: 'direct', capabilities: [] };
+        } else {
+          const title = prompt('Finding 标题'); if (!title?.trim()) return;
+          const description = prompt('Finding 内容'); if (!description?.trim()) return;
+          const factIds = (prompt('Evidence Fact IDs（逗号分隔）', this.fgs?.facts?.at(-1)?.id || 'origin') || '').split(',').map(v => v.trim()).filter(Boolean); if (!factIds.length) return;
+          payload = { title: title.trim(), description: description.trim(), factIds, creator: 'human' };
+        }
+        const created = await this.api('POST', `/v2/projects/${project}/${type === 'goal' ? 'goals' : type === 'step' ? 'steps' : 'findings'}`, payload);
+        await this.loadProject(this.project.project.id); this.updateGraph(); this.selectFgsNode(type, created.id); this.showToast(`${type} 已创建`);
+      } catch (e) { this.showToast(e.message, 'error'); }
+    },
+    async setFgsStatus(status) {
+      if (!this.fgsSelection || !['goal', 'step'].includes(this.fgsSelection.type)) return;
+      try {
+        const type = this.fgsSelection.type, kind = type === 'goal' ? 'goals' : 'steps', id = this.fgsSelection.id, payload = { status };
+        if (type === 'goal' && status === 'achieved') {
+          const evidenceIds = (prompt('Evidence Fact / Finding IDs（逗号分隔）', this.fgs?.facts?.at(-1)?.id || 'origin') || '').split(',').map(v => v.trim()).filter(Boolean); if (!evidenceIds.length) return;
+          payload.evidenceIds = evidenceIds;
+        }
+        await this.api('PATCH', `/v2/projects/${encodeURIComponent(this.project.project.id)}/${kind}/${encodeURIComponent(id)}`, payload);
+        await this.loadProject(this.project.project.id); this.updateGraph(); this.selectFgsNode(type, id); this.showToast(`${type} 已更新`);
+      } catch (e) { this.showToast(e.message, 'error'); }
     },
 
     formatTokens(value) {
@@ -3730,6 +3867,7 @@ function redtraceApp() {
     },
 
     applyReplayFrame(frameIndex, options = {}) {
+      if (this.replay.native) return this.applyFgsReplayFrame(frameIndex);
       if (!this.replay.active) return;
       const { reinitialize = false } = options;
       const frame = this.replay.frames[frameIndex];
@@ -3765,6 +3903,7 @@ function redtraceApp() {
     async startProjectReplay() {
       if (!this.project || this.replay.active || !this.selectedProjectId) return;
       try {
+        if (this.fgs?.nodes) { await this.startFgsReplay(); return; }
         const sourceProject = await this.api('GET', `/projects/${this.selectedProjectId}`);
         const baseEvents = this.timelineEvents().map(event => ({
           ...event,
@@ -3794,21 +3933,21 @@ function redtraceApp() {
         this.selectedNode = null;
         this.selectedFacts = [];
         this.selectedTimelineEntryId = null;
-        this.applyReplayFrame(0, { reinitialize: true });
+        await this.applyReplayFrame(0, { reinitialize: true });
         this.scheduleReplayTick();
       } catch (e) {
         this.showToast(e.message, 'error');
       }
     },
 
-    advanceProjectReplay() {
+    async advanceProjectReplay() {
       if (!this.replay.active) return;
       if (this.replay.frameIndex >= this.replay.frames.length - 1) {
         this.replay.playing = false;
         this.stopReplayTimer();
         return;
       }
-      this.applyReplayFrame(this.replay.frameIndex + 1);
+      await this.applyReplayFrame(this.replay.frameIndex + 1);
       this.scheduleReplayTick();
     },
 
@@ -3827,14 +3966,14 @@ function redtraceApp() {
       this.scheduleReplayTick();
     },
 
-    restartProjectReplay() {
+    async restartProjectReplay() {
       if (!this.replay.active || this.replay.frames.length === 0) return;
       this.stopReplayTimer();
       this.replay.playing = true;
       this.selectedNode = null;
       this.selectedFacts = [];
       this.selectedTimelineEntryId = null;
-      this.applyReplayFrame(0, { reinitialize: true });
+      await this.applyReplayFrame(0, { reinitialize: true });
       this.scheduleReplayTick();
     },
 
@@ -3904,6 +4043,7 @@ function redtraceApp() {
         this.polling = true;
       }
       this.rememberProjectListScroll();
+      this.fgsFocusGoal = ''; this.fgsStepFilter = ''; this.fgsSelection = null; this.fgsEdgeSelection = null; this.fgsPanelOpen = false;
       this.selectedProjectId = id;
       this.selectedNode = null;
       this.selectedFacts = [];
@@ -3963,6 +4103,7 @@ function redtraceApp() {
     },
 
     buildElements() {
+      if (this.fgs?.nodes) return this.fgsBuildElements();
       const nodes = [];
       const edges = [];
       for (const f of this.project.facts) {
@@ -4009,6 +4150,14 @@ function redtraceApp() {
           }
         }
       }
+      for (const goal of (this.fgs?.goals || []).filter(goal => goal.id !== 'goal')) {
+        nodes.push({ data: { id: goal.id, label: goal.description, description: goal.description, nodeType: 'subgoal', fgsType: 'goal', width: 132, height: 52 }});
+        edges.push({ data: { id: `goal_${goal.parentId}_${goal.id}`, source: goal.parentId || 'goal', target: goal.id, label: goal.status, status: 'goal_link', fgsType: 'goal' }});
+      }
+      for (const finding of (this.fgs?.findings || [])) {
+        nodes.push({ data: { id: finding.id, label: finding.title, description: finding.description, nodeType: 'finding', fgsType: 'finding', width: 132, height: 52 }});
+        for (const fact of finding.factIds) edges.push({ data: { id: `finding_${fact}_${finding.id}`, source: fact, target: finding.id, label: finding.type, status: 'finding_link', fgsType: 'finding' }});
+      }
       return { nodes, edges };
     },
 
@@ -4022,7 +4171,7 @@ function redtraceApp() {
         style: this.graphStyles(),
         layout: this.layoutOpts(),
         pixelRatio: 2,
-        minZoom: 0.15, maxZoom: 3.5,
+        minZoom: this.fgs?.nodes ? 0.01 : 0.15, maxZoom: 3.5,
       });
       this.cy = rawCy;
       const self = this;
@@ -4031,6 +4180,7 @@ function redtraceApp() {
       rawCy.on('tap', e => { if (e.target === rawCy) self.clearSelection(); });
       this.pulseActive();
       this.setupAutoFit();
+      if (this.fgs?.nodes) this.fitGraph();
     },
 
     graphStyles() {
@@ -4041,6 +4191,10 @@ function redtraceApp() {
         { selector: 'node[nodeType="fact"]', style: { ...common, shape:'round-rectangle','background-color':'#0c1a28','background-opacity':0.98,label:'data(label)',color:'#dbeeff','font-size':'11px','font-weight':'bold','text-wrap':'wrap','text-max-width':'116px','text-overflow-wrap':'anywhere',width:'data(width)',height:'data(height)','border-width':1.8,'border-color':'#2c9ed0' }},
         { selector: 'node[nodeType="fact"][label ^= "Target"]', style: { 'background-color':'#321115','border-color':'#ff585b','color':'#ffe5e5' }},
         { selector: 'node[nodeType="fact"][label ^= "[resource:"]', style: { 'background-color':'#19122f','border-color':'#a783ff','color':'#eee6ff' }},
+        { selector: 'node[nodeType="subgoal"]', style: { ...common, shape:'round-rectangle','background-color':'#321115',label:'data(label)',color:'#ffe5e5','font-size':'10px','text-wrap':'wrap','text-max-width':'112px',width:'data(width)',height:'data(height)','border-width':1.5,'border-color':'#ff7a7d' }},
+        { selector: 'node[nodeType="finding"]', style: { ...common, shape:'round-rectangle','background-color':'#19122f',label:'data(label)',color:'#eee6ff','font-size':'10px','text-wrap':'wrap','text-max-width':'112px',width:'data(width)',height:'data(height)','border-width':1.5,'border-color':'#a783ff' }},
+        { selector: 'edge[status="goal_link"]', style: { width:1.5,'line-color':'#ff7a7d','target-arrow-color':'#ff7a7d','target-arrow-shape':'triangle','curve-style':'bezier','line-style':'dotted' }},
+        { selector: 'edge[status="finding_link"]', style: { width:1.5,'line-color':'#a783ff','target-arrow-color':'#a783ff','target-arrow-shape':'triangle','curve-style':'bezier' }},
         { selector: 'node[nodeType="in_progress"]', style: { ...common, shape:'round-rectangle','background-color':'#2b1c08','background-opacity':0.95,label:'data(label)',color:'#ffe6ae','font-size':'10px','font-weight':'bold',width:'data(width)',height:'data(height)','border-width':2,'border-color':'#ffb82e','text-wrap':'wrap','text-max-width':'112px' }},
         { selector: 'node[nodeType="unclaimed"]', style: { ...common, shape:'round-rectangle','background-color':'#101722','background-opacity':0.7,label:'data(label)',color:'#8595ab','font-size':'10px','font-weight':'bold',width:'data(width)',height:'data(height)','border-width':1.5,'border-color':'#526279','border-style':'dashed','text-wrap':'wrap','text-max-width':'112px' }},
         { selector: 'node[nodeType="bootstrap_pending"]', style: { ...common, shape:'round-rectangle','background-color':'#19122f','background-opacity':0.96,label:'data(label)',color:'#e4d9ff','font-size':'11px','font-weight':'bold',width:'data(width)',height:'data(height)','border-width':1.7,'border-color':'#a783ff','border-style':'dashed','text-wrap':'wrap','text-max-width':'70px' }},
@@ -4060,10 +4214,12 @@ function redtraceApp() {
         { selector: 'node.selected-fact', style: { 'border-width':2,'border-color':'#ff585b','underlay-color':'#ff585b','underlay-padding':8,'underlay-opacity':0.24,'z-index':1001 }},
         { selector: '.faded', style: { opacity:0.5 }},
         { selector: '.fresh', style: { opacity:0 }},
+        ...(this.fgs?.nodes ? this.fgsStyles() : []),
       ];
     },
 
     layoutOpts(animate = true) {
+      if (this.fgs?.nodes) return { name: 'dagre', rankDir: 'LR', nodeSep: 24, rankSep: 100, padding: 40, fit: false, animate: false };
       return {
         name: 'dagre',
         rankDir: 'TB',
@@ -4140,6 +4296,7 @@ function redtraceApp() {
 
     updateGraph() {
       if (!this.cy || !this.project) return;
+      if (this.fgs?.nodes) return this.updateFgsGraph();
       const { nodes, edges } = this.buildElements();
       const wantNodes = new Set(nodes.map(n => n.data.id));
       const wantEdges = new Set(edges.map(e => e.data.id));
@@ -4333,7 +4490,7 @@ function redtraceApp() {
               this.saveSidePanelWidth();
             }
             this.cy.resize();
-            this.cy.fit(undefined, 50);
+            if (!this.fgs?.nodes) this.cy.fit(undefined, 50);
           }
         }, 200);
       });
@@ -4380,6 +4537,7 @@ function redtraceApp() {
     },
 
     clearSelection() {
+      this.fgsSelection = null; this.fgsEdgeSelection = null;
       this.clearGraphSelection(false);
     },
 
@@ -4419,9 +4577,12 @@ function redtraceApp() {
 
     onNodeTap(e) {
       const node = e.target;
+      if (node.data('fgs')) { this.selectFgsNode(node.data('nodeType'), node.id()); return; }
       const id = node.data('id');
       const nt = node.data('nodeType');
       const keepLogFocus = this.sideTab === 'log';
+
+      if (node.data('fgsType')) { this.selectFgsNode(node.data('fgsType'), id); return; }
 
       if (['in_progress', 'unclaimed', 'bootstrap_pending', 'bootstrap_running'].includes(nt)) {
         this.selectIntent(node.data('intentId'));
@@ -4443,12 +4604,15 @@ function redtraceApp() {
     },
 
     onEdgeTap(e) {
+      if (e.target.data('fgs')) { this.selectFgsEdge(e.target.data()); return; }
+      if (e.target.data('fgsType')) { this.selectFgsNode(e.target.data('fgsType'), e.target.target().id()); return; }
       this.selectIntent(e.target.data('intentId'));
       if (this.sideTab === 'log') this.scrollTimelineToSelection();
       else this.sideTab = 'detail';
     },
 
     selectIntent(intent) {
+      if (this.fgs?.nodes) { this.selectFgsNode('step', typeof intent === 'string' ? intent : intent?.id); return; }
       const intentId = typeof intent === 'string' ? intent : intent?.id;
       if (!intentId) return;
       this.selectedFacts = [];
@@ -4458,6 +4622,7 @@ function redtraceApp() {
     },
 
     selectFact(fact) {
+      if (this.fgs?.nodes) { this.fgsOpenReference(typeof fact === 'string' ? fact : fact?.id); return; }
       const factId = typeof fact === 'string' ? fact : fact?.id;
       if (!factId) return;
       if (!this.selectedFacts.includes(factId)) this.selectedFacts = [factId];
@@ -4583,6 +4748,7 @@ function redtraceApp() {
     },
 
     getProducingIntent(fid) {
+      if (this.fgs?.nodes) { const stepId = this.fgs.facts.find(f => f.id === fid)?.stepId; return this.project?.intents.find(i => i.id === stepId) || null; }
       return this.project ? this.project.intents.find(i => i.to === fid) || null : null;
     },
 
@@ -4620,7 +4786,14 @@ function redtraceApp() {
     selectedOpenIntentRecord() {
       const intent = this.selectedIntentRecord();
       if (!intent || intent.to || !this.projectIsActive()) return null;
+      if (this.fgs?.nodes && !['pending', 'running', 'paused'].includes(intent.status)) return null;
       return intent;
+    },
+
+    selectedDeletableIntentRecord() {
+      const intent = this.selectedIntentRecord();
+      if (this.fgs?.nodes && (!intent || intent.factIds.length || !['pending', 'paused', 'blocked'].includes(intent.status))) return null;
+      return intent && this.projectIsActive() && !intent.to && !intent.concluded_at && !intent.worker ? intent : null;
     },
 
     selectedActionableOpenIntentRecord() {
@@ -5141,6 +5314,23 @@ function redtraceApp() {
       } catch(e) { this.showToast(e.message, 'error'); }
     },
 
+    async deleteSelectedIntent() {
+      const intent = this.selectedDeletableIntentRecord();
+      if (!intent || !await this.requestDangerConfirm({
+        title: '删除 Intent',
+        description: '删除后无法恢复；正在执行或已经产出 Fact 的 Intent 不允许删除。',
+        subject: `${intent.id} · ${intent.description}`,
+        confirmLabel: '删除 Intent',
+      })) return;
+      try {
+        await this.api('DELETE', `/projects/${this.selectedProjectId}/intents/${encodeURIComponent(intent.id)}`);
+        this.clearSelection();
+        await this.loadProject(this.selectedProjectId);
+        this.updateGraph();
+        this.showToast('Intent 已删除');
+      } catch(e) { this.showToast(e.message, 'error'); }
+    },
+
     releaseSelectedGraphNode() {
       return this.selectedReleasableFactId()
         ? this.releaseSelectedFact()
@@ -5238,6 +5428,23 @@ function redtraceApp() {
         await this.loadProject(this.selectedProjectId);
         this.sideTab = 'hints';
         this.showToast('Hint 已添加');
+      } catch(e) { this.showToast(e.message, 'error'); }
+    },
+
+    async deleteHint(hint) {
+      if (!this.projectCanWriteHints() || !await this.requestDangerConfirm({
+        title: '删除提示',
+        description: '删除后无法恢复。',
+        subject: hint.content,
+        confirmLabel: '删除提示',
+      })) return;
+      try {
+        await this.api('DELETE', `/projects/${this.selectedProjectId}/hints/${encodeURIComponent(hint.id)}`);
+        this.selectedTimelineEntryId = null;
+        await this.loadProjects();
+        await this.loadProject(this.selectedProjectId);
+        this.sideTab = 'hints';
+        this.showToast('Hint 已删除');
       } catch(e) { this.showToast(e.message, 'error'); }
     },
 

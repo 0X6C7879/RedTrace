@@ -20,16 +20,13 @@ def test_compose_builds_local_kali_worker_on_portable_bridge() -> None:
     assert compose["networks"]["default"]["name"] == "redtrace-network"
 
 
-    for service_name in ("redtrace-server", "redtrace-dispatcher"):
-        volumes = services[service_name]["volumes"]
-        assert any(
-            "${REDTRACE_CONFIG_FILE:-${REDTRACE_DISPATCH_CONFIG_FILE:-./redtrace.yaml}}"
-            in volume
-            for volume in volumes
-        )
-
-    dispatcher = services["redtrace-dispatcher"]
-    assert dispatcher["depends_on"]["redtrace-worker-image"]["condition"] == "service_completed_successfully"
+    runtime = services["redtrace"]
+    assert any(
+        "${REDTRACE_CONFIG_FILE:-${REDTRACE_DISPATCH_CONFIG_FILE:-./redtrace.yaml}}"
+        in volume
+        for volume in runtime["volumes"]
+    )
+    assert runtime["depends_on"]["redtrace-worker-image"]["condition"] == "service_completed_successfully"
 
 
 def test_dockerfiles_are_kali_based_and_architecture_neutral() -> None:
@@ -38,12 +35,15 @@ def test_dockerfiles_are_kali_based_and_architecture_neutral() -> None:
         encoding="utf-8"
     )
 
-    assert app_dockerfile.startswith("FROM kalilinux/kali-rolling:latest")
+    assert app_dockerfile.startswith("FROM node:24.21.0-bookworm-slim")
     assert worker_dockerfile.startswith("FROM kalilinux/kali-rolling:latest")
     assert "ARG TARGETARCH" in worker_dockerfile
     assert "amd64|arm64" in worker_dockerfile
     assert "FROM --platform=" not in app_dockerfile
     assert "FROM --platform=" not in worker_dockerfile
+    assert "python3" not in app_dockerfile
+    assert "uv " not in app_dockerfile
+    assert "start-redtrace.sh" in app_dockerfile
 
     assert "@openai/codex" not in app_dockerfile
     assert "@anthropic-ai/claude-code" not in app_dockerfile
@@ -72,4 +72,5 @@ def test_docker_context_excludes_host_virtual_environments_and_secrets() -> None
     patterns = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
 
     assert "**/.venv" in patterns
+    assert "**/.venv-*" in patterns
     assert ".redtrace-secrets" in patterns

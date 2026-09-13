@@ -58,10 +58,11 @@ def default_database_path(
 ) -> Path:
     """Return the database location, keeping WSL SQLite files off DrvFS."""
     env = environ or os.environ
-    resolved_root = (root or redtrace_root(env)).resolve()
-    root_text = resolved_root.as_posix()
+    selected_root = root or redtrace_root(env)
+    root_text = selected_root.as_posix()
     if is_wsl(env) and (root_text == "/mnt" or root_text.startswith("/mnt/")):
         return Path(env.get("HOME", str(Path.home()))) / ".redtrace" / "redtrace.db"
+    resolved_root = selected_root.resolve()
     return resolved_root / ".redtrace" / "redtrace.db"
 
 

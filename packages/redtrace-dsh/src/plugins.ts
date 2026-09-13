@@ -242,6 +242,9 @@ export class PluginManager {
     /** Repo root for module resolution and the user plugins/ directory; tests inject a tmp root. */
     root: string = repoRoot,
     loadModule: (relative: string) => Promise<unknown> = load,
+    /** Native engine modules use the same real Cordis fibers and management contracts. */
+    private readonly replacements: Readonly<Record<string, unknown>> = {},
+    private readonly onChange: () => void = () => {},
   ) {
     // The loader's repoRoot URL carries a trailing slash; normalize so prefix
     // checks (inside-repo, inside plugins/) compare cleanly.
@@ -291,6 +294,7 @@ export class PluginManager {
       if (this.statuses.get(entry.id) === 'stopped') shared.presets.delete(entry.preset)
       else shared.presets.add(entry.preset)
     }
+    this.onChange()
   }
 
   private async readManifest(): Promise<void> {
@@ -323,7 +327,7 @@ export class PluginManager {
     if (this.mounted.has(entry.id)) return
     const config = entry.needsRuntimeConfig === true ? this.config : undefined
     try {
-      const mounted = this.mount(entry.id, entry.module, config)
+      const mounted = this.mount(entry.id, this.replacements[entry.id] ?? entry.module, config)
       if (awaitSettle) {
         await Promise.race([mounted.settled, delay(SETTLE_TIMEOUT_SECONDS)])
       }

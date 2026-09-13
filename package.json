@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "pnpm@11.7.0",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24.15 <25"
   },
   "scripts": {
     "dsh:install": "node scripts/dsh-pnpm.mjs install --frozen-lockfile",

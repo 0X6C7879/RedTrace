@@ -1,0 +1,33 @@
+# Existing Cordis services, hosted by the Node FGS engine.
+- id: web-server
+  name: '../../vendor/deepseek-harness/packages/host/webserver/lib/index.js'
+  config:
+    host: !!js process.env.REDTRACE_DSH_WEB_HOST ?? '127.0.0.1'
+    port: !!js Number(process.env.REDTRACE_DSH_WEB_PORT ?? '8000')
+- id: settings
+  name: '../../vendor/deepseek-harness/packages/settings/settings-file/lib/index.js'
+  config:
+    path: !!js process.env.REDTRACE_DSH_SETTINGS
+- id: llm-pi-ai
+  name: '../../vendor/deepseek-harness/packages/llm/llm-pi-ai/lib/index.js'
+  config: { providers: {} }
+- id: llm-deepseek
+  name: '../../vendor/deepseek-harness/packages/llm/llm-deepseek/lib/index.js'
+- id: token-meter
+  name: '../../vendor/deepseek-harness/packages/llm/token-meter/lib/index.js'
+- id: compaction-basic
+  name: '../../vendor/deepseek-harness/packages/compaction/compaction-basic/lib/index.js'
+- id: compaction-tool-result-pruner
+  name: '../../vendor/deepseek-harness/packages/compaction/compaction-tool-result-pruner/lib/index.js'
+- id: subprocess
+  name: '../../vendor/deepseek-harness/packages/subprocess/subprocess-local/lib/index.js'
+- id: sessions
+  name: '../../vendor/deepseek-harness/packages/session/session-persistence-jsonl/lib/index.js'
+  config:
+    root: !!js process.env.DSH_SESSION_ROOT
+    compression: none
+- id: session-checkpoints
+  name: '../../vendor/deepseek-harness/packages/session/session-checkpoint-policy/lib/index.js'
+- id: redtrace-node
+  name: '../../packages/redtrace-engine/compat/cordis.mjs'
+  config: !!js JSON.parse(process.env.REDTRACE_NODE_OPTIONS)

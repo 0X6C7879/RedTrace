@@ -1930,3 +1930,17 @@ body .fixed.z-50 > .bg-white {
     max-width: none !important;
   }
 }
+/* Native FGS: narrow viewports use a drawer instead of shrinking the graph. */
+.fgs-drawer-toggle { display: none; }
+.fgs-header { flex-wrap: wrap; }
+.fgs-header > .title-action-trigger { max-width: 100%; }
+#graphLayout.fgs-native { position: relative; min-width: 0 !important; }
+#graphLayout.fgs-native .fgs-toolbar select,
+#graphLayout.fgs-native .fgs-side-panel select { background: #101722; color: #dbeeff; border-color: #405167; }
+#graphLayout.fgs-native .fgs-selection { color: #dbeeff; background: #101722; border-color: #405167; }
+@media (max-width: 900px) {
+  #graphLayout.fgs-native .fgs-drawer-toggle { display: inline-block; }
+  #graphLayout.fgs-native .fgs-resize-handle { display: none; }
+  #graphLayout.fgs-native .fgs-side-panel { display: none; position: absolute; right: 0; top: 48px; bottom: 0; width: min(360px, 92%) !important; min-width: 0 !important; max-width: 92%; z-index: 30; }
+  #graphLayout.fgs-native.fgs-panel-open .fgs-side-panel { display: flex; }
+}

@@ -5,6 +5,7 @@
 .redtrace-secrets
 
 **/.venv
+**/.venv-*
 **/.codex-test-venv
 **/venv
 **/__pycache__

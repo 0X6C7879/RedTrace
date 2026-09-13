@@ -1,6 +1,6 @@
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
 from redtrace.board import intents
 from redtrace.board.intents import BOOTSTRAP_CREATOR
@@ -16,6 +16,8 @@ from redtrace.board.models import (
 )
 from redtrace.board.storage import (
     bump_planning_revision,
+    check_project_active,
+    get_intent_or_404,
     get_project_or_404,
     utcnow,
 )
@@ -33,6 +35,22 @@ MAX_FAILURES = len(RETRY_DELAYS)
 )
 def create_intent(project_id: str, body: CreateIntentRequest):
     return intents.create(project_id, body)
+
+
+@router.delete("/projects/{project_id}/intents/{intent_id}", status_code=204)
+def delete_intent(project_id: str, intent_id: str) -> Response:
+    with get_conn(immediate=True) as conn:
+        check_project_active(conn, project_id)
+        intent = get_intent_or_404(conn, project_id, intent_id)
+        if intent["to_fact_id"] is not None or intent["concluded_at"] is not None:
+            raise HTTPException(409, "Concluded Intent cannot be deleted")
+        if intent["worker"] is not None:
+            raise HTTPException(409, f"Intent is currently claimed by {intent['worker']}")
+        conn.execute(
+            "DELETE FROM intents WHERE id = ? AND project_id = ?",
+            (intent_id, project_id),
+        )
+    return Response(status_code=204)
 
 
 @router.patch(

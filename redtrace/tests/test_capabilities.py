@@ -13,6 +13,7 @@ from redtrace.capabilities import (
 from redtrace.dispatcher.config import WorkerConfig
 from redtrace.dispatcher.runtime.containers import ContainerManager
 from redtrace.server.app import app
+from redtrace.server import db
 
 SKILL = """---
 name: recon
@@ -61,6 +62,7 @@ def _worker(worker_type: str) -> WorkerConfig:
 
 def test_capabilities_api_crud(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("REDTRACE_CAPABILITIES_ROOT", str(tmp_path))
+    monkeypatch.setattr(db, "DEFAULT_DB", tmp_path / "redtrace.db")
     with TestClient(app) as client:
         index = client.get("/")
         assert index.status_code == 200

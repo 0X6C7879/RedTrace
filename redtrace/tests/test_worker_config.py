@@ -973,6 +973,8 @@ def test_static_ui_has_only_dagre_and_admin_defaults() -> None:
     assert "return 'admin';" in index
     assert "return 'admin';" in operations
     assert ':disabled="!selectedOpenIntentRecord()"' in index
+    assert ':disabled="!selectedDeletableIntentRecord()"' in index
+    assert "/hints/${encodeURIComponent(hint.id)}" in index
     assert "return intent?.worker ? intent : null;" in index
     assert "webshellSessionLabel()" in operations
     assert "resource.status === 'available'" in operations

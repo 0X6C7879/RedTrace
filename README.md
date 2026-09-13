@@ -1,6 +1,6 @@
 # RedTrace
 
-RedTrace 是一个面向授权安全研究、代码审计与复杂技术调查的多 Agent 协同平台。它把目标、已验证证据、待验证方向和人工提示组织成持续演进的证据图谱，再由独立的调度器把工作分配给声明了各自模型与资格的异构 Worker。
+RedTrace 是一个面向授权安全研究、代码审计与复杂技术调查的本地 Agent 系统。Node 内核把目标、事实、待执行步骤和成果组织为唯一的 FGS 图，再把工作分配给声明了各自模型、资格与并发上限的 Worker。
 
 RedTrace 关注的不是一次对话能否给出答案，而是一个长任务能否被并行推进、持续校正、失败恢复并完整审计。每次执行都有明确输入、结构化输出、运行记录和 Workspace；新的可靠结论会进入共享证据面，供正在运行的其他 Worker 在关键决策点增量获取。
 
@@ -8,10 +8,10 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 
 ## 核心能力
 
-- **Trace Loop 任务闭环**：通过 `bootstrap → reason → explore` 循环完成初始突破、全局判断和并行验证，直到目标完成、人工停止或暂时没有可执行方向。
-- **证据图谱**：用 `Project`、`Fact`、`Intent`、`Hint`、`Observation` 区分目标、正式事实、调查方向、人工输入和中间观察，避免把模型的临时推测当成结论。所有结论只能通过契约工具原子提交，不允许直写。
+- **Decide / Execute 闭环**：每个项目最多一个无私有会话的 Decide；多个 Execute 可并行推进 Step，任一事实提交都会立即唤醒下一轮规划。
+- **唯一 FGS 图**：`Fact` 保存有来源的事实，`Goal` 保存完成条件和子目标，`Step` 保存行动与状态，`Finding` 保存可交付成果。`Hint` 与 `Observation` 保持人工输入和中间记录语义。
 - **异构 Worker 协同（Worker 即路由）**：任意数量 Worker 各自声明 Provider、模型、任务资格（bootstrap/reason/explore）、并发与优先级。调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务——路由完全由 Worker 派生，而非按任务类型写死。
-- **统一 DSH Agent 运行时**：所有真实 Worker 运行在同一个常驻 DSH/Cordis 运行时中，每个任务获得独立 Agent 与 Session；Shell、文件系统、Skill、MCP、沙箱按任务动态挂载。运行时自身也由插件组成——编排、审计、资源、Web 托管全部是可独立启停的 Cordis 插件（见 `packages/redtrace-dsh/`）。
+- **Node 24 Agent 运行时**：轻量任务直接使用 Pi Agent；需要旧钩子的任务使用 DSH 适配器。两者共享一个 FGS 调度器，Cordis 插件仍运行在真实 Cordis 服务和生命周期中。
 - **运行中知识同步**：证据图谱修订会通过 `agent.inject()` 增量送达正在运行的 Agent；共享 Resource 摘要随上下文注入，完整信息按需查询。
 - **上下文预算治理**：DSH 原生 Session Compaction 与 Tool Result Pruner 控制上下文压力，Graph 按需注入而不是无限堆进 Prompt；完整输出落盘为可追溯 Artifact。
 - **资源与操作面**：统一管理 WebShell、C2 Listener、Session、Payload、凭证、外部插件和操作结果；MSF、Sliver、Cobalt Strike 与自定义 C2 通过同一个 Adapter 合约接入。Resource 保留可变运行状态，不会隐式生成 Fact。
@@ -20,32 +20,29 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 
 ## 工作方式
 
-系统分为三层：**控制面**是 Python（FastAPI + SQLite）的 RedTrace Server，负责领域状态、租约、审计与配置；**执行面**是常驻 DSH/Cordis 运行时（TypeScript），其内的 Scheduler 插件负责 worker-centric 派发与任务编排，每个任务在运行时中激活独立 Agent；**能力层**由共享 Skill（92 个，其中 40 个为攻防竞赛专项）、共享 MCP 配置和 Context Harness 组成，按任务类型动态挂载。
+系统分为三层：**内核**是 TypeScript + Node 24 + 内置 SQLite，负责 FGS、事务、调度、审计与配置；**执行面**按 Worker 选择 Pi 或 DSH Agent，并保持 Step 独立会话；**能力层**由 Cordis 插件、Skill、MCP、Resource、浏览器与安全工具组成，按任务装载。
 
 ```mermaid
 flowchart LR
-    U[用户 / Web / CLI / 插件] --> W[DSH Web Server :8000]
-    W -->|域 API 反代| S[RedTrace Server<br/>FastAPI + SQLite]
-    S --> E[(证据图谱与审计记录)]
-    D[Scheduler 插件<br/>worker-centric 派发] <--> S
-    D --> RT[常驻 Cordis 运行时<br/>每任务独立 Agent + Session]
-    RT --> WA[Worker A<br/>provider + model]
-    RT --> WB[Worker B<br/>provider + model]
-    RT --> WM[Mock Worker<br/>确定性测试引擎]
-    WA --> A[审计事件与结构化结果]
-    WB --> A
-    A --> S
-    S -. 增量证据通知 .-> RT
+    U[用户 / Web / 旧 API / 插件] --> N[Node 请求处理器]
+    N <--> DB[(SQLite<br/>FGS + Finding + Audit)]
+    DB --> D[单实例 Decide]
+    D --> S[待执行 Step]
+    S --> E1[Pi Execute]
+    S --> E2[DSH Execute]
+    E1 --> DB
+    E2 --> DB
+    C[Cordis 宿主<br/>Web / 插件 / 外围能力] --> N
 ```
 
 一次典型任务会经历：
 
-1. 用户创建 Project，提供起点、目标、约束和可选 Hint。
-2. `bootstrap` 尝试直接取得关键证据或完成目标。
-3. `reason` 读取当前证据图谱，判断是否已经完成；若未完成，则创建新的 Intent。
-4. 一个或多个 `explore` Worker 认领 Intent，并行执行验证。
-5. 执行中的发现先共享为 Observation；最终验证结果通过 conclude 原子写为 Fact 并收束 Intent，随后进入下一轮 `reason`。
-6. 目标满足后项目标记为 completed；失败、超时或取消则按任务协议回收或恢复。
+1. 用户创建 Project，提供 Origin、根 Goal 与可选 Hint。
+2. Decide 读取当前任务图，完成 Goal 或生成关联 Fact、Goal 与优先级的 Step；Bootstrap 只是首轮 Step 策略。
+3. 调度器按模型、资格与并发限制原子领取 Step；Pi 或 DSH Execute 在独立会话中执行。
+4. Execute 可持续提交 Fact 和 Finding；事务提交后直接唤醒 Decide 与界面，无需 HTTP 认领轮询。
+5. Stop 保存活动检查点；恢复沿用同一 Step 会话。崩溃后保留已提交事实，结果未知的外部操作不会自动重放。
+6. Goal 满足后项目完成；旧 Intent/Reason/Explore API 只投影到这张图，不维护第二套状态。
 
 详细设计见 [技术架构与调度设计](docs/specs/dispatcher-design.md)。
 
@@ -63,17 +60,16 @@ flowchart LR
 
 正在运行的 Worker 不必等到下一次任务启动才看到新证据。RedTrace 会监视证据修订，通过运行时的原生注入通道发送精简更新；完整内容继续按需读取，避免无边界地扩张 Prompt。
 
-### 执行面可替换，控制面保持稳定
+### 一个内核，多种执行适配器
 
-Server 负责协议与持久状态，Scheduler 负责派发与生命周期，DSH 运行时负责进程和隔离，Provider Profile 负责供应商差异。切换模型或执行后端时，项目协议和审计结构无需随之重写；DSH 上游以子模块形式 pin 住版本，由每周定时任务检测漂移并自动开出升级 PR。
+FGS Store 负责唯一持久状态，Scheduler 只领取 Step 和分配配额，执行适配器负责模型会话与工具。Pi 与 DSH 不复制任务图；旧 API、Cordis 插件和外围能力都调用同一组 Node 存储函数。
 
 ## 快速开始
 
 ### 环境要求
 
-- Python 3.12 或更高版本
-- [`uv`](https://docs.astral.sh/uv/) 作为推荐的 Python 包与运行工具
-- Node.js 22.19 或更高版本（DSH Cordis 运行时）
+- Node.js 24.15 或更高版本，且保持在 Node 24 LTS 主版本
+- npm（仅首次安装锁定的 Node 依赖时使用）
 - 一个 OpenAI 兼容或 Anthropic 兼容的模型 API 端点与密钥
 
 Windows、macOS 和 Linux 均可原生运行，无需 Docker 与 WSL。
@@ -86,7 +82,7 @@ cd RedTrace
 BRAVE_API_KEY="replace-me" bash deploy.sh
 ```
 
-`deploy.sh` 会检测 Linux 或 macOS，准备 Python/Node 环境、Playwright/Chromium、共享 Skill 和安全工具链。Linux 支持 APT、DNF/YUM、Pacman、Zypper 与 APK；也可以只检查安全工具链计划：
+`deploy.sh` 会检测 Linux 或 macOS，准备 Node、Playwright/Chromium、共享 Skill 和可选安全工具链。Linux 支持 APT、DNF/YUM、Pacman、Zypper 与 APK；也可以只检查安全工具链计划：
 
 ```bash
 bash install-security-toolchain.sh --dry-run apt
@@ -108,11 +104,11 @@ cp redtrace.dsh.example.yaml redtrace.yaml
 ./start-redtrace.sh
 ```
 
-复制后编辑 `redtrace.yaml`：填入 `providers.<name>.api_key`，按需调整 `workers`。两个入口都是真正的“一键”：首次运行会自动同步 Python 依赖、初始化 DSH 子模块（`vendor/deepseek-harness`）并构建 DSH 运行时，之后直接启动。它们都接受 `--config`、`--host` 和 `--port`；`Ctrl+C` 会停止本次启动的全部进程。各平台使用独立虚拟环境，允许 Windows 与 WSL 安全地共用同一检出目录。
+复制后编辑 `redtrace.yaml`：填入 `providers.<name>.api_key`，按需调整 `workers`。两个入口首次运行会执行锁定的 npm 安装并构建 Cordis 兼容运行时，之后直接启动。它们接受 `--config`、`--host` 和 `--port`；`Ctrl+C` 会停止本次 Node 进程。用户调用的 Python 安全工具仍可作为外部工具使用，RedTrace 自身不依赖 Python。
 
 ### 运行时模型
 
-启动后只有一个入口进程 `redtrace start`：它同时监管 RedTrace API Server 与常驻 DSH Cordis 运行时。真实 Provider Worker 由 Cordis 运行时调度，每个任务在其中创建独立 Agent 与 Session，模型经 OpenAI/Anthropic 兼容端点调用；Web UI 由 Cordis Web 服务器直接提供（默认 `http://127.0.0.1:8000`），域 API 由内置代理转发到 RedTrace Server。`mock` Worker（`provider: mock`）走进程内确定性测试引擎，用于开发与自动化测试。
+启动后只有一个 Node 进程：Cordis Web 服务直接调用 Node 请求处理器并提供 Web UI（默认 `http://127.0.0.1:8000`），没有 FastAPI 反代。`mock` Worker 走进程内确定性执行器，用于开发、持久化测试和性能对照。
 
 Worker 即路由：每个 Worker 独立声明 `provider`、`model`、`bootstrap/reason/explore` 资格、`max_running` 并发与 `priority`；调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务。Worker 修改后对新任务自动生效，无需重启——设置页与直改配置文件都走同一条热加载链路，任何配置变更都不要求重启进程。
 
@@ -125,7 +121,7 @@ cp redtrace.container.example.yaml redtrace.yaml
 docker compose up --build
 ```
 
-Compose 会构建 RedTrace 控制面和 Worker 镜像。Container Runtime 默认按项目创建独立容器，并挂载共享能力目录与项目 Workspace。
+Compose 会构建单进程 Node 控制面和可选 Worker 工具镜像。Node 容器直接运行 FGS 调度器、Cordis Web 宿主与执行器，并挂载共享能力目录、独立的 v2 数据目录和项目 Workspace。
 
 如需使用其他配置文件：
 
@@ -141,8 +137,8 @@ Mock Worker 用于协议开发、调度回归和确定性端到端测试，不�
 
 ```bash
 cp redtrace.mock.example.yaml redtrace.yaml
-uv run --project redtrace redtrace serve
-uv run --project redtrace redtrace dispatch --config redtrace.yaml
+./start-redtrace.sh --config redtrace.yaml --mock
+# Windows: start-redtrace.cmd --config redtrace.yaml --mock
 ```
 
 ## 配置概览
@@ -177,10 +173,8 @@ uv run --project redtrace redtrace dispatch --config redtrace.yaml
 ### 主程序
 
 ```bash
-redtrace serve --host 127.0.0.1 --port 8000
-redtrace dispatch --config redtrace.yaml
-redtrace dispatch --config redtrace.yaml --once
-redtrace dispatch --config redtrace.yaml --startup-healthcheck-only
+./start-redtrace.sh --config redtrace.yaml --host 127.0.0.1 --port 8000
+# Windows: start-redtrace.cmd --config redtrace.yaml --host 127.0.0.1 --port 8000
 ```
 
 ### DSH 运行时构建与测试
@@ -190,7 +184,6 @@ npm run dsh:install        # 安装 DSH 上游依赖（vendor/deepseek-harness �
 npm run dsh:build          # 构建上游 + RedTrace DSH 扩展包
 npm run dsh:test           # 运行 TypeScript 侧测试
 npm run dsh:probe          # 探针检查运行时装配
-npm run dsh:check-revision # 校验 DSH 上游 revision pin
 ```
 
 ### 增量证据查询
@@ -248,14 +241,11 @@ Context Harness 会把完整输出保存到 `.redtrace/artifacts/context`，同�
 
 | 路径 | 内容 |
 |---|---|
-| `redtrace/src/redtrace/server/` | FastAPI 控制面、SQLite、REST/SSE、静态 Web UI |
-| `redtrace/src/redtrace/dispatcher/` | 配置、调度循环、任务编排、运行时与 Mock Worker Adapter |
-| `redtrace/src/redtrace/board/` | Project、Fact、Intent、Hint 的领域模型与存储访问 |
-| `redtrace/src/redtrace/capabilities.py` | Skill/MCP 能力发现、启停、版本与 Workspace 物化 |
-| `redtrace/src/redtrace/worker_config.py` | Worker 配置服务、连接测试和原生 CLI 配置同步 |
+| `packages/redtrace-engine/` | Node FGS 存储、Decide/Execute 调度、REST/SSE、配置、审计与外围能力 |
 | `packages/redtrace-dsh/` | RedTrace DSH 扩展包：Scheduler、契约工具、插件管理、审计投影、Web 托管等 Cordis 插件 |
 | `vendor/deepseek-harness/` | DSH/Cordis 运行时（vendored，本地维护为主，不跟随上游） |
 | `profiles/redtrace/` | Cordis 运行时组装配置（runtime/direct/reason/isolated） |
+| `redtrace/` | 已退出生产入口的 Python 旧版源码与兼容契约回归样本 |
 | `skills/` | 多 Worker 共享的一级原生 Skill；由 Agent 按需直接加载 |
 | `mcp/` | 共享 MCP 配置与服务入口 |
 | `container/` | Worker 容器镜像与运行资产 |
@@ -269,15 +259,16 @@ Context Harness 会把完整输出保存到 `.redtrace/artifacts/context`，同�
 ## 验证与测试
 
 ```bash
-uv sync --project redtrace --locked --group dev
-uv run --project redtrace pytest -q
+npm ci --prefix packages/redtrace-engine
+npm run --prefix packages/redtrace-engine check
+npm test --prefix packages/redtrace-engine
 npm run dsh:test
 docker compose config -q
 ```
 
-Python 测试套件（340+ 用例）覆盖 Server API、数据库迁移、调度策略、任务协议、Worker 路由、实时控制、本地与容器运行时、项目删除、能力管理、上下文工件、部署脚本和 Mock 端到端流程；TypeScript 侧用 `node:test` 覆盖 DSH 扩展包。
+Node 测试覆盖 FGS 事务、并发领取、事实触发规划、暂停恢复、旧 API 投影、配置密钥、外围能力、Cordis 生命周期、启动脚本和 Mock 端到端流程；DSH 扩展继续用 `node:test` 覆盖插件与旧 Agent 钩子。
 
-CI 在 Windows、macOS 与 Ubuntu 三个平台上运行全链：依赖同步 → DSH revision 校验 → 构建 → TS 测试 → 探针 → 全量 pytest → 启动脚本冒烟。另有每周一定时任务检测 DSH 上游漂移，自动提交子模块指针更新并开出升级 PR。
+CI 在 Windows、macOS 与 Ubuntu 三个平台上运行 Node 24.21：内核类型检查与测试 → DSH 构建、测试与探针 → 启动脚本冒烟。
 
 ## 安全边界
 

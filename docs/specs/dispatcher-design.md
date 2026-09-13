@@ -1,4 +1,6 @@
-# RedTrace 技术架构与调度设计
+# RedTrace 技术架构与调度设计（Python 旧版归档）
+
+本文记录切换前的 Python/FastAPI 调度架构，仅用于兼容排查和回退。当前 Node 24 FGS 架构见 [Node FGS Runtime](node-fgs-runtime.md)。
 
 本文档描述 RedTrace 0.3.x 当前代码的系统设计、运行链路、可靠性机制和技术优势。字段级 API 契约见 [Server 协议](server-protocol.md)，上下文处理细节见 [Context Harness](context-harness.md)。
 

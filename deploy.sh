@@ -22,14 +22,6 @@ case "$OS" in
 esac
 REDTRACE_HOST="${REDTRACE_HOST:-$DEFAULT_HOST}"
 REDTRACE_PORT="${REDTRACE_PORT:-8000}"
-REDTRACE_USE_LAUNCHD="${REDTRACE_USE_LAUNCHD:-0}"
-if [[ "$OS" == "Darwin" ]]; then
-  DEFAULT_PLAINTEXT_SECRETS=1
-else
-  DEFAULT_PLAINTEXT_SECRETS=0
-fi
-REDTRACE_PLAINTEXT_SECRETS="${REDTRACE_PLAINTEXT_SECRETS:-$DEFAULT_PLAINTEXT_SECRETS}"
-export REDTRACE_PLAINTEXT_SECRETS
 BRAVE_SKILL_DIR="$PROJECT_DIR/skills/brave-search"
 GHIDRA_SKILL_DIR="$PROJECT_DIR/skills/ghidra-reverse"
 PLAYWRIGHT_SKILL_DIR="$PROJECT_DIR/skills/playwright-skill"
@@ -261,32 +253,30 @@ ensure_brew_formula_cli_path() {
 }
 
 ensure_node() {
-  local major=0
+  local major=0 minor=0
   if has node; then
     major="$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/' || true)"
+    minor="$(node --version 2>/dev/null | cut -d. -f2 | tr -cd '0-9' || true)"
   fi
-  if has npm && [[ "$major" =~ ^[0-9]+$ ]] && ((major >= 22)); then
+  if has npm && [[ "$major" == 24 && "$minor" =~ ^[0-9]+$ ]] && ((minor >= 15)); then
     log "Node.js $(node --version) and npm are already installed"
     return
   fi
   if [[ "$OS" == "Darwin" ]]; then
-    log "installing/upgrading Node.js through Homebrew"
-    brew list --formula node >/dev/null 2>&1 && brew upgrade node || brew install node
+    log "installing/upgrading Node.js 24 through Homebrew"
+    brew list --formula node@24 >/dev/null 2>&1 && brew upgrade node@24 || brew install node@24
+    export PATH="$(brew --prefix node@24)/bin:$PATH"
   else
     if ldd --version 2>&1 | grep -qi musl; then
-      die "Node.js 22 or newer is required on musl Linux; install the distribution's nodejs-current package"
+      die "Node.js 24.15+ is required on musl Linux; install a Node 24 package"
     fi
-    local machine node_arch version archive base temp_dir node_dir
+    local machine node_arch version=v24.21.0 archive base temp_dir node_dir
     machine="$(uname -m)"
     case "$machine" in
       x86_64|amd64) node_arch="x64" ;;
       aarch64|arm64) node_arch="arm64" ;;
       *) die "unsupported Node.js architecture: $machine" ;;
     esac
-    version="$(
-      curl -fsSL https://npmmirror.com/mirrors/node/index.json \
-        | python3 -c 'import json,sys; print(next(v["version"] for v in json.load(sys.stdin) if v.get("lts") and int(v["version"].split(".")[0][1:]) >= 22))'
-    )"
     archive="node-${version}-linux-${node_arch}.tar.xz"
     base="https://npmmirror.com/mirrors/node/${version}"
     temp_dir="$(mktemp -d)"
@@ -307,8 +297,9 @@ ensure_node() {
   fi
   hash -r
   major="$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/' || true)"
-  has npm && has npx && [[ "$major" =~ ^[0-9]+$ ]] && ((major >= 22)) \
-    || die "Node.js 22 or newer with npm/npx is required"
+  minor="$(node --version 2>/dev/null | cut -d. -f2 | tr -cd '0-9' || true)"
+  has npm && has npx && [[ "$major" == 24 && "$minor" =~ ^[0-9]+$ ]] && ((minor >= 15)) \
+    || die "Node.js 24.15+ (<25) with npm/npx is required"
 }
 
 ensure_java() {
@@ -710,108 +701,13 @@ prepare_local_config() {
   log "created local config: $CONFIG_PATH"
 }
 
-configure_brave_search_secret() {
-  local api_key="${BRAVE_API_KEY:-}"
-  if [[ -z "$api_key" ]]; then
-    if uv run --project "$PROJECT_DIR/redtrace" python - "$CONFIG_PATH" <<'PY'
-import sys
-import yaml
-
-from redtrace.config_secrets import secret_id_from_reference
-from redtrace.worker_config import WorkerConfigService
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    raw = yaml.safe_load(handle) or {}
-value = (raw.get("common_env") or {}).get("BRAVE_API_KEY")
-if secret_id_from_reference(value):
-    raise SystemExit(0)
-if isinstance(value, str) and value:
-    WorkerConfigService(sys.argv[1]).set_common_env_value("BRAVE_API_KEY", value)
-    raise SystemExit(0)
-raise SystemExit(1)
-PY
-    then
-      log "BRAVE_API_KEY is already configured for all local workers"
-      return
-    fi
-    warn "BRAVE_API_KEY is not configured; export it and rerun to enable Brave fallback"
-    return
-  fi
-
-  BRAVE_API_KEY="$api_key" uv run --project "$PROJECT_DIR/redtrace" python - "$CONFIG_PATH" <<'PY'
-import os
-import sys
-
-from redtrace.worker_config import WorkerConfigService
-
-WorkerConfigService(sys.argv[1]).set_common_env_value(
-    "BRAVE_API_KEY",
-    os.environ["BRAVE_API_KEY"],
-)
-PY
-  unset BRAVE_API_KEY
-  log "stored BRAVE_API_KEY in the encrypted local Worker configuration"
-}
-
-configure_brave_search_key() {
-  local api_key="${BRAVE_API_KEY:-}"
-  BRAVE_API_KEY="$api_key" uv run --project "$PROJECT_DIR/redtrace" python - "$CONFIG_PATH" <<'PY'
-import os
-import sys
-import yaml
-from pathlib import Path
-
-from redtrace.config_secrets import (
-    SecretStore,
-    atomic_write_text,
-    resolve_config_secrets,
-)
-
-path = Path(sys.argv[1]).expanduser().resolve()
-with open(path, encoding="utf-8") as handle:
-    raw = yaml.safe_load(handle) or {}
-resolved = resolve_config_secrets(path, raw)
-common_env = resolved.setdefault("common_env", {})
-supplied = os.environ.get("BRAVE_API_KEY", "")
-if supplied:
-    common_env["BRAVE_API_KEY"] = supplied
-common_env["NODE_USE_ENV_PROXY"] = "1"
-value = common_env.get("BRAVE_API_KEY")
-if not isinstance(value, str) or not value:
-    raise SystemExit("BRAVE_API_KEY is not configured")
-
-atomic_write_text(path, yaml.safe_dump(resolved, sort_keys=False), mode=0o600)
-store = SecretStore(path)
-store.data_path.unlink(missing_ok=True)
-store.key_path.unlink(missing_ok=True)
-try:
-    store.data_path.parent.rmdir()
-except OSError:
-    pass
-PY
-  unset BRAVE_API_KEY
-  log "stored BRAVE_API_KEY as plaintext in the local Worker configuration"
-}
-
 test_brave_search_skill() {
   [[ "${REDTRACE_SKIP_BRAVE_TEST:-0}" == "1" ]] && {
     log "skipping brave-search API test (REDTRACE_SKIP_BRAVE_TEST=1)"
     return
   }
 
-  local api_key attempt
-  api_key="$(
-    uv run --project "$PROJECT_DIR/redtrace" python - "$CONFIG_PATH" <<'PY'
-import sys
-from pathlib import Path
-
-from redtrace.dispatcher.config import DispatchConfig
-
-print(
-    DispatchConfig.load(Path(sys.argv[1])).common_env.get("BRAVE_API_KEY", "")
-)
-PY
-  )"
+  local api_key="${BRAVE_API_KEY:-}" attempt
   if [[ -z "$api_key" ]]; then
     warn "brave-search API test skipped because BRAVE_API_KEY is not configured"
     return
@@ -849,157 +745,11 @@ start_component() {
   fi
   rm -f -- "$pid_file"
   log "starting $name"
-  uv run --project "$PROJECT_DIR/redtrace" python - \
-    "$PROJECT_DIR" "$pid_file" "$LOG_DIR/$name.log" "$@" <<'PY'
-import os
-import sys
-from pathlib import Path
-
-working_directory, pid_path, log_path, *arguments = sys.argv[1:]
-first_child = os.fork()
-if first_child:
-    _, status = os.waitpid(first_child, 0)
-    raise SystemExit(os.waitstatus_to_exitcode(status))
-
-os.setsid()
-daemon_pid = os.fork()
-if daemon_pid:
-    path = Path(pid_path)
-    temporary = path.with_suffix(".pid.tmp")
-    temporary.write_text(f"{daemon_pid}\n", encoding="utf-8")
-    temporary.replace(path)
-    os._exit(0)
-
-os.chdir(working_directory)
-stdin = os.open(os.devnull, os.O_RDONLY)
-output = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-os.dup2(stdin, 0)
-os.dup2(output, 1)
-os.dup2(output, 2)
-os.close(stdin)
-os.close(output)
-os.execvpe(arguments[0], arguments, os.environ.copy())
-PY
+  (cd "$PROJECT_DIR" && nohup "$@" >>"$LOG_DIR/$name.log" 2>&1 </dev/null & echo $! >"$pid_file.tmp")
+  mv -- "$pid_file.tmp" "$pid_file"
   pid="$(cat "$pid_file")"
   sleep 1
   kill -0 "$pid" 2>/dev/null || { tail -n 40 "$LOG_DIR/$name.log" >&2 || true; die "$name failed to start"; }
-}
-
-write_launch_agent() {
-  local label="$1" log_path="$2" plist_path="$3"
-  shift 3
-  uv run --project "$PROJECT_DIR/redtrace" python - \
-    "$plist_path" "$label" "$PROJECT_DIR" "$log_path" "$CONFIG_PATH" \
-    "${REDTRACE_CONFIG_SECRETS_DIR:-$PROJECT_DIR/.redtrace-secrets}" \
-    "$HOME" "$WORKER_PATH:$PATH" "$REDTRACE_LOCAL_PATH_PREPEND" \
-    "${DYLD_FALLBACK_LIBRARY_PATH:-}" "$@" <<'PY'
-import plistlib
-import sys
-from pathlib import Path
-
-(
-    plist_path,
-    label,
-    working_directory,
-    log_path,
-    config_path,
-    secrets_directory,
-    home_directory,
-    process_path,
-    worker_path,
-    dyld_fallback_library_path,
-    *arguments,
-) = sys.argv[1:]
-payload = {
-    "Label": label,
-    "ProgramArguments": arguments,
-    "WorkingDirectory": working_directory,
-    "EnvironmentVariables": {
-        "PATH": process_path,
-        "HOME": home_directory,
-        "REDTRACE_ROOT": working_directory,
-        "REDTRACE_DISPATCH_CONFIG": config_path,
-        "REDTRACE_CONFIG_SECRETS_DIR": secrets_directory,
-        "REDTRACE_PLAINTEXT_SECRETS": "1",
-        "REDTRACE_LOCAL_PATH_PREPEND": worker_path,
-        "TMPDIR": str(Path(working_directory) / ".redtrace" / "tmp"),
-        "TMP": str(Path(working_directory) / ".redtrace" / "tmp"),
-        "TEMP": str(Path(working_directory) / ".redtrace" / "tmp"),
-        "DYLD_FALLBACK_LIBRARY_PATH": dyld_fallback_library_path,
-        "PYTHONUNBUFFERED": "1",
-    },
-    "RunAtLoad": True,
-    "KeepAlive": True,
-    "ProcessType": "Background",
-    "ThrottleInterval": 5,
-    "StandardOutPath": log_path,
-    "StandardErrorPath": log_path,
-}
-path = Path(plist_path)
-path.parent.mkdir(parents=True, exist_ok=True)
-temporary = path.with_suffix(".plist.tmp")
-with temporary.open("wb") as handle:
-    plistlib.dump(payload, handle, sort_keys=False)
-temporary.replace(path)
-path.chmod(0o600)
-PY
-}
-
-launchd_pid() {
-  local label="$1"
-  launchctl print "gui/$(id -u)/$label" 2>/dev/null \
-    | awk '/^[[:space:]]*pid = / { print $3; exit }'
-}
-
-stop_launch_agents() {
-  local uid_value
-  uid_value="$(id -u)"
-  launchctl bootout "gui/$uid_value/com.redtrace.dispatcher" >/dev/null 2>&1 || true
-  launchctl bootout "gui/$uid_value/com.redtrace.server" >/dev/null 2>&1 || true
-}
-
-start_launch_agents() {
-  local uid_value uv_path agent_dir server_label dispatcher_label
-  local server_plist dispatcher_plist server_pid dispatcher_pid
-  uid_value="$(id -u)"
-  uv_path="$(command -v uv)"
-  agent_dir="$HOME/Library/LaunchAgents"
-  server_label="com.redtrace.server"
-  dispatcher_label="com.redtrace.dispatcher"
-  server_plist="$agent_dir/$server_label.plist"
-  dispatcher_plist="$agent_dir/$dispatcher_label.plist"
-
-  write_launch_agent \
-    "$server_label" "$LOG_DIR/server.log" "$server_plist" \
-    "$uv_path" run --project "$PROJECT_DIR/redtrace" redtrace serve \
-    --db-path "$PROJECT_DIR/.redtrace/redtrace.db" \
-    --host "$REDTRACE_HOST" --port "$REDTRACE_PORT"
-  write_launch_agent \
-    "$dispatcher_label" "$LOG_DIR/dispatcher.log" "$dispatcher_plist" \
-    "$uv_path" run --project "$PROJECT_DIR/redtrace" redtrace dispatch \
-    --config "$CONFIG_PATH"
-
-  stop_launch_agents
-  log "starting server with launchd"
-  launchctl bootstrap "gui/$uid_value" "$server_plist"
-
-  log "waiting for RedTrace server"
-  for _ in $(seq 1 40); do
-    curl -fsS "http://127.0.0.1:$REDTRACE_PORT/projects" >/dev/null 2>&1 && break
-    sleep 1
-  done
-  curl -fsS "http://127.0.0.1:$REDTRACE_PORT/projects" >/dev/null 2>&1 \
-    || { tail -n 40 "$LOG_DIR/server.log" >&2 || true; die "server health check timed out"; }
-
-  log "starting dispatcher with launchd"
-  launchctl bootstrap "gui/$uid_value" "$dispatcher_plist"
-  sleep 2
-  server_pid="$(launchd_pid "$server_label")"
-  dispatcher_pid="$(launchd_pid "$dispatcher_label")"
-  [[ "$server_pid" =~ ^[0-9]+$ ]] || die "launchd server has no running pid"
-  [[ "$dispatcher_pid" =~ ^[0-9]+$ ]] || die "launchd dispatcher has no running pid"
-  printf '%s\n' "$server_pid" >"$RUN_DIR/server.pid"
-  printf '%s\n' "$dispatcher_pid" >"$RUN_DIR/dispatcher.pid"
 }
 
 setup_macos() {
@@ -1010,7 +760,7 @@ setup_macos() {
   update_homebrew
   local required_formulae=(
     ca-certificates curl git xz pkg-config cmake ninja swig
-    python@3.12 libffi openssl@3 gmp mpfr libmpc zlib libomp
+    libffi openssl@3 gmp mpfr libmpc zlib libomp
     openjdk@21 ghidra ruby go jq ripgrep nuclei
   )
   brew_install_required "${required_formulae[@]}"
@@ -1018,6 +768,7 @@ setup_macos() {
 
   if [[ "${REDTRACE_SKIP_OPTIONAL_TOOLS:-0}" != "1" ]]; then
     local optional_formulae=(
+      python@3.12
       ffuf gdb radare2 binutils binwalk exiftool sleuthkit ffmpeg wireshark steghide testdisk
       john-jumbo nmap hashcat imagemagick apktool upx qemu qrencode sshpass rlwrap
       nikto dirsearch yq yara p7zip foremost pcapfix zbar sox tesseract
@@ -1043,9 +794,11 @@ setup_macos() {
 
 setup_linux() {
   initialize_linux
-  [[ -f "$CTF_TOOL_INSTALLER" ]] || die "CTF tool installer is missing: $CTF_TOOL_INSTALLER"
-  log "installing system and CTF dependencies with $PACKAGE_MANAGER"
-  bash "$CTF_TOOL_INSTALLER" system
+  if [[ "${REDTRACE_SKIP_OPTIONAL_TOOLS:-0}" != "1" ]]; then
+    [[ -f "$CTF_TOOL_INSTALLER" ]] || die "CTF tool installer is missing: $CTF_TOOL_INSTALLER"
+    log "installing system and CTF dependencies with $PACKAGE_MANAGER"
+    bash "$CTF_TOOL_INSTALLER" system
+  fi
   configure_linux_paths
   ensure_node
   ensure_java
@@ -1057,7 +810,6 @@ else
   setup_linux
 fi
 
-ensure_uv
 ensure_npm_cli codegraph "@colbymchenry/codegraph@${CODEGRAPH_VERSION}"
 log "verifying codegraph installation"
 codegraph --version >/dev/null 2>&1 || die "codegraph failed verification"
@@ -1068,6 +820,7 @@ ensure_brave_search_skill
 ensure_ghidra_headless_skill
 ensure_nuclei
 if [[ "${REDTRACE_SKIP_OPTIONAL_TOOLS:-0}" != "1" ]]; then
+  ensure_uv
   ensure_rsactftool
   ensure_qiling
   [[ "$OS" == "Linux" ]] || configure_native_build_env
@@ -1078,17 +831,7 @@ else
   log "skipping optional Python and Ruby security tools"
 fi
 
-log "syncing RedTrace Python environment"
-if ! UV_INDEX_URL="$PYPI_INDEX" uv sync --frozen --project "$PROJECT_DIR/redtrace"; then
-  warn "configured PyPI mirror failed; retrying from official PyPI"
-  UV_INDEX_URL=https://pypi.org/simple uv sync --frozen --project "$PROJECT_DIR/redtrace"
-fi
 prepare_local_config
-if [[ "$REDTRACE_PLAINTEXT_SECRETS" == "1" ]]; then
-  configure_brave_search_key
-else
-  configure_brave_search_secret
-fi
 test_brave_search_skill
 
 mkdir -p "$RUN_DIR" "$LOG_DIR" "$PROJECT_DIR/workspaces" "$PROJECT_DIR/output/webshell" "$PROJECT_DIR/output/c2"
@@ -1099,30 +842,21 @@ else
   WORKER_PATH="$BIN_DIR:$NPM_CONFIG_PREFIX/bin:$TOOL_VENV/bin:$GOBIN:$GEM_BIN"
 fi
 export REDTRACE_LOCAL_PATH_PREPEND="$WORKER_PATH"
-export REDTRACE_DISPATCH_CONFIG="$CONFIG_PATH"
 
-if [[ "$REDTRACE_USE_LAUNCHD" == "1" ]]; then
-  die "REDTRACE_USE_LAUNCHD=1 is disabled because LaunchAgents write outside the project"
-else
-  start_component server \
-    uv run --project "$PROJECT_DIR/redtrace" redtrace serve \
-      --db-path "$PROJECT_DIR/.redtrace/redtrace.db" \
-      --host "$REDTRACE_HOST" --port "$REDTRACE_PORT"
+start_component redtrace \
+  "$PROJECT_DIR/start-redtrace.sh" --config "$CONFIG_PATH" \
+    --host "$REDTRACE_HOST" --port "$REDTRACE_PORT"
 
-  log "waiting for RedTrace server"
-  server_ready=0
-  for _ in $(seq 1 40); do
-    if curl -fsS "http://127.0.0.1:$REDTRACE_PORT/projects" >/dev/null 2>&1; then
-      server_ready=1
-      break
-    fi
-    sleep 1
-  done
-  ((server_ready == 1)) || { tail -n 40 "$LOG_DIR/server.log" >&2 || true; die "server health check timed out"; }
-
-  start_component dispatcher \
-    uv run --project "$PROJECT_DIR/redtrace" redtrace dispatch --config "$CONFIG_PATH"
-fi
+log "waiting for RedTrace Node runtime"
+server_ready=0
+for _ in $(seq 1 40); do
+  if curl -fsS "http://127.0.0.1:$REDTRACE_PORT/health" >/dev/null 2>&1; then
+    server_ready=1
+    break
+  fi
+  sleep 1
+done
+((server_ready == 1)) || { tail -n 40 "$LOG_DIR/redtrace.log" >&2 || true; die "Node runtime health check timed out"; }
 
 UI_URL="http://127.0.0.1:$REDTRACE_PORT"
 if [[ "$OS" == "Linux" ]] && grep -qi microsoft /proc/version 2>/dev/null; then
@@ -1133,16 +867,15 @@ cat <<SUMMARY
 
 RedTrace local mode is running on $OS.
   UI:         $UI_URL
-  Config:     $CONFIG_PATH
-  Server:     pid $(cat "$RUN_DIR/server.pid"), log $LOG_DIR/server.log
-  Dispatcher: pid $(cat "$RUN_DIR/dispatcher.pid"), log $LOG_DIR/dispatcher.log
+  Source:     $CONFIG_PATH
+  Config:     $PROJECT_DIR/.redtrace/v2/redtrace.yaml
+  Runtime:    pid $(cat "$RUN_DIR/redtrace.pid"), log $LOG_DIR/redtrace.log
 
 Worker API settings override each process; empty settings keep the CLI's existing login/global configuration.
 
 Optional controls:
   REDTRACE_SKIP_OPTIONAL_TOOLS=1  Skip the large security-tool set
   REDTRACE_SKIP_BRAVE_TEST=1      Skip the brave-search API smoke test
-  REDTRACE_PLAINTEXT_SECRETS=1    Keep local API settings as plaintext
   REDTRACE_NO_OPEN=1              Do not open the browser automatically
 $(
   if [[ "$OS" == "Darwin" ]]; then
@@ -1152,14 +885,7 @@ $(
 )
 
 Stop with:
-$(
-  if [[ "$REDTRACE_USE_LAUNCHD" == "1" ]]; then
-    printf '  launchctl bootout gui/%s/com.redtrace.dispatcher\n' "$(id -u)"
-    printf '  launchctl bootout gui/%s/com.redtrace.server\n' "$(id -u)"
-  else
-    printf '  kill %s %s\n' "$(cat "$RUN_DIR/server.pid")" "$(cat "$RUN_DIR/dispatcher.pid")"
-  fi
-)
+  kill $(cat "$RUN_DIR/redtrace.pid")
 SUMMARY
 
 if [[ "$OS" == "Darwin" && "${REDTRACE_NO_OPEN:-0}" != "1" ]]; then

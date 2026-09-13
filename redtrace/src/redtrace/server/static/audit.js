@@ -271,9 +271,12 @@ function auditPage() {
     },
 
     eventVisible(event) {
-      if (event.kind === 'run.started' || event.kind === 'session.started' || event.kind === 'turn.started' || event.kind === 'thinking.completed') {
-        return false;
-      }
+      if (!['system.prompt', 'user.message', 'assistant.message', 'assistant.delta',
+        'thinking.message', 'thinking.delta', 'tool.started', 'tool.completed',
+        'command.started', 'command.completed', 'skill.started', 'skill.completed',
+        'file.changed', 'run.completed', 'error', 'stderr'].includes(event.kind)) return false;
+      if (['system.prompt', 'user.message', 'assistant.message', 'assistant.delta', 'thinking.message', 'thinking.delta'].includes(event.kind)
+        && !String(event.content || '').trim()) return false;
       if (['command.started', 'tool.started', 'skill.started'].includes(event.kind) && this.hasCompletion(event)) {
         return false;
       }
@@ -287,9 +290,8 @@ function auditPage() {
     },
 
     visibleEvents() {
-      const total = this.events.length;
-      if (total <= this.renderWindow) return this.events;
-      return this.events.slice(total - this.renderWindow);
+      const visible = this.events.filter(event => this.eventVisible(event));
+      return visible.length <= this.renderWindow ? visible : visible.slice(-this.renderWindow);
     },
 
     hasMoreEvents() {
@@ -420,7 +422,7 @@ function auditPage() {
       const title = String(this.toolTitle(event) || '').trim().toLowerCase().replaceAll('_', ' ');
       return ['skill.started', 'skill.completed'].includes(event.kind)
         || (['tool.started', 'tool.completed'].includes(event.kind)
-          && ['skill', 'skills', 'load skill', 'use skill'].includes(title));
+          && ['skill', 'skills', 'load skill', 'read skill', 'use skill'].includes(title));
     },
 
     displaySkillName(event) {

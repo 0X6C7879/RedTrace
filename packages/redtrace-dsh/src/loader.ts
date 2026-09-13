@@ -2,11 +2,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 import type { CordisFiber, ScopedContext } from './types.js'
 
-export const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
+export const repoRoot = path.resolve(process.env.REDTRACE_SOURCE_ROOT || fileURLToPath(new URL('../../../', import.meta.url)))
+const codeRoot = path.resolve(process.env.REDTRACE_CODE_ROOT || repoRoot)
 
 /** Load a module from the DSH harness or this repository by repo-relative path. */
 export async function load(relative: string): Promise<any> {
-  return import(pathToFileURL(path.join(repoRoot, relative)).href)
+  const root = relative.startsWith('vendor/deepseek-harness/') ? codeRoot : repoRoot
+  return import(pathToFileURL(path.join(root, relative)).href)
 }
 
 /** Mount a plugin by repo-relative module path and wait for its fiber.

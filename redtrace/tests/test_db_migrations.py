@@ -28,7 +28,7 @@ def test_wsl_database_path_uses_ext4_home_only_for_drvfs_root(
         root, {"WSL_DISTRO_NAME": "kali-linux", "HOME": str(home)}
     ) == home / ".redtrace" / "redtrace.db"
     monkeypatch.setattr("redtrace.paths.is_wsl", lambda _environ=None: False)
-    assert db.default_database_path(root, {"HOME": str(home)}) == root / ".redtrace" / "redtrace.db"
+    assert db.default_database_path(root, {"HOME": str(home)}) == (root / ".redtrace" / "redtrace.db").resolve()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlink support")

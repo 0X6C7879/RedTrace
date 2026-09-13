@@ -23,10 +23,16 @@ export interface PresetConfig {
 }
 
 export async function apply(scoped: ScopedContext, config: PresetConfig): Promise<void> {
+  scoped = await mountExecutionTools(scoped, config)
+  scoped.systemPrompt.section({ name: 'redtrace:persona', order: 0, text: persona('explore') })
+  scoped.tools.restrict({ deny: [...contracts.CONTRACTS.reason, ...contracts.CONTRACTS.bootstrap] })
+}
+
+/** The existing filesystem, shell, Skill and isolation stack, shared by both task vocabularies. */
+export async function mountExecutionTools(scoped: ScopedContext, config: PresetConfig): Promise<ScopedContext> {
   for (const service of ['shell', 'shellEnv', 'fs', 'skills', 'sandbox', 'sandboxPolicy', 'approval']) {
     scoped = scoped.isolate(service)
   }
-  scoped.systemPrompt.section({ name: 'redtrace:persona', order: 0, text: persona('explore') })
   scoped.systemPrompt.section({
     name: 'redtrace:workspace',
     order: 1,
@@ -58,5 +64,5 @@ export async function apply(scoped: ScopedContext, config: PresetConfig): Promis
     customSkillDirs: [config.skillsDir],
   })
   await mount(scoped, 'vendor/deepseek-harness/packages/skill/tool-skill/lib/index.js')
-  scoped.tools.restrict({ deny: [...contracts.CONTRACTS.reason, ...contracts.CONTRACTS.bootstrap] })
+  return scoped
 }

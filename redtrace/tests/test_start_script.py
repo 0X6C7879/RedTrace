@@ -91,29 +91,26 @@ def test_platform_wrappers_use_one_shared_start_command() -> None:
     bash = BASH_SCRIPT.read_text(encoding="utf-8")
     windows = WINDOWS_SCRIPT.read_text(encoding="utf-8")
 
-    assert "redtrace start" in bash
-    assert "redtrace start" in windows
-    assert ".venv-$PLATFORM" in bash
-    assert "Darwin) PLATFORM=macos" in bash
-    assert "Linux) PLATFORM=linux" in bash
+    assert "run-redtrace-node.mjs" in bash
+    assert "run-redtrace-node.mjs" in windows
+    assert "Node.js 24.15" in bash
+    assert "Node.js 24.15" in windows
     assert "REDTRACE_DSH_ROOT" in bash
     assert "REDTRACE_PARENT_PATH" in bash
     assert "REDTRACE_PARENT_VIRTUAL_ENV" in bash
-    assert ".venv-windows" in windows
-    assert "uv sync" in bash
-    assert "uv sync" in windows
+    assert "node-v24.21.0-win-x64" in windows
+    assert "uv sync" not in bash
+    assert "uv sync" not in windows
 
 
 def test_start_scripts_answer_help_without_config() -> None:
     bash = BASH_SCRIPT.read_text(encoding="utf-8")
     windows = WINDOWS_SCRIPT.read_text(encoding="utf-8")
 
-    # CI smoke-tests `start-redtrace --help` on a fresh checkout where
-    # redtrace.yaml does not exist yet, so both launchers must pass --help
-    # through to `redtrace start` before the config check.
-    assert '*" --help "*' in bash
-    assert "redtrace start" in bash
-    assert "!LAUNCHER_ARGS:--help=!" in windows
+    assert '"$@"' in bash
+    assert "%*" in windows
+    assert "run-redtrace-node.mjs" in bash
+    assert "run-redtrace-node.mjs" in windows
 
 
 def test_start_command_help_documents_both_components() -> None:

@@ -509,6 +509,52 @@ def test_project_workflow_create_conclude_complete_and_reopen(
     assert payload["intent"]["to"] == "f002"
 
 
+def test_hint_and_unclaimed_intent_deletion(client: TestClient) -> None:
+    project_id = _create_project(client)
+
+    assert client.delete(f"/projects/{project_id}/hints/h001").status_code == 204
+    assert client.delete(f"/projects/{project_id}/hints/h001").status_code == 404
+    assert client.get(f"/projects/{project_id}").json()["hints"] == []
+
+    create_body = {
+        "capabilities": ["web"],
+        "from": ["origin"],
+        "description": "remove me",
+        "creator": "reasoner",
+        "worker": None,
+    }
+    intent_id = client.post(
+        f"/projects/{project_id}/intents", json=create_body
+    ).json()["id"]
+    assert client.delete(
+        f"/projects/{project_id}/intents/{intent_id}"
+    ).status_code == 204
+    assert client.delete(
+        f"/projects/{project_id}/intents/{intent_id}"
+    ).status_code == 404
+
+    claimed_id = client.post(
+        f"/projects/{project_id}/intents",
+        json={**create_body, "description": "claimed", "worker": "reasoner"},
+    ).json()["id"]
+    assert client.delete(
+        f"/projects/{project_id}/intents/{claimed_id}"
+    ).status_code == 409
+    assert client.post(
+        f"/projects/{project_id}/intents/{claimed_id}/conclude",
+        json={"worker": "reasoner", "description": "kept fact"},
+    ).status_code == 200
+    assert client.delete(
+        f"/projects/{project_id}/intents/{claimed_id}"
+    ).status_code == 409
+
+    with db.get_conn() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM intent_sources WHERE project_id = ? AND intent_id = ?",
+            (project_id, intent_id),
+        ).fetchone()[0] == 0
+
+
 def test_bootstrap_conclude_with_completion_ends_project_and_reopens(
     client: TestClient,
 ) -> None:

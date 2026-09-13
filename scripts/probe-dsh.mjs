@@ -77,6 +77,7 @@ const api = createServer((request, response) => {
   if (request.method === 'GET' && url.pathname === '/projects/probe') return done(project)
   if (request.method === 'GET' && url.pathname === '/runtime/config') return done(snapshot)
   if (request.method === 'GET' && url.pathname === '/projects/probe/resources') return done({ project_id: 'probe', resources: [] })
+  if (request.method === 'POST' && url.pathname === '/capabilities/resolve') return done({ skills: ['api-security'], capabilities: ['common'], diagnostics: [] })
   if (request.method === 'POST' && url.pathname === '/projects/probe/intents') return done(intent)
   if (request.method === 'POST' && url.pathname === '/projects/probe/intents/intent-probe/claim') {
     claims.push(request.headers['content-type'] ? 'claim' : 'claim')
