@@ -437,7 +437,7 @@ class Scheduler {
       }
       const persistedSession = this.ctx.sessionPersistence === undefined
         ? false
-        : await this.ctx.sessionPersistence.readRaw(task.sessionId!) !== undefined
+        : await this.ctx.sessionPersistence.stat(task.sessionId!) !== undefined
       if ((resumeOnly || concludeOnly) && !persistedSession) {
         this.pausedSessions.delete(recoveryKey)
         this.concludeRecoveries.delete(recoveryKey)

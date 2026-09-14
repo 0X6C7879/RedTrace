@@ -6,7 +6,7 @@
  * @module redtrace-audit
  */
 
-import { mkdir, rm, rmdir } from 'node:fs/promises'
+import { lstat, mkdir, readdir, rm, rmdir } from 'node:fs/promises'
 import path from 'node:path'
 import type { AuditRun, RuntimeConfig, RuntimeOptions, RuntimeTask, RuntimeContext, SessionEvent, SessionPersistence, TaskUsage } from './types.js'
 import { state } from './state.js'
@@ -189,19 +189,27 @@ export async function cleanupSessionArtifacts(
   runs: readonly AuditRun[],
   persistence?: SessionPersistence,
 ): Promise<void> {
-  if (persistence?.supportsRawArtifacts !== true) return
+  if (persistence === undefined) return
   const root = path.resolve(sessionRoot)
   const parents = new Set<string>()
+  const projectDirectories = await readdir(root, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return []
+    throw error
+  })
   for (const id of new Set(runs.map(run => run.session_id).filter((value): value is string => Boolean(value)))) {
-    const raw = await persistence.readRaw(id)
-    const location = raw === undefined ? undefined : persistence.locate(raw.meta)
-    if (location === undefined) continue
-    const artifact = path.resolve(location.path)
-    if (!artifact.startsWith(`${root}${path.sep}`)) throw new Error(`session artifact is outside session root: ${artifact}`)
-    const directory = path.dirname(artifact)
-    if (directory === root) throw new Error(`session artifact has no owned directory: ${artifact}`)
-    parents.add(path.dirname(directory))
-    await rm(directory, { recursive: true, force: true })
+    if (!/^[A-Za-z0-9._-]+$/.test(id) || id === '.' || id === '..') continue
+    if (await persistence.stat(id) === undefined) continue
+    for (const projectDirectory of projectDirectories) {
+      if (!projectDirectory.isDirectory()) continue
+      const directory = path.join(root, projectDirectory.name, id)
+      const exists = await lstat(directory).then(value => value.isDirectory()).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return false
+        throw error
+      })
+      if (!exists) continue
+      parents.add(path.dirname(directory))
+      await rm(directory, { recursive: true, force: true })
+    }
   }
   for (const parent of parents) {
     if (parent !== root && parent.startsWith(`${root}${path.sep}`)) {

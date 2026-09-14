@@ -19,6 +19,9 @@
   name: '../../vendor/deepseek-harness/packages/llm/llm-pi-ai/lib/index.js'
   config: !!js JSON.parse(process.env.REDTRACE_DSH_PI_AI_CONFIG ?? '{"providers":{}}')
 
+- id: session-projection
+  name: '../../vendor/deepseek-harness/packages/session/session-projection/lib/index.js'
+
 - id: token-meter
   name: '../../vendor/deepseek-harness/packages/llm/token-meter/lib/index.js'
 

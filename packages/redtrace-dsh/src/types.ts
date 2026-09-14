@@ -189,9 +189,7 @@ export interface LlmService {
 }
 
 export interface SessionPersistence {
-  supportsRawArtifacts: boolean
-  readRaw(id: string): Promise<{ meta: Record<string, unknown> } | undefined>
-  locate(meta: Record<string, unknown>): { path: string } | undefined
+  stat(id: string): Promise<{ header: Record<string, unknown> } | undefined>
 }
 
 export interface SessionEvent {

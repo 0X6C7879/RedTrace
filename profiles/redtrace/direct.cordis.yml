@@ -7,6 +7,9 @@
 - id: llm-deepseek
   name: '../../vendor/deepseek-harness/packages/llm/llm-deepseek/lib/index.js'
 
+- id: session-projection
+  name: '../../vendor/deepseek-harness/packages/session/session-projection/lib/index.js'
+
 - id: token-meter
   name: '../../vendor/deepseek-harness/packages/llm/token-meter/lib/index.js'
 
