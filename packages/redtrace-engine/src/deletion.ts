@@ -48,12 +48,12 @@ export class ProjectDeletion {
     try {
       await this.operations.cancelProject(id)
       const sessions = new Set((this.store.db.prepare('SELECT data FROM audit_runs WHERE project_id=?').all(id) as { data: string }[]).map(row => String(JSON.parse(row.data).session_id ?? '')).filter(Boolean))
-      const sessionRoot = path.join(this.root, '.redtrace/v2/sessions')
+      const sessionRoot = path.join(this.root, '.redtrace/sessions')
       if (existsSync(sessionRoot)) for (const project of readdirSync(sessionRoot, { withFileTypes: true }).filter(entry => entry.isDirectory())) {
         const directory = path.join(sessionRoot, project.name)
         for (const entry of readdirSync(directory, { withFileTypes: true })) if (entry.isDirectory() && sessions.has(entry.name)) this.removeContained(path.join(directory, entry.name))
       }
-      for (const target of [path.join(this.root, '.redtrace/v2/projects', id), path.join(this.root, '.redtrace/v2/log/projects', id), path.join(this.root, '.redtrace/v2/audit', id), path.join(this.workspaceRoot, id)]) this.removeContained(target)
+      for (const target of [path.join(this.root, '.redtrace/projects', id), path.join(this.root, '.redtrace/log/projects', id), path.join(this.root, '.redtrace/audit', id), path.join(this.workspaceRoot, id)]) this.removeContained(target)
       this.store.transaction(() => {
         const durable = ['webshell', 'c2_listener', 'c2_session', 'c2_payload', 'c2_profile', 'credential_ref'], marks = durable.map(() => '?').join(',')
         this.store.db.prepare(`DELETE FROM resource_audit_events WHERE project_id=? AND (resource_id IS NULL OR resource_id NOT IN (SELECT id FROM shared_resources WHERE project_id=? AND kind IN (${marks})))`).run(id, id, ...durable)

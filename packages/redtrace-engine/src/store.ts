@@ -249,6 +249,16 @@ export class Store {
       if (input.status !== undefined) {
         if (!['open', 'achieved', 'cancelled'].includes(input.status)) throw new HttpError(422, 'Invalid goal status')
         if (goal.id === 'goal' && input.status === 'cancelled') throw new HttpError(409, 'Root goal cannot be deleted')
+        if (input.status === 'open') {
+          // addGoal only checks the direct parent; reopening must keep the whole ancestor chain open,
+          // otherwise an open subgoal under a closed parent becomes an unfinishable orphan branch.
+          let ancestorId = goal.parentId
+          while (ancestorId) {
+            const ancestor = this.node<Goal>(id, ancestorId, 'goal')
+            if (ancestor.status !== 'open') throw new HttpError(409, 'Parent goal is closed')
+            ancestorId = ancestor.parentId
+          }
+        }
         goal.status = input.status
       }
       if (input.evidenceIds !== undefined) {
@@ -260,7 +270,11 @@ export class Store {
         goal.evidenceIds = this.evidenceIds(id, goal.evidenceIds)
       }
       this.saveNode(goal); this.event(id, 'goal.updated', goal, goal)
-      if (goal.status === 'cancelled') {
+      if (goal.status !== 'open') {
+        // Closing a goal closes its open descendants: a cancelled parent is abandoned, and an
+        // achieved parent makes its remaining subgoals moot. This keeps the invariant that an
+        // open goal always has an open ancestor chain, so claim and dispatch only need to
+        // check the directly attached goal.
         const descendants = new Set([goal.id]), graph = this.graph(id)
         for (const parentId of descendants) for (const child of graph.goals.filter(g => g.parentId === parentId)) {
           descendants.add(child.id)

@@ -122,7 +122,18 @@ export async function apply(ctx, options) {
       })
     })
     const cancel = () => handle?.agent.cancel({ kind: 'hook', reason: 'FGS activity paused or cancelled' })
-    const prompt = text => handle.agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
+    const message = text => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
+    const prompt = text => handle.agent.followup(message(text))
+    // Mid-run blackboard updates reach a running Execute the same way the pi backend steers it.
+    let cursor = Number(store.db.prepare('SELECT COALESCE(MAX(id),0) AS value FROM events WHERE project_id=?').get(run.projectId).value)
+    const steer = projectId => {
+      if (projectId !== run.projectId || run.activity !== 'execute' || finished || concludeOnly || !handle) return
+      const events = store.events(projectId, cursor)
+      cursor = events.at(-1)?.id ?? cursor
+      if (!events.some(e => e.type === 'hint.added' || (e.type === 'fact.added' && e.payload && e.payload.stepId !== run.stepId))) return
+      handle.agent.inject(message('共享图已有更新。需要时用 read_graph 查看，不必改变当前 Step。'))
+    }
+    store.changes.on('change', steer)
     const wait = async seconds => {
       const timer = setTimeout(() => { concludeOnly = true; handle.agent.cancel({ kind: 'hook', reason: 'Activity execution timeout' }) }, seconds * 1000)
       try { await handle.agent.whenIdle() } finally { clearTimeout(timer) }
@@ -133,7 +144,9 @@ export async function apply(ctx, options) {
       task.handle = handle
       signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) { cancel(); return }
       store.checkpoint(run.id, { sessionId: run.id })
-      prompt(resume ? '继续' : JSON.stringify({ graph: store.graph(run.projectId), step }))
+      // Same minimal launch slice as runPi; the agent reads the rest of the graph on demand.
+      const graph = store.graph(run.projectId)
+      prompt(resume ? '继续' : JSON.stringify({ project: graph.project, goal: graph.goals.find(g => g.id === 'goal'), step: step ?? null, origin: graph.facts[0], instruction: '用 read_graph 获取所需状态后推进任务。' }))
       await wait(run.activity === 'decide' ? config.decideTimeout : config.executeTimeout)
       if (!finished && !task.committed && !signal.aborted) {
         concludeOnly = true; toolScope.tools.restrict({ allow: tools.map(t => t.name) })
@@ -143,7 +156,7 @@ export async function apply(ctx, options) {
     } finally {
       signal.removeEventListener('abort', cancel)
       try { if (handle) { cancel(); await handle.agent.whenIdle(); await ctx.sessions.flush(handle.agent.session); store.checkpoint(run.id, { sessionId: run.id }); await handle.dispose() } }
-      finally { unlisten(); shared.tasks.delete(run.id); await skillView?.cleanup() }
+      finally { unlisten(); store.changes.off('change', steer); shared.tasks.delete(run.id); await skillView?.cleanup() }
     }
   }
 }

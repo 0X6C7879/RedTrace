@@ -517,9 +517,6 @@ FastAPI + SQLite WAL 足以支持单机多 Worker 调度，不要求额外数据
 推荐验证命令：
 
 ```bash
-uv sync --project redtrace --locked --group dev
-uv run --project redtrace pytest -q
-python -m compileall -q redtrace/src
 bash -n start-redtrace.sh deploy.sh install-security-toolchain.sh
 docker compose config -q
 ```

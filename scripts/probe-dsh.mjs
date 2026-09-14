@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { boot } from '../vendor/deepseek-harness/packages/boot/app-boot/lib/index.js'
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
-const sessionRoot = resolve(root, '.redtrace/dsh/probe-sessions')
+const sessionRoot = resolve(root, '.redtrace/probe-sessions')
 mkdirSync(sessionRoot, { recursive: true })
 
 async function probe(profile) {
@@ -105,7 +105,7 @@ Object.assign(process.env, {
   DEEPSEEK_API_KEY: 'probe-not-used',
   DSH_CORDIS_CONFIG: runtimeProfile,
   DSH_SESSION_ROOT: sessionRoot,
-  REDTRACE_DSH_SETTINGS: resolve(root, '.redtrace/dsh/probe-settings.yaml'),
+  REDTRACE_DSH_SETTINGS: resolve(root, '.redtrace/probe-settings.yaml'),
   REDTRACE_DSH_WEB_HOST: '127.0.0.1',
   REDTRACE_DSH_WEB_PORT: '0',
   REDTRACE_DSH_PI_AI_CONFIG: '{"providers":{}}',
@@ -115,8 +115,8 @@ Object.assign(process.env, {
     root,
     sessionRoot,
     skillsDir: resolve(root, 'skills'),
-    workspacesDir: resolve(root, '.redtrace/dsh/probe-workspaces'),
-    staticDir: resolve(root, 'redtrace/src/redtrace/server/static'),
+    workspacesDir: resolve(root, '.redtrace/probe-workspaces'),
+    staticDir: resolve(root, 'static'),
     interval: 1,
     maxWorkers: 1,
     maxRunningProjects: 1,

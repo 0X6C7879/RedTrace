@@ -1,0 +1,10 @@
+# Downloaded binaries
+bin/
+
+# Cloned repos (SecLists, PayloadsAllTheThings, Vulhub, etc.)
+wordlists/
+payloads/
+poc/
+
+# Keep the directory structure
+!.gitignore

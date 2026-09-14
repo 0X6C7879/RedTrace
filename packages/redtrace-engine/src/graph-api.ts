@@ -4,7 +4,7 @@ import { Router, body, queryNumber, send } from './http.ts'
 import type { RequestContext } from './http.ts'
 import { Store } from './store.ts'
 import { legacyIntent, legacyProject, legacySummary, graphEdges } from './legacy.ts'
-import { projectFgs } from './fgs.ts'
+import { projectFgs, liveSteps } from './fgs.ts'
 import { HttpError, requiredText } from './types.ts'
 import type { Fact, Step, Run } from './types.ts'
 
@@ -50,7 +50,9 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
   }
   router.add('GET', '/v2/projects/:project/graph', c => {
     const graph = c.url.searchParams.has('revision') ? store.graphAt(p(c), queryNumber(c.url, 'revision', 1)) : store.graph(p(c))
-    return { ...graph, ...projectFgs(graph) }
+    const view = projectFgs(graph), live = liveSteps(graph)
+    // The live layer is a canvas-only virtual overlay; exports and tools keep the pure projection.
+    return { ...graph, ...view, nodes: [...view.nodes, ...live.nodes], edges: [...view.edges, ...live.edges] }
   })
   router.add('GET', '/v2/projects/:project/nodes/:node', c => store.node(p(c), c.params.node))
   router.add('GET', '/v2/projects/:project/runs', c => { store.project(p(c)); return store.runs(p(c)) })

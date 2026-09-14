@@ -270,15 +270,21 @@ export class PluginManager {
   async boot(): Promise<void> {
     await this.readManifest()
     const disabled = new Set(this.manifest.disabled ?? [])
+    // Preset gates are computed before any plugin mounts: the scheduler
+    // replacement dispatches during boot and must not bypass a disabled
+    // preset in the window before the post-loop sync.
+    for (const entry of PRESETS) {
+      this.statuses.set(entry.id, disabled.has(entry.id) ? 'stopped' : 'running')
+    }
     for (const entry of MANAGED) {
       if (disabled.has(entry.id)) {
         this.statuses.set(entry.id, 'stopped')
         continue
       }
       await this.mountManaged(entry, true)
-    }
-    for (const entry of PRESETS) {
-      this.statuses.set(entry.id, disabled.has(entry.id) ? 'stopped' : 'running')
+      // redtrace-domain initializes the shared state the presets live in;
+      // gate them before the scheduler replacement mounts and dispatches.
+      if (entry.id === 'redtrace-domain') this.syncPresets()
     }
     this.syncPresets()
     for (const user of this.manifest.user ?? []) {

@@ -39,6 +39,10 @@ if not exist "%ROOT%\vendor\deepseek-harness\package.json" (
 )
 if not exist "%ROOT%\vendor\deepseek-harness\packages\boot\app-boot\lib\index.js" goto :buildDsh
 if not exist "%ROOT%\packages\redtrace-dsh\lib\index.js" goto :buildDsh
+rem Rebuild when the adapter sources are newer than the compiled lib; stale lib
+rem output crashes startup at import time (same as a missing build).
+powershell -NoProfile -Command "$lib=(Get-Item '%ROOT%\packages\redtrace-dsh\lib\index.js').LastWriteTime; if (Get-ChildItem -Recurse '%ROOT%\packages\redtrace-dsh\src' -Filter *.ts | Where-Object {$_.LastWriteTime -gt $lib} | Select-Object -First 1) { exit 0 }; exit 1" >nul 2>nul
+if not errorlevel 1 goto :buildDsh
 goto :run
 
 :buildDsh

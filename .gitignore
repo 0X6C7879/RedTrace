@@ -34,7 +34,7 @@ vendor/*
 nul
 *.stackdump
 
-# 顶层设计文档不提交到公开仓库（docs/ 与 redtrace/tests/ 随代码推送）
+# 顶层设计文档不提交到公开仓库
 design-qa.md
 design-qa-*.png
 
@@ -55,6 +55,11 @@ skills/pentest-tools/tools/burp-mcp-full/.gradle/
 
 # 根目录 npm 依赖产物（不入库）
 node_modules/
+
+# tools/ - 大型运行时工具（bin/wordlists/poc 等），不入库
+tools/*
+!tools/tool_list.md
+!tools/scripts/
 
 # 本地 agent 工具状态（freebuff/mimocode CLI）
 .freebuff/

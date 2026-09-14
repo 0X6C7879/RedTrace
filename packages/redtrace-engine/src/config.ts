@@ -44,10 +44,10 @@ export class Configuration {
   readonly root: string
   readonly secretRoot: string
   readonly workspaceRoot: string
-  constructor(root: string, filename = path.join(root, '.redtrace/v2/redtrace.yaml')) {
+  constructor(root: string, filename = path.join(root, '.redtrace/redtrace.yaml')) {
     this.root = path.resolve(root); this.filename = path.resolve(filename)
     this.secretRoot = path.join(path.dirname(this.filename), '.redtrace-secrets')
-    this.workspaceRoot = path.join(root, 'workspaces/v2')
+    this.workspaceRoot = path.join(root, 'workspaces')
   }
   initialize(source?: string) {
     if (existsSync(this.filename)) {

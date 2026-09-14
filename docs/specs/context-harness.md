@@ -95,16 +95,3 @@ only confirmed conclusions plus evidence IDs/paths. Working-context compaction
 keeps the objective, scope, confirmed facts, active direction, failed boundaries,
 authentication state, evidence paths, and next action.
 
-## Before/after benchmark
-
-Run real `curl` and, when available, `nmap` tasks against an ephemeral localhost
-target:
-
-```bash
-python redtrace/scripts/benchmark_context_harness.py --concurrency 4 --enforce
-```
-
-The report verifies identical child exit codes and SHA-256-identical raw stdout
-Artifacts, then compares duration, visible bytes, token reduction, parser time,
-peak harness memory, and concurrent success preservation. Run it inside the Kali
-worker image for the representative tool set.

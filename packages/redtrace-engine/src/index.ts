@@ -22,10 +22,10 @@ export async function createEngine(options: { root: string; database?: string; c
   const [major, minor] = process.versions.node.split('.').map(Number)
   if (major !== 24 || minor < 15) throw new Error('RedTrace requires Node 24.15 or newer in the Node 24 LTS line')
   const root = path.resolve(options.root), configuration = new Configuration(root, options.configuration)
-  const managed = path.dirname(configuration.filename), staticRoot = path.join(root, 'redtrace/src/redtrace/server/static')
+  const managed = path.dirname(configuration.filename), staticRoot = path.join(root, 'static')
   configuration.initialize()
   const config = configuration.resolve(configuration.read().raw)
-  const store = new Store(options.database ?? path.join(root, '.redtrace/v2/engine.db'))
+  const store = new Store(options.database ?? path.join(root, '.redtrace/engine.db'))
   const runTask: RunTask = options.runTask ?? (async context => {
     const runner = await import('./runner.ts')
     if (context.run.backend === 'mock') return runner.runMock(context)

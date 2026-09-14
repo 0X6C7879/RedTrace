@@ -28,7 +28,7 @@ runtime:
   # "startup_and_task" checks at dispatcher startup and before every task.
   # "startup_only" checks only at startup. "disabled" skips automatic worker checks.
   worker_healthcheck: "startup_only"
-  # Prompt set loaded from redtrace/src/redtrace/dispatcher/prompts/.
+  # Prompt group identifier for the mock engine.
   prompt_group: "mock"
 
 tasks:

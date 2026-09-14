@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { mkdir, copyFile, access, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, access, readFile, writeFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Configuration } from '../packages/redtrace-engine/src/config.ts'
@@ -10,7 +10,7 @@ if (major !== 24 || minor < 15) throw new Error('Node 24.15+ required')
 if (values.help) { console.log('RedTrace Node: --root DIR --host 127.0.0.1 --port 8000 --config SOURCE --copy-config SOURCE --mock [--compat]'); process.exit(0) }
 if (!values.compat) { await import('../packages/redtrace-engine/src/cli.ts'); }
 else {
-  const root = path.resolve(values.root), managed = path.resolve(process.env.REDTRACE_DATA_ROOT || path.join(root, '.redtrace/v2'))
+  const root = path.resolve(values.root), managed = path.resolve(process.env.REDTRACE_DATA_ROOT || path.join(root, '.redtrace'))
   const config = new Configuration(root, path.join(managed, 'redtrace.yaml'))
   const runtimeRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)))
   const sourceRoot = path.resolve(process.env.REDTRACE_SOURCE_ROOT || runtimeRoot), codeRoot = path.resolve(process.env.REDTRACE_DSH_ROOT || runtimeRoot)
@@ -20,10 +20,6 @@ else {
   catch { console.error('==> first run: importing Skills and MCP configuration') }
   if (process.env.BRAVE_API_KEY) config.commit(config.read().revision, raw => { raw.common_env = { ...raw.common_env, BRAVE_API_KEY: process.env.BRAVE_API_KEY } })
   if (values.mock) config.commit(config.read().revision, raw => { raw.workers = [{ name: 'mock', provider: 'mock', max_running: 4 }] })
-  for (const [source, destination] of [['.redtrace/dsh/settings.yaml', 'settings.yaml'], ['.redtrace/dsh/plugins.json', 'plugins.json']]) {
-    const target = path.join(managed, destination)
-    try { await access(target) } catch { try { await copyFile(path.join(root, source), target) } catch (e) { if (e.code !== 'ENOENT') throw e } }
-  }
   process.env.REDTRACE_DSH_WEB_HOST = values.host; process.env.REDTRACE_DSH_WEB_PORT = values.port
   process.env.REDTRACE_CODE_ROOT = codeRoot; process.env.REDTRACE_SOURCE_ROOT = sourceRoot
   process.env.DSH_SESSION_ROOT = path.join(managed, 'sessions'); process.env.REDTRACE_DSH_SETTINGS = path.join(managed, 'settings.yaml')

@@ -245,7 +245,7 @@ Context Harness 会把完整输出保存到 `.redtrace/artifacts/context`，同�
 | `packages/redtrace-dsh/` | RedTrace DSH 扩展包：Scheduler、契约工具、插件管理、审计投影、Web 托管等 Cordis 插件 |
 | `vendor/deepseek-harness/` | DSH/Cordis 运行时（vendored，本地维护为主，不跟随上游） |
 | `profiles/redtrace/` | Cordis 运行时组装配置（runtime/direct/reason/isolated） |
-| `redtrace/` | 已退出生产入口的 Python 旧版源码与兼容契约回归样本 |
+| `static/` | Web UI 静态资源（HTML/JS/CSS/字体/图表库） |
 | `skills/` | 多 Worker 共享的一级原生 Skill；由 Agent 按需直接加载 |
 | `mcp/` | 共享 MCP 配置与服务入口 |
 | `container/` | Worker 容器镜像与运行资产 |

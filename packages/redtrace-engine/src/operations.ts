@@ -36,7 +36,7 @@ export class Operations {
   private channels = new Map<string, net.Socket>()
   private closed = false
   constructor(store: Store, root: string) {
-    this.store = store; this.outputRoot = path.join(root, '.redtrace/v2/output')
+    this.store = store; this.outputRoot = path.join(root, '.redtrace/output')
     store.db.exec(readFileSync(new URL('./operations.sql', import.meta.url), 'utf8'))
     // An interrupted external operation cannot be inferred safe to repeat.
     store.db.prepare("UPDATE operation_tasks SET status='failed',output_summary='Process interrupted; external result unknown. Verify before resubmitting.',completed_at=? WHERE status='running'").run(now())

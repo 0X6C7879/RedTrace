@@ -7,7 +7,7 @@ import os from 'node:os'
 import { serveEngine } from '../src/index.ts'
 import { Configuration } from '../src/config.ts'
 
-test('initialization copies legacy configuration into v2 and encrypts its secrets in place', () => {
+test('initialization copies seed configuration into the managed root and encrypts its secrets in place', () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-config-copy-')), source = path.join(root, 'legacy.yaml')
   const plaintext = 'providers: {}\nworkers: []\ncommon_env:\n  API_TOKEN: legacy-secret\n'
   writeFileSync(source, plaintext)
@@ -35,11 +35,11 @@ test('worker mutations probe the live model before commit and retain the old sna
     let snapshot = (await call('/worker-config')).data
     assert.equal((await call('/worker-config/common-env', 'PUT', { expected_revision: snapshot.revision, entries: [{ name: 'bad-name', value: 'x' }] })).status, 422)
     snapshot = (await call('/worker-config/common-env', 'PUT', { expected_revision: snapshot.revision, entries: [{ name: 'API_TOKEN', value: 'token-at-rest' }, { name: 'PUBLIC_URL', value: 'https://example.test' }] })).data
-    const persistedEnvironment = readFileSync(path.join(root, '.redtrace/v2/redtrace.yaml'), 'utf8')
+    const persistedEnvironment = readFileSync(path.join(root, '.redtrace/redtrace.yaml'), 'utf8')
     assert.doesNotMatch(persistedEnvironment, /token-at-rest/); assert.match(persistedEnvironment, /REDTRACE_SECRET/)
     assert.deepEqual(snapshot.common_env, [{ name: 'API_TOKEN', value: 'token-at-rest' }, { name: 'PUBLIC_URL', value: 'https://example.test' }])
     snapshot = (await call('/worker-config/providers', 'POST', { expected_revision: snapshot.revision, name: 'fixture', api: 'openai-completions', base_url: `http://127.0.0.1:${(model.address() as { port: number }).port}/v1`, api_key: 'fixture-key', models: [{ id: 'fixture', context_window: 10000, max_tokens: 1000 }] })).data
-    assert.doesNotMatch(readFileSync(path.join(root, '.redtrace/v2/redtrace.yaml'), 'utf8'), /fixture-key/)
+    assert.doesNotMatch(readFileSync(path.join(root, '.redtrace/redtrace.yaml'), 'utf8'), /fixture-key/)
     const worker = { expected_revision: snapshot.revision, name: 'worker', provider: 'fixture', model: 'fixture', priority: 0, max_running: 1 }
     const saved = await call('/worker-config/workers', 'POST', worker)
     assert.equal(saved.status, 201); assert.equal(probes, 1); assert.equal(saved.data.engine, 'dsh'); assert.equal(saved.data.workers[0].type, 'dsh')

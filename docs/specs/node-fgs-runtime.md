@@ -16,7 +16,7 @@ Decide 的触发白名单只有：任务创建、Fact 增加、Execute 成功完
 
 ## FGS 图投影
 
-画布永久节点只有 `scope / fact / finding / subgoal / goal`；内部保留 `origin` 标识并显示为 Scope。Goal 在创建时即以 open 状态出现，完成由引用证据的状态更新表达。Decide 和 Execute 属于活动；Step 是持久化的执行记录，不占据画布节点。
+画布永久节点只有 `scope / fact / finding / subgoal / goal`；内部保留 `origin` 标识并显示为 Scope。Goal 在创建时即以 open 状态出现，完成由引用证据的状态更新表达。Step 是持久化的执行记录，不占据永久画布节点；但未完成（pending / running / paused / blocked）的 Step 会作为仅供人工审核的虚拟临时节点叠加在画布端点上：黄色圆形、来源连虚线 `executes` 边、指向目标的 `pursues` 边，完成产出 Fact 后虚拟节点消失、由产出边接管，与旧版开放 Intent 的画布行为一致。该虚拟层由 `liveSteps` 在读取时计算，仅存在于 `/v2/projects/:id/graph` 响应中，不进入导出/快照文件，也不被 `read_graph` 等读图工具读到。
 
 `src/fgs.ts` 在读取时投影原始记录，不建立第二份图数据库：Scope 关联目标范围；Step 的每个来源连接其全部 Fact 产出；Fact 支撑 Finding；产出关联推进的 Goal；验收证据连接 Goal；Subgoal 指向父 Goal。目标归属与验收证据分开标记，Step 结束不会自动证明 Goal 达成。取消或失败的 Step 仍保留已提交产出的来源关系。边保留 Step ID，可进入执行面板查看来源、全部产出和各次运行日志。
 
@@ -32,7 +32,7 @@ Decide 的触发白名单只有：任务创建、Fact 增加、Execute 成功完
 
 ## 数据与启动
 
-新版数据库、会话和 Workspace 位于 `.redtrace/v2` 与 `workspaces/v2`。首次启动从 `redtrace.yaml` 复制配置；后续写入只修改新版副本。旧数据库和工作目录由 `scripts/archive-redtrace-legacy.mjs` 一致性归档，不与新版共写。
+数据库、会话和 Workspace 位于 `.redtrace` 与 `workspaces`(规范路径,无版本子目录)。首次启动从 `redtrace.yaml` 复制配置;后续写入只修改该副本。切换到 Node 运行时前可用 `scripts/archive-node-migration.mjs` 为旧版数据库与配置生成一致性快照(存于 `.redtrace/migration/`)。
 
 ```powershell
 .\start-redtrace.cmd

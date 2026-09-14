@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import { Store } from '../src/store.ts'
 import { Scheduler } from '../src/scheduler.ts'
-import { projectFgs } from '../src/fgs.ts'
+import { projectFgs, liveSteps } from '../src/fgs.ts'
 import type { EngineConfig } from '../src/types.ts'
 
 const worker = { name: 'test', backend: 'mock' as const, provider: 'mock', model: '', enabled: true, decide: true, execute: true, maxRunning: 4, priority: 0 }
@@ -41,6 +41,32 @@ test('FGS keeps every output, typed relationship and cancelled-step provenance',
     assert.equal(reachable.size, view.nodes.length)
     assert.equal(s.graphAt(id, s.project(id).revision).steps[0].status, 'cancelled')
     assert.deepEqual(projectFgs(s.graphAt(id, s.project(id).revision)), view)
+  } finally { s.close() }
+})
+
+test('closing a goal cascades to descendants: no orphan open branches survive', () => {
+  const s = new Store(':memory:')
+  try {
+    const id = create(s), fact = s.addFact(id, 'Evidence', { evidence: [{ description: 'proof' }] })
+    const sg1 = s.addGoal(id, 'SG1'), sg1_1 = s.addGoal(id, 'SG1.1', sg1.id), sg1_1_1 = s.addGoal(id, 'SG1.1.1', sg1_1.id)
+    const closedChild = s.addGoal(id, 'Closed child', sg1.id)
+    s.updateGoal(id, closedChild.id, { status: 'achieved', evidenceIds: [fact.id] })
+    const direct = s.addStep(id, { description: 'Under SG1', sourceIds: ['origin'], goalId: sg1.id })
+    const deep = s.addStep(id, { description: 'Under SG1.1.1', sourceIds: ['origin'], goalId: sg1_1_1.id })
+    const deepRun = s.claim(id, 'execute', worker, deep.id)
+    s.updateGoal(id, sg1.id, { status: 'achieved', evidenceIds: [fact.id] })
+    const graph = s.graph(id)
+    assert.equal(graph.goals.find(g => g.id === sg1_1.id)!.status, 'cancelled')
+    assert.equal(graph.goals.find(g => g.id === sg1_1_1.id)!.status, 'cancelled')
+    assert.equal(graph.goals.find(g => g.id === closedChild.id)!.status, 'achieved', 'already-closed descendants stay untouched')
+    assert.equal(graph.steps.find(st => st.id === direct.id)!.status, 'cancelled')
+    assert.equal(graph.steps.find(st => st.id === deep.id)!.status, 'cancelled')
+    assert.throws(() => s.claim(id, 'execute', worker, deep.id), /Step is not claimable/)
+    s.finishRun(deepRun.id, 'cancelled')
+    assert.throws(() => s.updateGoal(id, sg1_1.id, { status: 'open' }), /Parent goal is closed/)
+    s.updateGoal(id, sg1.id, { status: 'open' })
+    s.updateGoal(id, sg1_1.id, { status: 'open' })
+    assert.equal(s.graph(id).goals.find(g => g.id === sg1_1.id)!.status, 'open')
   } finally { s.close() }
 })
 
@@ -107,21 +133,31 @@ test('each permitted event alone advances planning; all other writes do not', ()
   } finally { s.close() }
 })
 
-test('native canvas projection and focus share references without inserting Step nodes', () => {
+test('native canvas projection renders active Steps as virtual nodes, then swaps them for fact edges on completion', () => {
   const context = vm.createContext({ window: {} })
-  vm.runInContext(readFileSync(new URL('../../../redtrace/src/redtrace/server/static/fgs-view.js', import.meta.url), 'utf8'), context)
+  vm.runInContext(readFileSync(new URL('../../../static/fgs-view.js', import.meta.url), 'utf8'), context)
   const s = new Store(':memory:')
   try {
     const id = create(s), goal = s.addGoal(id, 'Goal'), step = s.addStep(id, { description: 'Work', sourceIds: ['origin'], goalId: goal.id })
     const run = s.claim(id, 'execute', worker, step.id), fact = s.addFact(id, 'A', { runId: run.id })
     const hint = s.addInput(id, 'hint', 'Context')
-    const g = s.graph(id), app = { ...context.window.redtraceFgsView, fgs: { ...g, ...projectFgs(g) }, factDisplayId: (id: string) => id }
-    app.fgsFocusGoal = goal.id
-    const elements = app.fgsBuildElements()
-    assert.equal(elements.nodes.length, 4); assert.ok(elements.nodes.some((n: any) => n.data.id === fact.id))
-    assert.ok(elements.nodes.every((n: any) => !n.data.id.startsWith('_ph_') && n.data.nodeType !== 'step'))
-    assert.equal(new Set(elements.nodes.map((n: any) => n.data.id)).size, elements.nodes.length)
-    const project = app.nativeProject(g)
+    const canvas = (g: ReturnType<Store['graph']>) => { const view = projectFgs(g), live = liveSteps(g); return { g, view, app: { ...context.window.redtraceFgsView, fgs: { ...g, ...view, nodes: [...view.nodes, ...live.nodes], edges: [...view.edges, ...live.edges] }, factDisplayId: (id: string) => id } } }
+    const running = canvas(s.graph(id))
+    running.app.fgsFocusGoal = goal.id
+    const nodes = running.app.fgsBuildElements().nodes, stepNode = nodes.find((n: any) => n.data.nodeType === 'step')
+    assert.ok(stepNode, 'running Step renders as a canvas node')
+    assert.equal(stepNode.data.status, 'running')
+    assert.equal(nodes.length, 5)
+    assert.equal(new Set(nodes.map((n: any) => n.data.id)).size, nodes.length)
+    assert.ok(running.app.fgs.edges.some((e: any) => e.source === 'origin' && e.target === step.id && e.relation === 'executes' && e.stepIds.length === 1))
+    assert.ok(running.app.fgs.edges.some((e: any) => e.source === step.id && e.target === goal.id && e.relation === 'pursues'))
+    assert.ok(running.view.nodes.every(n => n.nodeType !== 'step'), 'pure projection stays free of virtual Step nodes for exports and tools')
+    assert.ok(running.view.edges.every(e => e.relation !== 'executes'))
+    s.finishRun(run.id, 'succeeded')
+    const done = canvas(s.graph(id))
+    assert.ok(done.app.fgsBuildElements().nodes.every((n: any) => n.data.nodeType !== 'step'), 'completed Step node disappears from the canvas')
+    assert.ok(done.view.edges.some(e => e.source === 'origin' && e.target === fact.id && e.relation === 'derived' && e.stepIds.length === 1))
+    const project = done.app.nativeProject(done.g)
     assert.equal(project.hints[0].created_at, hint.createdAt)
     assert.ok([project.project.created_at, ...project.intents.map((i: any) => i.created_at)].every(t => typeof t === 'string'))
   } finally { s.close() }

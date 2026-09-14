@@ -61,7 +61,8 @@ try {
   if (!graph.goals.some(goal => goal.description === 'Browser sub goal' && goal.status === 'achieved')) throw new Error('Sub Goal update was not persisted')
   if (!graph.steps.some(step => step.description === 'Browser manual step')) throw new Error('Step create was not persisted')
   if (!graph.findings.some(finding => finding.title === 'Browser finding')) throw new Error('Finding create was not persisted')
-  if (graph.nodes.some(node => !['scope', 'fact', 'finding', 'subgoal', 'goal'].includes(node.nodeType))) throw new Error('Execution nodes leaked into FGS')
+  if (graph.nodes.some(node => !['scope', 'fact', 'finding', 'subgoal', 'goal', 'step'].includes(node.nodeType))) throw new Error('Unexpected FGS node type')
+  if (!graph.nodes.some(node => node.nodeType === 'step' && node.status === 'pending')) throw new Error('Pending Step missing from FGS canvas')
   if (errors.length) throw new Error(`Browser errors: ${errors.join(' | ')}`)
   console.log(JSON.stringify({ ok: true, screenshot: output, geometry: box, goals: graph.goals.length, steps: graph.steps.length, findings: graph.findings.length }))
 } finally { await browser.close() }

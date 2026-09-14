@@ -1,15 +1,16 @@
 import type { Graph } from './types.ts'
 
-export type FgsNodeType = 'scope' | 'fact' | 'finding' | 'subgoal' | 'goal'
-export interface FgsNode { id: string; nodeType: FgsNodeType; label: string; description: string; status?: string; activeSteps?: number }
-export interface FgsEdge { id: string; source: string; target: string; relation: 'scope' | 'derived' | 'supports' | 'pursues' | 'evidence' | 'subgoal'; stepIds: string[] }
+export type FgsNodeType = 'scope' | 'fact' | 'finding' | 'subgoal' | 'goal' | 'step'
+export interface FgsNode { id: string; nodeType: FgsNodeType; label: string; description: string; status?: string; worker?: string | null; activeSteps?: number }
+export interface FgsEdge { id: string; source: string; target: string; relation: 'scope' | 'derived' | 'supports' | 'pursues' | 'evidence' | 'subgoal' | 'executes'; stepIds: string[] }
+const ACTIVE_STEP_STATUSES = ['pending', 'running', 'paused', 'blocked']
 
 /** A lossless projection of recorded relationships, not a second graph database. */
 export function projectFgs(graph: Graph) {
   const nodes: FgsNode[] = [
     ...graph.facts.map(f => ({ id: f.id, nodeType: f.id === 'origin' ? 'scope' as const : 'fact' as const, label: f.description, description: f.description })),
     ...graph.goals.map(g => ({ id: g.id, nodeType: g.parentId ? 'subgoal' as const : 'goal' as const, label: g.description, description: g.description, status: g.status,
-      activeSteps: graph.steps.filter(s => !s.deleted && s.goalId === g.id && ['pending', 'running', 'paused', 'blocked'].includes(s.status)).length })),
+      activeSteps: graph.steps.filter(s => !s.deleted && s.goalId === g.id && ACTIVE_STEP_STATUSES.includes(s.status)).length })),
     ...graph.findings.map(f => ({ id: f.id, nodeType: 'finding' as const, label: f.title, description: f.description })),
   ]
   const ids = new Set(nodes.map(n => n.id)), edges = new Map<string, FgsEdge>(), missing = new Set<string>()
@@ -48,4 +49,24 @@ export function projectFgs(graph: Graph) {
     if (step) add(finding.id, step.goalId, 'pursues', step.id)
   }
   return { nodes, edges: [...edges.values()], missingReferences: [...missing] }
+}
+
+/**
+ * Canvas-only virtual layer for human review, mirroring the old open-Intent placeholder nodes:
+ * active Steps render as temporary nodes with dashed executes edges and vanish once their facts exist.
+ * It is never persisted into exports/snapshots and never read by graph tools such as read_graph.
+ */
+export function liveSteps(graph: Graph): { nodes: FgsNode[]; edges: FgsEdge[] } {
+  const active = graph.steps.filter(s => !s.deleted && ACTIVE_STEP_STATUSES.includes(s.status))
+  if (!active.length) return { nodes: [], edges: [] }
+  const ids = new Set<string>([...graph.facts.map(f => f.id), ...graph.goals.map(g => g.id), ...graph.findings.map(f => f.id), ...active.map(s => s.id)])
+  const edges: FgsEdge[] = []
+  const add = (source: string, target: string, relation: FgsEdge['relation'], stepId: string) => {
+    if (ids.has(source) && ids.has(target) && source !== target && !edges.some(e => e.source === source && e.target === target)) edges.push({ id: JSON.stringify([relation, source, target]), source, target, relation, stepIds: [stepId] })
+  }
+  for (const step of active) {
+    for (const source of step.sourceIds) add(source, step.id, 'executes', step.id)
+    if (step.goalId) add(step.id, step.goalId, 'pursues', step.id)
+  }
+  return { nodes: active.map(s => ({ id: s.id, nodeType: 'step' as const, label: s.description, description: s.description, status: s.status, worker: s.worker })), edges }
 }

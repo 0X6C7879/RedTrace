@@ -40,15 +40,25 @@ RUN_SCRIPT="$ROOT/scripts/run-redtrace-node.mjs"
 [[ "$(uname -s)" == "Darwin" ]] && KOFFI_OS=darwin || KOFFI_OS=linux
 if [[ -n "${WSL_DISTRO_NAME:-}" && "$ROOT" == /mnt/* ]]; then
   export REDTRACE_DSH_ROOT="${REDTRACE_DSH_ROOT:-${HOME}/redtrace-dsh}"
-  export REDTRACE_DATA_ROOT="${REDTRACE_DATA_ROOT:-${REDTRACE_DSH_ROOT}/.redtrace/v2}"
+  export REDTRACE_DATA_ROOT="${REDTRACE_DATA_ROOT:-${REDTRACE_DSH_ROOT}/.redtrace}"
   DSH_CODE_ROOT="$REDTRACE_DSH_ROOT"
 fi
 if [[ "$DSH_CODE_ROOT" == "$ROOT" && ! -f "$ROOT/packages/redtrace-engine/node_modules/yaml/package.json" ]]; then
   printf '==> first run: installing RedTrace Node dependencies\n' >&2
   npm ci --prefix "$ROOT/packages/redtrace-engine"
 fi
+# The compat host imports the compiled adapter from packages/redtrace-dsh/lib;
+# lib output older than its sources crashes startup at import time, so treat
+# staleness exactly like a missing build.
+DSH_LIB_STALE=0
+if [[ -f "$ROOT/packages/redtrace-dsh/lib/index.js" ]] \
+  && [[ -n "$(find "$ROOT/packages/redtrace-dsh/src" -name '*.ts' -newer "$ROOT/packages/redtrace-dsh/lib/index.js" -print -quit 2>/dev/null)" ]]; then
+  printf '==> packages/redtrace-dsh sources are newer than the compiled lib: rebuilding\n' >&2
+  DSH_LIB_STALE=1
+fi
 if [[ ! -f "$DSH_CODE_ROOT/vendor/deepseek-harness/packages/boot/app-boot/lib/index.js" \
-  || ! -f "$ROOT/packages/redtrace-dsh/lib/index.js" ]] \
+  || ! -f "$ROOT/packages/redtrace-dsh/lib/index.js" \
+  || "$DSH_LIB_STALE" -eq 1 ]] \
   || ! compgen -G "$DSH_CODE_ROOT/vendor/deepseek-harness/node_modules/.pnpm/@koromix+koffi-$KOFFI_OS-*" >/dev/null; then
   printf '==> first run: installing and building the Cordis compatibility runtime\n' >&2
   "$ROOT/build-dsh.sh"

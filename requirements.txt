@@ -1,0 +1,66 @@
+# RedTrace Security Tool Dependencies
+# Install: pip3 install -r requirements.txt
+
+# ── HTTP / Web / API ──────────────────────────────────────────────
+requests
+urllib3
+httpx
+aiohttp
+httpcore
+h11
+h2
+websockets
+websocket-client
+beautifulsoup4
+lxml
+html5lib
+
+# ── SOCKS / Proxy / Network ───────────────────────────────────────
+PySocks
+paramiko
+scapy
+dnspython
+
+# ── Web Framework / Session / Token ──────────────────────────────
+Flask
+Werkzeug
+Jinja2
+itsdangerous
+flask-unsign
+PyJWT
+
+# ── Crypto ───────────────────────────────────────────────────────
+cryptography
+pycryptodome
+bcrypt
+PyNaCl
+
+# ── Binary / RE / Pwn ────────────────────────────────────────────
+pwntools
+capstone
+unicorn
+pyelftools
+z3-solver
+
+# ── Data / Science / Image ───────────────────────────────────────
+numpy
+scipy
+Pillow
+
+# ── Serialization / Special Payload ──────────────────────────────
+phpserialize
+pydash
+
+# ── Async / Server ───────────────────────────────────────────────
+sanic
+
+# ── CLI / Utility ────────────────────────────────────────────────
+rich
+click
+colorama
+tqdm
+python-dateutil
+PyYAML
+
+# ── Browser Automation ───────────────────────────────────────────
+playwright

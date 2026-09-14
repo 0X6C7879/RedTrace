@@ -54,10 +54,8 @@ printf '==> building DSH runtime\n' >&2
 
 if [[ -n "${WSL_DISTRO_NAME:-}" && "$ROOT" == /mnt/* ]]; then
   mkdir -p "$RUNTIME_ROOT/scripts" "$RUNTIME_ROOT/profiles/redtrace" "$RUNTIME_ROOT/packages/redtrace-dsh"
-  cp "$ROOT/scripts/run-redtrace-dsh.mjs" "$RUNTIME_ROOT/scripts/"
-  cp "$ROOT/scripts/run-dsh.sh" "$RUNTIME_ROOT/scripts/" 2>/dev/null || true
   cp "$ROOT/scripts/chrome-cdp-daemon.sh" "$RUNTIME_ROOT/scripts/" 2>/dev/null || true
-  chmod +x "$RUNTIME_ROOT/scripts/run-dsh.sh" "$RUNTIME_ROOT/scripts/chrome-cdp-daemon.sh" 2>/dev/null || true
+  chmod +x "$RUNTIME_ROOT/scripts/chrome-cdp-daemon.sh" 2>/dev/null || true
   cp "$ROOT/profiles/redtrace/runtime.cordis.yml" "$RUNTIME_ROOT/profiles/redtrace/"
   cp "$ROOT/packages/redtrace-dsh/package.json" "$RUNTIME_ROOT/packages/redtrace-dsh/"
   rm -rf "$RUNTIME_ROOT/packages/redtrace-dsh/lib"

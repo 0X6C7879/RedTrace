@@ -15,7 +15,7 @@ test('single-use deletion removes only project data and keeps durable shared res
   try {
     const { project } = engine.store.createProject({ title: 'Delete', origin: 'input', goal: 'goal' }), workspace = path.join(engine.configuration.workspaceRoot, project.id)
     mkdirSync(workspace, { recursive: true }); writeFileSync(path.join(workspace, 'evidence.txt'), 'private')
-    const session = 'run_delete_fixture', sessionDir = path.join(root, '.redtrace/v2/sessions/project-fixture', session)
+    const session = 'run_delete_fixture', sessionDir = path.join(root, '.redtrace/sessions/project-fixture', session)
     mkdirSync(sessionDir, { recursive: true }); writeFileSync(path.join(sessionDir, 'session.jsonl'), '{}')
     engine.store.db.prepare('INSERT INTO audit_runs(id,project_id,data) VALUES (?,?,?)').run(session, project.id, JSON.stringify({ id: session, session_id: session }))
     const durable = engine.operations.create(project.id, { kind: 'webshell', name: 'keep', actor: 'human' }).resource.id
