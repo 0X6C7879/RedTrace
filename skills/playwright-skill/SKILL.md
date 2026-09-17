@@ -6,8 +6,6 @@ compatibility: Requires Node.js 20+, npm, and network access on first setup to i
 metadata:
   author: lackeyjb
   version: "5.0.0"
-  redtrace:
-    capabilities: [web]
 allowed-tools: Bash(node:*) Bash(npm:*) Read Write
 ---
 

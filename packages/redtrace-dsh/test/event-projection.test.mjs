@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { accumulateUsage, eventProjection, reportRun } from '../lib/audit.js'
+import { accumulateUsage, eventProjection } from '../lib/audit.js'
 
 test('does not duplicate a streamed assistant message', () => {
   const task = { sessionId: 'rt-test', type: 'reason', projectId: 'proj_test', worker: 'reasoner', committed: false }
@@ -169,46 +169,3 @@ test('accumulateUsage ignores events without provider usage', () => {
   assert.equal(task.usage, undefined)
 })
 
-test('reportRun carries cumulative usage on the run metadata', async () => {
-  const task = {
-    sessionId: 'rt-test', runId: 'run-1', startedAt: Date.parse('2026-01-01T00:00:00Z'),
-    type: 'bootstrap', projectId: 'proj_test', worker: 'boot', committed: true,
-    usage: { inputTokens: 300, outputTokens: 100, cacheReadTokens: 10, cacheWriteTokens: 5 },
-  }
-  const bodies = []
-  const originalFetch = globalThis.fetch
-  globalThis.fetch = async (url, init) => {
-    bodies.push({ url: String(url), body: JSON.parse(init.body) })
-    return { ok: true, text: async () => '' }
-  }
-  try {
-    await reportRun({ server: 'http://srv', workspacesDir: '/tmp/ws' }, task, 'running')
-  } finally {
-    globalThis.fetch = originalFetch
-  }
-  assert.equal(bodies.length, 1)
-  assert.equal(bodies[0].url, 'http://srv/audit/events')
-  assert.deepEqual(bodies[0].body.run, {
-    ...bodies[0].body.run,
-    input_tokens: 300, output_tokens: 100, cache_read_tokens: 10, cache_write_tokens: 5,
-  })
-})
-
-test('reportRun omits usage when the task never reported any', async () => {
-  const task = {
-    sessionId: 'rt-test', runId: 'run-2', startedAt: Date.parse('2026-01-01T00:00:00Z'),
-    type: 'reason', projectId: 'proj_test', worker: 'reasoner', committed: false,
-  }
-  const bodies = []
-  const originalFetch = globalThis.fetch
-  globalThis.fetch = async (url, init) => {
-    bodies.push(JSON.parse(init.body))
-    return { ok: true, text: async () => '' }
-  }
-  try {
-    await reportRun({ server: 'http://srv', workspacesDir: '/tmp/ws' }, task, 'failure')
-  } finally {
-    globalThis.fetch = originalFetch
-  }
-  assert.equal('input_tokens' in bodies[0].run, false)
-})

@@ -1,7 +1,0 @@
-interface:
-  display_name: "Forensic Timeline"
-  short_description: "Correlate host, mail, memory, and network evidence over time"
-  default_prompt: "Use $forensic-timeline to reconstruct the attack timeline across logs, disk, memory, mail, and network artifacts in this task."
-
-policy:
-  allow_implicit_invocation: false

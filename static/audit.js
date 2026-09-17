@@ -225,11 +225,24 @@ function auditPage() {
       return Number.isInteger(event?.id) ? `id:${event.id}` : '';
     },
 
+    eventCallId(event) {
+      const direct = String(event?.call_id ?? '').trim();
+      if (direct) return direct;
+      const data = event?.data;
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return '';
+      for (const key of ['callId', 'toolCallId', 'id']) {
+        const value = String(data[key] ?? '').trim();
+        if (value) return value;
+      }
+      return '';
+    },
+
     indexEvent(event) {
       const key = this.eventKey(event);
       if (key) this._eventKeys.add(key);
-      if (event.call_id && event.run_id && ['command.completed', 'tool.completed', 'skill.completed'].includes(event.kind)) {
-        this._completedKeys.add(`${event.run_id}:${event.call_id}`);
+      const callId = this.eventCallId(event);
+      if (callId && event.run_id && ['command.completed', 'tool.completed', 'skill.completed'].includes(event.kind)) {
+        this._completedKeys.add(`${event.run_id}:${callId}`);
       }
     },
 
@@ -277,16 +290,31 @@ function auditPage() {
         'file.changed', 'run.completed', 'error', 'stderr'].includes(event.kind)) return false;
       if (['system.prompt', 'user.message', 'assistant.message', 'assistant.delta', 'thinking.message', 'thinking.delta'].includes(event.kind)
         && !String(event.content || '').trim()) return false;
-      if (['command.started', 'tool.started', 'skill.started'].includes(event.kind) && this.hasCompletion(event)) {
-        return false;
+      if (['command.started', 'tool.started', 'skill.started'].includes(event.kind)) {
+        if (this.hasCompletion(event) || this.isRedundantStarted(event)) return false;
       }
       if (this.selectedProvider !== 'all' && this.eventAgent(event) !== this.selectedProvider) return false;
       return this.selectedWorker === 'all' || event.worker === this.selectedWorker;
     },
 
     hasCompletion(event) {
-      if (!event?.run_id || !event?.call_id) return false;
-      return this._completedKeys.has(`${event.run_id}:${event.call_id}`);
+      const callId = this.eventCallId(event);
+      if (!event?.run_id || !callId) return false;
+      return this._completedKeys.has(`${event.run_id}:${callId}`);
+    },
+
+    isRedundantStarted(event) {
+      const startKinds = ['command.started', 'tool.started', 'skill.started'];
+      if (!startKinds.includes(event?.kind) || String(event?.call_id ?? '').trim()) return false;
+      const callId = this.eventCallId(event);
+      if (!event?.run_id || !callId) return false;
+      return this.events.some(candidate => (
+        candidate !== event
+        && candidate.run_id === event.run_id
+        && startKinds.includes(candidate.kind)
+        && String(candidate.call_id ?? '').trim()
+        && this.eventCallId(candidate) === callId
+      ));
     },
 
     visibleEvents() {

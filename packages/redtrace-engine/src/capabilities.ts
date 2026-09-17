@@ -8,7 +8,6 @@ import { HttpError } from './types.ts'
 import { body, send } from './http.ts'
 import type { Router } from './http.ts'
 
-export const directions = ['common', 'web', 'pentest', 'binary', 'crypto', 'cloud', 'blockchain', 'hardware', 'ai-security', 'defense']
 const ignored = new Set(['.git', '.venv', '__pycache__', 'node_modules', '.redtrace'])
 const validName = (name: string) => { if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(name)) throw new HttpError(400, 'Invalid capability name'); return name }
 const readJSON = (file: string, fallback: any = undefined) => existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : fallback
@@ -64,29 +63,13 @@ export class Capabilities {
     if (state.revision && state.revision !== revisionOf(content, state)) { state.trust = 'provisional'; state.successfulReuses = 0; state.provisionalTask = 'out-of-band' }
     return { name, description: metadata.description ?? '', enabled: path.dirname(directory) === this.skillsDir, content,
       files: includeFiles ? files(directory) : [], version: state.version, revision: revisionOf(content, state), updatedAt: state.updatedAt, trust: state.trust,
-      successfulReuses: state.successfulReuses, failureCount: state.failureCount, capabilities: metadata.metadata?.redtrace?.capabilities ?? [] }
+      successfulReuses: state.successfulReuses, failureCount: state.failureCount }
   }
   skills() { return [...new Set([this.skillsDir, this.disabledDir].flatMap(root => readdirSync(root, { withFileTypes: true }).filter(d => d.isDirectory() && !d.name.startsWith('.') && existsSync(path.join(root, d.name, 'SKILL.md'))).map(d => d.name)))].sort().map(name => this.skill(name, false)) }
-  classify() {
-    return this.skills().filter(s => s.enabled).map(s => {
-      const caps = Array.isArray(s.capabilities) ? s.capabilities : [], diagnostics = []
-      if (!caps.length) diagnostics.push('metadata.redtrace.capabilities is required')
-      if (caps.some(c => !directions.includes(c))) diagnostics.push('unknown capability(s)')
-      if (new Set(caps).size !== caps.length) diagnostics.push('capabilities must not contain duplicates')
-      return { name: s.name, capabilities: caps, valid: !diagnostics.length, diagnostics }
-    })
-  }
-  resolve(capabilities: string[]) {
-    if (!capabilities.length || new Set(capabilities).size !== capabilities.length || capabilities.some(c => !directions.includes(c))) throw new HttpError(422, 'Invalid capabilities')
-    const catalog = this.classify(), errors = catalog.flatMap(s => s.diagnostics.map(message => ({ skill: s.name, message })))
-    if (errors.length) throw new HttpError(422, errors.map(e => `${e.skill}: ${e.message}`).join('; '))
-    return { skills: catalog.filter(s => s.capabilities.some(c => c === 'common' || capabilities.includes(c))).map(s => s.name).sort(), capabilities, diagnostics: [] }
-  }
   write(name: string, content: string, enabled: boolean, expected?: string | null, restore?: any) {
     validName(name); content = content.trimEnd() + '\n'
     if (!content.trim() || content.length > Number(process.env.REDTRACE_MAX_SKILL_CHARS ?? 65536)) throw new HttpError(400, 'Invalid Skill content length')
-    const metadata = frontmatter(content), caps = metadata.metadata?.redtrace?.capabilities
-    if (enabled && (!Array.isArray(caps) || !caps.length || caps.some(c => !directions.includes(c)) || new Set(caps).size !== caps.length)) throw new HttpError(400, 'Enabled Skill requires valid metadata.redtrace.capabilities')
+    frontmatter(content)
     let previous: ReturnType<Capabilities['skill']> | undefined
     try { previous = this.skill(name) } catch (e) { if (!(e instanceof HttpError) || e.status !== 404) throw e }
     if (expected && previous?.revision !== expected) throw new HttpError(409, 'Skill revision conflict')
@@ -146,8 +129,6 @@ export class Capabilities {
 export function capabilityRoutes(router: Router, store: Capabilities) {
   const summary = ({ content: _, ...skill }: ReturnType<Capabilities['skill']>) => skill
   router.add('GET', '/capabilities', () => { const skills = store.entries(), mcp = store.servers(); return { root: store.root, skillsDir: store.skillsDir, mcpDir: store.mcpDir, skills: { total: skills.length, enabled: skills.filter(s => s.enabled).length }, mcp: { total: mcp.length, enabled: mcp.filter(s => s.enabled).length }, agents: [{ id: 'dsh', skills: store.skillsDir, runtimeSnapshot: null, mcp: 'mcpConfigs (runtime config)' }] } })
-  router.add('GET', '/capabilities/catalog', () => ({ capabilities: directions, skills: store.classify() }))
-  router.add('POST', '/capabilities/resolve', async c => store.resolve((await body(c.req, Type.Object({ capabilities: Type.Array(Type.String(), { minItems: 1, uniqueItems: true }) }))).capabilities))
   router.add('GET', '/capabilities/skills', () => store.skills().map(summary))
   router.add('GET', '/capabilities/skill-entries', () => store.entries())
   router.add('GET', '/capabilities/skills/:name', c => store.skill(c.params.name))

@@ -82,10 +82,6 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
   assert.equal(kernel.length, 10)
   assert.ok(kernel.every((view) => view.status === 'running' && !view.canStop && !view.canUninstall))
 
-  const web = views.find((view) => view.id === 'redtrace-web')
-  assert.equal(web.canStop, false)
-  assert.ok(views.find((view) => view.id === 'redtrace-audit').canStop)
-
   // Every catalog entry carries a non-empty one-liner and a longer intro;
   // neither may leak external project names.
   for (const view of views.filter((item) => item.source !== 'user')) {
@@ -94,13 +90,58 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
     assert.ok(!/Cairn|FastAPI/i.test(`${view.description}${view.intro}`), `${view.id} leaks an external project name`)
   }
 
-  // Dependency order: core first, scheduler last.
+  // Dependency order: core first, scheduler last. Session-scoped capabilities
+  // mount no host fiber and opt-in entries boot stopped, so the host count is
+  // unchanged.
   assert.equal(ctx.mounts[0].module, core)
   assert.equal(ctx.mounts.at(-1).module.name, 'redtrace-scheduler')
-  assert.equal(ctx.mounts.length, 9)
+  assert.equal(ctx.mounts.length, 5)
 
-  const statuses = views.filter((view) => view.source === 'builtin').map((view) => view.status)
-  assert.ok(statuses.every((status) => status === 'running'))
+  // Every builtin entry boots running unless it is opt-in (defaultOff).
+  const optIn = new Set([
+    'redtrace-credentials', 'redtrace-attachment', 'redtrace-file-references',
+    'redtrace-lsp', 'redtrace-ptc',
+  ])
+  for (const view of views.filter((item) => item.source === 'builtin')) {
+    assert.ok(view.status === 'running' || optIn.has(view.id), `${view.id} boots ${view.status}`)
+  }
+})
+
+test('default-off capabilities boot stopped and opt in through the manifest', async (t) => {
+  const root = scratch('optin')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const manifestPath = path.join(root, 'plugins.json')
+
+  // A fresh manifest leaves opt-in entries stopped; none of them mounts.
+  const first = makeManager(root, manifestPath, async () => ({ apply() {} }))
+  await first.manager.boot()
+  assert.equal(first.manager.view('redtrace-lsp').status, 'stopped')
+  assert.equal(first.manager.view('redtrace-ptc').status, 'stopped')
+  assert.ok(first.ctx.mounts.every(({ module }) => module?.name !== 'redtrace-credentials'))
+
+  // Starting one records the opt-in and mounts its host-plane module.
+  await first.manager.start('redtrace-credentials')
+  await tick()
+  assert.equal(first.manager.view('redtrace-credentials').status, 'running')
+  assert.ok(first.ctx.mounts.some(({ module }) => module?.name === 'redtrace-credentials'))
+  assert.deepEqual(JSON.parse(readFileSync(manifestPath, 'utf8')).enabled, ['redtrace-credentials'])
+
+  // A session-scoped capability has no host fiber; start only flips the gate.
+  await first.manager.start('redtrace-web')
+  assert.equal(first.manager.view('redtrace-web').status, 'running')
+  assert.ok(!first.ctx.mounts.some(({ module }) => module?.name === 'redtrace-web'))
+
+  // The enabled list survives restarts; stopping removes the opt-in.
+  const next = makeManager(root, manifestPath, async () => ({ apply() {} }))
+  await next.manager.boot()
+  assert.equal(next.manager.view('redtrace-credentials').status, 'running')
+  assert.equal(next.manager.view('redtrace-web').status, 'running')
+  assert.equal(next.manager.view('redtrace-lsp').status, 'stopped')
+
+  await next.manager.stop('redtrace-web')
+  assert.equal(next.manager.view('redtrace-web').status, 'stopped')
+  assert.deepEqual(JSON.parse(readFileSync(manifestPath, 'utf8')).enabled, ['redtrace-credentials'])
+  assert.deepEqual(JSON.parse(readFileSync(manifestPath, 'utf8')).disabled, ['redtrace-web'])
 })
 
 test('boot honors the manifest: disabled plugins stay unmounted', async (t) => {
@@ -109,7 +150,7 @@ test('boot honors the manifest: disabled plugins stay unmounted', async (t) => {
   const manifestPath = path.join(root, 'plugins.json')
   writeFileSync(manifestPath, JSON.stringify({
     version: 1,
-    disabled: ['redtrace-audit', 'redtrace-reason'],
+    disabled: ['redtrace-webshell', 'redtrace-reason'],
   }))
 
   initState({
@@ -121,9 +162,9 @@ test('boot honors the manifest: disabled plugins stay unmounted', async (t) => {
   await manager.boot()
   const views = manager.list()
 
-  assert.equal(views.find((view) => view.id === 'redtrace-audit').status, 'stopped')
+  assert.equal(views.find((view) => view.id === 'redtrace-webshell').status, 'stopped')
   assert.equal(views.find((view) => view.id === 'redtrace-reason').status, 'stopped')
-  assert.ok(ctx.mounts.every(({ module }) => module.name !== 'redtrace-audit'))
+  assert.ok(ctx.mounts.every(({ module }) => module.name !== 'redtrace-webshell'))
 
   // The scheduler consults this set: reason must not be dispatchable.
   const shared = (await import('../lib/state.js')).state()
@@ -138,32 +179,31 @@ test('stop and start toggle fibers live and persist across restarts', async (t) 
   const { ctx, manager } = makeManager(root, manifestPath, async () => ({}))
   await manager.boot()
 
-  const audit = ctx.mounts.find(({ module }) => module.name === 'redtrace-audit')
-  const stopped = await manager.stop('redtrace-audit')
+  const webshell = ctx.mounts.find(({ module }) => module.name === 'redtrace-webshell')
+  const stopped = await manager.stop('redtrace-webshell')
   assert.equal(stopped.status, 'stopped')
-  assert.equal(audit.disposed, true)
-  assert.deepEqual(JSON.parse(readFileSync(manifestPath, 'utf8')).disabled, ['redtrace-audit'])
+  assert.equal(webshell.disposed, true)
+  assert.deepEqual(JSON.parse(readFileSync(manifestPath, 'utf8')).disabled, ['redtrace-webshell'])
 
-  await manager.start('redtrace-audit')
+  await manager.start('redtrace-webshell')
   await tick()
-  assert.equal(manager.view('redtrace-audit').status, 'running')
+  assert.equal(manager.view('redtrace-webshell').status, 'running')
   assert.deepEqual(JSON.parse(readFileSync(manifestPath, 'utf8')).disabled, [])
 
-  // Stop again, then a fresh manager on the same manifest boots with audit
-  // stopped: the lifecycle survives restarts through the manifest.
-  await manager.stop('redtrace-audit')
+  // Stop again, then a fresh manager on the same manifest boots with the
+  // plugin stopped: the lifecycle survives restarts through the manifest.
+  await manager.stop('redtrace-webshell')
   const next = makeManager(root, manifestPath, async () => ({}))
   await next.manager.boot()
-  assert.equal(next.manager.view('redtrace-audit').status, 'stopped')
+  assert.equal(next.manager.view('redtrace-webshell').status, 'stopped')
 })
 
-test('stop refuses the protected web plugin; unknown ids are rejected', async (t) => {
-  const root = scratch('protect')
+test('stop rejects unknown ids', async (t) => {
+  const root = scratch('unknown')
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const { manager } = makeManager(root, path.join(root, 'plugins.json'), async () => ({}))
   await manager.boot()
 
-  await assert.rejects(() => manager.stop('redtrace-web'), PluginError)
   await assert.rejects(() => manager.stop('nope'), PluginError)
 })
 
@@ -253,7 +293,7 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const list = await call('GET', '/__redtrace/plugins')
   assert.equal(list.status, 200)
-  assert.equal(JSON.parse(list.body).plugins.length, 22)
+  assert.equal(JSON.parse(list.body).plugins.length, 30)
 
   const added = await call('POST', '/__redtrace/plugins', {
     id: 'my-plug', module: 'plugins/my-plug/index.js', description: '介绍一下',
@@ -275,12 +315,9 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
   assert.equal(badId.status, 400)
   assert.ok(JSON.parse(badId.body).detail.includes('unknown plugin'))
 
-  const protectedStop = await call('POST', '/__redtrace/plugins/redtrace-web/stop')
-  assert.equal(protectedStop.status, 400)
-
   const unknown = await call('GET', '/__redtrace/pluginsfoo')
   assert.equal(unknown.status, 404)
 
-  const badAction = await call('POST', '/__redtrace/plugins/redtrace-audit/restart')
+  const badAction = await call('POST', '/__redtrace/plugins/redtrace-resource/restart')
   assert.equal(badAction.status, 404)
 })

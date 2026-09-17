@@ -1,7 +1,0 @@
-interface:
-  display_name: "Identity Windows"
-  short_description: "Trace tickets, tokens, mailbox rules, and Windows pivot paths"
-  default_prompt: "Use $identity-windows to trace tickets, tokens, Windows host evidence, mailbox rules, or lateral movement in this task."
-
-policy:
-  allow_implicit_invocation: false

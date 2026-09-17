@@ -149,3 +149,13 @@ test('native audit keeps the conversation and drops lifecycle noise', () => {
     assert.equal(events[4].arguments.name, 'api-security')
   } finally { s.close() }
 })
+
+test('tool tracking can skip the audit mirror for externally projected sessions', () => {
+  const s = new Store(':memory:')
+  try {
+    const id = create(s), step = s.addStep(id, { description: 'Run an external command', sourceIds: ['origin'] }), run = s.claim(id, 'execute', worker, step.id)
+    s.toolStarted(run.id, 'call-1', { turn: 1, step: 1, callId: 'call-1', name: 'bash', arguments: '{}' }, false)
+    assert.deepEqual(s.db.prepare('SELECT data FROM audit_events ORDER BY id').all().map(row => JSON.parse(String(row.data))), [])
+    assert.deepEqual(s.run(run.id).pendingTools, ['call-1'])
+  } finally { s.close() }
+})

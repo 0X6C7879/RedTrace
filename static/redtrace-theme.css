@@ -1937,7 +1937,6 @@ body .fixed.z-50 > .bg-white {
 #graphLayout.fgs-native { position: relative; min-width: 0 !important; }
 #graphLayout.fgs-native .fgs-toolbar select,
 #graphLayout.fgs-native .fgs-side-panel select { background: #101722; color: #dbeeff; border-color: #405167; }
-#graphLayout.fgs-native .fgs-selection { color: #dbeeff; background: #101722; border-color: #405167; }
 @media (max-width: 900px) {
   #graphLayout.fgs-native .fgs-drawer-toggle { display: inline-block; }
   #graphLayout.fgs-native .fgs-resize-handle { display: none; }

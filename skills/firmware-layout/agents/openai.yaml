@@ -1,7 +1,0 @@
-interface:
-  display_name: "Firmware Layout"
-  short_description: "Map firmware partitions, boot chains, and extracted secrets"
-  default_prompt: "Use $firmware-layout to map this firmware image, extract partitions, trace the boot or update chain, and recover decisive secrets or branches."
-
-policy:
-  allow_implicit_invocation: false

@@ -16,7 +16,7 @@ export interface Goal extends NodeBase { kind: 'goal'; description: string; pare
 export interface Step extends NodeBase {
   kind: 'step'; description: string; goalId: string; sourceIds: string[]; factIds: string[]
   status: StepStatus; priority: number; worker: string | null; executionProfile: 'direct' | 'isolated'
-  capabilities: string[]; attempts: number; endedAt: string | null; failure: string | null
+  requires: string[]; attempts: number; endedAt: string | null; failure: string | null
   bootstrap: boolean; deleted?: boolean; resultGoalId?: string; sourceGoalId?: string
   failureCount?: number; retryAfter?: number | null; circuitOpen?: boolean; runtimeMs?: number
 }

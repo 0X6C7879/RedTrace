@@ -10,9 +10,9 @@ import type { Fact, Step, Run } from './types.ts'
 
 const text = Type.String({ minLength: 1, pattern: '\\S' }), refs = Type.Array(text, { minItems: 1 })
 const workerBody = Type.Object({ worker: text })
-const capabilities = Type.Array(Type.Union(['common', 'web', 'pentest', 'binary', 'crypto', 'cloud', 'blockchain', 'hardware', 'ai-security', 'defense'].map(v => Type.Literal(v))), { uniqueItems: true })
 const profile = Type.Union([Type.Literal('direct'), Type.Literal('isolated')])
-const stepSchema = Type.Object({ description: text, sourceIds: refs, goalId: Type.Optional(text), creator: Type.Optional(text), priority: Type.Optional(Type.Integer()), executionProfile: Type.Optional(profile), capabilities: Type.Optional(capabilities) })
+const requires = Type.Array(Type.String(), { uniqueItems: true, maxItems: 16 })
+const stepSchema = Type.Object({ description: text, sourceIds: refs, goalId: Type.Optional(text), creator: Type.Optional(text), priority: Type.Optional(Type.Integer()), executionProfile: Type.Optional(profile), requires: Type.Optional(requires) })
 const goalUpdate = Type.Object({ description: Type.Optional(text), status: Type.Optional(Type.Union(['open', 'achieved', 'cancelled'].map(v => Type.Literal(v)))), evidenceIds: Type.Optional(Type.Array(text)) })
 
 function waitChange(store: Store, id: string | undefined, changed: () => boolean, seconds: number, signal: AbortSignal) {
@@ -68,7 +68,7 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
   router.add('PATCH', '/v2/projects/:project/goals/:node', async c => store.updateGoal(p(c), c.params.node, await body(c.req, goalUpdate)))
   router.add('DELETE', '/v2/projects/:project/goals/:node', c => store.updateGoal(p(c), c.params.node, { status: 'cancelled' }))
   router.add('POST', '/v2/projects/:project/steps', async c => send(c.res, store.addStep(p(c), await body(c.req, stepSchema), maxSteps()), 201))
-  router.add('PATCH', '/v2/projects/:project/steps/:node', async c => store.updateStep(p(c), c.params.node, await body(c.req, Type.Object({ priority: Type.Optional(Type.Integer()), status: Type.Optional(Type.Union([Type.Literal('pending'), Type.Literal('cancelled')])), executionProfile: Type.Optional(profile), capabilities: Type.Optional(capabilities) }))))
+  router.add('PATCH', '/v2/projects/:project/steps/:node', async c => store.updateStep(p(c), c.params.node, await body(c.req, Type.Object({ priority: Type.Optional(Type.Integer()), status: Type.Optional(Type.Union([Type.Literal('pending'), Type.Literal('cancelled')])), executionProfile: Type.Optional(profile) }))))
   router.add('DELETE', '/v2/projects/:project/steps/:node', c => store.updateStep(p(c), c.params.node, { status: 'cancelled' }))
   router.add('POST', '/v2/projects/:project/facts', async c => { const b = await body(c.req, Type.Object({ description: text, creator: Type.Optional(text), evidence: Type.Array(Type.Object({ description: text, path: Type.Optional(text), runId: Type.Optional(text), toolCallId: Type.Optional(text) })) })); send(c.res, store.addFact(p(c), b.description, { creator: b.creator ?? 'human', evidence: b.evidence }), 201) })
   router.add('POST', '/v2/projects/:project/findings', async c => send(c.res, store.addFinding(p(c), await body(c.req, Type.Object({ title: text, description: text, type: Type.Optional(text), factIds: refs, creator: Type.Optional(text) }))), 201))
@@ -86,19 +86,17 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
     }
   })
   router.add('POST', '/projects/:project/intents', async c => {
-    const b = await body(c.req, Type.Object({ from: refs, description: text, creator: text, worker: Type.Optional(Type.Union([text, Type.Null()])), execution_profile: Type.Optional(profile), capabilities, max_active_intents: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])) }))
+    const b = await body(c.req, Type.Object({ from: refs, description: text, creator: text, worker: Type.Optional(Type.Union([text, Type.Null()])), execution_profile: Type.Optional(profile), requires: Type.Optional(requires), max_active_intents: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])) }))
     requireActive(p(c))
     if (b.from.includes('goal')) throw new HttpError(400, 'goal cannot be used in from')
     if (b.worker && b.worker !== b.creator) throw new HttpError(400, 'worker must be null or equal to creator')
     const bootstrap = b.creator === 'dispatcher.bootstrap' && b.description === 'bootstrap' && b.from.length === 1 && b.from[0] === 'origin'
-    if (!bootstrap && !b.capabilities.length) throw new HttpError(422, 'capabilities must contain at least one direction')
-    const result = store.transaction(() => { const s = store.addStep(p(c), { description: b.description, sourceIds: b.from, creator: b.creator, executionProfile: b.execution_profile, capabilities: b.capabilities, bootstrap }, b.max_active_intents); if (b.worker) store.claim(p(c), 'execute', { name: b.worker, backend: 'dsh' }, s.id); return intent(p(c), s.id) })
+    const result = store.transaction(() => { const s = store.addStep(p(c), { description: b.description, sourceIds: b.from, creator: b.creator, executionProfile: b.execution_profile, requires: b.requires, bootstrap }, b.max_active_intents); if (b.worker) store.claim(p(c), 'execute', { name: b.worker, backend: 'dsh' }, s.id); return intent(p(c), s.id) })
     send(c.res, result, 201)
   })
-  for (const suffix of ['execution-profile', 'capabilities'] as const) router.add('PATCH', `/projects/:project/intents/:node/${suffix}`, async c => {
+  router.add('PATCH', '/projects/:project/intents/:node/execution-profile', async c => {
     requireActive(p(c))
-    if (suffix === 'capabilities') { const b = await body(c.req, Type.Object({ capabilities })); if (!b.capabilities.length) throw new HttpError(422, 'capabilities must contain at least one direction'); store.updateStep(p(c), c.params.node, { capabilities: b.capabilities }) }
-    else store.updateStep(p(c), c.params.node, { executionProfile: (await body(c.req, Type.Object({ execution_profile: profile }))).execution_profile })
+    store.updateStep(p(c), c.params.node, { executionProfile: (await body(c.req, Type.Object({ execution_profile: profile }))).execution_profile })
     return intent(p(c), c.params.node)
   })
   router.add('DELETE', '/projects/:project/intents/:node', c => { requireActive(p(c)); store.deleteStep(p(c), c.params.node); send(c.res, null, 204) })

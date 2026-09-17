@@ -6,9 +6,6 @@ description: >-
   and close challenge containers, obtain score-penalized hints deliberately,
   submit flags, and recover platform errors. This Skill controls benchmark
   lifecycle only; delegate challenge solving to specialist Skills.
-metadata:
-  redtrace:
-    capabilities: [common]
 ---
 # Tsecbench API
 

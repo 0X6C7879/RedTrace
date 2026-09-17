@@ -1,7 +1,0 @@
-interface:
-  display_name: "Runtime Routing"
-  short_description: "Trace proxy rules, Host headers, and route-to-service resolution"
-  default_prompt: "Use $runtime-routing to map how this hostname, proxy rule, or path prefix resolves to the live in-scope service."
-
-policy:
-  allow_implicit_invocation: false

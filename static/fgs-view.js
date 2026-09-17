@@ -112,7 +112,7 @@ window.redtraceFgsView = {
     this.fgsSelection = { type: type === 'subgoal' ? 'goal' : type, id };
     this.fgsEdgeSelection = null;
     this.fgsPanelOpen = true;
-    this.sideTab = type === 'step' ? 'steps' : 'fgs';
+    this.sideTab = 'detail';
     this.selectedNode = type === 'step' ? { type: 'intent', id } : ['scope', 'fact'].includes(type) ? { type: 'fact', id } : null;
     this.selectedFacts = ['scope', 'fact'].includes(type) ? [id] : [];
     this.highlightFgsSelection();
@@ -124,7 +124,7 @@ window.redtraceFgsView = {
   selectFgsEdge(edge) {
     this.fgsSelection = null;
     this.fgsEdgeSelection = { ...edge };
-    this.sideTab = 'fgs'; this.fgsPanelOpen = true;
+    this.sideTab = 'detail'; this.fgsPanelOpen = true;
     this.highlightFgsSelection();
   },
   fgsRelatedEdges() {
@@ -133,10 +133,10 @@ window.redtraceFgsView = {
   },
   fgsRelatedSteps() {
     const id = this.fgsSelection?.id, edgeSteps = this.fgsEdgeSelection?.stepIds || [];
-    return (this.fgs?.steps || []).filter(s => !s.deleted && (edgeSteps.includes(s.id) || s.id === id || s.goalId === id || s.sourceIds.includes(id) || s.factIds.includes(id) || this.fgs?.findings.find(f => f.id === id)?.stepId === s.id));
+    return (this.fgs?.steps || []).filter(s => !s.deleted && (edgeSteps.includes(s.id) || s.goalId === id || s.sourceIds.includes(id) || s.factIds.includes(id) || this.fgs?.findings.find(f => f.id === id)?.stepId === s.id));
   },
   fgsVisibleSteps() { return (this.fgs?.steps || []).filter(s => !s.deleted && (!this.fgsStepFilter || s.goalId === this.fgsStepFilter)); },
-  fgsOpenReference(id) { const n = this.fgs?.nodes.find(n => n.id === id); if (n) this.selectFgsNode(n.nodeType, id); },
+  fgsOpenReference(id) { const n = this.fgs?.nodes.find(n => n.id === id); if (n) this.selectFgsNode(n.nodeType, id); else if ((this.fgs?.steps || []).some(s => s.id === id && !s.deleted)) this.selectFgsNode('step', id); },
   nativeProject(graph) {
     return { project: { ...graph.project, reason: null, bootstrap_enabled: graph.project.bootstrap, created_at: graph.project.createdAt }, facts: [...graph.facts, ...graph.goals.filter(g => g.id === 'goal')], hints: graph.hints.map(h => ({ ...h, created_at: h.createdAt })),
       intents: graph.steps.filter(s => !s.deleted).map(s => ({ ...s, from: s.sourceIds, to: s.status === 'done' ? s.resultGoalId || s.factIds.at(-1) || null : null, state: { pending: 'open', running: 'working', paused: 'open', blocked: 'blocked', done: 'concluded', cancelled: 'dropped' }[s.status], worker: s.status === 'paused' ? null : s.worker, execution_profile: s.executionProfile, created_at: s.createdAt, concluded_at: s.endedAt, failure_count: s.failureCount || 0, failure_signature: s.failure, retry_after: s.retryAfter, circuit_open: s.circuitOpen, attempt_count: s.attempts, cumulative_runtime_ms: s.runtimeMs || 0, fact_yield: s.factIds.length })) };

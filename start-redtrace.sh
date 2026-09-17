@@ -17,16 +17,31 @@ fi
 export REDTRACE_PARENT_PATH="${REDTRACE_PARENT_PATH:-$PATH}"
 export REDTRACE_PARENT_VIRTUAL_ENV="${REDTRACE_PARENT_VIRTUAL_ENV-${VIRTUAL_ENV-}}"
 
-command -v node >/dev/null 2>&1 || {
-  printf 'error: Node.js 24.15 or newer from the Node 24 line is required\n' >&2
+# Node 24.15+ is required. The PATH node wins normally, but competing installs
+# keep hijacking it (e.g. ~/.local/bin/node symlinking to a bundled node 22),
+# so fall back to a Homebrew node@24 keg when the PATH node is another line.
+node_is_24() {
+  [[ -n "$1" ]] || return 1
+  local major minor _
+  IFS=. read -r major minor _ <<<"$("$1" --version 2>/dev/null | sed 's/^v//')"
+  [[ "$major" == 24 && "$minor" -ge 15 ]]
+}
+NODE_BIN="$(command -v node || true)"
+if ! node_is_24 "$NODE_BIN"; then
+  for NODE_CAND in /opt/homebrew/opt/node@24/bin /usr/local/opt/node@24/bin; do
+    if node_is_24 "$NODE_CAND/node"; then
+      export PATH="$NODE_CAND:$PATH"
+      NODE_BIN="$NODE_CAND/node"
+      printf '==> PATH node is not from the 24 line; using node %s from %s\n' "$("$NODE_CAND/node" --version)" "$NODE_CAND" >&2
+      break
+    fi
+  done
+fi
+node_is_24 "$NODE_BIN" || {
+  printf 'error: Node.js 24.15+ (<25) is required; found %s\n' "$("${NODE_BIN:-node}" --version 2>/dev/null || echo none)" >&2
   printf '  install: https://nodejs.org/\n' >&2
   exit 1
 }
-IFS=. read -r NODE_MAJOR NODE_MINOR _ <<<"$(node --version | sed 's/^v//')"
-if [[ "$NODE_MAJOR" -ne 24 || "$NODE_MINOR" -lt 15 ]]; then
-  printf 'error: Node.js 24.15+ (<25) is required; found %s\n' "$(node --version)" >&2
-  exit 1
-fi
 command -v npm >/dev/null 2>&1 || {
   printf 'error: npm is required to install the Node runtime dependencies\n' >&2
   exit 1

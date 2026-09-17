@@ -1,63 +1,12 @@
 /**
- * RedTrace Audit plugin: projects DSH session events onto the RedTrace audit
- * stream and reports run outcomes. The DSH session event log stays the
- * source of truth for the full agent trajectory; only the compact UI
- * projection is written to RedTrace.
+ * RedTrace audit projection: folds DSH session events onto the compact
+ * RedTrace audit timeline. The Node engine host consumes these helpers
+ * directly and commits rows to its own store — there is no separate audit
+ * reporter process.
  * @module redtrace-audit
  */
 
-import { lstat, mkdir, readdir, rm, rmdir } from 'node:fs/promises'
-import path from 'node:path'
-import type { AuditRun, RuntimeConfig, RuntimeOptions, RuntimeTask, RuntimeContext, SessionEvent, SessionPersistence, TaskUsage } from './types.js'
-import { state } from './state.js'
-
-export const name = 'redtrace-audit'
-
-async function api<T>(config: RuntimeConfig & { server: string }, pathname: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${config.server}${pathname}`, init)
-  const body = await response.text()
-  if (!response.ok) throw new Error(`RedTrace API ${response.status} ${pathname}: ${body.slice(0, 500)}`)
-  return (body === '' ? null : JSON.parse(body)) as T
-}
-
-export async function reportRun(
-  config: RuntimeOptions,
-  task: RuntimeTask,
-  status: string,
-  events: Record<string, unknown>[] = [],
-): Promise<void> {
-  if (task.runId === undefined || task.sessionId === undefined || task.startedAt === undefined) return
-  const cwd = path.join(config.workspacesDir, safeId(task.projectId))
-  await api(config, '/audit/events', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      run: {
-        id: task.runId, project_id: task.projectId, intent_id: task.intentId ?? null,
-        task_type: task.type, phase: task.type, worker: task.worker,
-        provider: task.route?.provider ?? 'dsh', engine: 'dsh', model: task.route?.model ?? null,
-        execution_profile: task.executionProfile ?? 'direct', session_id: task.sessionId,
-        workspace_kind: 'local', workspace_ref: cwd, workspace_root: cwd,
-        status, started_at: new Date(task.startedAt).toISOString(),
-        ended_at: status === 'running' ? null : new Date().toISOString(),
-        cancelled: status === 'cancelled', timed_out: status === 'timeout',
-        ...usageBody(task.usage),
-      },
-      events,
-    }),
-  })
-}
-
-/** Cumulative usage for the run metadata; totals are what the server stores. */
-function usageBody(usage: TaskUsage | undefined): Record<string, number> {
-  if (usage === undefined) return {}
-  return {
-    input_tokens: usage.inputTokens,
-    output_tokens: usage.outputTokens,
-    cache_read_tokens: usage.cacheReadTokens,
-    cache_write_tokens: usage.cacheWriteTokens,
-  }
-}
+import type { RuntimeTask, SessionEvent, TaskUsage } from './types.js'
 
 /**
  * Fold one session event's provider usage into the task's cumulative totals.
@@ -177,65 +126,4 @@ export function eventProjection(task: RuntimeTask, event: SessionEvent): Record<
   }
   if (event.type === 'turn/end') return [{ ...base, kind: 'turn.completed' }]
   return []
-}
-
-function safeId(value: string): string {
-  const clean = value.replace(/[^A-Za-z0-9_-]/g, '-').replace(/-+/g, '-').slice(0, 48)
-  return clean || 'project'
-}
-
-export async function cleanupSessionArtifacts(
-  sessionRoot: string,
-  runs: readonly AuditRun[],
-  persistence?: SessionPersistence,
-): Promise<void> {
-  if (persistence === undefined) return
-  const root = path.resolve(sessionRoot)
-  const parents = new Set<string>()
-  const projectDirectories = await readdir(root, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'ENOENT') return []
-    throw error
-  })
-  for (const id of new Set(runs.map(run => run.session_id).filter((value): value is string => Boolean(value)))) {
-    if (!/^[A-Za-z0-9._-]+$/.test(id) || id === '.' || id === '..') continue
-    if (await persistence.stat(id) === undefined) continue
-    for (const projectDirectory of projectDirectories) {
-      if (!projectDirectory.isDirectory()) continue
-      const directory = path.join(root, projectDirectory.name, id)
-      const exists = await lstat(directory).then(value => value.isDirectory()).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === 'ENOENT') return false
-        throw error
-      })
-      if (!exists) continue
-      parents.add(path.dirname(directory))
-      await rm(directory, { recursive: true, force: true })
-    }
-  }
-  for (const parent of parents) {
-    if (parent !== root && parent.startsWith(`${root}${path.sep}`)) {
-      await rmdir(parent).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== 'ENOENT' && error.code !== 'ENOTEMPTY') throw error
-      })
-    }
-  }
-}
-
-export function apply(ctx: RuntimeContext): void {
-  // Events must reach the server in session order: concurrent POSTs race and
-  // scramble the live timeline, so each session gets a serial fetch chain.
-  const chains = new Map<string, Promise<void>>()
-  ctx.on('session/event', (value: { id?: string }, event: SessionEvent) => {
-    const shared = state()
-    const session = String(value.id ?? '')
-    const task = shared?.tasks.get(session)
-    if (shared === undefined || task === undefined) return
-    accumulateUsage(task, event)
-    const events = eventProjection(task, event)
-    if (events.length === 0) return
-    const next = (chains.get(session) ?? Promise.resolve())
-      .then(() => reportRun(shared.config, task, 'running', events))
-      .catch(error => { ctx.logger?.warn(error) })
-      .finally(() => { if (chains.get(session) === next) chains.delete(session) })
-    chains.set(session, next)
-  })
 }

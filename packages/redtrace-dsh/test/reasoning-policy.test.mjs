@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { resolveReasoningEffort, workerRoute } from '../lib/scheduler.js'
+import { resolveReasoningEffort } from '../lib/agent.js'
 
 function llmWith(efforts) {
   return {
@@ -43,12 +43,3 @@ test('an explicit effort is validated against the exact model capability', async
   )
 })
 
-test('worker routes preserve configured provider names and reasoning policy', () => {
-  assert.deepEqual(workerRoute({
-    name: 'reasoner', enabled: true, provider: 'deepseek', model: 'deepseek-reasoner',
-    bootstrap: true, reason: true, explore: true, maxRunning: 1, priority: 0,
-    reasoning: 'auto_max',
-  }), {
-    provider: 'deepseek', model: 'deepseek-reasoner', reasoning: 'auto_max',
-  })
-})

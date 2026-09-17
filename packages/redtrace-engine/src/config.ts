@@ -110,7 +110,7 @@ export class Configuration {
     const { raw, revision } = this.read(), config = this.resolve(raw)
     return { revision, engine: config.workers.every(w => w.backend === 'mock') ? 'mock' : 'dsh', execution: 'local', runtime_max_workers: config.maxWorkers,
       runtime: { max_workers: config.maxWorkers, max_project_workers: config.maxProjectWorkers, max_running_projects: config.maxRunningProjects },
-      tasks: raw.tasks ?? {}, common_env: Object.entries(config.commonEnv ?? {}).sort(([left], [right]) => left.localeCompare(right)).map(([name, value]) => ({ name, value })),
+      tasks: raw.tasks ?? {}, common_env: Object.entries(config.commonEnv ?? {}).map(([name, value]) => ({ name, value })),
       providers: Object.entries(raw.providers ?? {}).map(([name, p]) => ({ name, api: p.api, base_url: p.base_url, api_key_configured: !!p.api_key, api_key_env: p.api_key_env ?? null,
         models: p.models.map(m => ({ ...m, reasoning: m.reasoning ?? 'auto_max', reasoning_efforts: m.reasoning_efforts ?? null, thinking_format: m.thinking_format ?? 'auto' })), referenced: config.workers.some(w => w.provider === name) })),
       dsh: null, workers: config.workers.map(w => ({ name: w.name, type: w.provider === 'mock' ? 'mock' : 'dsh', provider: w.provider, model: w.model, enabled: w.enabled,

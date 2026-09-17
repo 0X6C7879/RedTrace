@@ -13,6 +13,8 @@ import { buildBeacon, compatibleOneliners, generateOneliner } from './c2-payload
 export const resourceKinds = ['webshell', 'c2_listener', 'c2_session', 'c2_payload', 'c2_profile', 'proxy', 'file', 'credential_ref', 'result']
 export const terminalTasks = ['succeeded', 'failed', 'cancelled', 'rejected']
 export const digest = (s: string | Buffer) => createHash('sha256').update(s).digest('hex')
+const TASK_SUMMARY_LIMIT = 1000
+const summarize = (value: string) => value.slice(0, TASK_SUMMARY_LIMIT)
 const uid = (prefix: string) => `${prefix}_${randomBytes(7).toString('hex')}`
 const object = Type.Record(Type.String(), Type.Unknown())
 const text = (maxLength = 128) => Type.String({ minLength: 1, maxLength })
@@ -34,12 +36,15 @@ export class Operations {
   private externalTimers = new Map<string, NodeJS.Timeout>()
   private externalSyncs = new Map<string, AbortController>()
   private channels = new Map<string, net.Socket>()
+  private staleTimer: NodeJS.Timeout
   private closed = false
   constructor(store: Store, root: string) {
     this.store = store; this.outputRoot = path.join(root, '.redtrace/output')
     store.db.exec(readFileSync(new URL('./operations.sql', import.meta.url), 'utf8'))
     // An interrupted external operation cannot be inferred safe to repeat.
     store.db.prepare("UPDATE operation_tasks SET status='failed',output_summary='Process interrupted; external result unknown. Verify before resubmitting.',completed_at=? WHERE status='running'").run(now())
+    this.staleTimer = setInterval(() => { if (!this.closed) this.expireStale() }, 30_000)
+    this.staleTimer.unref()
     this.wake()
   }
   wake() { queueMicrotask(() => { if (!this.closed) this.dispatch() }) }
@@ -68,7 +73,7 @@ export class Operations {
       })()
     }
   }
-  async close() { this.closed = true; for (const entry of this.running.values()) entry.abort.abort(); for (const id of new Set([...this.listeners.keys(), ...this.externalTimers.keys(), ...this.externalSyncs.keys()])) this.stopListener(id); for (const socket of this.channels.values()) socket.destroy(); await Promise.all([...this.running.values()].map(r => r.completion)); await new Promise<void>(resolve => setImmediate(resolve)) }
+  async close() { this.closed = true; clearInterval(this.staleTimer); for (const entry of this.running.values()) entry.abort.abort(); for (const id of new Set([...this.listeners.keys(), ...this.externalTimers.keys(), ...this.externalSyncs.keys()])) this.stopListener(id); for (const socket of this.channels.values()) socket.destroy(); await Promise.all([...this.running.values()].map(r => r.completion)); await new Promise<void>(resolve => setImmediate(resolve)) }
   async cancelProject(project: string) {
     this.store.db.prepare("UPDATE operation_tasks SET cancel_requested=1,status=CASE WHEN status IN ('queued','running') THEN 'cancelled' ELSE status END,completed_at=CASE WHEN status IN ('queued','running') THEN ? ELSE completed_at END WHERE project_id=? AND status NOT IN ('succeeded','failed','cancelled','rejected')").run(now(), project)
     for (const [id, entry] of this.running) if (this.task(id).project_id === project) entry.abort.abort()
@@ -161,10 +166,24 @@ export class Operations {
   }
   publicTask({ input_json, ...task }: any) { return { ...task, input: JSON.parse(input_json), requires_approval: !!task.requires_approval, cancel_requested: !!task.cancel_requested } }
   expireStale(project?: string) {
-    const rows = this.store.db.prepare(`SELECT * FROM shared_resources WHERE kind='c2_session' AND status='available' AND last_seen_at IS NOT NULL ${project ? 'AND project_id=?' : ''}`).all(...(project ? [project] : [])) as any[], cutoff = Date.now() - 120_000
+    const rows = this.store.db.prepare(`SELECT * FROM shared_resources WHERE kind='c2_session' AND status IN ('available','offline') AND last_seen_at IS NOT NULL ${project ? 'AND project_id=?' : ''}`).all(...(project ? [project] : [])) as any[], cutoff = Date.now() - 120_000
     for (const row of rows) {
       const connection = JSON.parse(row.metadata_json).connection_type ?? 'beacon'
-      if (['beacon', 'agent'].includes(connection) && Date.parse(row.last_seen_at) < cutoff) { this.updateResource(row.id, { status: 'offline' }); this.audit(row.project_id, row.id, null, { actor_type: 'system', actor: 'session-monitor' }, 'c2.session_offline', 'offline') }
+      if (['beacon', 'agent'].includes(connection) && (row.status === 'offline' || Date.parse(row.last_seen_at) < cutoff)) {
+        const at = now()
+        this.store.transaction(() => {
+          if (row.status === 'available') this.updateResource(row.id, { status: 'offline' })
+          const pending = this.store.db.prepare("SELECT * FROM operation_tasks WHERE resource_id=? AND status IN ('queued','running')").all(row.id) as any[]
+          for (const task of pending) {
+            const message = task.status === 'running'
+              ? 'C2 session went offline before a result was received; external result is unknown. Verify before resubmitting.'
+              : 'C2 session went offline before the task was dispatched. Retry after the session returns.'
+            this.store.db.prepare("UPDATE operation_tasks SET status='failed',output_summary=?,completed_at=? WHERE id=?").run(message, at, task.id)
+            this.audit(task.project_id, row.id, task.id, { actor_type: 'system', actor: 'session-monitor' }, `operation.${task.action}`, 'failed', { error: message, reason: 'c2_session_offline' })
+          }
+          if (row.status === 'available') this.audit(row.project_id, row.id, null, { actor_type: 'system', actor: 'session-monitor' }, 'c2.session_offline', 'offline', { failed_tasks: pending.length })
+        })
+      }
     }
   }
   audit(project: string | null, resource: string | null, task: string | null, actor: any, action: string, status: string, detail = {}) {
@@ -214,6 +233,7 @@ export class Operations {
     return this.store.transaction(() => {
       const resource = this.resource(id); this.available(resource, input)
       if (!['webshell', 'c2_session'].includes(resource.kind)) throw new HttpError(409, 'This resource type does not accept operation tasks')
+      if (resource.kind === 'c2_session' && resource.status !== 'available') throw new HttpError(409, `C2 session is ${resource.status}`)
       const approval = input.requires_approval ?? (input.actor_type === 'worker' && ['high', 'critical'].includes(input.risk)), op = uid('op'), status = approval ? 'awaiting_approval' : 'queued'
       this.store.db.prepare('INSERT INTO operation_tasks(id,project_id,resource_id,intent_id,fact_id,action,actor_type,actor,risk,status,input_json,requires_approval,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(op, project, id, input.intent_id ?? null, input.fact_id ?? null, input.action, input.actor_type ?? 'human', input.actor ?? 'admin', input.risk ?? 'low', status, JSON.stringify(input.arguments ?? {}), Number(approval), now())
       this.audit(project, id, op, input, `operation.${input.action}`, status, { risk: input.risk ?? 'low', intent_id: input.intent_id ?? null })
@@ -233,9 +253,10 @@ export class Operations {
         const directory = path.join(this.outputRoot, resource.kind === 'webshell' ? 'webshell' : 'c2', 'results'); mkdirSync(directory, { recursive: true }); writeFileSync(path.join(directory, `${id}-${result}.txt`), content)
         if (JSON.parse(task.input_json).publish_result) this.create(task.project_id, { kind: 'result', name: `${resource.name} · ${task.action}`, target: ref, summary: output, metadata: { result_id: result, task_id: id }, actor_type: task.actor_type, actor: task.actor, source_task_id: id })
       }
-      this.store.db.prepare('UPDATE operation_tasks SET status=?,output_summary=?,result_ref=?,completed_at=? WHERE id=?').run(status, output || (succeeded ? '任务已完成，未返回文本输出' : 'operation failed'), ref, at, id)
+      const outputSummary = summarize(output || (succeeded ? '任务已完成，未返回文本输出' : 'operation failed'))
+      this.store.db.prepare('UPDATE operation_tasks SET status=?,output_summary=?,result_ref=?,completed_at=? WHERE id=?').run(status, outputSummary, ref, at, id)
       this.updateResource(resource.id, { status: succeeded ? 'available' : 'degraded', ...(succeeded ? { last_seen_at: at } : {}) })
-      this.audit(task.project_id, task.resource_id, id, task, `operation.${task.action}`, status, succeeded ? { result_ref: ref, summary: output } : { error: output })
+      this.audit(task.project_id, task.resource_id, id, task, `operation.${task.action}`, status, succeeded ? { result_ref: ref, summary: outputSummary } : { error: outputSummary })
       return this.publicTask(this.task(id))
     })
   }
@@ -416,11 +437,11 @@ export function operationRoutes(router: Router, ops: Operations) {
     })
   })
   router.add('POST', '/c2/sessions/:session/results/:operation', async c => {
-    const session = ops.session(c.params.session, String(c.req.headers['x-redtrace-session-token'] ?? '')), b = await body(c.req, Type.Object({ success: optional(Type.Boolean()), output: optional(Type.String({ maxLength: 2 * 1024 * 1024 })), summary: optional(Type.String({ maxLength: 1000 })) })), task = ops.task(c.params.operation)
+    const session = ops.session(c.params.session, String(c.req.headers['x-redtrace-session-token'] ?? '')), b = await body(c.req, Type.Object({ success: optional(Type.Boolean()), output: optional(Type.String({ maxLength: 2 * 1024 * 1024 })), summary: optional(Type.String({ maxLength: 2 * 1024 * 1024 })) })), task = ops.task(c.params.operation)
     if (task.resource_id !== session.id) throw new HttpError(404, 'Task not found')
     if (['cancelled', 'rejected'].includes(task.status)) return { task: ops.publicTask(task) }
     const result = ops.finish(task.id, b.success !== false, b.output ?? '')
-    if (b.summary?.trim()) { db.prepare('UPDATE operation_tasks SET output_summary=? WHERE id=?').run(b.summary.trim(), task.id); return { task: ops.publicTask(ops.task(task.id)) } }
+    if (b.summary?.trim()) { db.prepare('UPDATE operation_tasks SET output_summary=? WHERE id=?').run(summarize(b.summary.trim()), task.id); return { task: ops.publicTask(ops.task(task.id)) } }
     return { task: result }
   })
 }

@@ -18,17 +18,14 @@ import type { CordisFiber, RuntimeConfig, RuntimeContext, TaskType } from './typ
 import { load, repoRoot } from './loader.js'
 import { state } from './state.js'
 import * as core from './core.js'
-import * as prompt from './prompt.js'
-import * as context from './context.js'
-import * as contracts from './contracts.js'
-import * as resource from './resource.js'
 import * as domain from './domain.js'
-import * as audit from './audit.js'
-import * as web from './web.js'
 import * as scheduler from './scheduler.js'
-import * as bootstrapPreset from './bootstrap.js'
-import * as reasonPreset from './reason.js'
-import * as explorePreset from './explore.js'
+import * as webshell from './webshell.js'
+import * as c2 from './c2.js'
+import * as credentials from './credentials.js'
+import * as attachment from './attachment.js'
+import * as fileReferences from './file-references.js'
+import * as codeRuntime from './code-runtime.js'
 
 export const name = 'redtrace-plugins'
 export const inject = ['webServer']
@@ -45,18 +42,25 @@ interface KernelEntry {
   intro: string
 }
 
-/** A RedTrace plugin the manager mounts as a child fiber. */
+/** A RedTrace plugin the manager mounts as a child fiber, or a session-scoped
+ * DSH native capability the execution toolchain mounts into each Execute
+ * agent while its catalog entry runs (no host-plane module of its own). */
 interface ManagedEntry {
   id: string
   label: string
   description: string
   intro: string
   category: 'core' | 'feature'
-  module: unknown
+  /** Host-plane Cordis plugin module; omitted for session-scoped capabilities. */
+  module?: unknown
+  /** Module path shown in the UI. */
+  modulePath: string
   /** Receive the full RuntimeConfig (domain and scheduler need it). */
   needsRuntimeConfig?: boolean
   /** Stopping this plugin removes the management plane itself. */
   protectStop?: boolean
+  /** Boots stopped unless the manifest's enabled list names it. */
+  defaultOff?: boolean
 }
 
 /** A task preset: enabled/disabled gates dispatch, the scheduler mounts it per agent. */
@@ -83,6 +87,8 @@ export interface PluginManifest {
   version: 1
   /** Ids of catalog plugins that must stay unmounted at boot. */
   disabled?: string[]
+  /** Ids of default-off catalog plugins the user opted into. */
+  enabled?: string[]
   user?: UserEntry[]
 }
 
@@ -148,48 +154,105 @@ const KERNEL: readonly KernelEntry[] = [
 const MANAGED: readonly ManagedEntry[] = [
   {
     id: 'redtrace-core', label: 'RedTrace Core', category: 'core', module: core,
+    modulePath: 'packages/redtrace-dsh/lib/core.js',
     description: '最小运行内核',
     intro: '整个运行时的最小内核:装配 agent 循环、会话、模型调用、工具注册与系统提示词。其余全部能力都以插件形式叠加在这层之上。',
   },
   {
-    id: 'redtrace-prompt', label: 'Persona', category: 'feature', module: prompt,
-    description: '中文人格与任务规则',
-    intro: '定义 agent 的中文人格与行为规则,涵盖任务收尾、输出格式与安全边界,是所有任务共享的提示词基座。',
+    id: 'redtrace-webshell', label: 'WebShell', category: 'feature', module: webshell,
+    modulePath: 'packages/redtrace-dsh/lib/webshell.js',
+    description: 'WebShell 通道族',
+    intro: 'WebShell 能力插件:提供通道连通性探测工具;停用后 remote.command / remote.file.* 动词不再复用 WebShell 通道。',
   },
   {
-    id: 'redtrace-context', label: 'Context', category: 'feature', module: context,
-    description: '图谱与资源的上下文注入',
-    intro: '把项目知识图谱、资源与黑板修订序列化为上下文消息,在任务启动和图谱变更时注入 agent 会话。',
+    id: 'redtrace-c2', label: 'C2', category: 'feature', module: c2,
+    modulePath: 'packages/redtrace-dsh/lib/c2.js',
+    description: 'C2 通道族',
+    intro: 'C2 能力插件:提供 listener 创建、payload 生成与会话查询工具;停用后 remote.command / remote.file.* 动词不再复用 C2 会话通道。',
   },
   {
-    id: 'redtrace-contracts', label: 'Contracts', category: 'feature', module: contracts,
-    description: '契约工具',
-    intro: '注册契约类工具并按任务类型分配。agent 必须通过这些工具提交结果、创建意图与事实,保证产出可追踪。',
+    id: 'redtrace-web', label: 'Web', category: 'feature',
+    modulePath: 'vendor/deepseek-harness/packages/web/tool-web/lib/index.js',
+    description: '网页搜索与抓取',
+    intro: 'DSH 原生 Web 能力:web_search 走 dsh-web-search-free 免费多引擎检索(TinyFish/AnySearch/Exa/Tavily 等,按顺序自动 fallback,引擎 Key 经 common_env 环境变量提供,如 TINYFISH_API_KEY),web_fetch 抓取公开 HTTP(S) 页面。对新启动的 Execute 会话生效。',
   },
   {
-    id: 'redtrace-resource', label: 'Resource', category: 'feature', module: resource,
-    description: '共享资源工具',
-    intro: '共享资源读写工具。agent 通过它登记与查询项目资源,资源经后台关联进入图谱。',
+    id: 'redtrace-jobs', label: '后台任务', category: 'feature',
+    modulePath: 'vendor/deepseek-harness/packages/jobs/tool-jobs/lib/index.js',
+    description: '后台任务管理与完成通知',
+    intro: 'DSH 原生后台任务:bash 的 run_in_background 把长耗时命令(nmap、nuclei、ffuf 等)登记为任务,模型用 job_output / job_list / job_kill 跟进,完成后自动收到通知,不必 sleep 轮询。任务随所属会话结束自动清理。',
+  },
+  {
+    id: 'redtrace-terminal', label: '持久终端', category: 'feature',
+    modulePath: 'vendor/deepseek-harness/packages/terminal/tool-terminal/lib/index.js',
+    description: '交互式 PTY 终端',
+    intro: 'DSH 原生持久终端:terminal_open / send / read / signal / close / list 在多次工具调用间保留交互式 shell 状态,适合 gdb、REPL、交互式探测等持续交互进程。一次性命令仍走 bash,长命令走后台任务。隔离档案下终端被限制在工作区内。',
+  },
+  {
+    id: 'redtrace-fs-search', label: '工作区搜索', category: 'feature',
+    modulePath: 'vendor/deepseek-harness/packages/fs/tool-fs-search/lib/index.js',
+    description: 'glob 与 grep 工具',
+    intro: 'DSH 原生文件搜索:glob / grep 直接搜索当前工作区,内置结果上限、超时与大结果 spill,不需要在 shell 里拼 find / rg 命令。',
+  },
+  {
+    id: 'redtrace-spill', label: '大结果落盘', category: 'feature',
+    modulePath: 'vendor/deepseek-harness/packages/spill/spill-policy/lib/index.js',
+    description: '超大工具结果落盘预览',
+    intro: 'DSH 原生 Spill:超过 50 KB 的纯文本工具结果完整写入会话文件,模型只看到头尾预览与取回指引,需要时再用 read / grep 按需读取;与工具结果裁剪互补而非替代。',
+  },
+  {
+    id: 'redtrace-tool-timeout', label: '工具超时', category: 'feature',
+    modulePath: 'vendor/deepseek-harness/packages/guard/timeout-policy/lib/index.js',
+    description: '工具调用统一超时控制',
+    intro: 'DSH 原生工具超时策略:为声明了超时预算的工具(web、文件搜索等)统一武装截止时间,超时以结构化错误返回而不是悬挂到任务级超时。',
+  },
+  {
+    id: 'redtrace-repeat-reminder', label: '重复调用提醒', category: 'feature',
+    modulePath: 'vendor/deepseek-harness/packages/guard/repeat-tool-reminder/lib/index.js',
+    description: '连续重复调用同一工具时提醒',
+    intro: 'DSH 原生重复提醒:同一工具以相同参数连续调用 3 / 5 / 8 次时向模型注入提醒,打断死循环式的重复调用,适合长时间自主运行的 Worker。',
+  },
+  {
+    id: 'redtrace-credentials', label: 'Credentials', category: 'feature', module: credentials,
+    modulePath: 'packages/redtrace-dsh/lib/credentials.js', defaultOff: true,
+    description: '凭据文档服务',
+    intro: 'DSH 原生凭据服务:从 $DSH_HOME/.credentials.yaml 与项目 / 用户 .env 解析凭据引用(如 Web 搜索的 DEEPSEEK_API_KEY),不回写进程环境。RedTrace 自身的 Provider 密钥仍由配置文件管理,二者互不影响。',
+  },
+  {
+    id: 'redtrace-attachment', label: 'Attachment', category: 'feature', module: attachment,
+    modulePath: 'packages/redtrace-dsh/lib/attachment.js', defaultOff: true,
+    description: '二进制附件持久化服务',
+    intro: 'DSH 原生附件服务:为 APK / PCAP / ELF 等二进制样本提供内容寻址的持久存储,消息中只保留引用。当前 RedTrace 管线不提交附件,服务为后续通道与自定义插件预留。',
+  },
+  {
+    id: 'redtrace-file-references', label: 'File References', category: 'feature', module: fileReferences,
+    modulePath: 'packages/redtrace-dsh/lib/file-references.js', defaultOff: true,
+    description: '@ 文件引用发现服务',
+    intro: 'DSH 原生文件引用服务:为交互界面提供 @ 路径补全候选,让消息按路径引用工作区文件而不是内联内容。无头 Worker 不输入 @,仅在接入交互前端或自定义插件时有用。',
+  },
+  {
+    id: 'redtrace-lsp', label: 'LSP', category: 'feature',
+    modulePath: 'vendor/deepseek-harness/packages/lsp/tool-lsp/lib/index.js', defaultOff: true,
+    description: '语言服务器代码导航',
+    intro: 'DSH 原生 LSP:lsp 工具提供 goToDefinition / findReferences / goToImplementation / hover 精确导航,预置 typescript-language-server、pyright-langserver、clangd 三个服务端,只挂载本机已安装的部分,一个都没有时该工具不出现。适合代码审计任务,按需开启。',
+  },
+  {
+    id: 'redtrace-ptc', label: 'PTC', category: 'feature', module: codeRuntime,
+    modulePath: 'packages/redtrace-dsh/lib/code-runtime.js', defaultOff: true,
+    description: 'run_code 程序化工具调用',
+    intro: 'DSH 原生代码运行时与 PTC 呈现:宿主挂载 worker-thread TypeScript 运行时(限时限量),每个 Execute 会话以 both 模式在原生工具之外追加 run_code,供模型把多步工具调用编排为一段程序。实验性能力,默认关闭。',
   },
   {
     id: 'redtrace-domain', label: 'Domain', category: 'feature', module: domain,
-    needsRuntimeConfig: true, description: '后端 API 桥接与热加载',
+    needsRuntimeConfig: true, modulePath: 'packages/redtrace-dsh/lib/domain.js',
+    description: '后端 API 桥接与热加载',
     intro: '连接后端 API 的桥:拉取热加载的运行时配置(Worker、任务限额、Provider),挂载并热重载 MCP 客户端,并把 Provider 配置同步给模型层。',
   },
   {
-    id: 'redtrace-audit', label: 'Audit', category: 'feature', module: audit,
-    description: '运行审计与事件投影',
-    intro: '把每个任务的运行记录上报审计,并把会话事件投影为可检索的时间线,日志页展示的数据来源于此。',
-  },
-  {
-    id: 'redtrace-web', label: 'Web UI', category: 'feature', module: web, protectStop: true,
-    description: 'Web UI 静态服务与 API 反代(受保护)',
-    intro: '在内核 HTTP 服务上托管 Web UI 静态资源,并把 API 请求反代到后端。关闭它将失去 Web 管理入口,因此受保护不可停用。',
-  },
-  {
     id: 'redtrace-scheduler', label: 'Scheduler', category: 'feature', module: scheduler,
-    needsRuntimeConfig: true, description: 'Worker 中心调度与编排',
-    intro: '调度循环:按 Worker 的资格、优先级与并发上限认领任务,为每个任务创建独立 agent 会话,并跟踪其生命周期直至上报结果。',
+    needsRuntimeConfig: true, modulePath: 'packages/redtrace-dsh/lib/scheduler.js',
+    description: 'FGS 引擎调度器',
+    intro: '托管 FGS 引擎的调度循环:按 Worker 的资格、优先级与并发上限认领 Decide/Execute 活动,派发给对应的 Agent 会话并跟踪其生命周期。停止后运行中的活动进入暂停,且不再认领新任务。',
   },
 ]
 
@@ -270,6 +333,7 @@ export class PluginManager {
   async boot(): Promise<void> {
     await this.readManifest()
     const disabled = new Set(this.manifest.disabled ?? [])
+    const enabled = new Set(this.manifest.enabled ?? [])
     // Preset gates are computed before any plugin mounts: the scheduler
     // replacement dispatches during boot and must not bypass a disabled
     // preset in the window before the post-loop sync.
@@ -277,7 +341,7 @@ export class PluginManager {
       this.statuses.set(entry.id, disabled.has(entry.id) ? 'stopped' : 'running')
     }
     for (const entry of MANAGED) {
-      if (disabled.has(entry.id)) {
+      if (disabled.has(entry.id) || (entry.defaultOff === true && !enabled.has(entry.id))) {
         this.statuses.set(entry.id, 'stopped')
         continue
       }
@@ -307,10 +371,13 @@ export class PluginManager {
     try {
       const raw = await readFile(this.manifestPath, 'utf8')
       const parsed = JSON.parse(raw) as PluginManifest
-      if (parsed !== null && typeof parsed === 'object' && Array.isArray(parsed.user ?? parsed.disabled)) {
+      const hasList = parsed !== null && typeof parsed === 'object'
+        && (Array.isArray(parsed.disabled) || Array.isArray(parsed.enabled) || Array.isArray(parsed.user))
+      if (hasList) {
         this.manifest = {
           version: 1,
           disabled: Array.isArray(parsed.disabled) ? [...new Set(parsed.disabled.filter(v => typeof v === 'string'))] : [],
+          enabled: Array.isArray(parsed.enabled) ? [...new Set(parsed.enabled.filter(v => typeof v === 'string'))] : [],
           user: Array.isArray(parsed.user) ? parsed.user : [],
         }
         return
@@ -331,6 +398,12 @@ export class PluginManager {
 
   private async mountManaged(entry: ManagedEntry, awaitSettle: boolean): Promise<void> {
     if (this.mounted.has(entry.id)) return
+    // Session-scoped capabilities have no host-plane fiber: the execution
+    // toolchain mounts their stack per Execute agent while this entry runs.
+    if (entry.module === undefined) {
+      this.statuses.set(entry.id, 'running')
+      return
+    }
     const config = entry.needsRuntimeConfig === true ? this.config : undefined
     try {
       const mounted = this.mount(entry.id, this.replacements[entry.id] ?? entry.module, config)
@@ -399,7 +472,7 @@ export class PluginManager {
         category: entry.category,
         source: 'builtin',
         status: this.statuses.get(entry.id) ?? 'stopped',
-        module: `packages/redtrace-dsh/lib/${entry.id.replace('redtrace-', '')}.js`,
+        module: entry.modulePath,
         config: null,
         canStop: entry.protectStop !== true,
         canUninstall: false,
@@ -447,11 +520,19 @@ export class PluginManager {
     return view
   }
 
+  /** Live running check for capability gating; pending boots count as down. */
+  running(id: string): boolean {
+    return this.statuses.get(id) === 'running'
+  }
+
   async start(id: string): Promise<PluginView> {
     const managed = MANAGED.find(entry => entry.id === id)
     if (managed !== undefined) {
       if (this.mounted.has(id)) return this.view(id)
       this.manifest.disabled = (this.manifest.disabled ?? []).filter(item => item !== id)
+      if (managed.defaultOff === true) {
+        this.manifest.enabled = [...new Set([...(this.manifest.enabled ?? []), id])]
+      }
       await this.mountManaged(managed, false)
       await this.writeManifest()
       this.syncPresets()
@@ -481,6 +562,7 @@ export class PluginManager {
     if (managed !== undefined) {
       await this.dispose(id)
       this.manifest.disabled = [...new Set([...(this.manifest.disabled ?? []), id])]
+      this.manifest.enabled = (this.manifest.enabled ?? []).filter(item => item !== id)
       await this.writeManifest()
       this.syncPresets()
       return this.view(id)

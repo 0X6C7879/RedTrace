@@ -38,6 +38,11 @@ test('worker mutations probe the live model before commit and retain the old sna
     const persistedEnvironment = readFileSync(path.join(root, '.redtrace/redtrace.yaml'), 'utf8')
     assert.doesNotMatch(persistedEnvironment, /token-at-rest/); assert.match(persistedEnvironment, /REDTRACE_SECRET/)
     assert.deepEqual(snapshot.common_env, [{ name: 'API_TOKEN', value: 'token-at-rest' }, { name: 'PUBLIC_URL', value: 'https://example.test' }])
+    // The entry list keeps the submitted order (the settings page reorders by
+    // drag); it is never re-sorted alphabetically on save or reload.
+    snapshot = (await call('/worker-config/common-env', 'PUT', { expected_revision: snapshot.revision, entries: [{ name: 'ZULU_VAR', value: 'first' }, { name: 'ALPHA_VAR', value: 'second' }] })).data
+    assert.deepEqual(snapshot.common_env.map((entry: { name: string }) => entry.name), ['ZULU_VAR', 'ALPHA_VAR'])
+    assert.deepEqual((await call('/worker-config')).data.common_env.map((entry: { name: string }) => entry.name), ['ZULU_VAR', 'ALPHA_VAR'])
     snapshot = (await call('/worker-config/providers', 'POST', { expected_revision: snapshot.revision, name: 'fixture', api: 'openai-completions', base_url: `http://127.0.0.1:${(model.address() as { port: number }).port}/v1`, api_key: 'fixture-key', models: [{ id: 'fixture', context_window: 10000, max_tokens: 1000 }] })).data
     assert.doesNotMatch(readFileSync(path.join(root, '.redtrace/redtrace.yaml'), 'utf8'), /fixture-key/)
     const worker = { expected_revision: snapshot.revision, name: 'worker', provider: 'fixture', model: 'fixture', priority: 0, max_running: 1 }

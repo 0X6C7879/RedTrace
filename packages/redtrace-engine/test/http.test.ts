@@ -17,7 +17,7 @@ test('HTTP graph compatibility and atomic conclude survive reopening the databas
     assert.equal((await request('/projects', 'POST', { title: '' })).status, 422)
     const created = await request('/projects', 'POST', { title: 'Test', origin: 'Input', goal: 'Verified result' })
     assert.equal(created.status, 201); const id = created.data.project.id, base = `/projects/${id}`
-    const step = await request(`${base}/intents`, 'POST', { from: ['origin'], description: 'Check input', creator: 'human', capabilities: ['common'] })
+    const step = await request(`${base}/intents`, 'POST', { from: ['origin'], description: 'Check input', creator: 'human' })
     assert.equal(step.status, 201)
     assert.equal((await request(`${base}/intents/${step.data.id}/claim`, 'POST', { worker: 'w1' })).status, 200)
     assert.equal((await request(`${base}/intents/${step.data.id}/conclude`, 'POST', { worker: 'w2', description: 'Invalid owner' })).status, 409)

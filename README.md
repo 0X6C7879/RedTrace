@@ -13,7 +13,8 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 - **异构 Worker 协同（Worker 即路由）**：任意数量 Worker 各自声明 Provider、模型、任务资格（bootstrap/reason/explore）、并发与优先级。调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务——路由完全由 Worker 派生，而非按任务类型写死。
 - **Node 24 Agent 运行时**：轻量任务直接使用 Pi Agent；需要旧钩子的任务使用 DSH 适配器。两者共享一个 FGS 调度器，Cordis 插件仍运行在真实 Cordis 服务和生命周期中。
 - **运行中知识同步**：证据图谱修订会通过 `agent.inject()` 增量送达正在运行的 Agent；共享 Resource 摘要随上下文注入，完整信息按需查询。
-- **上下文预算治理**：DSH 原生 Session Compaction 与 Tool Result Pruner 控制上下文压力，Graph 按需注入而不是无限堆进 Prompt；完整输出落盘为可追溯 Artifact。
+- **上下文预算治理**：DSH 原生 Session Compaction、Tool Result Pruner 与 Spill 控制上下文压力，Graph 按需注入而不是无限堆进 Prompt；超大工具结果完整落盘、按需取回。
+- **DSH 原生执行工具链**：Execute Worker 直接获得 DSH 原生能力——`web_search` / `web_fetch`、后台任务（`job_output` / `job_list` / `job_kill`，bash `run_in_background`）、持久 PTY 终端、`glob` / `grep`、工具超时与重复调用防护；LSP 代码导航与 `run_code` 程序化调用按需开启。全部在插件管理页热启停，仅对新会话生效，不自研重复 Skill/MCP。
 - **资源与操作面**：统一管理 WebShell、C2 Listener、Session、Payload、凭证、外部插件和操作结果；MSF、Sliver、Cobalt Strike 与自定义 C2 通过同一个 Adapter 合约接入。Resource 保留可变运行状态，不会隐式生成 Fact。
 - **可观测与可恢复**：任务、会话、工具事件、输出、心跳、超时、取消和资源操作均可审计，Token 用量按运行累计汇总；Server 或运行时重启后可以恢复未完成状态。
 - **Web 控制台与插件接入**：内置证据图谱可视化、运行记录、Workspace、Skill 与 MCP 管理、Worker 设置、插件管理页，并提供浏览器扩展、Burp Suite 和兼容插件 API。
@@ -93,14 +94,14 @@ bash install-security-toolchain.sh --dry-run apt
 Windows 先在 PowerShell 中复制配置，然后可双击 `start-redtrace.cmd`，也可在终端启动：
 
 ```powershell
-Copy-Item redtrace.dsh.example.yaml redtrace.yaml
+Copy-Item redtrace.local.example.yaml redtrace.yaml
 .\start-redtrace.cmd
 ```
 
 macOS、Linux 或 WSL：
 
 ```bash
-cp redtrace.dsh.example.yaml redtrace.yaml
+cp redtrace.local.example.yaml redtrace.yaml
 ./start-redtrace.sh
 ```
 
@@ -147,7 +148,6 @@ cp redtrace.mock.example.yaml redtrace.yaml
 
 | 文件 | 用途 |
 |---|---|
-| `redtrace.dsh.example.yaml` | DSH 运行时 + Provider Worker（推荐起点） |
 | `redtrace.local.example.yaml` | 宿主机直跑 Worker |
 | `redtrace.container.example.yaml` | Docker/Compose 与项目级容器隔离 |
 | `redtrace.mock.example.yaml` | 无外部模型的开发和自动化测试 |
@@ -183,73 +183,29 @@ cp redtrace.mock.example.yaml redtrace.yaml
 npm run dsh:install        # 安装 DSH 上游依赖（vendor/deepseek-harness 子模块）
 npm run dsh:build          # 构建上游 + RedTrace DSH 扩展包
 npm run dsh:test           # 运行 TypeScript 侧测试
-npm run dsh:probe          # 探针检查运行时装配
 ```
 
-### 增量证据查询
+### 共享资源与能力动词
 
-`redtrace-blackboard` 是代码中保留的兼容入口名，实际承担只读证据查询职责：
+资源（WebShell、C2 Listener/Session/Payload、凭证、流量伪装 Profile、代理、文件）由引擎统一登记，人机共用。Web UI 的运维页提供全量管理与审批；Worker 侧通过工具访问：通用的 `resource_register` / `resource_list` / `resource_get`（`resource_register` 支持 secret 存储但不回显），以及 WebShell / C2 通道族的富表单工具（`webshell_register`、`c2_listener_create`、`c2_session_create`、`c2_credential_create`、`c2_profile_create`、payload 生成与 `c2_sessions`）。Explore 在任务中建立的通道、凭证与 payload 都会出现在对应运维页面上。
 
-```bash
-redtrace-blackboard status
-redtrace-blackboard snapshot
-redtrace-blackboard changes --since 42 --limit 20
-redtrace-blackboard node f003
-redtrace-blackboard source f003
-redtrace-blackboard context f003 --depth 1 --limit 30
-```
+Step 在创建时用 `requires` 声明能力动词（`remote.command`、`remote.file.read` 等）后，Execute 会话只获得对应的动词工具；派发器自动复用已注册的可用通道（按 target 主机匹配，或 `via` 显式指定），无可用通道时返回建立指引。`GET /capabilities/verbs` 列出全部动词、适配器与通道计数，插件页的 WebShell / C2 插件可热启停对应通道族。
 
-### 共享资源与操作
-
-```bash
-redtrace-resource capabilities
-redtrace-resource snapshot --kind webshell --kind c2_listener --kind c2_session
-redtrace-resource changes --since 42
-
-redtrace-resource webshell-create \
-  --name primary --target https://target.example/shell.php \
-  --command-param cmd --password-stdin
-redtrace-resource run ws_123 command --command-text id --wait
-
-# Listener 与资源本身是全局的；--project/REDTRACE_PROJECT_ID 只记录来源
-redtrace-resource listener-create --name reverse-01 \
-  --listener-type tcp_reverse --bind-host 0.0.0.0 --bind-port 4444
-redtrace-resource listener-create --name bind-01 \
-  --listener-type tcp_bind --target-host 10.0.0.8 --bind-port 4444
-redtrace-resource session-register --name dc01-winrm --target 10.0.0.8 \
-  --shell-type evil_winrm --connection-type direct --credential cred_123
-printf '%s' "$SECRET_JSON" | redtrace-resource credential-create \
-  --name 'DOMAIN\\alice' --credential-type active_directory --target dc01 --secret-stdin
-redtrace-resource payload-import --name custom-loader --target artifact://payload.exe \
-  --framework custom --format exe
-```
-
-MSF、Sliver、Cobalt Strike 与自定义 C2 通过同一个 Adapter 合约接入：RedTrace
-轮询 `GET /sessions?framework=...`，向 `POST /execute` 发送会话动作，并向
-`POST /payloads` 请求原生 Payload。Adapter 返回的会话会自动进入全局 C2 会话页；
-Worker 生成的任意文件或引用可直接用 `payload-import` 登记，不要求使用内置生成器。
-
-### Workspace 上下文
-
-```bash
-redtrace-context --help
-```
-
-Context Harness 会把完整输出保存到 `.redtrace/artifacts/context`，同时向 Worker 提供有界摘要和可追溯引用。
+MSF、Sliver、Cobalt Strike 与自定义 C2 通过同一个 Adapter 合约接入：RedTrace 轮询 `GET /sessions?framework=...`，向 `POST /execute` 发送会话动作，并向 `POST /payloads` 请求原生 Payload。Adapter 返回的会话自动进入全局 C2 会话页。
 
 ## 仓库结构
 
 | 路径 | 内容 |
 |---|---|
 | `packages/redtrace-engine/` | Node FGS 存储、Decide/Execute 调度、REST/SSE、配置、审计与外围能力 |
-| `packages/redtrace-dsh/` | RedTrace DSH 扩展包：Scheduler、契约工具、插件管理、审计投影、Web 托管等 Cordis 插件 |
+| `packages/redtrace-dsh/` | 引擎宿主的 Cordis 适配插件包：插件管理、资源工具、执行工具链、审计投影与引擎调度器生命周期 |
 | `vendor/deepseek-harness/` | DSH/Cordis 运行时（vendored，本地维护为主，不跟随上游） |
-| `profiles/redtrace/` | Cordis 运行时组装配置（runtime/direct/reason/isolated） |
+| `profiles/redtrace/` | Cordis 运行时组装配置（node 单入口） |
 | `static/` | Web UI 静态资源（HTML/JS/CSS/字体/图表库） |
 | `skills/` | 多 Worker 共享的一级原生 Skill；由 Agent 按需直接加载 |
 | `mcp/` | 共享 MCP 配置与服务入口 |
 | `container/` | Worker 容器镜像与运行资产 |
-| `scripts/` | DSH 构建与探针辅助脚本 |
+| `scripts/` | 构建、启动与基准辅助脚本 |
 | `.github/workflows/` | 三平台 CI（dsh-mainline） |
 | `.redtrace/` | 项目级数据库、日志、锁和内部运行状态（不提交） |
 | `workspaces/` | 按任务隔离的 Worker 会话、提示、临时文件和工件（不提交） |
@@ -280,10 +236,10 @@ CI 在 Windows、macOS 与 Ubuntu 三个平台上运行 Node 24.21：内核类�
 
 ## 进一步阅读
 
-- [技术架构与调度设计](docs/specs/dispatcher-design.md)
+- [Node FGS 运行时](docs/specs/node-fgs-runtime.md)
+- [Capability Registry(动词能力体系)](docs/specs/capability-registry.md)
 - [Server 协议](docs/specs/server-protocol.md)
 - [Context Harness](docs/specs/context-harness.md)
-- [增量证据查询 CLI](docs/shared-blackboard-cli.md)
 
 ## 许可证
 

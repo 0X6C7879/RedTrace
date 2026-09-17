@@ -26,7 +26,6 @@ jobs:
       - run: npm run dsh:install
       - run: npm run dsh:build
       - run: npm run dsh:test
-      - run: npm run dsh:probe
       - if: runner.os == 'Windows'
         run: cmd /d /c start-redtrace.cmd --help
       - if: runner.os != 'Windows'

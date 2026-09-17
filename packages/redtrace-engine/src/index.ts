@@ -12,13 +12,14 @@ import { configRoutes } from './config-api.ts'
 import { auditRoutes } from './audit-api.ts'
 import { Capabilities, capabilityRoutes } from './capabilities.ts'
 import { Operations, operationRoutes } from './operations.ts'
+import { verbRoutes } from './capability-verbs.ts'
 import { ProjectDeletion, deletionRoutes } from './deletion.ts'
 
 export { Store, Scheduler, Configuration, Router }
 export type * from './types.ts'
 export type { TaskContext, RunTask } from './scheduler.ts'
 
-export async function createEngine(options: { root: string; database?: string; configuration?: string; runTask?: RunTask; selectWorker?: SelectWorker; autoStart?: boolean }) {
+export async function createEngine(options: { root: string; database?: string; configuration?: string; runTask?: RunTask; selectWorker?: SelectWorker; autoStart?: boolean; adapterAvailability?: () => (adapter: string) => boolean }) {
   const [major, minor] = process.versions.node.split('.').map(Number)
   if (major !== 24 || minor < 15) throw new Error('RedTrace requires Node 24.15 or newer in the Node 24 LTS line')
   const root = path.resolve(options.root), configuration = new Configuration(root, options.configuration)
@@ -26,10 +27,11 @@ export async function createEngine(options: { root: string; database?: string; c
   configuration.initialize()
   const config = configuration.resolve(configuration.read().raw)
   const store = new Store(options.database ?? path.join(root, '.redtrace/engine.db'))
+  const adapterGate = options.adapterAvailability?.()
   const runTask: RunTask = options.runTask ?? (async context => {
     const runner = await import('./runner.ts')
     if (context.run.backend === 'mock') return runner.runMock(context)
-    if (context.run.backend === 'pi') return runner.runPi(context, capabilities)
+    if (context.run.backend === 'pi') return runner.runPi(context, capabilities, { operations, isAdapterAvailable: adapterGate })
     throw new Error('DSH execution requires the Cordis compatibility host')
   })
   const scheduler = new Scheduler(store, config, runTask, options.selectWorker), router = new Router()
@@ -43,6 +45,7 @@ export async function createEngine(options: { root: string; database?: string; c
   capabilityRoutes(router, capabilities)
   const operations = new Operations(store, root)
   operationRoutes(router, operations)
+  verbRoutes(router, operations, adapterGate)
   const deletion = new ProjectDeletion(store, operations, root, configuration.workspaceRoot)
   deletionRoutes(router, deletion)
   const watcher = watch(path.dirname(configuration.filename), (_event, filename) => {

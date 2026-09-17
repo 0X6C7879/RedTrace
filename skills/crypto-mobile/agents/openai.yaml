@@ -1,7 +1,0 @@
-interface:
-  display_name: "Crypto Mobile"
-  short_description: "Decode blobs, inspect stego, and hook mobile signers"
-  default_prompt: "Use $crypto-mobile to decode this blob, recover the transform chain, inspect stego payloads, or hook the mobile signing path."
-
-policy:
-  allow_implicit_invocation: false

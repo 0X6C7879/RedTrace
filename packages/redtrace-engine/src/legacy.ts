@@ -4,7 +4,7 @@ import type { Graph, Run, Step } from './types.ts'
 export function legacyIntent(step: Step, run?: Run) {
   const state = { pending: 'open', running: 'working', paused: 'open', blocked: 'blocked', done: 'concluded', cancelled: 'dropped' }[step.status]
   return { id: step.id, from: step.sourceGoalId ? [step.sourceGoalId] : step.sourceIds, to: step.status === 'done' ? step.resultGoalId ?? step.factIds.at(-1) ?? null : null, description: step.description, creator: step.creator, worker: step.status === 'paused' ? null : step.worker,
-    execution_profile: step.executionProfile, capabilities: step.capabilities, last_heartbeat_at: run ? run.heartbeatAt ?? run.startedAt : null,
+    execution_profile: step.executionProfile, requires: step.requires ?? [], last_heartbeat_at: run ? run.heartbeatAt ?? run.startedAt : null,
     created_at: step.createdAt, concluded_at: step.endedAt, failure_count: step.failureCount ?? (step.failure ? 1 : 0), failure_signature: step.failure,
     retry_after: step.retryAfter ?? null, circuit_open: step.circuitOpen ?? false, state, attempt_count: step.attempts, cumulative_runtime_ms: step.runtimeMs ?? 0, fact_yield: step.factIds.length, last_progress_at: null }
 }

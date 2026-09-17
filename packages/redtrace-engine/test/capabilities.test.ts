@@ -6,7 +6,7 @@ import os from 'node:os'
 import { Capabilities } from '../src/capabilities.ts'
 import { serveEngine } from '../src/index.ts'
 
-const content = (text: string) => `---\nname: sample\ndescription: Test helper\nmetadata:\n  redtrace:\n    capabilities: [common]\n---\n${text}\n`
+const content = (text: string) => `---\nname: sample\ndescription: Test helper\n---\n${text}\n`
 test('capabilities keep independent copies, nested entries, revisions and MCP configurations', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-capabilities-'))
   mkdirSync(path.join(root, 'skills/sample'), { recursive: true }); writeFileSync(path.join(root, 'skills/sample/SKILL.md'), content('original'))
@@ -18,7 +18,6 @@ test('capabilities keep independent copies, nested entries, revisions and MCP co
   }
   try {
     const c = engine.capabilities, first = c.skill('sample')
-    assert.deepEqual(c.resolve(['web']).skills, ['sample'])
     const second = c.write('sample', content('edited'), true, first.revision)
     assert.equal(readFileSync(path.join(root, 'skills/sample/SKILL.md'), 'utf8'), content('original'))
     assert.throws(() => c.write('sample', content('stale'), true, first.revision), /revision conflict/)
@@ -26,7 +25,6 @@ test('capabilities keep independent copies, nested entries, revisions and MCP co
     mkdirSync(path.join(c.directory('sample'), 'modules/deep'), { recursive: true }); writeFileSync(path.join(c.directory('sample'), 'modules/deep/SKILL.md'), '---\nname: nested\ndescription: Nested helper\n---\nNested text')
     assert.equal((await request('/capabilities/skills/sample/entries/modules/deep/SKILL.md')).data.name, 'nested')
     assert.equal((await request('/capabilities/skills/sample/enabled', 'PATCH', { enabled: false, expected_revision: second.revision })).status, 200)
-    assert.deepEqual(c.resolve(['web']).skills, [])
     assert.equal((await request('/capabilities/skills/sample/rollback/1', 'POST', { expected_revision: c.skill('sample').revision })).data.content, content('original'))
     const created = await request('/capabilities/mcp', 'POST', { name: 'echo', config: { agents: { dsh: { command: process.execPath, args: ['echo.mjs'] } } } })
     assert.equal(created.status, 201); assert.equal(c.mcpConfigs()[0].command, process.execPath)

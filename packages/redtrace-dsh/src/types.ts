@@ -2,9 +2,6 @@ type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 
 export type TaskType = 'reason' | 'explore' | 'bootstrap'
 export type ExecutionProfile = 'direct' | 'isolated'
-export type CapabilityName =
-  | 'common' | 'web' | 'pentest' | 'binary' | 'crypto' | 'cloud'
-  | 'blockchain' | 'hardware' | 'ai-security' | 'defense'
 export type ReasoningPolicy = 'auto_max' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export type { Json }
@@ -38,16 +35,16 @@ export interface RuntimeConfig {
   sessionRoot?: string
   skillsDir?: string
   workspacesDir?: string
-  staticDir?: string
   interval?: number
   maxWorkers?: number
   maxRunningProjects?: number
   maxProjectWorkers?: number
   tasks?: Partial<Record<TaskType, TaskLimits>>
   mcpConfigs?: Record<string, Json>[]
-  webProxy?: string
   /** Where the plugin manager persists its manifest; defaults next to settings.yaml. */
   pluginsManifest?: string
+  /** The FGS engine scheduler handle, passed by the Node compatibility host. */
+  engineScheduler?: { start(): void; close(): Promise<void> }
 }
 
 /** A validated launch config: the required paths and server are present. */
@@ -57,7 +54,6 @@ export interface RuntimeOptions extends RuntimeConfig {
   sessionRoot: string
   skillsDir: string
   workspacesDir: string
-  staticDir?: string
 }
 
 /** Hot-reloadable runtime config served by the RedTrace server at `/runtime/config`. */
@@ -96,8 +92,6 @@ export interface RuntimeTask {
   worker: string
   /** Model route captured from the selected Worker at launch. */
   route?: WorkerRoute
-  /** Session-isolated symlink view of the capability-filtered Skill catalog. */
-  skillViewDir?: string
   limits?: TaskLimits
   maxIntents?: number
   committed: boolean
@@ -203,74 +197,4 @@ export interface SessionEvent {
 export interface MessageFactory {
   createUserMessage(value: Record<string, unknown>): unknown
   SessionId(value: string): unknown
-}
-
-export interface AuditRun {
-  engine?: string
-  intent_id?: string | null
-  session_id?: string | null
-  status?: string
-  task_type?: string
-}
-
-export interface ProjectSummary {
-  id: string
-  title?: string
-  status: 'active' | 'stopped' | 'completed' | 'deleting'
-  bootstrap_enabled?: boolean
-  reason: unknown | null
-  planning_revision: number
-  reason_evaluated_revision: number
-  reason_context_revision: number
-  reason_retry_after?: number | null
-  reason_circuit_open?: boolean
-}
-
-export interface Intent {
-  id: string
-  from: string[]
-  to?: string | null
-  description: string
-  creator: string
-  worker?: string | null
-  execution_profile?: ExecutionProfile
-  capabilities: CapabilityName[]
-  created_at: string
-  state: string
-  retry_after?: number | null
-  circuit_open?: boolean
-}
-
-export interface ResourceSummary {
-  id: string
-  kind: string
-  name: string
-  target?: string | null
-  summary?: string | null
-  status?: string
-}
-
-export interface ProjectDetail {
-  project: ProjectSummary & { title: string; bootstrap_enabled: boolean }
-  facts: Array<{ id: string; description: string }>
-  intents: Intent[]
-  hints: Array<{ id: string; content: string; creator: string; created_at: string }>
-  blackboard_revision: number
-}
-
-export interface BlackboardChange {
-  revision: number
-  kind: string
-  node_id: string
-  action: string
-  created_at?: string
-  node: Record<string, Json> | null
-}
-
-export interface BlackboardChangesPage {
-  since: number
-  revision: number
-  next_revision: number
-  has_more: boolean
-  changes: BlackboardChange[]
 }

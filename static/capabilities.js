@@ -16,8 +16,7 @@ window.skillsPage = function skillsPage() {
     status: null,
     items: [],
     query: '',
-    capabilityFilter: '',
-    catalog: null,
+    verbs: null,
     selectedName: '',
     draft: null,
     versions: [],
@@ -41,13 +40,6 @@ window.skillsPage = function skillsPage() {
       return this.items.filter((item) =>
         (!needle || `${item.name} ${item.description || ''} ${item.parent || ''} ${item.path || ''}`
           .toLowerCase().includes(needle))
-        && (!this.capabilityFilter || (item.capabilities || []).includes(this.capabilityFilter))
-      );
-    },
-
-    get catalogDiagnostics() {
-      return (this.catalog?.skills || []).flatMap((skill) =>
-        (skill.diagnostics || []).map((message) => `${skill.name}: ${message}`),
       );
     },
 
@@ -61,10 +53,10 @@ window.skillsPage = function skillsPage() {
       try {
         // Status and the unified entry list load in parallel and fail
         // independently: a partial outage must not blank the page.
-        const [statusResult, entriesResult, catalogResult] = await Promise.allSettled([
+        const [statusResult, entriesResult, verbsResult] = await Promise.allSettled([
           capabilityRequest('GET', '/capabilities'),
           capabilityRequest('GET', '/capabilities/skill-entries'),
-          capabilityRequest('GET', '/capabilities/catalog'),
+          capabilityRequest('GET', '/capabilities/verbs'),
         ]);
         if (statusResult.status === 'fulfilled') {
           this.status = statusResult.value;
@@ -72,8 +64,8 @@ window.skillsPage = function skillsPage() {
         if (entriesResult.status === 'fulfilled') {
           this.items = entriesResult.value;
         }
-        if (catalogResult.status === 'fulfilled') this.catalog = catalogResult.value;
-        const failures = [statusResult, entriesResult, catalogResult]
+        if (verbsResult.status === 'fulfilled') this.verbs = verbsResult.value;
+        const failures = [statusResult, entriesResult, verbsResult]
           .filter((result) => result.status === 'rejected')
           .map((result) => result.reason?.message || String(result.reason));
         if (failures.length) {
@@ -133,7 +125,7 @@ window.skillsPage = function skillsPage() {
         name: '',
         enabled: true,
         files: [],
-        content: '---\nname: skill-name\ndescription: Describe when this skill should be used.\nmetadata:\n  redtrace:\n    capabilities: [common]\n---\n\n# Skill name\n\nAdd the workflow and any required rules here.\n',
+        content: '---\nname: skill-name\ndescription: Describe when this skill should be used.\n---\n\n# Skill name\n\nAdd the workflow and any required rules here.\n',
       };
       this.versions = [];
       this.rollbackVersion = '';
@@ -168,12 +160,7 @@ window.skillsPage = function skillsPage() {
     },
 
     async refreshList() {
-      const [items, catalog] = await Promise.all([
-        capabilityRequest('GET', '/capabilities/skill-entries'),
-        capabilityRequest('GET', '/capabilities/catalog'),
-      ]);
-      this.items = items;
-      this.catalog = catalog;
+      this.items = await capabilityRequest('GET', '/capabilities/skill-entries');
     },
 
     async rollback() {

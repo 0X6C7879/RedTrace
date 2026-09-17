@@ -4,6 +4,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { HttpError, integer, now, requiredText } from './types.ts'
+import { verbIds } from './capability-verbs.ts'
 import type { Activity, Evidence, Fact, Finding, Goal, Graph, GraphEvent, GraphNode, Input, Json, Project, Run, Step, Worker } from './types.ts'
 
 const AUDIT_CONVERSATION_KINDS = new Set([
@@ -288,34 +289,37 @@ export class Store {
       return goal
     })
   }
-  addStep(id: string, input: { description: string; sourceIds: string[]; goalId?: string; creator?: string; priority?: number; executionProfile?: Step['executionProfile']; capabilities?: string[]; bootstrap?: boolean }, maxSteps: number | null = null): Step {
+  addStep(id: string, input: { description: string; sourceIds: string[]; goalId?: string; creator?: string; priority?: number; executionProfile?: Step['executionProfile']; requires?: string[]; bootstrap?: boolean }, maxSteps: number | null = null): Step {
     return this.transaction(() => {
       this.writable(id)
       if (maxSteps !== null && this.graph(id).steps.filter(s => ['pending', 'running', 'paused'].includes(s.status)).length >= maxSteps) throw new HttpError(409, 'Active Step limit reached')
       const goalId = input.goalId ?? 'goal'; if (this.node<Goal>(id, goalId, 'goal').status !== 'open') throw new HttpError(409, 'Goal is closed')
       const profile = input.executionProfile ?? 'direct'; if (!['direct', 'isolated'].includes(profile)) throw new HttpError(422, 'Invalid execution profile')
-      if (input.capabilities && (!Array.isArray(input.capabilities) || input.capabilities.some(x => typeof x !== 'string'))) throw new HttpError(422, 'Invalid capabilities')
+      const requires = input.requires ?? []
+      if (!Array.isArray(requires) || requires.some(x => typeof x !== 'string' || x.length > 64) || requires.length > 16 || new Set(requires).size !== requires.length) throw new HttpError(422, 'Invalid requires')
+      if (requires.some(verb => !verbIds.includes(verb))) throw new HttpError(422, `Unknown capability verb; valid: ${verbIds.join(', ')}`)
       const step: Step = { id: this.next(id, 'step', 'i'), projectId: id, kind: 'step', description: requiredText(input.description, 'description'),
         sourceIds: this.evidenceIds(id, input.sourceIds, true), goalId, creator: input.creator ?? 'decide', priority: integer(input.priority ?? 0, 'priority', -2147483648),
-        status: 'pending', factIds: [], worker: null, executionProfile: profile, capabilities: input.capabilities ?? [], attempts: 0,
+        status: 'pending', factIds: [], worker: null, executionProfile: profile, requires, attempts: 0,
         endedAt: null, failure: null, createdAt: now(), bootstrap: input.bootstrap ?? false }
       this.saveNode(step); this.event(id, 'step.added', step, step); return step
     })
   }
-  updateStep(id: string, stepId: string, input: { priority?: number; status?: 'cancelled' | 'pending'; executionProfile?: Step['executionProfile']; capabilities?: string[] }): Step {
+  updateStep(id: string, stepId: string, input: { priority?: number; status?: 'cancelled' | 'pending'; executionProfile?: Step['executionProfile']; requires?: string[] }): Step {
     return this.transaction(() => {
       this.writable(id); const step = this.node<Step>(id, stepId, 'step')
       if (step.status === 'done') throw new HttpError(409, 'Step is already completed')
       if (input.priority !== undefined) step.priority = integer(input.priority, 'priority', -2147483648)
-      if (input.executionProfile !== undefined || input.capabilities !== undefined) {
+      if (input.executionProfile !== undefined || input.requires !== undefined) {
         if (step.status !== 'pending' || step.attempts) throw new HttpError(409, 'Execution settings freeze on claim')
         if (input.executionProfile !== undefined) {
           if (!['direct', 'isolated'].includes(input.executionProfile)) throw new HttpError(422, 'Invalid execution profile')
           step.executionProfile = input.executionProfile
         }
-        if (input.capabilities !== undefined) {
-          if (!Array.isArray(input.capabilities) || input.capabilities.some(x => typeof x !== 'string') || new Set(input.capabilities).size !== input.capabilities.length) throw new HttpError(422, 'Invalid capabilities')
-          step.capabilities = input.capabilities
+        if (input.requires !== undefined) {
+          if (!Array.isArray(input.requires) || input.requires.some(x => typeof x !== 'string' || x.length > 64) || input.requires.length > 16 || new Set(input.requires).size !== input.requires.length) throw new HttpError(422, 'Invalid requires')
+          if (input.requires.some(verb => !verbIds.includes(verb))) throw new HttpError(422, `Unknown capability verb; valid: ${verbIds.join(', ')}`)
+          step.requires = input.requires
         }
       }
       if (input.status !== undefined) {
@@ -544,8 +548,8 @@ export class Store {
       this.audit(metadata, conversationAuditEvents(event))
     })
   }
-  toolStarted(runId: string, callId: string, data: Json) {
-    this.transaction(() => { const run = this.run(runId); if (run.status !== 'running') throw new HttpError(409, 'Run is not running'); if (run.pendingTools.includes(callId)) throw new HttpError(409, 'Tool already started'); run.pendingTools.push(callId); this.saveRun(run); this.runEvent(runId, 'tool.started', data) })
+  toolStarted(runId: string, callId: string, data: Json, recordAudit = true) {
+    this.transaction(() => { const run = this.run(runId); if (run.status !== 'running') throw new HttpError(409, 'Run is not running'); if (run.pendingTools.includes(callId)) throw new HttpError(409, 'Tool already started'); run.pendingTools.push(callId); this.saveRun(run); if (recordAudit) this.runEvent(runId, 'tool.started', data) })
   }
   toolEnded(runId: string, callId: string, data: Json) {
     this.transaction(() => { const run = this.run(runId); run.pendingTools = run.pendingTools.filter(id => id !== callId); this.saveRun(run); this.runEvent(runId, 'tool.ended', data) })

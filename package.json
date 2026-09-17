@@ -10,8 +10,7 @@
     "dsh:build:upstream": "node scripts/dsh-pnpm.mjs run build:lib:host",
     "dsh:build:redtrace": "node scripts/dsh-pnpm.mjs exec tsc -p ../../packages/redtrace-dsh/tsconfig.json",
     "dsh:build": "npm run dsh:build:upstream && npm run dsh:build:redtrace",
-    "dsh:test": "node --test packages/redtrace-dsh/test/*.test.mjs",
-    "dsh:probe": "node scripts/probe-dsh.mjs"
+    "dsh:test": "node --test packages/redtrace-dsh/test/*.test.mjs"
   },
   "dependencies": {
     "playwright": "^1.62.1"

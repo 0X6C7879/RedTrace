@@ -11,14 +11,25 @@
 <script src="/static/vendor/dagre.min.js"></script>
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/vendor/cytoscape-dagre.js"></script>
-<script defer src="/static/audit.js?v=20260913-conversation-1"></script>
-<script defer src="/static/capabilities.js?v=20260827-capability-catalog-1"></script>
+<script defer src="/static/audit.js?v=20260917-tool-lifecycle-1"></script>
+<script defer src="/static/capabilities.js?v=20260916-skill-classification-retired-1"></script>
 <script defer src="/static/plugins.js?v=20260825-plugins-2"></script>
 <!-- Previous cache key: operations.js?v=20260810-performance-1 -->
 <script defer src="/static/operations.js?v=20260826-c2-ledger-delete-1"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
 <style>
   [x-cloak] { display: none !important; }
+  .env-row-dragging {
+    position: relative;
+    z-index: 20;
+    background: #ffffff;
+    border-color: rgb(203 213 225 / 0.9);
+    box-shadow: 0 12px 32px -12px rgb(15 23 42 / 0.28), 0 2px 6px -2px rgb(15 23 42 / 0.12);
+  }
+  .env-row-dragging .env-handle { color: #64748b; }
+  @media (prefers-reduced-motion: reduce) {
+    .env-row { will-change: auto; }
+  }
   #cy { width: 100%; height: 100%; }
   ::-webkit-scrollbar { width: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -241,7 +252,7 @@
     }
   }
 </script>
-<link rel="stylesheet" href="/static/redtrace-theme.css?v=20260813-payload-library-1">
+<link rel="stylesheet" href="/static/redtrace-theme.css?v=20260916-detail-tab-1">
 </head>
 <body class="bg-slate-50 text-slate-800 h-screen overflow-hidden" :class="{ 'select-none cursor-col-resize': isResizingPanel }" x-data="redtraceApp()">
 <div class="app-shell flex h-full min-h-0" :class="{ 'app-shell-operations': appPage === 'webshell' || appPage === 'plugins' || appPage.startsWith('c2-') }">
@@ -683,58 +694,210 @@
       </div>
 
 
-      <div x-show="['fgs', 'steps'].includes(sideTab) && (fgsSelection || fgsEdgeSelection)" class="fgs-selection shrink-0 overflow-y-auto p-3 space-y-2 border-b" style="max-height:45%">
-        <template x-if="fgsSelectionRecord()"><section data-testid="fgs-node-detail" class="space-y-2">
-          <strong class="text-xs" x-text="`${fgsSelection.type} · ${fgsSelection.id}`"></strong>
-          <p class="text-xs whitespace-pre-wrap break-words" x-text="fgsSelectionRecord().description"></p>
-          <p class="text-xs" x-text="fgsSelectionRecord().status || ''"></p>
-          <div class="flex flex-wrap gap-2" x-show="!replay.active && project.project.status === 'active'">
-            <button x-show="fgsSelection.type === 'goal' && fgsSelectionRecord().status === 'open'" @click="setFgsStatus('achieved')" class="border rounded px-2 py-1 text-xs">Achieve</button>
-            <button x-show="['goal','step'].includes(fgsSelection.type) && fgsSelection.id !== 'goal' && !['achieved','done','cancelled'].includes(fgsSelectionRecord().status)" @click="setFgsStatus('cancelled')" class="border rounded px-2 py-1 text-xs">Cancel</button>
-            <button x-show="fgsSelection.type === 'step' && ['blocked','cancelled'].includes(fgsSelectionRecord().status)" @click="setFgsStatus('pending')" class="border rounded px-2 py-1 text-xs">重试</button>
-          </div>
-          <template x-if="fgsSelection.type === 'step'"><div class="text-xs space-y-2">
-            <p x-text="`来源：${fgsSelectionRecord().sourceIds.join(', ')} → 目标：${fgsSelectionRecord().goalId}`"></p>
-            <p x-text="`全部产出：${fgsSelectionRecord().factIds.join(', ') || '尚无 Fact'}`"></p>
-            <p x-text="`Worker：${fgsSelectionRecord().worker || '未领取'} · ${fgsSelectionRecord().executionProfile}`"></p>
-            <p x-text="fgsSelectionRecord().failure || ''"></p>
-            <div class="flex flex-wrap gap-2" x-show="!replay.active && projectIsActive()">
-              <button @click="sendHeartbeatForSelectedIntent()" :disabled="!selectedActionableOpenIntentRecord()" class="border rounded px-2 py-1" x-text="selectedIntentPrimaryActionLabel()"></button>
-              <button @click="releaseSelectedGraphNode()" :disabled="!selectedReleasableOpenIntentRecord()" class="border rounded px-2 py-1">释放</button>
-              <button @click="selectedOpenIntentRecord() && openConclude(selectedOpenIntentRecord())" :disabled="!selectedOpenIntentRecord()" class="border rounded px-2 py-1">结论</button>
-              <button @click="toggleSelectedIntentExecutionProfile()" :disabled="!selectedEditableIntentProfileRecord()" class="border rounded px-2 py-1">隔离设置</button>
-              <button @click="deleteSelectedIntent()" :disabled="!selectedDeletableIntentRecord()" class="border rounded px-2 py-1">删除</button>
-            </div>
-            <button x-show="!replay.active" @click="openIntentLog(fgsSelection.id)" class="border rounded px-2 py-1">执行日志</button>
-            <select x-show="fgsRuns.length" aria-label="执行会话" x-model="fgsRunId" @change="loadFgsRunLog()" class="w-full border rounded"><template x-for="run in fgsRuns" :key="run.id"><option :value="run.id" x-text="`${run.worker} · ${run.status} · ${run.id}`"></option></template></select>
-            <button x-show="fgsRunHasMore" @click="loadFgsRunLog(true)" class="underline">更早日志</button>
-            <template x-for="event in fgsRunEvents" :key="event.id"><article class="border-t pt-2"><strong x-text="event.kind"></strong><pre class="whitespace-pre-wrap break-words" x-text="event.content || event.title || JSON.stringify(event.data || {})"></pre></article></template>
-          </div></template>
-          <template x-if="fgsSelection.type === 'fact'"><div class="text-xs"><span x-show="!fgsSelectionRecord().stepId">生产 Step 未记录</span><template x-for="(evidence, index) in (fgsSelectionRecord().evidence || [])" :key="index"><p class="break-words" x-text="`${evidence.description} ${evidence.path || ''}`"></p></template></div></template>
-        </section></template>
-        <template x-for="edge in fgsRelatedEdges()" :key="edge.id"><div class="flex flex-wrap gap-1 text-xs"><button class="underline" @click="fgsOpenReference(edge.source)" x-text="factDisplayId(edge.source)"></button><span x-text="`—${fgsRelationLabel(edge.relation)}→`"></span><button class="underline" @click="fgsOpenReference(edge.target)" x-text="factDisplayId(edge.target)"></button></div></template>
-        <template x-for="step in fgsRelatedSteps()" :key="step.id"><button class="block border rounded p-2 text-left text-xs w-full" @click="selectFgsNode('step', step.id)" x-text="`${step.id} · ${step.status} · ${step.description}`"></button></template>
-      </div>
       <div x-show="sideTab === 'steps'" class="flex-1 overflow-y-auto p-4 space-y-3">
         <select aria-label="按目标筛选执行" x-model="fgsStepFilter" class="w-full border rounded p-2 text-xs"><option value="">所有目标的执行</option><template x-for="goal in (fgs?.goals || [])" :key="goal.id"><option :value="goal.id" x-text="`${goal.id} · ${goal.description}`"></option></template></select>
         <section>
           <div class="mb-2 flex items-center justify-between"><h3 class="text-[10px] font-semibold uppercase tracking-widest text-amber-600">Step</h3><div class="flex items-center gap-2"><span class="text-[10px] text-slate-400" x-text="fgs?.steps?.length || 0"></span><button type="button" x-show="!replay.active && project.project.status === 'active'" @click="createFgs('step')" class="rounded-md border border-amber-200 bg-white px-1.5 py-0.5 text-[10px] text-amber-700" aria-label="Add step">＋</button></div></div>
-          <div class="space-y-2"><template x-for="step in fgsVisibleSteps()" :key="step.id"><button type="button" @click="selectFgsNode('step', step.id)" class="block w-full rounded-xl border border-amber-200 bg-white p-3 text-left shadow-sm">
+          <div class="space-y-2"><template x-for="step in fgsVisibleSteps()" :key="step.id"><button type="button" @click="selectFgsNode('step', step.id)" class="block w-full rounded-xl border border-amber-200 bg-white p-3 text-left shadow-sm transition" :class="fgsSelection?.type === 'step' && fgsSelection.id === step.id ? 'border-amber-400 ring-1 ring-amber-300' : 'hover:bg-amber-50/40'">
             <div class="flex items-center justify-between gap-2"><span class="font-mono text-[10px] text-slate-400" x-text="step.id"></span><span class="text-[9px] uppercase text-amber-700" x-text="step.status"></span></div>
-            <p class="mt-1 text-xs leading-relaxed text-slate-700" x-text="step.description"></p><p class="mt-1 text-[10px] text-slate-400" x-text="`${step.executionProfile} · ${(step.capabilities || []).join(', ') || 'generic'}`"></p>
+            <p class="mt-1 text-xs leading-relaxed text-slate-700" x-text="step.description"></p><p class="mt-1 text-[10px] text-slate-400" x-text="step.executionProfile"></p>
           </button></template></div>
         </section>
       </div>
 
       <!-- Detail -->
       <div x-show="sideTab === 'detail'" class="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/40">
-        <template x-if="!selectedNode">
+        <template x-if="fgs?.nodes && !fgsSelectionRecord() && !fgsEdgeSelection">
+          <div class="rounded-2xl border border-dashed border-slate-200 bg-white/80 px-5 py-10 text-center shadow-sm">
+            <p class="text-sm text-slate-400">点击图中节点或边</p>
+          </div>
+        </template>
+        <template x-if="fgs?.nodes && fgsSelectionRecord()">
+          <section data-testid="fgs-node-detail" class="rounded-2xl border bg-white shadow-sm overflow-hidden" :class="{
+            'border-rose-200': fgsSelection.type === 'goal',
+            'border-amber-200': fgsSelection.type === 'step',
+            'border-violet-200': fgsSelection.type === 'finding',
+            'border-teal-200': fgsSelection.type === 'scope',
+            'border-sky-200': fgsSelection.type === 'fact'
+          }">
+            <div class="px-4 py-3 border-b border-slate-100 bg-slate-50/80">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold shrink-0" :class="{
+                  'bg-rose-50 text-rose-600': fgsSelection.type === 'goal',
+                  'bg-amber-50 text-amber-700': fgsSelection.type === 'step',
+                  'bg-violet-100 text-violet-700': fgsSelection.type === 'finding',
+                  'bg-teal-50 text-teal-700': fgsSelection.type === 'scope',
+                  'bg-sky-50 text-sky-600': fgsSelection.type === 'fact'
+                }" x-text="factDisplayId(fgsSelection.id)"></span>
+                <span class="text-[11px] text-slate-400 font-medium uppercase tracking-wider" x-text="fgsSelection.type"></span>
+                <span x-show="fgsSelectionRecord().status" class="ml-auto rounded-full px-1.5 py-0.5 text-[9px] uppercase shrink-0" :class="{
+                  'bg-teal-50 text-teal-700': ['achieved', 'done'].includes(fgsSelectionRecord().status),
+                  'bg-slate-100 text-slate-500': fgsSelectionRecord().status === 'cancelled',
+                  'bg-rose-50 text-rose-600': fgsSelectionRecord().status === 'blocked',
+                  'bg-amber-50 text-amber-700': ['open', 'pending', 'running', 'paused'].includes(fgsSelectionRecord().status)
+                }" x-text="fgsSelectionRecord().status"></span>
+              </div>
+            </div>
+            <div class="p-4 space-y-4">
+              <div class="space-y-2">
+                <p x-show="fgsSelection.type === 'finding'" class="text-sm text-violet-700 font-semibold leading-relaxed break-words" x-text="fgsSelectionRecord().title"></p>
+                <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="fgsSelectionRecord().description"></p>
+              </div>
+              <template x-if="['fact', 'scope'].includes(fgsSelection.type)">
+                <div class="pt-4 border-t border-slate-100 space-y-3 text-xs">
+                  <div class="flex items-start justify-between gap-3">
+                    <span class="text-slate-400 shrink-0">产出 Step</span>
+                    <button type="button" x-show="fgsSelectionRecord().stepId" class="font-mono text-sky-600 underline underline-offset-2 break-all text-right" @click="selectFgsNode('step', fgsSelectionRecord().stepId)" x-text="fgsSelectionRecord().stepId"></button>
+                    <span x-show="!fgsSelectionRecord().stepId" class="text-slate-400 text-right">未记录</span>
+                  </div>
+                  <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Creator</span><span class="text-slate-600 text-right break-all" x-text="fgsSelectionRecord().creator"></span></div>
+                  <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">创建时间</span><span class="text-slate-600 text-right break-words" x-text="formatTime(fgsSelectionRecord().createdAt)"></span></div>
+                  <div class="pt-1" x-show="(fgsSelectionRecord().evidence || []).length">
+                    <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-2">证据</p>
+                    <div class="space-y-2">
+                      <template x-for="(evidence, index) in (fgsSelectionRecord().evidence || [])" :key="index">
+                        <div>
+                          <p class="text-slate-600 break-words" x-text="evidence.description"></p>
+                          <p x-show="evidence.path" class="font-mono text-[10px] text-slate-400 break-all" x-text="evidence.path"></p>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+              </template>
+              <template x-if="fgsSelection.type === 'goal'">
+                <div class="pt-4 border-t border-slate-100 space-y-3 text-xs">
+                  <div class="flex items-start justify-between gap-3">
+                    <span class="text-slate-400 shrink-0">父目标</span>
+                    <button type="button" x-show="fgsSelectionRecord().parentId" class="font-mono text-sky-600 underline underline-offset-2 break-all text-right" @click="fgsOpenReference(fgsSelectionRecord().parentId)" x-text="factDisplayId(fgsSelectionRecord().parentId)"></button>
+                    <span x-show="!fgsSelectionRecord().parentId" class="text-slate-400 text-right">根 Goal</span>
+                  </div>
+                  <div class="flex items-start justify-between gap-3">
+                    <span class="text-slate-400 shrink-0">验收</span>
+                    <span class="flex flex-wrap justify-end gap-x-1.5 gap-y-1">
+                      <template x-for="fid in fgsSelectionRecord().evidenceIds" :key="fid"><button type="button" class="font-mono text-sky-600 underline underline-offset-2 break-all text-right" @click="fgsOpenReference(fid)" x-text="factDisplayId(fid)"></button></template>
+                      <span x-show="!fgsSelectionRecord().evidenceIds.length" class="text-slate-400">—</span>
+                    </span>
+                  </div>
+                  <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Creator</span><span class="text-slate-600 text-right break-all" x-text="fgsSelectionRecord().creator"></span></div>
+                  <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">创建时间</span><span class="text-slate-600 text-right break-words" x-text="formatTime(fgsSelectionRecord().createdAt)"></span></div>
+                </div>
+              </template>
+              <template x-if="fgsSelection.type === 'step'">
+                <div class="pt-4 border-t border-slate-100 space-y-3 text-xs">
+                  <div class="flex items-start justify-between gap-3">
+                    <span class="text-slate-400 shrink-0">来源</span>
+                    <span class="flex flex-wrap justify-end gap-x-1.5 gap-y-1">
+                      <template x-for="sid in fgsSelectionRecord().sourceIds" :key="sid"><button type="button" class="font-mono text-sky-600 underline underline-offset-2 break-all text-right" @click="fgsOpenReference(sid)" x-text="factDisplayId(sid)"></button></template>
+                    </span>
+                  </div>
+                  <div class="flex items-start justify-between gap-3">
+                    <span class="text-slate-400 shrink-0">目标</span>
+                    <button type="button" x-show="fgsSelectionRecord().goalId" class="font-mono text-sky-600 underline underline-offset-2 break-all text-right" @click="fgsOpenReference(fgsSelectionRecord().goalId)" x-text="factDisplayId(fgsSelectionRecord().goalId)"></button>
+                    <span x-show="!fgsSelectionRecord().goalId" class="text-slate-400 text-right">—</span>
+                  </div>
+                  <div class="flex items-start justify-between gap-3">
+                    <span class="text-slate-400 shrink-0">产出</span>
+                    <span class="flex flex-wrap justify-end gap-x-1.5 gap-y-1">
+                      <template x-for="fid in fgsSelectionRecord().factIds" :key="fid"><button type="button" class="font-mono text-sky-600 underline underline-offset-2 break-all text-right" @click="fgsOpenReference(fid)" x-text="factDisplayId(fid)"></button></template>
+                      <span x-show="!fgsSelectionRecord().factIds.length" class="text-slate-400">尚无 Fact</span>
+                    </span>
+                  </div>
+                  <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Worker</span><span class="font-mono text-slate-600 text-right break-all" x-text="fgsSelectionRecord().worker || '未领取'"></span></div>
+                  <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">执行配置</span><span class="text-slate-600 text-right break-words" x-text="fgsSelectionRecord().executionProfile"></span></div>
+                  <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Creator</span><span class="text-slate-600 text-right break-all" x-text="fgsSelectionRecord().creator"></span></div>
+                  <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">创建时间</span><span class="text-slate-600 text-right break-words" x-text="formatTime(fgsSelectionRecord().createdAt)"></span></div>
+                  <template x-if="fgsSelectionRecord().endedAt"><div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">完成时间</span><span class="text-slate-600 text-right break-words" x-text="formatTime(fgsSelectionRecord().endedAt)"></span></div></template>
+                  <template x-if="fgsSelectionRecord().failure"><div class="flex items-start justify-between gap-3"><span class="text-rose-500 shrink-0">失败原因</span><span class="text-rose-500 text-right break-words" x-text="fgsSelectionRecord().failure"></span></div></template>
+                </div>
+              </template>
+              <template x-if="fgsSelection.type === 'finding'">
+                <div class="pt-4 border-t border-slate-100 space-y-3 text-xs">
+                  <div class="flex items-start justify-between gap-3">
+                    <span class="text-slate-400 shrink-0">关联 Fact</span>
+                    <span class="flex flex-wrap justify-end gap-x-1.5 gap-y-1">
+                      <template x-for="fid in fgsSelectionRecord().factIds" :key="fid"><button type="button" class="font-mono text-sky-600 underline underline-offset-2 break-all text-right" @click="fgsOpenReference(fid)" x-text="factDisplayId(fid)"></button></template>
+                    </span>
+                  </div>
+                  <div class="flex items-start justify-between gap-3">
+                    <span class="text-slate-400 shrink-0">产出 Step</span>
+                    <button type="button" x-show="fgsSelectionRecord().stepId" class="font-mono text-sky-600 underline underline-offset-2 break-all text-right" @click="selectFgsNode('step', fgsSelectionRecord().stepId)" x-text="fgsSelectionRecord().stepId"></button>
+                    <span x-show="!fgsSelectionRecord().stepId" class="text-slate-400 text-right">未记录</span>
+                  </div>
+                  <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Creator</span><span class="text-slate-600 text-right break-all" x-text="fgsSelectionRecord().creator"></span></div>
+                  <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">创建时间</span><span class="text-slate-600 text-right break-words" x-text="formatTime(fgsSelectionRecord().createdAt)"></span></div>
+                </div>
+              </template>
+              <div class="flex flex-wrap gap-1.5" x-show="!replay.active && project.project.status === 'active'">
+                <button x-show="fgsSelection.type === 'goal' && fgsSelectionRecord().status === 'open'" @click="setFgsStatus('achieved')" class="px-2.5 py-1 rounded-lg border border-teal-200 text-xs text-teal-600 hover:bg-teal-50 transition">Achieve</button>
+                <button x-show="['goal', 'step'].includes(fgsSelection.type) && fgsSelection.id !== 'goal' && !['achieved', 'done', 'cancelled'].includes(fgsSelectionRecord().status)" @click="setFgsStatus('cancelled')" class="px-2.5 py-1 rounded-lg border border-slate-200 text-xs text-slate-500 hover:bg-slate-50 transition">Cancel</button>
+                <button x-show="fgsSelection.type === 'step' && ['blocked', 'cancelled'].includes(fgsSelectionRecord().status)" @click="setFgsStatus('pending')" class="px-2.5 py-1 rounded-lg border border-amber-200 text-xs text-amber-700 hover:bg-amber-50 transition">重试</button>
+              </div>
+              <template x-if="fgsSelection.type === 'step'">
+                <div class="space-y-2">
+                  <div class="flex flex-wrap gap-1.5" x-show="!replay.active && projectIsActive()">
+                    <button @click="sendHeartbeatForSelectedIntent()" :disabled="!selectedActionableOpenIntentRecord()" class="px-2.5 py-1 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50 transition disabled:opacity-30 disabled:cursor-not-allowed" x-text="selectedIntentPrimaryActionLabel()"></button>
+                    <button @click="releaseSelectedGraphNode()" :disabled="!selectedReleasableOpenIntentRecord()" class="px-2.5 py-1 rounded-lg border border-amber-200 text-xs text-amber-700 hover:bg-amber-50 transition disabled:opacity-30 disabled:cursor-not-allowed">释放</button>
+                    <button @click="selectedOpenIntentRecord() && openConclude(selectedOpenIntentRecord())" :disabled="!selectedOpenIntentRecord()" class="px-2.5 py-1 rounded-lg border border-teal-200 text-xs text-teal-600 hover:bg-teal-50 transition disabled:opacity-30 disabled:cursor-not-allowed">结论</button>
+                    <button @click="toggleSelectedIntentExecutionProfile()" :disabled="!selectedEditableIntentProfileRecord()" class="px-2.5 py-1 rounded-lg border border-violet-200 text-xs text-violet-700 hover:bg-violet-50 transition disabled:opacity-30 disabled:cursor-not-allowed">隔离设置</button>
+                    <button @click="deleteSelectedIntent()" :disabled="!selectedDeletableIntentRecord()" class="px-2.5 py-1 rounded-lg border border-rose-200 text-xs text-rose-600 hover:bg-rose-50 transition disabled:opacity-30 disabled:cursor-not-allowed">删除</button>
+                  </div>
+                  <div class="space-y-2" x-show="!replay.active">
+                    <button @click="openIntentLog(fgsSelection.id)" class="px-2.5 py-1 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50 transition">执行日志</button>
+                    <select x-show="fgsRuns.length" aria-label="执行会话" x-model="fgsRunId" @change="loadFgsRunLog()" class="w-full border rounded-lg px-2 py-1.5 text-xs"><template x-for="run in fgsRuns" :key="run.id"><option :value="run.id" x-text="`${run.worker} · ${run.status} · ${run.id}`"></option></template></select>
+                    <button x-show="fgsRunHasMore" @click="loadFgsRunLog(true)" class="text-xs text-sky-600 underline underline-offset-2">更早日志</button>
+                    <template x-for="event in fgsRunEvents" :key="event.id"><article class="border-t border-slate-100 pt-2"><strong class="text-xs block mb-1" x-text="event.kind"></strong><pre class="whitespace-pre-wrap break-words font-mono text-[10px] text-slate-500" x-text="event.content || event.title || JSON.stringify(event.data || {})"></pre></article></template>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </section>
+        </template>
+        <template x-if="fgs?.nodes && fgsEdgeSelection">
+          <section data-testid="fgs-edge-detail" class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div class="px-4 py-3 border-b border-slate-100 bg-slate-50/80">
+              <div class="flex items-center gap-2">
+                <span class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[10px] font-mono font-bold">关系</span>
+                <span class="text-[11px] text-slate-500 font-medium" x-text="fgsRelationLabel(fgsEdgeSelection.relation)"></span>
+              </div>
+            </div>
+            <div class="p-4 space-y-4">
+              <div class="flex flex-wrap items-center gap-1.5 text-sm">
+                <button type="button" class="font-mono text-sky-600 underline underline-offset-2 break-all" @click="fgsOpenReference(fgsEdgeSelection.source)" x-text="factDisplayId(fgsEdgeSelection.source)"></button>
+                <span class="text-xs text-slate-400" x-text="`—${fgsRelationLabel(fgsEdgeSelection.relation)}→`"></span>
+                <button type="button" class="font-mono text-sky-600 underline underline-offset-2 break-all" @click="fgsOpenReference(fgsEdgeSelection.target)" x-text="factDisplayId(fgsEdgeSelection.target)"></button>
+              </div>
+            </div>
+          </section>
+        </template>
+        <template x-if="fgs?.nodes && (fgsSelectionRecord() || fgsEdgeSelection)">
+          <section class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden" x-show="fgsRelatedEdges().length || fgsRelatedSteps().length">
+            <div class="p-4 space-y-2">
+              <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-1">关联</p>
+              <template x-for="edge in fgsRelatedEdges()" :key="edge.id">
+                <div class="flex flex-wrap items-center gap-1 text-xs">
+                  <button type="button" class="font-mono text-sky-600 underline underline-offset-2 break-all" @click="fgsOpenReference(edge.source)" x-text="factDisplayId(edge.source)"></button>
+                  <span class="text-slate-400" x-text="`—${fgsRelationLabel(edge.relation)}→`"></span>
+                  <button type="button" class="font-mono text-sky-600 underline underline-offset-2 break-all" @click="fgsOpenReference(edge.target)" x-text="factDisplayId(edge.target)"></button>
+                </div>
+              </template>
+              <template x-for="step in fgsRelatedSteps()" :key="step.id">
+                <button type="button" class="block w-full rounded-xl border border-amber-200/80 bg-white p-2.5 text-left shadow-sm transition hover:bg-amber-50/40" @click="selectFgsNode('step', step.id)">
+                  <span class="font-mono text-[10px] text-slate-400" x-text="step.id"></span>
+                  <span class="ml-1.5 text-[9px] uppercase text-amber-700" x-text="step.status"></span>
+                  <p class="mt-1 text-xs leading-relaxed text-slate-600" x-text="step.description"></p>
+                </button>
+              </template>
+            </div>
+          </section>
+        </template>
+        <template x-if="!fgs?.nodes && !selectedNode">
           <div class="rounded-2xl border border-dashed border-slate-200 bg-white/80 px-5 py-10 text-center shadow-sm">
             <p class="text-sm text-slate-400">点击节点或边</p>
             <p class="text-xs text-slate-300 mt-1">Shift + 点击可多选</p>
           </div>
         </template>
-        <template x-if="selectedNode && selectedNode.type === 'fact' && selectedFacts.length > 1">
+        <template x-if="!fgs?.nodes && selectedNode && selectedNode.type === 'fact' && selectedFacts.length > 1">
           <div class="space-y-3">
             <template x-for="fact in selectedFactRecords()" :key="fact.id">
               <article class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
@@ -771,7 +934,7 @@
             </template>
           </div>
         </template>
-        <template x-if="selectedNode && selectedNode.type === 'fact' && selectedFactRecord() && selectedFacts.length <= 1">
+        <template x-if="!fgs?.nodes && selectedNode && selectedNode.type === 'fact' && selectedFactRecord() && selectedFacts.length <= 1">
           <section class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
             <div class="px-4 py-3 border-b border-slate-100 bg-slate-50/80">
               <div class="flex items-center gap-2">
@@ -820,7 +983,7 @@
             </div>
           </section>
         </template>
-        <template x-if="selectedNode && selectedNode.type === 'intent' && selectedIntentRecord()">
+        <template x-if="!fgs?.nodes && selectedNode && selectedNode.type === 'intent' && selectedIntentRecord()">
           <section class="rounded-2xl border border-violet-200/80 bg-white shadow-sm overflow-hidden">
             <div class="px-4 py-3 border-b border-violet-100 bg-violet-50/70">
               <div class="flex items-center gap-2">
@@ -832,7 +995,6 @@
               <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="selectedIntentRecord().description"></p>
               <div class="pt-4 border-t border-slate-100 space-y-3 text-xs">
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">From</span><span class="font-mono text-slate-600 text-right break-all" x-text="factDisplayList(selectedIntentRecord().from)"></span></div>
-                <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Capability</span><span class="flex flex-wrap justify-end gap-1"><template x-for="capability in (selectedIntentRecord().capabilities || [])" :key="capability"><span class="rounded-md bg-brand-50 px-1.5 py-0.5 text-[10px] text-brand-700" x-text="capability"></span></template></span></div>
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">To</span><span class="font-mono text-slate-600 text-right break-all" x-text="selectedIntentRecord().to || '—'"></span></div>
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Creator</span><span class="text-slate-600 text-right break-all" x-text="selectedIntentRecord().creator"></span></div>
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Worker</span><span class="text-slate-600 text-right break-all" x-text="selectedIntentRecord().worker || '—'"></span></div>
@@ -851,7 +1013,7 @@
         <section>
           <div class="mb-2 flex items-center justify-between"><h3 class="text-[10px] font-semibold uppercase tracking-widest text-rose-500">Goal / Sub Goal</h3><div class="flex items-center gap-2"><span class="text-[10px] text-slate-400" x-text="fgs?.goals?.length || 0"></span><button type="button" x-show="!replay.active && project.project.status === 'active'" @click="createFgs('goal')" class="rounded-md border border-rose-200 bg-white px-1.5 py-0.5 text-[10px] text-rose-600" aria-label="Add sub goal">＋</button></div></div>
           <div class="space-y-2">
-            <template x-for="goal in (fgs?.goals || [])" :key="goal.id"><button type="button" @click="selectFgsNode('goal', goal.id)" class="block w-full rounded-xl border bg-white p-3 text-left shadow-sm" :class="goal.status === 'achieved' ? 'border-teal-200' : goal.status === 'cancelled' ? 'border-slate-200 opacity-60' : 'border-rose-200'">
+            <template x-for="goal in (fgs?.goals || [])" :key="goal.id"><button type="button" @click="selectFgsNode('goal', goal.id)" class="block w-full rounded-xl border bg-white p-3 text-left shadow-sm transition" :class="fgsSelection?.type === 'goal' && fgsSelection.id === goal.id ? 'border-rose-400 ring-1 ring-rose-300' : goal.status === 'achieved' ? 'border-teal-200' : goal.status === 'cancelled' ? 'border-slate-200 opacity-60' : 'border-rose-200 hover:bg-rose-50/30'">
               <div class="flex items-center justify-between gap-2"><span class="font-mono text-[10px] text-slate-400" x-text="goal.id"></span><span class="rounded-full px-1.5 py-0.5 text-[9px] uppercase" :class="goal.status === 'achieved' ? 'bg-teal-50 text-teal-700' : 'bg-rose-50 text-rose-600'" x-text="goal.status"></span></div>
               <p class="mt-1 text-xs leading-relaxed text-slate-700" :style="`padding-left:${goal.parentId ? 12 : 0}px`" x-text="goal.description"></p>
             </button></template>
@@ -860,7 +1022,7 @@
 
         <section>
           <div class="mb-2 flex items-center justify-between"><h3 class="text-[10px] font-semibold uppercase tracking-widest text-violet-600">Finding</h3><div class="flex items-center gap-2"><span class="text-[10px] text-slate-400" x-text="fgs?.findings?.length || 0"></span><button type="button" x-show="!replay.active && project.project.status === 'active'" @click="createFgs('finding')" class="rounded-md border border-violet-200 bg-white px-1.5 py-0.5 text-[10px] text-violet-700" aria-label="Add finding">＋</button></div></div>
-          <div class="space-y-2"><template x-for="finding in (fgs?.findings || [])" :key="finding.id"><button type="button" @click="selectFgsNode('finding', finding.id)" class="block w-full rounded-xl border border-violet-200 bg-white p-3 text-left shadow-sm">
+          <div class="space-y-2"><template x-for="finding in (fgs?.findings || [])" :key="finding.id"><button type="button" @click="selectFgsNode('finding', finding.id)" class="block w-full rounded-xl border border-violet-200 bg-white p-3 text-left shadow-sm transition" :class="fgsSelection?.type === 'finding' && fgsSelection.id === finding.id ? 'border-violet-400 ring-1 ring-violet-300' : 'hover:bg-violet-50/40'">
             <div class="flex items-center justify-between gap-2"><span class="text-xs font-semibold text-violet-700" x-text="finding.title"></span><span class="font-mono text-[9px] text-slate-400" x-text="finding.id"></span></div><p class="mt-1 text-xs leading-relaxed text-slate-600" x-text="finding.description"></p>
           </button></template></div>
         </section>
@@ -1695,6 +1857,27 @@
         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新建 Skill
       </button>
     </header>
+    <details class="mx-5 mt-3 shrink-0 rounded-xl border border-slate-200/70 bg-white" x-show="verbs">
+      <summary class="flex cursor-pointer select-none list-none items-center gap-2 px-4 py-2.5 text-xs font-medium text-slate-600">
+        能力动词<span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-normal text-slate-500" x-text="`${(verbs?.verbs || []).length} 项`"></span>
+        <svg class="ml-auto h-3.5 w-3.5 text-slate-300 transition-transform" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </summary>
+      <div class="max-h-52 overflow-y-auto border-t border-slate-100 px-4 py-2">
+        <table class="w-full text-left text-[11px]">
+          <thead><tr class="text-slate-400"><th class="py-1 pr-3 font-medium">动词</th><th class="py-1 pr-3 font-medium">风险</th><th class="py-1 pr-3 font-medium">适配器</th><th class="py-1 font-medium">可用通道</th></tr></thead>
+          <tbody>
+            <template x-for="verb in (verbs?.verbs || [])" :key="verb.id">
+              <tr class="border-t border-slate-50" :class="verb.available ? 'text-slate-600' : 'text-slate-300'">
+                <td class="py-1.5 pr-3 font-mono" x-text="verb.id"></td>
+                <td class="py-1.5 pr-3" x-text="verb.risk"></td>
+                <td class="py-1.5 pr-3" x-text="verb.adapters.join(', ')"></td>
+                <td class="py-1.5" x-text="verb.available ? verb.channels : '—'"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </details>
     <div class="flex min-h-0 flex-1 flex-col lg:flex-row">
       <aside class="flex h-[45%] w-full shrink-0 flex-col border-b border-slate-200/70 bg-white lg:h-auto lg:w-72 lg:border-b-0 lg:border-r">
         <div class="p-3">
@@ -1702,22 +1885,13 @@
             <svg class="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-300" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
             <input x-model="query" placeholder="搜索 Skills" class="h-8 w-full rounded-lg border border-slate-200 bg-slate-50/70 pl-8 pr-3 text-xs text-slate-600 outline-none transition focus:border-brand-300 focus:bg-white focus:ring-2 focus:ring-brand-50">
           </label>
-          <div class="mt-2">
-            <select x-model="capabilityFilter" class="h-7 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 text-[10px] text-slate-500 outline-none" aria-label="按 Capability 筛选">
-              <option value="">全部 Capability</option>
-              <template x-for="capability in (catalog?.capabilities || [])" :key="capability"><option :value="capability" x-text="capability"></option></template>
-            </select>
-          </div>
         </div>
         <div x-show="message" class="mx-3 mb-1 break-all rounded-lg px-3 py-2 text-[10px] leading-relaxed" :class="messageType === 'error' ? 'bg-red-50 text-red-600' : 'bg-teal-50 text-teal-600'" x-text="message"></div>
-        <div x-show="catalogDiagnostics.length" class="mx-3 mb-1 rounded-lg bg-amber-50 px-3 py-2 text-[10px] leading-relaxed text-amber-700">
-          <span class="font-semibold">Skill 分类错误：</span><span x-text="catalogDiagnostics.join('；')"></span>
-        </div>
         <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
           <template x-for="skill in filteredItems" :key="skill.key">
             <button type="button" @click="select(skill)" class="capability-press mb-1 flex w-full items-start gap-2.5 rounded-xl py-2.5 pr-3 text-left" :class="[selectedName === skill.key ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50', skill.nested ? 'pl-7' : 'pl-3']">
               <span class="mt-1 h-2 w-2 shrink-0 rounded-full" :class="skill.nested ? 'bg-sky-400' : (skill.enabled ? 'bg-teal-500 shadow-[0_0_0_3px_rgba(20,184,166,.10)]' : 'bg-slate-300')"></span>
-              <span class="min-w-0 flex-1"><span class="flex items-center gap-1.5"><span class="min-w-0 flex-1 truncate text-xs font-semibold" x-text="skill.name"></span><span x-show="skill.nested" class="rounded bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600">包内</span><span x-show="!skill.nested" class="rounded px-1.5 py-0.5 text-[9px] font-medium" :class="skill.trust === 'trusted' ? 'bg-teal-50 text-teal-600' : (skill.trust === 'retired' ? 'bg-slate-100 text-slate-400' : 'bg-amber-50 text-amber-600')" x-text="skill.trust || 'trusted'"></span></span><span class="mt-1 flex flex-wrap gap-1"><template x-for="capability in (skill.capabilities || [])" :key="capability"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-500" x-text="capability"></span></template></span><span class="mt-1 block line-clamp-2 text-[10px] leading-relaxed text-slate-400" x-text="skill.description || skill.path || '暂无描述'"></span></span>
+              <span class="min-w-0 flex-1"><span class="flex items-center gap-1.5"><span class="min-w-0 flex-1 truncate text-xs font-semibold" x-text="skill.name"></span><span x-show="skill.nested" class="rounded bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600">包内</span><span x-show="!skill.nested" class="rounded px-1.5 py-0.5 text-[9px] font-medium" :class="skill.trust === 'trusted' ? 'bg-teal-50 text-teal-600' : (skill.trust === 'retired' ? 'bg-slate-100 text-slate-400' : 'bg-amber-50 text-amber-600')" x-text="skill.trust || 'trusted'"></span></span><span class="mt-1 block line-clamp-2 text-[10px] leading-relaxed text-slate-400" x-text="skill.description || skill.path || '暂无描述'"></span></span>
             </button>
           </template>
           <div x-show="!loading && filteredItems.length === 0" class="px-4 py-12 text-center text-xs leading-relaxed text-slate-400">没有匹配的 Skill。<br>创建一个即可被三个 agent 原生发现。</div>
@@ -1738,7 +1912,6 @@
             <button x-show="!draft.nested" @click="save()" :disabled="saving || !draft.name || !draft.content" class="capability-press h-8 rounded-lg bg-brand-500 px-4 text-xs font-medium text-white shadow-sm shadow-brand-100 hover:bg-brand-600 disabled:opacity-40" x-text="saving ? '保存中…' : '保存'"></button>
           </div>
           <div x-show="!isNew && !draft.nested" class="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/70 px-5 py-2 text-[10px] text-slate-500">
-            <template x-for="capability in (draft.capabilities || [])" :key="capability"><span class="rounded-md bg-slate-200 px-2 py-1 font-semibold text-slate-600" x-text="capability"></span></template>
             <span class="rounded-md px-2 py-1 font-semibold" :class="draft.trust === 'trusted' ? 'bg-teal-50 text-teal-700' : (draft.trust === 'retired' ? 'bg-slate-200 text-slate-500' : 'bg-amber-50 text-amber-700')" x-text="draft.trust || 'trusted'"></span>
             <span x-text="`${draft.successfulReuses || 0} 次独立复用`"></span>
             <span>·</span>
@@ -2020,14 +2193,17 @@
         <div x-show="commonEnvForm.length === 0" class="rounded-xl border border-dashed border-slate-200 px-5 py-8 text-center text-xs text-slate-400">尚未配置通用环境变量。</div>
         <div class="grid gap-3">
           <template x-for="(entry, index) in commonEnvForm" :key="entry.localId">
-            <div class="grid gap-3 rounded-xl bg-slate-50/70 p-3 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)_auto] sm:items-end">
+            <div class="env-row grid gap-3 rounded-xl bg-slate-50/70 p-3 will-change-transform sm:grid-cols-[auto_minmax(0,0.8fr)_minmax(0,1.4fr)_auto] sm:items-end">
+              <button type="button" class="env-handle flex h-6 w-full touch-none select-none items-center justify-center rounded-lg text-slate-300 transition hover:text-slate-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200 sm:h-9 sm:w-7" :aria-label="'拖动调整 ' + (entry.name || '变量') + ' 的顺序'" @pointerdown="envDragStart(index, $event)" @keydown="envDragKey(index, $event)">
+                <svg viewBox="0 0 10 16" fill="currentColor" aria-hidden="true" class="h-4 w-2.5"><circle cx="2.5" cy="2.5" r="1.5"/><circle cx="7.5" cy="2.5" r="1.5"/><circle cx="2.5" cy="8" r="1.5"/><circle cx="7.5" cy="8" r="1.5"/><circle cx="2.5" cy="13.5" r="1.5"/><circle cx="7.5" cy="13.5" r="1.5"/></svg>
+              </button>
               <label class="block"><span class="mb-1.5 block text-[10px] font-medium text-slate-400">变量名</span><input x-model="entry.name" @input="entry.name = entry.name.toUpperCase()" placeholder="VARIABLE_NAME" pattern="[A-Z][A-Z0-9_]*" required class="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 font-mono text-xs text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
               <label class="block"><span class="mb-1.5 block text-[10px] font-medium text-slate-400">变量值</span><input x-model="entry.value" type="text" placeholder="value" autocomplete="off" class="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 font-mono text-xs text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
               <button type="button" @click="removeCommonEnvRow(index)" class="h-9 rounded-lg px-3 text-xs text-rose-500 transition hover:bg-rose-50">删除</button>
             </div>
           </template>
         </div>
-        <p class="mt-3 text-[10px] leading-relaxed text-slate-400">变量值按原文保存到 redtrace.yaml。删除或改名会影响之后启动的 Worker 任务，不中断正在运行的任务。</p>
+        <p class="mt-3 text-[10px] leading-relaxed text-slate-400">变量值按原文保存到 redtrace.yaml。可拖动手柄调整顺序；删除或改名会影响之后启动的 Worker 任务，不中断正在运行的任务。</p>
       </div>
     </form>
 
@@ -2196,23 +2372,15 @@
           <option value="isolated">Isolated</option>
         </select>
       </label>
-      <div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
-        <div class="mb-2 flex items-center justify-between"><span class="text-[11px] font-medium text-slate-500">Capability 方向（至少一个）</span><span class="text-[10px] text-slate-400" x-text="`${intentForm.capabilities.length} 已选`"></span></div>
-        <div class="max-h-48 space-y-2 overflow-y-auto pr-1">
-          <template x-for="group in capabilityGroups" :key="group.label">
-            <div><div class="mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400" x-text="group.label"></div><div class="flex flex-wrap gap-1.5"><template x-for="capability in group.items" :key="capability.id"><label class="inline-flex cursor-pointer items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-600 hover:border-brand-200"><input type="checkbox" :value="capability.id" x-model="intentForm.capabilities" class="h-3 w-3 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span x-text="capability.id"></span></label></template></div></div>
-          </template>
-        </div>
-      </div>
       <div class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-500">
         Actor: <span class="font-medium text-slate-700" x-text="actorName()"></span>
       </div>
     </div>
     <div class="flex justify-end gap-2 mt-5">
       <button @click="showIntentModal = false" class="px-4 py-2 text-sm text-slate-500 hover:bg-slate-50 rounded-xl transition">取消</button>
-      <button @click="createIntent(false)" :disabled="!intentForm.description || !intentForm.capabilities.length"
+      <button @click="createIntent(false)" :disabled="!intentForm.description"
         class="px-5 py-2 text-sm border border-slate-200 text-slate-600 rounded-xl font-medium hover:bg-slate-50 transition disabled:opacity-30">声明</button>
-      <button @click="createIntent(true)" :disabled="!intentForm.description || !intentForm.capabilities.length"
+      <button @click="createIntent(true)" :disabled="!intentForm.description"
         class="px-5 py-2 text-sm bg-brand-500 text-white rounded-xl font-medium hover:bg-brand-600 transition disabled:opacity-30 shadow-sm shadow-brand-200">声明 &amp; 认领</button>
     </div>
   </div>
@@ -2486,8 +2654,42 @@
   <span x-text="toast.message"></span>
 </div>
 
-<script src="/static/fgs-view.js?v=20260914-step-nodes-1"></script>
+<script src="/static/fgs-view.js?v=20260916-detail-tab-1"></script>
 <script>
+// Common-env row drag reordering. Module-level state keeps the per-frame hot
+// path (1:1 pointer tracking, gap transforms, spring settle) off Alpine's
+// reactivity; only the final reorder touches reactive form data.
+const envDrag = {
+  busy: false, active: false, from: -1, target: -1, pointerId: -1,
+  startY: 0, dy: 0, rows: [], tops: [], heights: [], gap: 12, dragH: 0,
+  minDy: 0, maxDy: 0, history: [], settleRaf: 0, move: null, end: null,
+};
+
+const envReducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const envGapTransition = () => envReducedMotion() ? 'none' : 'transform 170ms cubic-bezier(0.2, 0, 0, 1)';
+const envRubberband = (over, dimension = 300, constant = 0.55) =>
+  (over * dimension * constant) / (dimension + constant * Math.abs(over));
+
+// Critically damped spring (response 220ms) animating one row's translateY to
+// zero, starting from the release transform and handing off the pointer's
+// velocity so the drag and the settle read as one motion.
+function envSettle(el, from, velocity) {
+  cancelAnimationFrame(envDrag.settleRaf);
+  if (envReducedMotion() || Math.abs(from) < 0.5) { el.style.transform = ''; return; }
+  let x = from, v = velocity, last = performance.now();
+  const omega = 2 / 0.22;
+  const step = (now) => {
+    const dt = Math.min((now - last) / 1000, 1 / 30);
+    last = now;
+    v += (-2 * omega * v - omega * omega * x) * dt;
+    x += v * dt;
+    if (Math.abs(x) < 0.3 && Math.abs(v) < 8) { el.style.transform = ''; return; }
+    el.style.transform = `translateY(${x.toFixed(2)}px)`;
+    envDrag.settleRaf = requestAnimationFrame(step);
+  };
+  envDrag.settleRaf = requestAnimationFrame(step);
+}
+
 function redtraceApp() {
   return {
     ...window.redtraceFgsView,
@@ -2527,17 +2729,7 @@ function redtraceApp() {
     _dangerConfirmResolve: null,
 
     newProject: { title: '', origin: '', goal: '', bootstrap: false, hints: [{ content: '' }] },
-    intentForm: { description: '', execution_profile: 'direct', capabilities: [] },
-    capabilityGroups: [
-      { label: 'Base', items: [{ id: 'common' }] },
-      { label: 'Application', items: ['web', 'api', 'database', 'thick-client', 'supply-chain'].map(id => ({ id })) },
-      { label: 'Vulnerability Research', items: [{ id: 'exploit-research' }] },
-      { label: 'Infrastructure', items: ['network', 'internal', 'pivoting', 'windows-privesc', 'linux-privesc', 'ad', 'post-exploitation', 'c2'].map(id => ({ id })) },
-      { label: 'Binary', items: ['reverse', 'pwn', 'malware', 'crypto'].map(id => ({ id })) },
-      { label: 'Platform / Device', items: ['mobile', 'cloud', 'blockchain', 'firmware-iot', 'hardware', 'wireless', 'radio-sdr', 'ot-ics'].map(id => ({ id })) },
-      { label: 'Identity / Communication', items: ['identity', 'email'].map(id => ({ id })) },
-      { label: 'AI / Defensive', items: ['ai-security', 'forensics', 'threat-hunting'].map(id => ({ id })) },
-    ],
+    intentForm: { description: '', execution_profile: 'direct' },
     concludeForm: { description: '', intentId: '' },
     completeForm: { description: '' },
     hintForm: { content: '' },
@@ -2749,8 +2941,7 @@ function redtraceApp() {
 
     openIntentNodeLabel(intent) {
       if (this.isBootstrapIntent(intent)) return 'bootstrap';
-      const capabilities = Array.isArray(intent.capabilities) ? intent.capabilities : [];
-      return capabilities.length ? `? · ${capabilities.join(' · ')}` : '?';
+      return '?';
     },
 
     openIntentNodeSize(intent) {
@@ -3060,7 +3251,6 @@ function redtraceApp() {
         if (!Array.isArray(snapshot.common_env)) {
           const runtimeSnapshot = await this.api('GET', '/runtime/config');
           snapshot.common_env = Object.entries(runtimeSnapshot.commonEnv || {})
-            .sort(([left], [right]) => left.localeCompare(right))
             .map(([name, value]) => ({ name, value: String(value ?? '') }));
         }
         this.applyWorkerSnapshot(snapshot);
@@ -3161,6 +3351,136 @@ function redtraceApp() {
     removeCommonEnvRow(index) {
       this.commonEnvForm.splice(index, 1);
       this.commonEnvDirty = true;
+    },
+
+    envDragStart(index, event) {
+      if (envDrag.busy) return;
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      const handle = event.currentTarget;
+      const row = handle.closest('.env-row');
+      const container = row?.parentElement;
+      if (!row || !container) return;
+      envDrag.busy = true;
+      envDrag.from = index;
+      envDrag.target = index;
+      envDrag.active = false;
+      envDrag.pointerId = event.pointerId;
+      envDrag.startY = event.clientY;
+      envDrag.dy = 0;
+      envDrag.history = [{ y: event.clientY, t: performance.now() }];
+      // A grab during another row's settle must start from real layout.
+      cancelAnimationFrame(envDrag.settleRaf);
+      for (const el of container.querySelectorAll(':scope > .env-row')) { el.style.transform = ''; el.style.transition = ''; }
+      try { handle.setPointerCapture(event.pointerId); } catch {}
+
+      envDrag.move = (ev) => {
+        if (ev.pointerId !== envDrag.pointerId) return;
+        ev.preventDefault();
+        const dy = ev.clientY - envDrag.startY;
+        if (!envDrag.active) {
+          if (Math.abs(dy) < 8) return;
+          envDrag.active = true;
+          envDrag.rows = [...container.querySelectorAll(':scope > .env-row')];
+          envDrag.tops = envDrag.rows.map(el => el.getBoundingClientRect().top);
+          envDrag.heights = envDrag.rows.map(el => el.getBoundingClientRect().height);
+          envDrag.dragH = envDrag.heights[index];
+          envDrag.gap = envDrag.rows.length > 1
+            ? Math.max(0, envDrag.tops[1] - envDrag.tops[0] - envDrag.heights[0]) : 0;
+          envDrag.minDy = envDrag.tops[0] - envDrag.tops[index];
+          const last = envDrag.rows.length - 1;
+          envDrag.maxDy = envDrag.tops[last] + envDrag.heights[last] - envDrag.heights[index] - envDrag.tops[index];
+          row.classList.add('env-row-dragging');
+          document.body.style.cursor = 'grabbing';
+          for (const el of envDrag.rows) if (el !== row) el.style.transition = envGapTransition();
+        }
+        envDrag.history.push({ y: ev.clientY, t: performance.now() });
+        if (envDrag.history.length > 6) envDrag.history.shift();
+        // 1:1 tracking with progressive resistance at the list ends.
+        let clamped = dy;
+        if (dy < envDrag.minDy) clamped = envDrag.minDy - envRubberband(envDrag.minDy - dy);
+        else if (dy > envDrag.maxDy) clamped = envDrag.maxDy + envRubberband(dy - envDrag.maxDy);
+        envDrag.dy = clamped;
+        row.style.transform = `translateY(${clamped.toFixed(2)}px)`;
+        const center = envDrag.tops[index] + envDrag.heights[index] / 2 + clamped;
+        let target = 0;
+        for (let i = 0; i < envDrag.rows.length; i++) {
+          if (i === index) continue;
+          if (envDrag.tops[i] + envDrag.heights[i] / 2 < center) target++;
+        }
+        if (target !== envDrag.target) {
+          envDrag.target = target;
+          const shift = envDrag.dragH + envDrag.gap;
+          for (let i = 0; i < envDrag.rows.length; i++) {
+            if (i === index) continue;
+            let move = 0;
+            if (target > index && i > index && i <= target) move = -shift;
+            else if (target < index && i >= target && i < index) move = shift;
+            envDrag.rows[i].style.transform = move ? `translateY(${move}px)` : '';
+          }
+        }
+      };
+
+      envDrag.end = (ev) => {
+        if (ev.pointerId !== envDrag.pointerId) return;
+        window.removeEventListener('pointermove', envDrag.move);
+        window.removeEventListener('pointerup', envDrag.end);
+        window.removeEventListener('pointercancel', envDrag.end);
+        try { handle.releasePointerCapture(envDrag.pointerId); } catch {}
+        const { from, target, dy, rows } = envDrag;
+        const cancelled = ev.type === 'pointercancel';
+        const visualTop = envDrag.active ? envDrag.tops[from] + dy : null;
+        const wasActive = envDrag.active;
+        envDrag.busy = false;
+        envDrag.active = false;
+        row.classList.remove('env-row-dragging');
+        document.body.style.cursor = '';
+        let velocity = 0;
+        const h = envDrag.history;
+        if (h.length > 1 && h[h.length - 1].t > h[0].t) {
+          velocity = (h[h.length - 1].y - h[0].y) / (h[h.length - 1].t - h[0].t) * 1000;
+        }
+        if (!wasActive || cancelled || target === from) {
+          for (const el of rows) if (el !== row) { el.style.transition = envGapTransition(); el.style.transform = ''; }
+          envSettle(row, wasActive ? dy : 0, 0);
+          return;
+        }
+        this.commonEnvForm.splice(target, 0, ...this.commonEnvForm.splice(from, 1));
+        this.commonEnvDirty = true;
+        this.$nextTick(() => {
+          // Other rows glide from their gap offsets to their new slots.
+          const currentRows = [...container.querySelectorAll(':scope > .env-row')];
+          for (const el of currentRows) if (el !== row) { el.style.transition = envGapTransition(); el.style.transform = ''; }
+          const moved = currentRows[target];
+          if (!moved) return;
+          // Continue from where the pointer left the row: set the residual
+          // transform, then spring it home at the release velocity.
+          moved.style.transition = 'none';
+          moved.style.transform = '';
+          const delta = visualTop - moved.getBoundingClientRect().top;
+          if (delta) moved.style.transform = `translateY(${delta.toFixed(2)}px)`;
+          requestAnimationFrame(() => envSettle(moved, delta, velocity));
+        });
+      };
+
+      window.addEventListener('pointermove', envDrag.move, { passive: false });
+      window.addEventListener('pointerup', envDrag.end);
+      window.addEventListener('pointercancel', envDrag.end);
+    },
+
+    envDragKey(index, event) {
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+      event.preventDefault();
+      const target = event.key === 'ArrowUp' ? index - 1 : index + 1;
+      if (target < 0 || target >= this.commonEnvForm.length) return;
+      this.commonEnvForm.splice(target, 0, ...this.commonEnvForm.splice(index, 1));
+      this.commonEnvDirty = true;
+      // The keyed reorder can drop focus off the moved handle; restore it so
+      // repeated arrow presses keep stepping the same row.
+      const handle = event.currentTarget;
+      this.$nextTick(() => {
+        const container = handle.closest('.env-row')?.parentElement;
+        container?.querySelectorAll(':scope > .env-row')[target]?.querySelector('.env-handle')?.focus();
+      });
     },
 
     commonEnvPayload() {
@@ -3515,7 +3835,7 @@ function redtraceApp() {
           const description = prompt('Step'); if (!description?.trim()) return;
           const sourceIds = (prompt('Source Scope / Fact / Finding IDs（逗号分隔）', this.fgs?.facts?.at(-1)?.id || 'origin') || '').split(',').map(v => v.trim()).filter(Boolean); if (!sourceIds.length) return;
           const goalId = prompt('Goal ID（可留空）', this.fgs?.goals?.[0]?.id || 'goal')?.trim() || undefined;
-          payload = { description: description.trim(), sourceIds, goalId, creator: 'human', executionProfile: 'direct', capabilities: [] };
+          payload = { description: description.trim(), sourceIds, goalId, creator: 'human', executionProfile: 'direct' };
         } else {
           const title = prompt('Finding 标题'); if (!title?.trim()) return;
           const description = prompt('Finding 内容'); if (!description?.trim()) return;
@@ -4120,10 +4440,7 @@ function redtraceApp() {
         }});
       }
       for (const intent of this.project.intents) {
-        const capabilities = Array.isArray(intent.capabilities) ? intent.capabilities : [];
-        const lbl = capabilities.length
-          ? `${intent.description} · [${capabilities.join(', ')}]`
-          : intent.description;
+        const lbl = intent.description;
         if (intent.to) {
           for (const src of intent.from) {
             edges.push({ data: { id: `${intent.id}_${src}`, source: src, target: intent.to, intentId: intent.id, label: lbl, status: 'concluded' }});
@@ -4136,7 +4453,6 @@ function redtraceApp() {
             id: phId,
             label: this.openIntentNodeLabel(intent),
             description: intent.description,
-            capabilities: intent.capabilities || [],
             nodeType,
             intentId: intent.id,
             width: nodeSize.width,
@@ -4906,7 +5222,7 @@ function redtraceApp() {
           timestamp: intent.created_at,
           actor: intent.creator,
           title: intent.description,
-          meta: [intent.id, `from ${intent.from.join(', ')}`, ...(intent.capabilities || []).map(capability => `capability:${capability}`)],
+          meta: [intent.id, `from ${intent.from.join(', ')}`],
           targetType: 'intent',
           targetId: intent.id,
           order: order++,
@@ -4924,7 +5240,7 @@ function redtraceApp() {
             timestamp: intent.concluded_at,
             actor: intent.worker || intent.creator,
             title: intent.description,
-            meta: [intent.id, `from ${intent.from.join(', ')}`, ...(intent.capabilities || []).map(capability => `capability:${capability}`)],
+            meta: [intent.id, `from ${intent.from.join(', ')}`],
             targetType: 'fact',
             targetId: 'goal',
             order: order++,
@@ -4942,7 +5258,7 @@ function redtraceApp() {
           timestamp: intent.concluded_at,
           actor: intent.worker || intent.creator,
           title: fact ? fact.description : intent.description,
-          meta: [intent.id, `produced ${intent.to}`, `from ${intent.from.join(', ')}`, ...(intent.capabilities || []).map(capability => `capability:${capability}`)],
+          meta: [intent.id, `produced ${intent.to}`, `from ${intent.from.join(', ')}`],
           targetType: 'fact',
           targetId: intent.to,
           order: order++,
@@ -5255,7 +5571,7 @@ function redtraceApp() {
 
     openCreateIntent() {
       if (!this.canActOnSelectedFacts()) return;
-      this.intentForm = { description:'', execution_profile:'direct', capabilities: [] };
+      this.intentForm = { description:'', execution_profile:'direct' };
       this.showIntentModal = true;
     },
 
@@ -5268,7 +5584,6 @@ function redtraceApp() {
           creator: actor,
           worker: claim ? actor : null,
           execution_profile: this.intentForm.execution_profile,
-          capabilities: this.intentForm.capabilities,
         });
         this.showIntentModal = false;
         await this.loadProject(this.selectedProjectId);

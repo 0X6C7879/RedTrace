@@ -9,8 +9,8 @@ import { runShell } from './shell.ts'
 import { modelSession } from './models.ts'
 import type { TaskContext } from './scheduler.ts'
 import type { Json, Step } from './types.ts'
-import { directions } from './capabilities.ts'
 import type { Capabilities } from './capabilities.ts'
+import { channelsFor, resourceTools, verbIds, verbTools, type VerbRuntime } from './capability-verbs.ts'
 
 const json = (value: unknown): Json => JSON.parse(JSON.stringify(value))
 const result = (value: unknown, terminate = false): AgentToolResult<unknown> => ({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value, ...(terminate ? { terminate: true } : {}) })
@@ -32,7 +32,7 @@ export function graphTools({ store, run, worker, config, signal }: TaskContext, 
   const tools: AgentTool[] = [readGraph]
   if (run.activity === 'decide') {
     tools.push(
-      tool('add_step', 'Create an action sourced from Scope (origin), Fact or Finding IDs to advance goalId. Leave capabilities empty for a general task; select specialized Skills only when needed.', Type.Object({ description: Type.String(), sourceIds: refs, goalId: Type.Optional(Type.String()), priority: Type.Optional(Type.Integer()), capabilities: Type.Optional(Type.Array(Type.Union(directions.map(c => Type.Literal(c))))), executionProfile: Type.Optional(Type.Union([Type.Literal('direct'), Type.Literal('isolated')])) }), args => store.addStep(run.projectId, args, config.maxSteps)),
+      tool('add_step', 'Create an action sourced from Scope (origin), Fact or Finding IDs to advance goalId. requires lists capability verbs (e.g. remote.command): matching verb tools are exposed to the Execute agent, which reuses existing channels automatically.', Type.Object({ description: Type.String(), sourceIds: refs, goalId: Type.Optional(Type.String()), priority: Type.Optional(Type.Integer()), requires: Type.Optional(Type.Array(Type.Union(verbIds.map(v => Type.Literal(v))), { uniqueItems: true, maxItems: 16 })), executionProfile: Type.Optional(Type.Union([Type.Literal('direct'), Type.Literal('isolated')])) }), args => store.addStep(run.projectId, args, config.maxSteps)),
       tool('update_step', 'Reprioritize or abandon a Step.', Type.Object({ id: Type.String(), priority: Type.Optional(Type.Integer()), cancel: Type.Optional(Type.Boolean()) }), args => store.updateStep(run.projectId, args.id, { priority: args.priority, ...(args.cancel ? { status: 'cancelled' } : {}) })),
       tool('add_goal', 'Add a Sub Goal.', Type.Object({ description: Type.String(), parentId: Type.Optional(Type.String()) }), args => store.addGoal(run.projectId, args.description, args.parentId)),
       tool('update_goal', 'Mark a goal achieved using Fact or Finding evidence IDs (never Scope), or abandon a Sub Goal. Step completion alone is not goal achievement.', Type.Object({ id: Type.String(), status: Type.Union([Type.Literal('open'), Type.Literal('achieved'), Type.Literal('cancelled')]), evidenceIds: Type.Optional(refs) }), args => store.updateGoal(run.projectId, args.id, args)),
@@ -52,7 +52,7 @@ export const activityPrompt = (activity: 'decide' | 'execute') => activity === '
   ? '你负责 Decide。FGS 的永久节点只有 Scope、Fact、Finding、Subgoal、Goal。任务创建、Fact 增加、Execute 完成或失败、任务重新激活触发你；Finding、Hint、Observation、Goal 和 Step 的变更不触发你。基于 Scope 和现有 Fact/Finding 评估目标与行动。Subgoal 必须是可验收的结果，先检查并复用已有目标；操作、重试、临时策略写成 Step，不要重复创建子目标。每个 Step 用 sourceIds 引用 Scope/Fact/Finding，并用 goalId 指向它推进的目标。目标验收使用真实 Fact/Finding evidenceIds，解释这些证据如何满足目标；失败、停止尝试、Step 结束不等于目标达成。容量满时仍可验收或调整目标，不再新增 Step。只规划，不执行外部操作。完成后调用 finish_decide。'
   : '你负责 Execute。沿当前 Step 执行，推进它的 goalId。以工具输出验证结论并及时 submit_fact，成功、失败和限制都可形成已确认事实；可交付成果提交为引用 Fact 的 Finding。Fact 会触发 Decide，Finding 不会。Hint 和 Observation 不是已确认事实。完成时调用 finish_step；Step 完成只表示本次执行结束，不表示 Goal/Subgoal 达成。'
 
-export async function runPi(context: TaskContext, capabilities?: Capabilities) {
+export async function runPi(context: TaskContext, capabilities?: Capabilities, verbs?: VerbRuntime) {
   const { store, run, worker, config, signal } = context
   const { models, model, thinkingLevel } = await modelSession(config, worker)
   const graph = store.graph(run.projectId), step = run.stepId ? store.node<Step>(run.projectId, run.stepId, 'step') : undefined
@@ -66,13 +66,8 @@ export async function runPi(context: TaskContext, capabilities?: Capabilities) {
     const env = new NodeExecutionEnv({ cwd })
     tools.push(bindTool(createReadTool(), env), bindTool(createEditTool(), env), bindTool(createWriteTool(), env),
       tool('shell', `Run a command using ${process.platform === 'win32' ? 'Windows PowerShell' : 'bash'} in the project Workspace. Full output is saved to a file.`, Type.Object({ command: Type.String(), timeout: Type.Optional(Type.Number({ exclusiveMinimum: 0 })) }), (args, abort) => runShell(args.command, cwd, { signal: abort, timeout: args.timeout, env: config.commonEnv })))
-    if (capabilities && step?.capabilities.length) {
-      const selected = capabilities.resolve(step.capabilities).skills
-      tools.push(tool('read_skill', `Read an explicitly selected Skill. Available Skills: ${selected.join(', ')}`, Type.Object({ name: Type.String() }), ({ name }) => {
-        if (!selected.includes(name)) throw new Error('Skill is not selected for this Step')
-        return { ...capabilities.skill(name), directory: capabilities.directory(name) }
-      }))
-    }
+    if (verbs) tools.push(...resourceTools(context, verbs))
+    if (verbs && step?.requires?.length) tools.push(...verbTools(context, verbs, step))
     const configs = capabilities?.mcpConfigs() ?? []
     if (configs.length) { external = await (await import('./mcp.ts')).connectMcp(configs, cwd, signal, config.commonEnv); tools.push(...external.tools) }
   }
@@ -132,7 +127,9 @@ export async function runPi(context: TaskContext, capabilities?: Capabilities) {
     const seconds = run.activity === 'decide' ? config.decideTimeout : config.executeTimeout
     let timeout = setTimeout(() => { concludeOnly = true; agent.abort() }, seconds * 1000)
     try {
-      await agent.prompt(messages.length ? '继续' : JSON.stringify({ project: graph.project, goal: graph.goals.find(g => g.id === 'goal'), step: step ?? null, origin: graph.facts[0], instruction: '用 read_graph 获取所需状态后推进任务。' }))
+      await agent.prompt(messages.length ? '继续' : JSON.stringify({ project: graph.project, goal: graph.goals.find(g => g.id === 'goal'), step: step ?? null, origin: graph.facts[0],
+        ...(step?.requires?.length && verbs ? { channels: channelsFor(verbs, step.requires) } : {}),
+        instruction: '用 read_graph 获取所需状态后推进任务。' }))
     } finally { clearTimeout(timeout) }
     if (signal.aborted || finished) return
     // One same-session conclude attempt, never a fresh execution after timeout/error.
