@@ -2,7 +2,7 @@ import path from 'node:path'
 import { mkdir } from 'node:fs/promises'
 import { watch } from 'node:fs'
 import { createEngine } from '../src/index.ts'
-import { graphTools, activityPrompt, runPi, runMock } from '../src/runner.ts'
+import { graphTools, activityPrompt, activityLimits, runPi, runMock } from '../src/runner.ts'
 import { verbTools, channelsFor, resourceTools } from '../src/capability-verbs.ts'
 import { PluginManager, registerPluginRoutes } from '../../redtrace-dsh/lib/plugins.js'
 import { load, repoRoot } from '../../redtrace-dsh/lib/loader.js'
@@ -70,7 +70,7 @@ export async function apply(ctx, options) {
     Object.assign(process.env, env); providerKeys = new Set(Object.keys(env))
     applyCommonEnv(config.commonEnv)
     await ctx.get('settings').replace('llm-pi-ai', { providers })
-    if (shared) shared.snapshot = { revision, workers: config.workers.map(w => ({ ...w, maxRunning: w.maxRunning, reason: w.decide, explore: w.execute, bootstrap: true })), providers, env, commonEnv: config.commonEnv, tasks: raw.tasks, mcpConfigs,
+    if (shared) shared.snapshot = { revision, workers: config.workers.map(w => ({ ...w })), providers, env, commonEnv: config.commonEnv, tasks: raw.tasks, mcpConfigs,
       limits: { maxWorkers: config.maxWorkers, maxProjectWorkers: config.maxProjectWorkers, maxRunningProjects: config.maxRunningProjects, interval: 0 } }
     profileRevision = revision
   }
@@ -110,7 +110,7 @@ export async function apply(ctx, options) {
         // agent discovers and loads them through the skill tool on demand.
         scoped = await mountExecutionTools(scoped, { task, cwd, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.running(id) })
       }
-      scoped.systemPrompt.section({ name: 'redtrace:fgs', order: 0, text: activityPrompt(run.activity) })
+      scoped.systemPrompt.section({ name: 'redtrace:fgs', order: 0, text: activityPrompt(run.activity, step) })
       // The DSH tools runtime projects parameters as lossless JSON; the graph
       // and verb tools carry typebox symbol annotations, so detach them into
       // plain JSON Schema before registration.
@@ -176,10 +176,11 @@ export async function apply(ctx, options) {
       prompt(resume ? '继续' : JSON.stringify({ project: graph.project, goal: graph.goals.find(g => g.id === 'goal'), step: step ?? null, origin: graph.facts[0],
         ...(step?.requires?.length ? { channels: channelsFor(verbRuntime, step.requires) } : {}),
         instruction: '用 read_graph 获取所需状态后推进任务。' }))
-      await wait(run.activity === 'decide' ? config.decideTimeout : config.executeTimeout)
+      const limits = activityLimits(config, run.activity, step)
+      await wait(limits.timeout)
       if (!finished && !task.committed && !signal.aborted) {
         concludeOnly = true
-        prompt('仅提交已有证据并调用结束工具，不再执行外部操作。'); await wait(config.concludeTimeout)
+        prompt('仅提交已有证据并调用结束工具，不再执行外部操作。'); await wait(limits.concludeTimeout)
       }
       if (!finished && !task.committed && !signal.aborted) throw new Error(concludeOnly ? 'Activity ended without a structured completion' : 'Agent execution failed')
     } finally {

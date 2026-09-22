@@ -520,6 +520,13 @@ export class Store {
     return this.transaction(() => {
       const run = this.run(runId)
       if (run.status !== 'running') return run
+      if (run.stepId && status === 'succeeded') {
+        const step = this.node<Step>(run.projectId, run.stepId, 'step')
+        if (step.bootstrap && !step.factIds.length) {
+          status = 'failed'
+          error = 'Bootstrap must return at least one Fact before Reason can start'
+        }
+      }
       run.status = status; run.error = error; run.endedAt = status === 'paused' ? null : now(); this.saveRun(run)
       if (run.stepId) {
         const step = this.node<Step>(run.projectId, run.stepId, 'step')

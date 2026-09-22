@@ -8,7 +8,7 @@ import path from 'node:path'
 import { runShell } from './shell.ts'
 import { modelSession } from './models.ts'
 import type { TaskContext } from './scheduler.ts'
-import type { Json, Step } from './types.ts'
+import type { EngineConfig, Json, Step } from './types.ts'
 import type { Capabilities } from './capabilities.ts'
 import { channelsFor, resourceTools, verbIds, verbTools, type VerbRuntime } from './capability-verbs.ts'
 
@@ -22,6 +22,7 @@ function bindTool<T extends TSchema, D>(base: AgentHarnessTool<ExecutionToolCont
 }
 
 export function graphTools({ store, run, worker, config, signal }: TaskContext, finish: () => void): AgentTool[] {
+  const step = run.stepId ? store.node<Step>(run.projectId, run.stepId, 'step') : undefined
   const readGraph = tool('read_graph', 'Read project state or a specific graph node. Page through facts, observations and Steps with offset. Hints and observations are unverified inputs.', Type.Object({ id: Type.Optional(Type.String()), offset: Type.Optional(Type.Integer({ minimum: 0 })) }), args => {
     if (args.id) return store.node(run.projectId, args.id)
     const g = store.graph(run.projectId)
@@ -42,15 +43,29 @@ export function graphTools({ store, run, worker, config, signal }: TaskContext, 
     tools.push(
       tool('submit_fact', 'Submit a confirmed fact and the evidence supporting it.', Type.Object({ description: Type.String(), evidence: Type.Array(Type.Object({ description: Type.String(), path: Type.Optional(Type.String()) })) }), args => store.addFact(run.projectId, args.description, { runId: run.id, evidence: args.evidence, creator: worker.name })),
       tool('submit_finding', 'Record a deliverable supported by confirmed facts. This does not trigger Decide.', Type.Object({ title: Type.String(), description: Type.String(), type: Type.Optional(Type.String()), factIds: refs }), args => store.addFinding(run.projectId, { ...args, creator: worker.name, runId: run.id })),
-      tool('finish_step', 'Finish this Step. Submit confirmed facts before finishing; do not invent success or evidence.', Type.Object({ summary: Type.String() }), args => { store.runEvent(run.id, 'step.summary', json(args)); finish(); return { saved: true } }, true),
+      tool('finish_step', step?.bootstrap
+        ? 'Finish Bootstrap after submitting at least one confirmed Fact. Reason remains blocked until Bootstrap succeeds with a Fact.'
+        : 'Finish this Step. Submit confirmed facts before finishing; do not invent success or evidence.', Type.Object({ summary: Type.String() }), args => {
+          const current = store.node<Step>(run.projectId, run.stepId!, 'step')
+          if (current.bootstrap && !current.factIds.length) throw new Error('Bootstrap must submit at least one Fact before finishing')
+          store.runEvent(run.id, 'step.summary', json(args)); finish(); return { saved: true }
+        }, true),
     )
   }
   return tools.map(t => ({ ...t, execute: async (...args) => { if (signal.aborted || store.run(run.id).status !== 'running') throw new Error('Activity has stopped'); return t.execute(...args) } }))
 }
 
-export const activityPrompt = (activity: 'decide' | 'execute') => activity === 'decide'
+export const activityPrompt = (activity: 'decide' | 'execute', step?: Step) => activity === 'decide'
   ? '你负责 Decide。FGS 的永久节点只有 Scope、Fact、Finding、Subgoal、Goal。任务创建、Fact 增加、Execute 完成或失败、任务重新激活触发你；Finding、Hint、Observation、Goal 和 Step 的变更不触发你。基于 Scope 和现有 Fact/Finding 评估目标与行动。Subgoal 必须是可验收的结果，先检查并复用已有目标；操作、重试、临时策略写成 Step，不要重复创建子目标。每个 Step 用 sourceIds 引用 Scope/Fact/Finding，并用 goalId 指向它推进的目标。目标验收使用真实 Fact/Finding evidenceIds，解释这些证据如何满足目标；失败、停止尝试、Step 结束不等于目标达成。容量满时仍可验收或调整目标，不再新增 Step。只规划，不执行外部操作。完成后调用 finish_decide。'
-  : '你负责 Execute。沿当前 Step 执行，推进它的 goalId。以工具输出验证结论并及时 submit_fact，成功、失败和限制都可形成已确认事实；可交付成果提交为引用 Fact 的 Finding。Fact 会触发 Decide，Finding 不会。Hint 和 Observation 不是已确认事实。完成时调用 finish_step；Step 完成只表示本次执行结束，不表示 Goal/Subgoal 达成。'
+  : step?.bootstrap
+    ? '你负责 Bootstrap。基于 Scope、Goal 和 Hints 理解任务，按需加载 Skills 并持续推进初始探索。在得到至少一个经证据支持的客观结果前不得结束；必须先用 submit_fact 提交 Fact，再调用 finish_step。Bootstrap 成功且返回 Fact 后 Reason 才会启动。不要把猜测、计划或未验证输出写成 Fact。'
+    : '你负责 Execute。沿当前 Step 执行，推进它的 goalId。以工具输出验证结论并及时 submit_fact，成功、失败和限制都可形成已确认事实；可交付成果提交为引用 Fact 的 Finding。Fact 会触发 Decide，Finding 不会。Hint 和 Observation 不是已确认事实。完成时调用 finish_step；Step 完成只表示本次执行结束，不表示 Goal/Subgoal 达成。'
+
+export function activityLimits(config: EngineConfig, activity: 'decide' | 'execute', step?: Step) {
+  if (activity === 'decide') return { timeout: config.decideTimeout, concludeTimeout: config.concludeTimeout }
+  if (step?.bootstrap) return { timeout: config.bootstrapTimeout, concludeTimeout: config.bootstrapConcludeTimeout }
+  return { timeout: config.executeTimeout, concludeTimeout: config.concludeTimeout }
+}
 
 export async function runPi(context: TaskContext, capabilities?: Capabilities, verbs?: VerbRuntime) {
   const { store, run, worker, config, signal } = context
@@ -74,7 +89,7 @@ export async function runPi(context: TaskContext, capabilities?: Capabilities, v
   const saved = store.run(run.id).checkpoint
   const messages = run.activity === 'execute' && saved && typeof saved === 'object' && !Array.isArray(saved) && Array.isArray(saved.messages) ? saved.messages as unknown as AgentMessage[] : []
   const agent = new Agent({ initialState: { model, tools, thinkingLevel, messages,
-    systemPrompt: activityPrompt(run.activity) },
+    systemPrompt: activityPrompt(run.activity, step) },
     sessionId: run.id, toolExecution: 'sequential',
     streamFn: (m, context, options) => models.streamSimple(m, context, { ...options, maxTokens: model.maxTokens, maxRetries: 2 }),
     prepareNextTurnWithContext: async ({ context }, abort) => {
@@ -101,7 +116,7 @@ export async function runPi(context: TaskContext, capabilities?: Capabilities, v
   })
   const abort = () => agent.abort()
   signal.addEventListener('abort', abort, { once: true })
-  store.runEvent(run.id, 'system.prompt', json({ content: activityPrompt(run.activity) }))
+  store.runEvent(run.id, 'system.prompt', json({ content: activityPrompt(run.activity, step) }))
   let cursor = Number(store.db.prepare('SELECT COALESCE(MAX(id),0) AS value FROM events WHERE project_id=?').get(run.projectId)!.value)
   const changed = (projectId: string) => {
     if (projectId !== run.projectId || run.activity !== 'execute' || !agent.state.isStreaming) return
@@ -124,7 +139,8 @@ export async function runPi(context: TaskContext, capabilities?: Capabilities, v
   })
   try {
     if (signal.aborted) return
-    const seconds = run.activity === 'decide' ? config.decideTimeout : config.executeTimeout
+    const limits = activityLimits(config, run.activity, step)
+    const seconds = limits.timeout
     let timeout = setTimeout(() => { concludeOnly = true; agent.abort() }, seconds * 1000)
     try {
       await agent.prompt(messages.length ? '继续' : JSON.stringify({ project: graph.project, goal: graph.goals.find(g => g.id === 'goal'), step: step ?? null, origin: graph.facts[0],
@@ -134,7 +150,7 @@ export async function runPi(context: TaskContext, capabilities?: Capabilities, v
     if (signal.aborted || finished) return
     // One same-session conclude attempt, never a fresh execution after timeout/error.
     concludeOnly = true
-    timeout = setTimeout(() => agent.abort(), config.concludeTimeout * 1000)
+    timeout = setTimeout(() => agent.abort(), limits.concludeTimeout * 1000)
     try { await agent.prompt('仅提交已经获得的证据并调用结束工具。不再执行外部操作。') } finally { clearTimeout(timeout) }
     if (!finished && !signal.aborted) throw new Error(agent.state.errorMessage ?? 'Activity ended without a structured completion')
   } finally {

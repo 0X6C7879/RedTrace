@@ -7,7 +7,7 @@ import { Scheduler } from '../src/scheduler.ts'
 import { projectFgs, liveSteps } from '../src/fgs.ts'
 import type { EngineConfig } from '../src/types.ts'
 
-const worker = { name: 'test', backend: 'mock' as const, provider: 'mock', model: '', enabled: true, decide: true, execute: true, maxRunning: 4, priority: 0 }
+const worker = { name: 'test', backend: 'mock' as const, provider: 'mock', model: '', enabled: true, reason: true, explore: true, bootstrap: true, maxRunning: 4, priority: 0 }
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
 const create = (s: Store) => s.createProject({ title: 'FGS', origin: 'Scope', goal: 'Verified result' }).project.id
 
@@ -95,7 +95,7 @@ test('reference boundaries, atomic failure, and historical states never use futu
 
 test('planning trigger allowlist and capacity do not prevent evidence evaluation', async () => {
   const s = new Store(':memory:'), id = create(s)
-  const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 4, maxProjectWorkers: 4, maxRunningProjects: 2, maxSteps: 1, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, workspaceRoot: '.' }
+  const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 4, maxProjectWorkers: 4, maxRunningProjects: 2, maxSteps: 1, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: '.' }
   const step = s.addStep(id, { description: 'At capacity', sourceIds: ['origin'] }), run = s.claim(id, 'execute', worker, step.id)
   s.addFact(id, 'Ready to evaluate', { runId: run.id })
   const revision = s.project(id).planningRevision

@@ -32,8 +32,15 @@ export class Scheduler {
   }
   private select(activity: Run['activity'], resume?: Run, step?: Step): Worker | undefined {
     const count = (name: string) => this.activeRuns.filter(r => r.worker === name).length
-    return this.config.workers.map(w => this.selectWorker(w, activity, step)).filter((w): w is Worker => !!w && w.enabled && w[activity] && (!resume || (w.name === resume.worker && w.backend === resume.backend)) && count(w.name) < w.maxRunning)
+    return this.config.workers.map(w => this.selectWorker(w, activity, step)).filter((w): w is Worker => !!w && w.enabled && this.eligible(w, activity, step) && (!resume || (w.name === resume.worker && w.backend === resume.backend)) && count(w.name) < w.maxRunning)
       .sort((a, b) => a.priority - b.priority || count(a.name) - count(b.name) || a.name.localeCompare(b.name))[0]
+  }
+  /** Decide needs a `reason` worker; an Execute run carries the Step it claims,
+   * so a bootstrap Step only ever reaches a `bootstrap` worker and an ordinary
+   * Step only ever reaches an `explore` worker. */
+  private eligible(worker: Worker, activity: Run['activity'], step?: Step): boolean {
+    if (activity === 'decide') return worker.reason
+    return step?.bootstrap ? worker.bootstrap : worker.explore
   }
   private dispatch() {
     if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = undefined }
@@ -54,7 +61,13 @@ export class Scheduler {
         if (!active.some(r => r.projectId === project.id) && new Set(active.map(r => r.projectId)).size >= this.config.maxRunningProjects) continue
         const graph = this.store.graph(project.id), p = graph.project
         if (p.status !== 'active') continue
-        const needsDecide = p.planningRevision > p.decidedRevision && !active.some(r => r.projectId === p.id && r.activity === 'decide')
+        // Bootstrap is a strict project gate, not merely the first runnable
+        // Step. Reason may start only after that Step succeeded with a Fact.
+        // A failed/cancelled/empty Bootstrap remains visible for diagnosis and
+        // can be retried explicitly without planning from an uninitialized graph.
+        const bootstrap = graph.steps.find(s => s.bootstrap)
+        const bootstrapComplete = !p.bootstrap || !!bootstrap && bootstrap.status === 'done' && bootstrap.factIds.length > 0
+        const needsDecide = bootstrapComplete && p.planningRevision > p.decidedRevision && !active.some(r => r.projectId === p.id && r.activity === 'decide')
         if (needsDecide) {
           if (p.retryAfter > Date.now()) retryAt = Math.min(retryAt, p.retryAfter)
           else {

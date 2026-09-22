@@ -99,12 +99,13 @@ export class Configuration {
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(w.name)) throw new HttpError(422, 'Invalid worker name')
       if (w.provider !== 'mock' && !providers[w.provider]?.models.some(m => m.id === w.model)) throw new HttpError(422, 'Worker references missing provider or model')
       if (w.backend && !['pi', 'dsh', 'mock'].includes(w.backend)) throw new HttpError(422, 'Invalid backend')
-      return { name: w.name, provider: w.provider, model: w.model ?? 'mock', enabled: w.enabled ?? true, decide: w.reason ?? true, execute: w.explore ?? true,
+      return { name: w.name, provider: w.provider, model: w.model ?? 'mock', enabled: w.enabled ?? true, reason: w.reason ?? true, explore: w.explore ?? true, bootstrap: w.bootstrap ?? true,
         priority: integer(w.priority ?? 0, 'priority', -2147483648), maxRunning: integer(w.max_running ?? 1, 'max_running', 1), backend: w.provider === 'mock' ? 'mock' as const : w.backend ?? 'pi' }
     })
     if (new Set(workers.map(w => w.name)).size !== workers.length) throw new HttpError(422, 'Worker names must be unique')
     return { workers, providers, commonEnv: Object.fromEntries(Object.entries(raw.common_env ?? {}).map(([name, value]) => { if (!/^[A-Z][A-Z0-9_]*$/.test(name) || typeof value !== 'string') throw new HttpError(422, 'Invalid common environment'); return [name, resolve(value)!] })), maxWorkers: integer(raw.runtime?.max_workers ?? 4, 'max_workers', 1), maxProjectWorkers: integer(raw.runtime?.max_project_workers ?? 4, 'max_project_workers', 1), maxRunningProjects: integer(raw.runtime?.max_running_projects ?? 1, 'max_running_projects', 1),
-      maxSteps: raw.tasks?.reason?.max_intents === undefined ? null : integer(raw.tasks.reason.max_intents, 'max_intents', 1), decideTimeout: integer(raw.tasks?.reason?.timeout ?? 300, 'reason timeout', 1), executeTimeout: integer(raw.tasks?.explore?.timeout ?? 900, 'execute timeout', 1), concludeTimeout: integer(raw.tasks?.explore?.conclude_timeout ?? 30, 'conclude timeout', 1), workspaceRoot: this.workspaceRoot }
+      maxSteps: raw.tasks?.reason?.max_intents === undefined ? null : integer(raw.tasks.reason.max_intents, 'max_intents', 1), decideTimeout: integer(raw.tasks?.reason?.timeout ?? 300, 'reason timeout', 1), executeTimeout: integer(raw.tasks?.explore?.timeout ?? 900, 'execute timeout', 1), concludeTimeout: integer(raw.tasks?.explore?.conclude_timeout ?? 30, 'conclude timeout', 1),
+      bootstrapTimeout: integer(raw.tasks?.bootstrap?.timeout ?? 900, 'bootstrap timeout', 1), bootstrapConcludeTimeout: integer(raw.tasks?.bootstrap?.conclude_timeout ?? 30, 'bootstrap conclude timeout', 1), workspaceRoot: this.workspaceRoot }
   }
   snapshot() {
     const { raw, revision } = this.read(), config = this.resolve(raw)
@@ -114,7 +115,7 @@ export class Configuration {
       providers: Object.entries(raw.providers ?? {}).map(([name, p]) => ({ name, api: p.api, base_url: p.base_url, api_key_configured: !!p.api_key, api_key_env: p.api_key_env ?? null,
         models: p.models.map(m => ({ ...m, reasoning: m.reasoning ?? 'auto_max', reasoning_efforts: m.reasoning_efforts ?? null, thinking_format: m.thinking_format ?? 'auto' })), referenced: config.workers.some(w => w.provider === name) })),
       dsh: null, workers: config.workers.map(w => ({ name: w.name, type: w.provider === 'mock' ? 'mock' : 'dsh', provider: w.provider, model: w.model, enabled: w.enabled,
-        bootstrap: raw.workers.find(r => r.name === w.name)?.bootstrap ?? true, reason: w.decide, explore: w.execute, task_types: [w.decide ? 'reason' : '', w.execute ? 'explore' : '', (raw.workers.find(r => r.name === w.name)?.bootstrap ?? true) ? 'bootstrap' : ''].filter(Boolean), priority: w.priority, max_running: w.maxRunning, editable: w.provider !== 'mock' })) }
+        bootstrap: w.bootstrap, reason: w.reason, explore: w.explore, task_types: [w.reason ? 'reason' : '', w.explore ? 'explore' : '', w.bootstrap ? 'bootstrap' : ''].filter(Boolean), priority: w.priority, max_running: w.maxRunning, editable: w.provider !== 'mock' })) }
   }
   commit(expected: string, mutate: (raw: RawConfig) => void) {
     const { raw, revision } = this.read()

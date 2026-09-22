@@ -34,7 +34,9 @@ export interface Run {
   provider?: string; model?: string; workspaceRoot?: string
 }
 export interface Worker {
-  name: string; provider: string; model: string; enabled: boolean; decide: boolean; execute: boolean
+  name: string; provider: string; model: string; enabled: boolean
+  /** Capabilities from the worker configuration: Decide, ordinary Steps, bootstrap Steps. */
+  reason: boolean; explore: boolean; bootstrap: boolean
   maxRunning: number; priority: number; backend: Run['backend']
 }
 export interface Provider {
@@ -45,7 +47,8 @@ export interface Provider {
 export interface EngineConfig {
   workers: Worker[]; providers: Record<string, Provider>; maxWorkers: number; maxProjectWorkers: number
   maxRunningProjects: number; maxSteps: number | null; decideTimeout: number; executeTimeout: number
-  concludeTimeout: number; workspaceRoot: string; commonEnv?: Record<string, string>
+  concludeTimeout: number; bootstrapTimeout: number; bootstrapConcludeTimeout: number
+  workspaceRoot: string; commonEnv?: Record<string, string>
 }
 export class HttpError extends Error {
   status: number

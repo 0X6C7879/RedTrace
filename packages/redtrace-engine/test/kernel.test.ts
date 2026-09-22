@@ -7,8 +7,8 @@ import { Store } from '../src/store.ts'
 import { Scheduler } from '../src/scheduler.ts'
 import type { EngineConfig } from '../src/types.ts'
 
-const worker = { name: 'mock', backend: 'mock' as const, provider: 'mock', model: '', enabled: true, decide: true, execute: true, maxRunning: 8, priority: 0 }
-const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 8, maxProjectWorkers: 8, maxRunningProjects: 2, maxSteps: null, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, workspaceRoot: os.tmpdir() }
+const worker = { name: 'mock', backend: 'mock' as const, provider: 'mock', model: '', enabled: true, reason: true, explore: true, bootstrap: true, maxRunning: 8, priority: 0 }
+const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 8, maxProjectWorkers: 8, maxRunningProjects: 2, maxSteps: null, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: os.tmpdir() }
 const create = (s: Store) => s.createProject({ title: 'Task', origin: 'Known input', goal: 'Write verified output' }).project.id
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
 async function until(predicate: () => boolean) { for (let i = 0; i < 200; i++) { if (predicate()) return; await turn() } assert.fail('Condition did not settle') }
@@ -102,7 +102,7 @@ test('unavailable planner does not block execution; pause resumes the same run',
   const s = new Store(':memory:'), id = create(s)
   s.addStep(id, { description: 'work', sourceIds: ['origin'] })
   const ids: string[] = []
-  const scheduler = new Scheduler(s, { ...config, workers: [{ ...worker, decide: false }] }, async ({ run, signal }) => {
+  const scheduler = new Scheduler(s, { ...config, workers: [{ ...worker, reason: false }] }, async ({ run, signal }) => {
     ids.push(run.id)
     if (ids.length === 1) await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
   })
