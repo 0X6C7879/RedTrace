@@ -11,7 +11,19 @@ import { HttpError } from './types.ts'
 export async function dshUpdateRoutes(router: Router, root: string, scheduler: Scheduler) {
   const codeRoot = path.resolve(process.env.REDTRACE_CODE_ROOT || root)
   const filename = path.join(codeRoot, 'vendor/deepseek-harness/package.json')
-  const version = async () => { try { return JSON.parse(await readFile(filename, 'utf8')).version as string } catch (error: any) { if (error.code === 'ENOENT') return null; throw error } }
+  // The updater rewrites package.json in place; a read that lands inside the
+  // truncated window sees empty/partial JSON, so retry instead of failing the
+  // snapshot (UI polls this endpoint continuously during an update).
+  const version = async () => {
+    for (let attempt = 0; ; attempt++) {
+      try { return JSON.parse(await readFile(filename, 'utf8')).version as string }
+      catch (error: any) {
+        if (error.code === 'ENOENT') return null
+        if (attempt >= 5) return null
+        await new Promise(resolve => setTimeout(resolve, 20))
+      }
+    }
+  }
   const runningVersion = await version()
   let latest: { version: string; tag: string; url: string } | null = null
   let job: { state: 'idle' | 'running' | 'succeeded' | 'failed'; message: string; backup?: string } = { state: 'idle', message: '' }

@@ -27,7 +27,7 @@ console.log('DSH_UPDATE_RESULT ' + JSON.stringify({changed, version: changed ? '
   const url = `http://127.0.0.1:${(engine.server.address() as { port: number }).port}`
   const get = async () => (await fetch(url + '/runtime/dsh')).json()
   const update = (headers = {}) => fetch(url + '/runtime/dsh/update', { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: '{}' })
-  const settled = async () => { for (let i = 0; i < 100; i++) { const value = await get(); if (value.state !== 'running') return value; await delay(20) }; throw new Error('Update did not settle') }
+  const settled = async () => { for (let i = 0; i < 100; i++) { const value = await get(); if (value.state && value.state !== 'running') return value; await delay(20) }; throw new Error('Update did not settle') }
   try {
     assert.equal((await get()).runningVersion, '0.1.0')
     assert.equal((await update({ Origin: 'https://other.test' })).status, 403)
