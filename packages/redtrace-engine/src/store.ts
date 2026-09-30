@@ -73,6 +73,8 @@ export class Store {
     const version = this.db.prepare('SELECT value FROM metadata WHERE key=?').get('schema') as { value: string } | undefined
     if (version && version.value !== '1') { this.db.close(); throw new Error(`Unsupported engine schema ${version.value}`) }
     this.db.prepare('INSERT OR IGNORE INTO metadata VALUES (?,?)').run('schema', '1')
+    // Counters of deleted projects would otherwise linger forever and are never read again.
+    this.db.prepare('DELETE FROM counters WHERE scope NOT IN (SELECT id FROM projects)').run()
     this.changes.setMaxListeners(0)
   }
   close() { this.changes.removeAllListeners(); this.db.close() }
@@ -98,6 +100,16 @@ export class Store {
     const row = this.db.prepare(`INSERT INTO counters VALUES (?,?,1) ON CONFLICT(scope,kind)
       DO UPDATE SET value=value+1 RETURNING value`).get(scope, kind) as { value: number }
     return prefix + String(row.value).padStart(3, '0')
+  }
+  // Project ids stay dense: the smallest unused number is picked, so deleting a project
+  // releases its number for reuse instead of advancing a global counter.
+  private nextProjectId(): string {
+    const used = new Set((this.db.prepare('SELECT id FROM projects').all() as { id: string }[])
+      .map(row => row.id.startsWith('proj_') ? Number.parseInt(row.id.slice(5), 10) : Number.NaN)
+      .filter(Number.isSafeInteger))
+    let n = 1
+    while (used.has(n)) n++
+    return `proj_${String(n).padStart(3, '0')}`
   }
   project(id: string): Project {
     const row = this.db.prepare('SELECT data FROM projects WHERE id=?').get(id) as { data: string } | undefined
@@ -208,7 +220,7 @@ export class Store {
   createProject(input: { title: string; origin: string; goal: string; bootstrap?: boolean; hints?: {content: string; creator: string}[] }): Graph {
     return this.transaction(() => {
       const title = requiredText(input.title, 'title'), origin = requiredText(input.origin, 'origin'), goal = requiredText(input.goal, 'goal')
-      const id = this.next('', 'project', 'proj_'), createdAt = now()
+      const id = this.nextProjectId(), createdAt = now()
       const p: Project = { id, title, status: 'active', bootstrap: input.bootstrap ?? false, createdAt, revision: 0, planningRevision: 0, decidedRevision: 0, retryAfter: 0 }
       this.db.prepare('INSERT INTO projects VALUES (?,?)').run(id, JSON.stringify(p))
       this.saveNode({ id: 'origin', projectId: id, kind: 'fact', description: origin, creator: 'human', createdAt, stepId: null, evidence: [] })
@@ -393,49 +405,6 @@ export class Store {
     const run = this.runs(id).find(r => r.activity === activity && r.stepId === stepId && r.status === 'running')
     if (!run || run.worker !== worker) throw new HttpError(409, 'Activity is not owned by this worker')
     return run
-  }
-  heartbeat(runId: string) { return this.transaction(() => { const run = this.run(runId); if (run.status !== 'running') throw new HttpError(409, 'Activity is not running'); run.heartbeatAt = now(); this.saveRun(run); return run }) }
-  releaseRun(runId: string) {
-    return this.transaction(() => {
-      const run = this.run(runId)
-      if (run.pendingTools.length) throw new HttpError(409, 'Unconfirmed tools prevent releasing this activity')
-      this.finishRun(run.id, 'cancelled')
-      if (run.stepId) { const step = this.node<Step>(run.projectId, run.stepId, 'step'); step.status = 'pending'; step.worker = null; step.endedAt = null; this.saveNode(step); this.event(run.projectId, 'step.updated', step, step) }
-    })
-  }
-  outcome(id: string, worker: string, outcome: string, detail: string, stepId: string | null, options: { runtimeMs?: number; baseRevision?: number; contextRevision?: number } = {}) {
-    return this.transaction(() => {
-      const p = this.project(id), step = stepId ? this.node<Step>(id, stepId, 'step') : undefined
-      if (p.status !== 'active' && !['success', 'cancelled'].includes(outcome)) throw new HttpError(403, `Project is ${p.status}`)
-      if (options.contextRevision !== undefined && options.contextRevision > p.revision) throw new HttpError(409, 'Reason context revision is ahead of Blackboard')
-      const run = this.runs(id).findLast(r => r.stepId === stepId && r.worker === worker)
-      if (run?.pendingTools.length && !['success', 'cancelled'].includes(outcome)) throw new HttpError(409, 'Unconfirmed tool results require verification before retry')
-      if (step) {
-        step.runtimeMs = (step.runtimeMs ?? 0) + (options.runtimeMs ?? 0)
-        this.saveNode(step); this.event(id, 'execute.outcome', step, { worker, outcome, detail, runtimeMs: options.runtimeMs ?? 0 })
-        if (['success', 'cancelled'].includes(outcome)) return { circuitOpen: false, failureCount: 0 }
-        if (step.status === 'done') return { circuitOpen: step.circuitOpen ?? false, failureCount: step.failureCount ?? 0 }
-        if (run?.status === 'running') this.finishRun(run.id, 'failed', detail || outcome)
-        const count = (step.failureCount ?? 0) + 1, blocked = !step.bootstrap && count >= 3
-        step.failureCount = count; step.failure = outcome.slice(0, 100); step.retryAfter = blocked ? null : Date.now() / 1000 + [5, 15, 60][Math.min(count - 1, 2)]
-        step.circuitOpen = blocked; step.status = blocked ? 'blocked' : 'pending'; step.worker = null; step.endedAt = null
-        this.saveNode(step); this.event(id, 'step.updated', step, step)
-        return { circuitOpen: blocked, failureCount: count, ...(blocked ? { state: 'blocked' } : { retryAfter: step.retryAfter }) }
-      }
-      if (run?.status === 'running') this.finishRun(run.id, outcome === 'success' ? 'succeeded' : outcome === 'cancelled' ? 'cancelled' : 'failed', detail || null)
-      const current = this.project(id)
-      current.contextRevision = Math.max(current.contextRevision ?? 0, options.contextRevision ?? 0)
-      if (['success', 'cancelled'].includes(outcome)) {
-        current.failureCount = 0; current.failureSignature = null; current.retryAfter = 0; current.circuitOpen = false
-        if (outcome === 'success') current.decidedRevision = Math.max(current.decidedRevision, Math.min(options.baseRevision ?? current.planningRevision, current.planningRevision))
-      } else {
-        current.failureCount = (current.failureCount ?? 0) + 1; current.failureSignature = outcome.slice(0, 100); current.circuitOpen = current.failureCount >= 3
-        current.retryAfter = current.circuitOpen ? 0 : Date.now() + [5, 15, 60][Math.min(current.failureCount - 1, 2)] * 1000
-        if (current.circuitOpen) current.status = 'stopped'
-      }
-      this.saveProject(current); this.event(id, 'decide.outcome', null, { worker, outcome, detail })
-      return { circuitOpen: current.circuitOpen, failureCount: current.failureCount, ...(current.retryAfter ? { retryAfter: current.retryAfter / 1000 } : {}) }
-    })
   }
   complete(id: string, description: string, evidenceIds: string[], worker: string): Step {
     return this.transaction(() => {

@@ -1,8 +1,7 @@
-import { Type } from 'typebox'
 import { mkdir, readdir, realpath, stat, open } from 'node:fs/promises'
 import path from 'node:path'
 import { stringify } from 'yaml'
-import { body, queryNumber } from './http.ts'
+import { queryNumber } from './http.ts'
 import type { Router } from './http.ts'
 import { HttpError } from './types.ts'
 import type { Json } from './types.ts'
@@ -28,13 +27,6 @@ export function auditRoutes(router: Router, store: Store, workspaceRoot: string)
     for (const run of runs(id)) value[run.task_type] = (value[run.task_type] ?? 0) + ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens'].reduce((sum, key) => sum + Number(run[key] ?? 0), 0)
     return { ...value, total: Object.values(value).reduce((a, b) => a + b, 0) }
   }
-  router.add('POST', '/audit/events', async c => {
-    const b = await body(c.req, Type.Object({ run: Type.Record(Type.String(), Type.Unknown()), events: Type.Array(Type.Record(Type.String(), Type.Unknown()), { maxItems: 128 }) }))
-    for (const key of ['id', 'project_id', 'task_type', 'phase', 'worker', 'provider', 'workspace_kind', 'workspace_ref', 'workspace_root', 'status', 'started_at']) if (!(key in b.run)) throw new HttpError(422, 'Incomplete audit run metadata')
-    const rawUsage = b.run.usage && typeof b.run.usage === 'object' ? b.run.usage as Record<string, unknown> : b.run
-    for (const key of ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens']) { const n = Number(rawUsage[key]) || 0; b.run[key] = Number.isSafeInteger(n) && n > 0 ? n : 0 }
-    return store.audit(b.run as Record<string, Json>, b.events as Record<string, Json>[])
-  })
   router.add('GET', '/audit/usage', () => usage())
   router.add('GET', '/audit/tasks', () => store.projects().map(p => {
     const r = runs(p.id); return { id: p.id, title: p.title, status: p.status, created_at: p.createdAt, run_count: r.length, last_run_at: r.map(r => r.started_at).sort().at(-1) ?? null, running_count: r.filter(r => r.status === 'running').length, token_total: usage(p.id).total }

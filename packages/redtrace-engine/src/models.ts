@@ -12,10 +12,12 @@ export async function modelSession(config: EngineConfig, worker: Worker) {
     ? await import('@earendil-works/pi-ai/api/anthropic-messages')
     : provider.api === 'openai-responses' ? await import('@earendil-works/pi-ai/api/openai-responses')
       : await import('@earendil-works/pi-ai/api/openai-completions')
+  const thinkingFormat: 'deepseek' | 'openai' | undefined = entry.thinkingFormat === 'deepseek' || entry.thinkingFormat === 'openai' ? entry.thinkingFormat : undefined
+  const compat = provider.api === 'openai-completions' ? { supportsDeveloperRole: false, ...(thinkingFormat ? { thinkingFormat } : {}) } : thinkingFormat ? { thinkingFormat } : undefined
   const model: Model<Api> = { id: entry.id, name: entry.id, api: provider.api, provider: worker.provider, baseUrl: provider.baseUrl,
     reasoning: entry.reasoningEfforts !== false && entry.thinkingFormat !== 'none', input: ['text', 'image'], contextWindow: entry.contextWindow, maxTokens: entry.maxTokens,
     ...(entry.reasoningEfforts && typeof entry.reasoningEfforts === 'object' ? { thinkingLevelMap: entry.reasoningEfforts as ThinkingLevelMap } : {}),
-    ...(entry.thinkingFormat === 'deepseek' || entry.thinkingFormat === 'openai' ? { compat: { thinkingFormat: entry.thinkingFormat } } : {}),
+    ...(compat ? { compat } : {}),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
   const models = createModels()
   models.setProvider(createProvider({ id: worker.provider, models: [model], api: streams, auth: { apiKey: { name: worker.provider, resolve: async () => ({ auth: { apiKey }, source: 'RedTrace configuration' }) } } }))

@@ -153,7 +153,7 @@ const KERNEL: readonly KernelEntry[] = [
 
 const MANAGED: readonly ManagedEntry[] = [
   {
-    id: 'redtrace-core', label: 'RedTrace Core', category: 'core', module: core,
+    id: 'redtrace-core', label: 'RedTrace Core', category: 'core', module: core, protectStop: true,
     modulePath: 'packages/redtrace-dsh/lib/core.js',
     description: '最小运行内核',
     intro: '整个运行时的最小内核:装配 agent 循环、会话、模型调用、工具注册与系统提示词。其余全部能力都以插件形式叠加在这层之上。',
@@ -174,7 +174,7 @@ const MANAGED: readonly ManagedEntry[] = [
     id: 'redtrace-web', label: 'Web', category: 'feature',
     modulePath: 'vendor/deepseek-harness/packages/web/tool-web/lib/index.js',
     description: '网页搜索与抓取',
-    intro: 'DSH 原生 Web 能力:web_search 走 dsh-web-search-free 免费多引擎检索(TinyFish/AnySearch/Exa/Tavily 等,按顺序自动 fallback,引擎 Key 经 common_env 环境变量提供,如 TINYFISH_API_KEY),web_fetch 抓取公开 HTTP(S) 页面。对新启动的 Execute 会话生效。',
+    intro: 'DSH 原生 Web 能力:web_search 走 dsh-web-search-free 免费多引擎检索(TinyFish/AnySearch/Exa/Tavily 等,按顺序自动 fallback,引擎 Key 经 common_env 环境变量提供,如 TINYFISH_API_KEY),web_fetch 抓取公开 HTTP(S) 页面。插件开关对运行中的 Execute 会话生效。',
   },
   {
     id: 'redtrace-jobs', label: '后台任务', category: 'feature',
@@ -213,6 +213,11 @@ const MANAGED: readonly ManagedEntry[] = [
     intro: 'DSH 原生重复提醒:同一工具以相同参数连续调用 3 / 5 / 8 次时向模型注入提醒,打断死循环式的重复调用,适合长时间自主运行的 Worker。',
   },
   {
+    id: 'redtrace-jev', label: 'Jev 语义辅助', category: 'feature', modulePath: 'packages/redtrace-engine/src/jev.ts', defaultOff: true,
+    description: '可热切换的 Explore 候选选择与证据就绪度建议',
+    intro: '启用后，Explore 可对已存在的扫描器、PoC、字典和搜索来源请求 Jev 排序，并评估已确认事实对攻击前置条件的支持程度。建议不自动执行。旧过滤场景默认关闭，可在 Worker 设置中单独开启。需配置 TYPESAFE_API_KEY。',
+  },
+  {
     id: 'redtrace-credentials', label: 'Credentials', category: 'feature', module: credentials,
     modulePath: 'packages/redtrace-dsh/lib/credentials.js', defaultOff: true,
     description: '凭据文档服务',
@@ -243,7 +248,7 @@ const MANAGED: readonly ManagedEntry[] = [
     intro: 'DSH 原生代码运行时与 PTC 呈现:宿主挂载 worker-thread TypeScript 运行时(限时限量),每个 Execute 会话以 both 模式在原生工具之外追加 run_code,供模型把多步工具调用编排为一段程序。实验性能力,默认关闭。',
   },
   {
-    id: 'redtrace-domain', label: 'Domain', category: 'feature', module: domain,
+    id: 'redtrace-domain', label: 'Domain', category: 'feature', module: domain, protectStop: true,
     needsRuntimeConfig: true, modulePath: 'packages/redtrace-dsh/lib/domain.js',
     description: '后端 API 桥接与热加载',
     intro: '连接后端 API 的桥:拉取热加载的运行时配置(Worker、任务限额、Provider),挂载并热重载 MCP 客户端,并把 Provider 配置同步给模型层。',
@@ -307,7 +312,7 @@ export class PluginManager {
     loadModule: (relative: string) => Promise<unknown> = load,
     /** Native engine modules use the same real Cordis fibers and management contracts. */
     private readonly replacements: Readonly<Record<string, unknown>> = {},
-    private readonly onChange: () => void = () => {},
+    private readonly onChange: () => void | Promise<void> = () => {},
   ) {
     // The loader's repoRoot URL carries a trailing slash; normalize so prefix
     // checks (inside-repo, inside plugins/) compare cleanly.
@@ -341,30 +346,29 @@ export class PluginManager {
       this.statuses.set(entry.id, disabled.has(entry.id) ? 'stopped' : 'running')
     }
     for (const entry of MANAGED) {
-      if (disabled.has(entry.id) || (entry.defaultOff === true && !enabled.has(entry.id))) {
+      if (entry.protectStop !== true && (disabled.has(entry.id) || (entry.defaultOff === true && !enabled.has(entry.id)))) {
         this.statuses.set(entry.id, 'stopped')
         continue
       }
       await this.mountManaged(entry, true)
       // redtrace-domain initializes the shared state the presets live in;
       // gate them before the scheduler replacement mounts and dispatches.
-      if (entry.id === 'redtrace-domain') this.syncPresets()
+      if (entry.id === 'redtrace-domain') await this.syncPresets()
     }
-    this.syncPresets()
+    await this.syncPresets()
     for (const user of this.manifest.user ?? []) {
       this.statuses.set(user.id, user.enabled === false ? 'stopped' : 'pending')
       if (user.enabled !== false) await this.mountUser(user, false)
     }
   }
 
-  private syncPresets(): void {
+  private async syncPresets(): Promise<void> {
     const shared = state()
-    if (shared === undefined) return
-    for (const entry of PRESETS) {
+    if (shared) for (const entry of PRESETS) {
       if (this.statuses.get(entry.id) === 'stopped') shared.presets.delete(entry.preset)
       else shared.presets.add(entry.preset)
     }
-    this.onChange()
+    await this.onChange()
   }
 
   private async readManifest(): Promise<void> {
@@ -533,9 +537,9 @@ export class PluginManager {
       if (managed.defaultOff === true) {
         this.manifest.enabled = [...new Set([...(this.manifest.enabled ?? []), id])]
       }
-      await this.mountManaged(managed, false)
+      await this.mountManaged(managed, true)
       await this.writeManifest()
-      this.syncPresets()
+      await this.syncPresets()
       return this.view(id)
     }
     const preset = PRESETS.find(entry => entry.id === id)
@@ -543,7 +547,7 @@ export class PluginManager {
       this.statuses.set(id, 'running')
       this.manifest.disabled = (this.manifest.disabled ?? []).filter(item => item !== id)
       await this.writeManifest()
-      this.syncPresets()
+      await this.syncPresets()
       return this.view(id)
     }
     const user = this.manifest.user?.find(entry => entry.id === id)
@@ -564,7 +568,7 @@ export class PluginManager {
       this.manifest.disabled = [...new Set([...(this.manifest.disabled ?? []), id])]
       this.manifest.enabled = (this.manifest.enabled ?? []).filter(item => item !== id)
       await this.writeManifest()
-      this.syncPresets()
+      await this.syncPresets()
       return this.view(id)
     }
     const preset = PRESETS.find(entry => entry.id === id)
@@ -572,7 +576,7 @@ export class PluginManager {
       this.statuses.set(id, 'stopped')
       this.manifest.disabled = [...new Set([...(this.manifest.disabled ?? []), id])]
       await this.writeManifest()
-      this.syncPresets()
+      await this.syncPresets()
       return this.view(id)
     }
     const user = this.manifest.user?.find(entry => entry.id === id)

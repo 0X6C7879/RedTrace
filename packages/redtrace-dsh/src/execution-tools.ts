@@ -10,7 +10,7 @@
 
 import { accessSync, constants, existsSync } from 'node:fs'
 import path from 'node:path'
-import type { RuntimeTask, ScopedContext } from './types.js'
+import type { CordisFiber, RuntimeTask, ScopedContext } from './types.js'
 import { mount } from './loader.js'
 
 const VENDOR = 'vendor/deepseek-harness/packages'
@@ -54,6 +54,7 @@ export interface ExecutionToolsConfig {
   /** Whether a plugin-manager catalog entry is running; gates the DSH native
    * capability stacks mounted below the shell/fs/skill baseline. */
   available?: (id: string) => boolean
+  onRefresh?: (refresh: () => Promise<void>) => void
 }
 
 /** Default language servers for the LSP stack: the languages security work
@@ -126,9 +127,9 @@ function toolsSectionText(toolsDir: string): string {
  * `jobs` would otherwise collide in the process-global service store. */
 export async function mountExecutionTools(scoped: ScopedContext, config: ExecutionToolsConfig): Promise<ScopedContext> {
   const available = config.available ?? (() => false)
+  const active = new Map<string, CordisFiber[]>()
   const jobs = available('redtrace-jobs')
-  const services = ['shell', 'shellEnv', 'fs', 'skills', 'sandbox', 'sandboxPolicy', 'approval']
-  if (jobs) services.push('jobs')
+  const services = ['shell', 'shellEnv', 'fs', 'skills', 'sandbox', 'sandboxPolicy', 'approval', 'jobs']
   for (const service of services) {
     scoped = scoped.isolate(service)
   }
@@ -155,13 +156,13 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
       : `${VENDOR}/shell/bash-local/lib/index.js`, { cwd: config.cwd })
     await mount(scoped, `${VENDOR}/fs/fs-local/lib/index.js`, { cwd: config.cwd })
   }
-  // The jobs registry must publish before tool-bash mounts, so background
-  // execution (run_in_background) resolves ctx.jobs in this scope.
-  if (jobs) await mount(scoped, `${VENDOR}/jobs/jobs-local/lib/index.js`)
+  if (jobs) active.set('redtrace-jobs', [await mount(scoped, `${VENDOR}/jobs/jobs-local/lib/index.js`)])
   await mount(scoped, `${VENDOR}/shell/shell-env/lib/index.js`)
-  await mount(scoped, process.platform === 'win32'
+  const shellTool = process.platform === 'win32'
     ? `${VENDOR}/shell/tool-pwsh/lib/index.js`
-    : `${VENDOR}/shell/tool-bash/lib/index.js`)
+    : `${VENDOR}/shell/tool-bash/lib/index.js`
+  let shellFiber = await mount(scoped, shellTool, { enableRunInBackground: jobs })
+  let background = jobs
   await mount(scoped, `${VENDOR}/fs/fs-observation-policy/lib/index.js`)
   await mount(scoped, `${VENDOR}/fs/tool-fs/lib/index.js`)
   await mount(scoped, `${VENDOR}/skill/skill/lib/index.js`)
@@ -170,65 +171,84 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
     customSkillDirs: [config.skillsDir],
   })
   await mount(scoped, `${VENDOR}/skill/tool-skill/lib/index.js`)
+  if (jobs) active.get('redtrace-jobs')!.push(await mount(scoped, `${VENDOR}/jobs/tool-jobs/lib/index.js`))
 
-  // ── DSH native capability stacks (plugin-page gated) ─────────────────────
-  // Every service here is session-scoped: isolated, mounted, and disposed with
-  // this Execute agent, so stopping a plugin mid-flight only affects new
-  // sessions while running ones keep their mounted stack.
-  if (jobs) {
-    await mount(scoped, `${VENDOR}/jobs/tool-jobs/lib/index.js`)
+  // Optional fibers belong to this Agent scope and can be changed mid-session.
+  type Use = (scope: ScopedContext, module: string, options?: Record<string, any>) => Promise<void>
+  const install = async (id: string, add: (use: Use) => Promise<void>) => {
+    if (active.has(id)) return
+    const fibers: CordisFiber[] = []
+    const use: Use = async (scope, module, options) => { fibers.push(await mount(scope, module, options)) }
+    try { await add(use); active.set(id, fibers) }
+    catch (error) { for (const fiber of fibers.reverse()) await fiber.dispose(); throw error }
   }
-  if (available('redtrace-web')) {
-    // Settings stays out of this scope: the free search plugin's settings
-    // namespace is single-instance while this stack mounts per session, so
-    // the isolated scope keeps it on the static mount config below (keys
-    // read from the process environment at every session mount).
-    scoped = scoped.isolate('web').isolate('settings')
-    await mount(scoped, `${VENDOR}/web/web/lib/index.js`, { searchProvider: 'web-search-free', fetchProvider: 'http' })
-    await mount(scoped, 'packages/redtrace-engine/node_modules/dsh-web-search-free/dist/index.js', webSearchFreeConfig())
-    await mount(scoped, `${VENDOR}/web/web-fetch-http/lib/index.js`)
-    await mount(scoped, `${VENDOR}/web/tool-web/lib/index.js`, { fetch: true, searchTimeoutMs: 60000 })
+  const remove = async (id: string) => {
+    const fibers = active.get(id)
+    if (!fibers) return
+    active.delete(id)
+    for (const fiber of fibers.reverse()) await fiber.dispose()
   }
-  if (available('redtrace-fs-search')) {
-    await mount(scoped, `${VENDOR}/fs/tool-fs-search/lib/index.js`, { sampleOverCapGlobResults: false })
+  const setBackground = async (enabled: boolean) => {
+    if (background === enabled) return
+    await shellFiber.dispose()
+    try { shellFiber = await mount(scoped, shellTool, { enableRunInBackground: enabled }); background = enabled }
+    catch (error) { shellFiber = await mount(scoped, shellTool, { enableRunInBackground: background }); throw error }
   }
-  if (available('redtrace-terminal')) {
-    scoped = scoped.isolate('terminals')
-    await mount(scoped, `${VENDOR}/terminal/terminal/lib/index.js`)
-    if (config.task.executionProfile !== 'isolated') {
-      // The direct profile mounts no confinement executor; the terminal
-      // backend still needs a policy service, so give it one as unconfined
-      // as the bash it replaces.
-      await mount(scoped, `${VENDOR}/sandbox/sandbox-policy/lib/index.js`, { mode: 'danger-full-access', workspaceRoot: config.cwd })
-    }
-    await mount(scoped, `${VENDOR}/terminal/terminal-bash/lib/index.js`)
-    await mount(scoped, `${VENDOR}/terminal/tool-terminal/lib/index.js`)
+  const stacks: Array<[string, (use: Use) => Promise<void>]> = [
+    ['redtrace-web', async use => {
+      const scope = scoped.isolate('web').isolate('settings')
+      await use(scope, `${VENDOR}/web/web/lib/index.js`, { searchProvider: 'web-search-free', fetchProvider: 'http' })
+      await use(scope, 'packages/redtrace-engine/node_modules/dsh-web-search-free/dist/index.js', webSearchFreeConfig())
+      await use(scope, `${VENDOR}/web/web-fetch-http/lib/index.js`)
+      await use(scope, `${VENDOR}/web/tool-web/lib/index.js`, { fetch: true, searchTimeoutMs: 60000 })
+    }],
+    ['redtrace-fs-search', use => use(scoped, `${VENDOR}/fs/tool-fs-search/lib/index.js`, { sampleOverCapGlobResults: false })],
+    ['redtrace-terminal', async use => {
+      const scope = scoped.isolate('terminals')
+      await use(scope, `${VENDOR}/terminal/terminal/lib/index.js`)
+      if (config.task.executionProfile !== 'isolated') await use(scope, `${VENDOR}/sandbox/sandbox-policy/lib/index.js`, { mode: 'danger-full-access', workspaceRoot: config.cwd })
+      await use(scope, `${VENDOR}/terminal/terminal-bash/lib/index.js`)
+      await use(scope, `${VENDOR}/terminal/tool-terminal/lib/index.js`)
+    }],
+    ['redtrace-spill', async use => {
+      const scope = scoped.isolate('spillStore')
+      await use(scope, `${VENDOR}/spill/spill-local/lib/index.js`)
+      await use(scope, `${VENDOR}/spill/spill-policy/lib/index.js`, { maxInlineBytes: 50000 })
+    }],
+    ['redtrace-tool-timeout', use => use(scoped, `${VENDOR}/guard/timeout-policy/lib/index.js`)],
+    ['redtrace-repeat-reminder', use => use(scoped, `${VENDOR}/guard/repeat-tool-reminder/lib/index.js`, { thresholds: [3, 5, 8], argumentsPreviewChars: 500 })],
+    ['redtrace-lsp', async use => {
+      const servers = availableLspServers()
+      if (!Object.keys(servers).length) return
+      const scope = scoped.isolate('lsp')
+      await use(scope, `${VENDOR}/lsp/lsp/lib/index.js`)
+      await use(scope, `${VENDOR}/lsp/lsp-stdio/lib/index.js`, { servers })
+      await use(scope, `${VENDOR}/lsp/tool-lsp/lib/index.js`)
+    }],
+    ['redtrace-ptc', use => use(scoped, `${VENDOR}/core/agent-tool-presentation/lib/index.js`, { mode: 'both' })],
+  ]
+  let last = Promise.resolve()
+  const refresh = () => {
+    const next = last.catch(() => {}).then(async () => {
+      if (available('redtrace-jobs')) {
+        await install('redtrace-jobs', async use => {
+          await use(scoped, `${VENDOR}/jobs/jobs-local/lib/index.js`)
+          await use(scoped, `${VENDOR}/jobs/tool-jobs/lib/index.js`)
+        })
+        await setBackground(true)
+      } else {
+        await setBackground(false)
+        await remove('redtrace-jobs')
+      }
+      for (const [id, add] of stacks) {
+        if (available(id)) await install(id, add)
+        else await remove(id)
+      }
+    })
+    last = next
+    return next
   }
-  if (available('redtrace-spill')) {
-    scoped = scoped.isolate('spillStore')
-    await mount(scoped, `${VENDOR}/spill/spill-local/lib/index.js`)
-    await mount(scoped, `${VENDOR}/spill/spill-policy/lib/index.js`, { maxInlineBytes: 50000 })
-  }
-  if (available('redtrace-tool-timeout')) {
-    await mount(scoped, `${VENDOR}/guard/timeout-policy/lib/index.js`)
-  }
-  if (available('redtrace-repeat-reminder')) {
-    await mount(scoped, `${VENDOR}/guard/repeat-tool-reminder/lib/index.js`, { thresholds: [3, 5, 8], argumentsPreviewChars: 500 })
-  }
-  if (available('redtrace-lsp')) {
-    const servers = availableLspServers()
-    if (Object.keys(servers).length > 0) {
-      scoped = scoped.isolate('lsp')
-      await mount(scoped, `${VENDOR}/lsp/lsp/lib/index.js`)
-      await mount(scoped, `${VENDOR}/lsp/lsp-stdio/lib/index.js`, { servers })
-      await mount(scoped, `${VENDOR}/lsp/tool-lsp/lib/index.js`)
-    }
-  }
-  if (available('redtrace-ptc')) {
-    // The run_code transport itself needs the host-plane codeRuntime service
-    // (redtrace-code-runtime plugin); this row only declares the additive
-    // 'both' presentation for this agent: run_code beside the native tools.
-    await mount(scoped, `${VENDOR}/core/agent-tool-presentation/lib/index.js`, { mode: 'both' })
-  }
+  config.onRefresh?.(refresh)
+  await refresh()
   return scoped
 }

@@ -127,9 +127,7 @@ export class Capabilities {
 }
 
 export function capabilityRoutes(router: Router, store: Capabilities) {
-  const summary = ({ content: _, ...skill }: ReturnType<Capabilities['skill']>) => skill
   router.add('GET', '/capabilities', () => { const skills = store.entries(), mcp = store.servers(); return { root: store.root, skillsDir: store.skillsDir, mcpDir: store.mcpDir, skills: { total: skills.length, enabled: skills.filter(s => s.enabled).length }, mcp: { total: mcp.length, enabled: mcp.filter(s => s.enabled).length }, agents: [{ id: 'dsh', skills: store.skillsDir, runtimeSnapshot: null, mcp: 'mcpConfigs (runtime config)' }] } })
-  router.add('GET', '/capabilities/skills', () => store.skills().map(summary))
   router.add('GET', '/capabilities/skill-entries', () => store.entries())
   router.add('GET', '/capabilities/skills/:name', c => store.skill(c.params.name))
   router.add('GET', '/capabilities/skills/:name/entries', c => store.entries(c.params.name).filter(s => s.nested))

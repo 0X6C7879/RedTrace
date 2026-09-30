@@ -65,7 +65,7 @@ manifest 语义:默认开启的插件用 `disabled` 记录停用;默认关闭的
 
 ## 数据与启动
 
-数据库、会话和 Workspace 位于 `.redtrace` 与 `workspaces`(规范路径,无版本子目录)。首次启动从 `redtrace.yaml` 复制配置;后续写入只修改该副本。切换到 Node 运行时前可用 `scripts/archive-node-migration.mjs` 为旧版数据库与配置生成一致性快照(存于 `.redtrace/migration/`)。
+数据库、会话和 Workspace 位于 `.redtrace` 与 `workspaces`(规范路径,无版本子目录)。首次启动从 `redtrace.yaml` 复制配置;后续写入只修改该副本。
 
 ```powershell
 .\start-redtrace.cmd
@@ -79,4 +79,4 @@ manifest 语义:默认开启的插件用 `disabled` 记录停用;默认关闭的
 
 ## 验证
 
-`packages/redtrace-engine/test` 覆盖事务并发、Decide 不重入、并行事实唤醒、Step 唯一领取、规划不可用时继续执行、暂停恢复、崩溃副作用保护、旧 API、真实 Pi 文件工具、MCP、外围操作、配置和删除。`scripts/verify-node-ui.mjs` 驱动真实 Chromium 验证项目创建、FGS 操作、外围页面与持久化；`scripts/benchmark-node-migration.mjs` 在同一平台和确定性任务上比较旧版、精简内核与完整兼容模式。
+`packages/redtrace-engine/test` 覆盖事务并发、Decide 不重入、并行事实唤醒、Step 唯一领取、规划不可用时继续执行、暂停恢复、崩溃副作用保护、旧 API、真实 Pi 文件工具、MCP、外围操作、配置和删除。`scripts/verify-node-ui.mjs` 驱动真实 Chromium 验证项目创建、FGS 操作、外围页面与持久化。

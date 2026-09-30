@@ -1,5 +1,5 @@
 import { Store } from './store.ts'
-import type { Graph, Run, Step } from './types.ts'
+import type { Run, Step } from './types.ts'
 
 export function legacyIntent(step: Step, run?: Run) {
   const state = { pending: 'open', running: 'working', paused: 'open', blocked: 'blocked', done: 'concluded', cancelled: 'dropped' }[step.status]
@@ -23,7 +23,4 @@ export function legacySummary(store: Store, id: string) {
   const detail = legacyProject(store, id)
   return { ...detail.project, fact_count: detail.facts.length, intent_count: detail.intents.length,
     working_intent_count: detail.intents.filter(i => i.state === 'working').length, unclaimed_intent_count: detail.intents.filter(i => i.state === 'open').length, hint_count: detail.hints.length }
-}
-export function graphEdges(graph: Graph) {
-  return graph.steps.filter(s => !s.deleted).flatMap(s => [...(s.sourceGoalId ? [s.sourceGoalId] : s.sourceIds).map(id => ({ from: id, to: s.id, relation: 'source' })), ...(s.resultGoalId ? [s.resultGoalId] : s.factIds).map(id => ({ from: s.id, to: id, relation: 'result' }))])
 }

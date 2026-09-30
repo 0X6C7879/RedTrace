@@ -65,7 +65,7 @@ const VERBS: readonly VerbDefinition[] = [
   },
   {
     id: 'remote.command', action: 'command', risk: 'medium',
-    description: 'Run a shell command on a remote target. The runtime reuses an existing WebShell or C2 session channel automatically; pass via (resource id) to force one, or target (host) to select by host. Establish a channel first (webshell_register, c2_session_create, or the Web UI resource page) when none exists.',
+    description: 'Run a shell command on a remote target. The runtime reuses an available channel automatically; pass via (resource id) to force one, or target (host) to select by host. Establish a supported channel first when none exists.',
     parameters: Type.Object({ command: Type.String({ minLength: 1 }), timeout: timeoutSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ command: args.command, timeout: args.timeout }),
   },
@@ -273,6 +273,11 @@ export function channelsFor(runtime: VerbRuntime, requires: readonly string[], l
 // ─── Agent tool factory ───────────────────────────────────────────────────────
 
 const toolName = (verb: string) => verb.replaceAll('.', '_')
+export const verbToolAvailable = (runtime: VerbRuntime, name: string) => {
+  if (name === 'remote_task') return true // Polling an existing task remains useful after its channel plugin stops.
+  const verb = verbRegistry.find(item => toolName(item.id) === name)
+  return !verb || availableAdapters(runtime, verb.id).length > 0
+}
 
 function verbTool<T extends TSchema>(name: string, description: string, parameters: T, execute: (args: Static<T>, signal?: AbortSignal) => unknown | Promise<unknown>): AgentTool<T> {
   return { name, label: name, description, parameters, executionMode: 'sequential', execute: async (_id, args, signal) => {
@@ -322,7 +327,7 @@ export function resourceTools(context: TaskContext, runtime: VerbRuntime): Agent
   const ops = runtime.operations, worker = { actor_type: 'worker', actor: context.worker.name, worker: context.worker.name, intent_id: context.run.stepId }
   return [
     verbTool('resource_register',
-      'Register a shared resource for cross-Step reuse: channels (webshell, c2_listener, c2_session), materials (c2_payload, c2_profile, credential_ref, proxy, file). secret stores credentials server-side (never returned); prefer the family tools (webshell_register, c2_session_create, c2_credential_create) for their structured forms. Everything registered here is visible on the operations pages.',
+      'Register a shared resource for cross-Step reuse: channels (webshell, c2_listener, c2_session), materials (c2_payload, c2_profile, credential_ref, proxy, file). secret stores credentials server-side (never returned); use a structured family tool when available. Everything registered here is visible on the operations pages.',
       Type.Object({
         kind: Type.Union(registerableKinds.map(kind => Type.Literal(kind))),
         name: Type.String({ minLength: 1, maxLength: 160 }),

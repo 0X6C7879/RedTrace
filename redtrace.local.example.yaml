@@ -1,29 +1,13 @@
-# Local deployment example: the DSH runtime runs agents in-process on
-# Windows/macOS/Linux. Workers reference shared providers (endpoint + key)
-# and own their model route, task eligibility, concurrency, and priority.
+# Local deployment example. Workers run in the Node process on Windows/macOS/Linux.
 #
 # Usage:
 #   cp redtrace.local.example.yaml redtrace.yaml
-#   uv run --project redtrace redtrace serve                       # in one shell
-#   uv run --project redtrace redtrace dispatch --config redtrace.yaml
-#
-# Notes:
-# - Do NOT run the dispatcher via docker-compose in local mode: it must run on the host
-#   where the CLIs are installed, logged in, and on PATH. The server may still run anywhere.
-# - Local mode runs the agents with your user's permissions and no sandbox. Only use it in
-#   environments you are authorized to operate in.
-
-server: "http://127.0.0.1:8000"
+#   ./start-redtrace.sh --config redtrace.yaml
 
 runtime:
-  execution: local            # run workers as host processes instead of per-project containers
-  worker_healthcheck: disabled  # no base_url to probe; startup instead checks the CLIs are on PATH
-  max_workers: 3              # all workers share this host — size to the machine
+  max_workers: 3
   max_running_projects: 2
   max_project_workers: 3
-  interval: 3
-  healthcheck_timeout: 60
-  prompt_group: "default"
 
 tasks:
   bootstrap:
@@ -39,30 +23,11 @@ tasks:
     conclude_timeout: 300
 
 
-# Optional. If omitted: workspace_root defaults to <paths.root>/workspaces,
-# completed_action defaults to keep. Each project gets an isolated <workspace_root>/<project_id>/.
-local:
-  # workspace_root: "/data/redtrace-runs"
-  completed_action: keep       # keep | remove
-
-# Extra environment variables for every local worker process. These are merged over the
-# dispatcher's own environment ({**os.environ, **common_env}), so use it for things the
-# CLIs need at runtime, e.g. an outbound proxy. (Alternatively just `export` them in the
-# shell that starts the dispatcher — local workers inherit that environment.)
-common_env:
-  BRAVE_API_KEY: "replace-me"  # native Claude/Codex web search is preferred
-#   https_proxy: "http://127.0.0.1:7897"
-#   http_proxy: "http://127.0.0.1:7897"
-#   all_proxy: "http://127.0.0.1:7897"
-  # TSec Benchmark 跑分凭证（skills/tsecbench-api）——从平台创建跑分任务后下发，手工填写
-  # BENCHMARK_BASE_URL: "https://benchmark.example.com"
-  # BENCHMARK_TOKEN: "replace-me"
-
 # Providers own the API protocol, endpoint, credential, and model list;
 # Workers reference them by name with their model, task eligibility,
 # concurrency, and priority. Each model entry carries its own capacities and
 # reasoning policy. Omitted reasoning means auto_max; custom gateways may
-# declare exact reasoning_efforts when DSH has no catalog metadata.
+# declare exact reasoning_efforts when the model catalog has no metadata.
 providers:
   deepseek:
     api: openai-completions
@@ -106,10 +71,3 @@ workers:
   #     - id: deepseek-chat-1m
   #       context_window: 1000000
   #       max_tokens: 128000
-paths:
-  root: .
-  skills: skills
-  mcp: mcp
-  managed: .redtrace
-  workspaces: workspaces
-  audit: .redtrace/audit

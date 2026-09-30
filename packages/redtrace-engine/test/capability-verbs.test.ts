@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { serveEngine } from '../src/index.ts'
-import { dispatchVerb, verbTask, verbTools, channelsFor, resourceTools, VerbDispatchError } from '../src/capability-verbs.ts'
+import { dispatchVerb, verbTask, verbTools, verbToolAvailable, channelsFor, resourceTools, VerbDispatchError } from '../src/capability-verbs.ts'
 import type { VerbRuntime } from '../src/capability-verbs.ts'
 
 test('verb registry: channel reuse, selection rules, approval gating and Step requires round-trip', async () => {
@@ -95,6 +95,9 @@ test('verb registry: channel reuse, selection rules, approval gating and Step re
 
     // Stopping the adapter plugin removes its channels from dispatch.
     const gated: VerbRuntime = { operations: engine.operations, isAdapterAvailable: () => false }
+    assert.equal(verbToolAvailable(runtime, 'remote_command'), true)
+    assert.equal(verbToolAvailable(gated, 'remote_command'), false)
+    assert.equal(verbToolAvailable(gated, 'remote_task'), true)
     await assert.rejects(dispatchVerb(gated, 'remote.command', { command: 'id' }, context), (error: unknown) => {
       assert.ok(error instanceof VerbDispatchError)
       assert.match(error.message, /没有可用适配器/)

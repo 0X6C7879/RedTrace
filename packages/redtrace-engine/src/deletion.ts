@@ -51,7 +51,10 @@ export class ProjectDeletion {
       const sessionRoot = path.join(this.root, '.redtrace/sessions')
       if (existsSync(sessionRoot)) for (const project of readdirSync(sessionRoot, { withFileTypes: true }).filter(entry => entry.isDirectory())) {
         const directory = path.join(sessionRoot, project.name)
-        for (const entry of readdirSync(directory, { withFileTypes: true })) if (entry.isDirectory() && sessions.has(entry.name)) this.removeContained(path.join(directory, entry.name))
+        let removed = 0
+        for (const entry of readdirSync(directory, { withFileTypes: true })) if (entry.isDirectory() && sessions.has(entry.name)) { this.removeContained(path.join(directory, entry.name)); removed++ }
+        // Only shrink directories this deletion actually emptied; untouched ones may belong to live projects.
+        if (removed && !readdirSync(directory).length) this.removeContained(directory)
       }
       for (const target of [path.join(this.root, '.redtrace/projects', id), path.join(this.root, '.redtrace/log/projects', id), path.join(this.root, '.redtrace/audit', id), path.join(this.workspaceRoot, id)]) this.removeContained(target)
       this.store.transaction(() => {
@@ -60,6 +63,7 @@ export class ProjectDeletion {
         this.store.db.prepare(`DELETE FROM shared_resources WHERE project_id=? AND kind NOT IN (${marks})`).run(id, ...durable)
         this.store.db.prepare('DELETE FROM project_lifecycle_events WHERE project_id=?').run(id)
         this.store.db.prepare('DELETE FROM projects WHERE id=?').run(id)
+        this.store.db.prepare('DELETE FROM counters WHERE scope=?').run(id)
         this.store.db.prepare('DELETE FROM project_deletions WHERE project_id=?').run(id)
       })
       return true

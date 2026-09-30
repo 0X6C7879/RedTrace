@@ -43,6 +43,10 @@ test('worker mutations probe the live model before commit and retain the old sna
     snapshot = (await call('/worker-config/common-env', 'PUT', { expected_revision: snapshot.revision, entries: [{ name: 'ZULU_VAR', value: 'first' }, { name: 'ALPHA_VAR', value: 'second' }] })).data
     assert.deepEqual(snapshot.common_env.map((entry: { name: string }) => entry.name), ['ZULU_VAR', 'ALPHA_VAR'])
     assert.deepEqual((await call('/worker-config')).data.common_env.map((entry: { name: string }) => entry.name), ['ZULU_VAR', 'ALPHA_VAR'])
+    snapshot = (await call('/worker-config/jev', 'PUT', { expected_revision: snapshot.revision, scenes: { context_filter: false, skill_suggestion: true } })).data
+    assert.equal(snapshot.jev.scenes.context_filter, false); assert.equal(snapshot.jev.scenes.skill_suggestion, true)
+    assert.equal(typeof snapshot.jev.api_key_configured, 'boolean')
+    assert.equal((await call('/worker-config/jev', 'PUT', { expected_revision: snapshot.revision, scenes: { invented_scene: true } })).status, 422)
     snapshot = (await call('/worker-config/providers', 'POST', { expected_revision: snapshot.revision, name: 'fixture', api: 'openai-completions', base_url: `http://127.0.0.1:${(model.address() as { port: number }).port}/v1`, api_key: 'fixture-key', models: [{ id: 'fixture', context_window: 10000, max_tokens: 1000 }] })).data
     assert.doesNotMatch(readFileSync(path.join(root, '.redtrace/redtrace.yaml'), 'utf8'), /fixture-key/)
     const worker = { expected_revision: snapshot.revision, name: 'worker', provider: 'fixture', model: 'fixture', priority: 0, max_running: 1 }

@@ -13,13 +13,12 @@ description: >-
 
 1. `NOW`: 确认这是 **TSec Benchmark 已授权测评任务**，不要把本 Skill 用于平台外目标。
 2. `NOW`: 检查 `BENCHMARK_BASE_URL` 与 `BENCHMARK_TOKEN` 已注入环境（来自 `redtrace.yaml` 的 `common_env` 手工配置）；禁止把 token 写入 Skill、脚本、日志或学习记录。
-3. `NOW`: 使用本 Skill 的 CLI 做 VPN/API 预检；VPN 不通时立即停止，不要继续启动题目。
-4. `NOW`: 列出全部题目与进度，跳过 `is_completed=true` 的题目。
-5. `NEXT`: 对待解题调用 `start`，获取 `container_addr` 后，将题目描述、难度、flag 数量和容器地址交给 Explore；由 Explore 再路由到 Web/Pwn/Reverse/Crypto/Network 等对应方向 Skill。
-6. `ACT`: 每发现一个可信 flag 就立即调用 `submit`，根据 `correct_flag_count/total_flag_count` 判断是否还需继续。
-7. `ACT`: 默认不取提示；只有明显卡住且剩余时间/得分权衡合理时，才允许带 `--confirm-score-penalty` 调用 `hint`。
-8. `ALWAYS`: 当前题完成、失败、放弃、超时或任务结束时都调用 `close` 释放容器。不要因为异常跳过关闭。
-9. `END`: 再次执行 `list`，以平台返回的 `is_completed` 和 flag 进度作为最终事实，不以本地推测代替平台状态。
+3. `NOW`: Reason 直接调用 `tsecbench_list` 查看全部题目与进度，跳过 `is_completed=true`；不要为获取题目另建 Explore Step。
+4. `NEXT`: Explore 收到具体题目后调用 `start`，获取 `container_addr`，再路由到 Web/Pwn/Reverse/Crypto/Network 等对应方向 Skill。
+5. `ACT`: 每发现一个可信 flag 就立即调用 `submit`，根据 `correct_flag_count/total_flag_count` 判断是否还需继续。
+6. `ACT`: 默认不取提示；Reason 仅在明确接受扣分后调用 `tsecbench_hint`（`confirm_score_penalty=true`），Explore 可用 CLI 的 `hint --confirm-score-penalty`。
+7. `ALWAYS`: 当前题完成、失败、放弃、超时或任务结束时都调用 `close` 释放容器。不要因为异常跳过关闭。
+8. `END`: Reason 再次调用 `tsecbench_list`，以平台返回的 `is_completed` 和 flag 进度作为最终事实。
 
 > 本 Skill 是 **TSec Benchmark 平台控制面适配器**，不包含具体漏洞利用方法。解题知识由专业方向 Skill 负责，本 Skill 只管理评测生命周期。
 
@@ -81,6 +80,8 @@ SDK 缺失时，先通过当前环境允许的依赖/bootstrap 机制安装 `tse
 
 ### 2. VPN 预检
 
+SDK 每次进入客户端上下文都会做 VPN 预检。Reason 的 `tsecbench_list` 和 `tsecbench_hint` 直接复用本脚本，无需先单独调用 `vpn`；Explore 仅在首次排查连通性时单独运行：
+
 ```bash
 python scripts/tsecbench.py vpn
 ```
@@ -92,6 +93,8 @@ VPN 检测失败时：
 - 不尝试由 SDK 自动连接 VPN，因为 SDK 不负责 VPN 连接。
 
 ### 3. 获取题目和当前进度
+
+Reason 用 `tsecbench_list` 直接获得平台清单并规划；Explore 已收到题面时不必重复查询。CLI 可供执行阶段复核：
 
 ```bash
 python scripts/tsecbench.py list
@@ -221,7 +224,9 @@ python scripts/tsecbench.py list
 
 Reason 负责：
 
-- 根据 `list` 的未完成题维持 Intent 池；
+- 用 `tsecbench_list` 直接读取题目与完成进度，维持 Intent 池；
+- 需要提示且接受扣分时，用 `tsecbench_hint(unique_code, confirm_score_penalty=true)` 读取；
+- 平台工具仅有这两项，不启动/关闭容器、不提交 flag，也不运行任意命令；
 - 每个 Challenge 原则上对应一个独立 Intent；
 - 依据 `difficulty`、`total_score`、剩余时间和可用 Worker 调整优先级；
 - 资源上限触发时避免继续创建会占用容器的新执行；

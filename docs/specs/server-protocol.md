@@ -104,7 +104,7 @@ Hint 代表外部补充的高纬输入，不属于探索执行本身。因此项
 id
 title           # 项目名称
 status          # "active" | "stopped" | "completed"
-bootstrap_enabled  # 是否允许消费者在初始态运行 bootstrap，默认 true
+bootstrap_enabled  # 是否允许消费者在初始态运行 bootstrap，默认 false
 created_at
 reason          # 当前项目级 reason lease，null 表示当前无人执行 reason
 ```
@@ -243,7 +243,7 @@ Body：
 
 #### POST /projects
 
-创建新项目。`origin` 和 `goal` 写入 `facts` 作为特殊 Fact。`hints` 可选。`bootstrap_enabled` 可选，默认为 `true`；为 `false` 时消费者跳过 bootstrap。即使为 `true`，消费者没有 bootstrap 能力时也可直接进入 reason。
+创建新项目。`origin` 和 `goal` 写入 `facts` 作为特殊 Fact。`hints` 可选。`bootstrap_enabled` 可选，默认为 `false`；为 `false` 时消费者跳过 bootstrap。即使为 `true`，消费者没有 bootstrap 能力时也可直接进入 reason。
 
 Body：
 

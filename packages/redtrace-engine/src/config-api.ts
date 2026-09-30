@@ -33,6 +33,10 @@ export function configRoutes(router: Router, configuration: Configuration) {
     testCache.set(key, { at: Date.now(), value: result }); return result
   }
   router.add('GET', '/worker-config', () => configuration.snapshot())
+  router.add('PUT', '/worker-config/jev', async c => {
+    const b = await body(c.req, Type.Object({ expected_revision: revision, scenes: Type.Record(Type.String(), Type.Boolean()) }))
+    return configuration.commit(b.expected_revision, raw => { raw.jev = { ...raw.jev, scenes: b.scenes } })
+  })
   const task = Type.Object({ timeout: Type.Integer({ minimum: 5 }), conclude_timeout: Type.Integer({ minimum: 5 }) })
   router.add('PUT', '/worker-config/runtime-tasks', async c => {
     const b = await body(c.req, Type.Object({ expected_revision: revision, runtime: Type.Object({ max_workers: positive, max_project_workers: positive, max_running_projects: positive }), tasks: Type.Object({ reason: Type.Object({ timeout: Type.Integer({ minimum: 5 }), conclude_timeout: Type.Integer({ minimum: 5 }), max_intents: Type.Optional(positive) }), explore: task, bootstrap: task }) }))

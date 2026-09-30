@@ -1,8 +1,10 @@
 import { Store } from './store.ts'
 import path from 'node:path'
+import { HttpError } from './types.ts'
 import type { EngineConfig, Run, RunStatus, Worker, Step } from './types.ts'
+import type { JevService } from './jev.ts'
 
-export interface TaskContext { store: Store; run: Run; worker: Worker; config: EngineConfig; signal: AbortSignal }
+export interface TaskContext { store: Store; run: Run; worker: Worker; config: EngineConfig; signal: AbortSignal; jev?: JevService }
 export type RunTask = (context: TaskContext) => Promise<void>
 export type SelectWorker = (worker: Worker, activity: Run['activity'], step?: Step) => Worker | undefined
 type Active = { run: Run; abort: AbortController; completion: Promise<void> }
@@ -45,9 +47,11 @@ export class Scheduler {
   private dispatch() {
     if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = undefined }
     for (const task of this.running.values()) {
-      const graph = this.store.graph(task.run.projectId)
-      const step = task.run.stepId ? graph.steps.find(s => s.id === task.run.stepId) : undefined
-      if (this.store.run(task.run.id).status !== 'running' || (graph.project.status !== 'active' && !(graph.project.status === 'completed' && task.run.activity === 'decide')) || step?.status === 'cancelled' || (step && graph.goals.find(g => g.id === step.goalId)?.status !== 'open')) task.abort.abort('Project or Step stopped')
+      try {
+        const graph = this.store.graph(task.run.projectId)
+        const step = task.run.stepId ? graph.steps.find(s => s.id === task.run.stepId) : undefined
+        if (this.store.run(task.run.id).status !== 'running' || (graph.project.status !== 'active' && !(graph.project.status === 'completed' && task.run.activity === 'decide')) || step?.status === 'cancelled' || (step && graph.goals.find(g => g.id === step.goalId)?.status !== 'open')) task.abort.abort('Project or Step stopped')
+      } catch (reason) { if (reason instanceof HttpError && reason.status === 404) task.abort.abort('Project deleted'); else throw reason }
     }
     const projects = this.store.projects().filter(p => p.status === 'active')
     if (!projects.length) return
@@ -79,7 +83,6 @@ export class Scheduler {
         const steps = graph.steps.filter(s => ['pending', 'paused'].includes(s.status) && graph.goals.find(g => g.id === s.goalId)?.status === 'open')
           .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
         for (const step of steps) {
-          if (step.retryAfter && step.retryAfter * 1000 > Date.now()) { retryAt = Math.min(retryAt, step.retryAfter * 1000); continue }
           const paused = step.status === 'paused' ? this.store.runs(p.id).find(r => r.stepId === step.id && r.status === 'paused') : undefined
           const worker = this.select('execute', paused, step)
           if (!worker) continue
@@ -101,14 +104,17 @@ export class Scheduler {
       try { await this.execute({ store: this.store, run, worker: structuredClone(worker), config, signal: abort.signal }) }
       catch (reason) { status = 'failed'; error = reason instanceof Error ? reason.message : String(reason) }
       finally {
-        if (abort.signal.aborted) {
-          const graph = this.store.graph(run.projectId)
-          status = (this.closed || graph.project.status === 'stopped') && run.activity === 'execute' ? 'paused' : 'cancelled'
-          error = null
-          if (this.store.run(run.id).pendingTools.length) { status = 'unknown'; error = 'Activity stopped with an unconfirmed tool result; verify before retrying' }
-        }
-        this.store.finishRun(run.id, status, error)
-        this.running.delete(run.id); this.wake()
+        try {
+          if (abort.signal.aborted) {
+            const graph = this.store.graph(run.projectId)
+            status = (this.closed || graph.project.status === 'stopped') && run.activity === 'execute' ? 'paused' : 'cancelled'
+            error = null
+            if (this.store.run(run.id).pendingTools.length) { status = 'unknown'; error = 'Activity stopped with an unconfirmed tool result; verify before retrying' }
+          }
+          this.store.finishRun(run.id, status, error)
+          // Deleting a project mid-abort cascades its runs away; there is nothing left to finish.
+        } catch (reason) { if (!(reason instanceof HttpError && reason.status === 404)) throw reason }
+        finally { this.running.delete(run.id); this.wake() }
       }
     })()
   }

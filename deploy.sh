@@ -22,13 +22,9 @@ case "$OS" in
 esac
 REDTRACE_HOST="${REDTRACE_HOST:-$DEFAULT_HOST}"
 REDTRACE_PORT="${REDTRACE_PORT:-8000}"
-BRAVE_SKILL_DIR="$PROJECT_DIR/skills/brave-search"
-GHIDRA_SKILL_DIR="$PROJECT_DIR/skills/ghidra-reverse"
 PLAYWRIGHT_SKILL_DIR="$PROJECT_DIR/skills/playwright-skill"
-GHIDRA_INSTALL_DIR="${REDTRACE_GHIDRA_HOME:-$PROJECT_DIR/.redtrace/runtime/ghidra}"
 RSACTFTOOL_VENV="${REDTRACE_RSACTFTOOL_VENV:-$PROJECT_DIR/.redtrace/runtime/rsactftool}"
 QILING_VENV="${REDTRACE_QILING_VENV:-$PROJECT_DIR/.redtrace/runtime/qiling}"
-QILING_WRAPPER="$PROJECT_DIR/skills/reverse-engineering/scripts/qiling-python"
 export REDTRACE_QILING_VENV="$QILING_VENV"
 NUCLEI_VERSION="${REDTRACE_NUCLEI_VERSION:-3.11.0}"
 CODEGRAPH_VERSION="${REDTRACE_CODEGRAPH_VERSION:-1.5.0}"
@@ -453,107 +449,6 @@ install_skill_python_dependencies() {
   done
 }
 
-ensure_brave_search_skill() {
-  [[ -f "$BRAVE_SKILL_DIR/SKILL.md" ]] || die "brave-search SKILL.md is missing"
-  [[ -f "$BRAVE_SKILL_DIR/package-lock.json" ]] || die "brave-search package-lock.json is missing"
-  if npm --prefix "$BRAVE_SKILL_DIR" ls --depth=0 >/dev/null 2>&1; then
-    log "brave-search Node dependencies are already installed"
-  else
-    log "installing brave-search Node dependencies"
-    npm ci --prefix "$BRAVE_SKILL_DIR" --registry="$NPM_REGISTRY"
-  fi
-  chmod +x "$BRAVE_SKILL_DIR/search.js" "$BRAVE_SKILL_DIR/content.js"
-}
-
-java_major_version() {
-  java -version 2>&1 | awk -F '[".]' '/version/ {
-    if ($2 == "1") print $3
-    else print $2
-    exit
-  }'
-}
-
-install_ghidra_release() {
-  local temp_dir release_json asset_info asset_url asset_digest extracted_dir
-  temp_dir="$(mktemp -d)"
-  release_json="$temp_dir/release.json"
-  log "resolving the latest official Ghidra release"
-  curl -fsSL https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/latest \
-    -o "$release_json"
-  asset_info="$(
-    python3 - "$release_json" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    release = json.load(handle)
-for asset in release.get("assets", []):
-    name = asset.get("name", "")
-    if name.startswith("ghidra_") and name.endswith(".zip"):
-        digest = asset.get("digest", "")
-        if not digest.startswith("sha256:"):
-            raise SystemExit("official Ghidra release zip has no SHA-256 digest")
-        print(f'{asset["browser_download_url"]}\t{digest}')
-        break
-else:
-    raise SystemExit("official Ghidra release zip was not found")
-PY
-  )"
-  asset_url="${asset_info%%$'\t'*}"
-  asset_digest="${asset_info#*$'\t'}"
-  asset_digest="${asset_digest#sha256:}"
-  curl -fL --retry 3 "$asset_url" -o "$temp_dir/ghidra.zip"
-  (
-    cd "$temp_dir"
-    printf '%s  ghidra.zip\n' "$asset_digest" | sha256sum -c -
-  )
-  mkdir -p "$temp_dir/extracted" "$(dirname "$GHIDRA_INSTALL_DIR")"
-  unzip -q "$temp_dir/ghidra.zip" -d "$temp_dir/extracted"
-  extracted_dir="$(
-    find "$temp_dir/extracted" -mindepth 1 -maxdepth 1 -type d \
-      -name 'ghidra_*' -print -quit
-  )"
-  [[ -n "$extracted_dir" ]] || die "Ghidra release archive has an unexpected layout"
-  [[ ! -e "$GHIDRA_INSTALL_DIR" ]] || die "Ghidra install path exists but is unusable: $GHIDRA_INSTALL_DIR"
-  mv -- "$extracted_dir" "$GHIDRA_INSTALL_DIR"
-  chmod +x "$GHIDRA_INSTALL_DIR/support/analyzeHeadless"
-  rm -rf -- "$temp_dir"
-}
-
-ensure_ghidra_headless_skill() {
-  local java_home java_major analyze_headless
-  [[ -f "$GHIDRA_SKILL_DIR/SKILL.md" ]] \
-    || die "ghidra-reverse SKILL.md is missing"
-  [[ -f "$GHIDRA_SKILL_DIR/scripts/headless/ghidra-analyze.sh" ]] \
-    || die "ghidra-headless wrapper is missing"
-  [[ -f "$GHIDRA_SKILL_DIR/scripts/headless/ghidra_scripts/ExportAll.java" ]] \
-    || die "ghidra-headless export scripts are missing"
-  chmod +x \
-    "$GHIDRA_SKILL_DIR/scripts/headless/find-ghidra.sh" \
-    "$GHIDRA_SKILL_DIR/scripts/headless/ghidra-analyze.sh"
-
-  if [[ "$OS" == "Darwin" ]]; then
-    java_home="$(brew --prefix openjdk@21)/libexec/openjdk.jdk/Contents/Home"
-    [[ -x "$java_home/bin/java" ]] || java_home="$(brew --prefix openjdk@21)"
-    export JAVA_HOME="$java_home"
-    export PATH="$JAVA_HOME/bin:$PATH"
-  fi
-  java_major="$(java_major_version)"
-  [[ "$java_major" =~ ^[0-9]+$ ]] && ((java_major >= 21)) \
-    || die "Ghidra requires OpenJDK 21 or newer; detected: ${java_major:-unknown}"
-
-  if ! analyze_headless="$("$GHIDRA_SKILL_DIR/scripts/headless/find-ghidra.sh" 2>/dev/null)"; then
-    [[ "$OS" == "Linux" ]] || die "Homebrew Ghidra installation is missing"
-    install_ghidra_release
-    export GHIDRA_HOME="$GHIDRA_INSTALL_DIR"
-    analyze_headless="$("$GHIDRA_SKILL_DIR/scripts/headless/find-ghidra.sh")"
-  fi
-  [[ -x "$analyze_headless" ]] || die "Ghidra analyzeHeadless is not executable"
-  export GHIDRA_HOME
-  GHIDRA_HOME="$(dirname "$(dirname "$analyze_headless")")"
-  log "ghidra-headless ready: $analyze_headless"
-}
-
 ensure_nuclei() {
   local nuclei_bin config_path
   if [[ "$OS" == "Darwin" ]]; then
@@ -614,9 +509,7 @@ ensure_qiling() {
   fi
   mkdir -p "$BIN_DIR"
   ln -sfn "$QILING_VENV/bin/qltool" "$BIN_DIR/qltool"
-  [[ -x "$QILING_WRAPPER" ]] || die "Qiling Python wrapper is missing"
-  ln -sfn "$QILING_WRAPPER" "$BIN_DIR/qiling-python"
-  qiling-python -c "import qiling; print(qiling.__version__)" >/dev/null \
+  "$QILING_VENV/bin/python" -c "import qiling; print(qiling.__version__)" >/dev/null \
     || die "Qiling verification failed"
 }
 
@@ -639,7 +532,7 @@ verify_security_toolchain() {
   gem_bin="$GEM_HOME/bin"
   nuclei -version >/dev/null 2>&1 || die "Nuclei verification failed"
   RsaCtfTool --help >/dev/null 2>&1 || die "RsaCtfTool verification failed"
-  qiling-python -c "import qiling" >/dev/null 2>&1 || die "Qiling verification failed"
+  "$QILING_VENV/bin/python" -c "import qiling" >/dev/null 2>&1 || die "Qiling verification failed"
   hashcat --version >/dev/null 2>&1 || die "hashcat verification failed"
   ffmpeg -version >/dev/null 2>&1 || die "FFmpeg verification failed"
   if [[ "$OS" == "Darwin" ]]; then
@@ -692,40 +585,8 @@ prepare_local_config() {
   fi
   [[ -f "$PROJECT_DIR/redtrace.local.example.yaml" ]] || die "redtrace.local.example.yaml is missing"
   cp -- "$PROJECT_DIR/redtrace.local.example.yaml" "$CONFIG_PATH"
-  awk -v workspace="$PROJECT_DIR/workspaces" '
-    /^  # workspace_root:/ { print "  workspace_root: \"" workspace "\""; next }
-    { print }
-  ' "$CONFIG_PATH" >"$CONFIG_PATH.tmp.$$"
-  mv -- "$CONFIG_PATH.tmp.$$" "$CONFIG_PATH"
   chmod 600 "$CONFIG_PATH"
   log "created local config: $CONFIG_PATH"
-}
-
-test_brave_search_skill() {
-  [[ "${REDTRACE_SKIP_BRAVE_TEST:-0}" == "1" ]] && {
-    log "skipping brave-search API test (REDTRACE_SKIP_BRAVE_TEST=1)"
-    return
-  }
-
-  local api_key="${BRAVE_API_KEY:-}" attempt
-  if [[ -z "$api_key" ]]; then
-    warn "brave-search API test skipped because BRAVE_API_KEY is not configured"
-    return
-  fi
-
-  log "testing brave-search API"
-  for attempt in 1 2 3; do
-    if BRAVE_API_KEY="$api_key" NODE_USE_ENV_PROXY=1 node "$BRAVE_SKILL_DIR/search.js" \
-      "RedTrace collaborative agent framework" -n 1 >/dev/null; then
-      unset api_key
-      log "brave-search API test passed"
-      return
-    fi
-    warn "brave-search API test attempt $attempt failed"
-    ((attempt < 3)) && sleep 2
-  done
-  unset api_key
-  die "brave-search API test failed after 3 attempts"
 }
 
 pid_is_running() {
@@ -816,8 +677,6 @@ codegraph --version >/dev/null 2>&1 || die "codegraph failed verification"
 codegraph serve --help >/dev/null 2>&1 || die "codegraph MCP entry (serve --mcp) is unavailable"
 ensure_rtk
 ensure_playwright_skill
-ensure_brave_search_skill
-ensure_ghidra_headless_skill
 ensure_nuclei
 if [[ "${REDTRACE_SKIP_OPTIONAL_TOOLS:-0}" != "1" ]]; then
   ensure_uv
@@ -832,7 +691,6 @@ else
 fi
 
 prepare_local_config
-test_brave_search_skill
 
 mkdir -p "$RUN_DIR" "$LOG_DIR" "$PROJECT_DIR/workspaces" "$PROJECT_DIR/output/webshell" "$PROJECT_DIR/output/c2"
 GEM_BIN="$GEM_HOME/bin"
@@ -875,7 +733,6 @@ Worker API settings override each process; empty settings keep the CLI's existin
 
 Optional controls:
   REDTRACE_SKIP_OPTIONAL_TOOLS=1  Skip the large security-tool set
-  REDTRACE_SKIP_BRAVE_TEST=1      Skip the brave-search API smoke test
   REDTRACE_NO_OPEN=1              Do not open the browser automatically
 $(
   if [[ "$OS" == "Darwin" ]]; then

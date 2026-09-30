@@ -1,14 +1,12 @@
 /**
  * RedTrace Domain plugin: the bridge between the Cordis runtime and the
- * RedTrace FastAPI server. Owns the shared runtime state, mounts MCP
- * clients, pulls the hot-reloadable worker-centric runtime config, and
- * pushes the derived pi-ai provider profiles into the settings namespace.
+ * RedTrace Node engine. Owns the shared runtime state and mounts MCP clients.
  * @module redtrace-domain
  */
 
-import type { CordisFiber, Json, RuntimeConfig, RuntimeContext, RuntimeOptions, RuntimeSnapshot } from './types.js'
+import type { CordisFiber, Json, RuntimeConfig, RuntimeContext, RuntimeOptions } from './types.js'
 import { load, mount } from './loader.js'
-import { initState, disposeState, state } from './state.js'
+import { initState, disposeState } from './state.js'
 
 export const name = 'redtrace-domain'
 
@@ -31,17 +29,6 @@ export function mcpSignature(configs: Array<Record<string, Json>>): string {
   return JSON.stringify(canonical(configs))
 }
 
-interface SettingsService {
-  replace(ns: string, section: object): Promise<void>
-}
-
-export async function api<T>(config: RuntimeOptions, pathname: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${config.server}${pathname}`, init)
-  const body = await response.text()
-  if (!response.ok) throw new Error(`RedTrace API ${response.status} ${pathname}: ${body.slice(0, 500)}`)
-  return (body === '' ? null : JSON.parse(body)) as T
-}
-
 /** Forward worker-facing common_env into worker shells. Values land in the
  * runtime's environment and their names in the DSH_FORWARD_ENV allowlist,
  * because the subprocess credential scrub drops credential-shaped ambient
@@ -58,49 +45,6 @@ export function applyCommonEnv(
   }
   for (const [name, value] of entries) env[name] = value
   env.DSH_FORWARD_ENV = [...names].sort().join(',')
-}
-
-export class Domain {
-  private providersRevision = ''
-
-  constructor(
-    private readonly ctx: RuntimeContext,
-    private readonly config: RuntimeOptions,
-  ) {}
-
-  /** Pull the latest worker-derived runtime config; workers, task limits, and
-   * concurrency limits apply to tasks launched after the swap. */
-  async refresh(): Promise<void> {
-    const shared = state()
-    if (shared === undefined) return
-    const next = await api<RuntimeSnapshot>(this.config, '/runtime/config')
-    if (!Array.isArray(next.workers)) throw new Error('redtrace runtime: /runtime/config did not return a workers array')
-    const changed = next.revision !== shared.snapshot?.revision
-    shared.snapshot = next
-    if (changed) {
-      for (const [name, value] of Object.entries(next.env ?? {})) process.env[name] = value
-      applyCommonEnv(next.commonEnv)
-    }
-    await this.syncProviders(next)
-    if (next.mcpConfigs !== undefined && mcpSignature(next.mcpConfigs) !== shared.mcpSignature) {
-      await shared.remountMcp?.(next.mcpConfigs)
-    }
-  }
-
-  /** Push the provider profiles into the llm-pi-ai settings namespace; API
-   * keys live in process.env (pi-ai resolves them per request). Retried on
-   * later refreshes while the settings service is unavailable or refused. */
-  private async syncProviders(snapshot: RuntimeSnapshot): Promise<void> {
-    if (snapshot.providers === undefined || snapshot.revision === this.providersRevision) return
-    const service = this.ctx.get('settings') as SettingsService | undefined
-    if (service === undefined || typeof service.replace !== 'function') return
-    try {
-      await service.replace('llm-pi-ai', { providers: snapshot.providers })
-      this.providersRevision = snapshot.revision
-    } catch (error) {
-      this.ctx.logger?.warn(error)
-    }
-  }
 }
 
 export async function apply(ctx: RuntimeContext, config: RuntimeConfig = {}): Promise<void> {
@@ -124,7 +68,6 @@ export async function apply(ctx: RuntimeContext, config: RuntimeConfig = {}): Pr
   }
   shared.mcpSignature = mcpSignature((config.mcpConfigs ?? []) as Array<Record<string, Json>>)
   // Owned here because the fibers mount on this plugin's context; the
-  // scheduler's Domain calls it when a refreshed snapshot carries new configs.
   shared.remountMcp = async (configs) => {
     for (const fiber of mcpFibers.splice(0)) {
       await fiber.dispose().catch(error => { ctx.logger?.warn(error) })

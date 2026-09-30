@@ -80,7 +80,7 @@ Windows、macOS 和 Linux 均可原生运行，无需 Docker 与 WSL。
 ```bash
 git clone https://github.com/0X6C7879/RedTrace.git
 cd RedTrace
-BRAVE_API_KEY="replace-me" bash deploy.sh
+bash deploy.sh
 ```
 
 `deploy.sh` 会检测 Linux 或 macOS，准备 Node、Playwright/Chromium、共享 Skill 和可选安全工具链。Linux 支持 APT、DNF/YUM、Pacman、Zypper 与 APK；也可以只检查安全工具链计划：
@@ -118,16 +118,16 @@ Agent 继承启动用户的宿主机权限；isolated 执行 profile 可按 Inte
 ### Docker Compose 模式
 
 ```bash
-cp redtrace.container.example.yaml redtrace.yaml
+cp redtrace.local.example.yaml redtrace.yaml
 docker compose up --build
 ```
 
-Compose 会构建单进程 Node 控制面和可选 Worker 工具镜像。Node 容器直接运行 FGS 调度器、Cordis Web 宿主与执行器，并挂载共享能力目录、独立的 v2 数据目录和项目 Workspace。
+Compose 会构建单进程 Node 服务。Node 容器直接运行 FGS 调度器、Cordis Web 宿主与执行器，并挂载共享能力目录、运行数据目录和项目 Workspace。
 
 如需使用其他配置文件：
 
 ```bash
-REDTRACE_CONFIG_FILE=./redtrace.container.example.yaml docker compose up --build
+REDTRACE_CONFIG_FILE=./redtrace.mock.example.yaml docker compose up --build
 ```
 
 启动完成后访问 <http://127.0.0.1:8000>。
@@ -144,12 +144,11 @@ cp redtrace.mock.example.yaml redtrace.yaml
 
 ## 配置概览
 
-四个可直接复制的配置模板：
+两个可直接复制的配置模板：
 
 | 文件 | 用途 |
 |---|---|
 | `redtrace.local.example.yaml` | 宿主机直跑 Worker |
-| `redtrace.container.example.yaml` | Docker/Compose 与项目级容器隔离 |
 | `redtrace.mock.example.yaml` | 无外部模型的开发和自动化测试 |
 
 关键配置域：
@@ -157,12 +156,10 @@ cp redtrace.mock.example.yaml redtrace.yaml
 | 配置域 | 说明 |
 |---|---|
 | `providers` | API 协议（OpenAI/Anthropic 兼容）、endpoint、密钥与模型列表（context window、max tokens、reasoning 策略） |
-| `workers` | 类型、启用状态、任务资格、优先级、并发和供应商环境变量 |
-| `runtime` | 执行后端、全局/项目并发、调度周期、健康检查和 Prompt 组 |
+| `workers` | 模型路由、启用状态、任务资格、优先级和并发 |
+| `runtime` | 全局/项目并发限制 |
 | `tasks` | Bootstrap、Reason、Explore 的主阶段与收尾超时，及 Intent 上限 |
-| `context_harness` | 工件目录、内联/可见/查询/解析预算与 Worker 输出上限 |
-| `container` / `local` | 容器镜像、网络、完成策略或本地 Workspace 根目录 |
-| `paths` | Skills、MCP、Plugins、托管状态、Workspace 与审计目录 |
+| `common_env` | 传递给 Worker 的环境变量 |
 
 配置支持快照与热加载：新任务使用新配置，已经运行的任务继续使用启动时快照。Web 设置页可创建、复制、启停和测试 Worker；写入使用 revision 做乐观并发控制，API Key 不会在查询响应中回显。
 

@@ -1,12 +1,4 @@
 services:
-  redtrace-worker-image:
-    build:
-      context: ./container
-      dockerfile: Dockerfile
-    image: redtrace-worker-container:latest
-    restart: "no"
-    command: ["true"]
-
   redtrace:
     build:
       context: .
@@ -22,7 +14,6 @@ services:
       - ./.redtrace:/redtrace/.redtrace
       - ./workspaces:/redtrace/workspaces
       - ./output:/redtrace/output
-      - /var/run/docker.sock:/var/run/docker.sock
       - type: bind
         source: ${REDTRACE_USER_HOME:-${HOME:-${USERPROFILE}}}/.claude
         target: /root/.claude
@@ -43,20 +34,11 @@ services:
           create_host_path: false
     environment:
       REDTRACE_ROOT: /redtrace
-      REDTRACE_MANAGED_DIR: /redtrace/.redtrace/v2
-      REDTRACE_WORKSPACE_ROOT: /redtrace/workspaces
-      REDTRACE_AUDIT_ROOT: /redtrace/.redtrace/v2/audit
+      REDTRACE_DATA_ROOT: /redtrace/.redtrace
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 5s
-    depends_on:
-      redtrace-worker-image:
-        condition: service_completed_successfully
     restart: unless-stopped
-
-networks:
-  default:
-    name: redtrace-network

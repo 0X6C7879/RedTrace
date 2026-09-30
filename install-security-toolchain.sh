@@ -18,7 +18,6 @@ set -Eeuo pipefail
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="$PROJECT_DIR/.redtrace/runtime"
 BIN_DIR="$RUNTIME_DIR/bin"
-QILING_WRAPPER="$PROJECT_DIR/skills/reverse-engineering/scripts/qiling-python"
 DRY_RUN=false
 FORCE=false
 MODE=""
@@ -502,8 +501,6 @@ install_qiling() {
   fi
   mkdir -p "$BIN_DIR"
   ln -sfn "$QILING_VENV/bin/qltool" "$BIN_DIR/qltool"
-  [[ -x "$QILING_WRAPPER" ]] || { log_error "Qiling Python wrapper is missing"; return 1; }
-  ln -sfn "$QILING_WRAPPER" "$BIN_DIR/qiling-python"
 }
 
 detect_arch() {

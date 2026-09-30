@@ -4,11 +4,13 @@ import path from 'node:path'
 import { parse, stringify } from 'yaml'
 import { HttpError, integer, requiredText } from './types.ts'
 import type { EngineConfig, Provider, Worker } from './types.ts'
+import { JEV_SCENES, jevSceneDefault } from './jev.ts'
+import type { JevScenes } from './jev.ts'
 
 type RawModel = { id: string; context_window: number; max_tokens: number; reasoning?: string; reasoning_efforts?: Record<string, string | null> | boolean | null; thinking_format?: string }
 type RawProvider = { api: Provider['api']; base_url: string; api_key?: string; api_key_env?: string; models: RawModel[] }
 type RawWorker = { name: string; provider: string; model?: string; enabled?: boolean; bootstrap?: boolean; reason?: boolean; explore?: boolean; max_running?: number; priority?: number; backend?: Worker['backend'] }
-export interface RawConfig { providers?: Record<string, RawProvider>; workers: RawWorker[]; runtime?: Record<string, unknown>; tasks?: Record<string, { timeout: number; conclude_timeout: number; max_intents?: number }>; common_env?: Record<string, string>; [key: string]: unknown }
+export interface RawConfig { providers?: Record<string, RawProvider>; workers: RawWorker[]; runtime?: Record<string, unknown>; tasks?: Record<string, { timeout: number; conclude_timeout: number; max_intents?: number }>; common_env?: Record<string, string>; jev?: { scenes?: JevScenes }; [key: string]: unknown }
 const secretPattern = /^\$\{REDTRACE_SECRET:([a-f0-9]{32})\}$/
 const sensitiveEnvironment = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD)$/
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
@@ -79,6 +81,10 @@ export class Configuration {
     return decryptSecrets(Buffer.from(readFileSync(path.join(this.secretRoot, 'master.key'), 'utf8').trim(), 'base64url'), readFileSync(data, 'utf8'))
   }
   resolve(raw: RawConfig): EngineConfig {
+    if (raw.jev?.scenes !== undefined) {
+      if (!raw.jev.scenes || typeof raw.jev.scenes !== 'object' || Array.isArray(raw.jev.scenes)) throw new HttpError(422, 'Invalid Jev scenes')
+      for (const [scene, enabled] of Object.entries(raw.jev.scenes)) if (!(JEV_SCENES as readonly string[]).includes(scene) || typeof enabled !== 'boolean') throw new HttpError(422, `Invalid Jev scene: ${scene}`)
+    }
     const secrets = this.secrets(), providers: Record<string, Provider> = {}
     const resolve = (value: string | undefined) => {
       const match = value?.match(secretPattern)
@@ -112,9 +118,10 @@ export class Configuration {
     return { revision, engine: config.workers.every(w => w.backend === 'mock') ? 'mock' : 'dsh', execution: 'local', runtime_max_workers: config.maxWorkers,
       runtime: { max_workers: config.maxWorkers, max_project_workers: config.maxProjectWorkers, max_running_projects: config.maxRunningProjects },
       tasks: raw.tasks ?? {}, common_env: Object.entries(config.commonEnv ?? {}).map(([name, value]) => ({ name, value })),
+      jev: { api_key_configured: !!process.env.TYPESAFE_API_KEY, scenes: Object.fromEntries(JEV_SCENES.map(scene => [scene, raw.jev?.scenes?.[scene] ?? jevSceneDefault(scene)])) },
       providers: Object.entries(raw.providers ?? {}).map(([name, p]) => ({ name, api: p.api, base_url: p.base_url, api_key_configured: !!p.api_key, api_key_env: p.api_key_env ?? null,
         models: p.models.map(m => ({ ...m, reasoning: m.reasoning ?? 'auto_max', reasoning_efforts: m.reasoning_efforts ?? null, thinking_format: m.thinking_format ?? 'auto' })), referenced: config.workers.some(w => w.provider === name) })),
-      dsh: null, workers: config.workers.map(w => ({ name: w.name, type: w.provider === 'mock' ? 'mock' : 'dsh', provider: w.provider, model: w.model, enabled: w.enabled,
+      workers: config.workers.map(w => ({ name: w.name, type: w.provider === 'mock' ? 'mock' : 'dsh', provider: w.provider, model: w.model, enabled: w.enabled,
         bootstrap: w.bootstrap, reason: w.reason, explore: w.explore, task_types: [w.reason ? 'reason' : '', w.explore ? 'explore' : '', w.bootstrap ? 'bootstrap' : ''].filter(Boolean), priority: w.priority, max_running: w.maxRunning, editable: w.provider !== 'mock' })) }
   }
   commit(expected: string, mutate: (raw: RawConfig) => void) {

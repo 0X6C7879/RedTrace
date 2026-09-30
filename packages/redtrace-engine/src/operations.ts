@@ -269,23 +269,17 @@ export function operationRoutes(router: Router, ops: Operations) {
   const add = (method: string, route: string, handler: (c: RequestContext) => unknown) => router.add(method, base + route, c => { ops.scope(c.params.project); return handler(c) })
   const resource = (c: RequestContext) => ops.resource(c.params.resource)
   const auditRows = (rows: any[]) => rows.map(({ detail_json, ...event }) => ({ ...event, detail: JSON.parse(detail_json) }))
-  const selected = (c: RequestContext, snapshot = false) => {
+  const selected = (c: RequestContext) => {
     ops.expireStale(c.params.project === '_global' ? undefined : c.params.project)
-    const q = c.url.searchParams, clauses = [], args: any[] = [], kinds = (q.get('kinds') ?? '').split(',').map(k => k.trim()).filter(Boolean)
-    if (snapshot && kinds.some(k => !resourceKinds.includes(k))) throw new HttpError(400, 'Unsupported resource kinds')
-    if (snapshot && kinds.length) { clauses.push(`kind IN (${kinds.map(() => '?').join(',')})`); args.push(...kinds) }
+    const q = c.url.searchParams, clauses = [], args: any[] = []
     for (const key of ['kind', 'status']) if (q.get(key)) { clauses.push(`${key}=?`); args.push(q.get(key)) }
     if (q.get('q')?.trim()) { clauses.push('(name LIKE ? OR target LIKE ? OR summary LIKE ?)'); args.push(...Array(3).fill(`%${q.get('q')!.trim()}%`)) }
-    args.push(queryNumber(c.url, 'limit', snapshot ? 100 : 200, 1, 500), queryNumber(c.url, 'offset', 0))
+    args.push(queryNumber(c.url, 'limit', 200, 1, 500), queryNumber(c.url, 'offset', 0))
     const rows = db.prepare(`SELECT * FROM shared_resources ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''} ORDER BY updated_at DESC LIMIT ? OFFSET ?`).all(...args)
-    if (c.req.headers['x-redtrace-worker']) ops.store.transaction(() => ops.audit(c.params.project, null, null, actor(c), snapshot ? 'resource.snapshot' : 'resource.list', 'succeeded', { kinds, count: rows.length }))
+    if (c.req.headers['x-redtrace-worker']) ops.store.transaction(() => ops.audit(c.params.project, null, null, actor(c), 'resource.list', 'succeeded', { count: rows.length }))
     return rows.map(r => ops.publicResource(r))
   }
   add('GET', '/resources', c => ({ project_id: c.params.project, scope: 'global', resources: selected(c) }))
-  add('GET', '/operations/snapshot', c => {
-    const resources = selected(c, true), counts: Record<string, number> = {}; for (const r of resources) counts[r.kind] = (counts[r.kind] ?? 0) + 1
-    return { project_id: c.params.project, scope: 'global', resources, counts, audit_cursor: db.prepare('SELECT COALESCE(MAX(id),0) AS n FROM resource_audit_events').get()!.n }
-  })
   add('GET', '/operations/summary', c => { ops.expireStale(c.params.project === '_global' ? undefined : c.params.project); return { project_id: c.params.project, scope: 'global', resources: Object.fromEntries(db.prepare("SELECT kind,COUNT(*) AS count,SUM(status='available') AS available FROM shared_resources GROUP BY kind").all().map(r => [r.kind, { count: r.count, available: r.available }])), tasks: Object.fromEntries(db.prepare('SELECT status,COUNT(*) AS n FROM operation_tasks GROUP BY status').all().map(r => [r.status, r.n])) } })
   add('POST', '/resources', async c => {
     const b = actor(c, await body(c.req, Type.Object({ kind: Type.Union(resourceKinds.filter(k => k !== 'result').map(v => Type.Literal(v))), name: text(160), target: optional(Type.String({ maxLength: 4096 })), summary: optional(Type.String({ maxLength: 2000 })), status: optional(text(32)), metadata: optional(object), secret: optional(object), ...actorFields, worker: optional(Type.Union([Type.String(), Type.Null()])), parent_resource_id: optional(Type.Union([Type.String(), Type.Null()])), source_task_id: optional(Type.Union([Type.String(), Type.Null()])), publish_fact: optional(Type.Boolean()) })))
@@ -361,10 +355,6 @@ export function operationRoutes(router: Router, ops: Operations) {
     const metadata = JSON.parse(row.metadata_json), bytes = readFileSync(artifact); c.res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': bytes.length, 'Content-Disposition': `attachment; filename="${String(metadata.original_filename ?? filename).replaceAll('"', '')}"` }); c.res.end(bytes)
   })
   add('GET', '/resources/:resource', c => { ops.expireStale(c.params.project === '_global' ? undefined : c.params.project); return { resource: ops.publicResource(resource(c)), tasks: db.prepare('SELECT * FROM operation_tasks WHERE resource_id=? ORDER BY created_at DESC LIMIT 50').all(c.params.resource).map(t => ops.publicTask(t)), audit: auditRows(db.prepare('SELECT * FROM resource_audit_events WHERE resource_id=? ORDER BY id DESC LIMIT 100').all(c.params.resource)) } })
-  add('PUT', '/resources/:resource', async c => {
-    const b: Record<string, any> = await body(c.req, Type.Object({ name: optional(text(160)), target: optional(Type.String({ maxLength: 4096 })), summary: optional(Type.String({ maxLength: 2000 })), status: optional(text(32)), metadata: optional(object), secret: optional(object), actor: optional(text()) })); resource(c)
-    return ops.store.transaction(() => { const fields: Record<string, any> = {}; for (const key of ['name', 'target', 'summary', 'status']) if (b[key] != null) fields[key] = b[key]; for (const key of ['metadata', 'secret']) if (b[key] != null) fields[`${key}_json`] = JSON.stringify(b[key]); const updated = ops.updateResource(c.params.resource, fields); ops.audit(c.params.project, c.params.resource, null, b, 'resource.update', 'succeeded'); return { resource: updated } })
-  })
   add('DELETE', '/resources/:resource', c => {
     const r = resource(c)
     if (db.prepare("SELECT 1 FROM operation_tasks WHERE resource_id=? AND status IN ('queued','running','awaiting_approval')").get(c.params.resource)) throw new HttpError(409, 'Cancel active tasks before deleting this resource')

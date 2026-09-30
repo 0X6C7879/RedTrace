@@ -828,6 +828,26 @@
                   <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">创建时间</span><span class="text-slate-600 text-right break-words" x-text="formatTime(fgsSelectionRecord().createdAt)"></span></div>
                 </div>
               </template>
+              <template x-if="fgsSelection.type === 'finding' && jevFindingReview">
+                <div class="border-t border-slate-100 pt-3 text-xs">
+                  <div class="flex items-center justify-between gap-3">
+                    <span class="font-medium text-slate-600">Jev 证据支持检查</span>
+                    <span class="rounded-md px-2 py-0.5 text-[10px] font-medium" :class="jevFindingReview.status === 'supported' ? 'bg-teal-50 text-teal-700' : jevFindingReview.status === 'contradictory' ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-700'" x-text="jevReviewLabel(jevFindingReview.status)"></span>
+                  </div>
+                  <p class="mt-1.5 leading-5 text-slate-400">语义检查仅针对列出的文本证据，不代表漏洞已复现。</p>
+                  <p x-show="jevFindingReview.reason" class="mt-1 break-words text-slate-500" x-text="jevFindingReview.reason"></p>
+                  <div x-show="(jevFindingReview.evidencePaths || []).length" class="mt-2 space-y-1 font-mono text-[10px] text-slate-400">
+                    <template x-for="source in (jevFindingReview.evidencePaths || [])" :key="source"><div class="break-all" x-text="source"></div></template>
+                  </div>
+                  <button type="button" @click="reviewJevFinding()" :disabled="jevFindingReviewLoading" class="mt-2 rounded-lg border border-slate-200 px-2.5 py-1 text-[10px] text-slate-500 transition hover:bg-slate-50 disabled:opacity-40" x-text="jevFindingReviewLoading ? '检查中…' : '重新检查'"></button>
+                </div>
+              </template>
+              <template x-for="advisory in jevAdvisories.filter(item => item.targetId === fgsSelection.id)" :key="advisory.targetId + advisory.scene">
+                <div class="border-t border-slate-100 pt-3 text-xs">
+                  <p class="font-medium text-amber-700">Jev 发现可能的语义重复（建议人工检查）</p>
+                  <button type="button" class="mt-1 font-mono text-sky-600 underline underline-offset-2" @click="selectFgsNode(jevDuplicateType(advisory.scene), advisory.duplicateId)" x-text="advisory.duplicateId"></button>
+                </div>
+              </template>
               <div class="flex flex-wrap gap-1.5" x-show="!replay.active && project.project.status === 'active'">
                 <button x-show="fgsSelection.type === 'goal' && fgsSelectionRecord().status === 'open'" @click="setFgsStatus('achieved')" class="px-2.5 py-1 rounded-lg border border-teal-200 text-xs text-teal-600 hover:bg-teal-50 transition">Achieve</button>
                 <button x-show="['goal', 'step'].includes(fgsSelection.type) && fgsSelection.id !== 'goal' && !['achieved', 'done', 'cancelled'].includes(fgsSelectionRecord().status)" @click="setFgsStatus('cancelled')" class="px-2.5 py-1 rounded-lg border border-slate-200 text-xs text-slate-500 hover:bg-slate-50 transition">Cancel</button>
@@ -2177,6 +2197,25 @@
       </div>
     </form>
 
+    <section class="mt-6 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm shadow-slate-100/60">
+      <div class="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 class="text-sm font-semibold text-slate-700">Jev 语义辅助</h2>
+          <p class="mt-1 text-[11px] leading-relaxed text-slate-400">先在插件管理页启动“Jev 语义辅助”插件；启动后，下面启用的场景会生效。</p>
+          <p class="mt-1 text-[11px] leading-relaxed text-slate-400" x-text="workerConfig.jev?.api_key_configured ? 'TYPESAFE_API_KEY 已配置。' : '未检测到 TYPESAFE_API_KEY；判断会安全回退。' "></p>
+        </div>
+        <span class="rounded-lg bg-amber-50 px-2.5 py-1 text-[10px] leading-4 text-amber-700">启用前请确认项目授权与 <a class="underline underline-offset-2" href="https://typesafe.ai/legal/acceptable-use-policy" target="_blank" rel="noopener noreferrer">TypeSafe 使用政策</a>允许文本外发。</span>
+      </div>
+      <div class="grid gap-2 p-4 sm:grid-cols-2 lg:grid-cols-3">
+        <template x-for="scene in jevSceneOptions" :key="scene.id">
+          <label class="flex min-h-12 items-start gap-3 rounded-xl border border-slate-100 px-3 py-2.5 transition hover:bg-slate-50">
+            <input type="checkbox" class="mt-0.5 rounded border-slate-300 text-slate-700 focus:ring-brand-300" :checked="!!workerConfig.jev?.scenes?.[scene.id]" :disabled="jevSettingsBusy" @change="saveJevScene(scene.id, $event.target.checked)">
+            <span class="min-w-0"><span class="block text-xs font-medium text-slate-600" x-text="scene.label"></span><span class="mt-0.5 block text-[10px] leading-4 text-slate-400" x-text="scene.note"></span></span>
+          </label>
+        </template>
+      </div>
+    </section>
+
     <form @submit.prevent="saveCommonEnv()" @input="commonEnvDirty = true" class="mt-6 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm shadow-slate-100/60">
       <div class="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -2700,6 +2739,9 @@ function redtraceApp() {
     project: null,
     fgs: null,
     fgsSelection: null,
+    jevFindingReview: null,
+    jevFindingReviewLoading: false,
+    jevAdvisories: [],
     tokenUsage: null,
     globalUsage: null,
     selectedProjectId: '',
@@ -2735,8 +2777,22 @@ function redtraceApp() {
     hintForm: { content: '' },
     reopenForm: { projectId: '', projectTitle: '', description: '' },
     renameForm: { projectId: '', originalTitle: '', title: '' },
-    workerConfig: { revision: '', engine: 'legacy', execution: 'local', runtime_max_workers: 1, cli_config_home: '', workers: [] },
+    workerConfig: { revision: '', engine: 'legacy', execution: 'local', runtime_max_workers: 1, cli_config_home: '', jev: { api_key_configured: false, scenes: {} }, workers: [] },
     workerConfigLoading: false,
+    jevSettingsBusy: false,
+    jevSceneOptions: [
+      { id: 'candidate_choice', label: 'Explore 候选选择', note: '扫描器、PoC、字典、搜索来源；仅建议，不自动执行。' },
+      { id: 'attack_readiness', label: '攻击前置条件评估', note: '按已确认 Fact 评估证据支持程度，不表示成功概率。' },
+      { id: 'context_filter', label: 'FGS 上下文过滤', note: 'PI + DSH，保留 Scope、Goal、当前 Step 和直接来源。' },
+      { id: 'tool_filter', label: '工具结果片段过滤', note: 'PI + DSH，只筛选可回读的文本输出。' },
+      { id: 'external_filter', label: '外部文档与 PoC 文本过滤', note: '检索文本按当前 Step 的相关性筛选。' },
+      { id: 'skill_suggestion', label: 'Skill 推荐', note: '仅 DSH Execute；只提示，不自动加载。' },
+      { id: 'step_dedup', label: 'Step 语义去重', note: '只返回候选 ID，不阻止创建。' },
+      { id: 'fact_dedup', label: 'Fact 语义去重', note: '只返回候选 ID，不阻止写入。' },
+      { id: 'finding_dedup', label: 'Finding 语义去重', note: '只返回候选 ID，不自动合并。' },
+      { id: 'evidence_support', label: 'Finding 证据支持检查', note: '仅检查文本证据，不代表漏洞已复现。' },
+      { id: 'trace_observer', label: 'Agent Trace 进展观察', note: '每十次工具调用检查一次；提醒限频。' },
+    ],
     runtimeTaskForm: {
       runtime: { max_workers: 30, max_running_projects: 10, max_project_workers: 3 },
       tasks: {
@@ -3267,6 +3323,7 @@ function redtraceApp() {
         engine: snapshot.engine || 'legacy',
         execution: snapshot.execution || 'local',
         runtime_max_workers: Number(snapshot.runtime_max_workers) || 1,
+        jev: snapshot.jev || { api_key_configured: false, scenes: Object.fromEntries(this.jevSceneOptions.map(scene => [scene.id, true])) },
         cli_config_home: snapshot.cli_config_home || '',
         providers: (Array.isArray(snapshot.providers) ? snapshot.providers : []).map(
           provider => ({
@@ -3291,6 +3348,22 @@ function redtraceApp() {
           name: entry.name || '',
           value: entry.value ?? '',
         }));
+      }
+    },
+
+    async saveJevScene(scene, enabled) {
+      if (this.jevSettingsBusy) return;
+      const scenes = { ...(this.workerConfig.jev?.scenes || {}), [scene]: !!enabled };
+      this.jevSettingsBusy = true;
+      try {
+        const snapshot = await this.api('PUT', '/worker-config/jev', { expected_revision: this.workerConfig.revision, scenes });
+        this.applyWorkerSnapshot(snapshot);
+        this.showToast('Jev 场景已热更新');
+      } catch (e) {
+        this.showToast(e.message, 'error');
+        if (e.message.includes('reload before saving')) await this.loadWorkerConfig(true);
+      } finally {
+        this.jevSettingsBusy = false;
       }
     },
 
@@ -3817,7 +3890,35 @@ function redtraceApp() {
       } else if (this.fgs?.project?.id !== id) this.fgs = null;
     },
 
-    selectFgsNode(type, id) { this.selectNativeFgsNode(type, id); },
+    selectFgsNode(type, id) {
+      this.selectNativeFgsNode(type, id);
+      this.jevFindingReview = null;
+      const projectId = this.project?.project?.id;
+      if (!projectId) return;
+      void this.loadJevAdvisories(projectId);
+      if (type === 'finding') void this.loadJevFindingReview(projectId, id);
+    },
+    async loadJevFindingReview(projectId, findingId) {
+      try {
+        const review = await this.api('GET', `/v2/projects/${encodeURIComponent(projectId)}/jev/findings/${encodeURIComponent(findingId)}`);
+        if (this.project?.project?.id === projectId && this.fgsSelection?.id === findingId) this.jevFindingReview = review;
+      } catch {
+        if (this.project?.project?.id === projectId && this.fgsSelection?.id === findingId) this.jevFindingReview = { status: 'unassessed', reason: '暂时无法读取检查结果' };
+      }
+    },
+    async reviewJevFinding() {
+      if (this.jevFindingReviewLoading || this.fgsSelection?.type !== 'finding') return;
+      this.jevFindingReviewLoading = true;
+      try { this.jevFindingReview = await this.api('POST', `/v2/projects/${encodeURIComponent(this.project.project.id)}/jev/findings/${encodeURIComponent(this.fgsSelection.id)}/review`); }
+      catch (e) { this.showToast(e.message, 'error'); }
+      finally { this.jevFindingReviewLoading = false; }
+    },
+    async loadJevAdvisories(projectId) {
+      try { this.jevAdvisories = await this.api('GET', `/v2/projects/${encodeURIComponent(projectId)}/jev/advisories`); }
+      catch { this.jevAdvisories = []; }
+    },
+    jevDuplicateType(scene) { return scene?.startsWith('step_') ? 'step' : scene?.startsWith('finding_') ? 'finding' : 'fact'; },
+    jevReviewLabel(status) { return ({ supported: '支持', insufficient: '证据不足', contradictory: '相矛盾', unassessed: '未评估' })[status] || '未评估'; },
     fgsSelectionRecord() {
       if (!this.fgsSelection || !this.fgs) return null;
       const source = this.fgsSelection.type === 'goal' ? this.fgs.goals : this.fgsSelection.type === 'step' ? this.fgs.steps : this.fgsSelection.type === 'finding' ? this.fgs.findings : this.fgs.facts;

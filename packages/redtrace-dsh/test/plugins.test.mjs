@@ -81,6 +81,8 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
   const kernel = views.filter((view) => view.source === 'kernel')
   assert.equal(kernel.length, 10)
   assert.ok(kernel.every((view) => view.status === 'running' && !view.canStop && !view.canUninstall))
+  assert.equal(manager.view('redtrace-core').canStop, false)
+  assert.equal(manager.view('redtrace-domain').canStop, false)
 
   // Every catalog entry carries a non-empty one-liner and a longer intro;
   // neither may leak external project names.
@@ -100,7 +102,7 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
   // Every builtin entry boots running unless it is opt-in (defaultOff).
   const optIn = new Set([
     'redtrace-credentials', 'redtrace-attachment', 'redtrace-file-references',
-    'redtrace-lsp', 'redtrace-ptc',
+    'redtrace-lsp', 'redtrace-ptc', 'redtrace-jev',
   ])
   for (const view of views.filter((item) => item.source === 'builtin')) {
     assert.ok(view.status === 'running' || optIn.has(view.id), `${view.id} boots ${view.status}`)
@@ -198,6 +200,28 @@ test('stop and start toggle fibers live and persist across restarts', async (t) 
   assert.equal(next.manager.view('redtrace-webshell').status, 'stopped')
 })
 
+test('plugin stop waits for running session refresh', async (t) => {
+  const root = scratch('session-refresh')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  initState({ server: 'http://127.0.0.1:9', root, sessionRoot: root, skillsDir: root, workspacesDir: root })
+  t.after(() => disposeState())
+  const ctx = fakeContext(), config = { sessionRoot: root, pluginsManifest: path.join(root, 'plugins.json') }
+  let block = false, release, entered
+  const waiting = new Promise(resolve => { entered = resolve })
+  const manager = new PluginManager(ctx, config, root, async () => ({}), {}, async () => {
+    if (block) { entered(); await new Promise(resolve => { release = resolve }) }
+  })
+  await manager.boot()
+  block = true
+  let settled = false
+  const stopping = manager.stop('redtrace-web').then(() => { settled = true })
+  await waiting
+  assert.equal(settled, false)
+  release()
+  await stopping
+  assert.equal(manager.running('redtrace-web'), false)
+})
+
 test('stop rejects unknown ids', async (t) => {
   const root = scratch('unknown')
   t.after(() => rmSync(root, { recursive: true, force: true }))
@@ -205,6 +229,8 @@ test('stop rejects unknown ids', async (t) => {
   await manager.boot()
 
   await assert.rejects(() => manager.stop('nope'), PluginError)
+  await assert.rejects(() => manager.stop('redtrace-core'), PluginError)
+  await assert.rejects(() => manager.stop('redtrace-domain'), PluginError)
 })
 
 test('add validates id, module path, and plugin shape; uninstall removes files', async (t) => {
@@ -293,7 +319,13 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const list = await call('GET', '/__redtrace/plugins')
   assert.equal(list.status, 200)
-  assert.equal(JSON.parse(list.body).plugins.length, 30)
+  assert.equal(JSON.parse(list.body).plugins.length, 31)
+  assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === 'redtrace-jev').status, 'stopped')
+
+  const jevStart = await call('POST', '/__redtrace/plugins/redtrace-jev/start')
+  assert.equal(JSON.parse(jevStart.body).plugin.status, 'running')
+  const jevStop = await call('POST', '/__redtrace/plugins/redtrace-jev/stop')
+  assert.equal(JSON.parse(jevStop.body).plugin.status, 'stopped')
 
   const added = await call('POST', '/__redtrace/plugins', {
     id: 'my-plug', module: 'plugins/my-plug/index.js', description: '介绍一下',

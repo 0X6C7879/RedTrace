@@ -19,7 +19,7 @@ test('HTTP graph compatibility and atomic conclude survive reopening the databas
     assert.equal(created.status, 201); const id = created.data.project.id, base = `/projects/${id}`
     const step = await request(`${base}/intents`, 'POST', { from: ['origin'], description: 'Check input', creator: 'human' })
     assert.equal(step.status, 201)
-    assert.equal((await request(`${base}/intents/${step.data.id}/claim`, 'POST', { worker: 'w1' })).status, 200)
+    engine.store.claim(id, 'execute', { name: 'w1', backend: 'dsh' }, step.data.id)
     assert.equal((await request(`${base}/intents/${step.data.id}/conclude`, 'POST', { worker: 'w2', description: 'Invalid owner' })).status, 409)
     assert.equal((await request(base)).data.facts.length, 2)
     const concluded = await request(`${base}/intents/${step.data.id}/conclude`, 'POST', { worker: 'w1', description: 'Input checked' })
@@ -43,7 +43,6 @@ test('HTTP graph compatibility and atomic conclude survive reopening the databas
     assert.ok(logs.some((event: any) => JSON.stringify(event).includes('Traceable execution')))
     const other = (await request('/v2/projects', 'POST', { title: 'Other', origin: 'Other scope', goal: 'Other goal' })).data.project.id
     assert.equal((await request(`/v2/projects/${other}/runs/${runs[0].id}/events`)).status, 404)
-    assert.equal((await request(`${base}/blackboard/path?source=origin&target=${concluded.data.fact.id}`)).data.found, true)
     await engine.close(); engine = await serveEngine({ root, port: 0, autoStart: false })
     assert.deepEqual((await request(`/v2${base}/graph`)).data, graph)
   } finally { await engine.close(); rmSync(root, { recursive: true, force: true }) }

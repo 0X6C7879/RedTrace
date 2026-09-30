@@ -16,6 +16,7 @@ import * as credentials from '../lib/credentials.js'
 import * as attachment from '../lib/attachment.js'
 import * as fileReferences from '../lib/file-references.js'
 import * as codeRuntime from '../lib/code-runtime.js'
+import * as webshell from '../lib/webshell.js'
 
 const VENDOR = 'vendor/deepseek-harness/packages'
 const MOUNT_TIMEOUT_MS = 30_000
@@ -63,11 +64,12 @@ async function mountSession(host, { executionProfile, available }) {
   const key = { session: cwd }
   const scope = createScope(carrier.ctx, key)
   const task = { type: 'explore', projectId: 'p1', worker: 'w', committed: false, executionProfile }
+  let refresh
   await withTimeout(
-    mountExecutionTools(scope.ctx, { task, cwd, skillsDir: path.join(cwd, 'skills'), available }),
+    mountExecutionTools(scope.ctx, { task, cwd, skillsDir: path.join(cwd, 'skills'), available, onRefresh: value => { refresh = value } }),
     `${executionProfile} session mount`,
   )
-  return { key, scope, cwd }
+  return { key, scope, cwd, refresh: () => refresh() }
 }
 
 test('capability stacks mount into concurrent Execute scopes and expose their tools', async (t) => {
@@ -113,6 +115,59 @@ test('capability stacks mount into concurrent Execute scopes and expose their to
   assert.equal(host.tools.get('lsp', direct.key) !== undefined, hasServer)
 
   await Promise.all([direct.scope.dispose(), isolated.scope.dispose(), bare.scope.dispose()])
+})
+
+test('running Execute session gains and loses plugin tools without restarting', async (t) => {
+  const host = await createHost()
+  t.after(async () => { await host.fiber.dispose() })
+  await withTimeout(host.plugin(codeRuntime).await(), 'code-runtime mount')
+  const enabled = new Set()
+  const session = await mountSession(host, { executionProfile: 'direct', available: id => enabled.has(id) })
+  t.after(() => rmSync(session.cwd, { recursive: true, force: true }))
+  t.after(async () => { await session.scope.dispose() })
+  const visible = name => host.tools.get(name, session.key) !== undefined
+  const bash = () => host.tools.get('bash', session.key)
+  const prompt = async () => (await host.systemPrompt.assemble({ scope: session.key })).sections.map(section => section.text).join('\n')
+  assert.equal(visible('web_search'), false)
+  assert.equal(visible('job_output'), false)
+  assert.doesNotMatch(await prompt(), /Use the web_search tool/)
+  assert.equal(JSON.stringify(bash().parameters).includes('run_in_background'), false)
+  const originalBash = bash()
+  await session.refresh()
+  assert.equal(bash(), originalBash, 'unchanged plugin state must not remount tools')
+
+  for (const id of ['redtrace-web', 'redtrace-jobs', 'redtrace-fs-search', 'redtrace-terminal', 'redtrace-spill', 'redtrace-tool-timeout', 'redtrace-repeat-reminder', 'redtrace-lsp', 'redtrace-ptc']) enabled.add(id)
+  await withTimeout(session.refresh(), 'hot enable')
+  for (const name of ['web_search', 'web_fetch', 'job_output', 'glob', 'grep', 'terminal_open', 'run_code']) assert.equal(visible(name), true, name)
+  assert.equal(JSON.stringify(bash().parameters).includes('run_in_background'), true)
+  assert.match(await prompt(), /Use the web_search tool/)
+  const enabledBash = bash(), enabledWeb = host.tools.get('web_search', session.key)
+  await session.refresh()
+  assert.equal(bash(), enabledBash)
+  assert.equal(host.tools.get('web_search', session.key), enabledWeb)
+
+  enabled.clear()
+  await withTimeout(session.refresh(), 'hot disable')
+  for (const name of ['web_search', 'web_fetch', 'job_output', 'glob', 'grep', 'terminal_open', 'run_code']) assert.equal(visible(name), false, name)
+  assert.equal(JSON.stringify(bash().parameters).includes('run_in_background'), false)
+  assert.doesNotMatch(await prompt(), /Use the web_search tool/)
+  assert.equal(visible('bash'), true)
+  enabled.add('redtrace-web')
+  await withTimeout(session.refresh(), 'hot re-enable')
+  assert.equal(visible('web_search'), true)
+})
+
+test('host plugin tools disappear from an already mounted Execute session', async (t) => {
+  const host = await createHost()
+  t.after(async () => { await host.fiber.dispose() })
+  const session = await mountSession(host, { executionProfile: 'direct', available: () => false })
+  t.after(() => rmSync(session.cwd, { recursive: true, force: true }))
+  t.after(async () => { await session.scope.dispose() })
+  const fiber = host.plugin(webshell)
+  await fiber.await()
+  assert.ok(host.tools.get('webshell_test', session.key))
+  await fiber.dispose()
+  assert.equal(host.tools.get('webshell_test', session.key), undefined)
 })
 
 test('host capability modules publish their DSH services', async (t) => {
