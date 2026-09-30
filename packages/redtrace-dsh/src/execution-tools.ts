@@ -81,13 +81,20 @@ const LSP_SERVERS: Record<string, { command: string; args: string[]; extensionTo
  * resolves every server executable at mount time, so a missing binary must
  * filter out here instead of failing the whole session setup. */
 function commandOnPath(command: string): boolean {
+  // Windows PATH lookups resolve PATHEXT suffixes (.CMD/.EXE/...); probe each
+  // candidate exactly like shell resolution does.
+  const extensions = process.platform === 'win32'
+    ? ['', ...(process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';')]
+    : ['']
   for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
     if (dir === '') continue
-    try {
-      accessSync(path.join(dir, command), constants.X_OK)
-      return true
-    } catch {
-      // keep scanning
+    for (const ext of extensions) {
+      try {
+        accessSync(path.join(dir, command + ext), constants.X_OK)
+        return true
+      } catch {
+        // keep scanning
+      }
     }
   }
   return false
