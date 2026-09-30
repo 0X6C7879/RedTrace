@@ -4,7 +4,122 @@
     "noEmit": true,
     "rewriteRelativeImportExtensions": false
   },
+  "include": [],
+  "exclude": [
+    "apps/desktop/tests/keyboard.spec.ts",
+    "packages/client/*/src/**",
+    "benchmarks/**/*.client.ts",
+    "benchmarks/**/*.client.tsx",
+    "packages/*/*/tests/**/*.client.ts",
+    "packages/*/*/tests/**/*.client.tsx",
+    "packages/*/*/tests/**/*.client.spec.ts",
+    "packages/*/*/tests/**/*.client.spec.tsx",
+    "packages/client/tsdown.client.ts",
+    "scripts/*.client.spec.ts",
+    "scripts/client-bundle-css.spec.ts",
+    "packages/typert/generator/tests/fixtures/**",
+    "scripts/client-bundle-purity.spec.ts"
+  ],
   "references": [
+    {
+      "path": "./packages/client/product-analytics/tsconfig.host.json"
+    },
+    {
+      "path": "./packages/telemetry/otel"
+    },
+    {
+      "path": "./packages/experimental/speech-to-text"
+    },
+    {
+      "path": "./packages/experimental/speech-to-text-sensevoice"
+    },
+    {
+      "path": "./packages/experimental/api-speech-to-text"
+    },
+    {
+      "path": "./packages/experimental/voice-input-bundle"
+    },
+    {
+      "path": "./packages/client/locale/tsconfig.host.json"
+    },
+    {
+      "path": "./packages/client/ui-theme/tsconfig.host.json"
+    },
+    {
+      "path": "./packages/client/ui-chat/tsconfig.host.json"
+    },
+    {
+      "path": "./packages/client/ui-conversation/tsconfig.host.json"
+    },
+    {
+      "path": "./packages/client/ui-settings/tsconfig.host.json"
+    },
+    {
+      "path": "./packages/client/ui-settings-general/tsconfig.host.json"
+    },
+    {
+      "path": "./packages/host/product-telemetry-otel"
+    },
+    {
+      "path": "./packages/boot/config-editor"
+    },
+    {
+      "path": "./packages/client/connection/tsconfig.host.json"
+    },
+    {
+      "path": "./packages/skill/skill-office"
+    },
+    {
+      "path": "./packages/skill/tool-workspace-dependencies"
+    },
+    {
+      "path": "./packages/browser-use/browser-use"
+    },
+    {
+      "path": "./packages/experimental/browser-use-runtime"
+    },
+    {
+      "path": "./packages/experimental/browser-use-playwright-mcp"
+    },
+    {
+      "path": "./packages/experimental/browser-use-chrome-devtools-mcp"
+    },
+    {
+      "path": "./packages/experimental/browser-use-stagehand-native"
+    },
+    {
+      "path": "./packages/api/terminal-controller/tsconfig.host.json"
+    },
+    {
+      "path": "./packages/computer-use/computer-use"
+    },
+    {
+      "path": "./packages/experimental/computer-use-cua-driver-mcp"
+    },
+    {
+      "path": "./packages/experimental/computer-use-cua-driver-native"
+    },
+    {
+      "path": "./packages/client/ui-sidebar-documentpreview/tsconfig.host.json"
+    },
+    {
+      "path": "./packages/client/ui-sidebar-browser/tsconfig.host.json"
+    },
+    {
+      "path": "./packages/client/ui-settings-general/tsconfig.host.json"
+    },
+    {
+      "path": "./packages/document/office-to-pdf"
+    },
+    {
+      "path": "./packages/api/account-controller"
+    },
+    {
+      "path": "./packages/credentials/deepseek-account-platform"
+    },
+    {
+      "path": "./packages/credentials/deepseek-account"
+    },
     {
       "path": "./packages/client/ui-deliverables/tsconfig.host.json"
     },
@@ -33,6 +148,9 @@
       "path": "./vendor/hmr"
     },
     {
+      "path": "./packages/boot/hmr"
+    },
+    {
       "path": "./vendor/logger-console"
     },
     {
@@ -48,10 +166,16 @@
       "path": "./packages/util/launch-environment"
     },
     {
+      "path": "./packages/util/lazy-require"
+    },
+    {
       "path": "./packages/util/native-command"
     },
     {
       "path": "./packages/util/home-paths"
+    },
+    {
+      "path": "./packages/client/ui-plugin-manager/tsconfig.host.json"
     },
     {
       "path": "./packages/util/time"
@@ -73,6 +197,9 @@
     },
     {
       "path": "./packages/util/workspace-path"
+    },
+    {
+      "path": "./packages/util/code-language"
     },
     {
       "path": "./packages/util/output-retention"
@@ -117,6 +244,9 @@
       "path": "./packages/api/remotes/tsconfig.host.json"
     },
     {
+      "path": "./packages/api/job-controller/tsconfig.host.json"
+    },
+    {
       "path": "./packages/api/session-controller/tsconfig.host.json"
     },
     {
@@ -145,6 +275,9 @@
     },
     {
       "path": "./packages/session/session-format-v2-to-v3"
+    },
+    {
+      "path": "./packages/session/session-format-v3-to-v4"
     },
     {
       "path": "./packages/session/session-format-catalog"
@@ -178,9 +311,6 @@
     },
     {
       "path": "./packages/settings/settings"
-    },
-    {
-      "path": "./packages/settings/settings-file"
     },
     {
       "path": "./packages/credentials/credentials"
@@ -291,6 +421,9 @@
       "path": "./packages/interaction/permission-presets"
     },
     {
+      "path": "./packages/experimental/auto-review"
+    },
+    {
       "path": "./packages/core/tools"
     },
     {
@@ -327,13 +460,19 @@
       "path": "./packages/subprocess/subprocess-local"
     },
     {
+      "path": "./packages/ssh/ssh"
+    },
+    {
+      "path": "./packages/ssh/fs-ssh"
+    },
+    {
+      "path": "./packages/ssh/subprocess-ssh"
+    },
+    {
+      "path": "./packages/ssh/sandbox-ssh"
+    },
+    {
       "path": "./packages/subprocess/win32-process"
-    },
-    {
-      "path": "./packages/e2b/e2b"
-    },
-    {
-      "path": "./packages/e2b/subprocess-e2b"
     },
     {
       "path": "./packages/shell/shell"
@@ -354,16 +493,25 @@
       "path": "./packages/terminal/tool-terminal"
     },
     {
-      "path": "./packages/code-runtime/code-runtime"
+      "path": "./packages/ptc-runtime/ptc-runtime"
     },
     {
-      "path": "./packages/experimental/code-runtime-python"
+      "path": "./packages/experimental/ptc-runtime-python"
     },
     {
-      "path": "./packages/code-runtime/code-runtime-worker-thread"
+      "path": "./packages/experimental/schedule-bundle"
+    },
+    {
+      "path": "./packages/ptc-runtime/ptc-runtime-node"
     },
     {
       "path": "./packages/llm/llm-deepseek"
+    },
+    {
+      "path": "./packages/llm/llm-deepseek-api-key"
+    },
+    {
+      "path": "./packages/llm/llm-deepseek-account"
     },
     {
       "path": "./packages/llm/llm-pi-ai"
@@ -405,13 +553,16 @@
       "path": "./packages/shell/tool-bash"
     },
     {
+      "path": "./packages/deliverables/tool-present"
+    },
+    {
+      "path": "./packages/deliverables/workspace-changes"
+    },
+    {
       "path": "./packages/fs/fs"
     },
     {
       "path": "./packages/fs/fs-local"
-    },
-    {
-      "path": "./packages/e2b/fs-e2b"
     },
     {
       "path": "./packages/fs/fs-observation-policy"
@@ -421,9 +572,6 @@
     },
     {
       "path": "./packages/fs/tool-fs"
-    },
-    {
-      "path": "./packages/fs/tool-present"
     },
     {
       "path": "./packages/fs/tool-fs-search"
@@ -442,6 +590,9 @@
     },
     {
       "path": "./packages/compaction/compaction-tool-result-pruner"
+    },
+    {
+      "path": "./packages/compaction/compaction-image-offload"
     },
     {
       "path": "./packages/web/web"
@@ -579,13 +730,10 @@
       "path": "./packages/experimental/tool-agent-team"
     },
     {
-      "path": "./packages/experimental/agent-team-web-profile"
-    },
-    {
       "path": "./packages/workflow/workflow"
     },
     {
-      "path": "./packages/workflow/workflow-worker-thread"
+      "path": "./packages/workflow/workflow-ptc"
     },
     {
       "path": "./packages/workflow/tool-workflow"
@@ -606,7 +754,10 @@
       "path": "./packages/plan/plan-mode"
     },
     {
-      "path": "./packages/preset/agent-presets"
+      "path": "./packages/preset/agent-preset-registry"
+    },
+    {
+      "path": "./packages/preset/agent-preset"
     },
     {
       "path": "./packages/preset/persona"
@@ -633,6 +784,9 @@
       "path": "./packages/mcp/mcp-client"
     },
     {
+      "path": "./packages/mcp/mcp-resources"
+    },
+    {
       "path": "./packages/host/directory-picker"
     },
     {
@@ -654,6 +808,9 @@
       "path": "./packages/host/plugin-inventory"
     },
     {
+      "path": "./packages/boot/plugin-manager"
+    },
+    {
       "path": "./packages/llm/plugin-package-inventory-deepseek"
     },
     {
@@ -673,6 +830,9 @@
     },
     {
       "path": "./packages/lsp/tool-lsp"
+    },
+    {
+      "path": "./packages/client/shortcuts/tsconfig.host.json"
     }
   ],
   "files": []

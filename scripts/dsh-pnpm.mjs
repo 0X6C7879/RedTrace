@@ -1,25 +1,27 @@
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+const repositoryRoot = new URL('..', import.meta.url)
+const dshRoot = process.env.REDTRACE_DSH_ROOT
+  ? resolve(process.env.REDTRACE_DSH_ROOT)
+  : resolve(fileURLToPath(new URL('vendor/deepseek-harness', repositoryRoot)))
+const manager = JSON.parse(readFileSync(join(dshRoot, 'package.json'), 'utf8')).packageManager
+if (!/^pnpm@\d+\.\d+\.\d+$/.test(manager)) throw new Error('Invalid DSH package manager')
 const shimDir = mkdtempSync(join(tmpdir(), 'redtrace-corepack-'))
-writeFileSync(join(shimDir, 'pnpm'), '#!/bin/sh\nexec corepack pnpm@11.7.0 "$@"\n')
+writeFileSync(join(shimDir, 'pnpm'), `#!/bin/sh\nexec corepack ${manager} "$@"\n`)
 chmodSync(join(shimDir, 'pnpm'), 0o755)
-writeFileSync(join(shimDir, 'pnpm.cmd'), '@echo off\r\ncorepack pnpm@11.7.0 %*\r\n')
+writeFileSync(join(shimDir, 'pnpm.cmd'), `@echo off\r\ncorepack ${manager} %*\r\n`)
 
 let result
 try {
-  const repositoryRoot = new URL('..', import.meta.url)
-  const dshRoot = process.env.REDTRACE_DSH_ROOT
-    ? resolve(process.env.REDTRACE_DSH_ROOT)
-    : resolve(fileURLToPath(new URL('vendor/deepseek-harness', repositoryRoot)))
   const command = process.argv[2]
   const pnpmOptions = command === 'install' ? [] : ['--config.frozen-lockfile=false']
   result = spawnSync(
     'corepack',
-    ['pnpm@11.7.0', ...pnpmOptions, '--dir', dshRoot, ...process.argv.slice(2)],
+    [manager, ...pnpmOptions, '--dir', dshRoot, ...process.argv.slice(2)],
     {
       cwd: dshRoot,
       env: {

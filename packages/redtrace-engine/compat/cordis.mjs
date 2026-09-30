@@ -14,7 +14,7 @@ import { apply as applyDomain, applyCommonEnv, mcpSignature } from '../../redtra
 import { accumulateUsage, eventProjection } from '../../redtrace-dsh/lib/audit.js'
 
 export const name = 'redtrace-node'
-export const inject = ['webServer', 'settings']
+export const inject = ['webServer']
 const json = value => JSON.parse(JSON.stringify(value))
 
 export function providerProfiles(config) {
@@ -146,7 +146,9 @@ export async function apply(ctx, options) {
     for (const key of providerKeys) if (!(key in env)) delete process.env[key]
     Object.assign(process.env, env); providerKeys = new Set(Object.keys(env))
     applyCommonEnv(config.commonEnv)
-    await ctx.get('settings').replace('llm-pi-ai', { providers })
+    const adapter = [...ctx.get('loader').entries()].find(entry => entry.options.id === 'llm-pi-ai')
+    if (!adapter) throw new Error('DSH llm-pi-ai profile entry is missing')
+    await adapter.update({ config: { providers } })
     if (shared) shared.snapshot = { revision, workers: config.workers.map(w => ({ ...w })), providers, env, commonEnv: config.commonEnv, tasks: raw.tasks, mcpConfigs,
       limits: { maxWorkers: config.maxWorkers, maxProjectWorkers: config.maxProjectWorkers, maxRunningProjects: config.maxRunningProjects, interval: 0 } }
     profileRevision = revision

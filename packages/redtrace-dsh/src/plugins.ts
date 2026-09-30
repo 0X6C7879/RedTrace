@@ -114,10 +114,6 @@ const KERNEL: readonly KernelEntry[] = [
     intro: '内置 HTTP 服务,托管 Web UI 的静态资源,并把未匹配的请求反代给后端 API。插件管理接口也注册在这台服务上。',
   },
   {
-    id: 'settings', label: 'Settings', description: '配置读写与热更新',
-    intro: '配置读写服务。负责 settings.yaml 的读取、原子写入与文件监听,是各项配置免重启热加载的通道。',
-  },
-  {
     id: 'llm-deepseek', label: 'LLM DeepSeek', description: 'DeepSeek 模型适配器',
     intro: 'DeepSeek 官方 API 的模型适配层,为 DeepSeek 系列模型提供统一调用入口。',
   },

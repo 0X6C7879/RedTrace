@@ -151,6 +151,7 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
     await mount(scoped, `${VENDOR}/interaction/user-approval/lib/index.js`, { policy: 'never' })
     await mount(scoped, `${VENDOR}/fs/fs-sandbox/lib/index.js`)
   } else {
+    await mount(scoped, `${VENDOR}/sandbox/sandbox-policy/lib/index.js`, { mode: 'danger-full-access', workspaceRoot: config.cwd })
     await mount(scoped, process.platform === 'win32'
       ? `${VENDOR}/shell/pwsh-local/lib/index.js`
       : `${VENDOR}/shell/bash-local/lib/index.js`, { cwd: config.cwd })
@@ -206,7 +207,6 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
     ['redtrace-terminal', async use => {
       const scope = scoped.isolate('terminals')
       await use(scope, `${VENDOR}/terminal/terminal/lib/index.js`)
-      if (config.task.executionProfile !== 'isolated') await use(scope, `${VENDOR}/sandbox/sandbox-policy/lib/index.js`, { mode: 'danger-full-access', workspaceRoot: config.cwd })
       await use(scope, `${VENDOR}/terminal/terminal-bash/lib/index.js`)
       await use(scope, `${VENDOR}/terminal/tool-terminal/lib/index.js`)
     }],

@@ -4,15 +4,11 @@
   config:
     host: !!js process.env.REDTRACE_DSH_WEB_HOST ?? '127.0.0.1'
     port: !!js Number(process.env.REDTRACE_DSH_WEB_PORT ?? '8000')
-- id: settings
-  name: '../../vendor/deepseek-harness/packages/settings/settings-file/lib/index.js'
-  config:
-    path: !!js process.env.REDTRACE_DSH_SETTINGS
 - id: llm-pi-ai
   name: '../../vendor/deepseek-harness/packages/llm/llm-pi-ai/lib/index.js'
   config: { providers: {} }
 - id: llm-deepseek
-  name: '../../vendor/deepseek-harness/packages/llm/llm-deepseek/lib/index.js'
+  name: '../../vendor/deepseek-harness/packages/llm/llm-deepseek-api-key/lib/index.js'
 - id: session-projection
   name: '../../vendor/deepseek-harness/packages/session/session-projection/lib/index.js'
 - id: token-meter

@@ -177,10 +177,13 @@ cp redtrace.mock.example.yaml redtrace.yaml
 ### DSH 运行时构建与测试
 
 ```bash
-npm run dsh:install        # 安装 DSH 上游依赖（vendor/deepseek-harness 子模块）
+npm run dsh:install        # 安装 vendored DSH 运行时依赖
+npm run dsh:update         # 更新到上游最新发布版本（包含 RC），保留本地补丁并构建验证
 npm run dsh:build          # 构建上游 + RedTrace DSH 扩展包
 npm run dsh:test           # 运行 TypeScript 侧测试
 ```
+
+Web 控制台的「设置 → DSH 运行时」提供检查更新和更新按钮。更新使用上游发布版本（包含预发布版），保留 `scripts/dsh-local.patch` 中的定制补丁；先在独立目录安装、构建并通过测试和启动检查，再替换运行时。Web 更新要求 Worker 空闲，成功后暂停新任务，重启 RedTrace 才会生效。失败保留当前版本，成功时旧版本备份在 `.redtrace/dsh-updates/`。直接修改过 DSH 源码时会拒绝覆盖，需先将改动维护到补丁中。独立运行目录（如 WSL 源码与运行时分离）请通过命令更新后重新部署。
 
 ### 共享资源与能力动词
 
@@ -196,7 +199,7 @@ MSF、Sliver、Cobalt Strike 与自定义 C2 通过同一个 Adapter 合约接�
 |---|---|
 | `packages/redtrace-engine/` | Node FGS 存储、Decide/Execute 调度、REST/SSE、配置、审计与外围能力 |
 | `packages/redtrace-dsh/` | 引擎宿主的 Cordis 适配插件包：插件管理、资源工具、执行工具链、审计投影与引擎调度器生命周期 |
-| `vendor/deepseek-harness/` | DSH/Cordis 运行时（vendored，本地维护为主，不跟随上游） |
+| `vendor/deepseek-harness/` | DSH/Cordis 运行时（vendored，通过设置页或 dsh:update 手动更新） |
 | `profiles/redtrace/` | Cordis 运行时组装配置（node 单入口） |
 | `static/` | Web UI 静态资源（HTML/JS/CSS/字体/图表库） |
 | `skills/` | 多 Worker 共享的一级原生 Skill；由 Agent 按需直接加载 |

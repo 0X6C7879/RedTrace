@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-root",
-  "version": "0.1.5-rc.2",
+  "version": "0.2.0-rc.2",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -16,6 +16,7 @@
     "apps/*"
   ],
   "scripts": {
+    "build:native-system": "tsx native/system/scripts/build.ts --host-addon-only",
     "build:lib": "pnpm run build:lib:host && pnpm run build:lib:client",
     "build:lib:host": "node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc -b tsconfig.host.json && tsdown --env.DSH_BUILD_FACE host",
     "build:lib:client": "tsc -b tsconfig.client.json && tsdown --env.DSH_BUILD_FACE client"

@@ -10,6 +10,7 @@ export type SelectWorker = (worker: Worker, activity: Run['activity'], step?: St
 type Active = { run: Run; abort: AbortController; completion: Promise<void> }
 
 export class Scheduler {
+  maintenance = false
   private readonly store: Store
   private readonly execute: RunTask
   private config: EngineConfig
@@ -45,6 +46,7 @@ export class Scheduler {
     return step?.bootstrap ? worker.bootstrap : worker.explore
   }
   private dispatch() {
+    if (this.maintenance) return
     if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = undefined }
     for (const task of this.running.values()) {
       try {

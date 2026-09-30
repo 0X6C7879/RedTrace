@@ -60,7 +60,7 @@ test('Pi shell keeps its log while Jev shortens the model-visible result', async
     const request = JSON.parse(Buffer.concat(chunks).toString())
     requests.push(request)
     const [name, args] = requests.length === 1
-      ? ['shell', { command: 'for i in {1..120}; do echo "marker $i abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"; done' }]
+      ? ['shell', { command: 'node -e "for (let i = 1; i <= 120; i++) console.log(\'marker \' + i + \' \' + \'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz\')"' }]
       : ['finish_step', { summary: 'Captured the shell output' }]
     res.writeHead(200, { 'Content-Type': 'text/event-stream' })
     res.write(`data: ${JSON.stringify({ id: 'test', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: `call-${requests.length}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: null }] })}\n\n`)

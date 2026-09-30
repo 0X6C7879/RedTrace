@@ -79,7 +79,8 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
   const views = manager.list()
 
   const kernel = views.filter((view) => view.source === 'kernel')
-  assert.equal(kernel.length, 10)
+  assert.equal(kernel.length, 9)
+  assert.equal(kernel.some(view => view.id === 'settings'), false)
   assert.ok(kernel.every((view) => view.status === 'running' && !view.canStop && !view.canUninstall))
   assert.equal(manager.view('redtrace-core').canStop, false)
   assert.equal(manager.view('redtrace-domain').canStop, false)
@@ -319,7 +320,7 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const list = await call('GET', '/__redtrace/plugins')
   assert.equal(list.status, 200)
-  assert.equal(JSON.parse(list.body).plugins.length, 31)
+  assert.equal(JSON.parse(list.body).plugins.length, 30)
   assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === 'redtrace-jev').status, 'stopped')
 
   const jevStart = await call('POST', '/__redtrace/plugins/redtrace-jev/start')

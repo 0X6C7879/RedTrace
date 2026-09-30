@@ -1,8 +1,7 @@
 /**
- * Code-runtime plugin: the DSH worker-thread TypeScript runtime
- * (`ctx.codeRuntime`). Runs model-authored `run_code` programs in fresh
- * worker threads with busy-time and wall-time budgets — a containment
- * substrate, not a security boundary. Mounted at the host plane because the
+ * Code-runtime plugin: the DSH process TypeScript runtime
+ * (`ctx.ptcRuntime`). Runs `run_code` programs under the session sandbox
+ * policy with elapsed-time and output budgets. Mounted at the host plane because the
  * tool registry's PTC transport resolves it from the host context; the
  * per-session presentation (`run_code` beside the native tools) is mounted
  * by the execution toolchain whenever the redtrace-ptc plugin is running.
@@ -15,5 +14,8 @@ import { mount } from './loader.js'
 export const name = 'redtrace-code-runtime'
 
 export async function apply(ctx: RuntimeContext): Promise<void> {
-  await mount(ctx, 'vendor/deepseek-harness/packages/code-runtime/code-runtime-worker-thread/lib/index.js')
+  await mount(ctx, 'vendor/deepseek-harness/packages/fs/fs-local/lib/index.js')
+  await mount(ctx, 'vendor/deepseek-harness/packages/sandbox/sandbox-local/lib/index.js')
+  await mount(ctx, 'vendor/deepseek-harness/packages/sandbox/sandbox-policy/lib/index.js', { mode: 'read-only' })
+  await mount(ctx, 'vendor/deepseek-harness/packages/ptc-runtime/ptc-runtime-node/lib/index.js')
 }

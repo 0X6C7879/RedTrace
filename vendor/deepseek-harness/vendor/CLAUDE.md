@@ -1,1 +1,1 @@
-AGENTS.md
+/Users/lxy/Downloads/RedTrace/.redtrace/dsh-update/deepseek-ai-deepseek-harness-639ed01/vendor/AGENTS.md

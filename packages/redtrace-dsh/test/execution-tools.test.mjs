@@ -76,7 +76,7 @@ test('capability stacks mount into concurrent Execute scopes and expose their to
   const host = await createHost()
   t.after(async () => { await host.fiber.dispose() })
   // The redtrace-ptc plugin's host module in production: run_code needs the
-  // host-plane codeRuntime before a session can present it.
+  // host-plane ptcRuntime before a session can present it.
   await withTimeout(host.plugin(codeRuntime).await(), 'code-runtime mount')
   const available = () => true
 
@@ -130,7 +130,7 @@ test('running Execute session gains and loses plugin tools without restarting', 
   const prompt = async () => (await host.systemPrompt.assemble({ scope: session.key })).sections.map(section => section.text).join('\n')
   assert.equal(visible('web_search'), false)
   assert.equal(visible('job_output'), false)
-  assert.doesNotMatch(await prompt(), /Use the web_search tool/)
+  assert.doesNotMatch(await prompt(), /web_search/)
   assert.equal(JSON.stringify(bash().parameters).includes('run_in_background'), false)
   const originalBash = bash()
   await session.refresh()
@@ -140,7 +140,7 @@ test('running Execute session gains and loses plugin tools without restarting', 
   await withTimeout(session.refresh(), 'hot enable')
   for (const name of ['web_search', 'web_fetch', 'job_output', 'glob', 'grep', 'terminal_open', 'run_code']) assert.equal(visible(name), true, name)
   assert.equal(JSON.stringify(bash().parameters).includes('run_in_background'), true)
-  assert.match(await prompt(), /Use the web_search tool/)
+  assert.match(await prompt(), /web_search/)
   const enabledBash = bash(), enabledWeb = host.tools.get('web_search', session.key)
   await session.refresh()
   assert.equal(bash(), enabledBash)
@@ -150,7 +150,7 @@ test('running Execute session gains and loses plugin tools without restarting', 
   await withTimeout(session.refresh(), 'hot disable')
   for (const name of ['web_search', 'web_fetch', 'job_output', 'glob', 'grep', 'terminal_open', 'run_code']) assert.equal(visible(name), false, name)
   assert.equal(JSON.stringify(bash().parameters).includes('run_in_background'), false)
-  assert.doesNotMatch(await prompt(), /Use the web_search tool/)
+  assert.doesNotMatch(await prompt(), /web_search/)
   assert.equal(visible('bash'), true)
   enabled.add('redtrace-web')
   await withTimeout(session.refresh(), 'hot re-enable')
@@ -189,5 +189,5 @@ test('host capability modules publish their DSH services', async (t) => {
   assert.ok(host.get('credentials') !== undefined, 'credentials service')
   assert.ok(host.get('attachments') !== undefined, 'attachments service')
   assert.ok(host.get('fileReferences') !== undefined, 'fileReferences service')
-  assert.ok(host.get('codeRuntime') !== undefined, 'codeRuntime service')
+  assert.ok(host.get('ptcRuntime') !== undefined, 'ptcRuntime service')
 })

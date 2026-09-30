@@ -2152,8 +2152,24 @@
       <div>
         <h1 class="text-xl font-semibold tracking-tight text-slate-800">运行设置</h1>
       </div>
-      <span class="inline-flex h-8 shrink-0 items-center gap-2 rounded-full bg-teal-50 px-3 text-[11px] font-medium text-teal-700"><span class="h-1.5 w-1.5 rounded-full bg-teal-500"></span><span>热加载 · 无需重启</span></span>
+      <span class="inline-flex h-8 shrink-0 items-center gap-2 rounded-full bg-teal-50 px-3 text-[11px] font-medium text-teal-700"><span class="h-1.5 w-1.5 rounded-full bg-teal-500"></span><span>配置热加载</span></span>
     </div>
+
+    <section aria-label="DSH 更新" class="mt-6 rounded-2xl border border-slate-200/80 bg-white px-5 py-4 shadow-sm shadow-slate-100/60">
+      <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="min-w-0">
+          <h2 class="text-sm font-semibold text-slate-700">DSH 运行时</h2>
+          <p class="mt-1 text-xs text-slate-500">当前运行 <span x-text="dshUpdate.runningVersion || '未安装'"></span><template x-if="dshUpdate.latest"><span> · 上游最新 <span x-text="dshUpdate.latest.version"></span></span></template></p>
+          <p class="mt-2 text-xs leading-5 text-slate-400">更新会暂停调度，完成后需要重启 RedTrace。请在 Worker 空闲时操作。</p>
+        </div>
+        <div class="flex shrink-0 flex-wrap gap-2">
+          <button type="button" @click="loadDshUpdate(true)" :disabled="dshChecking || dshUpdate.state === 'running'" class="h-9 rounded-xl border border-slate-200 px-4 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40" x-text="dshChecking ? '检查中…' : '检查更新'"></button>
+          <button type="button" @click="updateDsh()" :disabled="dshStarting || dshUpdate.state === 'running' || dshUpdate.restartRequired || !dshUpdate.runningVersion" class="h-9 rounded-xl bg-slate-800 px-4 text-xs font-medium text-white hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-40" x-text="dshStarting || dshUpdate.state === 'running' ? '更新中…' : dshUpdate.restartRequired ? '等待重启' : '更新 DSH'"></button>
+        </div>
+      </div>
+      <p x-show="dshUpdate.message" x-text="dshUpdate.message" role="status" aria-live="polite" class="mt-3 break-words text-xs leading-5" :class="dshUpdate.state === 'failed' ? 'text-red-600' : 'text-slate-600'"></p>
+      <p x-show="dshUpdate.restartRequired" class="mt-2 text-xs text-amber-700">新任务已暂停。请重启 RedTrace，启动后将使用 <span x-text="dshUpdate.installedVersion"></span>。</p>
+    </section>
 
     <form @submit.prevent="saveRuntimeTasks()" @input="runtimeSettingsDirty = true" class="mt-6 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm shadow-slate-100/60">
       <div class="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -2731,6 +2747,10 @@ function envSettle(el, from, velocity) {
 
 function redtraceApp() {
   return {
+    dshUpdate: { runningVersion: null, installedVersion: null, state: 'idle', message: '', restartRequired: false, latest: null },
+    dshChecking: false,
+    dshStarting: false,
+    dshPollTimer: null,
     ...window.redtraceFgsView,
     appPage: 'workspace',
     c2Expanded: false,
@@ -3300,6 +3320,7 @@ function redtraceApp() {
     },
 
     async loadWorkerConfig(force = false) {
+      this.loadDshUpdate();
       if (this.workerConfigLoading || (!force && this.workerConfig.revision)) return;
       this.workerConfigLoading = true;
       try {
@@ -3315,6 +3336,27 @@ function redtraceApp() {
       } finally {
         this.workerConfigLoading = false;
       }
+    },
+
+    async loadDshUpdate(check = false) {
+      if (check) this.dshChecking = true;
+      try {
+        this.dshUpdate = await this.api('GET', '/runtime/dsh' + (check ? '?check=1' : ''));
+        clearTimeout(this.dshPollTimer);
+        if (this.dshUpdate.state === 'running') this.dshPollTimer = setTimeout(() => this.loadDshUpdate(), 2000);
+        else if (check) this.showToast(this.dshUpdate.latest.version === this.dshUpdate.installedVersion ? 'DSH 已是最新版本' : `可更新到 DSH ${this.dshUpdate.latest.version}`);
+      } catch (e) { this.showToast(e.message, 'error'); }
+      finally { this.dshChecking = false; }
+    },
+
+    async updateDsh() {
+      if (this.dshStarting || this.dshUpdate.state === 'running' || this.dshUpdate.restartRequired) return;
+      this.dshStarting = true;
+      try {
+        this.dshUpdate = await this.api('POST', '/runtime/dsh/update', {});
+        await this.loadDshUpdate();
+      } catch (e) { this.showToast(e.message, 'error'); }
+      finally { this.dshStarting = false; }
     },
 
     applyWorkerSnapshot(snapshot) {

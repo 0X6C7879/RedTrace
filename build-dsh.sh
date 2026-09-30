@@ -45,10 +45,11 @@ REBUILD=0
 if [[ "$REBUILD" -eq 1 ]]; then
   printf '==> installing DSH dependencies\n' >&2
   rm -rf "$DSH_ROOT/node_modules"
-  (cd "$DSH_ROOT" && REDTRACE_DSH_ROOT="$DSH_ROOT" node "$ROOT/scripts/dsh-pnpm.mjs" install --force --no-frozen-lockfile --ignore-scripts) || exit 1
+  (cd "$DSH_ROOT" && REDTRACE_DSH_ROOT="$DSH_ROOT" node "$ROOT/scripts/dsh-pnpm.mjs" install --frozen-lockfile) || exit 1
 fi
 
 printf '==> building DSH runtime\n' >&2
+(cd "$DSH_ROOT" && REDTRACE_DSH_ROOT="$DSH_ROOT" node "$ROOT/scripts/dsh-pnpm.mjs" run build:native-system) || exit 1
 (cd "$DSH_ROOT" && "$DSH_ROOT/node_modules/.bin/tsc" -b tsconfig.host.json && "$DSH_ROOT/node_modules/.bin/tsdown" --env.DSH_BUILD_FACE host) || exit 1
 (cd "$ROOT" && node "$DSH_ROOT/node_modules/typescript/bin/tsc" -p "$ROOT/packages/redtrace-dsh/tsconfig.json") || exit 1
 

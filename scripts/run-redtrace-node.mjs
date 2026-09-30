@@ -22,7 +22,7 @@ else {
   if (values.mock) config.commit(config.read().revision, raw => { raw.workers = [{ name: 'mock', provider: 'mock', max_running: 4 }] })
   process.env.REDTRACE_DSH_WEB_HOST = values.host; process.env.REDTRACE_DSH_WEB_PORT = values.port
   process.env.REDTRACE_CODE_ROOT = codeRoot; process.env.REDTRACE_SOURCE_ROOT = sourceRoot
-  process.env.DSH_SESSION_ROOT = path.join(managed, 'sessions'); process.env.REDTRACE_DSH_SETTINGS = path.join(managed, 'settings.yaml')
+  process.env.DSH_SESSION_ROOT = path.join(managed, 'sessions')
   process.env.REDTRACE_NODE_OPTIONS = JSON.stringify({ root, database: path.join(managed, 'engine.db'), configuration: config.filename, server: `http://${values.host}:${values.port}` })
   const { boot, installFailLoud } = await import(pathToFileURL(path.join(codeRoot, 'vendor/deepseek-harness/packages/boot/app-boot/lib/index.js')).href)
   installFailLoud('redtrace-node')

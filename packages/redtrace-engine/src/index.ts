@@ -15,6 +15,7 @@ import { Operations, operationRoutes } from './operations.ts'
 import { verbRoutes } from './capability-verbs.ts'
 import { ProjectDeletion, deletionRoutes } from './deletion.ts'
 import { JevService } from './jev.ts'
+import { dshUpdateRoutes } from './dsh-update.ts'
 
 export { Store, Scheduler, Configuration, Router }
 export type * from './types.ts'
@@ -49,6 +50,7 @@ export async function createEngine(options: { root: string; database?: string; c
   router.add('GET', '/v2/projects/:project/jev/findings/:finding', c => jev.reviewForFinding(c.params.project, c.params.finding))
   router.add('POST', '/v2/projects/:project/jev/findings/:finding/review', c => jev.reviewFinding(c.params.project, c.params.finding, true))
   configRoutes(router, configuration)
+  const dshUpdate = await dshUpdateRoutes(router, path.resolve(process.env.REDTRACE_SOURCE_ROOT || root), scheduler)
   auditRoutes(router, store, configuration.workspaceRoot)
   const capabilities = new Capabilities(managed)
   capabilities.initialize(root)
@@ -78,7 +80,7 @@ export async function createEngine(options: { root: string; database?: string; c
     send(res, { detail: 'Not Found' }, 404)
   }
   if (options.autoStart !== false) scheduler.start()
-  return { store, scheduler, configuration, capabilities, operations, deletion, jev, router, handler, async close() { watcher.close(); await scheduler.close(); await operations.close(); jev.close(); store.close() } }
+  return { store, scheduler, configuration, capabilities, operations, deletion, jev, router, handler, async close() { watcher.close(); await dshUpdate.close(); await scheduler.close(); await operations.close(); jev.close(); store.close() } }
 }
 export async function serveEngine(options: Parameters<typeof createEngine>[0] & { host?: string; port?: number }) {
   const engine = await createEngine(options)
