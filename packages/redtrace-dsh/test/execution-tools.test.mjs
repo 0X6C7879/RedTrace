@@ -21,6 +21,10 @@ import * as webshell from '../lib/webshell.js'
 const VENDOR = 'vendor/deepseek-harness/packages'
 const MOUNT_TIMEOUT_MS = 30_000
 
+// The adapter mounts the platform shell tool (bash on unix, pwsh on Windows);
+// tests must assert the tool that actually mounts on the current host.
+const shellName = process.platform === 'win32' ? 'pwsh' : 'bash'
+
 function scratch(name) {
   return mkdtempSync(path.join(tmpdir(), `redtrace-exec-tools-${name}-`))
 }
@@ -91,7 +95,7 @@ test('capability stacks mount into concurrent Execute scopes and expose their to
   const bare = await mountSession(host, { executionProfile: 'direct', available: () => false })
   t.after(() => rmSync(bare.cwd, { recursive: true, force: true }))
 
-  const baseline = ['bash', 'skill']
+  const baseline = [shellName, 'skill']
   const stacks = ['job_output', 'job_list', 'job_kill', 'web_search', 'web_fetch',
     'glob', 'grep', 'terminal_open', 'terminal_send', 'terminal_read', 'terminal_list']
   for (const session of [direct, isolated]) {
@@ -103,14 +107,14 @@ test('capability stacks mount into concurrent Execute scopes and expose their to
     assert.equal(host.tools.get(name, bare.key), undefined, `${name} must stay unmounted when gated off`)
   }
   assert.equal(host.tools.get('run_code', bare.key), undefined, 'run_code must stay unmounted when gated off')
-  assert.ok(host.tools.get('bash', bare.key) !== undefined, 'baseline shell stays mounted')
+  assert.ok(host.tools.get(shellName, bare.key) !== undefined, 'baseline shell stays mounted')
 
   // The LSP tool appears only when a default language server is installed;
   // a host with none skips the whole stack instead of failing the session.
   const { execSync } = await import('node:child_process')
   let hasServer = false
   for (const command of ['typescript-language-server', 'pyright-langserver', 'clangd']) {
-    try { execSync(`command -v ${command}`, { stdio: 'ignore' }); hasServer = true } catch { /* not installed */ }
+    try { execSync(`${process.platform === 'win32' ? 'where' : 'command -v'} ${command}`, { stdio: 'ignore' }); hasServer = true } catch { /* not installed */ }
   }
   assert.equal(host.tools.get('lsp', direct.key) !== undefined, hasServer)
 
@@ -126,7 +130,7 @@ test('running Execute session gains and loses plugin tools without restarting', 
   t.after(() => rmSync(session.cwd, { recursive: true, force: true }))
   t.after(async () => { await session.scope.dispose() })
   const visible = name => host.tools.get(name, session.key) !== undefined
-  const bash = () => host.tools.get('bash', session.key)
+  const bash = () => host.tools.get(shellName, session.key)
   const prompt = async () => (await host.systemPrompt.assemble({ scope: session.key })).sections.map(section => section.text).join('\n')
   assert.equal(visible('web_search'), false)
   assert.equal(visible('job_output'), false)
@@ -151,7 +155,7 @@ test('running Execute session gains and loses plugin tools without restarting', 
   for (const name of ['web_search', 'web_fetch', 'job_output', 'glob', 'grep', 'terminal_open', 'run_code']) assert.equal(visible(name), false, name)
   assert.equal(JSON.stringify(bash().parameters).includes('run_in_background'), false)
   assert.doesNotMatch(await prompt(), /web_search/)
-  assert.equal(visible('bash'), true)
+  assert.equal(visible(shellName), true)
   enabled.add('redtrace-web')
   await withTimeout(session.refresh(), 'hot re-enable')
   assert.equal(visible('web_search'), true)
