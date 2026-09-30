@@ -242,7 +242,7 @@ export class JevService {
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || await readFile(target, 'utf8') !== text) return undefined
       }
-      return path.relative(root, target)
+      return path.relative(root, target).replaceAll('\\', '/')
     } catch { return undefined }
   }
 
