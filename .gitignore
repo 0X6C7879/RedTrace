@@ -59,6 +59,7 @@ node_modules/
 # tools/ - 大型运行时工具（bin/wordlists/poc 等），不入库
 tools/*
 !tools/tool_list.md
+!tools/requirements.txt
 !tools/scripts/
 
 # 本地 agent 工具状态（freebuff/mimocode CLI）
@@ -67,3 +68,15 @@ tools/*
 .agents/
 skills-lock.json
 *.tsbuildinfo
+
+# Local credentials and generated runtime files
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+skills/*/memory/audit.jsonl
+vendor/deepseek-harness/native/system/packages/*/bin/

@@ -24,7 +24,7 @@ set "BIN_DIR=%TOOLS_DIR%\bin"
 set "WORDLISTS_DIR=%TOOLS_DIR%\wordlists"
 set "PAYLOADS_DIR=%TOOLS_DIR%\payloads"
 set "POC_DIR=%TOOLS_DIR%\poc"
-set "REQUIREMENTS_FILE=%SCRIPT_DIR%\requirements.txt"
+set "REQUIREMENTS_FILE=%SCRIPT_DIR%\tools\requirements.txt"
 
 set "MODE=%~1"
 if "%MODE%"=="" set "MODE=all"

@@ -1,5 +1,5 @@
 # RedTrace Security Tool Dependencies
-# Install: pip3 install -r requirements.txt
+# Install: pip3 install -r tools/requirements.txt
 
 # ── HTTP / Web / API ──────────────────────────────────────────────
 requests

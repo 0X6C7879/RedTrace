@@ -3,6 +3,21 @@
 .codegraph
 .redtrace
 .redtrace-secrets
+redtrace.yaml
+redtrace.local.yaml
+.env
+.env.*
+!.env.example
+!.env.*.example
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+logs
+**/*.log
+output
+skills/*/memory/audit.jsonl
+vendor/deepseek-harness/native/system/packages/*/bin
 
 **/.venv
 **/.venv-*

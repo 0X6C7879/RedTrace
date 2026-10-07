@@ -28,7 +28,7 @@ BIN_DIR="${TOOLS_DIR}/bin"
 WORDLISTS_DIR="${TOOLS_DIR}/wordlists"
 PAYLOADS_DIR="${TOOLS_DIR}/payloads"
 POC_DIR="${TOOLS_DIR}/poc"
-REQUIREMENTS_FILE="${SCRIPT_DIR}/requirements.txt"
+REQUIREMENTS_FILE="${SCRIPT_DIR}/tools/requirements.txt"
 
 # Portable temp dir (respects $TMPDIR on macOS/Linux, $TEMP on Windows Git Bash)
 : "${TMPDIR:=/tmp}"

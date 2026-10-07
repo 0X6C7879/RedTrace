@@ -1,11 +1,27 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readlink, writeFile, rm, symlink } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
 import { serveEngine } from '../src/index.ts'
+
+test('runtime source copying preserves portable relative symlinks', async () => {
+  const url = pathToFileURL(path.resolve(import.meta.dirname, '../../../scripts/update-dsh.mjs')).href
+  const { prepareRuntime } = await import(url)
+  const root = await mkdtemp(path.join(os.tmpdir(), 'redtrace-dsh-links-'))
+  const source = path.join(root, 'source'), destination = path.join(root, 'destination')
+  try {
+    for (const name of ['packages', 'vendor', 'native', 'patches']) await mkdir(path.join(source, name), { recursive: true })
+    await writeFile(path.join(source, 'packages/AGENTS.md'), 'fixture')
+    await symlink('AGENTS.md', path.join(source, 'packages/CLAUDE.md'), 'file')
+    // The sparse source stops at scripts/types after the runtime directories have been copied.
+    await assert.rejects(prepareRuntime(source, destination), { code: 'ENOENT' })
+    assert.equal(await readlink(path.join(destination, 'packages/CLAUDE.md')), 'AGENTS.md')
+    assert.equal(await readFile(path.join(destination, 'packages/CLAUDE.md'), 'utf8'), 'fixture')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
 
 test('DSH update API protects active runs, rejects cross-origin calls and keeps scheduling paused until restart', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'redtrace-dsh-update-'))

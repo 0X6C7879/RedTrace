@@ -46,7 +46,7 @@ function run(command, args, cwd, env = {}) {
 
 export async function prepareRuntime(source, destination) {
   await mkdir(destination, { recursive: true })
-  for (const name of ['packages', 'vendor', 'native', 'patches']) await cp(path.join(source, name), path.join(destination, name), { recursive: true, filter: filename => !['tests', 'test', 'docs', '.agents', '.claude'].includes(path.basename(filename)) && !/^README(?:\.|$)/.test(path.basename(filename)) })
+  for (const name of ['packages', 'vendor', 'native', 'patches']) await cp(path.join(source, name), path.join(destination, name), { recursive: true, verbatimSymlinks: true, filter: filename => !['tests', 'test', 'docs', '.agents', '.claude'].includes(path.basename(filename)) && !/^README(?:\.|$)/.test(path.basename(filename)) })
   await cp(path.join(source, 'scripts/types'), path.join(destination, 'scripts/types'), { recursive: true })
   await cp(path.join(source, 'scripts/client-build-environment.ts'), path.join(destination, 'scripts/client-build-environment.ts'))
   await cp(path.join(source, 'scripts/bundle-input-isolation.ts'), path.join(destination, 'scripts/bundle-input-isolation.ts'))
