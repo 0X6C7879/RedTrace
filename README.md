@@ -105,11 +105,11 @@ cp redtrace.local.example.yaml redtrace.yaml
 ./start-redtrace.sh
 ```
 
-复制后编辑 `redtrace.yaml`：填入 `providers.<name>.api_key`，按需调整 `workers`。两个入口首次运行会执行锁定的 npm 安装并构建 Cordis 兼容运行时，之后直接启动。它们接受 `--config`、`--host` 和 `--port`；`Ctrl+C` 会停止本次 Node 进程。用户调用的 Python 安全工具仍可作为外部工具使用，RedTrace 自身不依赖 Python。
+复制后编辑 `redtrace.yaml`：填入 `providers.<name>.api_key`，按需调整 `workers`。两个入口首次运行会执行锁定的 npm 安装并构建 Cordis 兼容运行时，之后直接启动。默认监听 `0.0.0.0:8000`（所有 IPv4 网卡）；本机访问 `http://127.0.0.1:8000`，其他设备使用 `http://<服务器 IP>:8000`。它们接受 `--config`、`--host` 和 `--port`；如需仅限本机访问，传入 `--host 127.0.0.1`。`Ctrl+C` 会停止本次 Node 进程。用户调用的 Python 安全工具仍可作为外部工具使用，RedTrace 自身不依赖 Python。
 
 ### 运行时模型
 
-启动后只有一个 Node 进程：Cordis Web 服务直接调用 Node 请求处理器并提供 Web UI（默认 `http://127.0.0.1:8000`），没有 FastAPI 反代。`mock` Worker 走进程内确定性执行器，用于开发、持久化测试和性能对照。
+启动后只有一个 Node 进程：Cordis Web 服务直接调用 Node 请求处理器并提供 Web UI（默认监听 `0.0.0.0:8000`），没有 FastAPI 反代。`mock` Worker 走进程内确定性执行器，用于开发、持久化测试和性能对照。
 
 Worker 即路由：每个 Worker 独立声明 `provider`、`model`、`bootstrap/reason/explore` 资格、`max_running` 并发与 `priority`；调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务。Worker 修改后对新任务自动生效，无需重启——设置页与直改配置文件都走同一条热加载链路，任何配置变更都不要求重启进程。
 
@@ -170,8 +170,8 @@ cp redtrace.mock.example.yaml redtrace.yaml
 ### 主程序
 
 ```bash
-./start-redtrace.sh --config redtrace.yaml --host 127.0.0.1 --port 8000
-# Windows: start-redtrace.cmd --config redtrace.yaml --host 127.0.0.1 --port 8000
+./start-redtrace.sh --config redtrace.yaml --port 8000
+# Windows: start-redtrace.cmd --config redtrace.yaml --port 8000
 ```
 
 ### DSH 运行时构建与测试

@@ -2,7 +2,7 @@ import path from 'node:path'
 import { mkdir, realpath } from 'node:fs/promises'
 import { watch } from 'node:fs'
 import { createEngine } from '../src/index.ts'
-import { graphTools, activityPrompt, activityLimits, runPi, runMock } from '../src/runner.ts'
+import { graphTools, activityPrompt, activityLimits, graphUpdate, runPi, runMock } from '../src/runner.ts'
 import { isJevRecoveryPath, traceCall } from '../src/jev.ts'
 import { verbTools, verbToolAvailable, channelsFor, resourceTools } from '../src/capability-verbs.ts'
 import { PluginManager, registerPluginRoutes } from '../../redtrace-dsh/lib/plugins.js'
@@ -284,10 +284,9 @@ export async function apply(ctx, options) {
     let cursor = Number(store.db.prepare('SELECT COALESCE(MAX(id),0) AS value FROM events WHERE project_id=?').get(run.projectId).value)
     const steer = projectId => {
       if (projectId !== run.projectId || run.activity !== 'execute' || finished || concludeOnly || !handle) return
-      const events = store.events(projectId, cursor)
-      cursor = events.at(-1)?.id ?? cursor
-      if (!events.some(e => e.type === 'hint.added' || (e.type === 'fact.added' && e.payload && e.payload.stepId !== run.stepId))) return
-      handle.agent.inject(message('共享图已有更新。需要时用 read_graph 查看，不必改变当前 Step。'))
+      const update = graphUpdate(store, projectId, cursor, run.stepId); cursor = update.cursor
+      const { relevant } = update
+      if (relevant && store.project(projectId).status === 'active') handle.agent.inject(message('共享图已有更新。需要时用 read_graph 查看，不必改变当前 Step。'))
     }
     store.changes.on('change', steer)
     const wait = async seconds => {

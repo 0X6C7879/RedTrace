@@ -2,8 +2,8 @@ import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { serveEngine, Configuration } from './index.ts'
 
-const { values } = parseArgs({ options: { root: { type: 'string', default: process.cwd() }, host: { type: 'string', default: '127.0.0.1' }, port: { type: 'string', default: '8000' }, config: { type: 'string' }, 'copy-config': { type: 'string' }, mock: { type: 'boolean', default: false }, help: { type: 'boolean', default: false } } })
-if (values.help) { console.log('RedTrace Node engine: --root DIR --host 127.0.0.1 --port 8000 --config SOURCE --copy-config SOURCE --mock'); process.exit(0) }
+const { values } = parseArgs({ options: { root: { type: 'string', default: process.cwd() }, host: { type: 'string', default: '0.0.0.0' }, port: { type: 'string', default: '8000' }, config: { type: 'string' }, 'copy-config': { type: 'string' }, mock: { type: 'boolean', default: false }, help: { type: 'boolean', default: false } } })
+if (values.help) { console.log('RedTrace Node engine: --root DIR --host 0.0.0.0 --port 8000 --config SOURCE --copy-config SOURCE --mock'); process.exit(0) }
 const port = Number(values.port)
 if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new Error('Invalid port')
 const root = path.resolve(values.root), configuration = new Configuration(root)

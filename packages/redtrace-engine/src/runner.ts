@@ -11,6 +11,7 @@ import { promisify } from 'node:util'
 import { runShell, toolEnvironment } from './shell.ts'
 import { isJevRecoveryPath, traceCall, type TraceCall } from './jev.ts'
 import { modelSession } from './models.ts'
+import type { Store } from './store.ts'
 import type { TaskContext } from './scheduler.ts'
 import type { EngineConfig, Fact, Json, Step } from './types.ts'
 import type { Capabilities } from './capabilities.ts'
@@ -99,10 +100,10 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
 }
 
 export const activityPrompt = (activity: 'decide' | 'execute', step?: Step, jevChoice = false, jevReadiness = false) => (activity === 'decide'
-  ? '你负责 Decide。FGS 的永久节点只有 Scope、Fact、Finding、Subgoal、Goal。任务创建、Fact 增加、Execute 完成或失败、任务重新激活触发你；Finding、Hint、Observation、Goal 和 Step 的变更不触发你。基于 Scope 和现有 Fact/Finding 评估目标与行动。Subgoal 必须是可验收的结果，先检查并复用已有目标；操作、重试、临时策略写成 Step，不要重复创建子目标。每个 Step 用 sourceIds 引用 Scope/Fact/Finding，并用 goalId 指向它推进的目标。只创建基于现有证据即可执行的 Step；依赖尚未证实的入口或权限时，等 Fact 到来再规划。需要远程命令或内网代理时先确认已有在线的程序化通道；图形桌面登录本身不提供这类通道。不要并行创建重复的目标枚举；在测试机上扫描不需要 remote.command。目标验收使用真实 Fact/Finding evidenceIds，解释这些证据如何满足目标；失败、停止尝试、Step 结束不等于目标达成。容量满时仍可验收或调整目标，不再新增 Step。只规划，不执行解题、容器或提交操作；如提供测评查询工具，可直接查询题目或在确认扣分后查看提示。完成后调用 finish_decide。'
+  ? '你负责 Decide。FGS 的永久节点只有 Scope、Fact、Finding、Subgoal、Goal。任务首次启动允许规划；之后只有未确认的 Fact 与 Execute 成功或失败结束事件同时存在且有 Step 容量时才会触发你，失败重试保留原事件边界。重新激活、Finding、Hint、Observation、Goal 和 Step 的其他变更不单独触发你。基于 Scope 和现有 Fact/Finding 评估目标与行动。Subgoal 必须是可验收的结果，先检查并复用已有目标；操作、重试、临时策略写成 Step，不要重复创建子目标。每个 Step 用 sourceIds 引用 Scope/Fact/Finding，并用 goalId 指向它推进的目标。只创建基于现有证据即可执行的 Step；依赖尚未证实的入口或权限时，等 Fact 到来再规划。需要远程命令或内网代理时先确认已有在线的程序化通道；图形桌面登录本身不提供这类通道。不要并行创建重复的目标枚举；在测试机上扫描不需要 remote.command。目标验收使用真实 Fact/Finding evidenceIds，解释这些证据如何满足目标；失败、停止尝试、Step 结束不等于目标达成。只规划，不执行解题、容器或提交操作；如提供测评查询工具，可直接查询题目或在确认扣分后查看提示。完成后调用 finish_decide。'
   : step?.bootstrap
     ? '你负责 Bootstrap。基于 Scope、Goal 和 Hints 理解任务，按需加载 Skills 并持续推进初始探索。在得到至少一个经证据支持的客观结果前不得结束；必须先用 submit_fact 提交 Fact，再调用 finish_step。Bootstrap 成功且返回 Fact 后 Reason 才会启动。不要把猜测、计划或未验证输出写成 Fact。'
-    : '你负责 Execute。沿当前 Step 执行，推进它的 goalId。先复用共享的扫描结果、凭证和已验证远程通道；Scope、Fact、Hint 或执行结果中已有的账号口令，若资源中尚无对应凭证，就及时登记，即使远程通道尚不可用。发现可复用通道时及时登记为资源，后续操作使用匹配的通道。未验证的入口不要登记为可用通道。以工具输出验证结论并及时 submit_fact，成功、失败和限制都可形成已确认事实；可交付成果提交为引用 Fact 的 Finding。Fact 会触发 Decide，Finding 不会。Hint 和 Observation 不是已确认事实。完成时调用 finish_step；Step 完成只表示本次执行结束，不表示 Goal/Subgoal 达成。')
+    : '你负责 Execute。沿当前 Step 执行，推进它的 goalId。先复用共享的扫描结果、凭证和已验证远程通道；Scope、Fact、Hint 或执行结果中已有的账号口令，若资源中尚无对应凭证，就及时登记，即使远程通道尚不可用。发现可复用通道时及时登记为资源，后续操作使用匹配的通道。未验证的入口不要登记为可用通道。以工具输出验证结论并及时 submit_fact，成功、失败和限制都可形成已确认事实；可交付成果提交为引用 Fact 的 Finding。新 Fact 与成功或失败的 Step 结束事件配对后触发 Decide，Finding 不会。Hint 和 Observation 不是已确认事实。完成时调用 finish_step；Step 完成只表示本次执行结束，不表示 Goal/Subgoal 达成。')
   + (activity === 'execute' && jevChoice ? '当同一目标有两个以上真实可用的扫描器、PoC、字典或搜索来源，且选错会明显浪费时间时，可调用 jev_choose 比较。' : '')
   + (activity === 'execute' && jevReadiness ? '拟采用攻击路径但关键前置条件不明时，可调用 jev_assess_attack 评估已确认事实的支持程度。' : '')
   + (activity === 'execute' && (jevChoice || jevReadiness) ? 'Jev 只给建议，按原始证据自行决定和验证，避免为简单选择额外调用。' : '')
@@ -111,6 +112,16 @@ export function activityLimits(config: EngineConfig, activity: 'decide' | 'execu
   if (activity === 'decide') return { timeout: config.decideTimeout, concludeTimeout: config.concludeTimeout }
   if (step?.bootstrap) return { timeout: config.bootstrapTimeout, concludeTimeout: config.bootstrapConcludeTimeout }
   return { timeout: config.executeTimeout, concludeTimeout: config.concludeTimeout }
+}
+
+export function graphUpdate(store: Store, projectId: string, cursor: number, stepId: string | null) {
+  let relevant = false
+  for (;;) {
+    const events = store.events(projectId, cursor)
+    cursor = events.at(-1)?.id ?? cursor
+    relevant ||= events.some(e => e.type === 'hint.added' || (e.type === 'fact.added' && (e.payload as unknown as { stepId?: string }).stepId !== stepId))
+    if (events.length < 500) return { cursor, relevant }
+  }
 }
 
 export async function runPi(context: TaskContext, capabilities?: Capabilities, verbs?: VerbRuntime) {
@@ -219,12 +230,11 @@ export async function runPi(context: TaskContext, capabilities?: Capabilities, v
   let cursor = Number(store.db.prepare('SELECT COALESCE(MAX(id),0) AS value FROM events WHERE project_id=?').get(run.projectId)!.value)
   const changed = (projectId: string) => {
     if (projectId !== run.projectId || run.activity !== 'execute' || !agent.state.isStreaming) return
-    const g = store.graph(projectId)
-    const events = store.events(projectId, cursor)
-    cursor = events.at(-1)?.id ?? cursor
-    if (!events.some(e => e.type === 'hint.added' || (e.type === 'fact.added' && (e.payload as unknown as { stepId?: string }).stepId !== run.stepId))) return
+    const update = graphUpdate(store, projectId, cursor, run.stepId); cursor = update.cursor
+    const { relevant } = update
+    if (!relevant) return
     // Model reads canonical state on demand; no transcript-to-transcript coordination.
-    if (g.project.status === 'active') agent.steer({ role: 'user', content: '共享图已有更新。需要时用 read_graph 查看，不必改变当前 Step。', timestamp: Date.now() })
+    if (store.project(projectId).status === 'active') agent.steer({ role: 'user', content: '共享图已有更新。需要时用 read_graph 查看，不必改变当前 Step。', timestamp: Date.now() })
   }
   store.changes.on('change', changed)
   agent.subscribe(event => {

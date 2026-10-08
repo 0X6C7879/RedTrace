@@ -33,7 +33,7 @@ test('single graph, atomic rollback, references and unique claims', async () => 
   } finally { s.close() }
 })
 
-test('facts wake serial fresh decisions before the slowest execution completes', async () => {
+test('Fact plus Step completion wakes one serial decision while slower execution continues', async () => {
   const s = new Store(':memory:'), id = create(s)
   let decideActive = 0, peak = 0, decisions = 0, release!: () => void
   const slow = new Promise<void>(resolve => { release = resolve })

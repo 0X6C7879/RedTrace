@@ -93,29 +93,30 @@ test('reference boundaries, atomic failure, and historical states never use futu
   } finally { s.close() }
 })
 
-test('planning trigger allowlist and capacity do not prevent evidence evaluation', async () => {
+test('paired planning events wait at capacity and survive unrelated graph writes', async () => {
   const s = new Store(':memory:'), id = create(s)
-  const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 4, maxProjectWorkers: 4, maxRunningProjects: 2, maxSteps: 1, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: '.' }
+  const reason = { ...worker, explore: false }
+  const config: EngineConfig = { workers: [reason], providers: {}, maxWorkers: 4, maxProjectWorkers: 4, maxRunningProjects: 2, maxSteps: 1, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: '.' }
+  const initial = s.claim(id, 'decide', worker); s.finishRun(initial.id, 'succeeded')
   const step = s.addStep(id, { description: 'At capacity', sourceIds: ['origin'] }), run = s.claim(id, 'execute', worker, step.id)
-  s.addFact(id, 'Ready to evaluate', { runId: run.id })
+  const fact = s.addFact(id, 'Ready to evaluate', { runId: run.id }); s.finishRun(run.id, 'succeeded')
+  const pending = s.addStep(id, { description: 'Keeps capacity full', sourceIds: ['origin'] })
   const revision = s.project(id).planningRevision
-  s.addFinding(id, { title: 'F', description: 'F', factIds: [s.graph(id).facts.at(-1)!.id] })
+  s.addFinding(id, { title: 'F', description: 'F', factIds: [fact.id] })
   s.addInput(id, 'hint', 'hint'); s.addInput(id, 'observation', 'observation'); s.addGoal(id, 'Another result'); s.rename(id, 'Renamed')
   assert.equal(s.project(id).planningRevision, revision)
   assert.throws(() => s.addStep(id, { description: 'Overflow', sourceIds: ['origin'] }, config.maxSteps))
   let decisions = 0
   const scheduler = new Scheduler(s, config, async ({ run }) => { if (run.activity === 'decide') decisions++ })
-  // Start recovery sees no dangling running run: release without triggering Decide.
-  s.finishRun(run.id, 'cancelled'); assert.equal(s.project(id).planningRevision, revision)
-  s.updateStep(id, step.id, { status: 'pending' })
   try {
-    scheduler.start()
+    scheduler.start(); for (let i = 0; i < 20; i++) await turn(); assert.equal(decisions, 0)
+    s.updateStep(id, pending.id, { status: 'cancelled' })
     for (let i = 0; i < 20 && !decisions; i++) await turn()
-    assert.ok(decisions >= 1, 'Decide runs even with a pending Step at capacity')
+    assert.equal(decisions, 1)
   } finally { await scheduler.close(); s.close() }
 })
 
-test('each permitted event alone advances planning; all other writes do not', () => {
+test('legacy planning revision tracks its allowlist independently of paired wake eligibility', () => {
   const s = new Store(':memory:')
   try {
     const id = create(s); assert.equal(s.project(id).planningRevision, 1)

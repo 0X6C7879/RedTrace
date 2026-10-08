@@ -1,7 +1,7 @@
 import { Store } from './store.ts'
 import path from 'node:path'
 import { HttpError } from './types.ts'
-import type { EngineConfig, Run, RunStatus, Worker, Step } from './types.ts'
+import type { EngineConfig, Goal, Run, RunStatus, Worker, Step } from './types.ts'
 import type { JevService } from './jev.ts'
 
 export interface TaskContext { store: Store; run: Run; worker: Worker; config: EngineConfig; signal: AbortSignal; jev?: JevService }
@@ -50,9 +50,10 @@ export class Scheduler {
     if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = undefined }
     for (const task of this.running.values()) {
       try {
-        const graph = this.store.graph(task.run.projectId)
-        const step = task.run.stepId ? graph.steps.find(s => s.id === task.run.stepId) : undefined
-        if (this.store.run(task.run.id).status !== 'running' || (graph.project.status !== 'active' && !(graph.project.status === 'completed' && task.run.activity === 'decide')) || step?.status === 'cancelled' || (step && graph.goals.find(g => g.id === step.goalId)?.status !== 'open')) task.abort.abort('Project or Step stopped')
+        const project = this.store.project(task.run.projectId)
+        const step = task.run.stepId ? this.store.node<Step>(task.run.projectId, task.run.stepId, 'step') : undefined
+        const goalOpen = !step || this.store.node<Goal>(task.run.projectId, step.goalId, 'goal').status === 'open'
+        if (this.store.run(task.run.id).status !== 'running' || (project.status !== 'active' && !(project.status === 'completed' && task.run.activity === 'decide')) || step?.status === 'cancelled' || !goalOpen) task.abort.abort('Project or Step stopped')
       } catch (reason) { if (reason instanceof HttpError && reason.status === 404) task.abort.abort('Project deleted'); else throw reason }
     }
     const projects = this.store.projects().filter(p => p.status === 'active')
@@ -65,15 +66,22 @@ export class Scheduler {
         const active = this.activeRuns
         if (active.filter(r => r.projectId === project.id).length >= this.config.maxProjectWorkers) continue
         if (!active.some(r => r.projectId === project.id) && new Set(active.map(r => r.projectId)).size >= this.config.maxRunningProjects) continue
-        const graph = this.store.graph(project.id), p = graph.project
+        const p = this.store.project(project.id)
         if (p.status !== 'active') continue
+        const nodes = this.store.nodes<Step | Goal>(p.id, ['step', 'goal'])
+        const steps = nodes.filter((node): node is Step => node.kind === 'step')
+        const goals = new Map(nodes.filter(node => node.kind === 'goal').map(goal => [goal.id, goal]))
         // Bootstrap is a strict project gate, not merely the first runnable
         // Step. Reason may start only after that Step succeeded with a Fact.
         // A failed/cancelled/empty Bootstrap remains visible for diagnosis and
         // can be retried explicitly without planning from an uninitialized graph.
-        const bootstrap = graph.steps.find(s => s.bootstrap)
+        const bootstrap = steps.find(s => s.bootstrap)
         const bootstrapComplete = !p.bootstrap || !!bootstrap && bootstrap.status === 'done' && bootstrap.factIds.length > 0
-        const needsDecide = bootstrapComplete && p.planningRevision > p.decidedRevision && !active.some(r => r.projectId === p.id && r.activity === 'decide')
+        const occupied = steps.filter(step => ['pending', 'running', 'paused'].includes(step.status)).length
+        const hasCapacity = this.config.maxSteps === null || occupied < this.config.maxSteps
+        const pendingPair = p.factSeq > p.acknowledgedFactSeq && p.endedSeq > p.acknowledgedEndedSeq
+        const needsDecide = bootstrapComplete && hasCapacity && (p.initialPlanningPending || p.planningRetryPending || pendingPair)
+          && !active.some(r => r.projectId === p.id && r.activity === 'decide')
         if (needsDecide) {
           if (p.retryAfter > Date.now()) retryAt = Math.min(retryAt, p.retryAfter)
           else {
@@ -82,9 +90,9 @@ export class Scheduler {
           }
         }
         // An unavailable Decide never prevents existing execution work from starting.
-        const steps = graph.steps.filter(s => ['pending', 'paused'].includes(s.status) && graph.goals.find(g => g.id === s.goalId)?.status === 'open')
+        const runnable = steps.filter(s => ['pending', 'paused'].includes(s.status) && goals.get(s.goalId)?.status === 'open')
           .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
-        for (const step of steps) {
+        for (const step of runnable) {
           const paused = step.status === 'paused' ? this.store.runs(p.id).find(r => r.stepId === step.id && r.status === 'paused') : undefined
           const worker = this.select('execute', paused, step)
           if (!worker) continue
@@ -108,8 +116,8 @@ export class Scheduler {
       finally {
         try {
           if (abort.signal.aborted) {
-            const graph = this.store.graph(run.projectId)
-            status = (this.closed || graph.project.status === 'stopped') && run.activity === 'execute' ? 'paused' : 'cancelled'
+            const project = this.store.project(run.projectId)
+            status = (this.closed || project.status === 'stopped') && run.activity === 'execute' ? 'paused' : 'cancelled'
             error = null
             if (this.store.run(run.id).pendingTools.length) { status = 'unknown'; error = 'Activity stopped with an unconfirmed tool result; verify before retrying' }
           }

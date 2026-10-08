@@ -49,11 +49,18 @@ export class Store {
   constructor(filename: string) {
     if (filename !== ':memory:') mkdirSync(path.dirname(path.resolve(filename)), { recursive: true })
     this.db = new DatabaseSync(filename, { timeout: 5000 })
+    const tables = Number((this.db.prepare("SELECT COUNT(*) AS value FROM sqlite_master WHERE type='table'").get() as { value: number }).value)
+    if (tables) {
+      const metadata = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'").get()
+      const version = metadata ? this.db.prepare('SELECT value FROM metadata WHERE key=?').get('schema') as { value: string } | undefined : undefined
+      if (version?.value !== '2') { this.db.close(); throw new Error(`Unsupported engine schema ${version?.value ?? 'unknown'}; remove the old engine database before starting RedTrace`) }
+    }
     this.db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
       CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS nodes(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
         id TEXT NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(project_id,id));
+      CREATE INDEX IF NOT EXISTS nodes_project_kind ON nodes(project_id,kind);
       CREATE TABLE IF NOT EXISTS counters(scope TEXT NOT NULL, kind TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(scope,kind));
       CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, revision INTEGER NOT NULL,
@@ -70,9 +77,7 @@ export class Store {
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES audit_runs(id) ON DELETE CASCADE, data TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS audit_events_project ON audit_events(project_id,id);
     `)
-    const version = this.db.prepare('SELECT value FROM metadata WHERE key=?').get('schema') as { value: string } | undefined
-    if (version && version.value !== '1') { this.db.close(); throw new Error(`Unsupported engine schema ${version.value}`) }
-    this.db.prepare('INSERT OR IGNORE INTO metadata VALUES (?,?)').run('schema', '1')
+    this.db.prepare('INSERT OR IGNORE INTO metadata VALUES (?,?)').run('schema', '2')
     // Counters of deleted projects would otherwise linger forever and are never read again.
     this.db.prepare('DELETE FROM counters WHERE scope NOT IN (SELECT id FROM projects)').run()
     this.changes.setMaxListeners(0)
@@ -126,6 +131,13 @@ export class Store {
     if (kind && value.kind !== kind) throw new HttpError(404, `${kind} not found`)
     return value
   }
+  nodes<T extends GraphNode = GraphNode>(projectId: string, kinds: T['kind'][]): T[] {
+    this.project(projectId)
+    if (!kinds.length) return []
+    const placeholders = kinds.map(() => '?').join(',')
+    return (this.db.prepare(`SELECT data FROM nodes WHERE project_id=? AND kind IN (${placeholders}) ORDER BY rowid`).all(projectId, ...kinds) as { data: string }[])
+      .map(row => JSON.parse(row.data))
+  }
   private saveNode(node: GraphNode) {
     this.db.prepare('INSERT INTO nodes VALUES (?,?,?,?) ON CONFLICT(project_id,id) DO UPDATE SET data=excluded.data')
       .run(node.projectId, node.id, node.kind, JSON.stringify(node))
@@ -143,7 +155,8 @@ export class Store {
     const rows = this.db.prepare('SELECT revision,type,node_id,data FROM events WHERE project_id=? AND revision<=? ORDER BY revision').all(id, revision)
     const initial = JSON.parse(String(rows[0]?.data ?? '{}'))
     const historyIncomplete = !Array.isArray(initial.initialNodes)
-    const project: Project = { ...current.project, ...initial, status: 'active', revision: 0, planningRevision: 0, decidedRevision: 0 }
+    const project: Project = { ...current.project, ...initial, status: 'active', revision: 0, planningRevision: 0, decidedRevision: 0,
+      factSeq: 0, endedSeq: 0, acknowledgedFactSeq: 0, acknowledgedEndedSeq: 0, initialPlanningPending: true, planningRetryPending: false, retryAfter: 0 }
     delete (project as Project & { initialNodes?: unknown }).initialNodes
     const nodes = new Map<string, GraphNode>()
     if (!historyIncomplete) for (const node of initial.initialNodes as GraphNode[]) nodes.set(node.id, node)
@@ -155,6 +168,17 @@ export class Store {
     for (const row of rows) {
       const payload = JSON.parse(String(row.data)), type = String(row.type), nodeId = row.node_id as string | null
       project.revision = Number(row.revision)
+      if (['project.created', 'fact.added', 'execute.succeeded', 'execute.failed', 'project.active', 'project.reopened'].includes(type)) project.planningRevision++
+      if (type === 'fact.added') project.factSeq++
+      if ((type === 'execute.succeeded' || type === 'execute.failed') && payload.nodeSnapshot?.status !== 'cancelled') project.endedSeq++
+      if (type === 'decide.succeeded') {
+        project.decidedRevision = Math.max(project.decidedRevision, Number(payload.baseRevision) || 0)
+        project.acknowledgedFactSeq = Number(payload.factSeq) || 0
+        project.acknowledgedEndedSeq = Number(payload.endedSeq) || 0
+        project.initialPlanningPending = false; project.planningRetryPending = false; project.retryAfter = 0
+      } else if (type.startsWith('decide.') && !['decide.started', 'decide.succeeded'].includes(type)) {
+        project.planningRetryPending = true; project.retryAfter = Number(payload.retryAfter) || 0
+      }
       if (payload.kind && payload.id) nodes.set(payload.id, payload)
       if (payload.nodeSnapshot) nodes.set(payload.nodeSnapshot.id, payload.nodeSnapshot)
       if (type === 'fact.added' && payload.stepId) {
@@ -180,6 +204,8 @@ export class Store {
   private event(id: string, type: string, node: GraphNode | null, payload: unknown) {
     const planning = ['project.created', 'fact.added', 'execute.succeeded', 'execute.failed', 'project.active', 'project.reopened'].includes(type)
     const p = this.project(id); p.revision++; if (planning) p.planningRevision++
+    if (type === 'fact.added') p.factSeq++
+    if ((type === 'execute.succeeded' || type === 'execute.failed') && node?.kind === 'step' && node.status !== 'cancelled') p.endedSeq++
     this.saveProject(p)
     this.db.prepare('INSERT INTO events(project_id,revision,type,node_id,data,created_at) VALUES (?,?,?,?,?,?)')
       .run(id, p.revision, type, node?.id ?? null, JSON.stringify(node && payload && typeof payload === 'object' && !('kind' in payload) ? { ...payload, nodeSnapshot: node } : payload), now())
@@ -221,7 +247,8 @@ export class Store {
     return this.transaction(() => {
       const title = requiredText(input.title, 'title'), origin = requiredText(input.origin, 'origin'), goal = requiredText(input.goal, 'goal')
       const id = this.nextProjectId(), createdAt = now()
-      const p: Project = { id, title, status: 'active', bootstrap: input.bootstrap ?? false, createdAt, revision: 0, planningRevision: 0, decidedRevision: 0, retryAfter: 0 }
+      const p: Project = { id, title, status: 'active', bootstrap: input.bootstrap ?? false, createdAt, revision: 0, planningRevision: 0, decidedRevision: 0, retryAfter: 0,
+        factSeq: 0, endedSeq: 0, acknowledgedFactSeq: 0, acknowledgedEndedSeq: 0, initialPlanningPending: true, planningRetryPending: false }
       this.db.prepare('INSERT INTO projects VALUES (?,?)').run(id, JSON.stringify(p))
       this.saveNode({ id: 'origin', projectId: id, kind: 'fact', description: origin, creator: 'human', createdAt, stepId: null, evidence: [] })
       this.saveNode({ id: 'goal', projectId: id, kind: 'goal', description: goal, creator: 'human', createdAt, parentId: null, status: 'open', evidenceIds: [] })
@@ -478,11 +505,12 @@ export class Store {
       if (paused && (paused.worker !== worker.name || paused.backend !== worker.backend)) throw new HttpError(409, 'Resume must keep the original worker and backend')
       if (paused?.pendingTools.length) throw new HttpError(409, 'Unconfirmed tool results prevent automatic resume')
       const run: Run = paused ?? { id: `run-${randomUUID()}`, projectId: id, stepId, activity, worker: worker.name, backend: worker.backend, status: 'running', startedAt: now(), endedAt: null,
-        baseRevision: p.planningRevision, checkpoint: null, pendingTools: [], error: null, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+        baseRevision: p.planningRevision, checkpoint: null, pendingTools: [], error: null, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+        ...(activity === 'decide' ? { planningFactSeq: p.factSeq, planningEndedSeq: p.endedSeq } : {}) }
       run.status = 'running'; run.endedAt = null
       this.saveRun(run)
       if (step) { step.status = 'running'; step.worker = worker.name; if (!paused) step.attempts++; this.saveNode(step) }
-      this.event(id, `${activity}.started`, step ?? null, { runId: run.id }); return run
+      this.event(id, `${activity}.started`, step ?? null, { runId: run.id, factSeq: run.planningFactSeq, endedSeq: run.planningEndedSeq }); return run
     })
   }
   finishRun(runId: string, status: Run['status'], error: string | null = null) {
@@ -504,9 +532,13 @@ export class Store {
         this.event(run.projectId, `execute.${status}`, step, { runId, error })
       } else {
         const p = this.project(run.projectId)
-        if (status === 'succeeded') { p.decidedRevision = Math.max(p.decidedRevision, run.baseRevision); p.retryAfter = 0 }
-        else p.retryAfter = Date.now() + 5000
-        this.saveProject(p); this.event(p.id, `decide.${status}`, null, { runId, error })
+        if (status === 'succeeded') {
+          p.decidedRevision = Math.max(p.decidedRevision, run.baseRevision); p.retryAfter = 0
+          p.acknowledgedFactSeq = run.planningFactSeq ?? p.factSeq; p.acknowledgedEndedSeq = run.planningEndedSeq ?? p.endedSeq
+          p.initialPlanningPending = false; p.planningRetryPending = false
+        } else { p.retryAfter = Date.now() + 5000; p.planningRetryPending = true }
+        this.saveProject(p); this.event(p.id, `decide.${status}`, null, { runId, error, baseRevision: run.baseRevision,
+          factSeq: run.planningFactSeq, endedSeq: run.planningEndedSeq, retryAfter: p.retryAfter })
       }
       return run
     })

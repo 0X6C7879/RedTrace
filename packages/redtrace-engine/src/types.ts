@@ -7,6 +7,8 @@ export type Json = null | boolean | number | string | Json[] | { [key: string]: 
 export interface Project {
   id: string; title: string; status: ProjectStatus; bootstrap: boolean; createdAt: string
   revision: number; planningRevision: number; decidedRevision: number; retryAfter: number
+  factSeq: number; endedSeq: number; acknowledgedFactSeq: number; acknowledgedEndedSeq: number
+  initialPlanningPending: boolean; planningRetryPending: boolean
   failureCount?: number; failureSignature?: string | null; circuitOpen?: boolean; contextRevision?: number
 }
 export interface Evidence { path?: string; runId?: string; toolCallId?: string; description: string }
@@ -29,6 +31,7 @@ export interface Run {
   id: string; projectId: string; stepId: string | null; activity: Activity; worker: string
   backend: 'pi' | 'dsh' | 'mock'; status: RunStatus; startedAt: string; endedAt: string | null
   baseRevision: number; checkpoint: Json; pendingTools: string[]; error: string | null
+  planningFactSeq?: number; planningEndedSeq?: number
   inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number
   heartbeatAt?: string; trigger?: string
   provider?: string; model?: string; workspaceRoot?: string

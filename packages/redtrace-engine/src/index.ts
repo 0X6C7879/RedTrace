@@ -44,7 +44,7 @@ export async function createEngine(options: { root: string; database?: string; c
   }
   const scheduler = new Scheduler(store, config, runTask, options.selectWorker), router = new Router()
   graphRoutes(router, store, () => configuration.resolve(configuration.read().raw).maxSteps)
-  router.add('GET', '/health', () => ({ status: 'ok', engine: 'fgs', node: process.versions.node, schema: 1 }))
+  router.add('GET', '/health', () => ({ status: 'ok', engine: 'fgs', node: process.versions.node, schema: 2 }))
   router.add('GET', '/v2/projects/:project/jev/evaluations', c => jev.evaluations(c.params.project))
   router.add('GET', '/v2/projects/:project/jev/advisories', c => jev.advisories(c.params.project))
   router.add('GET', '/v2/projects/:project/jev/findings/:finding', c => jev.reviewForFinding(c.params.project, c.params.finding))

@@ -8,6 +8,12 @@ import type { Router } from './http.ts'
 import type { Scheduler } from './scheduler.ts'
 import { HttpError } from './types.ts'
 
+function updateErrorSummary(error: string) {
+  const lines = error.split('\n').map(line => line.trim()).filter(line => line && !/^at\s/.test(line))
+  const cause = lines.find(line => /\b(?:[A-Za-z]*Error|ERROR)\b|Cannot find/.test(line)) ?? lines[0]
+  return [...new Set([cause, lines.at(-1)])].filter(Boolean).join('\n').slice(0, 500)
+}
+
 export async function dshUpdateRoutes(router: Router, root: string, scheduler: Scheduler) {
   const codeRoot = path.resolve(process.env.REDTRACE_CODE_ROOT || root)
   const filename = path.join(codeRoot, 'vendor/deepseek-harness/package.json')
@@ -68,12 +74,12 @@ export async function dshUpdateRoutes(router: Router, root: string, scheduler: S
         }
       }
     })
-    child.stderr.on('data', (chunk: string) => { lastError = (lastError + chunk).slice(-2000) })
+    child.stderr.on('data', (chunk: string) => { lastError = (lastError + chunk).slice(-64000) })
     completion = new Promise<void>(resolve => {
       let finished = false
       const finish = (error?: string) => {
         if (finished) return; finished = true
-        job = error ? { state: 'failed', message: `更新失败，当前版本保留：${error.slice(-500)}` }
+        job = error ? { state: 'failed', message: `更新失败，当前版本保留：${updateErrorSummary(error)}` }
           : { state: 'succeeded', message: result!.changed ? `DSH ${result!.version} 已安装，请重启 RedTrace 后继续任务` : 'DSH 已是最新版本', backup: result!.backup }
         scheduler.maintenance = !error && !!result?.changed
         if (!scheduler.maintenance) scheduler.wake()

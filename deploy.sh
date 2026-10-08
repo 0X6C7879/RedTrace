@@ -16,8 +16,7 @@ NPM_REGISTRY="${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}"
 PYPI_INDEX="${UV_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
 OS="$(uname -s)"
 case "$OS" in
-  Darwin) DEFAULT_HOST=127.0.0.1 ;;
-  Linux) DEFAULT_HOST=0.0.0.0 ;;
+  Darwin|Linux) DEFAULT_HOST=0.0.0.0 ;;
   *) printf '[RedTrace] ERROR: deploy.sh supports macOS and Linux only\n' >&2; exit 1 ;;
 esac
 REDTRACE_HOST="${REDTRACE_HOST:-$DEFAULT_HOST}"
