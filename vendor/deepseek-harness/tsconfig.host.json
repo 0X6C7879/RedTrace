@@ -397,6 +397,9 @@
       "path": "./packages/schedule/schedule"
     },
     {
+      "path": "./packages/schedule/tool-schedule"
+    },
+    {
       "path": "./packages/context/time-context"
     },
     {
@@ -422,6 +425,9 @@
     },
     {
       "path": "./packages/experimental/auto-review"
+    },
+    {
+      "path": "./packages/experimental/claude-code-mods"
     },
     {
       "path": "./packages/core/tools"
@@ -497,9 +503,6 @@
     },
     {
       "path": "./packages/experimental/ptc-runtime-python"
-    },
-    {
-      "path": "./packages/experimental/schedule-bundle"
     },
     {
       "path": "./packages/ptc-runtime/ptc-runtime-node"
@@ -625,9 +628,6 @@
       "path": "./packages/guard/timeout-policy"
     },
     {
-      "path": "./packages/runtime-diagnostics/invariants"
-    },
-    {
       "path": "./packages/test-support/agent-loop-testkit"
     },
     {
@@ -725,6 +725,9 @@
     },
     {
       "path": "./packages/experimental/agent-team-profile"
+    },
+    {
+      "path": "./packages/experimental/inspector-profile"
     },
     {
       "path": "./packages/experimental/tool-agent-team"

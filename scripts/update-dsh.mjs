@@ -61,7 +61,8 @@ export async function prepareRuntime(source, destination) {
     'build:lib:host': 'node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc -b tsconfig.host.json && tsdown --env.DSH_BUILD_FACE host',
     'build:lib:client': 'tsc -b tsconfig.client.json && tsdown --env.DSH_BUILD_FACE client',
   }
-  pkg.devDependencies = Object.fromEntries(['@types/js-yaml', '@types/node', 'lightningcss', 'smol-toml', 'tsdown', 'tsx', 'typescript'].map(name => [name, pkg.devDependencies[name]]))
+  // Inspector's host build also compiles its DevTools assets with upstream's Vite.
+  pkg.devDependencies = Object.fromEntries(['@types/js-yaml', '@types/node', 'lightningcss', 'smol-toml', 'tsdown', 'tsx', 'typescript', 'vite'].map(name => [name, pkg.devDependencies[name]]))
   await save(path.join(destination, 'package.json'), pkg)
   // RedTrace serves its own UI; the upstream Web frontend is not part of this runtime.
   const webApp = path.join(destination, 'packages/bundle/web-app/package.json')

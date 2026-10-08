@@ -22,6 +22,9 @@
       "path": "./packages/experimental/client-ui-voice-input"
     },
     {
+      "path": "./packages/experimental/client-ui-claude-code-mods"
+    },
+    {
       "path": "./packages/client/ui-sidebar-terminal"
     },
     {
@@ -56,6 +59,9 @@
     },
     {
       "path": "./packages/experimental/inspector/tsconfig.client.json"
+    },
+    {
+      "path": "./packages/experimental/session-inspector"
     },
     {
       "path": "./packages/client/hmr"
