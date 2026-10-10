@@ -84,7 +84,11 @@ export async function prepareRuntime(source, destination) {
   await writeFile(workspace, (await readFile(workspace, 'utf8')).replace(/^  - (benchmarks|website|python\/sdk-runtime)\r?\n/gm, '').replace(/^  lefthook: true\r?\n/gm, '').replace(/^  ['"]?@(electron\/osx-sign|yao-pkg\/pkg)@[^\n]+\r?\n/gm, ''))
   for (const name of ['tsconfig.host.json', 'tsconfig.client.json']) {
     const ts = upstreamTypeScript()
-    const parsed = ts.readConfigFile(path.join(destination, name), filename => readFileSync(filename, 'utf8'))
+    // TypeScript 5.x throws its own "Debug Failure" path assertion on Windows
+    // instead of reporting a diagnostic, so any throw means the config did not parse.
+    let parsed
+    try { parsed = ts.readConfigFile(path.join(destination, name), filename => readFileSync(filename, 'utf8')) }
+    catch (error) { throw new Error(`Invalid upstream ${name}: ${error.message}`) }
     if (parsed.error) throw new Error(`Invalid upstream ${name}`)
     const config = parsed.config
     config.references = config.references.filter(ref => !ref.path.startsWith('./apps/'))
