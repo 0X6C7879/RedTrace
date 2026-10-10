@@ -14,6 +14,7 @@ test('single-use deletion removes only project data and keeps durable shared res
   }
   try {
     const { project } = engine.store.createProject({ title: 'Delete', origin: 'input', goal: 'goal' }), workspace = path.join(engine.configuration.workspaceRoot, project.id)
+    engine.store.db.prepare('INSERT INTO trace_fts(project,run_id,event_id,kind,text) VALUES (?,?,?,?,?)').run(project.id, 'fixture-run', 1, 'tool.started', 'private trace')
     mkdirSync(workspace, { recursive: true }); writeFileSync(path.join(workspace, 'evidence.txt'), 'private')
     const session = 'run_delete_fixture', sessionDir = path.join(root, '.redtrace/sessions/project-fixture', session)
     mkdirSync(sessionDir, { recursive: true }); writeFileSync(path.join(sessionDir, 'session.jsonl'), '{}')
@@ -28,6 +29,7 @@ test('single-use deletion removes only project data and keeps durable shared res
     assert.equal((await call(`/projects/${project.id}`)).status, 404); assert.equal(existsSync(workspace), false); assert.equal(existsSync(sessionDir), false)
     assert.equal(engine.operations.resource(durable).project_id, null)
     assert.throws(() => engine.operations.resource(disposable), /not found/i)
+    assert.equal(engine.store.db.prepare('SELECT 1 FROM trace_fts WHERE project=?').get(project.id), undefined)
   } finally { await engine.close(); rmSync(root, { recursive: true, force: true }) }
 })
 

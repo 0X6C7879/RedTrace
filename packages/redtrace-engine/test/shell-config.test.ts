@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { runShell, toolEnvironment } from '../src/shell.ts'
 import { Configuration, decryptSecrets, encryptSecrets } from '../src/config.ts'
 
@@ -13,7 +13,14 @@ test('native shell captures output, cancels process trees and protects provider 
   try {
     assert.equal(toolEnvironment().REDTRACE_TEST_API_KEY, undefined)
     const result = await runShell(process.platform === 'win32' ? "[Console]::Write('shell-ok')" : "printf 'shell-ok'", root)
-    assert.equal(result.exitCode, 0); assert.match(result.text, /shell-ok/); assert.match(readFileSync(result.outputPath, 'utf8'), /shell-ok/)
+    const raw = readFileSync(result.outputPath)
+    assert.equal(result.exitCode, 0); assert.match(result.text, /shell-ok/); assert.match(raw.toString(), /shell-ok/)
+    assert.equal(result.bytes, raw.length); assert.equal(result.sha256, createHash('sha256').update(raw).digest('hex'))
+    if (process.platform !== 'win32') {
+      const failure = await runShell("printf error >&2; exit 7", root), failedOutput = readFileSync(failure.outputPath)
+      assert.equal(failure.exitCode, 7); assert.equal(failure.text, 'error'); assert.equal(failure.bytes, 5)
+      assert.equal(failure.sha256, createHash('sha256').update(failedOutput).digest('hex'))
+    }
     const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 400)
     const start = Date.now()
     try { await assert.rejects(runShell(process.platform === 'win32' ? 'Start-Sleep -Seconds 60' : 'sleep 60', root, { signal: abort.signal }), /cancelled/); assert.ok(Date.now() - start < 15000) }
@@ -39,4 +46,15 @@ test('authenticated secrets and revision conflicts preserve independent configur
     assert.equal(c.resolve(c.read().raw).workers[0].enabled, true)
     assert.equal(copy.resolve(copy.read().raw).providers.fixture.apiKey, 'private-model-key')
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('shell retains stdout and stderr separately as well as the ordered full log', async()=>{
+ const root=mkdtempSync(path.join(os.tmpdir(),'redtrace-streams-'))
+ try {
+  const output=await runShell('printf "fixture-out"; printf "fixture-error" >&2; exit 7',root)
+  assert.equal(output.exitCode,7)
+  assert.equal(readFileSync(output.stdoutPath,'utf8'),'fixture-out')
+  assert.equal(readFileSync(output.stderrPath,'utf8'),'fixture-error')
+  assert.equal(createHash('sha256').update(readFileSync(output.outputPath)).digest('hex'),output.sha256)
+ } finally {rmSync(root,{recursive:true,force:true})}
 })

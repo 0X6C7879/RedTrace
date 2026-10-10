@@ -148,6 +148,11 @@ const KERNEL: readonly KernelEntry[] = [
 ]
 
 const MANAGED: readonly ManagedEntry[] = [
+  { id: 'redtrace-critical-events', label: '关键事件调度', category: 'feature', defaultOff: true, modulePath: 'packages/redtrace-engine/src/scheduler.ts', description: '运行时验证的关键事件提前规划', intro: '只消费平台确认或运行时验证的能力、路由及失效信号；停用后保留原 Fact＋Step 结束契约，不删除证据。' },
+  { id: 'redtrace-knowledge', label: '离线知识检索', category: 'feature', defaultOff: true, modulePath: 'packages/redtrace-engine/src/knowledge.ts', description: '本地 FTS5 搜索与有界读取', intro: '只检索本地知识源；命中不是漏洞证据，不自动执行 PoC。' },
+  { id: 'redtrace-browser-http', label: 'Browser + HTTP', category: 'feature', defaultOff: true, modulePath: 'packages/redtrace-engine/src/web.ts', description: '隔离持久浏览器与轻量 HTTP 批量验证', intro: '按 Project、Challenge、身份和 Session 隔离，默认串行；完整请求响应保存在权限受限的证据文件。' },
+  { id: 'redtrace-trace-search', label: 'Trace 检索', category: 'feature', defaultOff: true, modulePath: 'packages/redtrace-engine/src/store.ts', description: '项目内工具证据检索', intro: '按需搜索项目内工具记录；不广播完整历史，停用不删除原始证据。' },
+
   {
     id: 'redtrace-core', label: 'RedTrace Core', category: 'core', module: core, protectStop: true,
     modulePath: 'packages/redtrace-dsh/lib/core.js',
@@ -212,7 +217,7 @@ const MANAGED: readonly ManagedEntry[] = [
     id: 'redtrace-spill', label: '大结果落盘', category: 'feature',
     modulePath: 'vendor/deepseek-harness/packages/spill/spill-policy/lib/index.js',
     description: '超大工具结果落盘预览',
-    intro: 'DSH 原生 Spill:超过 50 KB 的纯文本工具结果完整写入会话文件,模型只看到头尾预览与取回指引,需要时再用 read / grep 按需读取;与工具结果裁剪互补而非替代。',
+    intro: 'DSH 原生 Spill:超过 8 KiB 的纯文本工具结果完整写入会话文件,模型只看到头尾预览与取回指引,需要时再用 read / grep 按需读取;与工具结果裁剪互补而非替代。',
   },
   {
     id: 'redtrace-tool-timeout', label: '工具超时', category: 'feature',
@@ -224,7 +229,7 @@ const MANAGED: readonly ManagedEntry[] = [
     id: 'redtrace-repeat-reminder', label: '重复调用提醒', category: 'feature',
     modulePath: 'vendor/deepseek-harness/packages/guard/repeat-tool-reminder/lib/index.js',
     description: '连续重复调用同一工具时提醒',
-    intro: 'DSH 原生重复提醒:同一工具以相同参数连续调用 3 / 5 / 8 次时向模型注入提醒,打断死循环式的重复调用,适合长时间自主运行的 Worker。',
+    intro: 'FGS 会话使用版本化尝试账本:完整输入、题目、身份、认证与通道状态一致时，第 3 次提醒一次；其他 DSH 会话保留原生重复提醒,打断死循环式的重复调用,适合长时间自主运行的 Worker。',
   },
   {
     id: 'redtrace-jev', label: 'Jev 语义辅助', category: 'feature', modulePath: 'packages/redtrace-engine/src/jev.ts', defaultOff: true,

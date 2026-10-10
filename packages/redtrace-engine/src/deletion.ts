@@ -59,6 +59,8 @@ export class ProjectDeletion {
       for (const target of [path.join(this.root, '.redtrace/projects', id), path.join(this.root, '.redtrace/log/projects', id), path.join(this.root, '.redtrace/audit', id), path.join(this.workspaceRoot, id)]) this.removeContained(target)
       this.store.transaction(() => {
         const durable = ['webshell', 'c2_listener', 'c2_session', 'c2_payload', 'c2_profile', 'credential_ref'], marks = durable.map(() => '?').join(',')
+        this.store.db.prepare('DELETE FROM trace_fts WHERE project=?').run(id)
+        this.store.db.prepare('DELETE FROM trace_audit_fts WHERE project=?').run(id)
         this.store.db.prepare(`DELETE FROM resource_audit_events WHERE project_id=? AND (resource_id IS NULL OR resource_id NOT IN (SELECT id FROM shared_resources WHERE project_id=? AND kind IN (${marks})))`).run(id, id, ...durable)
         this.store.db.prepare(`DELETE FROM shared_resources WHERE project_id=? AND kind NOT IN (${marks})`).run(id, ...durable)
         this.store.db.prepare('DELETE FROM project_lifecycle_events WHERE project_id=?').run(id)

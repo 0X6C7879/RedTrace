@@ -133,6 +133,29 @@ test('15: failed first planning remains eligible for retry', async () => {
   finally { await seen.scheduler.close(); store.close() }
 })
 
+test('critical verified events wake Decide at capacity, deduplicate, and do not relax Step limits', async () => {
+  const store = new Store(':memory:'), id = create(store), criticalWorker: Worker = { ...worker, name: 'critical', explore: true, maxRunning: 2 }
+  const cfg = { ...config(1), workers: [criticalWorker], maxWorkers: 2, maxProjectWorkers: 2 }
+  let decisions = 0, release!: () => void, executeStarted!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), executing = new Promise<void>(resolve => { executeStarted = resolve })
+  const scheduler = new Scheduler(store, cfg, async ({ run }) => {
+    if (run.activity === 'decide') decisions++
+    else { executeStarted(); await gate }
+  })
+  try {
+    scheduler.start(); await until(() => decisions === 1 && scheduler.activeRuns.length === 0)
+    store.addStep(id, { description: 'Long-running exploration', sourceIds: ['origin'] })
+    await executing
+    assert.equal(store.recordCriticalSignal(id, 'platform-flag:one', { source: 'platform-confirmed-flag' }), true)
+    assert.equal(store.recordCriticalSignal(id, 'platform-flag:one', { source: 'platform-confirmed-flag' }), false)
+    await until(() => decisions === 2)
+    await quiet()
+    assert.equal(scheduler.activeRuns.filter(run => run.activity === 'decide').length, 0)
+    assert.equal(store.project(id).acknowledgedCriticalSeq, 1)
+    assert.throws(() => store.addStep(id, { description: 'Over capacity', sourceIds: ['origin'] }, 1), /Active Step limit/)
+  } finally { release(); await scheduler.close(); store.close() }
+})
+
 test('16: disk recovery retains pending boundaries and retries interrupted planning', () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-wake-')), filename = path.join(root, 'engine.db')
   try {
@@ -178,4 +201,14 @@ test('19: no useful candidates permits an unsaturated plan without spinning', as
   const store = new Store(':memory:'), id = create(store), seen = counter(store, 3)
   try { seen.scheduler.start(); await until(() => seen.decisions() === 1); await quiet(); assert.equal(seen.decisions(), 1); assert.equal(store.nodes(id, ['step']).length, 0) }
   finally { await seen.scheduler.close(); store.close() }
+})
+
+test('critical-event plugin gate restores ordinary wake semantics without discarding signals',async()=>{
+ const store=new Store(':memory:'),id=ready(store)
+ let enabled=false,decisions=0
+ const scheduler=new Scheduler(store,config(),async({run})=>{if(run.activity==='decide')decisions++},undefined,()=>enabled)
+ try {
+  scheduler.start();store.recordCriticalSignal(id,'verified-new',{kind:'route.verified'});await quiet();assert.equal(decisions,0)
+  enabled=true;scheduler.wake();await until(()=>decisions===1);assert.equal(store.project(id).acknowledgedCriticalSeq,1)
+ } finally {await scheduler.close();store.close()}
 })

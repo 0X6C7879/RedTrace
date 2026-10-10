@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { HttpError, integer, now, requiredText } from './types.ts'
 import { verbIds } from './capability-verbs.ts'
@@ -40,6 +40,22 @@ export function conversationAuditEvents(event: Record<string, Json>): Record<str
   return content === event.content ? [event] : [{ ...event, content }]
 }
 
+export function redactSensitive(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactSensitive)
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+    if (/^(?:authorization|cookie|set-cookie|password|passwd|secret|token|api[_-]?key|flag|requestBody|responseBody|(?:request|response)?BodyBase64)$/i.test(key)) return [key, '[REDACTED]']
+    if (key.toLowerCase() === 'url' && typeof item === 'string') {
+      try {
+        const url = new URL(item)
+        for (const param of [...url.searchParams.keys()]) if (/^(?:auth(?:orization)?|cookie|csrf|key|password|secret|session|token|api[_-]?key|code)$/i.test(param)) url.searchParams.set(param, '[REDACTED]')
+        return [key, url.toString()]
+      } catch {}
+    }
+    return [key, redactSensitive(item)]
+  }))
+}
+
 export class Store {
   readonly db: DatabaseSync
   readonly changes = new EventEmitter()
@@ -55,6 +71,7 @@ export class Store {
       const version = metadata ? this.db.prepare('SELECT value FROM metadata WHERE key=?').get('schema') as { value: string } | undefined : undefined
       if (version?.value !== '2') { this.db.close(); throw new Error(`Unsupported engine schema ${version?.value ?? 'unknown'}; remove the old engine database before starting RedTrace`) }
     }
+    const importCriticalKeys=!this.db.prepare("SELECT 1 FROM sqlite_master WHERE name='critical_keys'").get()
     this.db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
       CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, data TEXT NOT NULL);
@@ -70,13 +87,23 @@ export class Store {
         step_id TEXT, activity TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL);
       CREATE UNIQUE INDEX IF NOT EXISTS one_active_step ON runs(project_id,step_id) WHERE status IN ('running','paused');
       CREATE UNIQUE INDEX IF NOT EXISTS one_decider ON runs(project_id) WHERE activity='decide' AND status='running';
+      CREATE INDEX IF NOT EXISTS runs_status_project ON runs(status,project_id,step_id);
+      CREATE INDEX IF NOT EXISTS runs_project_step ON runs(project_id,step_id);
       CREATE TABLE IF NOT EXISTS run_events(id INTEGER PRIMARY KEY AUTOINCREMENT,
         run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, type TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS audit_runs(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS audit_events(id INTEGER PRIMARY KEY AUTOINCREMENT, event_uid TEXT UNIQUE,
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES audit_runs(id) ON DELETE CASCADE, data TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS audit_events_project ON audit_events(project_id,id);
+      CREATE TABLE IF NOT EXISTS critical_keys(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,key TEXT NOT NULL,PRIMARY KEY(project_id,key));
+      CREATE TABLE IF NOT EXISTS channel_versions(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,channel TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(project_id,channel));
+      CREATE TABLE IF NOT EXISTS attempt_ledger(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,signature TEXT NOT NULL,count INTEGER NOT NULL,evidence TEXT NOT NULL,PRIMARY KEY(project_id,signature));
+      CREATE TABLE IF NOT EXISTS run_metrics(run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,call_id TEXT NOT NULL,kind TEXT NOT NULL,started INTEGER NOT NULL,ended INTEGER,PRIMARY KEY(run_id,call_id));
+      CREATE TABLE IF NOT EXISTS trace_cursors(project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,native INTEGER NOT NULL DEFAULT 0,audit INTEGER NOT NULL DEFAULT 0);
+      CREATE VIRTUAL TABLE IF NOT EXISTS trace_audit_fts USING fts5(project UNINDEXED,run_id UNINDEXED,event_id UNINDEXED,kind UNINDEXED,text,tokenize='unicode61');
+      CREATE VIRTUAL TABLE IF NOT EXISTS trace_fts USING fts5(project UNINDEXED,run_id UNINDEXED,event_id UNINDEXED,kind UNINDEXED,text,tokenize='unicode61');
     `)
+    if(importCriticalKeys) for(const row of this.db.prepare('SELECT id,data FROM projects').all()){const project=JSON.parse(String(row.data));for(const key of project.criticalSignals ?? [])this.db.prepare('INSERT OR IGNORE INTO critical_keys VALUES (?,?)').run(String(row.id),String(key))}
     this.db.prepare('INSERT OR IGNORE INTO metadata VALUES (?,?)').run('schema', '2')
     // Counters of deleted projects would otherwise linger forever and are never read again.
     this.db.prepare('DELETE FROM counters WHERE scope NOT IN (SELECT id FROM projects)').run()
@@ -122,6 +149,15 @@ export class Store {
     return JSON.parse(row.data)
   }
   projects(): Project[] { return (this.db.prepare('SELECT data FROM projects ORDER BY id').all() as { data: string }[]).map(r => JSON.parse(r.data)) }
+  setBenchmarkHosts(id: string, challenge: string, hosts?: string[]) {
+    return this.transaction(() => {
+      const project = this.writable(id)
+      project.benchmarkHosts = { ...project.benchmarkHosts }
+      if (hosts) project.benchmarkHosts[challenge] = hosts
+      else delete project.benchmarkHosts[challenge]
+      this.saveProject(project)
+    })
+  }
   private saveProject(p: Project) { this.db.prepare('UPDATE projects SET data=? WHERE id=?').run(JSON.stringify(p), p.id) }
   node<T extends GraphNode = GraphNode>(projectId: string, id: string, kind?: T['kind']): T {
     this.project(projectId)
@@ -131,12 +167,18 @@ export class Store {
     if (kind && value.kind !== kind) throw new HttpError(404, `${kind} not found`)
     return value
   }
-  nodes<T extends GraphNode = GraphNode>(projectId: string, kinds: T['kind'][]): T[] {
+  nodes<T extends GraphNode = GraphNode>(projectId: string, kinds: T['kind'][], page?: { offset?: number; limit?: number }): T[] {
     this.project(projectId)
     if (!kinds.length) return []
     const placeholders = kinds.map(() => '?').join(',')
-    return (this.db.prepare(`SELECT data FROM nodes WHERE project_id=? AND kind IN (${placeholders}) ORDER BY rowid`).all(projectId, ...kinds) as { data: string }[])
+    const offset = integer(page?.offset ?? 0, 'node offset'), limit = page?.limit === undefined ? undefined : integer(page.limit, 'node limit', 1)
+    const sql = `SELECT data FROM nodes WHERE project_id=? AND kind IN (${placeholders}) AND COALESCE(json_extract(data,'$.deleted'),0)=0 ORDER BY rowid${limit === undefined ? '' : ' LIMIT ? OFFSET ?'}`
+    return (this.db.prepare(sql).all(...(limit === undefined ? [projectId, ...kinds] : [projectId, ...kinds, limit, offset])) as { data: string }[])
       .map(row => JSON.parse(row.data))
+  }
+  nodeCount(projectId: string, kind: GraphNode['kind']): number {
+    this.project(projectId)
+    return Number((this.db.prepare("SELECT COUNT(*) AS value FROM nodes WHERE project_id=? AND kind=? AND COALESCE(json_extract(data,'$.deleted'),0)=0").get(projectId, kind) as { value: number }).value)
   }
   private saveNode(node: GraphNode) {
     this.db.prepare('INSERT INTO nodes VALUES (?,?,?,?) ON CONFLICT(project_id,id) DO UPDATE SET data=excluded.data')
@@ -429,7 +471,8 @@ export class Store {
     })
   }
   ownedRun(id: string, activity: Activity, worker: string, stepId: string | null = null): Run {
-    const run = this.runs(id).find(r => r.activity === activity && r.stepId === stepId && r.status === 'running')
+    const row = this.db.prepare('SELECT data FROM runs WHERE project_id=? AND activity=? AND step_id IS ? AND status=? LIMIT 1').get(id, activity, stepId, 'running') as { data: string } | undefined
+    const run = row ? JSON.parse(row.data) as Run : undefined
     if (!run || run.worker !== worker) throw new HttpError(409, 'Activity is not owned by this worker')
     return run
   }
@@ -457,6 +500,31 @@ export class Store {
     const rows = projectId === undefined ? this.db.prepare('SELECT data FROM runs ORDER BY rowid').all() : this.db.prepare('SELECT data FROM runs WHERE project_id=? ORDER BY rowid').all(projectId)
     return rows.map(r => JSON.parse(String(r.data)))
   }
+  runsByStatus(status: Run['status'], projectId?: string): Run[] {
+    const rows = projectId === undefined
+      ? this.db.prepare('SELECT data FROM runs WHERE status=? ORDER BY rowid').all(status)
+      : this.db.prepare('SELECT data FROM runs WHERE project_id=? AND status=? ORDER BY rowid').all(projectId, status)
+    return rows.map(r => JSON.parse(String(r.data)))
+  }
+  latestRun(projectId: string, stepId: string): Run | undefined {
+    const row = this.db.prepare('SELECT data FROM runs WHERE project_id=? AND step_id=? ORDER BY rowid DESC LIMIT 1').get(projectId, stepId) as { data: string } | undefined
+    return row ? JSON.parse(row.data) : undefined
+  }
+  recordCriticalSignal(projectId: string, key: string, data: Json) {
+    return this.transaction(() => {
+      const p = this.writable(projectId), signals = new Set(Array.isArray((p as Project & { criticalSignals?: string[] }).criticalSignals) ? (p as Project & { criticalSignals: string[] }).criticalSignals : [])
+      if(signals.has(key))return false
+      if(!this.db.prepare('INSERT OR IGNORE INTO critical_keys VALUES (?,?)').run(projectId,key).changes)return false
+      signals.add(key)
+      ;(p as Project & { criticalSignals: string[] }).criticalSignals = [...signals].slice(-256)
+      p.criticalSeq = (p.criticalSeq ?? 0) + 1; p.revision++; p.planningRevision++
+      this.saveProject(p)
+      this.db.prepare('INSERT INTO events(project_id,revision,type,node_id,data,created_at) VALUES (?,?,?,?,?,?)')
+        .run(projectId, p.revision, 'planning.critical', null, JSON.stringify(data), now())
+      this.pending.add(projectId)
+      return true
+    })
+  }
   saveRun(run: Run) {
     this.db.prepare('INSERT INTO runs VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,data=excluded.data').run(run.id, run.projectId, run.stepId, run.activity, run.status, JSON.stringify(run))
     const step = run.stepId ? this.node<Step>(run.projectId, run.stepId, 'step') : undefined
@@ -474,13 +542,13 @@ export class Store {
       const saved = row ? JSON.parse(String(row.data)) : null
       const result = { ...metadata }
       if (saved) {
-        if (saved.status !== 'running' && metadata.status === 'running' && !(saved.status === 'paused' && this.runs(projectId).some(r => r.id === id && r.status === 'running'))) for (const key of ['status', 'ended_at', 'exit_code', 'timed_out', 'cancelled']) result[key] = saved[key] ?? null
+        if (saved.status !== 'running' && metadata.status === 'running' && !(saved.status === 'paused' && this.db.prepare("SELECT 1 FROM runs WHERE id=? AND status='running'").get(id))) for (const key of ['status', 'ended_at', 'exit_code', 'timed_out', 'cancelled']) result[key] = saved[key] ?? null
         for (const key of ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens']) result[key] = Math.max(Number(saved[key]) || 0, Number(metadata[key]) || 0)
         result.session_id ??= saved.session_id
       }
       this.db.prepare('INSERT INTO audit_runs VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(id, projectId, JSON.stringify(result))
       for (const data of events) {
-        const event: { [key: string]: Json } = { ...data, project_id: projectId, run_id: id, task_type: data.task_type ?? metadata.task_type, worker: data.worker ?? metadata.worker, provider: data.provider ?? metadata.provider }
+        const event: { [key: string]: Json } = { ...redactSensitive(data) as { [key: string]: Json }, project_id: projectId, run_id: id, task_type: data.task_type ?? metadata.task_type, worker: data.worker ?? metadata.worker, provider: data.provider ?? metadata.provider }
         if (!['assistant.delta', 'thinking.delta', 'thinking.completed'].includes(String(data.kind))) {
           const inserted = this.db.prepare('INSERT OR IGNORE INTO audit_events(event_uid,project_id,run_id,data) VALUES (?,?,?,?)').run(typeof event.event_uid === 'string' ? event.event_uid : null, projectId, id, JSON.stringify(event))
           if (inserted.changes) event.id = Number(inserted.lastInsertRowid)
@@ -493,7 +561,7 @@ export class Store {
   claim(id: string, activity: Activity, worker: Pick<Worker, 'name' | 'backend'>, stepId: string | null = null): Run {
     return this.transaction(() => {
       const p = this.active(id)
-      if (activity === 'decide' && this.runs(id).some(r => r.activity === 'decide' && r.status === 'running')) throw new HttpError(409, 'Decide already running')
+      if (activity === 'decide' && this.db.prepare("SELECT 1 FROM runs WHERE project_id=? AND activity='decide' AND status='running' LIMIT 1").get(id)) throw new HttpError(409, 'Decide already running')
       let step: Step | undefined
       if (activity === 'execute') {
         if (!stepId) throw new HttpError(422, 'Step required')
@@ -501,16 +569,16 @@ export class Store {
         if (!['pending', 'paused'].includes(step.status)) throw new HttpError(409, 'Step is not claimable')
         if (this.node<Goal>(id, step.goalId, 'goal').status !== 'open') throw new HttpError(409, 'Step goal is closed')
       }
-      const paused = step?.status === 'paused' ? this.runs(id).find(r => r.stepId === stepId && r.status === 'paused') : undefined
+      const paused = step?.status === 'paused' ? this.runsByStatus('paused', id).find(r => r.stepId === stepId) : undefined
       if (paused && (paused.worker !== worker.name || paused.backend !== worker.backend)) throw new HttpError(409, 'Resume must keep the original worker and backend')
       if (paused?.pendingTools.length) throw new HttpError(409, 'Unconfirmed tool results prevent automatic resume')
       const run: Run = paused ?? { id: `run-${randomUUID()}`, projectId: id, stepId, activity, worker: worker.name, backend: worker.backend, status: 'running', startedAt: now(), endedAt: null,
         baseRevision: p.planningRevision, checkpoint: null, pendingTools: [], error: null, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
-        ...(activity === 'decide' ? { planningFactSeq: p.factSeq, planningEndedSeq: p.endedSeq } : {}) }
+        ...(activity === 'decide' ? { planningFactSeq: p.factSeq, planningEndedSeq: p.endedSeq, planningCriticalSeq: p.criticalSeq ?? 0 } : {}) }
       run.status = 'running'; run.endedAt = null
       this.saveRun(run)
       if (step) { step.status = 'running'; step.worker = worker.name; if (!paused) step.attempts++; this.saveNode(step) }
-      this.event(id, `${activity}.started`, step ?? null, { runId: run.id, factSeq: run.planningFactSeq, endedSeq: run.planningEndedSeq }); return run
+      this.event(id, `${activity}.started`, step ?? null, { runId: run.id, factSeq: run.planningFactSeq, endedSeq: run.planningEndedSeq, criticalSeq: run.planningCriticalSeq }); return run
     })
   }
   finishRun(runId: string, status: Run['status'], error: string | null = null) {
@@ -535,6 +603,7 @@ export class Store {
         if (status === 'succeeded') {
           p.decidedRevision = Math.max(p.decidedRevision, run.baseRevision); p.retryAfter = 0
           p.acknowledgedFactSeq = run.planningFactSeq ?? p.factSeq; p.acknowledgedEndedSeq = run.planningEndedSeq ?? p.endedSeq
+          p.acknowledgedCriticalSeq = run.planningCriticalSeq ?? p.criticalSeq ?? 0
           p.initialPlanningPending = false; p.planningRetryPending = false
         } else { p.retryAfter = Date.now() + 5000; p.planningRetryPending = true }
         this.saveProject(p); this.event(p.id, `decide.${status}`, null, { runId, error, baseRevision: run.baseRevision,
@@ -544,25 +613,111 @@ export class Store {
     })
   }
   checkpoint(runId: string, checkpoint: Json) { this.transaction(() => { const run = this.run(runId); run.checkpoint = checkpoint; this.saveRun(run) }) }
-  runEvent(runId: string, type: string, data: Json) {
+  runEvent(runId: string, type: string, data: Json, recordAudit = true) {
     this.transaction(() => {
       const run = this.run(runId), timestamp = now()
-      const inserted = this.db.prepare('INSERT INTO run_events(run_id,type,data,created_at) VALUES (?,?,?,?)').run(runId, type, JSON.stringify(data), timestamp)
-      const value = data && typeof data === 'object' && !Array.isArray(data) ? data as Record<string, Json> : {}
-      const event: { [key: string]: Json } = { event_uid: `native-${inserted.lastInsertRowid}`, run_sequence: Number(inserted.lastInsertRowid), timestamp, kind: type, data }
+      const safeData = redactSensitive(data) as Json
+      const inserted = this.db.prepare('INSERT INTO run_events(run_id,type,data,created_at) VALUES (?,?,?,?)').run(runId, type, JSON.stringify(safeData), timestamp)
+      const value = safeData && typeof safeData === 'object' && !Array.isArray(safeData) ? safeData as Record<string, Json> : {}
+      if (type === 'tool.started' || type === 'tool.ended') {
+        const text = JSON.stringify(safeData)
+        this.db.prepare('INSERT INTO trace_fts(project,run_id,event_id,kind,text) VALUES (?,?,?,?,?)').run(this.run(runId).projectId, runId, Number(inserted.lastInsertRowid), String(value.name ?? value.toolName ?? type), text)
+      }
+      const event: { [key: string]: Json } = { event_uid: `native-${inserted.lastInsertRowid}`, run_sequence: Number(inserted.lastInsertRowid), timestamp, kind: type, data: safeData }
       if (type === 'tool.started') { event.kind = 'tool.started'; event.title = value.name ?? null; event.call_id = value.id ?? null; event.arguments = value.arguments ?? null }
       if (type === 'tool_execution_end') { event.kind = 'tool.completed'; event.title = value.toolName ?? null; event.call_id = value.toolCallId ?? null; event.error = value.isError ?? false; event.content = JSON.stringify(value.result ?? null) }
       const metadata = JSON.parse(String(this.db.prepare('SELECT data FROM audit_runs WHERE id=?').get(runId)!.data))
-      this.audit(metadata, conversationAuditEvents(event))
+      if (recordAudit) this.audit(metadata, conversationAuditEvents(event))
     })
   }
-  toolStarted(runId: string, callId: string, data: Json, recordAudit = true) {
-    this.transaction(() => { const run = this.run(runId); if (run.status !== 'running') throw new HttpError(409, 'Run is not running'); if (run.pendingTools.includes(callId)) throw new HttpError(409, 'Tool already started'); run.pendingTools.push(callId); this.saveRun(run); if (recordAudit) this.runEvent(runId, 'tool.started', data) })
+  metricStart(runId: string, callId: string, kind: string) {
+    this.db.prepare('INSERT OR IGNORE INTO run_metrics VALUES (?,?,?,?,NULL)').run(runId, callId, kind, Date.now())
+  }
+  metricEnd(runId: string, callId: string) {
+    this.db.prepare('UPDATE run_metrics SET ended=? WHERE run_id=? AND call_id=? AND ended IS NULL').run(Date.now(), runId, callId)
+  }
+  runCosts(runId: string) {
+    const run = this.run(runId), end = run.endedAt ? Date.parse(run.endedAt) : Date.now(), start = Date.parse(run.startedAt)
+    const metrics = this.db.prepare('SELECT kind,started,ended FROM run_metrics WHERE run_id=? ORDER BY started').all(runId) as {kind:string;started:number;ended:number|null}[]
+    const sum = (kind: string) => metrics.filter(row=>row.kind===kind).reduce((total,row)=>total+Math.max(0,(row.ended ?? end)-row.started),0)
+    let covered=0,cursor=start
+    for (const row of metrics) { const left=Math.max(start,row.started),right=Math.min(end,row.ended ?? end); covered+=Math.max(0,right-Math.max(cursor,left)); cursor=Math.max(cursor,right) }
+    const tokens={input:run.inputTokens,output:run.outputTokens,cacheRead:run.cacheReadTokens,cacheWrite:run.cacheWriteTokens}
+    return {runId,projectId:run.projectId,status:run.status,tokens,totalTokens:Object.values(tokens).reduce((a,b)=>a+b,0),wallMs:Math.max(0,end-start),modelMs:sum('model'),toolMs:sum('tool'),platformMs:sum('platform'),waitOrUninstrumentedMs:Math.max(0,end-start-covered),instrumented:metrics.length>0,incompleteCalls:metrics.filter(row=>row.ended===null).length,imageTokenBreakdown:null}
+  }
+  attempt(runId: string, callId: string, data: Json, contextVersion = '') {
+    const run = this.run(runId), project = this.project(run.projectId)
+    const hasResources = this.db.prepare("SELECT 1 FROM sqlite_master WHERE name='shared_resources'").get()
+    const resources = hasResources ? this.db.prepare('SELECT id,status,metadata_json,secret_json,worker_paused,locked_by FROM shared_resources WHERE project_id=? OR project_id IS NULL ORDER BY id').all(run.projectId) : []
+    const value = data as Record<string, Json>, args = value.arguments as Record<string, Json> | undefined
+    const signature = createHash('sha256').update(JSON.stringify({ project: run.projectId, contextVersion, challenge: args?.challenge ?? args?.unique_code ?? run.stepId, name: value.name, input: value.arguments ?? data, factSeq: project.factSeq, resources, channels:this.db.prepare('SELECT channel,hash FROM channel_versions WHERE project_id=? ORDER BY channel').all(run.projectId) })).digest('hex')
+    const old = this.db.prepare('SELECT count,evidence FROM attempt_ledger WHERE project_id=? AND signature=?').get(run.projectId, signature) as { count: number; evidence: string } | undefined
+    const evidence = [...(old ? JSON.parse(old.evidence) : []), { runId, callId }].slice(-3), count = (old?.count ?? 0) + 1
+    this.db.prepare('INSERT INTO attempt_ledger VALUES (?,?,?,?) ON CONFLICT(project_id,signature) DO UPDATE SET count=excluded.count,evidence=excluded.evidence').run(run.projectId, signature, count, JSON.stringify(evidence))
+    return count === 3 ? `同一题目、身份及通道状态下已有 3 次相同尝试：${JSON.stringify(evidence)}。先检查这些调用的结果与失败边界；只有前置条件改变后再重试。未知结果或有副作用操作不会自动重放。` : undefined
+  }
+  toolStarted(runId: string, callId: string, data: Json, recordAudit = true, remind = true, contextVersion = '') {
+    return this.transaction(() => {
+      const run = this.run(runId)
+      if (run.status !== 'running') throw new HttpError(409, 'Run is not running')
+      if (run.pendingTools.includes(callId)) throw new HttpError(409, 'Tool already started')
+      run.pendingTools.push(callId); this.saveRun(run); this.runEvent(runId, 'tool.started', data, recordAudit)
+      const name = String((data as Record<string, Json>).name ?? '')
+      this.metricStart(runId, callId, name.startsWith('tsecbench_') ? 'platform' : 'tool')
+      return remind ? this.attempt(runId, callId, data, contextVersion) : undefined
+    })
   }
   toolEnded(runId: string, callId: string, data: Json) {
-    this.transaction(() => { const run = this.run(runId); run.pendingTools = run.pendingTools.filter(id => id !== callId); this.saveRun(run); this.runEvent(runId, 'tool.ended', data) })
+    this.transaction(() => { const run = this.run(runId); run.pendingTools = run.pendingTools.filter(id => id !== callId); this.saveRun(run); this.metricEnd(runId, callId); this.runEvent(runId, 'tool.ended', data) })
+  }
+  refreshTraces(projectId: string) {
+    this.transaction(() => {
+      let state = this.db.prepare('SELECT native,audit FROM trace_cursors WHERE project_id=?').get(projectId) as { native: number; audit: number } | undefined
+      if (!state) { this.db.prepare('DELETE FROM trace_fts WHERE project=?').run(projectId); this.db.prepare('DELETE FROM trace_audit_fts WHERE project=?').run(projectId); state = { native: 0, audit: 0 } }
+      for (const source of ['native', 'audit'] as const) {
+        for (;;) {
+          const rows = (source === 'native'
+            ? this.db.prepare('SELECT e.id,e.run_id,e.type,e.data FROM run_events e JOIN runs r ON r.id=e.run_id WHERE r.project_id=? AND e.id>? ORDER BY e.id LIMIT 500').all(projectId, state[source])
+            : this.db.prepare('SELECT id,run_id,data FROM audit_events WHERE project_id=? AND id>? ORDER BY id LIMIT 500').all(projectId, state[source])) as { id:number; run_id:string; type?:string; data:string }[]
+          for (const row of rows) {
+            const data = redactSensitive(JSON.parse(row.data)) as Record<string, Json>, kind = source === 'native' ? row.type : String(data.kind)
+            if (source === 'native' ? !['tool.started', 'tool.ended', 'tool_execution_end'].includes(String(kind)) : !['tool.started', 'tool.completed'].includes(String(kind)) || String(data.event_uid ?? '').startsWith('native-')) continue
+            const table = source === 'native' ? 'trace_fts' : 'trace_audit_fts'
+            this.db.prepare(`DELETE FROM ${table} WHERE project=? AND event_id=?`).run(projectId, row.id)
+            this.db.prepare(`INSERT INTO ${table} VALUES (?,?,?,?,?)`).run(projectId, row.run_id, row.id, String(data.name ?? data.title ?? kind), JSON.stringify(data))
+          }
+          state[source] = rows.at(-1)?.id ?? state[source]
+          if (rows.length < 500) break
+        }
+      }
+      this.db.prepare('INSERT INTO trace_cursors VALUES (?,?,?) ON CONFLICT(project_id) DO UPDATE SET native=excluded.native,audit=excluded.audit').run(projectId,state.native,state.audit)
+    })
+  }
+  traceSearch(projectId: string, query: string, limit = 5) {
+    this.project(projectId)
+    const terms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [])].slice(0, 16)
+    if (!terms.length) return []
+    this.refreshTraces(projectId)
+    const match = terms.map(term => `"${term.replaceAll('"', '""')}"`).join(' OR ')
+    const searchTable = (table: string, source: string) => (this.db.prepare(`SELECT run_id AS runId,event_id AS eventId,kind,bm25(${table}) AS rank FROM ${table} WHERE project=? AND ${table} MATCH ? ORDER BY rank LIMIT ?`).all(projectId,match,Math.min(5,integer(limit,'trace limit',1))) as {runId:string;eventId:number;kind:string;rank:number}[]).map(row=>({...row,source}))
+    return [...searchTable('trace_fts','native'),...searchTable('trace_audit_fts','audit')].sort((a,b)=>a.rank-b.rank).slice(0,Math.min(5,limit))
+  }
+  traceEvent(projectId: string, runId: string, eventId: number, source = 'native') {
+    if (source === 'audit') {
+      this.project(projectId)
+      const row = this.db.prepare('SELECT data FROM audit_events WHERE project_id=? AND run_id=? AND id=?').get(projectId,runId,integer(eventId,'event id',1)) as {data:string} | undefined
+      if (!row) throw new HttpError(404,'Trace event not found in this project')
+      const data = redactSensitive(JSON.parse(row.data)) as Record<string,Json>
+      return {id:eventId,runId,type:String(data.kind),createdAt:String(data.timestamp ?? ''),data:data as Json}
+    }
+    if (source !== 'native') throw new HttpError(422,'Invalid trace source')
+    this.project(projectId)
+    const row = this.db.prepare('SELECT e.id,e.run_id AS runId,e.type,e.data,e.created_at AS createdAt FROM run_events e JOIN runs r ON r.id=e.run_id WHERE r.project_id=? AND e.run_id=? AND e.id=?')
+      .get(projectId, runId, integer(eventId, 'event id', 1)) as { id: number; runId: string; type: string; data: string; createdAt: string } | undefined
+    if (!row) throw new HttpError(404, 'Trace event not found in this project')
+    return { ...row, data: redactSensitive(JSON.parse(row.data)) as Json }
   }
   recover() {
-    for (const run of this.runs().filter(r => r.status === 'running')) this.finishRun(run.id, 'unknown', run.pendingTools.length ? 'Process stopped with an unconfirmed tool result; do not replay automatically' : 'Process stopped before run completion')
+    for (const run of this.runsByStatus('running')) this.finishRun(run.id, 'unknown', run.pendingTools.length ? 'Process stopped with an unconfirmed tool result; do not replay automatically' : 'Process stopped before run completion')
   }
 }

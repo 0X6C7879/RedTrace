@@ -186,7 +186,7 @@ const ADAPTERS: readonly AdapterDefinition[] = [
     establish: '先等待 C2/SSH 会话真实上线，再通过 remote.session.probe 验证。',
   },
   {
-    id: 'proxy', label: '代理/Pivot', pluginId: 'redtrace-pivot', verbs: ['pivot.socks', 'pivot.validate', 'pivot.paths', 'pivot.close'], stub: true,
+    id: 'proxy', label: '代理/Pivot', pluginId: 'redtrace-pivot', verbs: ['pivot.socks', 'pivot.validate', 'pivot.paths', 'pivot.close'],
     kinds: ['proxy'],
     establish: '使用 pivot.socks 建立受管 SSH Forward、Chisel 或 Ligolo 路径。',
   },
@@ -200,11 +200,11 @@ const ADAPTERS: readonly AdapterDefinition[] = [
 const STUB_VERBS: readonly VerbDefinition[] = [
   {
     id: 'pivot.socks', action: 'pivot.socks', risk: 'medium',
-    description: 'Establish a managed SSH Forward, Chisel, or Ligolo process. Worker calls require matching project preauthorization.',
-    parameters: Type.Object({ provider: Type.Union(['ssh-forward', 'chisel', 'ligolo'].map(v => Type.Literal(v))), source_session_id: Type.Optional(Type.String()), mode: Type.Optional(Type.Union([Type.Literal('server'), Type.Literal('client')])), bind: Type.Optional(Type.String()), bind_host: Type.Optional(Type.String()), bind_port: Type.Optional(Type.Integer()), server: Type.Optional(Type.String()), remote: Type.Optional(Type.String()), target_scope: Type.Optional(Type.String()), protocols: Type.Optional(Type.Array(Type.Union([Type.Literal('tcp'), Type.Literal('udp')]))), name: Type.Optional(Type.String()) }),
+    description: 'Establish a managed SSH Forward or Chisel process (Ligolo is disabled). Worker calls require matching project preauthorization.',
+    parameters: Type.Object({ provider: Type.Union(['ssh-forward', 'chisel'].map(v => Type.Literal(v))), socks_endpoint: Type.Optional(Type.String()), source_session_id: Type.Optional(Type.String()), mode: Type.Optional(Type.Union([Type.Literal('server'), Type.Literal('client')])), bind: Type.Optional(Type.String()), bind_host: Type.Optional(Type.String()), bind_port: Type.Optional(Type.Integer()), server: Type.Optional(Type.String()), remote: Type.Optional(Type.String()), target_scope: Type.Optional(Type.String()), protocols: Type.Optional(Type.Array(Type.Union([Type.Literal('tcp'), Type.Literal('udp')]))), name: Type.Optional(Type.String()) }),
     arguments: args => ({ ...args }),
   },
-  { id: 'pivot.validate', action: 'pivot.validate', risk: 'low', description: 'Validate the actual managed route endpoint.', parameters: Type.Object({ via: Type.String(), host: Type.Optional(Type.String()), port: Type.Integer({ minimum: 1, maximum: 65535 }), timeout: timeoutSchema }), arguments: args => ({ ...args }) },
+  { id: 'pivot.validate', action: 'pivot.validate', risk: 'low', description: 'Validate the actual managed route endpoint.', parameters: Type.Object({ via: Type.String(), host: Type.Optional(Type.String()), port: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })), url: Type.Optional(Type.String()), timeout: timeoutSchema }), arguments: args => ({ ...args }) },
   { id: 'pivot.paths', action: 'pivot.paths', risk: 'low', description: 'List live directional routes matching a target scope.', parameters: Type.Object({ target: Type.String() }), arguments: args => ({ ...args }) },
   { id: 'pivot.close', action: 'pivot.close', risk: 'medium', description: 'Stop a managed route and mark it offline.', parameters: Type.Object({ via: Type.String() }), arguments: args => ({ ...args }) },
 ]
@@ -250,13 +250,13 @@ function channelSupports(row: ChannelRow, verb: string): boolean {
   return false
 }
 
-function candidateChannels(runtime: VerbRuntime, verb: string): ChannelRow[] {
+function candidateChannels(runtime: VerbRuntime, verb: string, projectId?: string): ChannelRow[] {
   const kinds = [...new Set(availableAdapters(runtime, verb).flatMap(adapter => adapter.kinds))]
   if (!kinds.length) return []
   const rows = runtime.operations.store.db
-    .prepare(`SELECT id,kind,name,target,last_seen_at,metadata_json FROM shared_resources WHERE kind IN (${kinds.map(() => '?').join(',')}) AND status='available' ORDER BY last_seen_at DESC`)
+    .prepare(`SELECT id,kind,name,target,last_seen_at,metadata_json FROM shared_resources WHERE kind IN (${kinds.map(() => '?').join(',')}) AND (status='available' ${verb==='pivot.validate' ? "OR status='degraded'" : ''}) ORDER BY last_seen_at DESC`)
     .all(...kinds) as unknown as ChannelRow[]
-  return rows.filter(row => channelSupports(row, verb))
+  return rows.filter(row => (projectId === undefined || runtime.operations.resource(row.id).project_id === null || runtime.operations.resource(row.id).project_id === projectId) && channelSupports(row, verb))
 }
 
 export class VerbDispatchError extends Error {
@@ -266,8 +266,8 @@ export class VerbDispatchError extends Error {
 
 /** Pick the channel for one verb call: explicit `via`, host-matching
  * `target`, or the single unambiguous candidate. Never guesses silently. */
-function selectChannel(runtime: VerbRuntime, verb: string, args: { via?: unknown; target?: unknown }): ChannelRow {
-  const candidates = candidateChannels(runtime, verb)
+function selectChannel(runtime: VerbRuntime, verb: string, args: { via?: unknown; target?: unknown }, projectId?: string): ChannelRow {
+  const candidates = candidateChannels(runtime,verb,projectId)
   const listing = () => candidates.map(row => ({ id: row.id, kind: row.kind, target: row.target }))
   const establish = [...new Set(availableAdapters(runtime, verb).map(adapter => adapter.establish))]
   const fail = (message: string): never => { throw new VerbDispatchError({ available: listing(), establish }, message) }
@@ -307,12 +307,20 @@ export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Rec
   if (!adapters.length) throw new VerbDispatchError({ available: [], establish }, `动词 ${verb} 当前没有可用适配器(插件已停用或尚未接入)。`)
   if (verb === 'pivot.socks') {
     const source = typeof args.source_session_id === 'string' ? runtime.operations.resource(args.source_session_id) : { id: '', target: String(args.target_scope ?? '') }
+    if ('project_id' in source && source.project_id !== null && source.project_id !== context.projectId) throw new Error('Source session belongs to another project')
     if (!runtime.operations.authorized(context.projectId, 'pivot.open', source)) return { status: 'authorization_required', error_code: 'AUTH_FAILED', note: 'A trusted human must issue a matching project authorization before a worker opens a route.' }
     return runtime.operations.pivots.open(context.projectId, { ...args, actor_type: 'worker', actor: context.worker })
   }
   if (verb === 'pivot.paths') return { target: args.target, paths: runtime.operations.pivots.paths(context.projectId, String(args.target)) }
-  const channel = selectChannel(runtime, verb, args as { via?: unknown; target?: unknown })
-  if (verb === 'pivot.validate') return runtime.operations.pivots.validate(channel.id, args)
+  const channel = selectChannel(runtime,verb,args as {via?:unknown;target?:unknown},context.projectId)
+  const resource = runtime.operations.resource(channel.id)
+  if (resource.project_id !== null && resource.project_id !== context.projectId) throw new Error('Channel belongs to another project')
+  runtime.operations.available(resource,{actor_type:'worker',actor:context.worker})
+  if (verb === 'pivot.validate') {
+    const lease=runtime.operations.lease(resource,{owner_type:'worker',owner:context.worker,run_id:context.runId,ttl_seconds:60})
+    try { return await runtime.operations.pivots.validate(channel.id,args) }
+    finally { runtime.operations.releaseLease(runtime.operations.resource(channel.id),{actor_type:'worker',actor:context.worker,fencing_token:lease.fencing_token}) }
+  }
   if (verb === 'pivot.close') return { route_id: channel.id, closed: await runtime.operations.pivots.close(channel.id) }
   if (verb.startsWith('remote.terminal.')) {
     const actor = { actor_type: 'worker', actor: context.worker }
@@ -360,13 +368,13 @@ export async function verbTask(runtime: VerbRuntime, taskId: string): Promise<Re
 }
 
 /** Available channels for a Step's declared verbs, for the launch prompt slice. */
-export function channelsFor(runtime: VerbRuntime, requires: readonly string[], limit = 8) {
+export function channelsFor(runtime: VerbRuntime, requires: readonly string[], limit = 8, projectId?: string) {
   const kinds = [...new Set(requires.flatMap(verb => availableAdapters(runtime, verb).flatMap(adapter => adapter.kinds)))]
   if (!kinds.length) return []
   const rows = runtime.operations.store.db
     .prepare(`SELECT id,kind,name,target,status,last_seen_at,metadata_json FROM shared_resources WHERE kind IN (${kinds.map(() => '?').join(',')}) AND status='available' ORDER BY last_seen_at DESC`)
     .all(...kinds) as unknown as Array<ChannelRow & { status: string }>
-  return rows.filter(row => requires.some(verb => channelSupports(row, verb))).slice(0, limit).map(({ metadata_json: _metadata, name: _name, last_seen_at: _seen, ...row }) => row)
+  return rows.filter(row => (projectId === undefined || runtime.operations.resource(row.id).project_id === null || runtime.operations.resource(row.id).project_id === projectId) && requires.some(verb => channelSupports(row, verb))).slice(0, limit).map(({ metadata_json: _metadata, name: _name, last_seen_at: _seen, ...row }) => row)
 }
 
 // ─── Agent tool factory ───────────────────────────────────────────────────────
@@ -437,7 +445,8 @@ export function resourceTools(context: TaskContext, runtime: VerbRuntime): Agent
       }),
       args => {
         if (!context.run.stepId) throw new Error('resource_register requires an active Step')
-        const created = ops.create(context.run.projectId, { ...args, target: args.target ?? '', summary: args.summary ?? '', metadata: args.metadata ?? {}, secret: args.secret ?? {}, ...worker })
+        const metadata = { ...args.metadata }; for (const key of ['runtime_verified','verification_version','verified_at','verified_endpoint','verified_capabilities']) delete metadata[key]
+        const created = ops.create(context.run.projectId, { ...args, target: args.target ?? '', summary: args.summary ?? '', metadata, secret: args.secret ?? {}, ...worker })
         return { resource: created.resource, ...(created.resource.kind === 'c2_session' && created.secret_once ? { secret_once: created.secret_once } : {}) }
       }),
     verbTool('resource_list',

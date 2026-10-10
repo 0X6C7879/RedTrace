@@ -198,7 +198,7 @@ test('read_graph keeps older relevant Facts discoverable and pages over the orig
     service.setScenes(legacyScenes); service.setEnabled(true)
     const context = { store, run, worker, config: { maxSteps: null } as EngineConfig, signal: new AbortController().signal, jev: service } as TaskContext
     const read = graphTools(context, () => {}).find(item => item.name === 'read_graph')!
-    const page = async (args: { offset?: number; full?: boolean; id?: string }) => {
+    const page = async (args: { offset?: number; full?: boolean; id?: string; limit?: number }) => {
       const block = (await read.execute('read', args)).content[0]!
       if (block.type !== 'text') throw new Error('Expected graph text')
       return JSON.parse(block.text)
@@ -207,8 +207,21 @@ test('read_graph keeps older relevant Facts discoverable and pages over the orig
     assert.equal(focused.nextOffset, 100)
     assert.equal(focused.facts.some((fact: { id: string }) => fact.id === old.id), true)
     assert.ok(focused.jev.omittedIds.length > 0)
-    assert.equal((await page({ full: true })).facts.length, 100)
-    assert.ok((await page({ offset: 100 })).facts.length > 0)
+    const large = await page({ full: true })
+    assert.ok(large.evidenceId); assert.ok(large.evidenceBytes > 8192)
+    const evidence = graphTools(context, () => {}).find(item => item.name === 'evidence_read')!
+    let offset = 0, exact = ''
+    while (offset < large.evidenceBytes) {
+      const read = await evidence.execute('read', { id: large.evidenceId, offset }) as { content: { type: string; text?: string }[]; details: { nextOffset: number | null } }
+      const block = read.content[0]!
+      if (block.type !== 'text' || typeof block.text !== 'string') throw new Error('Expected evidence text')
+      const separator = block.text.indexOf('\n')
+      exact += block.text.slice(separator + 1)
+      if (read.details.nextOffset === null) break
+      offset = read.details.nextOffset
+    }
+    assert.equal(JSON.parse(exact).facts.length, 100)
+    assert.equal((await page({ full: true, offset: 100, limit: 1 })).facts.length, 1)
     assert.equal((await page({ id: old.id })).id, old.id)
     service.close()
   } finally {

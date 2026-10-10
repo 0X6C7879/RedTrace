@@ -16,7 +16,7 @@ const goalUpdate = Type.Object({ description: Type.Optional(text), status: Type.
 export function graphRoutes(router: Router, store: Store, maxSteps: () => number | null = () => null) {
   const p = (c: RequestContext) => c.params.project
   const requireActive = (id: string) => { const project = store.project(id); if (project.status !== 'active') throw new HttpError(403, `Project is ${project.status}`) }
-  const intent = (id: string, sid: string) => { const step = store.node<Step>(id, sid, 'step'); if (step.deleted) throw new HttpError(404, 'Intent not found'); return legacyIntent(step, store.runs(id).findLast(r => r.stepId === sid)) }
+  const intent = (id: string, sid: string) => { const step = store.node<Step>(id, sid, 'step'); if (step.deleted) throw new HttpError(404, 'Intent not found'); return legacyIntent(step, store.latestRun(id, sid)) }
   const runFor = (id: string, sid: string, worker: string, claim = false) => {
     const step = store.node<Step>(id, sid, 'step')
     if (claim && step.status === 'pending') return store.claim(id, 'execute', { name: worker, backend: 'dsh' }, sid)

@@ -1,8 +1,9 @@
+import {createHash} from 'node:crypto'
 import path from 'node:path'
 import { mkdir, realpath } from 'node:fs/promises'
 import { watch } from 'node:fs'
 import { createEngine } from '../src/index.ts'
-import { graphTools, activityPrompt, activityLimits, graphUpdate, runPi, runMock } from '../src/runner.ts'
+import { criticalNotice, efficiencyToolAvailable, graphTools, activityPrompt, activityLimits, graphUpdate, runPi, runMock } from '../src/runner.ts'
 import { isJevRecoveryPath, traceCall } from '../src/jev.ts'
 import { verbTools, verbToolAvailable, channelsFor, resourceTools } from '../src/capability-verbs.ts'
 import { PluginManager, registerPluginRoutes } from '../../redtrace-dsh/lib/plugins.js'
@@ -114,7 +115,7 @@ export async function apply(ctx, options) {
       if (!state()?.presets.has(preset)) return undefined
       return worker.backend !== 'mock' && step?.executionProfile === 'isolated' ? { ...worker, backend: 'dsh' } : worker
     },
-    runTask: context => context.run.backend === 'mock' ? runMock(context) : context.run.backend === 'pi' ? runPi(context, engine.capabilities, verbRuntime) : executeDsh(context) })
+    runTask: input => { const context = { ...input, featureAvailable: id => manager.running(id) }; return context.run.backend === 'mock' ? runMock(context) : context.run.backend === 'pi' ? runPi(context, engine.capabilities, verbRuntime) : executeDsh(context) } })
   const runtime = { runtime: true, root, server: options.server, sessionRoot: path.join(managed, 'sessions'), skillsDir: path.join(managed, 'skills'), workspacesDir: engine.configuration.workspaceRoot,
     pluginsManifest: path.join(managed, 'plugins.json'), engineScheduler: engine.scheduler }
   // The repo-local security-asset map (wordlists / payloads / PoC references /
@@ -194,7 +195,7 @@ export async function apply(ctx, options) {
       if (run.activity === 'execute') {
         // Skills mount DSH-natively from the full managed skills root; the
         // agent discovers and loads them through the skill tool on demand.
-        scoped = await mountExecutionTools(scoped, { task, cwd, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.running(id),
+        scoped = await mountExecutionTools(scoped, { task, cwd, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.running(id), contextualAttempts: true,
           onRefresh: refresh => sessionRefresh.set(run.id, async () => { await refresh(); refreshLiveTools() }) })
         if (jev?.isEnabled('skill_suggestion')) void (async () => {
           try {
@@ -223,14 +224,16 @@ export async function apply(ctx, options) {
           if (result.terminate) execution.concludeTurn?.()
           return result
         } })
-      for (const t of [...tools.filter(t => !t.name.startsWith('jev_')), ...(run.activity === 'execute' ? resourceTools(context, verbRuntime) : [])]) registerTool(t)
+      for (const t of [...tools.filter(t => !t.name.startsWith('jev_') && !/^(?:knowledge_|trace_|web_|http_batch$)/.test(t.name)), ...(run.activity === 'execute' ? resourceTools(context, verbRuntime) : [])]) registerTool(t)
       const liveVerbs = run.activity === 'execute' ? verbTools(context, verbRuntime, step) : []
       const refreshJevTools = refreshToolRegistrations(tools.filter(t => t.name.startsWith('jev_')),
         t => jev?.isEnabled(t.name === 'jev_choose' ? 'candidate_choice' : 'attack_readiness'), registerTool)
+      const refreshEfficiencyTools = refreshToolRegistrations(tools.filter(t => /^(?:knowledge_|trace_|web_|http_batch$)/.test(t.name)), t => efficiencyToolAvailable(context, t.name), registerTool)
       const refreshVerbTools = refreshToolRegistrations(liveVerbs, t => verbToolAvailable(verbRuntime, t.name), registerTool)
       refreshLiveTools = () => {
         refreshJevTools()
         refreshVerbTools()
+        refreshEfficiencyTools()
       }
       refreshLiveTools()
       // The conclude phase cuts non-graph tools at execution time: a
@@ -250,6 +253,8 @@ export async function apply(ctx, options) {
     const unlisten = ctx.on('session/event', (session, event) => {
       if (String(session.id) !== run.id) return
       const data = event.data ?? {}
+      if (event.type === 'step/start') store.metricStart(run.id, `model-${data.turn}-${data.step}`, 'model')
+      if (event.type === 'assistant/message' || event.type === 'step/end') store.metricEnd(run.id, `model-${data.turn}-${data.step}`)
       if (jev?.isEnabled('trace_observer')) {
         if (event.type === 'tool/call' && data.callId) tracePending.set(String(data.callId), {
           name: String(data.name ?? 'unknown'), args: data.arguments, revision: store.project(run.projectId).revision,
@@ -270,7 +275,10 @@ export async function apply(ctx, options) {
         // DSH's projected tool/call is the canonical audit row. The lifecycle
         // tracker still owns pendingTools, but must not emit a second started
         // row through Store.runEvent.
-        if (event.type === 'tool/call' && data.callId) store.toolStarted(run.id, String(data.callId), json(data), false)
+        if (event.type === 'tool/call' && data.callId) {
+          const notice = store.toolStarted(run.id, String(data.callId), json(data), false, manager.running('redtrace-repeat-reminder'),createHash('sha256').update(JSON.stringify(config.commonEnv ?? {})).digest('hex'))
+          if (notice && handle) handle.agent.inject(message(notice))
+        }
         if (event.type === 'tool/result' && data.message?.source?.callId) store.toolEnded(run.id, String(data.message.source.callId), json(data))
         accumulateUsage(task, event)
         if (task.usage) { const current = store.run(run.id); Object.assign(current, task.usage); store.saveRun(current) }
@@ -283,8 +291,18 @@ export async function apply(ctx, options) {
     const prompt = text => handle.agent.followup(message(text))
     // Mid-run blackboard updates reach a running Execute the same way the pi backend steers it.
     let cursor = Number(store.db.prepare('SELECT COALESCE(MAX(id),0) AS value FROM events WHERE project_id=?').get(run.projectId).value)
+    let criticalReminderSent = false
     const steer = projectId => {
-      if (projectId !== run.projectId || run.activity !== 'execute' || finished || concludeOnly || !handle) return
+      if (projectId !== run.projectId || finished || concludeOnly || !handle) return
+      if (run.activity === 'decide') {
+        const project = store.project(projectId)
+        const notice=criticalNotice(project,run,criticalReminderSent,manager.running('redtrace-critical-events'))
+        if(notice){
+          criticalReminderSent = true
+          handle.agent.inject(message(notice))
+        }
+        return
+      }
       const update = graphUpdate(store, projectId, cursor, run.stepId); cursor = update.cursor
       const { relevant } = update
       if (relevant && store.project(projectId).status === 'active') handle.agent.inject(message('共享图已有更新。需要时用 read_graph 查看，不必改变当前 Step。'))
@@ -301,9 +319,9 @@ export async function apply(ctx, options) {
       signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) { cancel(); return }
       store.checkpoint(run.id, { sessionId: run.id })
       // Same minimal launch slice as runPi; the agent reads the rest of the graph on demand.
-      const graph = store.graph(run.projectId)
+      const graph={project:store.project(run.projectId),goals:[store.node(run.projectId,'goal','goal')],facts:[store.node(run.projectId,'origin','fact')]}
       prompt(resume ? '继续' : JSON.stringify({ project: graph.project, goal: graph.goals.find(g => g.id === 'goal'), step: step ?? null, origin: graph.facts[0],
-        ...(step?.requires?.length ? { channels: channelsFor(verbRuntime, step.requires) } : {}),
+        ...(step?.requires?.length ? { channels: channelsFor(verbRuntime,step.requires,8,run.projectId) } : {}),
         instruction: '用 read_graph 获取所需状态后推进任务。' }))
       if (pendingSkillNotice && jev?.isEnabled('skill_suggestion')) void prompt(pendingSkillNotice).catch(() => {})
       pendingSkillNotice = ''

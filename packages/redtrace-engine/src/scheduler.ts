@@ -4,7 +4,7 @@ import { HttpError } from './types.ts'
 import type { EngineConfig, Goal, Run, RunStatus, Worker, Step } from './types.ts'
 import type { JevService } from './jev.ts'
 
-export interface TaskContext { store: Store; run: Run; worker: Worker; config: EngineConfig; signal: AbortSignal; jev?: JevService }
+export interface TaskContext { store: Store; run: Run; worker: Worker; config: EngineConfig; signal: AbortSignal; jev?: JevService; featureAvailable?: (id: string) => boolean }
 export type RunTask = (context: TaskContext) => Promise<void>
 export type SelectWorker = (worker: Worker, activity: Run['activity'], step?: Step) => Worker | undefined
 type Active = { run: Run; abort: AbortController; completion: Promise<void> }
@@ -21,20 +21,21 @@ export class Scheduler {
   private cursor = 0
   private readonly changed = () => this.wake()
   private readonly selectWorker: SelectWorker
-  constructor(store: Store, config: EngineConfig, execute: RunTask, selectWorker: SelectWorker = worker => worker) { this.store = store; this.config = config; this.execute = execute; this.selectWorker = selectWorker }
+  private readonly criticalEnabled: () => boolean
+  constructor(store: Store, config: EngineConfig, execute: RunTask, selectWorker: SelectWorker = worker => worker, criticalEnabled: () => boolean = () => true) { this.store = store; this.config = config; this.execute = execute; this.selectWorker = selectWorker; this.criticalEnabled = criticalEnabled }
   start() {
     if (!this.closed) return
     this.closed = false; this.store.recover(); this.store.changes.on('change', this.changed); this.wake()
   }
   update(config: EngineConfig) { this.config = config; this.wake() }
-  get activeRuns() { return this.store.runs().filter(r => r.status === 'running') }
+  get activeRuns() { return this.store.runsByStatus('running') }
   wake() {
     if (this.closed || this.scheduled) return
     this.scheduled = true
     queueMicrotask(() => { this.scheduled = false; if (!this.closed) this.dispatch() })
   }
-  private select(activity: Run['activity'], resume?: Run, step?: Step): Worker | undefined {
-    const count = (name: string) => this.activeRuns.filter(r => r.worker === name).length
+  private select(activity: Run['activity'], resume?: Run, step?: Step, active = this.activeRuns): Worker | undefined {
+    const count = (name: string) => active.filter(r => r.worker === name).length
     return this.config.workers.map(w => this.selectWorker(w, activity, step)).filter((w): w is Worker => !!w && w.enabled && this.eligible(w, activity, step) && (!resume || (w.name === resume.worker && w.backend === resume.backend)) && count(w.name) < w.maxRunning)
       .sort((a, b) => a.priority - b.priority || count(a.name) - count(b.name) || a.name.localeCompare(b.name))[0]
   }
@@ -56,14 +57,16 @@ export class Scheduler {
         if (this.store.run(task.run.id).status !== 'running' || (project.status !== 'active' && !(project.status === 'completed' && task.run.activity === 'decide')) || step?.status === 'cancelled' || !goalOpen) task.abort.abort('Project or Step stopped')
       } catch (reason) { if (reason instanceof HttpError && reason.status === 404) task.abort.abort('Project deleted'); else throw reason }
     }
+    const activeRuns = this.activeRuns
+    const launch = (run: Run, worker: Worker) => { activeRuns.push(run); this.launch(run,worker) }
     const projects = this.store.projects().filter(p => p.status === 'active')
     if (!projects.length) return
     let retryAt = Infinity, madeProgress = true
-    while (madeProgress && this.activeRuns.length < this.config.maxWorkers) {
+    while (madeProgress && activeRuns.length < this.config.maxWorkers) {
       madeProgress = false
-      for (let i = 0; i < projects.length && this.activeRuns.length < this.config.maxWorkers; i++) {
+      for (let i = 0; i < projects.length && activeRuns.length < this.config.maxWorkers; i++) {
         const project = projects[(this.cursor + i) % projects.length]
-        const active = this.activeRuns
+        const active = activeRuns
         if (active.filter(r => r.projectId === project.id).length >= this.config.maxProjectWorkers) continue
         if (!active.some(r => r.projectId === project.id) && new Set(active.map(r => r.projectId)).size >= this.config.maxRunningProjects) continue
         const p = this.store.project(project.id)
@@ -80,23 +83,24 @@ export class Scheduler {
         const occupied = steps.filter(step => ['pending', 'running', 'paused'].includes(step.status)).length
         const hasCapacity = this.config.maxSteps === null || occupied < this.config.maxSteps
         const pendingPair = p.factSeq > p.acknowledgedFactSeq && p.endedSeq > p.acknowledgedEndedSeq
-        const needsDecide = bootstrapComplete && hasCapacity && (p.initialPlanningPending || p.planningRetryPending || pendingPair)
+        const pendingCritical = this.criticalEnabled() && (p.criticalSeq ?? 0) > (p.acknowledgedCriticalSeq ?? 0)
+        const needsDecide = bootstrapComplete && (hasCapacity || pendingCritical) && (p.initialPlanningPending || p.planningRetryPending || pendingPair || pendingCritical)
           && !active.some(r => r.projectId === p.id && r.activity === 'decide')
         if (needsDecide) {
           if (p.retryAfter > Date.now()) retryAt = Math.min(retryAt, p.retryAfter)
           else {
-            const worker = this.select('decide')
-            if (worker) { this.launch(this.store.claim(p.id, 'decide', worker), worker); madeProgress = true; continue }
+            const worker = this.select('decide',undefined,undefined,activeRuns)
+            if (worker) { launch(this.store.claim(p.id, 'decide', worker), worker); madeProgress = true; continue }
           }
         }
         // An unavailable Decide never prevents existing execution work from starting.
         const runnable = steps.filter(s => ['pending', 'paused'].includes(s.status) && goals.get(s.goalId)?.status === 'open')
           .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
         for (const step of runnable) {
-          const paused = step.status === 'paused' ? this.store.runs(p.id).find(r => r.stepId === step.id && r.status === 'paused') : undefined
-          const worker = this.select('execute', paused, step)
+          const paused = step.status === 'paused' ? this.store.runsByStatus('paused', p.id).find(r => r.stepId === step.id) : undefined
+          const worker = this.select('execute',paused,step,activeRuns)
           if (!worker) continue
-          this.launch(this.store.claim(p.id, 'execute', worker, step.id), worker); madeProgress = true; break
+          launch(this.store.claim(p.id, 'execute', worker, step.id), worker); madeProgress = true; break
         }
       }
       this.cursor = (this.cursor + 1) % projects.length

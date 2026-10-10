@@ -43,7 +43,7 @@ test('verb registry: channel reuse, selection rules, approval gating and Step re
     assert.equal(verbs.data.verbs.find((v: any) => v.id === 'web.request'), undefined)
     assert.equal(verbs.data.adapters.find((a: any) => a.id === 'browser'), undefined)
     assert.equal(verbs.data.adapters.find((a: any) => a.id === 'webshell').plugin_id, 'redtrace-webshell')
-    assert.equal(verbs.data.verbs.find((v: any) => v.id === 'pivot.socks').available, false)
+    assert.equal(verbs.data.verbs.find((v: any) => v.id === 'pivot.socks').available, true)
     assert.equal(verbs.data.verbs.find((v: any) => v.id === 'remote.terminal.open').available, false)
 
     // No channel: the dispatch error carries establishment guidance, no guess.
@@ -169,7 +169,7 @@ test('resource tools: agent registration with secrets becomes a visible, dispatc
     assert.deepEqual((listed as { resources: Array<{ id: string }> }).resources.map(row => row.id), [id])
     const detail = await byName('resource_get')({ resource_id: id })
     assert.equal((detail as { resource: { target: string } }).resource.target, target)
-    engine.operations.updateResource(id, { metadata_json: JSON.stringify({ command_param: 'cmd', protocol: 'raw', verified_capabilities: ['remote.command','remote.file.touch'] }) })
+    engine.operations.verifiedResource(id, { metadata_json: JSON.stringify({ command_param: 'cmd', protocol: 'raw', verified_capabilities: ['remote.command','remote.file.touch'] }) })
     fixtureAuthorize(engine.operations, project.id, id, ['command', 'create_file'])
     const context2 = { projectId: project.id, worker: 'worker-1', stepId: step.id, signal: new AbortController().signal }
     const run = await dispatchVerb(runtime, 'remote.command', { command: 'echo registered', via: id }, context2)

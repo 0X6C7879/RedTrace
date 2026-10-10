@@ -105,6 +105,7 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
     'redtrace-credentials', 'redtrace-attachment', 'redtrace-file-references',
     'redtrace-lsp', 'redtrace-ptc', 'redtrace-jev',
     'redtrace-remote-terminal', 'redtrace-pivot',
+    'redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events',
   ])
   for (const view of views.filter((item) => item.source === 'builtin')) {
     assert.ok(view.status === 'running' || optIn.has(view.id), `${view.id} boots ${view.status}`)
@@ -324,9 +325,16 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const list = await call('GET', '/__redtrace/plugins')
   assert.equal(list.status, 200)
-  assert.equal(JSON.parse(list.body).plugins.length, 33)
+  assert.equal(JSON.parse(list.body).plugins.length, 37)
   assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === 'redtrace-jev').status, 'stopped')
 
+  for (const id of ['redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
+    assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === id).status, 'stopped')
+    const started = await call('POST', `/__redtrace/plugins/${id}/start`)
+    assert.equal(JSON.parse(started.body).plugin.status, 'running')
+    const stopped = await call('POST', `/__redtrace/plugins/${id}/stop`)
+    assert.equal(JSON.parse(stopped.body).plugin.status, 'stopped')
+  }
   const jevStart = await call('POST', '/__redtrace/plugins/redtrace-jev/start')
   assert.equal(JSON.parse(jevStart.body).plugin.status, 'running')
   const jevStop = await call('POST', '/__redtrace/plugins/redtrace-jev/stop')

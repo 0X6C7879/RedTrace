@@ -8,6 +8,8 @@ export interface Project {
   id: string; title: string; status: ProjectStatus; bootstrap: boolean; createdAt: string
   revision: number; planningRevision: number; decidedRevision: number; retryAfter: number
   factSeq: number; endedSeq: number; acknowledgedFactSeq: number; acknowledgedEndedSeq: number
+  criticalSeq?: number; acknowledgedCriticalSeq?: number
+  benchmarkHosts?: Record<string,string[]>
   initialPlanningPending: boolean; planningRetryPending: boolean
   failureCount?: number; failureSignature?: string | null; circuitOpen?: boolean; contextRevision?: number
 }
@@ -32,6 +34,7 @@ export interface Run {
   backend: 'pi' | 'dsh' | 'mock'; status: RunStatus; startedAt: string; endedAt: string | null
   baseRevision: number; checkpoint: Json; pendingTools: string[]; error: string | null
   planningFactSeq?: number; planningEndedSeq?: number
+  planningCriticalSeq?: number
   inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number
   heartbeatAt?: string; trigger?: string
   provider?: string; model?: string; workspaceRoot?: string

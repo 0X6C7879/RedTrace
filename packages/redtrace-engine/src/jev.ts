@@ -204,7 +204,7 @@ export class JevService {
       this.record({ projectId, scene: 'evidence_support', durationMs: 0, inputTokens: 0, cacheHit: false, fallback: true, beforeBytes: 0, afterBytes: 0, status: 'unassessed', result: { ...target, status: 'unassessed', reason: 'No eligible bounded text evidence' }, cacheKey: hash([projectId, findingId, 'unassessed']), revision: graph.project.revision, stepId: finding.stepId })
       return { ...target, status: 'unassessed', reason: 'No eligible bounded text evidence' }
     }
-    const query = this.ask({ projectId, run: finding.stepId ? this.store.runs(projectId).findLast(run => run.stepId === finding.stepId) : undefined, target,
+    const query = this.ask({ projectId, run: finding.stepId ? this.store.latestRun(projectId, finding.stepId) : undefined, target,
       stepId: finding.stepId, scene: 'evidence_support', state: { target, evidence: sources }, beforeBytes: bytes(sources), questions: {
         support: { type: 'choice', instructions: 'Do these supplied raw text evidence excerpts support the Finding title? Judge only the supplied text. Do not infer successful reproduction or truth beyond it.', criteria: {
           supported: 'Directly supports the central claim in the title', insufficient: 'Relevant but does not establish the title', contradictory: 'Materially contradicts the title',

@@ -42,7 +42,7 @@ export async function createEngine(options: { root: string; database?: string; c
       throw new Error('DSH execution requires the Cordis compatibility host')
     } finally { jev.finishRun(context.run.id); operations.releaseRunLeases(context.run.id) }
   }
-  const scheduler = new Scheduler(store, config, runTask, options.selectWorker), router = new Router()
+  const scheduler = new Scheduler(store,config,runTask,options.selectWorker,()=>!adapterGate || adapterGate('redtrace-critical-events')), router = new Router()
   graphRoutes(router, store, () => configuration.resolve(configuration.read().raw).maxSteps)
   router.add('GET', '/health', () => ({ status: 'ok', engine: 'fgs', node: process.versions.node, schema: 2 }))
   router.add('GET', '/v2/projects/:project/jev/evaluations', c => jev.evaluations(c.params.project))
@@ -80,7 +80,7 @@ export async function createEngine(options: { root: string; database?: string; c
     send(res, { detail: 'Not Found' }, 404)
   }
   if (options.autoStart !== false) scheduler.start()
-  return { store, scheduler, configuration, capabilities, operations, deletion, jev, router, handler, async close() { watcher.close(); await dshUpdate.close(); await scheduler.close(); await operations.close(); jev.close(); store.close() } }
+  return { store, scheduler, configuration, capabilities, operations, deletion, jev, router, handler, async close() { watcher.close(); await dshUpdate.close(); await scheduler.close(); await import('./web.ts').then(({ closeWebSessions }) => closeWebSessions(store)); await operations.close(); jev.close(); store.close() } }
 }
 export async function serveEngine(options: Parameters<typeof createEngine>[0] & { host?: string; port?: number }) {
   const engine = await createEngine(options)

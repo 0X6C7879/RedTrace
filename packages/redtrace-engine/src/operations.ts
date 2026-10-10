@@ -227,9 +227,30 @@ export class Operations {
   audit(project: string | null, resource: string | null, task: string | null, actor: any, action: string, status: string, detail = {}) {
     this.store.db.prepare('INSERT INTO resource_audit_events(project_id,resource_id,task_id,actor_type,actor,action,status,detail_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)').run(project === '_global' ? null : project, resource, task, actor.actor_type ?? 'human', actor.actor ?? 'admin', action, status, JSON.stringify(detail), now())
   }
-  updateResource(id: string, fields: Record<string, any>) {
+  verifiedResource(id: string, fields: Record<string, any>, kind = 'capability.verified') {
+    const row = this.resource(id), old = JSON.parse(row.metadata_json), metadata = JSON.parse(fields.metadata_json ?? row.metadata_json)
+    const fresh = old.runtime_verified !== true || (metadata.verified_capabilities ?? []).some((capability: string)=>!(old.verified_capabilities ?? []).includes(capability)) || metadata.verified_endpoint !== old.verified_endpoint
+    metadata.runtime_verified = true; metadata.verification_version = Number(old.verification_version ?? 0) + (fresh ? 1 : 0)
+    const result = this.updateResource(id, { ...fields, metadata_json: JSON.stringify(metadata) }, true)
+    if (fresh && row.project_id) this.store.recordCriticalSignal(row.project_id, `${kind}:${id}:${metadata.verification_version}`, { kind, resourceId: id, version: metadata.verification_version })
+    return result
+  }
+  updateResource(id: string, fields: Record<string, any>, verified = false) {
+    const row = this.resource(id), metadata = JSON.parse(row.metadata_json)
+    const invalidate = !verified && (fields.status && fields.status !== 'available' || fields.secret_json !== undefined && fields.secret_json !== row.secret_json || fields.metadata_json !== undefined && fields.metadata_json !== row.metadata_json)
+    if (invalidate) {
+      const next = JSON.parse(fields.metadata_json ?? row.metadata_json)
+      next.runtime_verified = false; next.verified_capabilities = []; delete next.verified_at; delete next.verified_endpoint
+      next.verification_version = Number(metadata.verification_version ?? 0) + (metadata.runtime_verified ? 1 : 0)
+      fields.metadata_json = JSON.stringify(next)
+    }
     fields.updated_at = now()
     this.store.db.prepare(`UPDATE shared_resources SET ${Object.keys(fields).map(k => `${k}=?`).join(',')} WHERE id=?`).run(...Object.values(fields), id)
+    if (invalidate) {
+      if (metadata.runtime_verified && row.project_id) this.store.recordCriticalSignal(row.project_id, `capability.lost:${id}:${Number(metadata.verification_version ?? 0)}`, { kind: 'capability.lost', resourceId: id })
+      const dependents = this.store.db.prepare("SELECT id FROM shared_resources WHERE id<>? AND status='available' AND (parent_resource_id=? OR json_extract(metadata_json,'$.source_resource_id')=? OR EXISTS(SELECT 1 FROM json_each(metadata_json,'$.dependencies') WHERE value=?))").all(id,id,id,id) as {id:string}[]
+      for (const dependent of dependents) this.updateResource(dependent.id,{status:'degraded'})
+    }
     return this.publicResource(this.resource(id))
   }
   available(resource: any, actor: any) {
@@ -312,7 +333,7 @@ export class Operations {
       if (!resourceKinds.includes(input.kind)) throw new HttpError(400, 'Unsupported resource kind')
       const prefixes: Record<string, string> = { webshell: 'ws', c2_listener: 'lis', c2_session: 'ses', c2_payload: 'pay', c2_profile: 'prf', proxy: 'prx', host: 'hst', terminal: 'tty', entry: 'ent', file: 'fil', credential_ref: 'cred', result: 'res' }
       const id = uid(prefixes[input.kind]), metadata = { ...input.metadata }, secret = { ...input.secret }, at = now()
-      if (input.actor_type === 'worker') { delete metadata.verified_capabilities; delete metadata.verified_at; delete metadata.conflict_key }
+      if(input.actor_type==='worker') for(const key of ['verified_capabilities','verified_at','verified_endpoint','runtime_verified','verification_version','conflict_key']) delete metadata[key]
       let status = input.status ?? 'available', secret_once: string | undefined
       if (project) metadata.source_project_id ??= project
       if (input.parent_resource_id) this.resource(input.parent_resource_id)
@@ -376,7 +397,7 @@ export class Operations {
         for (const line of output.split(/\r?\n/)) { const index = line.indexOf('='); if (index > 0) observed[line.slice(0, index)] = line.slice(index + 1) }
         metadata.observed = Object.keys(observed).length ? observed : { raw: output.slice(0, 4000) }; metadata.observed_at = at
         metadata.verified_capabilities = [...new Set([...(metadata.verified_capabilities ?? []), 'remote.command', 'remote.session.probe'])]
-        this.updateResource(resource.id, { metadata_json: JSON.stringify(metadata) })
+        this.verifiedResource(resource.id, { metadata_json: JSON.stringify(metadata) })
       }
       return this.publicTask(this.task(id))
     })

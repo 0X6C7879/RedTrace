@@ -32,6 +32,10 @@ export function auditRoutes(router: Router, store: Store, workspaceRoot: string)
     const r = runs(p.id); return { id: p.id, title: p.title, status: p.status, created_at: p.createdAt, run_count: r.length, last_run_at: r.map(r => r.started_at).sort().at(-1) ?? null, running_count: r.filter(r => r.status === 'running').length, token_total: usage(p.id).total }
   }).sort((a, b) => String(b.last_run_at ?? b.created_at).localeCompare(String(a.last_run_at ?? a.created_at))))
   router.add('GET', '/audit/tasks/:project/usage', c => { store.project(c.params.project); return usage(c.params.project) })
+  router.add('GET', '/audit/tasks/:project/costs', c => {
+    store.project(c.params.project)
+    return store.runsByStatus('running',c.params.project).concat(['paused','succeeded','failed','unknown','cancelled'].flatMap(status=>store.runsByStatus(status as import('./types.ts').Run['status'],c.params.project))).map(run=>store.runCosts(run.id))
+  })
   router.add('GET', '/audit/tasks/:project/runs', c => { store.project(c.params.project); return runs(c.params.project).sort((a, b) => String(b.started_at).localeCompare(a.started_at)) })
   router.add('GET', '/audit/tasks/:project/events', c => {
     store.project(c.params.project)

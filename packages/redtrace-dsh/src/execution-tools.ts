@@ -54,6 +54,7 @@ export interface ExecutionToolsConfig {
   /** Whether a plugin-manager catalog entry is running; gates the DSH native
    * capability stacks mounted below the shell/fs/skill baseline. */
   available?: (id: string) => boolean
+  contextualAttempts?: boolean
   onRefresh?: (refresh: () => Promise<void>) => void
 }
 
@@ -220,10 +221,10 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
     ['redtrace-spill', async use => {
       const scope = scoped.isolate('spillStore')
       await use(scope, `${VENDOR}/spill/spill-local/lib/index.js`)
-      await use(scope, `${VENDOR}/spill/spill-policy/lib/index.js`, { maxInlineBytes: 50000 })
+      await use(scope, `${VENDOR}/spill/spill-policy/lib/index.js`, { maxInlineBytes: 8192 })
     }],
     ['redtrace-tool-timeout', use => use(scoped, `${VENDOR}/guard/timeout-policy/lib/index.js`)],
-    ['redtrace-repeat-reminder', use => use(scoped, `${VENDOR}/guard/repeat-tool-reminder/lib/index.js`, { thresholds: [3, 5, 8], argumentsPreviewChars: 500 })],
+    ['redtrace-repeat-reminder', use => config.contextualAttempts ? Promise.resolve() : use(scoped, `${VENDOR}/guard/repeat-tool-reminder/lib/index.js`, { thresholds: [3, 5, 8], argumentsPreviewChars: 500 })],
     ['redtrace-lsp', async use => {
       const servers = availableLspServers()
       if (!Object.keys(servers).length) return

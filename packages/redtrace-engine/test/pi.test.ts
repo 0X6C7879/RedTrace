@@ -103,6 +103,46 @@ test('Pi shell keeps its log while Jev shortens the model-visible result', async
   }
 })
 
+test('Pi bounds large shell output but keeps the full byte-hashed log reachable', async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-pi-shell-budget-')), store = new Store(path.join(root, 'engine.db'))
+  const requests: any[] = []
+  const server = createServer(async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk)
+    const request = JSON.parse(Buffer.concat(chunks).toString()); requests.push(request)
+    if (requests.length === 2) {
+      const message = request.messages.findLast((item: any) => item.role === 'tool')
+      assert.equal(typeof message.content, 'string')
+      const summary = JSON.parse(message.content)
+      assert.equal(summary.outputBytes, 20_000); assert.equal(summary.exitCode, 0)
+      assert.match(summary.outputSha256, /^[a-f0-9]{64}$/); assert.match(summary.outputPath, /\.redtrace-output/)
+      assert.match(summary.evidenceId, /^ev-[a-f0-9]{64}$/)
+      const bytes = readFileSync(summary.outputPath)
+      assert.equal(bytes.length, summary.outputBytes)
+      assert.equal((await import('node:crypto')).createHash('sha256').update(bytes).digest('hex'), summary.outputSha256)
+      assert.ok(Buffer.byteLength(message.content) < 8192)
+    }
+    const name = requests.length === 1 ? 'shell' : 'finish_step', args = requests.length === 1
+      ? { command: `node -e "process.stdout.write('z'.repeat(20000))"` } : { summary: 'Read the compact shell result' }
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+    res.write(`data: ${JSON.stringify({ id: 'test', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: `call-${requests.length}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: null }] })}\n\n`)
+    res.write(`data: ${JSON.stringify({ id: 'test', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 } })}\n\n`)
+    res.end('data: [DONE]\n\n')
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const c = new Configuration(root); c.initialize()
+    c.commit(c.read().revision, raw => {
+      raw.providers = { fixture: { api: 'openai-completions', base_url: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, api_key: 'fixture-key', models: [{ id: 'fixture', context_window: 20000, max_tokens: 1000, reasoning: 'off' }] } }
+      raw.workers = [{ name: 'fixture', provider: 'fixture', model: 'fixture' }]
+    })
+    const config = c.resolve(c.read().raw), worker = config.workers[0]
+    const project = store.createProject({ title: 'Shell budget', origin: 'Fixture scope', goal: 'Keep long logs out of context' }).project
+    const step = store.addStep(project.id, { description: 'Capture long output', sourceIds: ['origin'] }), run = store.claim(project.id, 'execute', worker, step.id)
+    await runPi({ store, run, config, worker, signal: new AbortController().signal })
+    assert.equal(requests.length, 2)
+  } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); store.close(); rmSync(root, { recursive: true, force: true }) }
+})
+
 test('Pi refreshes Jev prompt and tool schemas between turns in one run', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-pi-toggle-')), store = new Store(path.join(root, 'engine.db'))
   const requests: any[] = []
