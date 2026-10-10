@@ -1,5 +1,6 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import type { Operations } from './operations.ts'
@@ -48,7 +49,7 @@ export class PivotRuntime {
     if (!['127.0.0.1','localhost','[::1]'].includes(proxy.hostname) || !proxy.port || proxy.username || proxy.password) throw new ExecutionError('PROTOCOL_ERROR','A local managed socks_endpoint is required; listener readiness is not route validation')
     try {
       const seconds = Math.max(1, Math.min(30, Number(input.timeout ?? 5)))
-      const { stdout } = await promisify(execFile)('curl',['--silent','--show-error','--noproxy','','--proxy',proxy.toString(),'--max-time',String(seconds),'--output','/dev/null','--write-out','%{http_code}',url.toString()],{timeout:seconds*1000+1000,maxBuffer:8192})
+      const { stdout } = await promisify(execFile)('curl',['--silent','--show-error','--noproxy','','--proxy',proxy.toString(),'--max-time',String(seconds),'--output',os.devNull,'--write-out','%{http_code}',url.toString()],{timeout:seconds*1000+1000,maxBuffer:8192})
       if (!/^[1-5]\d{2}$/.test(stdout.trim())) throw new Error('Proxy did not return an HTTP response from the target service')
       metadata.verified_at = new Date().toISOString(); metadata.verified_endpoint = url.toString(); metadata.verified_capabilities = ['pivot.socks']
       this.operations.verifiedResource(id,{status:'available',metadata_json:JSON.stringify(metadata),last_seen_at:metadata.verified_at},'route.verified')
