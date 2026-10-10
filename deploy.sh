@@ -428,6 +428,7 @@ install_skill_python_dependencies() {
     'fpylll==0.6.4|fpylll' 'py_ecc==8.0.0|py_ecc'
     'pycparser==2.23|pycparser' 'angr==9.2.193|angr'
     'frida-tools==14.8.0|frida' 'requests==2.32.5|requests'
+    'httpx==0.28.1|httpx' 'beautifulsoup4==4.14.3|bs4' 'websockets==17.2|websockets'
     'flask-unsign==1.2.1|flask_unsign' 'sqlmap==1.10.3|sqlmap' 'ropper==1.13.13|ropper'
     'ROPgadget==7.7|ropgadget' 'volatility3==2.27.0|volatility3' 'yara-python==4.5.4|yara'
     'pefile==2024.8.26|pefile' 'capstone==5.0.3|capstone' 'oletools==0.60.2|oletools'
