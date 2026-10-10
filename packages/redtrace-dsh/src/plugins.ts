@@ -185,6 +185,24 @@ const MANAGED: readonly ManagedEntry[] = [
     intro: 'DSH 原生持久终端:terminal_open / send / read / signal / close / list 在多次工具调用间保留交互式 shell 状态,适合 gdb、REPL、交互式探测等持续交互进程。一次性命令仍走 bash,长命令走后台任务。隔离档案下终端被限制在工作区内。',
   },
   {
+    id: 'redtrace-remote-terminal', label: '远程持久终端（待验收）', category: 'feature', defaultOff: true,
+    modulePath: 'packages/redtrace-engine/src/remote-terminal.ts',
+    description: '跨 Step 的 Resource 托管 SSH PTY',
+    intro: '基于已验证 SSH Resource 建立远程 PTY,提供游标读取、expect、输入、信号与尺寸控制。写操作受租约 fencing token 保护,与 Agent 私有的本地 terminal_* 完全分离。',
+  },
+  {
+    id: 'redtrace-session-probe', label: '会话能力探测', category: 'feature',
+    modulePath: 'packages/redtrace-engine/src/operation-execution.ts',
+    description: '按需验证会话真实能力与基础主机信息',
+    intro: '仅在 Step 声明 remote.session.probe 时执行最小信息探测；自报能力与 Runtime 验证能力分开保存，重连后需重新验证。',
+  },
+  {
+    id: 'redtrace-pivot', label: '受管网络路径（待验收）', category: 'feature', defaultOff: true,
+    modulePath: 'packages/redtrace-engine/src/pivot-runtime.ts',
+    description: 'SSH Forward、Chisel 与 Ligolo 生命周期管理',
+    intro: '建立方向明确的 TCP/UDP Route Resource,管理隧道进程、依赖、实际端点验证与清理。Worker 建路必须命中可信项目预授权；停止插件后工具与派发入口同步消失。',
+  },
+  {
     id: 'redtrace-fs-search', label: '工作区搜索', category: 'feature',
     modulePath: 'vendor/deepseek-harness/packages/fs/tool-fs-search/lib/index.js',
     description: 'glob 与 grep 工具',

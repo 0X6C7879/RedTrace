@@ -6,6 +6,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { serveEngine } from '../src/index.ts'
 import { dispatchVerb, verbTask, verbTools, verbToolAvailable, channelsFor, resourceTools, VerbDispatchError } from '../src/capability-verbs.ts'
+import { fixtureFrame, fixtureAuthorize } from './execution-fixture.ts'
 import type { VerbRuntime } from '../src/capability-verbs.ts'
 
 test('verb registry: channel reuse, selection rules, approval gating and Step requires round-trip', async () => {
@@ -16,7 +17,7 @@ test('verb registry: channel reuse, selection rules, approval gating and Step re
     req.on('data', chunk => { body += chunk })
     req.on('end', () => {
       const form = new URLSearchParams(body); wire.push(form.get('cmd') ?? '')
-      res.end(/RT_[a-f0-9]+/.exec(form.get('cmd') ?? '')?.[0] ?? 'verb fixture output')
+      res.end(fixtureFrame(form.get('cmd') ?? '', /RT_[a-f0-9]+/.exec(form.get('cmd') ?? '')?.[0] ?? 'verb fixture output'))
     })
   })
   await new Promise<void>(resolve => remote.listen(0, '127.0.0.1', resolve))
@@ -42,6 +43,8 @@ test('verb registry: channel reuse, selection rules, approval gating and Step re
     assert.equal(verbs.data.verbs.find((v: any) => v.id === 'web.request'), undefined)
     assert.equal(verbs.data.adapters.find((a: any) => a.id === 'browser'), undefined)
     assert.equal(verbs.data.adapters.find((a: any) => a.id === 'webshell').plugin_id, 'redtrace-webshell')
+    assert.equal(verbs.data.verbs.find((v: any) => v.id === 'pivot.socks').available, false)
+    assert.equal(verbs.data.verbs.find((v: any) => v.id === 'remote.terminal.open').available, false)
 
     // No channel: the dispatch error carries establishment guidance, no guess.
     await assert.rejects(dispatchVerb(runtime, 'remote.command', { command: 'id' }, context), (error: unknown) => {
@@ -52,15 +55,17 @@ test('verb registry: channel reuse, selection rules, approval gating and Step re
     })
 
     // One channel: auto-selected without target or via.
-    const shellA = engine.operations.create(project.id, { kind: 'webshell', name: 'Shell A', target: `http://127.0.0.1:${remotePort}`, metadata: { command_param: 'cmd', protocol: 'raw' }, actor_type: 'human', actor: 'test' }).resource
+    const shellA = engine.operations.create(project.id, { kind: 'webshell', name: 'Shell A', target: `http://127.0.0.1:${remotePort}`, metadata: { command_param: 'cmd', protocol: 'raw', verified_capabilities: ['remote.command', 'remote.file.delete'] }, actor_type: 'human', actor: 'test' }).resource
+    fixtureAuthorize(engine.operations, project.id, shellA.id, ['command'])
     const first = await dispatchVerb(runtime, 'remote.command', { command: 'echo one' }, context)
     assert.equal(first.status, 'succeeded')
     assert.equal(first.channel.resource_id, shellA.id)
     assert.equal(first.output, 'verb fixture output')
-    assert.deepEqual(wire.at(-1), 'echo one')
+    assert.match(wire.at(-1)!, /echo one/)
 
     // Target matching picks the channel whose host matches.
-    const shellB = engine.operations.create(project.id, { kind: 'webshell', name: 'Shell B', target: `http://localhost:${remotePort}/shell-b.php`, metadata: { command_param: 'cmd', protocol: 'raw' }, actor_type: 'human', actor: 'test' }).resource
+    const shellB = engine.operations.create(project.id, { kind: 'webshell', name: 'Shell B', target: `http://localhost:${remotePort}/shell-b.php`, metadata: { command_param: 'cmd', protocol: 'raw', verified_capabilities: ['remote.command', 'remote.file.delete'] }, actor_type: 'human', actor: 'test' }).resource
+    fixtureAuthorize(engine.operations, project.id, shellB.id, ['command'])
     wire.length = 0
     const matched = await dispatchVerb(runtime, 'remote.command', { command: 'echo two', target: 'http://localhost' }, context)
     assert.equal(matched.channel.resource_id, shellB.id)
@@ -86,7 +91,7 @@ test('verb registry: channel reuse, selection rules, approval gating and Step re
     const risky = await dispatchVerb(runtime, 'remote.file.delete', { path: '/tmp/x', via: shellA.id }, context)
     assert.equal(risky.status, 'awaiting_approval')
     assert.ok(String(risky.note).includes('remote.task'))
-    engine.store.db.prepare("UPDATE operation_tasks SET status='queued' WHERE id=?").run(risky.task_id)
+    engine.store.db.prepare("UPDATE operation_tasks SET status='queued',approved_by='fixture-human' WHERE id=?").run(risky.task_id)
     engine.operations.wake()
     for (let i = 0; i < 100 && engine.operations.task(risky.task_id).status !== 'succeeded'; i++) await new Promise(resolve => setTimeout(resolve, 10))
     const polled = await verbTask(runtime, risky.task_id)
@@ -132,7 +137,7 @@ test('resource tools: agent registration with secrets becomes a visible, dispatc
     req.on('data', chunk => { body += chunk })
     req.on('end', () => {
       const form = new URLSearchParams(body); wire.push(form.get('cmd') ?? '')
-      res.end(/RT_[a-f0-9]+/.exec(form.get('cmd') ?? '')?.[0] ?? 'registered channel output')
+      res.end(fixtureFrame(form.get('cmd') ?? '', /RT_[a-f0-9]+/.exec(form.get('cmd') ?? '')?.[0] ?? 'registered channel output'))
     })
   })
   await new Promise<void>(resolve => remote.listen(0, '127.0.0.1', resolve))
@@ -164,11 +169,13 @@ test('resource tools: agent registration with secrets becomes a visible, dispatc
     assert.deepEqual((listed as { resources: Array<{ id: string }> }).resources.map(row => row.id), [id])
     const detail = await byName('resource_get')({ resource_id: id })
     assert.equal((detail as { resource: { target: string } }).resource.target, target)
+    engine.operations.updateResource(id, { metadata_json: JSON.stringify({ command_param: 'cmd', protocol: 'raw', verified_capabilities: ['remote.command','remote.file.touch'] }) })
+    fixtureAuthorize(engine.operations, project.id, id, ['command', 'create_file'])
     const context2 = { projectId: project.id, worker: 'worker-1', stepId: step.id, signal: new AbortController().signal }
     const run = await dispatchVerb(runtime, 'remote.command', { command: 'echo registered', via: id }, context2)
     assert.equal(run.status, 'succeeded')
     assert.equal(run.output, 'registered channel output')
-    assert.deepEqual(wire, ['echo registered'])
+    assert.equal(wire.length, 1); assert.match(wire[0], /echo registered/)
 
     // The touch verb creates empty files through the same channel.
     const touch = await dispatchVerb(runtime, 'remote.file.touch', { path: '/tmp/agent-marker', via: id }, context2)

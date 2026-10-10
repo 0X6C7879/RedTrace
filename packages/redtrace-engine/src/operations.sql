@@ -95,6 +95,38 @@ ON operation_tasks(resource_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_operation_tasks_status
 ON operation_tasks(status, created_at);
 
+CREATE TABLE IF NOT EXISTS operation_authorizations (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    actions_json TEXT NOT NULL,
+    resources_json TEXT NOT NULL DEFAULT '[]',
+    targets_json TEXT NOT NULL DEFAULT '[]',
+    route_ids_json TEXT NOT NULL DEFAULT '[]',
+    issued_by TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_operation_authorizations_project
+ON operation_authorizations(project_id, expires_at);
+
+CREATE TABLE IF NOT EXISTS resource_leases (
+    conflict_key TEXT PRIMARY KEY,
+    resource_id TEXT NOT NULL REFERENCES shared_resources(id) ON DELETE CASCADE,
+    owner_type TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    run_id TEXT,
+    fencing_token INTEGER NOT NULL,
+    expires_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS operation_schema (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+INSERT OR IGNORE INTO operation_schema VALUES ('version','2');
+
 CREATE TABLE IF NOT EXISTS operation_results (
     id TEXT PRIMARY KEY,
     project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,

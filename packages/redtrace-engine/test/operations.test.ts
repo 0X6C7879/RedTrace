@@ -7,6 +7,8 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { serveEngine } from '../src/index.ts'
+import { executionResult } from '../src/execution-result.ts'
+import { fixtureFrame } from './execution-fixture.ts'
 
 test('resource operations use real HTTP, keep global provenance and enforce existing ownership contracts', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-operations-')), wire: string[] = []
@@ -14,10 +16,10 @@ test('resource operations use real HTTP, keep global provenance and enforce exis
     const chunks = []; for await (const c of req) chunks.push(c)
     if (req.url?.startsWith('/sessions')) { res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify({ sessions: [{ id: 'ext-1', hostname: 'external-host' }] })) }
     if (req.url === '/payloads') { res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify({ target: 'https://adapter.test/payload', name: 'external.bin' })) }
-    if (req.url === '/execute') return res.end('external adapter verified')
+    if (req.url === '/execute') { res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify(executionResult('external adapter verified', 0))) }
     const form = new URLSearchParams(Buffer.concat(chunks).toString()); wire.push(form.get('cmd') ?? '')
-    if (form.get('cmd') === 'wait') return
-    res.end(/RT_[a-f0-9]+/.exec(form.get('cmd') ?? '')?.[0] ?? 'local adapter verified')
+    if (form.get('cmd')?.includes("eval 'wait'")) return
+    res.end(fixtureFrame(form.get('cmd') ?? '', /RT_[a-f0-9]+/.exec(form.get('cmd') ?? '')?.[0] ?? 'local adapter verified'))
   })
   await new Promise<void>(resolve => remote.listen(0, '127.0.0.1', resolve))
   const engine = await serveEngine({ root, port: 0, autoStart: false }), url = `http://127.0.0.1:${(engine.server.address() as { port: number }).port}`
@@ -39,7 +41,7 @@ test('resource operations use real HTTP, keep global provenance and enforce exis
     assert.equal((await request('/projects/_global/resources')).data.resources[0].source.project_id, project.id)
     const run = await request(`${base}/resources/${id}/tasks`, 'POST', { action: 'command', arguments: { command: 'echo fixture', publish_result: true } })
     assert.equal(run.status, 202); await waitFor(run.data.task.id, 'succeeded')
-    assert.deepEqual(wire, ['echo fixture'])
+    assert.equal(wire.length, 1); assert.match(wire[0], /echo fixture/)
     const task = engine.operations.task(run.data.task.id), output = await request(task.result_ref)
     assert.equal(output.data, 'local adapter verified'); assert.equal(engine.store.graph(project.id).facts.length, 1)
     const worker = { 'X-RedTrace-Worker': 'worker-1' }
@@ -61,13 +63,13 @@ test('resource operations use real HTTP, keep global provenance and enforce exis
     const beaconTask = await request(`${base}/resources/${checkin.data.session_id}/tasks`, 'POST', { action: 'command', arguments: { command: 'id' } })
     const polled = await request(checkin.data.poll_path, 'POST', undefined, { 'X-RedTrace-Session-Token': checkin.data.session_token })
     assert.deepEqual(polled.data.tasks.map((t: any) => t.id), [beaconTask.data.task.id])
-    const beaconResult = await request(`/c2/sessions/${checkin.data.session_id}/results/${beaconTask.data.task.id}`, 'POST', { output: 'uid=1000', success: true }, { 'X-RedTrace-Session-Token': checkin.data.session_token })
+    const beaconResult = await request(`/c2/sessions/${checkin.data.session_id}/results/${beaconTask.data.task.id}`, 'POST', { ...executionResult('uid=1000', 0), attempt_id: beaconTask.data.task.attempt_id }, { 'X-RedTrace-Session-Token': checkin.data.session_token })
     assert.equal(beaconResult.data.task.status, 'succeeded')
     const longTask = await request(`${base}/resources/${checkin.data.session_id}/tasks`, 'POST', { action: 'command', arguments: { command: 'long output' } })
     const longPolled = await request(checkin.data.poll_path, 'POST', undefined, { 'X-RedTrace-Session-Token': checkin.data.session_token })
     assert.deepEqual(longPolled.data.tasks.map((t: any) => t.id), [longTask.data.task.id])
     const longOutput = 'A'.repeat(1101)
-    const longResult = await request(`/c2/sessions/${checkin.data.session_id}/results/${longTask.data.task.id}`, 'POST', { output: longOutput, summary: longOutput, success: true }, { 'X-RedTrace-Session-Token': checkin.data.session_token })
+    const longResult = await request(`/c2/sessions/${checkin.data.session_id}/results/${longTask.data.task.id}`, 'POST', { ...executionResult(longOutput, 0), summary: longOutput.slice(0,1000), attempt_id: longTask.data.task.attempt_id }, { 'X-RedTrace-Session-Token': checkin.data.session_token })
     assert.equal(longResult.status, 200)
     assert.equal(longResult.data.task.status, 'succeeded')
     assert.equal(longResult.data.task.output_summary.length, 1000)
@@ -108,7 +110,7 @@ test('resource operations use real HTTP, keep global provenance and enforce exis
 
     const reserve = createTcpServer(); await new Promise<void>(resolve => reserve.listen(0, '127.0.0.1', resolve)); const port = (reserve.address() as { port: number }).port; await new Promise<void>(resolve => reserve.close(() => resolve()))
     const reverse = await request(base + '/resources', 'POST', { kind: 'c2_listener', name: 'TCP fixture', metadata: { listener_type: 'tcp_reverse', bind_host: '127.0.0.1', bind_port: port } })
-    await new Promise(r => setTimeout(r, 20)); const channel = createConnection(port, '127.0.0.1'); await new Promise<void>((resolve, reject) => { channel.once('connect', resolve); channel.once('error', reject) }); channel.on('data', () => channel.write('raw channel verified'))
+    await new Promise(r => setTimeout(r, 20)); const channel = createConnection(port, '127.0.0.1'); await new Promise<void>((resolve, reject) => { channel.once('connect', resolve); channel.once('error', reject) }); channel.on('data', chunk => channel.write(fixtureFrame(chunk.toString(), 'raw channel verified')))
     let rawSession: any
     for (let i = 0; i < 100 && !rawSession; i++) { rawSession = engine.store.db.prepare("SELECT * FROM shared_resources WHERE parent_resource_id=? AND kind='c2_session'").get(reverse.data.resource.id); if (!rawSession) await new Promise(r => setTimeout(r, 10)) }
     const rawTask = await request(`${base}/resources/${rawSession.id}/tasks`, 'POST', { action: 'command', arguments: { command: 'whoami', timeout: 2 } }); await waitFor(rawTask.data.task.id, 'succeeded')

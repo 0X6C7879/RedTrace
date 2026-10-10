@@ -40,7 +40,7 @@ export async function createEngine(options: { root: string; database?: string; c
       if (task.run.backend === 'mock') return runner.runMock(task)
       if (task.run.backend === 'pi') return runner.runPi(task, capabilities, { operations, isAdapterAvailable: adapterGate })
       throw new Error('DSH execution requires the Cordis compatibility host')
-    } finally { jev.finishRun(context.run.id) }
+    } finally { jev.finishRun(context.run.id); operations.releaseRunLeases(context.run.id) }
   }
   const scheduler = new Scheduler(store, config, runTask, options.selectWorker), router = new Router()
   graphRoutes(router, store, () => configuration.resolve(configuration.read().raw).maxSteps)
@@ -55,7 +55,7 @@ export async function createEngine(options: { root: string; database?: string; c
   const capabilities = new Capabilities(managed)
   capabilities.initialize(root)
   capabilityRoutes(router, capabilities)
-  const operations = new Operations(store, root)
+  const operations = new Operations(store, root, adapterGate)
   operationRoutes(router, operations)
   verbRoutes(router, operations, adapterGate)
   const deletion = new ProjectDeletion(store, operations, root, configuration.workspaceRoot)

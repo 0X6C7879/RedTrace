@@ -104,6 +104,7 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
   const optIn = new Set([
     'redtrace-credentials', 'redtrace-attachment', 'redtrace-file-references',
     'redtrace-lsp', 'redtrace-ptc', 'redtrace-jev',
+    'redtrace-remote-terminal', 'redtrace-pivot',
   ])
   for (const view of views.filter((item) => item.source === 'builtin')) {
     assert.ok(view.status === 'running' || optIn.has(view.id), `${view.id} boots ${view.status}`)
@@ -120,6 +121,9 @@ test('default-off capabilities boot stopped and opt in through the manifest', as
   await first.manager.boot()
   assert.equal(first.manager.view('redtrace-lsp').status, 'stopped')
   assert.equal(first.manager.view('redtrace-ptc').status, 'stopped')
+  assert.equal(first.manager.view('redtrace-remote-terminal').status, 'stopped')
+  assert.equal(first.manager.view('redtrace-pivot').status, 'stopped')
+  assert.equal(first.manager.view('redtrace-session-probe').status, 'running')
   assert.ok(first.ctx.mounts.every(({ module }) => module?.name !== 'redtrace-credentials'))
 
   // Starting one records the opt-in and mounts its host-plane module.
@@ -320,7 +324,7 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const list = await call('GET', '/__redtrace/plugins')
   assert.equal(list.status, 200)
-  assert.equal(JSON.parse(list.body).plugins.length, 30)
+  assert.equal(JSON.parse(list.body).plugins.length, 33)
   assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === 'redtrace-jev').status, 'stopped')
 
   const jevStart = await call('POST', '/__redtrace/plugins/redtrace-jev/start')

@@ -43,6 +43,8 @@ export interface AdapterDefinition {
   kinds: string[]
   /** The Cordis plugin whose running state gates this adapter. */
   pluginId?: string
+  /** Additional runtime plugins that must also be live. */
+  requiresPlugins?: string[]
   /** Guidance returned when no channel exists yet. */
   establish: string
   /** Placeholder adapters declare verbs but dispatch nothing yet. */
@@ -53,6 +55,7 @@ const timeoutSchema = Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 
 const viaSchema = Type.Optional(Type.String({ minLength: 1, maxLength: 64 }))
 const targetSchema = Type.Optional(Type.String({ minLength: 1, maxLength: 2048 }))
 const pathSchema = Type.String({ minLength: 1, maxLength: 1024 })
+const fencingSchema = Type.Integer({ minimum: 1 })
 
 const fileVerbs = ['remote.command']
 
@@ -66,8 +69,14 @@ const VERBS: readonly VerbDefinition[] = [
   {
     id: 'remote.command', action: 'command', risk: 'medium',
     description: 'Run a shell command on a remote target. The runtime reuses an available channel automatically; pass via (resource id) to force one, or target (host) to select by host. Establish a supported channel first when none exists.',
-    parameters: Type.Object({ command: Type.String({ minLength: 1 }), timeout: timeoutSchema, target: targetSchema, via: viaSchema }),
-    arguments: args => ({ command: args.command, timeout: args.timeout }),
+    parameters: Type.Object({ command: Type.String({ minLength: 1 }), cwd: Type.Optional(pathSchema), timeout: timeoutSchema, target: targetSchema, via: viaSchema }),
+    arguments: args => ({ command: args.command, cwd: args.cwd, timeout: args.timeout }),
+  },
+  {
+    id: 'remote.session.probe', action: 'probe_info', risk: 'low',
+    description: 'Probe a registered channel for minimal host, identity, working-directory, and architecture data; successful output promotes only runtime-verified capabilities.',
+    parameters: Type.Object({ timeout: timeoutSchema, target: targetSchema, via: viaSchema }),
+    arguments: args => ({ timeout: args.timeout }),
   },
   {
     id: 'remote.file.read', action: 'read_file', risk: 'low',
@@ -78,8 +87,8 @@ const VERBS: readonly VerbDefinition[] = [
   {
     id: 'remote.file.write', action: 'write_file', risk: 'medium',
     description: 'Write text content to a remote file over an existing WebShell or C2 session channel; channel selection matches remote.command.',
-    parameters: Type.Object({ path: pathSchema, content: Type.String({ minLength: 1 }), target: targetSchema, via: viaSchema }),
-    arguments: args => ({ path: args.path, content_base64: Buffer.from(String(args.content), 'utf8').toString('base64') }),
+    parameters: Type.Object({ path: pathSchema, content: Type.String(), overwrite: Type.Optional(Type.Boolean()), target: targetSchema, via: viaSchema }),
+    arguments: args => ({ path: args.path, overwrite: args.overwrite === true, content_base64: Buffer.from(String(args.content), 'utf8').toString('base64') }),
   },
   {
     id: 'remote.file.list', action: 'list_files', risk: 'low',
@@ -100,6 +109,18 @@ const VERBS: readonly VerbDefinition[] = [
     arguments: args => ({ path: args.path }),
   },
   {
+    id: 'remote.file.stat', action: 'stat_file', risk: 'low',
+    description: 'Read remote file metadata through a channel that has verified file capability.',
+    parameters: Type.Object({ path: pathSchema, target: targetSchema, via: viaSchema }),
+    arguments: args => ({ path: args.path }),
+  },
+  {
+    id: 'remote.file.hash', action: 'hash_file', risk: 'low',
+    description: 'Calculate a remote file SHA-256 through a channel that has verified file capability.',
+    parameters: Type.Object({ path: pathSchema, target: targetSchema, via: viaSchema }),
+    arguments: args => ({ path: args.path }),
+  },
+  {
     id: 'remote.file.move', action: 'move_file', risk: 'medium',
     description: 'Move or rename a remote file or directory over an existing WebShell or C2 session channel; channel selection matches remote.command.',
     parameters: Type.Object({ path: pathSchema, destination: Type.String({ minLength: 1, maxLength: 1024 }), target: targetSchema, via: viaSchema }),
@@ -111,35 +132,81 @@ const VERBS: readonly VerbDefinition[] = [
     parameters: Type.Object({ path: pathSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ path: args.path }),
   },
+  {
+    id: 'remote.terminal.open', action: 'terminal.open', risk: 'medium', description: 'Open a persistent SSH terminal resource and acquire its exclusive write lease.',
+    parameters: Type.Object({ via: Type.String({ minLength: 1 }), name: Type.Optional(Type.String()), rows: Type.Optional(Type.Integer({ minimum: 2, maximum: 500 })), cols: Type.Optional(Type.Integer({ minimum: 2, maximum: 1000 })), ttl_seconds: Type.Optional(Type.Integer({ minimum: 5, maximum: 3600 })) }), arguments: args => ({ ...args }),
+  },
+  {
+    id: 'remote.terminal.read', action: 'terminal.read', risk: 'low', description: 'Read bounded remote terminal output from a cursor.',
+    parameters: Type.Object({ via: Type.String({ minLength: 1 }), cursor: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 262144 })) }), arguments: args => ({ ...args }),
+  },
+  {
+    id: 'remote.terminal.send', action: 'terminal.send', risk: 'medium', description: 'Write to a persistent terminal using its live fencing token.',
+    parameters: Type.Object({ via: Type.String({ minLength: 1 }), data: Type.String(), fencing_token: fencingSchema, cursor: Type.Optional(Type.Integer({ minimum: 0 })) }), arguments: args => ({ ...args }),
+  },
+  {
+    id: 'remote.terminal.expect', action: 'terminal.expect', risk: 'low', description: 'Wait for literal bounded terminal text and distinguish match, timeout, and EOF.',
+    parameters: Type.Object({ via: Type.String({ minLength: 1 }), text: Type.String({ minLength: 1, maxLength: 4096 }), cursor: Type.Optional(Type.Integer({ minimum: 0 })), timeout: timeoutSchema }), arguments: args => ({ ...args }),
+  },
+  {
+    id: 'remote.terminal.resize', action: 'terminal.resize', risk: 'low', description: 'Resize a persistent PTY using its live fencing token.',
+    parameters: Type.Object({ via: Type.String({ minLength: 1 }), rows: Type.Integer({ minimum: 2, maximum: 500 }), cols: Type.Integer({ minimum: 2, maximum: 1000 }), fencing_token: fencingSchema }), arguments: args => ({ ...args }),
+  },
+  {
+    id: 'remote.terminal.signal', action: 'terminal.signal', risk: 'medium', description: 'Send an allowed POSIX signal to a persistent terminal.',
+    parameters: Type.Object({ via: Type.String({ minLength: 1 }), signal: Type.Union(['INT', 'TERM', 'HUP', 'KILL', 'QUIT'].map(v => Type.Literal(v))), fencing_token: fencingSchema }), arguments: args => ({ ...args }),
+  },
+  {
+    id: 'remote.terminal.close', action: 'terminal.close', risk: 'medium', description: 'Close a persistent terminal using its live fencing token.',
+    parameters: Type.Object({ via: Type.String({ minLength: 1 }), fencing_token: fencingSchema }), arguments: args => ({ ...args }),
+  },
 ]
 
 const ADAPTERS: readonly AdapterDefinition[] = [
   {
     id: 'webshell', label: 'WebShell', pluginId: 'redtrace-webshell',
-    verbs: [...fileVerbs, 'remote.file.read', 'remote.file.write', 'remote.file.list', 'remote.file.mkdir', 'remote.file.touch', 'remote.file.move', 'remote.file.delete', 'remote.task'],
+    verbs: [...fileVerbs, 'remote.file.read', 'remote.file.write', 'remote.file.list', 'remote.file.mkdir', 'remote.file.touch', 'remote.file.stat', 'remote.file.hash', 'remote.file.move', 'remote.file.delete', 'remote.task'],
     kinds: ['webshell'],
     establish: '先取得一个可用的 WebShell 并用 webshell_register 注册(或经 Web UI 资源页登记),即可自动复用。',
   },
   {
     id: 'c2', label: 'C2 会话', pluginId: 'redtrace-c2',
-    verbs: [...fileVerbs, 'remote.file.read', 'remote.file.write', 'remote.file.list', 'remote.file.mkdir', 'remote.file.touch', 'remote.file.move', 'remote.file.delete', 'remote.task'],
+    verbs: [...fileVerbs, 'remote.file.read', 'remote.file.write', 'remote.file.list', 'remote.file.mkdir', 'remote.file.touch', 'remote.file.stat', 'remote.file.hash', 'remote.file.move', 'remote.file.delete', 'remote.task'],
     kinds: ['c2_session'],
     establish: '先创建 C2 listener 并等待会话上线(Web UI 运维页或 c2_* 工具),会话即成为可复用通道。',
   },
   {
-    id: 'proxy', label: '代理/Pivot(占位)', stub: true, verbs: ['pivot.socks'],
-    kinds: [],
-    establish: '代理适配器尚未接入:chisel/ligolo 通道管理落地后可用(规划中)。',
+    id: 'session-probe-webshell', label: 'WebShell 会话探测', pluginId: 'redtrace-session-probe', requiresPlugins: ['redtrace-webshell'],
+    verbs: ['remote.session.probe'], kinds: ['webshell'],
+    establish: '先登记 WebShell 配置，再通过 remote.session.probe 验证真实能力。',
+  },
+  {
+    id: 'session-probe-c2', label: 'C2 会话探测', pluginId: 'redtrace-session-probe', requiresPlugins: ['redtrace-c2'],
+    verbs: ['remote.session.probe'], kinds: ['c2_session'],
+    establish: '先等待 C2/SSH 会话真实上线，再通过 remote.session.probe 验证。',
+  },
+  {
+    id: 'proxy', label: '代理/Pivot', pluginId: 'redtrace-pivot', verbs: ['pivot.socks', 'pivot.validate', 'pivot.paths', 'pivot.close'], stub: true,
+    kinds: ['proxy'],
+    establish: '使用 pivot.socks 建立受管 SSH Forward、Chisel 或 Ligolo 路径。',
+  },
+  {
+    id: 'remote-terminal', label: '远程终端', pluginId: 'redtrace-remote-terminal', stub: true,
+    verbs: ['remote.terminal.open', 'remote.terminal.read', 'remote.terminal.send', 'remote.terminal.expect', 'remote.terminal.resize', 'remote.terminal.signal', 'remote.terminal.close'],
+    kinds: ['c2_session', 'terminal'], establish: '先登记并验证 SSH Session，再用 remote.terminal.open 建立跨 Step 终端。',
   },
 ]
 
 const STUB_VERBS: readonly VerbDefinition[] = [
   {
     id: 'pivot.socks', action: 'pivot.socks', risk: 'medium',
-    description: 'Establish a SOCKS pivot through a managed proxy channel (placeholder; not yet dispatchable).',
-    parameters: Type.Object({ target: targetSchema }),
+    description: 'Establish a managed SSH Forward, Chisel, or Ligolo process. Worker calls require matching project preauthorization.',
+    parameters: Type.Object({ provider: Type.Union(['ssh-forward', 'chisel', 'ligolo'].map(v => Type.Literal(v))), source_session_id: Type.Optional(Type.String()), mode: Type.Optional(Type.Union([Type.Literal('server'), Type.Literal('client')])), bind: Type.Optional(Type.String()), bind_host: Type.Optional(Type.String()), bind_port: Type.Optional(Type.Integer()), server: Type.Optional(Type.String()), remote: Type.Optional(Type.String()), target_scope: Type.Optional(Type.String()), protocols: Type.Optional(Type.Array(Type.Union([Type.Literal('tcp'), Type.Literal('udp')]))), name: Type.Optional(Type.String()) }),
     arguments: args => ({ ...args }),
   },
+  { id: 'pivot.validate', action: 'pivot.validate', risk: 'low', description: 'Validate the actual managed route endpoint.', parameters: Type.Object({ via: Type.String(), host: Type.Optional(Type.String()), port: Type.Integer({ minimum: 1, maximum: 65535 }), timeout: timeoutSchema }), arguments: args => ({ ...args }) },
+  { id: 'pivot.paths', action: 'pivot.paths', risk: 'low', description: 'List live directional routes matching a target scope.', parameters: Type.Object({ target: Type.String() }), arguments: args => ({ ...args }) },
+  { id: 'pivot.close', action: 'pivot.close', risk: 'medium', description: 'Stop a managed route and mark it offline.', parameters: Type.Object({ via: Type.String() }), arguments: args => ({ ...args }) },
 ]
 
 export const verbRegistry = [...VERBS, ...STUB_VERBS]
@@ -154,7 +221,7 @@ export interface VerbRuntime {
 
 function adapterLive(adapter: AdapterDefinition, gate: (pluginId: string) => boolean): boolean {
   if (adapter.stub) return false
-  return adapter.pluginId ? gate(adapter.pluginId) : true
+  return (!adapter.pluginId || gate(adapter.pluginId)) && (adapter.requiresPlugins ?? []).every(gate)
 }
 
 function availableAdapters(runtime: VerbRuntime, verb: string): AdapterDefinition[] {
@@ -170,15 +237,26 @@ function hostOf(value: string): string {
   return (hostPort ? hostPort[1] : raw).toLowerCase()
 }
 
-interface ChannelRow { id: string; kind: string; name: string; target: string; last_seen_at: string | null }
+interface ChannelRow { id: string; kind: string; name: string; target: string; last_seen_at: string | null; metadata_json: string }
+
+function channelSupports(row: ChannelRow, verb: string): boolean {
+  const metadata = JSON.parse(row.metadata_json || '{}'), verified = Array.isArray(metadata.verified_capabilities) ? metadata.verified_capabilities : undefined
+  if (verb === 'pivot.validate' || verb === 'pivot.close') return row.kind === 'proxy'
+  if (verb === 'remote.terminal.open') return row.kind === 'c2_session' && metadata.connection_type === 'direct' && metadata.shell_type === 'ssh' && verified?.includes('remote.command') === true
+  if (verb.startsWith('remote.terminal.')) return row.kind === 'terminal' && metadata.interactive === true
+  if (verb === 'remote.session.probe') return row.kind === 'webshell' || metadata.connection_type === 'direct' && metadata.shell_type === 'ssh' || (metadata.reported_capabilities ?? metadata.capabilities ?? []).includes('command')
+  if (row.kind === 'c2_session' && verb.startsWith('remote.file.') && !['direct', 'external_c2'].includes(metadata.connection_type)) return false
+  if (verified) return verified.includes(verb)
+  return false
+}
 
 function candidateChannels(runtime: VerbRuntime, verb: string): ChannelRow[] {
   const kinds = [...new Set(availableAdapters(runtime, verb).flatMap(adapter => adapter.kinds))]
   if (!kinds.length) return []
   const rows = runtime.operations.store.db
-    .prepare(`SELECT id,kind,name,target,last_seen_at FROM shared_resources WHERE kind IN (${kinds.map(() => '?').join(',')}) AND status='available' ORDER BY last_seen_at DESC`)
-.all(...kinds) as unknown as ChannelRow[]
-  return rows
+    .prepare(`SELECT id,kind,name,target,last_seen_at,metadata_json FROM shared_resources WHERE kind IN (${kinds.map(() => '?').join(',')}) AND status='available' ORDER BY last_seen_at DESC`)
+    .all(...kinds) as unknown as ChannelRow[]
+  return rows.filter(row => channelSupports(row, verb))
 }
 
 export class VerbDispatchError extends Error {
@@ -202,6 +280,7 @@ function selectChannel(runtime: VerbRuntime, verb: string, args: { via?: unknown
     const wanted = hostOf(args.target)
     const matched = candidates.filter(row => row.target && hostOf(row.target) === wanted)
     if (!matched.length) return fail(`没有匹配目标 ${args.target} 的可用通道。`)
+    if (matched.length > 1) return fail(`目标 ${args.target} 有多个真实可用通道，请显式指定 via。`)
     return matched[0]!
   }
   if (candidates.length === 1) return candidates[0]!
@@ -219,13 +298,33 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, r
 
 /** Dispatch one verb call through the operation queue: channel selection,
  * task creation (risk carries the approval policy), and in-process polling. */
-export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Record<string, unknown>, context: { projectId: string; worker: string; stepId: string | null; signal: AbortSignal }) {
+export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Record<string, unknown>, context: { projectId: string; worker: string; stepId: string | null; runId?: string; signal: AbortSignal }): Promise<any> {
   const definition = verbRegistry.find(entry => entry.id === verb)
   if (!definition) throw new Error(`Unknown capability verb: ${verb}`)
+  if (verb === 'remote.task') return verbTask(runtime, String(args.task_id ?? ''))
   const adapters = availableAdapters(runtime, verb)
   const establish = [...new Set(ADAPTERS.filter(adapter => adapter.verbs.includes(verb)).map(adapter => adapter.establish))]
   if (!adapters.length) throw new VerbDispatchError({ available: [], establish }, `动词 ${verb} 当前没有可用适配器(插件已停用或尚未接入)。`)
+  if (verb === 'pivot.socks') {
+    const source = typeof args.source_session_id === 'string' ? runtime.operations.resource(args.source_session_id) : { id: '', target: String(args.target_scope ?? '') }
+    if (!runtime.operations.authorized(context.projectId, 'pivot.open', source)) return { status: 'authorization_required', error_code: 'AUTH_FAILED', note: 'A trusted human must issue a matching project authorization before a worker opens a route.' }
+    return runtime.operations.pivots.open(context.projectId, { ...args, actor_type: 'worker', actor: context.worker })
+  }
+  if (verb === 'pivot.paths') return { target: args.target, paths: runtime.operations.pivots.paths(context.projectId, String(args.target)) }
   const channel = selectChannel(runtime, verb, args as { via?: unknown; target?: unknown })
+  if (verb === 'pivot.validate') return runtime.operations.pivots.validate(channel.id, args)
+  if (verb === 'pivot.close') return { route_id: channel.id, closed: await runtime.operations.pivots.close(channel.id) }
+  if (verb.startsWith('remote.terminal.')) {
+    const actor = { actor_type: 'worker', actor: context.worker }
+    if (!runtime.operations.authorized(context.projectId, definition.action, runtime.operations.resource(channel.id))) throw new Error('Remote terminal operation requires explicit project authorization')
+    if (verb === 'remote.terminal.open') return runtime.operations.terminals.open(context.projectId, channel.id, { ...args, ...actor, run_id: context.runId })
+    if (verb === 'remote.terminal.read') return runtime.operations.terminals.read(channel.id, Number(args.cursor ?? 0), Number(args.limit ?? 65536))
+    if (verb === 'remote.terminal.send') return runtime.operations.terminals.send(channel.id, { ...args, ...actor })
+    if (verb === 'remote.terminal.expect') return runtime.operations.terminals.expect(channel.id, args)
+    if (verb === 'remote.terminal.resize') return runtime.operations.terminals.resize(channel.id, { ...args, ...actor })
+    if (verb === 'remote.terminal.signal') return runtime.operations.terminals.signal(channel.id, { ...args, ...actor })
+    if (verb === 'remote.terminal.close') return { terminal_id: channel.id, closed: await runtime.operations.terminals.close(channel.id, 'agent request', { ...args, ...actor }) }
+  }
   const task = runtime.operations.createTask(context.projectId, channel.id, {
     action: definition.action,
     arguments: definition.arguments(args),
@@ -244,7 +343,7 @@ export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Rec
     }
     if (TERMINAL.includes(current.status)) {
       const output = current.status === 'succeeded' ? String(current.output_summary ?? '') : undefined
-      return { task_id: task.id, channel: { resource_id: channel.id, kind: channel.kind, target: channel.target }, status: current.status as string, output, result_ref: current.result_ref ?? null }
+      return { task_id: task.id, attempt_id: current.attempt_id, channel: { resource_id: channel.id, kind: channel.kind, target: channel.target }, status: current.status as string, output, result: JSON.parse(current.result_json || '{}'), result_ref: current.result_ref ?? null }
     }
   }
   return { task_id: task.id, channel: { resource_id: channel.id, kind: channel.kind, target: channel.target }, status: runtime.operations.task(task.id).status as string, note: '任务仍在排队或执行;稍后用 remote.task(task_id) 查询结果。' }
@@ -257,7 +356,7 @@ export async function verbTask(runtime: VerbRuntime, taskId: string): Promise<Re
     ? runtime.operations.store.db.prepare('SELECT content FROM operation_results WHERE task_id=?').get(task.id) as { content?: string } | undefined
     : undefined
   const output = result?.content && result.content.length > 64 * 1024 ? result.content.slice(0, 64 * 1024) + '\n[truncated]' : result?.content
-  return { task_id: task.id, resource_id: task.resource_id, action: task.action, status: task.status, output: output ?? task.output_summary ?? null, result_ref: task.result_ref ?? null }
+  return { task_id: task.id, attempt_id: task.attempt_id, resource_id: task.resource_id, action: task.action, status: task.status, output: output ?? task.output_summary ?? null, result: JSON.parse(task.result_json || '{}'), result_ref: task.result_ref ?? null }
 }
 
 /** Available channels for a Step's declared verbs, for the launch prompt slice. */
@@ -265,9 +364,9 @@ export function channelsFor(runtime: VerbRuntime, requires: readonly string[], l
   const kinds = [...new Set(requires.flatMap(verb => availableAdapters(runtime, verb).flatMap(adapter => adapter.kinds)))]
   if (!kinds.length) return []
   const rows = runtime.operations.store.db
-    .prepare(`SELECT id,kind,target,status FROM shared_resources WHERE kind IN (${kinds.map(() => '?').join(',')}) AND status='available' ORDER BY last_seen_at DESC LIMIT ?`)
-    .all(...kinds, limit) as unknown as Array<{ id: string; kind: string; target: string; status: string }>
-  return rows
+    .prepare(`SELECT id,kind,name,target,status,last_seen_at,metadata_json FROM shared_resources WHERE kind IN (${kinds.map(() => '?').join(',')}) AND status='available' ORDER BY last_seen_at DESC`)
+    .all(...kinds) as unknown as Array<ChannelRow & { status: string }>
+  return rows.filter(row => requires.some(verb => channelSupports(row, verb))).slice(0, limit).map(({ metadata_json: _metadata, name: _name, last_seen_at: _seen, ...row }) => row)
 }
 
 // ─── Agent tool factory ───────────────────────────────────────────────────────
@@ -288,7 +387,7 @@ function verbTool<T extends TSchema>(name: string, description: string, paramete
 
 const wrapDispatch = (runtime: VerbRuntime, context: TaskContext) => async (verb: string, args: Record<string, unknown>) => {
   try {
-    return await dispatchVerb(runtime, verb, args, { projectId: context.run.projectId, worker: context.worker.name, stepId: context.run.stepId, signal: context.signal })
+    return await dispatchVerb(runtime, verb, args, { projectId: context.run.projectId, worker: context.worker.name, stepId: context.run.stepId, runId: context.run.id, signal: context.signal })
   } catch (error) {
     if (error instanceof VerbDispatchError) {
       return { error: error.message, available_channels: error.hint.available, establish: error.hint.establish }
@@ -375,7 +474,7 @@ export function verbRoutes(router: Router, operations: Operations, isAdapterAvai
   const gate = isAdapterAvailable ?? (() => true)
   const runtime: VerbRuntime = { operations, isAdapterAvailable: gate }
   router.add('GET', '/capabilities/verbs', () => {
-    const adapters = ADAPTERS.map(adapter => ({ id: adapter.id, label: adapter.label, verbs: adapter.verbs, kinds: adapter.kinds, plugin_id: adapter.pluginId ?? null, available: adapterLive(adapter, gate), stub: !!adapter.stub, establish: adapter.establish }))
+    const adapters = ADAPTERS.map(adapter => ({ id: adapter.id, label: adapter.label, verbs: adapter.verbs, kinds: adapter.kinds, plugin_id: adapter.pluginId ?? null, requires_plugins: adapter.requiresPlugins ?? [], available: adapterLive(adapter, gate), stub: !!adapter.stub, establish: adapter.establish }))
     const verbs = verbRegistry.map(verb => {
       const serving = ADAPTERS.filter(adapter => adapter.verbs.includes(verb.id))
       return { id: verb.id, description: verb.description, risk: verb.risk, adapters: serving.map(adapter => adapter.id), available: serving.some(adapter => adapterLive(adapter, gate)), channels: candidateChannels(runtime, verb.id).length }

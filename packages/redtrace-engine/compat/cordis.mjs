@@ -161,6 +161,7 @@ export async function apply(ctx, options) {
   const sessionRefresh = new Map()
   const manager = new PluginManager(ctx, runtime, repoRoot, load, replacements, async () => {
     engine.jev.setEnabled(manager.running('redtrace-jev'))
+    await engine.operations.synchronizeAdapters()
     await Promise.all([...sessionRefresh.values()].map(refresh => refresh()))
     engine.scheduler.wake()
   })

@@ -860,6 +860,14 @@ function operationsPage() {
     },
 
     parseFileListing(output) {
+      if (String(output || '').trim().startsWith('[')) {
+        const entries = JSON.parse(output);
+        if (!Array.isArray(entries)) throw new Error('无效的目录结果');
+        return entries.filter((entry) => typeof entry.name === 'string').map((entry) => ({
+          kind: entry.directory ? 'd' : 'f', name: entry.name, modified: entry.mtime || '—',
+          size: Number(entry.size || 0), permissions: '—', path: this.joinPath(this.fileDirectoryPath, entry.name),
+        })).sort((left, right) => (left.kind !== right.kind ? (left.kind === 'd' ? -1 : 1) : left.name.localeCompare(right.name, 'zh-CN', { numeric: true })));
+      }
       return String(output || '')
         .split(/\r?\n/)
         .filter(Boolean)
@@ -971,6 +979,7 @@ function operationsPage() {
         await this.runFileTask('write_file', {
           path: this.fileEditorPath,
           content_base64: this.encodeBase64(this.fileContent || ''),
+          overwrite: true,
         }, 'medium');
         this.fileMessage = '文件已保存';
         this.fileLoading = false;
@@ -1211,11 +1220,12 @@ function operationsPage() {
     },
 
     async copyPayload(item) {
-      const command = item.metadata?.command || '';
-      if (!command) return;
-      await navigator.clipboard.writeText(command);
-      this.payloadCopiedId = item.id;
-      window.setTimeout(() => { if (this.payloadCopiedId === item.id) this.payloadCopiedId = ''; }, 1400);
+      try {
+        const { command } = await this.api(`/projects/${encodeURIComponent(this.projectId())}/resources/${encodeURIComponent(item.id)}/material`, { method: 'POST' });
+        await navigator.clipboard.writeText(command);
+        this.payloadCopiedId = item.id;
+        window.setTimeout(() => { if (this.payloadCopiedId === item.id) this.payloadCopiedId = ''; }, 1400);
+      } catch (error) { this.error = `复制失败：${error.message}`; }
     },
 
     async removePayload(item) {
