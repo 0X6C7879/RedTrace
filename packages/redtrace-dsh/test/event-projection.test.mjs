@@ -90,8 +90,8 @@ test('projects tool call arguments and result text', () => {
     type: 'tool/result', seq: 8, ts: '2026-01-01T00:00:02Z',
     data: {
       message: {
-        role: 'user',
-        content: [{ type: 'tool-result', toolCallId: 'c1', isError: false, content: [{ type: 'text', text: '/workspace' }] }],
+        role: 'tool', toolCallId: 'c1', isError: false,
+        content: [{ type: 'text', text: '/workspace' }],
         source: { kind: 'tool', callId: 'c1' },
       },
     },
@@ -107,8 +107,8 @@ test('tool result without a matching call carries no title', () => {
     type: 'tool/result', seq: 9, ts: '2026-01-01T00:00:03Z',
     data: {
       message: {
-        role: 'user',
-        content: [{ type: 'tool-result', toolCallId: 'cX', isError: true, content: [{ type: 'text', text: 'boom' }] }],
+        role: 'tool', toolCallId: 'cX', isError: true,
+        content: [{ type: 'text', text: 'boom' }],
         source: { kind: 'tool', callId: 'cX' },
       },
     },

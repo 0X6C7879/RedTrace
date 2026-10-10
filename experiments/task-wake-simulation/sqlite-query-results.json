@@ -1,0 +1,107 @@
+{
+  "node": "v24.21.0",
+  "samples": 9,
+  "measuredAt": "2026-09-30T08:29:57.835Z",
+  "results": [
+    {
+      "nodeCount": 123,
+      "readers": 1,
+      "full": {
+        "medianMs": 0.23320899999999867,
+        "medianCpuMs": 0.235,
+        "parsedNodes": 246
+      },
+      "indexed": {
+        "medianMs": 0.017082999999999515,
+        "medianCpuMs": 0.018,
+        "parsedNodes": 11
+      },
+      "beforeIndex": [
+        "SEARCH nodes USING INDEX sqlite_autoindex_nodes_1 (task_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ],
+      "selectionPlan": [
+        "SEARCH nodes USING INDEX nodes_task_kind (task_id=? AND kind=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ],
+      "pointPlan": [
+        "SEARCH nodes USING INDEX sqlite_autoindex_nodes_1 (task_id=? AND id=?)"
+      ]
+    },
+    {
+      "nodeCount": 123,
+      "readers": 8,
+      "full": {
+        "medianMs": 0.9965830000000011,
+        "medianCpuMs": 1.013,
+        "parsedNodes": 1107
+      },
+      "indexed": {
+        "medianMs": 0.034166999999996506,
+        "medianCpuMs": 0.034,
+        "parsedNodes": 25
+      },
+      "beforeIndex": [
+        "SEARCH nodes USING INDEX sqlite_autoindex_nodes_1 (task_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ],
+      "selectionPlan": [
+        "SEARCH nodes USING INDEX nodes_task_kind (task_id=? AND kind=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ],
+      "pointPlan": [
+        "SEARCH nodes USING INDEX sqlite_autoindex_nodes_1 (task_id=? AND id=?)"
+      ]
+    },
+    {
+      "nodeCount": 20083,
+      "readers": 1,
+      "full": {
+        "medianMs": 60.755416999999966,
+        "medianCpuMs": 53.914,
+        "parsedNodes": 40166
+      },
+      "indexed": {
+        "medianMs": 0.014290999999957421,
+        "medianCpuMs": 0.015,
+        "parsedNodes": 11
+      },
+      "beforeIndex": [
+        "SEARCH nodes USING INDEX sqlite_autoindex_nodes_1 (task_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ],
+      "selectionPlan": [
+        "SEARCH nodes USING INDEX nodes_task_kind (task_id=? AND kind=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ],
+      "pointPlan": [
+        "SEARCH nodes USING INDEX sqlite_autoindex_nodes_1 (task_id=? AND id=?)"
+      ]
+    },
+    {
+      "nodeCount": 20083,
+      "readers": 8,
+      "full": {
+        "medianMs": 272.6808329999999,
+        "medianCpuMs": 252.099,
+        "parsedNodes": 180747
+      },
+      "indexed": {
+        "medianMs": 0.0376669999996011,
+        "medianCpuMs": 0.077,
+        "parsedNodes": 25
+      },
+      "beforeIndex": [
+        "SEARCH nodes USING INDEX sqlite_autoindex_nodes_1 (task_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ],
+      "selectionPlan": [
+        "SEARCH nodes USING INDEX nodes_task_kind (task_id=? AND kind=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ],
+      "pointPlan": [
+        "SEARCH nodes USING INDEX sqlite_autoindex_nodes_1 (task_id=? AND id=?)"
+      ]
+    }
+  ]
+}

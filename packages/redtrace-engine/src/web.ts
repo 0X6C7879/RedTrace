@@ -152,6 +152,17 @@ function safeUrl(value: string) {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new HttpError(422, 'Only credential-free HTTP(S) URLs are supported')
   return url
 }
+function jsonChangedFields(left: Buffer, right: Buffer): string[] | null {
+  try {
+    const flatten = (value: unknown, prefix = '$', output = new Map<string, string>()) => {
+      if (value !== null && typeof value === 'object') for (const [key, child] of Object.entries(value)) flatten(child, Array.isArray(value) ? `${prefix}[${key}]` : `${prefix}.${key}`, output)
+      else output.set(prefix, JSON.stringify(value))
+      return output
+    }
+    const before = flatten(JSON.parse(left.toString('utf8'))), after = flatten(JSON.parse(right.toString('utf8')))
+    return [...new Set([...before.keys(), ...after.keys()])].filter(key => before.get(key) !== after.get(key)).slice(0, 20)
+  } catch { return null }
+}
 async function archive(context: TaskContext, record: unknown) {
   const raw = Buffer.from(JSON.stringify(record)), id = `ev-${createHash('sha256').update(raw).digest('hex')}`
   const root = context.run.workspaceRoot ?? path.join(context.config.workspaceRoot ?? path.join(os.tmpdir(), 'redtrace-workspaces'), context.run.projectId)
@@ -211,6 +222,42 @@ export function webTools(context: TaskContext): AgentTool[] {
 
       })
     } },
+    { name: 'http_replay', label: 'http_replay', description: 'Replay a captured, idempotent GET/HEAD browser request by Request ID with up to 3 query variants. Preserves captured headers and browser cookies; refuses request bodies and one-time token/signature fields.', parameters: Type.Object({ session: Type.String({ minLength: 1, maxLength: 96 }), challenge: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })), identity: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })), request_id: Type.String({ minLength: 1, maxLength: 40 }), variants: Type.Array(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 128 }), value: Type.String({ maxLength: 4096 }) }), { maxItems: 16 }), { minItems: 1, maxItems: 3 }) }), executionMode: 'sequential', execute: async (_id: string, args: Session & { session: string; request_id: string; variants: { name: string; value: string }[][] }) => {
+      const entry = await entryFor(context, args)
+      return serialized(entry, async () => {
+        const item = entry.requests.find(candidate => candidate.id === args.request_id)
+        if (!item) throw new Error('Network request not found in this isolated browser session')
+        await item.pending
+        if (!item.evidence) throw new Error('Captured request evidence is not complete')
+        const captured = JSON.parse(await readFile(item.evidence.file, 'utf8'))
+        const method = String(captured.method ?? item.method).toUpperCase(), body = captured.requestBodyBase64 ? Buffer.from(captured.requestBodyBase64, 'base64') : Buffer.alloc(0)
+        if (!['GET', 'HEAD'].includes(method) || body.length) throw new Error('Replay is limited to bodyless GET/HEAD requests; reacquire current state for mutating or body-bearing requests')
+        const url = assertScoped(context, String(captured.url ?? item.url))
+        const transient = /(?:csrf|nonce|token|signature|authenticity|session|ticket|state|code)/i
+        if ([...url.searchParams.keys()].some(key => transient.test(key)) || Object.keys(captured.requestHeaders ?? {}).some(key => /^(?:x-csrf|x-xsrf|x-signature|x-request-token)/i.test(key))) throw new Error('Captured request contains a one-time or state-bound value; reacquire a fresh request instead of replaying it')
+        const headers = Object.fromEntries(Object.entries(captured.requestHeaders ?? {}).filter(([key]) => !/^(?:host|content-length|connection)$/i.test(key))) as Record<string, string>
+        const requests = [[], ...args.variants].map((changes, index) => {
+          const target = new URL(url)
+          for (const change of changes) { if (transient.test(change.name)) throw new Error(`Replay cannot override state-bound parameter: ${change.name}`); target.searchParams.set(change.name, change.value) }
+          assertScoped(context, target.href)
+          return { index, url: target.href }
+        })
+        const results: { index: number; method: string; url: string; status: number | null; durationMs: number; responseBytes?: number; sha256?: string; location?: string | null; evidence: Awaited<ReturnType<typeof archive>>; error?: string }[] = []
+        for (const request of requests) {
+          const started = Date.now(); let response: Awaited<ReturnType<APIRequestContext['fetch']>> | undefined
+          try {
+            response = await entry.api.fetch(request.url, { method, headers, timeout: 20_000, maxRedirects: 0, maxRetries: 0 })
+            const bytes = await response.body(), responseHeaders = response.headers(), evidence = await archive(context, { replayOf: args.request_id, request: { method, url: request.url, headers }, response: { status: response.status(), headers: responseHeaders, bodyBase64: bytes.toString('base64') } })
+            results.push({ index: request.index, method, url: request.url, status: response.status(), durationMs: Date.now() - started, responseBytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), location: responseHeaders.location ?? null, evidence })
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error), evidence = await archive(context, { replayOf: args.request_id, request: { method, url: request.url }, error: message, outcome: 'unknown; do not automatically retry' })
+            results.push({ index: request.index, method, url: request.url, status: null, durationMs: Date.now() - started, evidence, error: message.slice(0, 300) })
+            break
+          } finally { await response?.dispose() }
+        }
+        return { request_id: args.request_id, results: results.map((result, index) => ({ ...result, differenceFromBaseline: index === 0 ? null : { sameStatus: result.status === results[0]?.status, sameBody: 'sha256' in result && result.sha256 === ('sha256' in (results[0] ?? {}) ? results[0].sha256 : undefined) } })) }
+      })
+    } },
     { name: 'http_batch', label: 'http_batch', description: 'Send up to 20 explicit HTTP requests without launching a browser; reuse its cookie jar if already open. Serial by default; set parallel only for independent requests. Returns status/timing and compact body diffs, not full response bodies.', parameters: Type.Object({ session: Type.String({ minLength: 1, maxLength: 96 }), challenge: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })), identity: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })), requests: Type.Array(Type.Object({ url: Type.String({ minLength: 8, maxLength: 4096 }), method: Type.Optional(Type.Union(['GET','POST','PUT','PATCH','DELETE','HEAD'].map(value => Type.Literal(value)))), headers: Type.Optional(Type.Record(Type.String(), Type.String({ maxLength: 4096 }))), body: Type.Optional(Type.String({ maxLength: 262144 })) }), { minItems: 1, maxItems: 20 }), parallel: Type.Optional(Type.Boolean()) }), executionMode: 'sequential', execute: async (_id: string, args: Session & { session: string; requests: { url: string; method?: string; headers?: Record<string, string>; body?: string }[]; parallel?: boolean }) => {
       for (const item of args.requests) assertScoped(context, item.url)
       const entry = await entryFor(context, args, false)
@@ -240,13 +287,13 @@ export function webTools(context: TaskContext): AgentTool[] {
           if(!baseline || item.error){displayed.push({...item,differenceFromFirst:null});continue}
           const sameBody=item.responseSha256===baseline.responseSha256
           let firstDifferentByteOffset: number|null=null
+          baselineBody ??= Buffer.from(JSON.parse(await readFile(baseline.evidence.file,'utf8')).response.bodyBase64,'base64')
+          const body=Buffer.from(JSON.parse(await readFile(item.evidence.file,'utf8')).response.bodyBase64,'base64')
           if(!sameBody){
-            baselineBody ??= Buffer.from(JSON.parse(await readFile(baseline.evidence.file,'utf8')).response.bodyBase64,'base64')
-            const body=Buffer.from(JSON.parse(await readFile(item.evidence.file,'utf8')).response.bodyBase64,'base64')
             let offset=0;while(offset<baselineBody.length && offset<body.length && baselineBody[offset]===body[offset])offset++
             firstDifferentByteOffset=offset
           }
-          displayed.push({...item,differenceFromFirst:{sameStatus:item.status===baseline.status,sameBody,firstDifferentByteOffset}})
+          displayed.push({...item,differenceFromFirst:{sameStatus:item.status===baseline.status,sameBody,firstDifferentByteOffset,jsonChangedFields:jsonChangedFields(baselineBody,body)}})
         }
         return {results:displayed}
 

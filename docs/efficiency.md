@@ -10,11 +10,11 @@
 - `read_graph` 支持 `id/offset/full/kinds/limit`，每种节点在 SQL 层分页；`full:true` 仍为当前页。`graphUpdate` 排空超过 500 个事件的分页。
 - 默认文本结果预算 8 KiB；原文、退出码、错误、哈希和证据引用保留。Shell 完整合并日志与独立 stdout/stderr 文件均保存，未知副作用不自动重放。JSON、扫描端口和 HTTP 状态/时间/正文差异做确定性提取；解析失败只报错并给原文入口。
 - `evidence_read` 按关键词、行号或字节区间读取本 Run 的哈希校验证据，单片最多 7600 字节。
-- `knowledge_search/read/match` 使用本地 FTS5，默认前 5 项，来源路径和哈希可核对；索引已有 Skills、Vulhub、PayloadsAllTheThings，以及本机已有的 `tools/poc/nuclei-templates`（或 `REDTRACE_NUCLEI_TEMPLATES_DIR` 指定目录）。Nuclei YAML 提取 CVE/CWE、标签、协议、引用、匹配器指纹词和可明确读取的产品/版本/前置条件；未显式声明的字段仍为 unknown。`knowledge_match` 仅作精确元数据候选比对，不确认漏洞、不运行模板。SecLists 仅索引目录、文件数和规模；不下载知识，不自动运行 PoC，不索引已识别的 flag/题解文件。源文件改变会拒绝旧片段并使下一次搜索重建索引。
+- `knowledge_search/read/match` 使用本地 FTS5，默认前 5 项，来源路径和哈希可核对；Nuclei 路径兼容 `tools/wordlists/nuclei-templates`、旧的 `tools/poc/nuclei-templates`、`/opt/redtrace/data/nuclei-templates`、`~/.nuclei-templates` 及 `REDTRACE_NUCLEI_TEMPLATES_DIR` 显式覆盖。搜索结果报告本机各知识源的可用/缺失状态与索引数；扫描上限触发时明确报告未索引告警。索引 Skills、Vulhub、PayloadsAllTheThings 和可用的 ExploitDB；Nuclei YAML 提取 CVE/CWE、标签、协议、引用、匹配器指纹词和可明确读取的产品/版本/前置条件；未显式声明的字段仍为 unknown。`knowledge_match` 仅作精确元数据候选比对，不确认漏洞、不运行模板。SecLists 仅索引目录、文件数和规模；不下载知识，不自动运行 PoC，不索引已识别的 flag/题解文件。源文件改变会拒绝旧片段并使下一次搜索重建索引。
 - 尝试签名保存完整输入顺序和编码、题目、身份、资源/通道和认证环境版本。第 3 次相同尝试仅提醒一次，不阻断任意 Shell，不自动缓存或重放有副作用、超时和未知结果。
-- `web_open/snapshot/act/network/http_batch`：明确传入 `challenge/identity/session` 可跨 Worker 复用同一身份；省略 challenge 则按 Step 隔离。简单 HTTP 不启动浏览器；需要页面时使用现有 Playwright，缺少 bundled Chromium 时本机自动使用已安装 Edge。
+- `web_open/snapshot/act/network/http_batch/http_replay`：明确传入 `challenge/identity/session` 可跨 Worker 复用同一身份；省略 challenge 则按 Step 隔离。简单 HTTP 不启动浏览器；需要页面时使用现有 Playwright，缺少 bundled Chromium 时本机自动使用已安装 Edge。`http_replay` 仅按同一隔离 Session 中捕获的 Request ID 重放无 Body 的 GET/HEAD，并最多串行比较 3 个查询变量；拒绝 CSRF/一次性 Token/签名字段，不自动重放写操作。
 - BrowserContext 按 Project/Challenge/身份/Session 隔离；同一会话操作串行。只访问 Scope 或 SDK 验证启动的目标。ARIA 快照提供变化标记；表单、隐藏字段和网络原文完整存证。局部截图需显式 `screenshot:true,selector`；失败动作使旧 snapshot_id 失效。
-- HTTP 串行默认；`parallel:true` 是对请求明确独立的声明，最多 4 并发。Cookie 共享不代替 Authorization/CSRF，调用者须显式提供；一次性参数不会自动重放。响应持久化后 dispose；展示差异不删除异常证据。取消使受影响的身份会话失效。验证码仅供当前模型通过授权局部截图尝试；无法识别应记录阻塞、转向，不承诺通用通过。
+- HTTP 串行默认；`parallel:true` 是对请求明确独立的声明，最多 4 并发。Cookie 共享不代替 Authorization/CSRF，调用者须显式提供；一次性参数不会自动重放。JSON 响应比较返回有界字段路径差异，不将差异直接当成漏洞。响应持久化后 dispose；展示差异不删除异常证据。取消使受影响的身份会话失效。验证码仅供当前模型通过授权局部截图尝试；无法识别应记录阻塞、转向，不承诺通用通过。
 - `trace_search/read` 默认前 5 项，从历史 Native Run/Audit 分页派生，强制 Project 隔离；可重建，不注入完整历史。
 - 只有 SDK 确认得分、运行时 probe/路由验证或已验证能力失效产生关键事件。事件合并、去重，只唤醒现有 Decide；满 Step 容量可重排但 add_step 不越限。成功只确认启动边界，失败/暂停和迟到事件保留。Pi/DSH 共用关键提醒判定。
 - Pivot 支持受管 SSH SOCKS（非交互式密钥/既有 SSH 配置）及 Chisel；监听启动不算路径成功。`pivot_validate` 通过指定本地 SOCKS 访问授权 HTTP(S) 服务并观察响应，受 Project 和租约控制。认证、上游或代理失效会撤销验证并级联使依赖通道降级；重新验证后恢复。Ligolo 不可派发。

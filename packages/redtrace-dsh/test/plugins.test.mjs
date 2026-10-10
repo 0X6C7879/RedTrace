@@ -103,7 +103,6 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
   const optIn = new Set([
     'redtrace-credentials', 'redtrace-attachment', 'redtrace-file-references',
     'redtrace-lsp', 'redtrace-ptc', 'redtrace-jev',
-    'redtrace-remote-terminal', 'redtrace-pivot',
   ])
   for (const view of views.filter((item) => item.source === 'builtin')) {
     assert.ok(view.status === 'running' || optIn.has(view.id), `${view.id} boots ${view.status}`)
@@ -120,11 +119,12 @@ test('efficiency features boot enabled by default and remain explicitly switchab
   await first.manager.boot()
   assert.equal(first.manager.view('redtrace-lsp').status, 'stopped')
   assert.equal(first.manager.view('redtrace-ptc').status, 'stopped')
-  assert.equal(first.manager.view('redtrace-remote-terminal').status, 'stopped')
+  assert.equal(first.manager.view('redtrace-jev').status, 'stopped')
+  assert.equal(first.manager.view('redtrace-remote-terminal').status, 'running')
   for (const id of ['redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
     assert.equal(first.manager.view(id).status, 'running')
   }
-  assert.equal(first.manager.view('redtrace-pivot').status, 'stopped')
+  assert.equal(first.manager.view('redtrace-pivot').status, 'running')
   assert.equal(first.manager.view('redtrace-session-probe').status, 'running')
   assert.ok(first.ctx.mounts.every(({ module }) => module?.name !== 'redtrace-credentials'))
 

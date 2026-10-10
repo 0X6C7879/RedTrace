@@ -56,10 +56,11 @@ function metadataFor(file: string, body: string, nucleiRoot: string): KnowledgeM
   } catch { return { kind: 'nuclei-template', protocols: [], tags: [], cves: [], cwes: [], references: [], prerequisites: [], fingerprintIndicators: [], parseError: true } }
 }
 function sourcePath(file: string, repository: string, nucleiRoot: string) {
+  const relativeToNuclei = path.relative(nucleiRoot, file)
+  if (!path.isAbsolute(relativeToNuclei) && relativeToNuclei !== '..' && !relativeToNuclei.startsWith(`..${path.sep}`)) return `${nucleiPathPrefix}${portable(relativeToNuclei)}`
   const relativeToRepository = path.relative(repository, file)
   if (!path.isAbsolute(relativeToRepository) && relativeToRepository !== '..' && !relativeToRepository.startsWith(`..${path.sep}`)) return portable(relativeToRepository)
-  const relativeToNuclei = path.relative(nucleiRoot, file)
-  return !path.isAbsolute(relativeToNuclei) && relativeToNuclei !== '..' && !relativeToNuclei.startsWith(`..${path.sep}`) ? `${nucleiPathPrefix}${portable(relativeToNuclei)}` : portable(relativeToRepository)
+  return portable(relativeToRepository)
 }
 function sourceFile(repository: string, relative: string, nucleiRoot: string) {
   return relative.startsWith(nucleiPathPrefix) ? path.join(nucleiRoot, relative.slice(nucleiPathPrefix.length)) : path.join(repository, relative)
@@ -67,11 +68,22 @@ function sourceFile(repository: string, relative: string, nucleiRoot: string) {
 const normalized = (value: string) => value.trim().toLowerCase()
 // Index keys and model-visible paths stay slash-separated on every platform.
 const portable = (value: string) => value.split(path.sep).join('/')
+function localDirectory(repository: string, name: string, env: string, candidates: string[], envChild?: string) {
+  const explicit = process.env[env]
+  const explicitPath = explicit ? path.resolve(explicit) : undefined
+  const paths = explicit ? [explicitChild(explicitPath!, envChild)] : candidates.map(value => path.resolve(repository, value))
+  const found = paths.find(value => { try { return statSync(value).isDirectory() } catch { return false } })
+  return { name, path: found ?? null, status: found ? 'available' : 'missing', ...(found ? {} : { reason: explicit ? `${env} points to a missing directory` : 'No supported local installation path exists', checked: paths }) }
+}
+function explicitChild(directory: string, child?: string) {
+  return child && path.basename(directory).toLowerCase() !== child.toLowerCase() ? path.join(directory, child) : directory
+}
 
 function collect(root: string, output: string[], maximum = 10_000) {
   const pending = [root]
   let scanned = 0
-  while (pending.length && output.length < maximum && scanned < maximum * 8) {
+  const start = output.length
+  while (pending.length && output.length - start < maximum && scanned < maximum * 8) {
     const directory = pending.pop()!
     let entries
     try { entries = readdirSync(directory, { withFileTypes: true }) } catch { continue }
@@ -82,10 +94,11 @@ function collect(root: string, output: string[], maximum = 10_000) {
       if (entry.isDirectory()) pending.push(full)
       else if (entry.isFile() && searchable.test(entry.name)) {
         try { if (statSync(full).size <= 256 * 1024) output.push(full) } catch {}
-        if (output.length >= maximum) break
+        if (output.length - start >= maximum) break
       }
     }
   }
+  return pending.length > 0 || output.length - start >= maximum || scanned >= maximum * 8
 }
 
 function collectWordlistCatalog(root: string, repository: string) {
@@ -110,11 +123,11 @@ function collectWordlistCatalog(root: string, repository: string) {
       }
     }
   }
-  return [...counts].map(([category, value]) => {
+  return { items: [...counts].map(([category, value]) => {
     const sourcePath = portable(path.relative(repository, path.join(root, category)))
     const relative = `${sourcePath} (catalog)`
     return { relative, body: `SecLists category: ${sourcePath}; ${value.files} files; ${value.bytes} bytes; filenames and sizes only, wordlist content not indexed.` }
-  })
+  }), truncated: pending.length > 0 || visited >= 10_000 || scanned >= 80_000 }
 }
 
 function openIndex(root: string, filename: string, sources: string[], wordlists: string[], nucleiRoot: string) {
@@ -124,7 +137,8 @@ function openIndex(root: string, filename: string, sources: string[], wordlists:
   const state = db.prepare("SELECT value FROM index_state WHERE key='updated' ").get() as { value: string } | undefined
   if (!state || Date.now() - Number(state.value) > 60_000) {
     const files: string[] = []
-    for (const source of sources) collect(source, files)
+    const warnings: string[] = []
+    for (const source of sources) if (collect(source, files)) warnings.push(`Source indexing limit reached; some files were not indexed: ${source}`)
     const known = new Map((db.prepare('SELECT id,path FROM docs').all() as { id: string; path: string }[]).map(row => [row.path, row.id]))
     const remove = db.prepare('DELETE FROM docs WHERE path=?'), insert = db.prepare('INSERT INTO docs(id,path,body) VALUES (?,?,?)')
     db.exec('BEGIN')
@@ -135,10 +149,15 @@ function openIndex(root: string, filename: string, sources: string[], wordlists:
         if (/\b(?:flag|tsecbench|htb)\{[^}\r\n]+\}/i.test(body)) continue
         current.set(relative, { hash, body })
       }
-      for (const wordlist of wordlists) for (const item of collectWordlistCatalog(wordlist, root)) current.set(item.relative, { hash: digest(item.body), body: item.body })
+      for (const wordlist of wordlists) {
+        const catalog = collectWordlistCatalog(wordlist, root)
+        if (catalog.truncated) warnings.push(`SecLists catalog limit reached; some categories were not indexed: ${wordlist}`)
+        for (const item of catalog.items) current.set(item.relative, { hash: digest(item.body), body: item.body })
+      }
       for (const [relative, item] of current) if (known.get(relative) !== item.hash) { if (known.has(relative)) remove.run(relative); insert.run(item.hash, relative, item.body) }
       for (const previous of known.keys()) if (!current.has(previous)) remove.run(previous)
       db.prepare("INSERT INTO index_state VALUES ('updated',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(Date.now()))
+      db.prepare("INSERT INTO index_state VALUES ('warnings',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(warnings))
       db.exec('COMMIT')
     } catch (error) { db.exec('ROLLBACK'); db.close(); throw error }
   }
@@ -147,9 +166,20 @@ function openIndex(root: string, filename: string, sources: string[], wordlists:
 
 export function knowledgeTools(_evidenceRoot: string, context: TaskContext): AgentTool[] {
   const repository = context.config.workspaceRoot ? path.resolve(context.config.workspaceRoot, '..') : path.join(os.tmpdir(), 'redtrace-knowledge-test', context.run.projectId)
-  const nucleiRoot = path.resolve(process.env.REDTRACE_NUCLEI_TEMPLATES_DIR ?? path.join(repository, 'tools', 'poc', 'nuclei-templates'))
-  const sources = [...['skills', '.agents/skills', '.redtrace/skills', 'tools/poc/vulhub', 'tools/poc/vulhub/.claude/skills', 'tools/payloads/PayloadsAllTheThings'].map(item => path.join(repository, item)), nucleiRoot].filter((item, index, all) => all.indexOf(item) === index && (() => { try { return statSync(item).isDirectory() } catch { return false } })())
-  const wordlists = ['tools/wordlists/SecLists'].map(item => path.join(repository, item)).filter(item => { try { return statSync(item).isDirectory() } catch { return false } })
+  const resources = [
+    localDirectory(repository, 'project-skills', 'REDTRACE_SKILLS_DIR', ['skills']),
+    localDirectory(repository, 'agent-skills', 'REDTRACE_AGENT_SKILLS_DIR', ['.agents/skills']),
+    localDirectory(repository, 'private-skills', 'REDTRACE_PRIVATE_SKILLS_DIR', ['.redtrace/skills']),
+    localDirectory(repository, 'vulhub', 'REDTRACE_VULHUB_DIR', ['tools/poc/vulhub', 'tools/vulhub', 'tools/poc/Vulhub']),
+    localDirectory(repository, 'vulhub-skills', 'REDTRACE_VULHUB_SKILLS_DIR', ['tools/poc/vulhub/.claude/skills']),
+    localDirectory(repository, 'payloads-all-the-things', 'REDTRACE_PAYLOADS_DIR', ['tools/payloads/PayloadsAllTheThings', 'tools/payloads/payloads-all-the-things'], 'PayloadsAllTheThings'),
+    localDirectory(repository, 'exploitdb', 'REDTRACE_EXPLOITDB_DIR', ['tools/poc/exploitdb', 'tools/exploitdb', '/usr/share/exploitdb']),
+    localDirectory(repository, 'nuclei-templates', 'REDTRACE_NUCLEI_TEMPLATES_DIR', ['tools/wordlists/nuclei-templates', 'tools/poc/nuclei-templates', '/opt/redtrace/data/nuclei-templates', path.join(os.homedir(), '.nuclei-templates')]),
+    localDirectory(repository, 'seclists', 'REDTRACE_WORDLISTS_DIR', ['tools/wordlists/SecLists', '/usr/share/seclists'], 'SecLists'),
+  ]
+  const nucleiRoot = resources.find(item => item.name === 'nuclei-templates')!.path ?? path.resolve(repository, 'tools/poc/nuclei-templates')
+  const sources = [...new Set(resources.filter(item => item.path && item.name !== 'seclists').map(item => item.path!))]
+  const wordlists = resources.filter(item => item.name === 'seclists' && item.path).map(item => item.path!)
   const index = path.join(repository, '.redtrace', 'knowledge.sqlite')
   return [
     { name: 'knowledge_search', label: 'knowledge_search', description: 'Search indexed local Skills, Vulhub, PayloadsAllTheThings and available local Nuclei CVE/fingerprint templates. Returns at most 5 candidates; a match is not proof a vulnerability applies.', parameters: Type.Object({ query: Type.String({ minLength: 2, maxLength: 300 }) }), executionMode: 'sequential', execute: async (_id: string, args: { query: string }) => {
@@ -159,7 +189,8 @@ export function knowledgeTools(_evidenceRoot: string, context: TaskContext): Age
       try {
       const rows = db.prepare('SELECT id,path,body,substr(body,max(1,instr(lower(body),lower(?))-160),360) AS snippet FROM docs WHERE docs MATCH ? ORDER BY bm25(docs) LIMIT 5').all(terms[0], terms.map(term => `"${term.replaceAll('"', '""')}"`).join(' OR ')) as { id: string; path: string; body: string; snippet: string }[]
       const results = rows.map(row => { const metadata = metadataFor(sourceFile(repository,row.path,nucleiRoot),row.body,nucleiRoot); return { id: row.id, path: row.path, sha256: row.id, snippet: row.snippet, kind: metadata.kind, templateId: metadata.templateId ?? null, name: metadata.name ?? null, severity: metadata.severity ?? 'unknown', vendor: metadata.vendor ?? 'unknown', component: metadata.component ?? 'unknown', version: metadata.version ?? 'unknown', protocols: metadata.protocols, tags: metadata.tags, cves: metadata.cves, cwes: metadata.cwes, references: metadata.references, prerequisites: metadata.prerequisites.length ? metadata.prerequisites : 'unknown', fingerprintIndicators: metadata.fingerprintIndicators, metadataParseError: metadata.parseError ?? false } })
-        const value = { results, indexedSources: (db.prepare('SELECT COUNT(*) AS count FROM docs').get() as { count: number }).count }
+        const indexWarnings = (db.prepare("SELECT value FROM index_state WHERE key='warnings'").get() as { value: string } | undefined)?.value
+        const value = { results, indexedSources: (db.prepare('SELECT COUNT(*) AS count FROM docs').get() as { count: number }).count, resources, indexWarnings: indexWarnings ? JSON.parse(indexWarnings) : [] }
         return { content: [{ type: 'text', text: JSON.stringify(value) }], details: value }
       } finally { db.close() }
     } },

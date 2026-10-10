@@ -11,7 +11,7 @@
 <script src="/static/vendor/dagre.min.js"></script>
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/vendor/cytoscape-dagre.js"></script>
-<script defer src="/static/audit.js?v=20260917-tool-lifecycle-1"></script>
+<script defer src="/static/audit.js?v=20261010-audit-output-1"></script>
 <script defer src="/static/capabilities.js?v=20260916-skill-classification-retired-1"></script>
 <script defer src="/static/plugins.js?v=20260825-plugins-2"></script>
 <!-- Previous cache key: operations.js?v=20260810-performance-1 -->
@@ -1809,7 +1809,7 @@
                       <span class="text-emerald-400">$</span><span class="audit-command-text min-w-0 flex-1" x-text="eventCommand(event)"></span>
                       <span class="text-[10px]" :class="event.error ? 'text-rose-500' : event.kind.endsWith('completed') ? 'text-emerald-500' : 'text-amber-500'" x-text="eventStatus(event)"></span>
                     </summary>
-                    <pre x-show="event.content" class="max-h-64 overflow-auto border-t border-white/10 px-3 py-2 text-[10px] leading-relaxed text-slate-300" x-text="displayText(event.content)"></pre>
+                    <pre x-show="event.content || event.kind.endsWith('completed')" class="max-h-64 overflow-auto whitespace-pre-wrap border-t border-white/10 px-3 py-2 text-[10px] leading-relaxed text-slate-300" x-text="eventPayload(event)"></pre>
                   </details>
                 </template>
                 <template x-if="['error', 'stderr'].includes(event.kind)">

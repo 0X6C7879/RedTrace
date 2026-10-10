@@ -38,7 +38,8 @@ async function tsecbenchQuery(config: EngineConfig, args: string[], signal?: Abo
     const { stdout } = await execFileAsync('python3', [script, ...args], {
       cwd: path.dirname(script), env: toolEnvironment(config.commonEnv), signal, timeout: 45_000, maxBuffer: 2 * 1024 * 1024,
     })
-    return JSON.parse(stdout)
+    const response = JSON.parse(stdout)
+    return response?.[args[0]] ?? response
   } catch (error) {
     try { return JSON.parse((error as { stderr?: string }).stderr ?? '') }
     catch { throw new Error('TSecBench query failed or timed out') }

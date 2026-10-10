@@ -106,12 +106,16 @@ export function eventProjection(task: RuntimeTask, event: SessionEvent): Record<
   }
   if (event.type === 'tool/result') {
     const message = data.message as {
-      content?: Array<{ type?: string; isError?: boolean; content?: Array<{ type?: string; text?: string }> }>
+      toolCallId?: string
+      isError?: boolean
+      content?: Array<{ type?: string; text?: string; isError?: boolean; content?: Array<{ type?: string; text?: string }> }>
       source?: { callId?: string }
     } | undefined
-    const callId = message?.source?.callId
-    const block = message?.content?.find(candidate => candidate.type === 'tool-result')
-    const text = textBlocksOf(block?.content)
+    const callId = message?.toolCallId ?? message?.source?.callId ?? data.callId as string | undefined
+    const blocks = message?.content ?? []
+    // New DSH messages store result blocks directly; accept the old wrapper too.
+    const wrapper = blocks.find(candidate => candidate.type === 'tool-result')
+    const text = textBlocksOf(wrapper?.content ?? blocks)
     // The UI hides a tool.started once its completion arrives, so the tool
     // name must travel on the completion for the block header to show it.
     const name = callId === undefined ? undefined : task.toolNames?.get(String(callId))
@@ -120,7 +124,7 @@ export function eventProjection(task: RuntimeTask, event: SessionEvent): Record<
       kind: 'tool.completed',
       title: name,
       call_id: callId,
-      error: Boolean(data.error) || Boolean(block?.isError),
+      error: Boolean(data.error) || Boolean(message?.isError) || Boolean(wrapper?.isError),
       ...(text === '' ? {} : { content: clipText(text) }),
     }]
   }

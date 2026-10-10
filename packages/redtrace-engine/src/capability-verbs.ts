@@ -16,6 +16,7 @@ import { Type } from 'typebox'
 import type { TSchema, Static } from 'typebox'
 import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
 import { resourceKinds } from './operations.ts'
+import { operationSupported } from './operation-execution.ts'
 import type { Operations } from './operations.ts'
 import type { Router } from './http.ts'
 import type { TaskContext } from './scheduler.ts'
@@ -133,12 +134,32 @@ const VERBS: readonly VerbDefinition[] = [
     arguments: args => ({ path: args.path }),
   },
   {
+    id: 'remote.file.upload', action: 'upload_file', risk: 'medium',
+    description: 'Upload a managed File resource through verified SFTP with resumable temporary transfer, SHA-256 verification, and atomic publication.',
+    parameters: Type.Object({ artifact_id: Type.String({ minLength: 1, maxLength: 64 }), path: pathSchema, overwrite: Type.Optional(Type.Boolean()), timeout: timeoutSchema, target: targetSchema, via: viaSchema }),
+    arguments: args => ({ artifact_id: args.artifact_id, path: args.path, overwrite: args.overwrite === true, timeout: args.timeout }),
+  },
+  {
+    id: 'remote.file.download', action: 'download_file', risk: 'low',
+    description: 'Download a remote file through verified SFTP into the controlled Artifact store and return a reusable File resource.',
+    parameters: Type.Object({ path: pathSchema, timeout: timeoutSchema, target: targetSchema, via: viaSchema }),
+    arguments: args => ({ path: args.path, timeout: args.timeout }),
+  },
+  {
     id: 'remote.terminal.open', action: 'terminal.open', risk: 'medium', description: 'Open a persistent SSH terminal resource and acquire its exclusive write lease.',
     parameters: Type.Object({ via: Type.String({ minLength: 1 }), name: Type.Optional(Type.String()), rows: Type.Optional(Type.Integer({ minimum: 2, maximum: 500 })), cols: Type.Optional(Type.Integer({ minimum: 2, maximum: 1000 })), ttl_seconds: Type.Optional(Type.Integer({ minimum: 5, maximum: 3600 })) }), arguments: args => ({ ...args }),
   },
   {
     id: 'remote.terminal.read', action: 'terminal.read', risk: 'low', description: 'Read bounded remote terminal output from a cursor.',
     parameters: Type.Object({ via: Type.String({ minLength: 1 }), cursor: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 262144 })) }), arguments: args => ({ ...args }),
+  },
+  {
+    id: 'remote.terminal.claim', action: 'terminal.claim', risk: 'medium', description: 'Claim an existing persistent terminal for this Run and receive a fresh fencing token.',
+    parameters: Type.Object({ via: Type.String({ minLength: 1 }), ttl_seconds: Type.Optional(Type.Integer({ minimum: 5, maximum: 3600 })) }), arguments: args => ({ ...args }),
+  },
+  {
+    id: 'remote.terminal.release', action: 'terminal.release', risk: 'low', description: 'Release this Run’s terminal lease without closing the remote terminal.',
+    parameters: Type.Object({ via: Type.String({ minLength: 1 }), fencing_token: fencingSchema }), arguments: args => ({ ...args }),
   },
   {
     id: 'remote.terminal.send', action: 'terminal.send', risk: 'medium', description: 'Write to a persistent terminal using its live fencing token.',
@@ -176,6 +197,11 @@ const ADAPTERS: readonly AdapterDefinition[] = [
     establish: '先创建 C2 listener 并等待会话上线(Web UI 运维页或 c2_* 工具),会话即成为可复用通道。',
   },
   {
+    id: 'ssh-sftp', label: 'SSH/SFTP', pluginId: 'redtrace-c2',
+    verbs: ['remote.file.upload', 'remote.file.download'], kinds: ['c2_session'],
+    establish: '先验证 direct SSH Session 的 SFTP 子系统，再使用受控 Artifact 进行上传或下载。',
+  },
+  {
     id: 'session-probe-webshell', label: 'WebShell 会话探测', pluginId: 'redtrace-session-probe', requiresPlugins: ['redtrace-webshell'],
     verbs: ['remote.session.probe'], kinds: ['webshell'],
     establish: '先登记 WebShell 配置，再通过 remote.session.probe 验证真实能力。',
@@ -191,8 +217,8 @@ const ADAPTERS: readonly AdapterDefinition[] = [
     establish: '使用 pivot.socks 建立受管 SSH Forward、Chisel 或 Ligolo 路径。',
   },
   {
-    id: 'remote-terminal', label: '远程终端', pluginId: 'redtrace-remote-terminal', stub: true,
-    verbs: ['remote.terminal.open', 'remote.terminal.read', 'remote.terminal.send', 'remote.terminal.expect', 'remote.terminal.resize', 'remote.terminal.signal', 'remote.terminal.close'],
+    id: 'remote-terminal', label: '远程终端', pluginId: 'redtrace-remote-terminal',
+    verbs: ['remote.terminal.open', 'remote.terminal.read', 'remote.terminal.claim', 'remote.terminal.release', 'remote.terminal.send', 'remote.terminal.expect', 'remote.terminal.resize', 'remote.terminal.signal', 'remote.terminal.close'],
     kinds: ['c2_session', 'terminal'], establish: '先登记并验证 SSH Session，再用 remote.terminal.open 建立跨 Step 终端。',
   },
 ]
@@ -256,7 +282,13 @@ function candidateChannels(runtime: VerbRuntime, verb: string, projectId?: strin
   const rows = runtime.operations.store.db
     .prepare(`SELECT id,kind,name,target,last_seen_at,metadata_json FROM shared_resources WHERE kind IN (${kinds.map(() => '?').join(',')}) AND (status='available' ${verb==='pivot.validate' ? "OR status='degraded'" : ''}) ORDER BY last_seen_at DESC`)
     .all(...kinds) as unknown as ChannelRow[]
-  return rows.filter(row => (projectId === undefined || runtime.operations.resource(row.id).project_id === null || runtime.operations.resource(row.id).project_id === projectId) && channelSupports(row, verb))
+  const action = verbRegistry.find(entry => entry.id === verb)?.action
+  return rows.filter(row => {
+    const resource = runtime.operations.resource(row.id)
+    return (projectId === undefined || resource.project_id === null || resource.project_id === projectId)
+      && channelSupports(row, verb)
+      && (!action || action.startsWith('pivot.') || action.startsWith('terminal.') || operationSupported(resource, action))
+  })
 }
 
 export class VerbDispatchError extends Error {
@@ -327,6 +359,8 @@ export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Rec
     if (!runtime.operations.authorized(context.projectId, definition.action, runtime.operations.resource(channel.id))) throw new Error('Remote terminal operation requires explicit project authorization')
     if (verb === 'remote.terminal.open') return runtime.operations.terminals.open(context.projectId, channel.id, { ...args, ...actor, run_id: context.runId })
     if (verb === 'remote.terminal.read') return runtime.operations.terminals.read(channel.id, Number(args.cursor ?? 0), Number(args.limit ?? 65536))
+    if (verb === 'remote.terminal.claim') return { terminal_id: channel.id, lease: runtime.operations.lease(resource, { owner_type: 'worker', owner: context.worker, run_id: context.runId, ttl_seconds: Number(args.ttl_seconds ?? 120) }) }
+    if (verb === 'remote.terminal.release') { runtime.operations.releaseLease(resource, { ...actor, fencing_token: args.fencing_token }); return { terminal_id: channel.id, released: true } }
     if (verb === 'remote.terminal.send') return runtime.operations.terminals.send(channel.id, { ...args, ...actor })
     if (verb === 'remote.terminal.expect') return runtime.operations.terminals.expect(channel.id, args)
     if (verb === 'remote.terminal.resize') return runtime.operations.terminals.resize(channel.id, { ...args, ...actor })

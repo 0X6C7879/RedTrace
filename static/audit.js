@@ -593,6 +593,7 @@ function auditPage() {
       if (event.changes) {
         try { return JSON.stringify(event.changes, null, 2); } catch {}
       }
+      if (['tool.completed', 'command.completed'].includes(event.kind)) return '（未返回可显示的文本输出）';
       return '';
     },
 

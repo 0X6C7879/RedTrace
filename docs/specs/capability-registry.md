@@ -14,6 +14,7 @@ Skill 无分类轴:Execute 会话统一通过 DSH 原生 skill 栈(`skill` + `sk
 | 派发器 | 同上 `dispatchVerb` | 通道选择 → `Operations.createTask` → 轮询至终态;审批等待提前返回 |
 | 工具工厂 | 同上 `verbTools` | 按 Step.requires 生成 pi 风格 AgentTool(`remote_command` 等),runPi 与 compat 宿主共用 |
 | 通道族插件 | `packages/redtrace-dsh/src/webshell.ts`、`c2.ts` | Cordis 插件 `redtrace-webshell` / `redtrace-c2`,进插件管理页,提供族专属工具(探测、listener/payload/会话)并以其运行状态门控适配器 |
+| SSH/SFTP 与远程终端 | `packages/redtrace-engine/src/operation-execution.ts`、`remote-terminal.ts` | 上传/下载仅由真实 direct SSH + 已探测 SFTP 子系统的适配器提供；远程 PTY 是 Resource 托管终端，租约校验发生在每次写入/尺寸/信号调用 |
 
 ## 派发规则(通道选择)
 
@@ -31,21 +32,21 @@ Skill 无分类轴:Execute 会话统一通过 DSH 原生 skill 栈(`skill` + `sk
 - conclude 阶段 restrict 到图工具,动词工具自动切断;Decide 只见图工具,永不接触动词。
 - requires 为空 → 行为与旧版完全一致(无动词工具、无 channels 切片)。
 
-## 扩展路径(本期未实现)
+## 扩展路径(按已验证实现开放)
 
-- **插件 manifest provides**:plugins.json UserEntry 扩展 `provides` 字段,用户插件声明动词与资源。
-- **CLI 适配器**:`tools/bin`(chisel/ligolo 等)的进程生命周期管理,提供 `pivot.socks` 等通道族。
-- 当前注册表中的 proxy 为占位适配器(`stub: true`):声明动词、展示 establish 提示、不参与派发。Web 联网能力不走动词层:DSH 原生 `web_search` / `web_fetch` 工具由 redtrace-web 插件直接挂载进 Execute 会话。
+- **插件 manifest provides**:尚未交付 `plugins.json UserEntry.provides`;注册表仍只开放固定已知动词。
+- **CLI 适配器**:`PivotRuntime` 管理 SSH Forward 与 Chisel 进程、Route Resource、验证和关闭;Ligolo/TUN 仍不支持。
+- Pivot 插件默认启用，但只有真实验证过的 Route 才会出现在路径查询结果中。插件启用或进程启动不等于目标可达。Web 联网能力不走动词层:DSH 原生 `web_search` / `web_fetch` 工具由 redtrace-web 插件直接挂载进 Execute 会话。
 
 ## 执行结果与验证边界
 
 - `ExecutionResult.version=1`，携带 completion、远端退出码（未知时 null）、error_code、stdout/stderr/combined_output、output_ref、truncated、execution_context 和时间。不能分流的通道只填写 combined_output。
 - HTTP 200 不证明远端执行成功。需要帧的协议缺帧报 PROTOCOL_ERROR；无可靠完成证明的结果保持 unknown，任务终态 failed，不自动重放。
 - 模型结果摘要有界；原始证据通过 result_ref 读取。当前持久输出上限 2 MiB，结果记录保存 saved_bytes 和截断标记，不声称保存了超限输出。
-- 登记与自报能力不是验证。Worker 登记时无法写入 verified_capabilities；成功 `remote.session.probe` 只证明命令与探测能力，不能自动授予文件、PTY 或持久终端能力。
+- 登记与自报能力不是验证。Worker 登记时无法写入 verified_capabilities；成功命令探测本身不授予文件能力。direct SSH 只有额外完成 SFTP 子系统真实握手及 `realpath` 才暴露 SFTP 文件动词；PTY 仍由单独 SSH shell 建立成功后登记。
 - Beacon v1 结果必须携带 attempt_id、completion、exit_code、error_code 和 combined_output。旧结果请求缺执行证明会被拒绝；同一 Session 一次只派发一个任务，拒绝旧尝试和已完成任务的迟到覆盖。
 - `remote.task` 在通道插件停用后仍可查询历史证据。插件停用同时关闭拥有的监听器和后台运行资源；已派发结果不声称可以撤回。
-- 远程终端与 Pivot 代码处于待验收状态：插件默认关闭，适配器 stub，不对 Agent 开放；不能以存在工具名称证明能力完成。
+- 远程 SSH PTY 与 SSH Forward/Chisel 已接入受管运行时与动词派发，插件默认启用；这不代表已通过真实环境验收。Ligolo/TUN、TCP 持续终端、完整有向多跳选路与真实依赖传播仍未交付，不能以插件可用或工具可见证明网络路径可达。
 
 ## 授权、租约与迁移
 

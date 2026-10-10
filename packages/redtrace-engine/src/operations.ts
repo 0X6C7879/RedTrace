@@ -1,4 +1,4 @@
-import { readFileSync, mkdirSync, writeFileSync, statSync, rmSync } from 'node:fs'
+import { readFileSync, mkdirSync, writeFileSync, statSync, rmSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto'
 import net from 'node:net'
@@ -97,7 +97,18 @@ export class Operations {
             this.finish(task.id, await this.executeChannel(channel, operationCommand(task.action, args, JSON.parse(resource.metadata_json)), Number(args.timeout ?? 20), abort.signal))
           }
           else {
-            const { executeOperation } = await import('./operation-execution.ts'); this.finish(task.id, await executeOperation(resource, task, cwd, abort.signal))
+            const { executeOperation } = await import('./operation-execution.ts')
+            let executableTask = task
+            if (task.action === 'upload_file') {
+              const input = JSON.parse(task.input_json), artifact = this.resource(String(input.artifact_id ?? ''))
+              if (artifact.kind !== 'file' || artifact.project_id !== null && artifact.project_id !== task.project_id) throw new ExecutionError('AUTH_FAILED', 'Managed File resource is unavailable to this project')
+              const source = realpathSync(String(JSON.parse(artifact.secret_json).artifact_path ?? '')), root = realpathSync(this.outputRoot)
+              if (source !== root && !source.startsWith(root + path.sep) || !statSync(source).isFile()) throw new ExecutionError('AUTH_FAILED', 'Managed File resource points outside the controlled Artifact store')
+              executableTask = { ...task, input_json: JSON.stringify({ ...input, _source_path: source }) }
+            } else if (task.action === 'download_file') {
+              executableTask = { ...task, input_json: JSON.stringify({ ...JSON.parse(task.input_json), _artifact_directory: cwd }) }
+            }
+            this.finish(task.id, await executeOperation(resource, executableTask, cwd, abort.signal))
           }
         }
         catch (error) {
@@ -289,7 +300,7 @@ export class Operations {
     } catch (error) { this.finish(task.id, executionResult(error instanceof Error ? error.message : String(error), null, { error_code: 'AUTH_FAILED' })); return false }
   }
   private actionRisk(action: string, requested = 'low') {
-    const fixed: Record<string, string> = { command: 'high', delete_file: 'high', move_file: 'high', write_file: 'high', create_file: 'medium', create_directory: 'medium', 'pivot.open': 'high', 'terminal.signal': 'medium' }
+    const fixed: Record<string, string> = { command: 'high', delete_file: 'high', move_file: 'high', write_file: 'high', upload_file: 'high', create_file: 'medium', create_directory: 'medium', 'pivot.open': 'high', 'terminal.signal': 'medium' }
     const order = ['low', 'medium', 'high', 'critical']
     return order[Math.max(order.indexOf(fixed[action] ?? 'low'), Math.max(0, order.indexOf(requested)))]!
   }
@@ -334,6 +345,7 @@ export class Operations {
       const prefixes: Record<string, string> = { webshell: 'ws', c2_listener: 'lis', c2_session: 'ses', c2_payload: 'pay', c2_profile: 'prf', proxy: 'prx', host: 'hst', terminal: 'tty', entry: 'ent', file: 'fil', credential_ref: 'cred', result: 'res' }
       const id = uid(prefixes[input.kind]), metadata = { ...input.metadata }, secret = { ...input.secret }, at = now()
       if(input.actor_type==='worker') for(const key of ['verified_capabilities','verified_at','verified_endpoint','runtime_verified','verification_version','conflict_key']) delete metadata[key]
+      if (input.actor_type === 'worker' && input.kind === 'file') delete secret.artifact_path
       let status = input.status ?? 'available', secret_once: string | undefined
       if (project) metadata.source_project_id ??= project
       if (input.parent_resource_id) this.resource(input.parent_resource_id)
@@ -382,6 +394,12 @@ export class Operations {
       const content = truncated ? bytes.subarray(0, 2 * 1024 * 1024).toString() + '\n[output truncated by RedTrace]' : output
       const ref = `/projects/${task.project_id ?? '_global'}/operations/results/${outputId}`
       result = { ...result, output_ref: ref, truncated: result.truncated || truncated, completed_at: at, execution_context: { ...result.execution_context, resource_id: resource.id, host_id: JSON.parse(resource.metadata_json).host_id ?? null, route_id: JSON.parse(resource.metadata_json).route_id ?? null } }
+      if (succeeded && task.action === 'download_file' && result.execution_context.artifact_path) {
+        const artifactPath = realpathSync(String(result.execution_context.artifact_path)), root = realpathSync(this.outputRoot)
+        if (!artifactPath.startsWith(root + path.sep) || !statSync(artifactPath).isFile()) throw new Error('Downloaded artifact escaped the controlled store')
+        const file = this.create(task.project_id, { kind: 'file', name: String(result.execution_context.artifact_name ?? path.basename(artifactPath)), target: '', summary: `Downloaded from ${resource.name}`, metadata: { size_bytes: result.execution_context.size_bytes, sha256: result.execution_context.sha256, source_resource_id: resource.id, remote_path: JSON.parse(task.input_json).path, verified: true }, secret: { artifact_path: artifactPath }, actor_type: 'system', actor: 'remote-transfer', parent_resource_id: resource.id, source_task_id: task.id }).resource
+        result.execution_context.file_resource_id = file.id
+      }
       this.store.db.prepare('INSERT INTO operation_results VALUES (?,?,?,?,?,?,?,?)').run(outputId, task.project_id, id, 'text/plain; charset=utf-8', content, Buffer.byteLength(content), digest(content), at)
       const directory = path.join(this.outputRoot, resource.kind === 'webshell' ? 'webshell' : 'c2', 'results'); mkdirSync(directory, { recursive: true }); writeFileSync(path.join(directory, `${id}-${outputId}.txt`), content)
       if (JSON.parse(task.input_json).publish_result) this.create(task.project_id, { kind: 'result', name: `${resource.name} · ${task.action}`, target: ref, summary: output, metadata: { result_id: outputId, task_id: id }, actor_type: task.actor_type, actor: task.actor, source_task_id: id })
@@ -396,7 +414,13 @@ export class Operations {
         const metadata = JSON.parse(resource.metadata_json), observed: Record<string, string> = {}
         for (const line of output.split(/\r?\n/)) { const index = line.indexOf('='); if (index > 0) observed[line.slice(0, index)] = line.slice(index + 1) }
         metadata.observed = Object.keys(observed).length ? observed : { raw: output.slice(0, 4000) }; metadata.observed_at = at
-        metadata.verified_capabilities = [...new Set([...(metadata.verified_capabilities ?? []), 'remote.command', 'remote.session.probe'])]
+        const fileCapabilities = result.execution_context.file_protocol === 'sftp' ? ['remote.file.read', 'remote.file.write', 'remote.file.list', 'remote.file.mkdir', 'remote.file.touch', 'remote.file.stat', 'remote.file.hash', 'remote.file.move', 'remote.file.delete', 'remote.file.upload', 'remote.file.download'] : []
+        metadata.verified_capabilities = [...new Set([...(metadata.verified_capabilities ?? []), 'remote.command', 'remote.session.probe', ...fileCapabilities])]
+        if (result.execution_context.file_protocol) metadata.file_protocol = result.execution_context.file_protocol
+        if (!metadata.host_id) {
+          const host = this.create(task.project_id, { kind: 'host', name: observed.hostname || resource.target || resource.name, target: resource.target, summary: `Observed through ${resource.name}`, metadata: { identity_evidence: { hostname: observed.hostname ?? null, target: resource.target, source_resource_id: resource.id }, os: observed.os ?? null, arch: observed.arch ?? null, network_context: metadata.network_context ?? 'local', observed_at: at }, actor_type: 'system', actor: 'session-probe', parent_resource_id: resource.id }).resource
+          metadata.host_id = host.id
+        }
         this.verifiedResource(resource.id, { metadata_json: JSON.stringify(metadata) })
       }
       return this.publicTask(this.task(id))

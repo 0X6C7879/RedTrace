@@ -111,6 +111,27 @@ http:
   }
 })
 
+test('Nuclei legacy installer path is discovered and resource availability is returned', async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-nuclei-legacy-')), previous = process.env.REDTRACE_NUCLEI_TEMPLATES_DIR
+  delete process.env.REDTRACE_NUCLEI_TEMPLATES_DIR
+  const templates = path.join(root, 'tools', 'wordlists', 'nuclei-templates', 'http', 'cves')
+  mkdirSync(templates, { recursive: true })
+  writeFileSync(path.join(templates, 'legacy.yaml'), 'id: legacy-offline-fixture\ninfo:\n  name: Legacy Offline Fixture\n  severity: info\nhttp:\n  - method: GET\n')
+  const store = new Store(':memory:'), project = store.createProject({ title: 'Legacy path', origin: 'Local fixture', goal: 'Resolve installed data' }).project
+  const step = store.addStep(project.id, { description: 'Index fixture', sourceIds: ['origin'] }), run = store.claim(project.id, 'execute', worker, step.id)
+  try {
+    const search = knowledgeTools('', { store, run, worker, config: { workspaceRoot: path.join(root, 'workspaces') } as EngineConfig, signal: new AbortController().signal }).find(tool => tool.name === 'knowledge_search')!
+    const result = await search.execute('search', { query: 'Legacy Offline Fixture' }) as any
+    assert.equal(result.details.results[0].path, '@nuclei-templates/http/cves/legacy.yaml')
+    assert.equal(result.details.resources.find((item: any) => item.name === 'nuclei-templates').status, 'available')
+    assert.equal(result.details.resources.find((item: any) => item.name === 'nuclei-templates').path, path.join(root, 'tools', 'wordlists', 'nuclei-templates'))
+    assert.ok(Array.isArray(result.details.indexWarnings))
+  } finally {
+    store.close(); rmSync(root, { recursive: true, force: true })
+    if (previous === undefined) delete process.env.REDTRACE_NUCLEI_TEMPLATES_DIR; else process.env.REDTRACE_NUCLEI_TEMPLATES_DIR = previous
+  }
+})
+
 test('tool traces are indexed and readable only inside their project', () => {
   const store = new Store(':memory:')
   try {

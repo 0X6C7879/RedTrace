@@ -1,6 +1,9 @@
 import http from 'node:http'
 import https from 'node:https'
-import { readFileSync } from 'node:fs'
+import { createReadStream, createWriteStream, readFileSync, renameSync, statSync } from 'node:fs'
+import { basename as pathModuleBasename, join as pathModuleJoin } from 'node:path'
+import { createHash } from 'node:crypto'
+import { pipeline } from 'node:stream/promises'
 import { Client, type ConnectConfig, type SFTPWrapper } from 'ssh2'
 import { runProcess } from './shell.ts'
 import { ExecutionError, commandFrame, executionResult, parseCommandFrame, quoteShell, validateExecutionResult, type ExecutionResult } from './execution-result.ts'
@@ -101,11 +104,21 @@ async function sftpCall<T>(client: Client, run: (sftp: SFTPWrapper) => Promise<T
 }
 const sftpBuffer = (sftp: SFTPWrapper, path: string) => new Promise<Buffer>((resolve, reject) => { const chunks: Buffer[] = []; let size = 0; const stream = sftp.createReadStream(path); stream.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 2 * 1024 * 1024) stream.destroy(new ExecutionError('PROTOCOL_ERROR', 'SFTP read exceeds the 2 MiB bounded read limit')); else chunks.push(chunk) }); stream.on('error', reject); stream.on('end', () => resolve(Buffer.concat(chunks))) })
 const sftpWrite = (sftp: SFTPWrapper, path: string, data: Buffer, overwrite = false) => new Promise<void>((resolve, reject) => { const stream = sftp.createWriteStream(path, { flags: overwrite ? 'w' : 'wx' }); stream.on('error', reject); stream.on('close', resolve); stream.end(data) })
+const sftpStat = (sftp: SFTPWrapper, file: string) => new Promise<any | null>((resolve, reject) => sftp.stat(file, (error, stats) => error ? ((error as any).code === 2 ? resolve(null) : reject(error)) : resolve(stats)))
+const sftpRename = (sftp: SFTPWrapper, source: string, destination: string, overwrite: boolean) => new Promise<void>((resolve, reject) => {
+  const done = (error?: Error | null) => error ? reject(error) : resolve()
+  if (overwrite && typeof (sftp as any).ext_openssh_rename === 'function') (sftp as any).ext_openssh_rename(source, destination, done)
+  else sftp.rename(source, destination, done)
+})
+async function hashStream(stream: NodeJS.ReadableStream) { const hash = createHash('sha256'); for await (const chunk of stream as any) hash.update(chunk); return hash.digest('hex') }
+const localHash = (file: string, bytes?: number) => bytes === 0 ? Promise.resolve(createHash('sha256').digest('hex')) : hashStream(createReadStream(file, bytes === undefined ? {} : { start: 0, end: bytes - 1 }))
+const remoteHash = (sftp: SFTPWrapper, file: string, bytes?: number) => bytes === 0 ? Promise.resolve(createHash('sha256').digest('hex')) : hashStream(sftp.createReadStream(file, bytes === undefined ? {} : { start: 0, end: bytes - 1 }))
 async function executeSsh(resource: any, metadata: any, secret: any, action: string, args: any, signal: AbortSignal): Promise<ExecutionResult> {
   const started_at = new Date().toISOString()
   let partialOutput = ''
   return withSsh(resource, metadata, secret, signal, async client => {
-    if (['command', 'probe', 'probe_info'].includes(action)) return await new Promise<ExecutionResult>((resolve, reject) => {
+    if (['command', 'probe', 'probe_info'].includes(action)) {
+      const commandResult = await new Promise<ExecutionResult>((resolve, reject) => {
       const command = action === 'command' ? String(args.command ?? '') : operationCommand(action, args, metadata)
       if (!command.trim()) return reject(new ExecutionError('PROTOCOL_ERROR', 'command is required'))
       const remote = args.cwd ? `cd -- ${quoteShell(String(args.cwd))} && ${command}` : command
@@ -116,15 +129,48 @@ async function executeSsh(resource: any, metadata: any, secret: any, action: str
         stream.on('data', (value: Buffer) => collect(stdout, value)); stream.stderr.on('data', (value: Buffer) => collect(stderr, value)); stream.once('error', reject)
         stream.on('close', (code: number | undefined, signalName: string | undefined) => { const out = Buffer.concat(stdout).toString(), err = Buffer.concat(stderr).toString(); resolve(executionResult(out + err, code ?? null, { stdout: out, stderr: err, started_at, execution_context: { resource_id: resource.id, target: resource.target, user: secret.username || metadata.username || null, cwd: args.cwd ?? null, signal: signalName ?? null } })) })
       })
-    })
+      })
+      if (action === 'probe_info' && commandResult.exit_code === 0) {
+        try {
+          await sftpCall(client, sftp => new Promise<void>((resolve, reject) => sftp.realpath('.', error => error ? reject(error) : resolve())))
+          commandResult.execution_context.file_protocol = 'sftp'
+        } catch (error) { commandResult.execution_context.sftp_probe_error = error instanceof Error ? error.message : String(error) }
+      }
+      return commandResult
+    }
     return await sftpCall(client, async sftp => {
-      operationCommand(action, args, metadata) // Validate structured inputs before any SFTP mutation.
+      if (!['upload_file', 'download_file'].includes(action)) operationCommand(action, args, metadata) // Validate before any mutation.
       if (!args.path?.trim()) throw new ExecutionError('PROTOCOL_ERROR', 'path is required')
+      if (action === 'upload_file' && !args._source_path) throw new ExecutionError('PROTOCOL_ERROR', 'Managed upload source is required')
+      if (action === 'download_file' && !args._artifact_directory) throw new ExecutionError('PROTOCOL_ERROR', 'Controlled artifact directory is required')
       const path = String(args.path), result = (value = '') => executionResult(value, 0, { stdout: value, execution_context: { resource_id: resource.id, target: resource.target, protocol: 'sftp' }, started_at })
       if (action === 'read_file') return result((await sftpBuffer(sftp, path)).toString('base64'))
       if (action === 'write_file') { await sftpWrite(sftp, path, Buffer.from(String(args.content_base64 ?? ''), 'base64'), args.overwrite === true); return result() }
+      if (action === 'upload_file') {
+        const source = String(args._source_path ?? ''), sourceStats = statSync(source)
+        if (!sourceStats.isFile()) throw new ExecutionError('PROTOCOL_ERROR', 'Managed upload source is not a file')
+        const sourceHash = await localHash(source), temporary = `${path}.redtrace-${sourceHash.slice(0, 16)}.part`, target = await sftpStat(sftp, path)
+        if (target && args.overwrite !== true) throw new ExecutionError('COMMAND_FAILED', 'Remote destination already exists')
+        let partial = await sftpStat(sftp, temporary), offset = Number(partial?.size ?? 0)
+        if (offset > sourceStats.size || offset > 0 && await localHash(source, offset) !== await remoteHash(sftp, temporary, offset)) {
+          if (partial) await new Promise<void>((resolve, reject) => sftp.unlink(temporary, error => error ? reject(error) : resolve()))
+          partial = null; offset = 0
+        }
+        if (offset < sourceStats.size) await pipeline(createReadStream(source, { start: offset }), sftp.createWriteStream(temporary, { flags: offset ? 'r+' : 'w', start: offset }))
+        const uploaded = await sftpStat(sftp, temporary), uploadedHash = await remoteHash(sftp, temporary)
+        if (uploaded?.size !== sourceStats.size || uploadedHash !== sourceHash) throw new ExecutionError('PROTOCOL_ERROR', 'Uploaded temporary file failed size or SHA-256 verification')
+        if (target && args.overwrite === true && typeof (sftp as any).ext_openssh_rename !== 'function') throw new ExecutionError('CAPABILITY_UNSUPPORTED', 'Atomic overwrite requires OpenSSH posix-rename support')
+        await sftpRename(sftp, temporary, path, !!target)
+        return result(JSON.stringify({ path, size: sourceStats.size, sha256: sourceHash, resumed_from: offset, verified: true }))
+      }
+      if (action === 'download_file') {
+        const temporary = pathModuleJoin(args._artifact_directory, 'download.part'), artifact = pathModuleJoin(args._artifact_directory, 'artifact.bin')
+        await pipeline(sftp.createReadStream(path), createWriteStream(temporary, { flags: 'wx' }))
+        const downloaded = statSync(temporary), sha256 = await localHash(temporary); renameSync(temporary, artifact)
+        return executionResult(JSON.stringify({ path, size: downloaded.size, sha256, verified: true }), 0, { stdout: '', execution_context: { resource_id: resource.id, target: resource.target, protocol: 'sftp', artifact_path: artifact, artifact_name: pathModuleBasename(path), size_bytes: downloaded.size, sha256 }, started_at })
+      }
       if (action === 'stat_file') return await new Promise<ExecutionResult>((resolve, reject) => sftp.stat(path, (error, stats) => error ? reject(error) : resolve(result(JSON.stringify({ path, size: stats.size, directory: stats.isDirectory(), mtime: new Date(stats.mtime * 1000).toISOString() })))))
-      if (action === 'hash_file') { const { createHash } = await import('node:crypto'); return result(createHash('sha256').update(await sftpBuffer(sftp, path)).digest('hex')) }
+      if (action === 'hash_file') return result(await remoteHash(sftp, path))
       if (action === 'list_files') return await new Promise<ExecutionResult>((resolve, reject) => sftp.readdir(path, (error, list) => error ? reject(error) : resolve(result(JSON.stringify(list.map((item: any) => ({ name: item.filename, size: item.attrs.size, directory: item.attrs.isDirectory(), mtime: new Date(item.attrs.mtime * 1000).toISOString() })))))))
       if (action === 'create_directory') return await new Promise<ExecutionResult>((resolve, reject) => sftp.mkdir(path, error => error ? reject(error) : resolve(result())))
       if (action === 'create_file') { await sftpWrite(sftp, path, Buffer.alloc(0)); return result() }
@@ -138,8 +184,9 @@ async function executeSsh(resource: any, metadata: any, secret: any, action: str
 export function operationSupported(resource: any, action: string) {
   const metadata = JSON.parse(resource.metadata_json ?? '{}')
   if (['command', 'probe', 'probe_info'].includes(action)) return resource.kind !== 'entry' || action === 'command'
-  const files = ['read_file', 'write_file', 'list_files', 'create_directory', 'create_file', 'move_file', 'delete_file', 'stat_file', 'hash_file']
+  const files = ['read_file', 'write_file', 'list_files', 'create_directory', 'create_file', 'move_file', 'delete_file', 'stat_file', 'hash_file', 'upload_file', 'download_file']
   if (!files.includes(action)) return false
+  if (['upload_file', 'download_file'].includes(action)) return metadata.connection_type === 'direct' && metadata.shell_type === 'ssh'
   return resource.kind === 'webshell' || metadata.connection_type === 'direct' && metadata.shell_type === 'ssh'
     || metadata.connection_type === 'external_c2' && (metadata.supported_actions ?? []).includes(action)
 }

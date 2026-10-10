@@ -39,12 +39,14 @@ test('verb registry: channel reuse, selection rules, approval gating and Step re
     assert.equal(verbs.status, 200)
     const remoteCommand = verbs.data.verbs.find((v: any) => v.id === 'remote.command')
     assert.deepEqual(remoteCommand.adapters, ['webshell', 'c2'])
+    assert.deepEqual(verbs.data.verbs.find((v: any) => v.id === 'remote.file.upload').adapters, ['ssh-sftp'])
+    assert.deepEqual(verbs.data.verbs.find((v: any) => v.id === 'remote.file.download').adapters, ['ssh-sftp'])
     assert.equal(remoteCommand.available, true)
     assert.equal(verbs.data.verbs.find((v: any) => v.id === 'web.request'), undefined)
     assert.equal(verbs.data.adapters.find((a: any) => a.id === 'browser'), undefined)
     assert.equal(verbs.data.adapters.find((a: any) => a.id === 'webshell').plugin_id, 'redtrace-webshell')
     assert.equal(verbs.data.verbs.find((v: any) => v.id === 'pivot.socks').available, true)
-    assert.equal(verbs.data.verbs.find((v: any) => v.id === 'remote.terminal.open').available, false)
+    assert.equal(verbs.data.verbs.find((v: any) => v.id === 'remote.terminal.open').available, true)
 
     // No channel: the dispatch error carries establishment guidance, no guess.
     await assert.rejects(dispatchVerb(runtime, 'remote.command', { command: 'id' }, context), (error: unknown) => {
@@ -57,6 +59,9 @@ test('verb registry: channel reuse, selection rules, approval gating and Step re
     // One channel: auto-selected without target or via.
     const shellA = engine.operations.create(project.id, { kind: 'webshell', name: 'Shell A', target: `http://127.0.0.1:${remotePort}`, metadata: { command_param: 'cmd', protocol: 'raw', verified_capabilities: ['remote.command', 'remote.file.delete'] }, actor_type: 'human', actor: 'test' }).resource
     fixtureAuthorize(engine.operations, project.id, shellA.id, ['command'])
+    const falseSftp = engine.operations.create(project.id, { kind: 'c2_session', name: 'non-SSH C2', target: 'fixture', status: 'available', metadata: { connection_type: 'beacon', verified_capabilities: ['remote.file.upload'] }, actor_type: 'human', actor: 'test' }).resource
+    fixtureAuthorize(engine.operations, project.id, falseSftp.id, ['upload_file'])
+    await assert.rejects(dispatchVerb(runtime, 'remote.file.upload', { artifact_id: 'missing', path: '/tmp/file', via: falseSftp.id }, context), /不在可用通道列表/)
     const first = await dispatchVerb(runtime, 'remote.command', { command: 'echo one' }, context)
     assert.equal(first.status, 'succeeded')
     assert.equal(first.channel.resource_id, shellA.id)
