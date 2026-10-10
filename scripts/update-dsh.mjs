@@ -44,6 +44,17 @@ function run(command, args, cwd, env = {}) {
   })
 }
 
+// The vendored TypeScript parses the staged tsconfigs; a checkout that has not
+// run `dsh:install` yet (the engine suite is checked before it in CI) falls back
+// to the engine's own TypeScript, which parses the same config files.
+function upstreamTypeScript() {
+  const require = createRequire(import.meta.url)
+  for (const candidate of [path.join(repository, 'vendor/deepseek-harness/node_modules/typescript'), path.join(repository, 'packages/redtrace-engine/node_modules/typescript')]) {
+    if (existsSync(candidate)) return require(candidate)
+  }
+  try { return require('typescript') } catch { throw new Error('TypeScript runtime not found; run npm ci --prefix packages/redtrace-engine or npm run dsh:install') }
+}
+
 export async function prepareRuntime(source, destination) {
   await mkdir(destination, { recursive: true })
   for (const name of ['packages', 'vendor', 'native', 'patches']) await cp(path.join(source, name), path.join(destination, name), { recursive: true, verbatimSymlinks: true, filter: filename => !['tests', 'test', 'docs', '.agents', '.claude'].includes(path.basename(filename)) && !/^README(?:\.|$)/.test(path.basename(filename)) })
@@ -72,7 +83,7 @@ export async function prepareRuntime(source, destination) {
   const workspace = path.join(destination, 'pnpm-workspace.yaml')
   await writeFile(workspace, (await readFile(workspace, 'utf8')).replace(/^  - (benchmarks|website|python\/sdk-runtime)\r?\n/gm, '').replace(/^  lefthook: true\r?\n/gm, '').replace(/^  ['"]?@(electron\/osx-sign|yao-pkg\/pkg)@[^\n]+\r?\n/gm, ''))
   for (const name of ['tsconfig.host.json', 'tsconfig.client.json']) {
-    const ts = createRequire(import.meta.url)(path.join(repository, 'vendor/deepseek-harness/node_modules/typescript'))
+    const ts = upstreamTypeScript()
     const parsed = ts.readConfigFile(path.join(destination, name), filename => readFileSync(filename, 'utf8'))
     if (parsed.error) throw new Error(`Invalid upstream ${name}`)
     const config = parsed.config
