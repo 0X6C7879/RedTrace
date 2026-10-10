@@ -18,6 +18,7 @@
     "@earendil-works/pi-agent-core": "0.82.1",
     "@earendil-works/pi-ai": "0.82.1",
     "dsh-web-search-free": "^1.4.0",
+    "playwright": "^1.62.1",
     "ssh2": "^1.17.0",
     "typebox": "1.1.38",
     "yaml": "2.9.0"
