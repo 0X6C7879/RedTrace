@@ -94,35 +94,36 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
   }
 
   // Dependency order: core first, scheduler last. Session-scoped capabilities
-  // mount no host fiber and opt-in entries boot stopped, so the host count is
-  // unchanged.
+  // mount no host fiber, so the host count is unchanged.
   assert.equal(ctx.mounts[0].module, core)
   assert.equal(ctx.mounts.at(-1).module.name, 'redtrace-scheduler')
   assert.equal(ctx.mounts.length, 5)
 
-  // Every builtin entry boots running unless it is opt-in (defaultOff).
+  // Every builtin entry boots running unless it is explicitly opt-in (defaultOff).
   const optIn = new Set([
     'redtrace-credentials', 'redtrace-attachment', 'redtrace-file-references',
     'redtrace-lsp', 'redtrace-ptc', 'redtrace-jev',
     'redtrace-remote-terminal', 'redtrace-pivot',
-    'redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events',
   ])
   for (const view of views.filter((item) => item.source === 'builtin')) {
     assert.ok(view.status === 'running' || optIn.has(view.id), `${view.id} boots ${view.status}`)
   }
 })
 
-test('default-off capabilities boot stopped and opt in through the manifest', async (t) => {
+test('efficiency features boot enabled by default and remain explicitly switchable', async (t) => {
   const root = scratch('optin')
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const manifestPath = path.join(root, 'plugins.json')
 
-  // A fresh manifest leaves opt-in entries stopped; none of them mounts.
+  // A fresh manifest enables the efficiency features; unrelated opt-ins stay stopped.
   const first = makeManager(root, manifestPath, async () => ({ apply() {} }))
   await first.manager.boot()
   assert.equal(first.manager.view('redtrace-lsp').status, 'stopped')
   assert.equal(first.manager.view('redtrace-ptc').status, 'stopped')
   assert.equal(first.manager.view('redtrace-remote-terminal').status, 'stopped')
+  for (const id of ['redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
+    assert.equal(first.manager.view(id).status, 'running')
+  }
   assert.equal(first.manager.view('redtrace-pivot').status, 'stopped')
   assert.equal(first.manager.view('redtrace-session-probe').status, 'running')
   assert.ok(first.ctx.mounts.every(({ module }) => module?.name !== 'redtrace-credentials'))
@@ -329,7 +330,7 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
   assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === 'redtrace-jev').status, 'stopped')
 
   for (const id of ['redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
-    assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === id).status, 'stopped')
+    assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === id).status, 'running')
     const started = await call('POST', `/__redtrace/plugins/${id}/start`)
     assert.equal(JSON.parse(started.body).plugin.status, 'running')
     const stopped = await call('POST', `/__redtrace/plugins/${id}/stop`)

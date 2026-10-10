@@ -48,7 +48,7 @@ function metadataFor(file: string, body: string, nucleiRoot: string): KnowledgeM
       name: typeof info.name === 'string' ? info.name.slice(0, 300) : undefined,
       severity: typeof info.severity === 'string' ? info.severity.slice(0, 40).toLowerCase() : undefined,
       vendor: strings(metadata.vendor)[0]?.slice(0, 200), component: strings(metadata.product ?? metadata.component ?? metadata.technology)[0]?.slice(0, 200),
-      version: strings(metadata.version ?? metadata.versions)[0]?.slice(0, 100),
+      version: strings(metadata.version ?? metadata.versions)[0]?.match(/^\d+(?:\.\d+){0,4}$/)?.[0],
       protocols: Object.keys(template).filter(key => nucleiProtocols.has(key.toLowerCase())), tags: strings(info.tags).map(value => value.toLowerCase()),
       cves: [...cves].slice(0, 20), cwes: [...cwes].slice(0, 20), references: strings(info.reference ?? info.references).slice(0, 10).map(value => value.slice(0, 500)),
       prerequisites: strings(metadata.prerequisites ?? info.prerequisites).slice(0, 10).map(value => value.slice(0, 300)), fingerprintIndicators: fingerprintIndicators(template),
@@ -56,13 +56,15 @@ function metadataFor(file: string, body: string, nucleiRoot: string): KnowledgeM
   } catch { return { kind: 'nuclei-template', protocols: [], tags: [], cves: [], cwes: [], references: [], prerequisites: [], fingerprintIndicators: [], parseError: true } }
 }
 function sourcePath(file: string, repository: string, nucleiRoot: string) {
-  const relative = path.relative(nucleiRoot, file)
-  return !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`) ? `${nucleiPathPrefix}${relative}` : path.relative(repository, file)
+  const relativeToRepository = path.relative(repository, file)
+  if (!path.isAbsolute(relativeToRepository) && relativeToRepository !== '..' && !relativeToRepository.startsWith(`..${path.sep}`)) return portable(relativeToRepository)
+  const relativeToNuclei = path.relative(nucleiRoot, file)
+  return !path.isAbsolute(relativeToNuclei) && relativeToNuclei !== '..' && !relativeToNuclei.startsWith(`..${path.sep}`) ? `${nucleiPathPrefix}${portable(relativeToNuclei)}` : portable(relativeToRepository)
 }
 function sourceFile(repository: string, relative: string, nucleiRoot: string) {
   return relative.startsWith(nucleiPathPrefix) ? path.join(nucleiRoot, relative.slice(nucleiPathPrefix.length)) : path.join(repository, relative)
 }
-const normalized = (value: string) => value.trim().toLocaleLowerCase()
+const normalized = (value: string) => value.trim().toLowerCase()
 // Index keys and model-visible paths stay slash-separated on every platform.
 const portable = (value: string) => value.split(path.sep).join('/')
 
@@ -115,7 +117,7 @@ function collectWordlistCatalog(root: string, repository: string) {
   })
 }
 
-function openIndex(root: string, filename: string, sources: string[], wordlists: string[]) {
+function openIndex(root: string, filename: string, sources: string[], wordlists: string[], nucleiRoot: string) {
   mkdirSync(path.dirname(filename), { recursive: true })
   const db = new DatabaseSync(filename)
   db.exec("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS index_state(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(id UNINDEXED,path UNINDEXED,body,tokenize='unicode61')")
@@ -129,7 +131,7 @@ function openIndex(root: string, filename: string, sources: string[], wordlists:
     try {
       const current = new Map<string, { hash: string; body: string }>()
       for (const file of files) {
-        const relative=portable(path.relative(root,file)),body=readFileSync(file,'utf8'),hash=digest(body)
+        const relative=sourcePath(file,root,nucleiRoot),body=readFileSync(file,'utf8'),hash=digest(body)
         if (/\b(?:flag|tsecbench|htb)\{[^}\r\n]+\}/i.test(body)) continue
         current.set(relative, { hash, body })
       }
@@ -153,7 +155,7 @@ export function knowledgeTools(_evidenceRoot: string, context: TaskContext): Age
     { name: 'knowledge_search', label: 'knowledge_search', description: 'Search indexed local Skills, Vulhub, PayloadsAllTheThings and available local Nuclei CVE/fingerprint templates. Returns at most 5 candidates; a match is not proof a vulnerability applies.', parameters: Type.Object({ query: Type.String({ minLength: 2, maxLength: 300 }) }), executionMode: 'sequential', execute: async (_id: string, args: { query: string }) => {
       const terms = tokenize(args.query)
       if (!terms.length) return { content: [{ type: 'text', text: JSON.stringify({ results: [], reason: 'No searchable terms' }) }], details: { results: [] } }
-      const db = openIndex(repository, index, sources, wordlists)
+      const db = openIndex(repository, index, sources, wordlists, nucleiRoot)
       try {
       const rows = db.prepare('SELECT id,path,body,substr(body,max(1,instr(lower(body),lower(?))-160),360) AS snippet FROM docs WHERE docs MATCH ? ORDER BY bm25(docs) LIMIT 5').all(terms[0], terms.map(term => `"${term.replaceAll('"', '""')}"`).join(' OR ')) as { id: string; path: string; body: string; snippet: string }[]
       const results = rows.map(row => { const metadata = metadataFor(sourceFile(repository,row.path,nucleiRoot),row.body,nucleiRoot); return { id: row.id, path: row.path, sha256: row.id, snippet: row.snippet, kind: metadata.kind, templateId: metadata.templateId ?? null, name: metadata.name ?? null, severity: metadata.severity ?? 'unknown', vendor: metadata.vendor ?? 'unknown', component: metadata.component ?? 'unknown', version: metadata.version ?? 'unknown', protocols: metadata.protocols, tags: metadata.tags, cves: metadata.cves, cwes: metadata.cwes, references: metadata.references, prerequisites: metadata.prerequisites.length ? metadata.prerequisites : 'unknown', fingerprintIndicators: metadata.fingerprintIndicators, metadataParseError: metadata.parseError ?? false } })
@@ -162,22 +164,30 @@ export function knowledgeTools(_evidenceRoot: string, context: TaskContext): Age
       } finally { db.close() }
     } },
     { name: 'knowledge_match', label: 'knowledge_match', description: 'Compare a local template candidate with supplied confirmed component, exact version and protocol facts. Returns candidate/not_applicable/unknown only; never confirms a vulnerability or runs a template.', parameters: Type.Object({ id: Type.String({ minLength: 64, maxLength: 64, pattern: '^[a-f0-9]{64}$' }), component: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })), version: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })), protocol: Type.Optional(Type.String({ minLength: 1, maxLength: 32 })), confirmed_prerequisites: Type.Optional(Type.Array(Type.String({ maxLength: 300 }), { maxItems: 10 })) }), executionMode: 'sequential', execute: async (_id: string, args: { id: string; component?: string; version?: string; protocol?: string; confirmed_prerequisites?: string[] }) => {
-      const db = openIndex(repository, index, sources, wordlists)
+      const db = openIndex(repository, index, sources, wordlists, nucleiRoot)
       try {
         const row = db.prepare('SELECT path,body FROM docs WHERE id=?').get(args.id) as { path: string; body: string } | undefined
         if (!row) throw new Error('Knowledge entry not found; search again after rebuilding the local index')
         const metadata = metadataFor(sourceFile(repository,row.path,nucleiRoot),row.body,nucleiRoot)
-        const checks = (['component', 'version', 'protocol'] as const).flatMap(field => args[field] ? [{ field, expected: args[field]!, actual: field === 'protocol' ? metadata.protocols.find(value => normalized(value) === normalized(args[field]!)) ?? (metadata.protocols.length ? metadata.protocols.join(', ') : undefined) : metadata[field], matches: field === 'protocol' ? metadata.protocols.some(value => normalized(value) === normalized(args[field]!)) : metadata[field] ? normalized(metadata[field]!) === normalized(args[field]!) : undefined }] : [])
-        const knownMismatch = checks.some(check => check.matches === false), unknown = checks.filter(check => check.matches === undefined).map(check => check.field)
+        // shortcut: exact dotted versions only; add range parsing if local templates encode ranges.
+        const checks = (['component', 'version', 'protocol'] as const).flatMap(field => {
+          const expected = args[field]
+          if (!expected) return []
+          const actual = field === 'protocol' ? metadata.protocols.length ? metadata.protocols.join(', ') : undefined : metadata[field]
+          const matches = field === 'protocol' ? metadata.protocols.length ? metadata.protocols.some(value => normalized(value) === normalized(expected)) : undefined : actual ? normalized(actual) === normalized(expected) : undefined
+          return [{ field, expected, actual, matches }]
+        })
+        const required = ['component', 'version', 'protocol'] as const
+        const knownMismatch = checks.some(check => check.matches === false), unknown = [...new Set([...checks.filter(check => check.matches === undefined).map(check => check.field), ...required.filter(field => !args[field])])]
         const confirmed = new Set((args.confirmed_prerequisites ?? []).map(normalized)), unconfirmedPrerequisites = metadata.prerequisites.filter(value => !confirmed.has(normalized(value)))
-        const hasMatch = checks.some(check => check.matches === true)
-        const status = knownMismatch ? 'not_applicable' : hasMatch && !unknown.length && !unconfirmedPrerequisites.length ? 'candidate' : 'unknown'
-        const value = { id: args.id, path: row.path, status, checks, unconfirmedPrerequisites, unresolved: [...unknown, ...(metadata.version ? [] : ['version']), ...(metadata.component ? [] : ['component'])], note: 'Candidate matching is not vulnerability evidence; manually validate template prerequisites and target response.' }
+        const completeMatch = required.every(field => checks.some(check => check.field === field && check.matches === true))
+        const status = knownMismatch ? 'not_applicable' : completeMatch && !unknown.length && !unconfirmedPrerequisites.length ? 'candidate' : 'unknown'
+        const value = { id: args.id, path: row.path, status, checks, unconfirmedPrerequisites, unresolved: unknown, note: 'Candidate matching is not vulnerability evidence; manually validate template prerequisites and target response.' }
         return { content: [{ type: 'text', text: JSON.stringify(value) }], details: value }
       } finally { db.close() }
     } },
     { name: 'knowledge_read', label: 'knowledge_read', description: 'Read at most 8 KiB from a local knowledge result returned by knowledge_search.', parameters: Type.Object({ id: Type.String({ minLength: 64, maxLength: 64, pattern: '^[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 8192 })) }), executionMode: 'sequential', execute: async (_id: string, args: { id: string; offset?: number; length?: number }) => {
-      const db = openIndex(repository, index, sources, wordlists)
+      const db = openIndex(repository, index, sources, wordlists, nucleiRoot)
       try {
         const row = db.prepare('SELECT path,body FROM docs WHERE id=?').get(args.id) as { path: string; body: string } | undefined
         if (!row) throw new Error('Knowledge entry not found; search again after rebuilding the local index')
