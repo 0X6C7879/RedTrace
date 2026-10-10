@@ -51,7 +51,9 @@ test('authenticated secrets and revision conflicts preserve independent configur
 test('shell retains stdout and stderr separately as well as the ordered full log', async()=>{
  const root=mkdtempSync(path.join(os.tmpdir(),'redtrace-streams-'))
  try {
-  const output=await runShell('printf "fixture-out"; printf "fixture-error" >&2; exit 7',root)
+  const output=await runShell(process.platform === 'win32'
+    ? "[Console]::Write('fixture-out'); [Console]::Error.Write('fixture-error'); exit 7"
+    : 'printf "fixture-out"; printf "fixture-error" >&2; exit 7',root)
   assert.equal(output.exitCode,7)
   assert.equal(readFileSync(output.stdoutPath,'utf8'),'fixture-out')
   assert.equal(readFileSync(output.stderrPath,'utf8'),'fixture-error')
