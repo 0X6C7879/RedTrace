@@ -186,6 +186,12 @@ const MANAGED: readonly ManagedEntry[] = [
     intro: 'DSH 原生持久终端:terminal_open / send / read / signal / close / list 在多次工具调用间保留交互式 shell 状态,适合 gdb、REPL、交互式探测等持续交互进程。一次性命令仍走 bash,长命令走后台任务。隔离档案下终端被限制在工作区内。',
   },
   {
+    id: 'redtrace-shell', label: 'Worker 持久 Shell', category: 'feature',
+    modulePath: 'packages/redtrace-engine/src/worker-shell.ts',
+    description: '宿主 tmux 托管成熟交互 CLI，同一 Run 复用',
+    intro: '无需 MCP 或 Skill。shell_open(argv,cwd?) 启动 OpenSSH、evil-winrm-py、Penelope 等已安装 CLI；shell_send 输入，shell_read 查看有界屏幕快照，shell_list 查看当前 Run，shell_close 主动关闭。会话只属于同一 Worker Run，不跨 Run/Worker 或重启恢复；Run 结束、取消、插件停止清理。输入提交不是命令成功，CLI 退出码不是远端命令退出码；密码使用已授权 credential_id 而非 argv/text。仅 direct 执行支持宿主 tmux；HTTP WebShell 保持无状态；远端不需 tmux。',
+  },
+  {
     id: 'redtrace-remote-terminal', label: '远程持久终端', category: 'feature',
     modulePath: 'packages/redtrace-engine/src/remote-terminal.ts',
     description: '跨 Step 的 Resource 托管 SSH PTY',

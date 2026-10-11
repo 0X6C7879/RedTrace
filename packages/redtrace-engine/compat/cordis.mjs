@@ -3,6 +3,7 @@ import path from 'node:path'
 import { mkdir, realpath } from 'node:fs/promises'
 import { watch } from 'node:fs'
 import { createEngine } from '../src/index.ts'
+import { workerShellTools, shellInstructions } from '../src/worker-shell.ts'
 import { createPlanGuard } from '../src/plan-guard.ts'
 import { criticalNotice, efficiencyToolAvailable, graphTools, activityPrompt, activityLimits, graphUpdate, runMock } from '../src/runner.ts'
 import { isJevRecoveryPath, traceCall } from '../src/jev.ts'
@@ -156,6 +157,8 @@ export async function apply(ctx, options) {
   const sessionRefresh = new Map()
   const manager = new PluginManager(ctx, runtime, repoRoot, load, replacements, async () => {
     engine.jev.setEnabled(manager.running('redtrace-jev'))
+    engine.shells.enabled = manager.running('redtrace-shell')
+    if (!engine.shells.enabled) await engine.shells.closeAll()
     await engine.operations.synchronizeAdapters()
     await Promise.all([...sessionRefresh.values()].map(refresh => refresh()))
     engine.scheduler.wake()
@@ -234,9 +237,13 @@ export async function apply(ctx, options) {
       const refreshJevTools = refreshToolRegistrations(tools.filter(t => t.name.startsWith('jev_')),
         t => jev?.isEnabled(t.name === 'jev_choose' ? 'candidate_choice' : 'attack_readiness'), registerTool)
       const refreshEfficiencyTools = refreshToolRegistrations(tools.filter(t => /^(?:knowledge_|trace_|web_|http_batch$)/.test(t.name)), t => efficiencyToolAvailable(context, t.name), registerTool)
+      const shellEnabled = () => manager.running('redtrace-shell') && run.activity === 'execute' && task.executionProfile === 'direct'
+      scoped.systemPrompt.section({ name: 'redtrace:shell', order: 3, text: () => shellEnabled() ? shellInstructions : '' })
+      const refreshShellTools = refreshToolRegistrations(run.activity === 'execute' && task.executionProfile === 'direct' ? workerShellTools(context, engine.shells, engine.operations, cwd) : [], () => shellEnabled(), registerTool)
       const refreshVerbTools = refreshToolRegistrations(liveVerbs, t => verbToolAvailable(verbRuntime, t.name), registerTool)
       refreshLiveTools = () => {
         refreshJevTools()
+        refreshShellTools()
         refreshVerbTools()
         refreshEfficiencyTools()
       }
@@ -248,6 +255,7 @@ export async function apply(ctx, options) {
       const graphNames = new Set(tools.map(t => t.name))
       scoped.tools.guard(exec => concludeOnly && !graphNames.has(exec.name) ? 'Execution timed out; only summarize and submit existing evidence'
         : (exec.name === 'jev_choose' && !jev?.isEnabled('candidate_choice') || exec.name === 'jev_assess_attack' && !jev?.isEnabled('attack_readiness')) ? 'Jev plugin is disabled'
+          : exec.name.startsWith('shell_') && !shellEnabled() ? 'Shell plugin is disabled or execution is isolated'
           : !verbToolAvailable(verbRuntime, exec.name) ? 'Capability adapter is disabled' : undefined)
       // Decide sees only its scoped graph tools: the tools runtime restricts
       // global names only, so an empty allow set masks every global tool

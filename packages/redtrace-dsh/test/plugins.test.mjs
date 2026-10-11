@@ -122,7 +122,7 @@ test('efficiency features boot enabled by default and remain explicitly switchab
   assert.equal(first.manager.view('redtrace-ptc').status, 'stopped')
   assert.equal(first.manager.view('redtrace-jev').status, 'stopped')
   assert.equal(first.manager.view('redtrace-remote-terminal').status, 'running')
-  for (const id of ['redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
+  for (const id of ['redtrace-shell', 'redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
     assert.equal(first.manager.view(id).status, 'running')
   }
   assert.equal(first.manager.view('redtrace-pivot').status, 'running')
@@ -327,10 +327,10 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const list = await call('GET', '/__redtrace/plugins')
   assert.equal(list.status, 200)
-  assert.equal(JSON.parse(list.body).plugins.length, 36)
+  assert.equal(JSON.parse(list.body).plugins.length, 37)
   assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === 'redtrace-jev').status, 'stopped')
 
-  for (const id of ['redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
+  for (const id of ['redtrace-shell', 'redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
     assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === id).status, 'running')
     const started = await call('POST', `/__redtrace/plugins/${id}/start`)
     assert.equal(JSON.parse(started.body).plugin.status, 'running')

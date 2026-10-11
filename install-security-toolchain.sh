@@ -101,7 +101,7 @@ set_system_packages() {
   case "$manager" in
     apt)
       SYSTEM_PACKAGES=(
-        ca-certificates curl git xz-utils unzip build-essential pkg-config cmake ninja-build swig
+        tmux openssh-client ca-certificates curl git xz-utils unzip build-essential pkg-config cmake ninja-build swig
         python3 python3-venv python3-pip python3-dev openjdk-21-jdk-headless
         libffi-dev libssl-dev libgmp-dev libmpfr-dev libmpc-dev zlib1g-dev
         ruby ruby-dev golang-go nodejs npm jq ripgrep
@@ -119,7 +119,7 @@ set_system_packages() {
       ;;
     dnf|yum)
       SYSTEM_PACKAGES=(
-        ca-certificates curl git xz unzip gcc gcc-c++ make pkgconf-pkg-config cmake ninja-build swig
+        tmux ca-certificates curl git xz unzip gcc gcc-c++ make pkgconf-pkg-config cmake ninja-build swig
         python3 python3-pip python3-devel java-21-openjdk-headless
         libffi-devel openssl-devel gmp-devel mpfr-devel libmpc-devel zlib-devel
         ruby ruby-devel golang nodejs npm jq ripgrep
@@ -132,7 +132,7 @@ set_system_packages() {
       ;;
     pacman)
       SYSTEM_PACKAGES=(
-        ca-certificates curl git xz unzip base-devel pkgconf cmake ninja swig
+        tmux ca-certificates curl git xz unzip base-devel pkgconf cmake ninja swig
         python python-pip jdk21-openjdk libffi openssl gmp mpfr libmpc zlib
         ruby go nodejs npm jq ripgrep
         gdb radare2 binutils binwalk foremost perl-image-exiftool wireshark-cli sleuthkit
@@ -144,7 +144,7 @@ set_system_packages() {
       ;;
     zypper)
       SYSTEM_PACKAGES=(
-        ca-certificates curl git xz unzip gcc gcc-c++ make pkg-config cmake ninja swig
+        tmux ca-certificates curl git xz unzip gcc gcc-c++ make pkg-config cmake ninja swig
         python3 python3-pip python3-devel java-21-openjdk-headless
         libffi-devel libopenssl-devel gmp-devel mpfr-devel mpc-devel zlib-devel
         ruby ruby-devel go nodejs npm jq ripgrep
@@ -157,7 +157,7 @@ set_system_packages() {
       ;;
     apk)
       SYSTEM_PACKAGES=(
-        bash ca-certificates curl git xz unzip build-base pkgconf cmake ninja swig
+        tmux bash ca-certificates curl git xz unzip build-base pkgconf cmake ninja swig
         python3 py3-pip py3-virtualenv openjdk21-jre-headless
         libffi-dev openssl-dev gmp-dev mpfr-dev mpc1-dev zlib-dev
         ruby ruby-dev go nodejs-current npm jq ripgrep
@@ -170,7 +170,7 @@ set_system_packages() {
       ;;
     brew)
       SYSTEM_PACKAGES=(
-        ca-certificates curl git xz unzip pkg-config cmake ninja swig
+        tmux ca-certificates curl git xz unzip pkg-config cmake ninja swig
         python@3.12 libffi openssl@3 gmp mpfr libmpc zlib libomp
         openjdk@21 ruby go node jq ripgrep ghidra nuclei
         gdb radare2 binutils binwalk exiftool wireshark sleuthkit ffmpeg testdisk

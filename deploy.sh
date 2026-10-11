@@ -437,11 +437,17 @@ install_skill_python_dependencies() {
     'pyzbar==0.1.9|pyzbar' 'pytesseract==0.3.13|pytesseract'
     'segno==1.6.6|segno' 'shodan==1.31.0|shodan'
     'uncompyle6==3.9.3|uncompyle6' 'lief==0.17.6|lief' 'dnspython==2.8.0|dns'
+    'evil-winrm-py==1.7.0|evil_winrm_py' 'penelope-shell-handler==0.21.0|penelope'
     'dnslib==0.9.26|dnslib' 'dissect.cobaltstrike==1.2.1|dissect.cobaltstrike'
   )
   for entry in "${entries[@]}"; do
     spec="${entry%%|*}"; module="${entry##*|}"
-    "$python" -c "import $module" >/dev/null 2>&1 && continue
+    if [[ "$module" == penelope || "$module" == evil_winrm_py ]]; then
+      # Penelope imports require a real TTY; check the pinned distribution instead.
+      "$python" -c "from importlib.metadata import version; assert version('${spec%%==*}') == '${spec##*==}'" >/dev/null 2>&1 && continue
+    else
+      "$python" -c "import $module" >/dev/null 2>&1 && continue
+    fi
     log "installing Python security package $spec"
     uv pip install --python "$python" --index-url "$PYPI_INDEX" "$spec" \
       || uv pip install --python "$python" --index-url https://pypi.org/simple "$spec" \
@@ -620,7 +626,7 @@ setup_macos() {
   repair_homebrew_remotes
   update_homebrew
   local required_formulae=(
-    ca-certificates curl git xz pkg-config cmake ninja swig
+    ca-certificates curl git xz pkg-config cmake ninja swig tmux
     libffi openssl@3 gmp mpfr libmpc zlib libomp
     openjdk@21 ghidra ruby go jq ripgrep nuclei
   )
