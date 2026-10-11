@@ -111,7 +111,7 @@ export class Capabilities {
   }
   servers() { return readdirSync(this.mcpDir).filter(n => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\.json$/.test(n)).sort().map(n => this.mcp(n.slice(0, -5))) }
   mcpConfigs() {
-    return this.servers().filter(s => s.enabled).map(s => {
+    return this.servers().filter(s => s.enabled && s.name.toLowerCase() !== 'rea').map(s => {
       const config = { ...s.config, ...s.config.agents?.dsh, serverName: s.name }
       for (const key of ['enabled', 'agents', 'name']) delete config[key]
       config.transport = config.transport ?? config.type ?? (config.url ? 'streamable-http' : 'stdio')

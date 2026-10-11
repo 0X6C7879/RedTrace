@@ -1,7 +1,7 @@
 ---
 name: ghidra-headless
 description: >-
-  Reverse engineers binaries using Ghidra's headless analyzer. Use when
+  Retained legacy fallback for Ghidra batch exports; prefer the plugin-owned REA Skill when visible. Reverse engineers binaries using Ghidra's headless analyzer. Use when
   decompiling executables, extracting functions, strings, symbols, or
   analyzing call graphs from compiled binaries without the Ghidra GUI.
 allowed-tools:
@@ -12,6 +12,10 @@ allowed-tools:
 ---
 
 # Ghidra Headless Analysis
+
+Prefer `reverse-engineer-anything` when available. These scripts remain for
+unverified batch/export and platform coverage; do not reinstall engines during
+evaluation. Read their output before treating it as verified Fact/Finding.
 
 Perform automated reverse engineering using Ghidra's `analyzeHeadless` tool.
 Import binaries, run analysis, decompile to C code, and extract useful

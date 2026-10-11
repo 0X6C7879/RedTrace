@@ -36,6 +36,9 @@ command -v npm >/dev/null 2>&1 || {
   exit 1
 }
 
+printf '==> installing pinned REA and root dependencies\n' >&2
+(cd "$ROOT" && npm ci) || exit 1
+
 REBUILD=0
 [[ "${1:-}" == "--rebuild" ]] && REBUILD=1
 [[ ! -x "$DSH_ROOT/node_modules/.bin/tsx" ]] && REBUILD=1

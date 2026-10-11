@@ -1,8 +1,8 @@
 ---
 name: ctf-reverse
-description: Provides reverse engineering techniques for CTF challenges. Use when the main job is to understand how a compiled, obfuscated, packed, or virtualized target works before exploiting or solving it, including binaries, APKs, WASM, firmware, custom VMs, bytecode, game clients, malware-like loaders, and anti-debug or anti-analysis logic. Do not use it when the vulnerability is already understood and the remaining task is exploitation; use pwn instead. Do not use it for pure web workflows, log or disk forensics, or standalone crypto problems unless reversing the implementation is the real blocker.
+description: CTF solving references for custom VMs, anti-debugging, emulation, symbolic constraints and flag validation. Prefer reverse-engineer-anything for supported static analysis; use these references for specialized solving and retained legacy fallbacks.
 license: MIT
-compatibility: Requires filesystem-based agent (Claude Code or similar) with bash, Python 3, and internet access for tool installation.
+compatibility: Requires preinstalled tools. Do not install interactively during evaluation.
 allowed-tools: Bash Read Write Edit Glob Grep Task WebFetch WebSearch
 metadata:
   user-invocable: "false"
@@ -12,32 +12,15 @@ metadata:
 
 Quick reference for RE challenges. For detailed techniques, see supporting files.
 
-## Prerequisites
+## Default analysis route
 
-**Python packages (all platforms):**
-```bash
-pip install frida-tools angr qiling uncompyle6 capstone lief z3-solver
-# For Python 3.9+ bytecode: build pycdc from source
-git clone https://github.com/zrax/pycdc && cd pycdc && cmake . && make
-```
-
-**Linux (apt):**
-```bash
-apt install gdb radare2 binutils strace ltrace apktool upx
-```
-
-**macOS (Homebrew):**
-```bash
-brew install gdb radare2 binutils apktool upx ghidra
-```
-
-**radare2 plugins:**
-```bash
-r2pm -ci r2ghidra   # Native Ghidra decompiler for radare2
-```
-
-**Manual install:**
-- pwndbg — Linux: [GitHub](https://github.com/pwndbg/pwndbg), macOS: `brew install pwndbg/tap/pwndbg-gdb`
+When `reverse-engineer-anything` is visible, load it first for REA-native analysis.
+This Skill supplies the CTF-solving knowledge that REA does not replace: GDB/LLDB,
+angr/Z3 constraints, Unicorn/Qiling emulation, Frida hooks, anti-analysis, custom
+VMs and candidate verification. Read only the reference matching the blocker.
+Use existing deployed tools; a missing dependency is a recorded blocker, not an
+interactive installation step. Retained `ghidra-headless`, radare2/Rizin and
+platform-specific tools remain fallback paths where equivalence is unverified.
 
 ## Additional Resources
 
@@ -141,22 +124,6 @@ Two patterns: (1) `transform(flag) == stored_target` — reverse the transform. 
 - RC4 with hardcoded key
 - Custom permutation + XOR
 - XOR with position index (`^ i` or `^ (i & 0xff)`) layered with a repeating key
-
-## Quick Tool Reference
-
-```bash
-# Radare2
-r2 -d ./binary     # Debug mode
-aaa                # Analyze
-afl                # List functions
-pdf @ main         # Disassemble main
-
-# Ghidra (headless)
-analyzeHeadless project/ tmp -import binary -postScript script.py
-
-# IDA
-ida64 binary       # Open in IDA64
-```
 
 ## Deep-Dive Notes
 

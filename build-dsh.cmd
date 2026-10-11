@@ -22,6 +22,9 @@ where npm >nul 2>nul || (
 
 pushd "%ROOT%" || exit /b 1
 
+echo ==^> installing pinned REA and root dependencies 1>&2
+call npm ci || (popd & exit /b 1)
+
 rem -- Install dependencies if missing or --rebuild requested ---------------
 set "REBUILD=0"
 if "%~1"=="--rebuild" set "REBUILD=1"

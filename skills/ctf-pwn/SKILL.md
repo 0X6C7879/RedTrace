@@ -74,7 +74,7 @@ gem install one_gadget seccomp-tools
 
 ## When to Pivot
 
-- If you do not yet understand what the binary does, switch to `/ctf-reverse` before trying to exploit it.
+- If you do not yet understand what the binary does, load `reverse-engineer-anything` when visible; use `/ctf-reverse` for specialized CTF-solving references or retained fallbacks before trying to exploit it.
 - If the service is really a restricted shell, encoding puzzle, or sandbox language challenge, switch to `/ctf-misc`.
 - If the exploit path depends on a web endpoint, session bug, or upload primitive more than memory corruption, switch to `/ctf-web`.
 - If the vulnerability requires breaking a cryptographic primitive before exploitation, switch to `/ctf-crypto`.

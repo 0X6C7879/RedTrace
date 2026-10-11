@@ -1,0 +1,15 @@
+{
+  "package": "rea-agents",
+  "version": "6.4.0",
+  "repository": "https://github.com/morluto/rea",
+  "reviewedCommit": "951c2aae3be1c357df9f23558d8c09680e64c2cb",
+  "skillFiles": {
+    "reverse-engineer-anything/SKILL.md": "46b495fe6459c283c1432294ebe67799a54391cd2ded197ee7df3f8ac0a8ac8f",
+    "reverse-engineer-anything/references/android-applications.md": "412d9cb462d85b07f6fdbc2453dd741ca3da2c0dbba627867d5624df94afa74c",
+    "reverse-engineer-anything/references/connection-and-recovery.md": "668e421e2a27b63058f42ebd36bec04db73404c136e5f47611119ab9d4b4f607",
+    "reverse-engineer-anything/references/evidence-workflows.md": "dd23217d55342bbe3e98a2bf47a7f208b35a4b41c98645ac160a4d0aac5316f9",
+    "reverse-engineer-anything/references/javascript-applications.md": "04cc298e2485d1db7925b8789097fc5fdd042e937ed11980d3eabc29cb176e59",
+    "reverse-engineer-anything/references/native-and-artifacts.md": "1947af57448ba7be6a0736ffbe976c7ecdab4105f315ecc06c830727cc5205fe",
+    "reverse-engineer-anything/references/runtime-observation.md": "b3eea94dd7d0c6474634de22ac3ccae317f42ba1ba2389d93535ee8dae7d94e1"
+  }
+}

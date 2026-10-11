@@ -64,7 +64,7 @@ brew install hashcat
 
 ## When to Pivot
 
-- If the real blocker is understanding a binary, obfuscated client, or weird VM, switch to `/ctf-reverse`.
+- If the real blocker is understanding a binary, obfuscated client, or weird VM, load `reverse-engineer-anything` when visible; use `/ctf-reverse` for specialized CTF-solving references or retained fallbacks.
 - If the challenge is mostly packet carving, disk recovery, or stego extraction before any decryption starts, switch to `/ctf-forensics`.
 - If the task is just implementing an exploit against a vulnerable network service after the crypto part is solved, switch to `/ctf-pwn` or `/ctf-web`.
 - If the crypto challenge involves adversarial ML, model extraction, or neural-network-based ciphers, switch to `/ctf-ai-ml`.

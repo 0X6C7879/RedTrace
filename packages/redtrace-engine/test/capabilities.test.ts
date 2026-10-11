@@ -35,3 +35,15 @@ test('capabilities keep independent copies, nested entries, revisions and MCP co
     assert.equal(restored.skill('sample').version, 4)
   } finally { await engine.close(); rmSync(root, { recursive: true, force: true }) }
 })
+
+
+test('REA is reserved for the per-Run reverse plugin rather than globally mounted twice', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-rea-config-'))
+  try {
+    const c = new Capabilities(root)
+    c.writeMcp('rea', { command: 'rea', args: ['mcp'] })
+    c.writeMcp('unrelated', { command: 'echo' })
+    assert.deepEqual(c.mcpConfigs().map(s => s.serverName), ['unrelated'])
+    assert.equal(c.mcp('rea').enabled, true)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})

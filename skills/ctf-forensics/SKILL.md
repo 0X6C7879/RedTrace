@@ -62,7 +62,7 @@ gem install zsteg
 - If the artifact is a web app backup or API dump and the remaining problem is application logic, switch to `/ctf-web`.
 - If the forensic evidence is really an encoding puzzle, steganography trick, or esoteric format rather than true forensics, switch to `/ctf-misc`.
 - If you need to trace infrastructure, attribute actors, or investigate public records from forensic findings, switch to `/ctf-osint`.
-- If the recovered artifact is a compiled binary or firmware that needs disassembly and analysis, switch to `/ctf-reverse`.
+- If the recovered artifact is a compiled binary or firmware that needs disassembly and analysis, load `reverse-engineer-anything` when visible; use `/ctf-reverse` for specialized CTF-solving references or retained fallbacks.
 
 ## Quick Start Commands
 

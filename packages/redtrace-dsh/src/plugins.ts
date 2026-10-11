@@ -144,6 +144,7 @@ const KERNEL: readonly KernelEntry[] = [
 ]
 
 const MANAGED: readonly ManagedEntry[] = [
+  { id: 'redtrace-reverse', label: 'Reverse Engineering', category: 'feature', modulePath: 'packages/redtrace-dsh/lib/reverse.js', defaultOff: true, description: 'REA 原生逆向 Skill、CLI 与按需 MCP', intro: 'Explore 加载官方 reverse-engineer-anything Skill 后，按 Run 隔离连接 DSH 原生 REA MCP；启用本身不启动分析引擎。停用撤销 Skill/工具并清理受管会话，保留证据；通用 Shell 不受系统级限制。' },
   { id: 'redtrace-critical-events', label: '关键事件调度', category: 'feature', modulePath: 'packages/redtrace-engine/src/scheduler.ts', description: '运行时验证的关键事件提前规划', intro: '只消费平台确认或运行时验证的能力、路由及失效信号；停用后保留原 Fact＋Step 结束契约，不删除证据。' },
   { id: 'redtrace-knowledge', label: '离线知识检索', category: 'feature', modulePath: 'packages/redtrace-engine/src/knowledge.ts', description: '本地 FTS5 搜索与有界读取', intro: '只检索本地知识源；命中不是漏洞证据，不自动执行 PoC。' },
   { id: 'redtrace-browser-http', label: 'Browser + HTTP', category: 'feature', modulePath: 'packages/redtrace-engine/src/web.ts', description: '隔离持久浏览器与轻量 HTTP 批量验证', intro: '按 Project、Challenge、身份和 Session 隔离，默认串行；完整请求响应保存在权限受限的证据文件。' },

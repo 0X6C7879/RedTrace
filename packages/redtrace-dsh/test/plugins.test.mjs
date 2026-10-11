@@ -103,7 +103,7 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
   // Every builtin entry boots running unless it is explicitly opt-in (defaultOff).
   const optIn = new Set([
     'redtrace-credentials', 'redtrace-file-references',
-    'redtrace-lsp', 'redtrace-ptc', 'redtrace-jev',
+    'redtrace-lsp', 'redtrace-ptc', 'redtrace-jev', 'redtrace-reverse',
   ])
   for (const view of views.filter((item) => item.source === 'builtin')) {
     assert.ok(view.status === 'running' || optIn.has(view.id), `${view.id} boots ${view.status}`)
@@ -327,7 +327,7 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const list = await call('GET', '/__redtrace/plugins')
   assert.equal(list.status, 200)
-  assert.equal(JSON.parse(list.body).plugins.length, 37)
+  assert.equal(JSON.parse(list.body).plugins.length, 38)
   assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === 'redtrace-jev').status, 'stopped')
 
   for (const id of ['redtrace-shell', 'redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
@@ -367,4 +367,24 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const badAction = await call('POST', '/__redtrace/plugins/redtrace-resource/restart')
   assert.equal(badAction.status, 404)
+})
+
+
+test('reverse plugin is default-off, persists opt-in and can be stopped and restarted', async t => {
+  const root = scratch('reverse')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const manifest = path.join(root, 'plugins.json')
+  const first = makeManager(root, manifest, async () => ({}))
+  await first.manager.boot()
+  assert.equal(first.manager.view('redtrace-reverse').status, 'stopped')
+  await first.manager.start('redtrace-reverse')
+  assert.equal(first.manager.view('redtrace-reverse').status, 'running')
+  assert.ok(JSON.parse(readFileSync(manifest)).enabled.includes('redtrace-reverse'))
+  const second = makeManager(root, manifest, async () => ({}))
+  await second.manager.boot()
+  assert.equal(second.manager.view('redtrace-reverse').status, 'running')
+  await second.manager.stop('redtrace-reverse')
+  assert.equal(second.manager.view('redtrace-reverse').status, 'stopped')
+  await second.manager.start('redtrace-reverse')
+  assert.equal(second.manager.view('redtrace-reverse').status, 'running')
 })
