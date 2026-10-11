@@ -8,14 +8,16 @@ export interface Project {
   id: string; title: string; status: ProjectStatus; bootstrap: boolean; createdAt: string
   revision: number; planningRevision: number; decidedRevision: number; retryAfter: number
   factSeq: number; endedSeq: number; acknowledgedFactSeq: number; acknowledgedEndedSeq: number
+  evidenceSeq?: number; acknowledgedEvidenceSeq?: number
   criticalSeq?: number; acknowledgedCriticalSeq?: number
   benchmarkHosts?: Record<string,string[]>
   initialPlanningPending: boolean; planningRetryPending: boolean
   failureCount?: number; failureSignature?: string | null; circuitOpen?: boolean; contextRevision?: number
 }
 export interface Evidence { path?: string; runId?: string; toolCallId?: string; description: string }
-export interface NodeBase { id: string; projectId: string; createdAt: string; creator: string }
-export interface Fact extends NodeBase { kind: 'fact'; description: string; stepId: string | null; evidence: Evidence[]; deleted?: boolean }
+export interface NodeBase { id: string; projectId: string; createdAt: string; creator: string; version?: number }
+export interface EvidenceLifecycle { lifecycle?: 'active' | 'archived' | 'merged'; mergedInto?: string; mergedFromIds?: string[]; producerStepIds?: string[] }
+export interface Fact extends NodeBase, EvidenceLifecycle { kind: 'fact'; description: string; stepId: string | null; evidence: Evidence[]; deleted?: boolean }
 export interface Goal extends NodeBase { kind: 'goal'; description: string; parentId: string | null; status: 'open' | 'achieved' | 'cancelled'; evidenceIds: string[] }
 export interface Step extends NodeBase {
   kind: 'step'; description: string; goalId: string; sourceIds: string[]; factIds: string[]
@@ -23,18 +25,21 @@ export interface Step extends NodeBase {
   requires: string[]; attempts: number; endedAt: string | null; failure: string | null
   bootstrap: boolean; deleted?: boolean; resultGoalId?: string; sourceGoalId?: string
   failureCount?: number; retryAfter?: number | null; circuitOpen?: boolean; runtimeMs?: number
+  planVersion?: number; replaces?: string; replacedBy?: string; replacementPending?: boolean
 }
-export interface Finding extends NodeBase { kind: 'finding'; title: string; description: string; type: string; factIds: string[]; details: Json; stepId?: string | null }
+export interface Finding extends NodeBase, EvidenceLifecycle { kind: 'finding'; title: string; description: string; type: string; factIds: string[]; details: Json; stepId?: string | null; sourceDetails?: { id: string; details: Json }[] }
 export interface Input extends NodeBase { kind: 'hint' | 'observation'; content: string; stepId: string | null; deleted: boolean }
 export type GraphNode = Fact | Goal | Step | Finding | Input
-export interface Graph { project: Project; facts: Fact[]; goals: Goal[]; steps: Step[]; findings: Finding[]; hints: Input[]; observations: Input[] }
+export interface Graph { project: Project; facts: Fact[]; goals: Goal[]; steps: Step[]; findings: Finding[]; hints: Input[]; observations: Input[]; inactiveIds?: string[] }
 export interface GraphEvent { id: number; projectId: string; revision: number; type: string; nodeId: string | null; payload: Json; createdAt: string }
 export interface Run {
   id: string; projectId: string; stepId: string | null; activity: Activity; worker: string
-  backend: 'pi' | 'dsh' | 'mock'; status: RunStatus; startedAt: string; endedAt: string | null
+  backend: 'dsh' | 'mock'; status: RunStatus; startedAt: string; endedAt: string | null
   baseRevision: number; checkpoint: Json; pendingTools: string[]; error: string | null
   planningFactSeq?: number; planningEndedSeq?: number
   planningCriticalSeq?: number
+  planningEvidenceSeq?: number; processedEvidenceSeq?: number; deliveredEvidenceSeq?: number; boundStepVersion?: number
+  deliveredGraphCursor?: number
   inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number
   heartbeatAt?: string; trigger?: string
   provider?: string; model?: string; workspaceRoot?: string
@@ -58,7 +63,11 @@ export interface EngineConfig {
 }
 export class HttpError extends Error {
   status: number
-  constructor(status: number, message: string) { super(message); this.status = status }
+  details?: unknown
+  constructor(status: number, message: string, details?: unknown) { super(message); this.status = status; this.details = details }
+}
+export function activeEvidence(node: GraphNode): boolean {
+  return !('deleted' in node && node.deleted) && (!('lifecycle' in node) || !node.lifecycle || node.lifecycle === 'active')
 }
 export function requiredText(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new HttpError(422, `${name} must be a non-empty string`)

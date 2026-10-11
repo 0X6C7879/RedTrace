@@ -4,12 +4,13 @@ import { body } from './http.ts'
 import type { Router } from './http.ts'
 import type { Configuration, RawConfig } from './config.ts'
 import { HttpError } from './types.ts'
+import type { ProbeModel } from './index.ts'
 
 const text = Type.String({ minLength: 1 }), revision = Type.String({ minLength: 64, maxLength: 64, pattern: '^[a-f0-9]+$' })
 const positive = Type.Integer({ minimum: 1 }), policy = Type.Union(['auto_max', 'max', 'xhigh', 'high', 'medium', 'low', 'minimal', 'off'].map(v => Type.Literal(v)))
 const workerSchema = Type.Object({ expected_revision: revision, original_name: Type.Optional(Type.Union([text, Type.Null()])), name: text, provider: text, model: Type.Optional(text), enabled: Type.Optional(Type.Boolean()), bootstrap: Type.Optional(Type.Boolean()), reason: Type.Optional(Type.Boolean()), explore: Type.Optional(Type.Boolean()), priority: Type.Integer(), max_running: positive })
 const providerSchema = Type.Object({ expected_revision: revision, name: text, api: Type.Optional(Type.Union(['openai-completions', 'openai-responses', 'anthropic-messages'].map(v => Type.Literal(v)))), base_url: text, api_key: Type.Optional(Type.Union([Type.String(), Type.Null()])), api_key_env: Type.Optional(Type.Union([Type.String(), Type.Null()])), models: Type.Array(Type.Object({ id: text, context_window: Type.Optional(positive), max_tokens: Type.Optional(positive), reasoning: Type.Optional(policy), reasoning_efforts: Type.Optional(Type.Union([Type.Record(Type.String(), Type.Union([Type.String(), Type.Null()])), Type.Boolean(), Type.Null()])), thinking_format: Type.Optional(Type.Union(['auto', 'deepseek', 'openai', 'none'].map(v => Type.Literal(v)))) }), { minItems: 1 }) })
-export function configRoutes(router: Router, configuration: Configuration) {
+export function configRoutes(router: Router, configuration: Configuration, probeModel?: ProbeModel) {
   const checkRevision = (expected: string) => { if (configuration.read().revision !== expected) throw new HttpError(409, 'worker configuration changed; reload before saving') }
   const workerIndex = (raw: RawConfig, name: string) => { const i = raw.workers.findIndex(w => w.name === name); if (i < 0) throw new HttpError(400, 'Worker not found'); return i }
   const testCache = new Map<string, { at: number; value: { ok: boolean; status: number | null; duration_ms: number; detail: string; cached: boolean } }>()
@@ -24,9 +25,8 @@ export function configRoutes(router: Router, configuration: Configuration) {
     const start = Date.now()
     if (worker.backend !== 'mock') {
       try {
-        const { modelSession } = await import('./models.ts'), { model, models } = await modelSession(config, worker)
-        const response = await models.completeSimple(model, { messages: [{ role: 'user', content: 'Reply with OK.', timestamp: Date.now() }] }, { signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]), maxTokens: 64, maxRetries: 0 })
-        if (response.stopReason === 'error' || response.stopReason === 'aborted') throw new Error('provider rejected the probe')
+        if (!probeModel) throw new Error('DSH model service is unavailable')
+        await probeModel(config, worker, AbortSignal.any([signal, AbortSignal.timeout(30000)]))
       } catch { throw new HttpError(422, 'Provider connection test failed; verify the endpoint, model and credentials') }
     }
     const result = { ok: true, status: worker.backend === 'mock' ? null : 200, duration_ms: Date.now() - start, detail: worker.backend === 'mock' ? 'mock worker needs no connection' : 'Connection successful', cached: false }

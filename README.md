@@ -11,7 +11,7 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 - **Decide / Execute 闭环**：每个项目最多一个无私有会话的 Decide；多个 Execute 可并行推进 Step，任一事实提交都会立即唤醒下一轮规划。
 - **唯一 FGS 图**：`Fact` 保存有来源的事实，`Goal` 保存完成条件和子目标，`Step` 保存行动与状态，`Finding` 保存可交付成果。`Hint` 与 `Observation` 保持人工输入和中间记录语义。
 - **异构 Worker 协同（Worker 即路由）**：任意数量 Worker 各自声明 Provider、模型、任务资格（bootstrap/reason/explore）、并发与优先级。调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务——路由完全由 Worker 派生，而非按任务类型写死。
-- **Node 24 Agent 运行时**：轻量任务直接使用 Pi Agent；需要旧钩子的任务使用 DSH 适配器。两者共享一个 FGS 调度器，Cordis 插件仍运行在真实 Cordis 服务和生命周期中。
+- **Node 24 Agent 运行时**：DSH 原生 Agent Loop 是唯一真实模型执行器；`dsh-llm-pi-ai` 仅适配模型协议。FGS 调度器与 Cordis 插件保持单实例、原生生命周期。
 - **运行中知识同步**：证据图谱修订会通过 `agent.inject()` 增量送达正在运行的 Agent；共享 Resource 摘要随上下文注入，完整信息按需查询。
 - **上下文预算治理**：DSH 原生 Session Compaction、Tool Result Pruner 与 Spill 控制上下文压力，Graph 按需注入而不是无限堆进 Prompt；超大工具结果完整落盘、按需取回。
 - **DSH 原生执行工具链**：Execute Worker 直接获得 DSH 原生能力——`web_search` / `web_fetch`、后台任务（`job_output` / `job_list` / `job_kill`，bash `run_in_background`）、持久 PTY 终端、`glob` / `grep`、工具超时与重复调用防护；LSP 代码导航与 `run_code` 程序化调用按需开启。全部在插件管理页热启停，仅对新会话生效，不自研重复 Skill/MCP。
@@ -21,7 +21,7 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 
 ## 工作方式
 
-系统分为三层：**内核**是 TypeScript + Node 24 + 内置 SQLite，负责 FGS、事务、调度、审计与配置；**执行面**按 Worker 选择 Pi 或 DSH Agent，并保持 Step 独立会话；**能力层**由 Cordis 插件、Skill、MCP、Resource、浏览器与安全工具组成，按任务装载。
+系统分为三层：**内核**是 TypeScript + Node 24 + 内置 SQLite，负责 FGS、事务、调度、审计与配置；**执行面**按 Worker 路由模型，由 DSH 原生 Agent Loop 执行，并保持 Step 独立会话；**能力层**由 Cordis 插件、Skill、MCP、Resource、浏览器与安全工具组成，按任务装载。
 
 ```mermaid
 flowchart LR
@@ -29,10 +29,8 @@ flowchart LR
     N <--> DB[(SQLite<br/>FGS + Finding + Audit)]
     DB --> D[单实例 Decide]
     D --> S[待执行 Step]
-    S --> E1[Pi Execute]
-    S --> E2[DSH Execute]
-    E1 --> DB
-    E2 --> DB
+    S --> E[DSH Native Agent Loop]
+    E --> DB
     C[Cordis 宿主<br/>Web / 插件 / 外围能力] --> N
 ```
 
@@ -40,7 +38,7 @@ flowchart LR
 
 1. 用户创建 Project，提供 Origin、根 Goal 与可选 Hint。
 2. Decide 读取当前任务图，完成 Goal 或生成关联 Fact、Goal 与优先级的 Step；Bootstrap 只是首轮 Step 策略。
-3. 调度器按模型、资格与并发限制原子领取 Step；Pi 或 DSH Execute 在独立会话中执行。
+3. 调度器按模型、资格与并发限制原子领取 Step；DSH Execute 在独立会话中执行。
 4. Execute 可持续提交 Fact 和 Finding；事务提交后直接唤醒 Decide 与界面，无需 HTTP 认领轮询。
 5. Stop 保存活动检查点；恢复沿用同一 Step 会话。崩溃后保留已提交事实，结果未知的外部操作不会自动重放。
 6. Goal 满足后项目完成；旧 Intent/Reason/Explore API 只投影到这张图，不维护第二套状态。
@@ -61,9 +59,9 @@ flowchart LR
 
 正在运行的 Worker 不必等到下一次任务启动才看到新证据。RedTrace 会监视证据修订，通过运行时的原生注入通道发送精简更新；完整内容继续按需读取，避免无边界地扩张 Prompt。
 
-### 一个内核，多种执行适配器
+### 一个内核，一个 Agent 执行器
 
-FGS Store 负责唯一持久状态，Scheduler 只领取 Step 和分配配额，执行适配器负责模型会话与工具。Pi 与 DSH 不复制任务图；旧 API、Cordis 插件和外围能力都调用同一组 Node 存储函数。
+FGS Store 负责唯一持久状态，Scheduler 只领取 Step 和分配配额，DSH 负责模型会话与工具；Pi Agent 已退役，`dsh-llm-pi-ai` 只负责模型协议，不运行 Agent；旧 API、Cordis 插件和外围能力都调用同一组 Node 存储函数。
 
 ## 快速开始
 
@@ -105,7 +103,7 @@ cp redtrace.local.example.yaml redtrace.yaml
 ./start-redtrace.sh
 ```
 
-复制后编辑 `redtrace.yaml`：填入 `providers.<name>.api_key`，按需调整 `workers`。两个入口首次运行会执行锁定的 npm 安装并构建 Cordis 兼容运行时，之后直接启动。默认监听 `0.0.0.0:8000`（所有 IPv4 网卡）；本机访问 `http://127.0.0.1:8000`，其他设备使用 `http://<服务器 IP>:8000`。它们接受 `--config`、`--host` 和 `--port`；如需仅限本机访问，传入 `--host 127.0.0.1`。`Ctrl+C` 会停止本次 Node 进程。用户调用的 Python 安全工具仍可作为外部工具使用，RedTrace 自身不依赖 Python。
+复制后编辑 `redtrace.yaml`：填入 `providers.<name>.api_key`，按需调整 `workers`。两个入口首次运行会执行锁定的 npm 安装并构建 Cordis 兼容运行时，之后直接启动。默认监听 `127.0.0.1:8000`；本机访问 `http://127.0.0.1:8000`。DSH 不接受通配监听地址；如需局域网访问，使用 `--host <本机局域网 IP>`。它们接受 `--config`、`--host` 和 `--port`；旧 `--compat` 参数仅兼容接受，不再切换执行器。`Ctrl+C` 会停止本次 Node 进程。用户调用的 Python 安全工具仍可作为外部工具使用，RedTrace 自身不依赖 Python。
 
 ### 运行时模型
 

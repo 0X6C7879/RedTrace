@@ -52,7 +52,7 @@ print(json.dumps({'ok':True,cmd:value}))
     const tools = graphTools({ store, run, worker, config, signal: new AbortController().signal }, () => {})
     const byName = (name: string) => tools.find(item => item.name === name)!
     assert.deepEqual((await byName('tsecbench_start').execute('start', { unique_code: 'b-01' })).details, { unique_code: 'b-01', container_addr: ['127.0.0.1:8080'] })
-    assert.equal((await byName('tsecbench_submit').execute('submit', { unique_code: 'b-01', flag: 'flag{fixture}' })).details.correct, true)
+    assert.equal(((await byName('tsecbench_submit').execute('submit', { unique_code: 'b-01', flag: 'flag{fixture}' })).details as { correct: boolean }).correct, true)
     assert.deepEqual((await byName('tsecbench_close').execute('close', { unique_code: 'b-01' })).details, { unique_code: 'b-01', closed: true })
     assert.match(store.graph(id).facts.map(fact => fact.description).join('\n'), /platform confirmed 1\/4 flags/)
   } finally { store.close(); rmSync(root, { recursive: true, force: true }) }

@@ -16,7 +16,7 @@ const listener = createServer()
 await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve))
 const port = listener.address().port
 await new Promise(resolve => listener.close(resolve))
-const child = spawn(process.execPath, [path.join(root, 'scripts/run-redtrace-node.mjs'), '--compat', '--mock', '--root', work, '--port', String(port)], {
+const child = spawn(process.execPath, [path.join(root, 'scripts/run-redtrace-node.mjs'), '--mock', '--root', work, '--port', String(port)], {
   cwd: root,
   env: { ...process.env, DSH_HOME: path.join(work, '.dsh'), REDTRACE_SOURCE_ROOT: candidate, REDTRACE_DSH_ROOT: candidate, REDTRACE_DATA_ROOT: path.join(work, '.redtrace') },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -28,7 +28,7 @@ for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => { 
 try {
   let healthy = false
   for (let attempt = 0; attempt < 100 && !exited; attempt++) {
-    try { healthy = (await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(500) })).ok } catch { /* Host is still starting. */ }
+    try { healthy = (await fetch(`http://127.0.0.1:${port}/__redtrace/plugins`, { signal: AbortSignal.timeout(500) })).ok } catch { /* Host is still starting. */ }
     if (healthy) break
     await delay(200)
   }

@@ -10,7 +10,7 @@ import { activityPrompt, graphTools } from '../src/runner.ts'
 import type { EngineConfig } from '../src/types.ts'
 import type { TaskContext } from '../src/scheduler.ts'
 
-const worker = { name: 'test', backend: 'pi' as const }
+const worker = { name: 'test', backend: 'dsh' as const }
 const legacyScenes: JevScenes = { context_filter: true, tool_filter: true, external_filter: true, skill_suggestion: true,
   step_dedup: true, fact_dedup: true, finding_dedup: true, evidence_support: true, trace_observer: true }
 const fixture = (calls: Record<string, unknown>[], choose?: (scene: string, criteria: string[]) => string, noul = 0.1, confidence = 0.99) => async (_url: string | URL | Request, init?: RequestInit) => {

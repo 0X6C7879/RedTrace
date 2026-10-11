@@ -37,12 +37,12 @@ test('1: first launch plans once; reactivation alone does not plan again', async
   } finally { await seen.scheduler.close(); store.close() }
 })
 
-test('2: many Facts from one Step coalesce until an ending arrives', async () => {
+test('2: many Facts in one burst coalesce without waiting for an ending', async () => {
   const store = new Store(':memory:'), id = ready(store), seen = counter(store)
   try {
     seen.scheduler.start(); await quiet(); const item = execution(store, id, 2)
     for (let i = 0; i < 5; i++) fact(store, item)
-    await quiet(); assert.equal(seen.decisions(), 0)
+    await until(() => seen.decisions() === 1)
     finish(store, item, 'succeeded'); await until(() => seen.decisions() === 1); await quiet(); assert.equal(seen.decisions(), 1)
   } finally { await seen.scheduler.close(); store.close() }
 })
@@ -53,44 +53,44 @@ test('3: ending a Step without a new Fact cannot wake Decide', async () => {
   finally { await seen.scheduler.close(); store.close() }
 })
 
-for (const [number, order] of [[4, 'fact-first'], [5, 'end-first']] as const) test(`${number}: different Steps pair in ${order} order`, async () => {
+for (const [number, order] of [[4, 'fact-first'], [5, 'end-first']] as const) test(`${number}: Fact arrival wakes regardless of ${order} completion order`, async () => {
   const store = new Store(':memory:'), id = ready(store), seen = counter(store)
   try {
     seen.scheduler.start(); await quiet(); const a = execution(store, id, 2), b = execution(store, id, 3)
     if (order === 'fact-first') { fact(store, a); finish(store, b, 'succeeded') }
     else { finish(store, b, 'failed'); fact(store, a) }
     await until(() => seen.decisions() === 1); await quiet(); assert.equal(seen.decisions(), 1)
-    fact(store, a); await quiet(); assert.equal(seen.decisions(), 1, 'an acknowledged ending cannot pair again')
+    fact(store, a); await quiet(); assert.equal(seen.decisions(), 2, 'new evidence independently wakes again')
   } finally { await seen.scheduler.close(); store.close() }
 })
 
-test('6: events from different projects never pair', async () => {
+test('6: evidence wakes only its owning project', async () => {
   const store = new Store(':memory:'), a = ready(store), b = ready(store), seen = counter(store)
-  try { seen.scheduler.start(); await quiet(); const x = execution(store, a, 2), y = execution(store, b, 3); fact(store, x); finish(store, y, 'succeeded'); await quiet(); assert.equal(seen.decisions(), 0) }
+  try { seen.scheduler.start(); await quiet(); const x = execution(store, a, 2), y = execution(store, b, 3); fact(store, x); finish(store, y, 'succeeded'); await quiet(); assert.equal(seen.decisions(), 1); assert.equal(store.runs(a).filter(r => r.activity === 'decide').length, 2); assert.equal(store.runs(b).filter(r => r.activity === 'decide').length, 1) }
   finally { await seen.scheduler.close(); store.close() }
 })
 
-test('7: full capacity preserves a pending pair until a slot opens', async () => {
+test('7: Step capacity does not suppress evidence-driven planning', async () => {
   const store = new Store(':memory:'), id = ready(store), seen = counter(store, 3)
   try {
     seen.scheduler.start(); await quiet(); const a = execution(store, id, 2), b = execution(store, id, 3)
     fact(store, a); finish(store, b, 'succeeded')
     const c = store.addStep(id, { description: 'Square 4', sourceIds: ['origin'] }), d = store.addStep(id, { description: 'Square 5', sourceIds: ['origin'] })
-    await quiet(); assert.equal(seen.decisions(), 0)
+    await until(() => seen.decisions() === 1)
     store.updateStep(id, d.id, { status: 'cancelled' }); await until(() => seen.decisions() === 1)
     assert.equal(store.node(id, c.id).kind, 'step')
   } finally { await seen.scheduler.close(); store.close() }
 })
 
-for (const [number, status, expected] of [[8, 'succeeded', 1], [9, 'failed', 1], [10, 'paused', 0], [11, 'cancelled', 0]] as const) test(`${number}: Execute ${status} ${expected ? 'does' : 'does not'} provide an ending event`, async () => {
+for (const [number, status, expected] of [[8, 'succeeded', 1], [9, 'failed', 1], [10, 'paused', 1], [11, 'cancelled', 1]] as const) test(`${number}: Fact wakes independently of Execute ${status}`, async () => {
   const store = new Store(':memory:'), id = ready(store), item = execution(store, id, 2), seen = counter(store)
   try { fact(store, item); finish(store, item, status); seen.scheduler.start(); expected ? await until(() => seen.decisions() === 1) : await quiet(); assert.equal(seen.decisions(), expected) }
   finally { await seen.scheduler.close(); store.close() }
 })
 
-test('12: spare capacity and elapsed time cannot wake on a Fact alone', async () => {
+test('12: Fact alone wakes while its Step remains running', async () => {
   const store = new Store(':memory:'), id = ready(store), seen = counter(store, 3)
-  try { seen.scheduler.start(); await quiet(); const item = execution(store, id, 2); fact(store, item); await quiet(); assert.equal(seen.decisions(), 0); finish(store, item, 'succeeded'); await until(() => seen.decisions() === 1) }
+  try { seen.scheduler.start(); await quiet(); const item = execution(store, id, 2); fact(store, item); await until(() => seen.decisions() === 1); assert.equal(store.node<any>(id, item.step.id).status, 'running'); finish(store, item, 'succeeded'); await until(() => seen.decisions() === 1) }
   finally { await seen.scheduler.close(); store.close() }
 })
 

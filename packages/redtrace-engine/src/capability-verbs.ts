@@ -14,7 +14,7 @@
 
 import { Type } from 'typebox'
 import type { TSchema, Static } from 'typebox'
-import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentTool, AgentToolResult } from './tool-types.ts'
 import { resourceKinds } from './operations.ts'
 import { operationSupported } from './operation-execution.ts'
 import type { Operations } from './operations.ts'

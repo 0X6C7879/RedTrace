@@ -93,7 +93,7 @@ test('reference boundaries, atomic failure, and historical states never use futu
   } finally { s.close() }
 })
 
-test('paired planning events wait at capacity and survive unrelated graph writes', async () => {
+test('evidence planning runs at Step capacity without relaxing add_step limits', async () => {
   const s = new Store(':memory:'), id = create(s)
   const reason = { ...worker, explore: false }
   const config: EngineConfig = { workers: [reason], providers: {}, maxWorkers: 4, maxProjectWorkers: 4, maxRunningProjects: 2, maxSteps: 1, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: '.' }
@@ -109,7 +109,7 @@ test('paired planning events wait at capacity and survive unrelated graph writes
   let decisions = 0
   const scheduler = new Scheduler(s, config, async ({ run }) => { if (run.activity === 'decide') decisions++ })
   try {
-    scheduler.start(); for (let i = 0; i < 20; i++) await turn(); assert.equal(decisions, 0)
+    scheduler.start(); for (let i = 0; i < 20; i++) await turn(); assert.equal(decisions, 1)
     s.updateStep(id, pending.id, { status: 'cancelled' })
     for (let i = 0; i < 20 && !decisions; i++) await turn()
     assert.equal(decisions, 1)

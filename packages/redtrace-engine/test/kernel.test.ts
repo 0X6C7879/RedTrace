@@ -59,7 +59,7 @@ test('Fact plus Step completion wakes one serial decision while slower execution
   } finally { release(); await scheduler.close(); s.close() }
 })
 
-test('hints and findings stay out of planning revisions and do not start another Decide', async () => {
+test('Hint does not wake; Finding wakes independently of legacy planning revisions', async () => {
   const s = new Store(':memory:'), id = create(s)
   const fact = s.addFact(id, 'Verified evidence')
   let decisions = 0
@@ -73,7 +73,7 @@ test('hints and findings stay out of planning revisions and do not start another
     assert.equal(s.graph(id).findings.length, 1)
     assert.equal(s.project(id).planningRevision, planning)
     for (let i = 0; i < 8; i++) await turn()
-    assert.equal(decisions, 1)
+    assert.equal(decisions, 2)
   } finally { await scheduler.close(); s.close() }
 })
 

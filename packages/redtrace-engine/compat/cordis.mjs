@@ -3,7 +3,8 @@ import path from 'node:path'
 import { mkdir, realpath } from 'node:fs/promises'
 import { watch } from 'node:fs'
 import { createEngine } from '../src/index.ts'
-import { criticalNotice, efficiencyToolAvailable, graphTools, activityPrompt, activityLimits, graphUpdate, runPi, runMock } from '../src/runner.ts'
+import { createPlanGuard } from '../src/plan-guard.ts'
+import { criticalNotice, efficiencyToolAvailable, graphTools, activityPrompt, activityLimits, graphUpdate, runMock } from '../src/runner.ts'
 import { isJevRecoveryPath, traceCall } from '../src/jev.ts'
 import { verbTools, verbToolAvailable, channelsFor, resourceTools } from '../src/capability-verbs.ts'
 import { PluginManager, registerPluginRoutes } from '../../redtrace-dsh/lib/plugins.js'
@@ -13,24 +14,14 @@ import { activateAgent, resolveReasoningEffort } from '../../redtrace-dsh/lib/ag
 import { state } from '../../redtrace-dsh/lib/state.js'
 import { apply as applyDomain, applyCommonEnv, mcpSignature } from '../../redtrace-dsh/lib/domain.js'
 import { accumulateUsage, eventProjection } from '../../redtrace-dsh/lib/audit.js'
+import { providerProfiles } from '../src/models.ts'
+import { probeModel, admitToolImages } from './llm.mjs'
 
 export const name = 'redtrace-node'
 export const inject = ['webServer']
 const json = value => JSON.parse(JSON.stringify(value))
 
-export function providerProfiles(config) {
-  const providers = {}, env = {}
-  for (const [name, p] of Object.entries(config.providers)) {
-    const keyName = `REDTRACE_DSH_KEY_${Buffer.from(name).toString('hex').toUpperCase()}`
-    const key = p.apiKey ?? process.env[p.apiKeyEnv]
-    if (key) env[keyName] = key
-    providers[name] = { displayName: name, api: p.api, baseURL: p.baseUrl.replace(/\/$/, ''), apiKeyEnv: keyName,
-      models: p.models.map(m => ({ id: m.id, name: m.id, contextWindow: m.contextWindow, maxTokens: m.maxTokens,
-        ...(m.reasoningEfforts == null ? {} : { reasoningEfforts: m.reasoningEfforts }),
-        ...(p.api === 'openai-completions' && ['deepseek', 'openai'].includes(m.thinkingFormat) ? { compat: { thinkingFormat: m.thinkingFormat } } : {}) })) }
-  }
-  return { providers, env }
-}
+export { providerProfiles } from '../src/models.ts'
 
 export async function filterDshJevResult(jev, run, cwd, exec, result, decision) {
   if (!jev?.isEnabled('tool_filter') && !jev?.isEnabled('external_filter')) return decision
@@ -110,12 +101,13 @@ export async function apply(ctx, options) {
     // The gate is created before the manager exists; it only dereferences it
     // when a request or dispatch actually asks, long after boot settles.
     adapterAvailability: () => pluginId => manager.running(pluginId),
+    probeModel: (config, worker, signal) => probeModel(ctx, engine.configuration, config, worker, signal),
     selectWorker: (worker, activity, step) => {
       const preset = activity === 'decide' ? 'reason' : step?.bootstrap ? 'bootstrap' : 'explore'
       if (!state()?.presets.has(preset)) return undefined
-      return worker.backend !== 'mock' && step?.executionProfile === 'isolated' ? { ...worker, backend: 'dsh' } : worker
+      return worker
     },
-    runTask: input => { const context = { ...input, featureAvailable: id => manager.running(id) }; return context.run.backend === 'mock' ? runMock(context) : context.run.backend === 'pi' ? runPi(context, engine.capabilities, verbRuntime) : executeDsh(context) } })
+    runTask: input => { const context = { ...input, featureAvailable: id => manager.running(id) }; return context.run.backend === 'mock' ? runMock(context) : executeDsh(context) } })
   const runtime = { runtime: true, root, server: options.server, sessionRoot: path.join(managed, 'sessions'), skillsDir: path.join(managed, 'skills'), workspacesDir: engine.configuration.workspaceRoot,
     pluginsManifest: path.join(managed, 'plugins.json'), engineScheduler: engine.scheduler }
   // The repo-local security-asset map (wordlists / payloads / PoC references /
@@ -131,8 +123,10 @@ export async function apply(ctx, options) {
   // The engine handler serves the Web UI and the whole API; the Cordis web
   // server only owns the plugin-manager routes and falls through to it.
   ctx.effect(() => ctx.webServer.registerFallback(engine.handler))
-  let profileRevision = '', sceneRevision = '', providerKeys = new Set(), watcher
-  const refresh = async () => {
+  let profileRevision = '', sceneRevision = '', watcher
+  let refreshPending = Promise.resolve()
+  const refresh = () => refreshPending = refreshPending.catch(() => {}).then(refreshProfiles)
+  const refreshProfiles = async () => {
     const shared = state(), mcpConfigs = engine.capabilities.mcpConfigs()
     if (shared && mcpSignature(mcpConfigs) !== shared.mcpSignature) await shared.remountMcp?.(mcpConfigs)
     const { raw, revision } = engine.configuration.read()
@@ -143,14 +137,14 @@ export async function apply(ctx, options) {
       await Promise.all([...sessionRefresh.values()].map(update => update()))
     }
     if (revision === profileRevision) return
-    const config = engine.configuration.resolve(raw), { providers, env } = providerProfiles(config)
-    for (const key of providerKeys) if (!(key in env)) delete process.env[key]
-    Object.assign(process.env, env); providerKeys = new Set(Object.keys(env))
+    const config = engine.configuration.resolve(raw), { providers } = providerProfiles(config)
     applyCommonEnv(config.commonEnv)
     const adapter = [...ctx.get('loader').entries()].find(entry => entry.options.id === 'llm-pi-ai')
     if (!adapter) throw new Error('DSH llm-pi-ai profile entry is missing')
-    await adapter.update({ config: { providers } })
-    if (shared) shared.snapshot = { revision, workers: config.workers.map(w => ({ ...w })), providers, env, commonEnv: config.commonEnv, tasks: raw.tasks, mcpConfigs,
+    await adapter.fiber.await()
+    await adapter.update({ config: { providers, credentialSource: { root: engine.configuration.root, filename: engine.configuration.filename, revision } } })
+    await adapter.fiber.await()
+    if (shared) shared.snapshot = { revision, workers: config.workers.map(w => ({ ...w })), providers, env: {}, commonEnv: config.commonEnv, tasks: raw.tasks, mcpConfigs,
       limits: { maxWorkers: config.maxWorkers, maxProjectWorkers: config.maxProjectWorkers, maxRunningProjects: config.maxRunningProjects, interval: 0 } }
     profileRevision = revision
   }
@@ -172,7 +166,7 @@ export async function apply(ctx, options) {
     watcher = watch(path.dirname(engine.configuration.filename), (_event, filename) => {
       if (!filename || String(filename) === path.basename(engine.configuration.filename)) void refresh().catch(error => ctx.logger.warn(error))
     })
-    ctx.effect(() => async () => { watcher.close(); await engine.close(); for (const key of providerKeys) delete process.env[key] })
+    ctx.effect(() => async () => { watcher.close(); await engine.close() })
   } catch (error) { watcher?.close(); await engine.close(); throw error }
 
   async function executeDsh(context) {
@@ -190,7 +184,7 @@ export async function apply(ctx, options) {
     const model = config.providers[worker.provider].models.find(m => m.id === worker.model)
     const effort = await resolveReasoningEffort(ctx.get('llm'), { provider: worker.provider, model: worker.model, reasoning: model.reasoning ?? 'auto_max' })
     const checkpoint = store.run(run.id).checkpoint, resume = !!checkpoint?.sessionId
-    if (resume && !await ctx.get('sessionPersistence').readRaw(run.id)) throw new Error('Execute checkpoint session is missing; refusing a new session')
+    if (resume && !await ctx.get('sessionPersistence').stat(SessionId(run.id))) throw new Error('Execute checkpoint session is missing; refusing a new session')
     const setup = async scoped => {
       if (run.activity === 'execute') {
         // Skills mount DSH-natively from the full managed skills root; the
@@ -213,6 +207,17 @@ export async function apply(ctx, options) {
         })
       }
       mountJevPrompt(scoped, run, step, jev)
+      const planGuard = run.activity === 'execute' ? createPlanGuard(store, run.id) : undefined
+      if (planGuard) {
+        scoped.on('session/event', (session, event) => { if (String(session.id) === run.id && event.type === 'step/start') planGuard.beginTurn() })
+        scoped.on('tools/result', exec => { if (!exec.parent) planGuard.settled(String(exec.rootCallId)) })
+        scoped.tools.guard(exec => planGuard.check({ name: exec.name, rootCallId: String(exec.rootCallId) }))
+      }
+      scoped.systemPrompt.section({ name: 'redtrace:live-plan', order: 2, text: () => {
+        if (!run.stepId) return ''
+        const current = store.node(run.projectId, run.stepId, 'step')
+        return `当前执行契约：${JSON.stringify({ id: current.id, description: current.description, goal: store.node(run.projectId, current.goalId, 'goal'), sourceIds: current.sourceIds, planVersion: current.planVersion ?? 1, boundStepVersion: store.run(run.id).boundStepVersion ?? 1 })}`
+      } })
       // The DSH tools runtime projects parameters as lossless JSON; the graph
       // and verb tools carry typebox symbol annotations, so detach them into
       // plain JSON Schema before registration.
@@ -220,7 +225,7 @@ export async function apply(ctx, options) {
         output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => value.content },
         async execute(args, execution) {
           if (finished || signal.aborted) throw new Error('Activity has stopped')
-          const result = await t.execute(execution.callId ?? '', args, execution.signal)
+          const result = await admitToolImages(ctx.get('attachments'), await t.execute(execution.callId ?? '', args, execution.signal))
           if (result.terminate) execution.concludeTurn?.()
           return result
         } })
@@ -239,7 +244,7 @@ export async function apply(ctx, options) {
       // The conclude phase cuts non-graph tools at execution time: a
       // restriction cannot, because the DSH capability stack registers the
       // session tools in this scope's own layer, which restrictions never
-      // filter. The guard mirrors the pi backend's conclude gate.
+      // filter. The guard enforces the same-session conclude boundary.
       const graphNames = new Set(tools.map(t => t.name))
       scoped.tools.guard(exec => concludeOnly && !graphNames.has(exec.name) ? 'Execution timed out; only summarize and submit existing evidence'
         : (exec.name === 'jev_choose' && !jev?.isEnabled('candidate_choice') || exec.name === 'jev_assess_attack' && !jev?.isEnabled('attack_readiness')) ? 'Jev plugin is disabled'
@@ -289,12 +294,17 @@ export async function apply(ctx, options) {
     const cancel = () => handle?.agent.cancel({ kind: 'hook', reason: 'FGS activity paused or cancelled' })
     const message = text => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
     const prompt = text => handle.agent.followup(message(text))
-    // Mid-run blackboard updates reach a running Execute the same way the pi backend steers it.
+    // Mid-run graph notices enter the native Agent inbox.
     let cursor = Number(store.db.prepare('SELECT COALESCE(MAX(id),0) AS value FROM events WHERE project_id=?').get(run.projectId).value)
-    let criticalReminderSent = false
+    let criticalReminderSent = false, lastEvidenceNotice = run.planningEvidenceSeq ?? 0
     const steer = projectId => {
       if (projectId !== run.projectId || finished || concludeOnly || !handle) return
+      const update = graphUpdate(store, projectId, cursor, run.stepId); cursor = update.cursor
       if (run.activity === 'decide') {
+        if (update.evidenceSeq > lastEvidenceNotice) {
+          lastEvidenceNotice = update.evidenceSeq
+          handle.agent.inject(message(`新增确认的 Fact/Finding：${update.nodeIds.join(', ')}；evidenceSeq=${update.evidenceSeq}。用 read_graph_delta 读取连续增量并更新计划；只在实际处理后确认 throughEvidenceSeq。`))
+        }
         const project = store.project(projectId)
         const notice=criticalNotice(project,run,criticalReminderSent,manager.running('redtrace-critical-events'))
         if(notice){
@@ -303,9 +313,8 @@ export async function apply(ctx, options) {
         }
         return
       }
-      const update = graphUpdate(store, projectId, cursor, run.stepId); cursor = update.cursor
       const { relevant } = update
-      if (relevant && store.project(projectId).status === 'active') handle.agent.inject(message('共享图已有更新。需要时用 read_graph 查看，不必改变当前 Step。'))
+      if (relevant && store.project(projectId).status === 'active') handle.agent.inject(message(update.planChanged ? '当前 Step 执行契约已修订。立即读取当前 Step，在安全边界用 sync_step 采纳新版本，再按最新目标生成下一回合动作；旧调用批次不能继续执行。' : `共享 FGS 已更新：${update.nodeIds.join(', ')}。用 read_graph_delta 获取所需变更并结合当前计划执行。`))
     }
     store.changes.on('change', steer)
     const wait = async seconds => {
@@ -318,7 +327,7 @@ export async function apply(ctx, options) {
       task.handle = handle
       signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) { cancel(); return }
       store.checkpoint(run.id, { sessionId: run.id })
-      // Same minimal launch slice as runPi; the agent reads the rest of the graph on demand.
+      // Only the minimal launch slice; the agent reads the rest of the graph on demand.
       const graph={project:store.project(run.projectId),goals:[store.node(run.projectId,'goal','goal')],facts:[store.node(run.projectId,'origin','fact')]}
       prompt(resume ? '继续' : JSON.stringify({ project: graph.project, goal: graph.goals.find(g => g.id === 'goal'), step: step ?? null, origin: graph.facts[0],
         ...(step?.requires?.length ? { channels: channelsFor(verbRuntime,step.requires,8,run.projectId) } : {}),

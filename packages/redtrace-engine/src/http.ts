@@ -46,7 +46,7 @@ export class Router {
       return true
     } catch (error) {
       if (res.headersSent) res.destroy()
-      else send(res, { detail: error instanceof HttpError ? error.message : 'Internal server error' }, error instanceof HttpError ? error.status : 500)
+      else send(res, { detail: error instanceof HttpError ? error.message : 'Internal server error', ...(error instanceof HttpError && error.details !== undefined ? { context: error.details } : {}) }, error instanceof HttpError ? error.status : 500)
       if (!(error instanceof HttpError)) console.error('Request failed:', error instanceof Error ? error.name : 'Unknown error')
       return true
     } finally { res.off('close', close) }

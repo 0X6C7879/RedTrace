@@ -6,12 +6,12 @@ import { legacyIntent, legacyProject, legacySummary } from './legacy.ts'
 import { projectFgs, liveSteps } from './fgs.ts'
 import { HttpError } from './types.ts'
 import type { Step } from './types.ts'
+import { evidenceChangeSchema, goalUpdateSchema, stepUpdateSchema } from './graph-contracts.ts'
 
 const text = Type.String({ minLength: 1, pattern: '\\S' }), refs = Type.Array(text, { minItems: 1 })
 const profile = Type.Union([Type.Literal('direct'), Type.Literal('isolated')])
 const requires = Type.Array(Type.String(), { uniqueItems: true, maxItems: 16 })
 const stepSchema = Type.Object({ description: text, sourceIds: refs, goalId: Type.Optional(text), creator: Type.Optional(text), priority: Type.Optional(Type.Integer()), executionProfile: Type.Optional(profile), requires: Type.Optional(requires) })
-const goalUpdate = Type.Object({ description: Type.Optional(text), status: Type.Optional(Type.Union(['open', 'achieved', 'cancelled'].map(v => Type.Literal(v)))), evidenceIds: Type.Optional(Type.Array(text)) })
 
 export function graphRoutes(router: Router, store: Store, maxSteps: () => number | null = () => null) {
   const p = (c: RequestContext) => c.params.project
@@ -36,7 +36,8 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
     router.add('DELETE', `${prefix}/projects/:project/hints/:node`, c => { store.deleteInput(p(c), c.params.node); send(c.res, null, 204) })
   }
   router.add('GET', '/v2/projects/:project/graph', c => {
-    const graph = c.url.searchParams.has('revision') ? store.graphAt(p(c), queryNumber(c.url, 'revision', 1)) : store.graph(p(c))
+    const includeInactive = c.url.searchParams.get('includeInactive') === 'true'
+    const graph = c.url.searchParams.has('revision') ? store.graphAt(p(c), queryNumber(c.url, 'revision', 1), includeInactive) : store.graph(p(c), includeInactive)
     const view = projectFgs(graph), live = liveSteps(graph)
     // The live layer is a canvas-only virtual overlay; exports and tools keep the pure projection.
     return { ...graph, ...view, nodes: [...view.nodes, ...live.nodes], edges: [...view.edges, ...live.edges] }
@@ -50,12 +51,18 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
       .all(p(c), c.params.run, queryNumber(c.url, 'before', Number.MAX_SAFE_INTEGER), queryNumber(c.url, 'limit', 100, 1, 500))
       .map(row => ({ ...JSON.parse(String(row.data)), id: Number(row.id) })).reverse()
   })
-  for (const kind of ['goals', 'steps', 'findings', 'facts', 'observations'] as const) router.add('GET', `/v2/projects/:project/${kind}`, c => store.graph(p(c))[kind])
+  for (const kind of ['goals', 'steps', 'findings', 'facts', 'observations'] as const) router.add('GET', `/v2/projects/:project/${kind}`, c => store.nodes(p(c), [kind.slice(0, -1) as 'goal' | 'step' | 'finding' | 'fact' | 'observation'], { ...(c.url.searchParams.has('limit') ? { limit: queryNumber(c.url, 'limit', 100, 1, 100), offset: queryNumber(c.url, 'offset', 0) } : {}), includeInactive: c.url.searchParams.get('includeInactive') === 'true' }))
+  router.add('POST', '/v2/projects/:project/evidence/manage', async c => store.manageEvidence(p(c), await body(c.req, evidenceChangeSchema)))
+  router.add('GET', '/v2/projects/:project/graph/delta', c => store.graphDelta(p(c), queryNumber(c.url, 'after', 0), queryNumber(c.url, 'limit', 100, 1, 100)))
+  router.add('POST', '/v2/projects/:project/runs/:run/resolve', async c => {
+    if (store.run(c.params.run).projectId !== p(c)) throw new HttpError(404, 'Run not found')
+    return store.resolveUnknown(c.params.run, (await body(c.req, Type.Object({ resolution: text }))).resolution)
+  })
   router.add('POST', '/v2/projects/:project/goals', async c => { const b = await body(c.req, Type.Object({ description: text, parentId: Type.Optional(text), creator: Type.Optional(text) })); send(c.res, store.addGoal(p(c), b.description, b.parentId, b.creator), 201) })
-  router.add('PATCH', '/v2/projects/:project/goals/:node', async c => store.updateGoal(p(c), c.params.node, await body(c.req, goalUpdate)))
+  router.add('PATCH', '/v2/projects/:project/goals/:node', async c => store.updateGoal(p(c), c.params.node, await body(c.req, goalUpdateSchema)))
   router.add('DELETE', '/v2/projects/:project/goals/:node', c => store.updateGoal(p(c), c.params.node, { status: 'cancelled' }))
   router.add('POST', '/v2/projects/:project/steps', async c => send(c.res, store.addStep(p(c), await body(c.req, stepSchema), maxSteps()), 201))
-  router.add('PATCH', '/v2/projects/:project/steps/:node', async c => store.updateStep(p(c), c.params.node, await body(c.req, Type.Object({ priority: Type.Optional(Type.Integer()), status: Type.Optional(Type.Union([Type.Literal('pending'), Type.Literal('cancelled')])), executionProfile: Type.Optional(profile) }))))
+  router.add('PATCH', '/v2/projects/:project/steps/:node', async c => store.updateStep(p(c), c.params.node, await body(c.req, stepUpdateSchema)))
   router.add('DELETE', '/v2/projects/:project/steps/:node', c => store.updateStep(p(c), c.params.node, { status: 'cancelled' }))
   router.add('POST', '/v2/projects/:project/facts', async c => { const b = await body(c.req, Type.Object({ description: text, creator: Type.Optional(text), evidence: Type.Array(Type.Object({ description: text, path: Type.Optional(text), runId: Type.Optional(text), toolCallId: Type.Optional(text) })) })); send(c.res, store.addFact(p(c), b.description, { creator: b.creator ?? 'human', evidence: b.evidence }), 201) })
   router.add('POST', '/v2/projects/:project/findings', async c => send(c.res, store.addFinding(p(c), await body(c.req, Type.Object({ title: text, description: text, type: Type.Optional(text), factIds: refs, creator: Type.Optional(text) }))), 201))

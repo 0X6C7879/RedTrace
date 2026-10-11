@@ -33,7 +33,7 @@ test('Step and Goal selection uses the project-kind index', () => {
   } finally { store.close() }
 })
 
-test('Pi and Cordis shared notification scan drains more than 500 events without reading the graph', () => {
+test('DSH shared notification scan drains more than 500 events without reading the graph', () => {
   const store = new Store(':memory:'), id = store.createProject({ title: 'Events', origin: 'Scope', goal: 'Goal' }).project.id
   try {
     for (let i = 0; i < 501; i++) store.addInput(id, 'observation', `noise ${i}`)

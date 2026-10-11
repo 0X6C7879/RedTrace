@@ -6,6 +6,8 @@ import { Store } from './store.ts'
 import { Configuration } from './config.ts'
 import { Scheduler } from './scheduler.ts'
 import type { RunTask, SelectWorker } from './scheduler.ts'
+import type { EngineConfig, Worker } from './types.ts'
+export type ProbeModel = (config: EngineConfig, worker: Worker, signal: AbortSignal) => Promise<void>
 import { Router, send } from './http.ts'
 import { graphRoutes } from './graph-api.ts'
 import { configRoutes } from './config-api.ts'
@@ -19,9 +21,10 @@ import { dshUpdateRoutes } from './dsh-update.ts'
 
 export { Store, Scheduler, Configuration, Router }
 export type * from './types.ts'
+export type { EvidenceChange, StepUpdate } from './store.ts'
 export type { TaskContext, RunTask } from './scheduler.ts'
 
-export async function createEngine(options: { root: string; database?: string; configuration?: string; runTask?: RunTask; selectWorker?: SelectWorker; autoStart?: boolean; adapterAvailability?: () => (adapter: string) => boolean }) {
+export async function createEngine(options: { root: string; database?: string; configuration?: string; runTask?: RunTask; selectWorker?: SelectWorker; autoStart?: boolean; probeModel?: ProbeModel; adapterAvailability?: () => (adapter: string) => boolean }) {
   const [major, minor] = process.versions.node.split('.').map(Number)
   if (major !== 24 || minor < 15) throw new Error('RedTrace requires Node 24.15 or newer in the Node 24 LTS line')
   const root = path.resolve(options.root), configuration = new Configuration(root, options.configuration)
@@ -38,8 +41,7 @@ export async function createEngine(options: { root: string; database?: string; c
       if (options.runTask) return await options.runTask(task)
       const runner = await import('./runner.ts')
       if (task.run.backend === 'mock') return runner.runMock(task)
-      if (task.run.backend === 'pi') return runner.runPi(task, capabilities, { operations, isAdapterAvailable: adapterGate })
-      throw new Error('DSH execution requires the Cordis compatibility host')
+      throw new Error('DSH execution requires the DSH host; no alternate Agent executor is available')
     } finally { jev.finishRun(context.run.id); operations.releaseRunLeases(context.run.id) }
   }
   const scheduler = new Scheduler(store,config,runTask,options.selectWorker,()=>!adapterGate || adapterGate('redtrace-critical-events')), router = new Router()
@@ -49,7 +51,7 @@ export async function createEngine(options: { root: string; database?: string; c
   router.add('GET', '/v2/projects/:project/jev/advisories', c => jev.advisories(c.params.project))
   router.add('GET', '/v2/projects/:project/jev/findings/:finding', c => jev.reviewForFinding(c.params.project, c.params.finding))
   router.add('POST', '/v2/projects/:project/jev/findings/:finding/review', c => jev.reviewFinding(c.params.project, c.params.finding, true))
-  configRoutes(router, configuration)
+  configRoutes(router, configuration, options.probeModel)
   const dshUpdate = await dshUpdateRoutes(router, path.resolve(process.env.REDTRACE_SOURCE_ROOT || root), scheduler)
   auditRoutes(router, store, configuration.workspaceRoot)
   const capabilities = new Capabilities(managed)

@@ -1,5 +1,6 @@
 .vscode/
 .zcode/
+.zcodeignore
 .DS_Store
 __pycache__/
 .playwright-cli/
@@ -80,3 +81,6 @@ skills-lock.json
 *.pfx
 skills/*/memory/audit.jsonl
 vendor/deepseek-harness/native/system/packages/*/bin/
+
+# 本地实验脚本/记录，不入库
+experiments/

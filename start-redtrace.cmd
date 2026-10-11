@@ -50,5 +50,5 @@ echo ==^> first run: installing and building the Cordis compatibility runtime 1>
 call "%ROOT%\build-dsh.cmd" || exit /b 1
 
 :run
-node "%ROOT%\scripts\run-redtrace-node.mjs" --compat --root "%ROOT%" %*
+node "%ROOT%\scripts\run-redtrace-node.mjs" --root "%ROOT%" %*
 exit /b %errorlevel%

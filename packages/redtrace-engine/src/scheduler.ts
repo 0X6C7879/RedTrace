@@ -64,43 +64,44 @@ export class Scheduler {
     let retryAt = Infinity, madeProgress = true
     while (madeProgress && activeRuns.length < this.config.maxWorkers) {
       madeProgress = false
-      for (let i = 0; i < projects.length && activeRuns.length < this.config.maxWorkers; i++) {
-        const project = projects[(this.cursor + i) % projects.length]
-        const active = activeRuns
-        if (active.filter(r => r.projectId === project.id).length >= this.config.maxProjectWorkers) continue
-        if (!active.some(r => r.projectId === project.id) && new Set(active.map(r => r.projectId)).size >= this.config.maxRunningProjects) continue
-        const p = this.store.project(project.id)
-        if (p.status !== 'active') continue
-        const nodes = this.store.nodes<Step | Goal>(p.id, ['step', 'goal'])
-        const steps = nodes.filter((node): node is Step => node.kind === 'step')
-        const goals = new Map(nodes.filter(node => node.kind === 'goal').map(goal => [goal.id, goal]))
-        // Bootstrap is a strict project gate, not merely the first runnable
-        // Step. Reason may start only after that Step succeeded with a Fact.
-        // A failed/cancelled/empty Bootstrap remains visible for diagnosis and
-        // can be retried explicitly without planning from an uninitialized graph.
-        const bootstrap = steps.find(s => s.bootstrap)
-        const bootstrapComplete = !p.bootstrap || !!bootstrap && bootstrap.status === 'done' && bootstrap.factIds.length > 0
-        const occupied = steps.filter(step => ['pending', 'running', 'paused'].includes(step.status)).length
-        const hasCapacity = this.config.maxSteps === null || occupied < this.config.maxSteps
-        const pendingPair = p.factSeq > p.acknowledgedFactSeq && p.endedSeq > p.acknowledgedEndedSeq
-        const pendingCritical = this.criticalEnabled() && (p.criticalSeq ?? 0) > (p.acknowledgedCriticalSeq ?? 0)
-        const needsDecide = bootstrapComplete && (hasCapacity || pendingCritical) && (p.initialPlanningPending || p.planningRetryPending || pendingPair || pendingCritical)
-          && !active.some(r => r.projectId === p.id && r.activity === 'decide')
-        if (needsDecide) {
-          if (p.retryAfter > Date.now()) retryAt = Math.min(retryAt, p.retryAfter)
-          else {
-            const worker = this.select('decide',undefined,undefined,activeRuns)
-            if (worker) { launch(this.store.claim(p.id, 'decide', worker), worker); madeProgress = true; continue }
+      for (const planningOnly of [true, false]) {
+        for (let i = 0; i < projects.length && activeRuns.length < this.config.maxWorkers; i++) {
+          const project = projects[(this.cursor + i) % projects.length]
+          const active = activeRuns
+          if (active.filter(r => r.projectId === project.id).length >= this.config.maxProjectWorkers) continue
+          if (!active.some(r => r.projectId === project.id) && new Set(active.map(r => r.projectId)).size >= this.config.maxRunningProjects) continue
+          const p = this.store.project(project.id)
+          if (p.status !== 'active') continue
+          const nodes = this.store.nodes<Step | Goal>(p.id, ['step', 'goal'])
+          const steps = nodes.filter((node): node is Step => node.kind === 'step')
+          const goals = new Map(nodes.filter(node => node.kind === 'goal').map(goal => [goal.id, goal]))
+          // Bootstrap is a strict project gate, not merely the first runnable
+          // Step. Reason may start only after that Step succeeded with a Fact.
+          // A failed/cancelled/empty Bootstrap remains visible for diagnosis and
+          // can be retried explicitly without planning from an uninitialized graph.
+          const bootstrap = steps.find(s => s.bootstrap)
+          const bootstrapComplete = !p.bootstrap || !!bootstrap && bootstrap.status === 'done' && bootstrap.factIds.length > 0
+          const pendingEvidence = (p.evidenceSeq ?? p.factSeq) > (p.acknowledgedEvidenceSeq ?? p.acknowledgedFactSeq)
+          const pendingCritical = this.criticalEnabled() && (p.criticalSeq ?? 0) > (p.acknowledgedCriticalSeq ?? 0)
+          const needsDecide = bootstrapComplete && (p.initialPlanningPending || p.planningRetryPending || pendingEvidence || pendingCritical)
+            && !active.some(r => r.projectId === p.id && r.activity === 'decide')
+          if (planningOnly && needsDecide) {
+            if (p.retryAfter > Date.now()) retryAt = Math.min(retryAt, p.retryAfter)
+            else {
+              const worker = this.select('decide',undefined,undefined,activeRuns)
+              if (worker) { launch(this.store.claim(p.id, 'decide', worker), worker); madeProgress = true; continue }
+            }
           }
-        }
-        // An unavailable Decide never prevents existing execution work from starting.
-        const runnable = steps.filter(s => ['pending', 'paused'].includes(s.status) && goals.get(s.goalId)?.status === 'open')
-          .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
-        for (const step of runnable) {
-          const paused = step.status === 'paused' ? this.store.runsByStatus('paused', p.id).find(r => r.stepId === step.id) : undefined
-          const worker = this.select('execute',paused,step,activeRuns)
-          if (!worker) continue
-          launch(this.store.claim(p.id, 'execute', worker, step.id), worker); madeProgress = true; break
+          if (planningOnly) continue
+          // An unavailable Decide never prevents existing execution work from starting.
+          const runnable = steps.filter(s => !s.replacementPending && ['pending', 'paused'].includes(s.status) && goals.get(s.goalId)?.status === 'open')
+            .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+          for (const step of runnable) {
+            const paused = step.status === 'paused' ? this.store.runsByStatus('paused', p.id).find(r => r.stepId === step.id) : undefined
+            const worker = this.select('execute',paused,step,activeRuns)
+            if (!worker) continue
+            launch(this.store.claim(p.id, 'execute', worker, step.id), worker); madeProgress = true; break
+          }
         }
       }
       this.cursor = (this.cursor + 1) % projects.length

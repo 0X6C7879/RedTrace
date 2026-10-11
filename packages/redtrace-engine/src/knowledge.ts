@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { Type } from 'typebox'
 import { parse as parseYaml } from 'yaml'
-import type { AgentTool } from '@earendil-works/pi-agent-core'
+import type { AgentTool } from './tool-types.ts'
 import type { TaskContext } from './scheduler.ts'
 
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')

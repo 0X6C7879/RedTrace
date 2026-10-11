@@ -9,7 +9,7 @@ import type { JevScenes } from './jev.ts'
 
 type RawModel = { id: string; context_window: number; max_tokens: number; reasoning?: string; reasoning_efforts?: Record<string, string | null> | boolean | null; thinking_format?: string }
 type RawProvider = { api: Provider['api']; base_url: string; api_key?: string; api_key_env?: string; models: RawModel[] }
-type RawWorker = { name: string; provider: string; model?: string; enabled?: boolean; bootstrap?: boolean; reason?: boolean; explore?: boolean; max_running?: number; priority?: number; backend?: Worker['backend'] }
+type RawWorker = { name: string; provider: string; model?: string; enabled?: boolean; bootstrap?: boolean; reason?: boolean; explore?: boolean; max_running?: number; priority?: number; backend?: Worker['backend'] | 'pi' }
 export interface RawConfig { providers?: Record<string, RawProvider>; workers: RawWorker[]; runtime?: Record<string, unknown>; tasks?: Record<string, { timeout: number; conclude_timeout: number; max_intents?: number }>; common_env?: Record<string, string>; jev?: { scenes?: JevScenes }; [key: string]: unknown }
 const secretPattern = /^\$\{REDTRACE_SECRET:([a-f0-9]{32})\}$/
 const sensitiveEnvironment = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD)$/
@@ -106,7 +106,7 @@ export class Configuration {
       if (w.provider !== 'mock' && !providers[w.provider]?.models.some(m => m.id === w.model)) throw new HttpError(422, 'Worker references missing provider or model')
       if (w.backend && !['pi', 'dsh', 'mock'].includes(w.backend)) throw new HttpError(422, 'Invalid backend')
       return { name: w.name, provider: w.provider, model: w.model ?? 'mock', enabled: w.enabled ?? true, reason: w.reason ?? true, explore: w.explore ?? true, bootstrap: w.bootstrap ?? true,
-        priority: integer(w.priority ?? 0, 'priority', -2147483648), maxRunning: integer(w.max_running ?? 1, 'max_running', 1), backend: w.provider === 'mock' ? 'mock' as const : w.backend ?? 'pi' }
+        priority: integer(w.priority ?? 0, 'priority', -2147483648), maxRunning: integer(w.max_running ?? 1, 'max_running', 1), backend: w.provider === 'mock' ? 'mock' as const : 'dsh' as const }
     })
     if (new Set(workers.map(w => w.name)).size !== workers.length) throw new HttpError(422, 'Worker names must be unique')
     return { workers, providers, commonEnv: Object.fromEntries(Object.entries(raw.common_env ?? {}).map(([name, value]) => { if (!/^[A-Z][A-Z0-9_]*$/.test(name) || typeof value !== 'string') throw new HttpError(422, 'Invalid common environment'); return [name, resolve(value)!] })), maxWorkers: integer(raw.runtime?.max_workers ?? 4, 'max_workers', 1), maxProjectWorkers: integer(raw.runtime?.max_project_workers ?? 4, 'max_project_workers', 1), maxRunningProjects: integer(raw.runtime?.max_running_projects ?? 1, 'max_running_projects', 1),

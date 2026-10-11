@@ -102,4 +102,4 @@ if [[ "$DSH_CODE_ROOT" != "$ROOT" ]]; then
 fi
 
 printf '==> starting RedTrace (loading Cordis services)\n' >&2
-exec node "$RUN_SCRIPT" --compat --root "$ROOT" "$@"
+exec node "$RUN_SCRIPT" --root "$ROOT" "$@"

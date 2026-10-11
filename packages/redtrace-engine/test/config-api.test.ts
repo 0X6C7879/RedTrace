@@ -28,7 +28,11 @@ test('worker mutations probe the live model before commit and retain the old sna
     res.end('data: {"id":"probe","object":"chat.completion.chunk","created":1,"model":"fixture","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
   })
   await new Promise<void>(resolve => model.listen(0, '127.0.0.1', resolve))
-  const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-config-api-')), engine = await serveEngine({ root, port: 0, autoStart: false })
+  const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-config-api-'))
+  const { Context } = await import(new URL('../../../vendor/deepseek-harness/vendor/cordis/lib/index.js', import.meta.url).href)
+  const { probeModel } = await import(new URL('../compat/llm.mjs', import.meta.url).href)
+  const ctx = new Context(), configuration = new Configuration(root)
+  const engine = await serveEngine({ root, port: 0, autoStart: false, probeModel: (config, worker, signal) => probeModel(ctx, configuration, config, worker, signal) })
   const url = `http://127.0.0.1:${(engine.server.address() as { port: number }).port}`
   const call = async (route: string, method = 'GET', data?: unknown) => { const response = await fetch(url + route, { method, ...(data === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) }) }); return { status: response.status, data: await response.json() as any } }
   try {
@@ -55,5 +59,5 @@ test('worker mutations probe the live model before commit and retain the old sna
     snapshot = (await call('/worker-config/providers', 'POST', { expected_revision: saved.data.revision, name: 'offline', api: 'openai-completions', base_url: 'http://127.0.0.1:1/v1', api_key: 'x', models: [{ id: 'offline' }] })).data
     assert.equal((await call('/worker-config/workers', 'POST', { ...worker, expected_revision: snapshot.revision, name: 'bad', provider: 'offline', model: 'offline' })).status, 422)
     assert.equal((await call('/worker-config')).data.workers.some((item: any) => item.name === 'bad'), false)
-  } finally { await engine.close(); model.closeAllConnections(); await new Promise<void>(resolve => model.close(() => resolve())); rmSync(root, { recursive: true, force: true }) }
+  } finally { await engine.close(); await ctx.fiber.dispose(); model.closeAllConnections(); await new Promise<void>(resolve => model.close(() => resolve())); rmSync(root, { recursive: true, force: true }) }
 })

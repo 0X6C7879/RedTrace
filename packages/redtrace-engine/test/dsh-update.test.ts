@@ -29,7 +29,7 @@ test('runtime preparation retains Vite required by upstream host build configura
   const source = path.join(root, 'source'), destination = path.join(root, 'destination')
   try {
     for (const name of ['packages/bundle/web-app', 'vendor', 'native', 'patches', 'scripts/types', 'apps/cli/config']) await mkdir(path.join(source, name), { recursive: true })
-    for (const name of ['scripts/client-build-environment.ts', 'scripts/bundle-input-isolation.ts', 'LICENSE', 'THIRD_PARTY_NOTICES.md', '.gitignore', '.gitattributes', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.base.json', 'tsconfig.base.client.json', 'tsconfig.json', 'tsconfig.client.json', 'tsdown.config.ts']) await writeFile(path.join(source, name), '')
+    for (const name of ['scripts/client-build-environment.ts', 'scripts/experimental-package-policy.ts', 'scripts/bundle-input-isolation.ts', 'LICENSE', 'THIRD_PARTY_NOTICES.md', '.gitignore', '.gitattributes', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.base.json', 'tsconfig.base.client.json', 'tsconfig.json', 'tsconfig.client.json', 'tsdown.config.ts']) await writeFile(path.join(source, name), '')
     // Stop after writing the staged package, before local patches and dependency installation.
     await writeFile(path.join(source, 'tsconfig.host.json'), '{')
     await writeFile(path.join(source, 'apps/cli/package.json'), '{}')
