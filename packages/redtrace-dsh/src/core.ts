@@ -2,14 +2,15 @@
  * Minimal DSH Core composition: exactly the runtime backbone the RedTrace
  * plugins build on — LLM service, Session, System Prompt assembly, Tool
  * runtime, Agent registry, and the Agent Loop (plus the LLM retry policy the
- * loop's provider adapters expect). Everything else in a RedTrace deployment
- * is a separately mounted plugin; the scheduler mounts shell, filesystem,
- * skill, sandbox, and contract plugins per agent.
+ * loop's provider adapters expect), and since DSH 0.2.1-alpha.2 the host-plane
+ * filesystem and working-directory services every tool injects. Everything
+ * else in a RedTrace deployment is a separately mounted plugin; the scheduler
+ * mounts shell, filesystem, skill, sandbox, and contract plugins per agent.
  * @module redtrace-core
  */
 
 import type { RuntimeContext } from './types.js'
-import { load } from './loader.js'
+import { load, repoRoot } from './loader.js'
 
 export const name = 'redtrace-core'
 
@@ -21,6 +22,8 @@ export async function apply(ctx: RuntimeContext): Promise<void> {
   const AgentRegistry = await load('vendor/deepseek-harness/packages/core/agent/lib/index.js')
   const llmRetry = await load('vendor/deepseek-harness/packages/llm/llm-retry/lib/index.js')
   const AgentLoop = await load('vendor/deepseek-harness/packages/core/agent-loop/lib/index.js')
+  const FsLocal = await load('vendor/deepseek-harness/packages/fs/fs-local/lib/index.js')
+  const WorkingDirectory = await load('vendor/deepseek-harness/packages/session/working-directory/lib/index.js')
   ctx.plugin(LlmRuntime.default ?? LlmRuntime)
   ctx.plugin(SessionStore.default ?? SessionStore)
   ctx.plugin(SystemPrompt.default ?? SystemPrompt, {
@@ -32,4 +35,11 @@ export async function apply(ctx: RuntimeContext): Promise<void> {
   ctx.plugin(AgentRegistry.default ?? AgentRegistry)
   ctx.plugin(llmRetry.default ?? llmRetry)
   ctx.plugin(AgentLoop.default ?? AgentLoop, { agents: [] })
+  // DSH ≥0.2.1-alpha.2 makes every tool and the file-reference service inject
+  // `workingDirectory`. One host-plane singleton serves all sessions: the
+  // effective directory resolves per Session from its committed projection,
+  // seeded by the header cwd the engine passes at activation. Session scopes
+  // keep isolating `fs`; this host copy only backs the directory service.
+  ctx.plugin(FsLocal.default ?? FsLocal, { cwd: repoRoot })
+  ctx.plugin(WorkingDirectory.default ?? WorkingDirectory)
 }

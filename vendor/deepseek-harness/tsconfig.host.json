@@ -22,6 +22,30 @@
   ],
   "references": [
     {
+      "path": "./packages/experimental/client-ui-cot-translation/tsconfig.host.json"
+    },
+    {
+      "path": "./packages/experimental/cot-translation-bundle"
+    },
+    {
+      "path": "./packages/experimental/session-search"
+    },
+    {
+      "path": "./packages/experimental/ralph-bundle"
+    },
+    {
+      "path": "./packages/experimental/terminal-bundle"
+    },
+    {
+      "path": "./packages/experimental/badge-skill-bundle"
+    },
+    {
+      "path": "./packages/experimental/session-titles-bundle"
+    },
+    {
+      "path": "./packages/experimental/translator"
+    },
+    {
       "path": "./packages/client/product-analytics/tsconfig.host.json"
     },
     {
@@ -322,7 +346,7 @@
       "path": "./packages/credentials/authorization"
     },
     {
-      "path": "./packages/session-query/tool-session-query"
+      "path": "./packages/experimental/tool-session-query"
     },
     {
       "path": "./packages/storage/storage"
@@ -346,13 +370,25 @@
       "path": "./packages/session/session-title"
     },
     {
+      "path": "./packages/session/working-directory"
+    },
+    {
+      "path": "./packages/experimental/worktree"
+    },
+    {
+      "path": "./packages/experimental/tool-worktree"
+    },
+    {
+      "path": "./packages/session/tool-working-directory"
+    },
+    {
       "path": "./packages/session/session-title-llm"
     },
     {
       "path": "./packages/session/session-title-first-prompt-llm"
     },
     {
-      "path": "./packages/session/session-title-all-prompts-llm"
+      "path": "./packages/experimental/session-title-all-prompts-llm"
     },
     {
       "path": "./packages/session/session-turn-outline"
@@ -439,7 +475,7 @@
       "path": "./packages/skill/skill"
     },
     {
-      "path": "./packages/skill/skill-badge"
+      "path": "./packages/experimental/skill-badge"
     },
     {
       "path": "./packages/skill/skill-filesystem"
@@ -469,6 +505,9 @@
       "path": "./packages/ssh/ssh"
     },
     {
+      "path": "./packages/ssh/ssh-helper-runtime"
+    },
+    {
       "path": "./packages/ssh/fs-ssh"
     },
     {
@@ -496,7 +535,7 @@
       "path": "./packages/shell/tool-pwsh-persistent"
     },
     {
-      "path": "./packages/terminal/tool-terminal"
+      "path": "./packages/experimental/tool-terminal"
     },
     {
       "path": "./packages/ptc-runtime/ptc-runtime"
@@ -691,9 +730,6 @@
       "path": "./packages/subagent/tool-subagent-control"
     },
     {
-      "path": "./packages/subagent/subagent-in-process-driver"
-    },
-    {
       "path": "./packages/subagent/subagent-spawn-in-process"
     },
     {
@@ -742,13 +778,13 @@
       "path": "./packages/workflow/tool-workflow"
     },
     {
-      "path": "./packages/workflow/tool-ralph"
+      "path": "./packages/experimental/tool-ralph"
     },
     {
-      "path": "./packages/webhook/webhook"
+      "path": "./packages/experimental/webhook"
     },
     {
-      "path": "./packages/webhook/webhook-github"
+      "path": "./packages/experimental/webhook-github"
     },
     {
       "path": "./packages/todo/tool-todo"
@@ -775,13 +811,13 @@
       "path": "./packages/extensions/tool-cordis"
     },
     {
-      "path": "./packages/hooks/hook-protocol"
+      "path": "./packages/experimental/hook-protocol"
     },
     {
-      "path": "./packages/hooks/hooks-claude-code"
+      "path": "./packages/experimental/hooks-claude-code"
     },
     {
-      "path": "./packages/hooks/hooks-codex"
+      "path": "./packages/experimental/hooks-codex"
     },
     {
       "path": "./packages/mcp/mcp-client"

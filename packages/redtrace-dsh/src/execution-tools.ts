@@ -216,7 +216,8 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
       const scope = scoped.isolate('terminals')
       await use(scope, `${VENDOR}/terminal/terminal/lib/index.js`)
       await use(scope, `${VENDOR}/terminal/terminal-bash/lib/index.js`)
-      await use(scope, `${VENDOR}/terminal/tool-terminal/lib/index.js`)
+      // DSH 0.2.1-alpha.2 moved the interactive terminal tool under experimental/.
+      await use(scope, `${VENDOR}/experimental/tool-terminal/lib/index.js`)
     }],
     ['redtrace-spill', async use => {
       const scope = scoped.isolate('spillStore')
@@ -233,7 +234,10 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
       await use(scope, `${VENDOR}/lsp/lsp-stdio/lib/index.js`, { servers })
       await use(scope, `${VENDOR}/lsp/tool-lsp/lib/index.js`)
     }],
-    ['redtrace-ptc', use => use(scoped, `${VENDOR}/core/agent-tool-presentation/lib/index.js`, { mode: 'both' })],
+    // DSH 0.2.1-alpha.2 removed the `both` presentation: a PTC session's
+    // direct view is `run_code` only, and the program dispatches every other
+    // mounted tool from inside the code (native scopes never see run_code).
+    ['redtrace-ptc', use => use(scoped, `${VENDOR}/core/agent-tool-presentation/lib/index.js`, { mode: 'ptc' })],
   ]
   let last = Promise.resolve()
   const refresh = () => {

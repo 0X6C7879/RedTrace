@@ -13,6 +13,9 @@
   ],
   "references": [
     {
+      "path": "./packages/experimental/client-ui-cot-translation/tsconfig.client.json"
+    },
+    {
       "path": "./packages/client/product-analytics/tsconfig.client.json"
     },
     {

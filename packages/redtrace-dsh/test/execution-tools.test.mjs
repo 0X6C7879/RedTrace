@@ -79,10 +79,9 @@ async function mountSession(host, { executionProfile, available }) {
 test('capability stacks mount into concurrent Execute scopes and expose their tools', async (t) => {
   const host = await createHost()
   t.after(async () => { await host.fiber.dispose() })
-  // The redtrace-ptc plugin's host module in production: run_code needs the
-  // host-plane ptcRuntime before a session can present it.
-  await withTimeout(host.plugin(codeRuntime).await(), 'code-runtime mount')
-  const available = () => true
+  // redtrace-ptc is excluded: under DSH ≥0.2.1-alpha.2 a PTC scope collapses
+  // to run_code alone, which the dedicated test below covers.
+  const available = id => id !== 'redtrace-ptc'
 
   // A direct and an isolated session alive at once: every per-session service
   // must live in its own isolate, or the second mount collides in the store.
@@ -99,9 +98,10 @@ test('capability stacks mount into concurrent Execute scopes and expose their to
   const stacks = ['job_output', 'job_list', 'job_kill', 'web_search', 'web_fetch',
     'glob', 'grep', 'terminal_open', 'terminal_send', 'terminal_read', 'terminal_list']
   for (const session of [direct, isolated]) {
-    for (const name of [...baseline, ...stacks, 'run_code']) {
+    for (const name of [...baseline, ...stacks]) {
       assert.ok(host.tools.get(name, session.key) !== undefined, `${session.cwd}: ${name} must be visible`)
     }
+    assert.equal(host.tools.get('run_code', session.key), undefined, `${session.cwd}: run_code must stay unmounted without redtrace-ptc`)
   }
   for (const name of stacks) {
     assert.equal(host.tools.get(name, bare.key), undefined, `${name} must stay unmounted when gated off`)
@@ -124,7 +124,6 @@ test('capability stacks mount into concurrent Execute scopes and expose their to
 test('running Execute session gains and loses plugin tools without restarting', async (t) => {
   const host = await createHost()
   t.after(async () => { await host.fiber.dispose() })
-  await withTimeout(host.plugin(codeRuntime).await(), 'code-runtime mount')
   const enabled = new Set()
   const session = await mountSession(host, { executionProfile: 'direct', available: id => enabled.has(id) })
   t.after(() => rmSync(session.cwd, { recursive: true, force: true }))
@@ -140,9 +139,9 @@ test('running Execute session gains and loses plugin tools without restarting', 
   await session.refresh()
   assert.equal(bash(), originalBash, 'unchanged plugin state must not remount tools')
 
-  for (const id of ['redtrace-web', 'redtrace-jobs', 'redtrace-fs-search', 'redtrace-terminal', 'redtrace-spill', 'redtrace-tool-timeout', 'redtrace-repeat-reminder', 'redtrace-lsp', 'redtrace-ptc']) enabled.add(id)
+  for (const id of ['redtrace-web', 'redtrace-jobs', 'redtrace-fs-search', 'redtrace-terminal', 'redtrace-spill', 'redtrace-tool-timeout', 'redtrace-repeat-reminder', 'redtrace-lsp']) enabled.add(id)
   await withTimeout(session.refresh(), 'hot enable')
-  for (const name of ['web_search', 'web_fetch', 'job_output', 'glob', 'grep', 'terminal_open', 'run_code']) assert.equal(visible(name), true, name)
+  for (const name of ['web_search', 'web_fetch', 'job_output', 'glob', 'grep', 'terminal_open']) assert.equal(visible(name), true, name)
   assert.equal(JSON.stringify(bash().parameters).includes('run_in_background'), true)
   assert.match(await prompt(), /web_search/)
   const enabledBash = bash(), enabledWeb = host.tools.get('web_search', session.key)
@@ -152,13 +151,27 @@ test('running Execute session gains and loses plugin tools without restarting', 
 
   enabled.clear()
   await withTimeout(session.refresh(), 'hot disable')
-  for (const name of ['web_search', 'web_fetch', 'job_output', 'glob', 'grep', 'terminal_open', 'run_code']) assert.equal(visible(name), false, name)
+  for (const name of ['web_search', 'web_fetch', 'job_output', 'glob', 'grep', 'terminal_open']) assert.equal(visible(name), false, name)
   assert.equal(JSON.stringify(bash().parameters).includes('run_in_background'), false)
   assert.doesNotMatch(await prompt(), /web_search/)
   assert.equal(visible(shellName), true)
   enabled.add('redtrace-web')
   await withTimeout(session.refresh(), 'hot re-enable')
   assert.equal(visible('web_search'), true)
+})
+
+test('PTC presentation collapses the session view to run_code alone', async (t) => {
+  const host = await createHost()
+  t.after(async () => { await host.fiber.dispose() })
+  await withTimeout(host.plugin(codeRuntime).await(), 'code-runtime mount')
+  const session = await mountSession(host, { executionProfile: 'direct', available: id => id === 'redtrace-ptc' })
+  t.after(() => rmSync(session.cwd, { recursive: true, force: true }))
+  t.after(async () => { await session.scope.dispose() })
+  assert.ok(host.tools.get('run_code', session.key) !== undefined, 'run_code must be the visible presentation transport')
+  // The collapse is a wire-level rule: the registry keeps every tool reachable
+  // for in-program dispatch, while the prompt states only run_code is direct.
+  const prompt = async () => (await host.systemPrompt.assemble({ scope: session.key })).sections.map(section => section.text).join('\n')
+  assert.match(await prompt(), /`run_code` is the only tool you can call directly/)
 })
 
 test('host plugin tools disappear from an already mounted Execute session', async (t) => {

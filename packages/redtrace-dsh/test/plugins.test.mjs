@@ -79,11 +79,12 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
   const views = manager.list()
 
   const kernel = views.filter((view) => view.source === 'kernel')
-  assert.equal(kernel.length, 9)
+  assert.equal(kernel.length, 8)
   assert.equal(kernel.some(view => view.id === 'settings'), false)
   assert.ok(kernel.every((view) => view.status === 'running' && !view.canStop && !view.canUninstall))
   assert.equal(manager.view('redtrace-core').canStop, false)
   assert.equal(manager.view('redtrace-domain').canStop, false)
+  assert.equal(manager.view('redtrace-attachment').canStop, false)
 
   // Every catalog entry carries a non-empty one-liner and a longer intro;
   // neither may leak external project names.
@@ -97,11 +98,11 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
   // mount no host fiber, so the host count is unchanged.
   assert.equal(ctx.mounts[0].module, core)
   assert.equal(ctx.mounts.at(-1).module.name, 'redtrace-scheduler')
-  assert.equal(ctx.mounts.length, 5)
+  assert.equal(ctx.mounts.length, 6)
 
   // Every builtin entry boots running unless it is explicitly opt-in (defaultOff).
   const optIn = new Set([
-    'redtrace-credentials', 'redtrace-attachment', 'redtrace-file-references',
+    'redtrace-credentials', 'redtrace-file-references',
     'redtrace-lsp', 'redtrace-ptc', 'redtrace-jev',
   ])
   for (const view of views.filter((item) => item.source === 'builtin')) {
@@ -326,7 +327,7 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const list = await call('GET', '/__redtrace/plugins')
   assert.equal(list.status, 200)
-  assert.equal(JSON.parse(list.body).plugins.length, 37)
+  assert.equal(JSON.parse(list.body).plugins.length, 36)
   assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === 'redtrace-jev').status, 'stopped')
 
   for (const id of ['redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {

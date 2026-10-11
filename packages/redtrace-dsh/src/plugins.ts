@@ -114,10 +114,6 @@ const KERNEL: readonly KernelEntry[] = [
     intro: '内置 HTTP 服务,托管 Web UI 的静态资源,并把未匹配的请求反代给后端 API。插件管理接口也注册在这台服务上。',
   },
   {
-    id: 'llm-deepseek', label: 'LLM DeepSeek', description: 'DeepSeek 模型适配器',
-    intro: 'DeepSeek 官方 API 的模型适配层,为 DeepSeek 系列模型提供统一调用入口。',
-  },
-  {
     id: 'llm-pi-ai', label: 'LLM pi-ai', description: '多 Provider 模型适配层',
     intro: '多 Provider 模型适配层。Worker 的 provider/model 路由在这里解析,Provider 配置变更实时生效。',
   },
@@ -185,7 +181,7 @@ const MANAGED: readonly ManagedEntry[] = [
   },
   {
     id: 'redtrace-terminal', label: '持久终端', category: 'feature',
-    modulePath: 'vendor/deepseek-harness/packages/terminal/tool-terminal/lib/index.js',
+    modulePath: 'vendor/deepseek-harness/packages/experimental/tool-terminal/lib/index.js',
     description: '交互式 PTY 终端',
     intro: 'DSH 原生持久终端:terminal_open / send / read / signal / close / list 在多次工具调用间保留交互式 shell 状态,适合 gdb、REPL、交互式探测等持续交互进程。一次性命令仍走 bash,长命令走后台任务。隔离档案下终端被限制在工作区内。',
   },
@@ -244,9 +240,9 @@ const MANAGED: readonly ManagedEntry[] = [
   },
   {
     id: 'redtrace-attachment', label: 'Attachment', category: 'feature', module: attachment,
-    modulePath: 'packages/redtrace-dsh/lib/attachment.js', defaultOff: true,
+    modulePath: 'packages/redtrace-dsh/lib/attachment.js', protectStop: true,
     description: '二进制附件持久化服务',
-    intro: 'DSH 原生附件服务:为 APK / PCAP / ELF 等二进制样本提供内容寻址的持久存储,消息中只保留引用。当前 RedTrace 管线不提交附件,服务为后续通道与自定义插件预留。',
+    intro: 'DSH 原生附件服务:工具截图先验证并存入内容寻址存储,消息中只保留附件引用。原生模型图像输入依赖此服务,不可停止。',
   },
   {
     id: 'redtrace-file-references', label: 'File References', category: 'feature', module: fileReferences,
@@ -264,7 +260,7 @@ const MANAGED: readonly ManagedEntry[] = [
     id: 'redtrace-ptc', label: 'PTC', category: 'feature', module: codeRuntime,
     modulePath: 'packages/redtrace-dsh/lib/code-runtime.js', defaultOff: true,
     description: 'run_code 程序化工具调用',
-    intro: 'DSH 原生代码运行时与 PTC 呈现:宿主挂载 worker-thread TypeScript 运行时(限时限量),每个 Execute 会话以 both 模式在原生工具之外追加 run_code,供模型把多步工具调用编排为一段程序。实验性能力,默认关闭。',
+    intro: 'DSH 原生代码运行时与 PTC 呈现:宿主挂载 Python PTC 运行时(限时限量),启用后该会话的模型直接可见的工具只剩 run_code,所有已挂载的原生工具都改为在程序内部调用。实验性能力,默认关闭。',
   },
   {
     id: 'redtrace-domain', label: 'Domain', category: 'feature', module: domain, protectStop: true,

@@ -32,6 +32,7 @@ export async function resolveReasoningEffort(
 ): Promise<string | undefined> {
   const info = await llm.resolveModelInfo(route.provider, route.model)
   const supported = info.reasoning?.efforts.map(effort => effort.id)
+  if (route.reasoning === 'off' && !supported?.length) return undefined
   if (route.reasoning === 'auto_max') {
     if (supported === undefined || supported.length === 0) return undefined
     const offered = new Set(supported)

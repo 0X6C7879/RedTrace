@@ -43,3 +43,7 @@ test('an explicit effort is validated against the exact model capability', async
   )
 })
 
+
+test('explicit off works for a model without reasoning metadata', async () => {
+  assert.equal(await resolveReasoningEffort(llmWith(undefined), { provider: 'fixture', model: 'fixture', reasoning: 'off' }), undefined)
+})
