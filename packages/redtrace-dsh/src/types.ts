@@ -88,6 +88,7 @@ export interface RuntimeTask {
   projectId: string
   intentId?: string
   executionProfile?: ExecutionProfile
+  plugins?: string[]
   /** Real Worker name; used for claim, heartbeat, audit, and the run index. */
   worker: string
   /** Model route captured from the selected Worker at launch. */

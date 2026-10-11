@@ -89,6 +89,18 @@ export class Capabilities {
     appendFileSync(audit, JSON.stringify({ skill: name, action: previous ? 'update' : 'create', version: current.version, revision: current.revision, at: state.updatedAt }) + '\n')
     return current
   }
+  /** Move-only enable toggle for plugin-owned skills: relocates the directory
+   * between the enabled and disabled roots without content changes, version
+   * bumps, or history entries. Idempotent; a skill present in both roots or in
+   * neither stays untouched. */
+  setEnabled(name: string, enabled: boolean) {
+    validName(name)
+    const source = path.join(enabled ? this.disabledDir : this.skillsDir, name), target = path.join(enabled ? this.skillsDir : this.disabledDir, name)
+    if (existsSync(target) || !existsSync(path.join(source, 'SKILL.md'))) return
+    renameSync(source, target)
+    const audit = path.join(this.skillsDir, '.redtrace/audit.jsonl'); mkdirSync(path.dirname(audit), { recursive: true })
+    appendFileSync(audit, JSON.stringify({ skill: name, action: enabled ? 'enable' : 'disable', at: new Date().toISOString() }) + '\n')
+  }
   private history(record: ReturnType<Capabilities['skill']>) {
     const file = path.join(this.skillsDir, '.redtrace/history', record.name, `v${String(record.version).padStart(6, '0')}.json`)
     if (!existsSync(file)) atomicWrite(file, JSON.stringify({ ...record, actor: 'api', reason: 'manual update', at: record.updatedAt ?? new Date().toISOString() }))

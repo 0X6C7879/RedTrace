@@ -7,11 +7,12 @@ import { projectFgs, liveSteps } from './fgs.ts'
 import { HttpError } from './types.ts'
 import type { Step } from './types.ts'
 import { evidenceChangeSchema, goalUpdateSchema, stepUpdateSchema } from './graph-contracts.ts'
+import { taskPluginsSchema } from './task-plugins.ts'
 
 const text = Type.String({ minLength: 1, pattern: '\\S' }), refs = Type.Array(text, { minItems: 1 })
 const profile = Type.Union([Type.Literal('direct'), Type.Literal('isolated')])
 const requires = Type.Array(Type.String(), { uniqueItems: true, maxItems: 16 })
-const stepSchema = Type.Object({ description: text, sourceIds: refs, goalId: Type.Optional(text), creator: Type.Optional(text), priority: Type.Optional(Type.Integer()), executionProfile: Type.Optional(profile), requires: Type.Optional(requires) })
+const stepSchema = Type.Object({ description: text, sourceIds: refs, goalId: Type.Optional(text), creator: Type.Optional(text), priority: Type.Optional(Type.Integer()), executionProfile: Type.Optional(profile), requires: Type.Optional(requires), plugins: Type.Optional(taskPluginsSchema) })
 
 export function graphRoutes(router: Router, store: Store, maxSteps: () => number | null = () => null) {
   const p = (c: RequestContext) => c.params.project
@@ -69,12 +70,12 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
   router.add('POST', '/v2/projects/:project/observations', async c => { const b = await body(c.req, Type.Object({ content: text, creator: Type.Optional(text), stepId: Type.Optional(text) })); send(c.res, store.addInput(p(c), 'observation', b.content, b.creator, b.stepId), 201) })
   router.add('GET', '/v2/projects/:project/events', c => store.events(p(c), queryNumber(c.url, 'after', 0), queryNumber(c.url, 'limit', 100, 1, 500)))
   router.add('POST', '/projects/:project/intents', async c => {
-    const b = await body(c.req, Type.Object({ from: refs, description: text, creator: text, worker: Type.Optional(Type.Union([text, Type.Null()])), execution_profile: Type.Optional(profile), requires: Type.Optional(requires), max_active_intents: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])) }))
+    const b = await body(c.req, Type.Object({ from: refs, description: text, creator: text, worker: Type.Optional(Type.Union([text, Type.Null()])), execution_profile: Type.Optional(profile), requires: Type.Optional(requires), plugins: Type.Optional(taskPluginsSchema), max_active_intents: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])) }))
     requireActive(p(c))
     if (b.from.includes('goal')) throw new HttpError(400, 'goal cannot be used in from')
     if (b.worker && b.worker !== b.creator) throw new HttpError(400, 'worker must be null or equal to creator')
     const bootstrap = b.creator === 'dispatcher.bootstrap' && b.description === 'bootstrap' && b.from.length === 1 && b.from[0] === 'origin'
-    const result = store.transaction(() => { const s = store.addStep(p(c), { description: b.description, sourceIds: b.from, creator: b.creator, executionProfile: b.execution_profile, requires: b.requires, bootstrap }, b.max_active_intents); if (b.worker) store.claim(p(c), 'execute', { name: b.worker, backend: 'dsh' }, s.id); return intent(p(c), s.id) })
+    const result = store.transaction(() => { const s = store.addStep(p(c), { description: b.description, sourceIds: b.from, creator: b.creator, executionProfile: b.execution_profile, requires: b.requires, plugins: b.plugins, bootstrap }, b.max_active_intents); if (b.worker) store.claim(p(c), 'execute', { name: b.worker, backend: 'dsh' }, s.id); return intent(p(c), s.id) })
     send(c.res, result, 201)
   })
   router.add('PATCH', '/projects/:project/intents/:node/execution-profile', async c => {

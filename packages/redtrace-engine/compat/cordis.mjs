@@ -13,6 +13,7 @@ import { load, repoRoot } from '../../redtrace-dsh/lib/loader.js'
 import { mountExecutionTools } from '../../redtrace-dsh/lib/execution-tools.js'
 import { activateAgent, resolveReasoningEffort } from '../../redtrace-dsh/lib/agent.js'
 import { state } from '../../redtrace-dsh/lib/state.js'
+import { TASK_PLUGINS } from '../../redtrace-dsh/lib/task-plugins.js'
 import { apply as applyDomain, applyCommonEnv, mcpSignature } from '../../redtrace-dsh/lib/domain.js'
 import { accumulateUsage, eventProjection } from '../../redtrace-dsh/lib/audit.js'
 import { providerProfiles } from '../src/models.ts'
@@ -108,7 +109,12 @@ export async function apply(ctx, options) {
       if (!state()?.presets.has(preset)) return undefined
       return worker
     },
-    runTask: input => { const context = { ...input, featureAvailable: id => manager.running(id) }; return context.run.backend === 'mock' ? runMock(context) : executeDsh(context) } })
+    runTask: input => {
+      const selected = input.run.stepId ? input.store.node(input.run.projectId, input.run.stepId, 'step').plugins ?? [] : []
+      for (const id of selected) if (!manager.taskPluginAllowed(id)) throw new Error(`task_plugin_disabled: ${id}; management policy forbids this Step's requested feature`)
+      const context = { ...input, featureAvailable: id => manager.availableForTask(id, selected), taskPluginAllowed: id => manager.taskPluginAllowed(id) }
+      return context.run.backend === 'mock' ? runMock(context) : executeDsh(context)
+    } })
   const runtime = { runtime: true, root, server: options.server, sessionRoot: path.join(managed, 'sessions'), skillsDir: path.join(managed, 'skills'), workspacesDir: engine.configuration.workspaceRoot,
     pluginsManifest: path.join(managed, 'plugins.json'), engineScheduler: engine.scheduler }
   // The repo-local security-asset map (wordlists / payloads / PoC references /
@@ -139,6 +145,8 @@ export async function apply(ctx, options) {
     }
     if (revision === profileRevision) return
     const config = engine.configuration.resolve(raw), { providers } = providerProfiles(config)
+    // File-watch delivery can lag; the model snapshot and scheduler must use the same revision.
+    engine.scheduler.update(config)
     applyCommonEnv(config.commonEnv)
     const adapter = [...ctx.get('loader').entries()].find(entry => entry.options.id === 'llm-pi-ai')
     if (!adapter) throw new Error('DSH llm-pi-ai profile entry is missing')
@@ -157,6 +165,10 @@ export async function apply(ctx, options) {
   const sessionRefresh = new Map()
   const manager = new PluginManager(ctx, runtime, repoRoot, load, replacements, async () => {
     engine.jev.setEnabled(manager.running('redtrace-jev'))
+    // The jev-decision skill only documents this plugin's tools: while the
+    // plugin is stopped it must leave the catalog entirely, or every Execute
+    // turn keeps paying its entry as prompt tokens.
+    try { engine.capabilities.setEnabled('jev-decision', manager.running('redtrace-jev')) } catch (error) { ctx.logger.warn(error) }
     engine.shells.enabled = manager.running('redtrace-shell')
     if (!engine.shells.enabled) await engine.shells.closeAll()
     await engine.operations.synchronizeAdapters()
@@ -178,7 +190,7 @@ export async function apply(ctx, options) {
     if (!shared) throw new Error('Cordis domain service is unavailable')
     const step = run.stepId ? store.node(run.projectId, run.stepId, 'step') : undefined
     const task = { usage: { inputTokens: run.inputTokens, outputTokens: run.outputTokens, cacheReadTokens: run.cacheReadTokens, cacheWriteTokens: run.cacheWriteTokens }, type: run.activity === 'decide' ? 'reason' : step?.bootstrap ? 'bootstrap' : 'explore', projectId: run.projectId, intentId: run.stepId ?? undefined,
-      worker: worker.name, sessionId: run.id, runId: run.id, committed: false, server: options.server, startedAt: Date.now(), executionProfile: step?.executionProfile ?? 'direct' }
+      worker: worker.name, sessionId: run.id, runId: run.id, committed: false, server: options.server, startedAt: Date.now(), executionProfile: step?.executionProfile ?? 'direct', ...(step?.plugins?.length ? { plugins: step.plugins } : {}) }
     if (!shared.presets.has(task.type)) throw new Error(`Cordis task preset ${task.type} is disabled`)
     const cwd = path.join(config.workspaceRoot, run.projectId); await mkdir(cwd, { recursive: true })
     let finished = false, concludeOnly = false, handle, pendingSkillNotice = ''
@@ -189,10 +201,12 @@ export async function apply(ctx, options) {
     const checkpoint = store.run(run.id).checkpoint, resume = !!checkpoint?.sessionId
     if (resume && !await ctx.get('sessionPersistence').stat(SessionId(run.id))) throw new Error('Execute checkpoint session is missing; refusing a new session')
     const setup = async scoped => {
+      if (run.activity === 'decide') scoped.systemPrompt.section({ name: 'redtrace:task-plugins', order: 3,
+        text: () => `Step.plugins 可选目录（仅为该 Step 的 Explore 装载）：\n${TASK_PLUGINS.map(p => `${p.id}: ${p.description} (${manager.taskPluginAllowed(p.id) ? 'allowed' : 'disabled'})`).join('\n')}` })
       if (run.activity === 'execute') {
         // Skills mount DSH-natively from the full managed skills root; the
         // agent discovers and loads them through the skill tool on demand.
-        scoped = await mountExecutionTools(scoped, { task, cwd, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.running(id), contextualAttempts: true,
+        scoped = await mountExecutionTools(scoped, { task, cwd, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.availableForTask(id, task.plugins), contextualAttempts: true,
           onRefresh: refresh => sessionRefresh.set(run.id, async () => { await refresh(); refreshLiveTools() }) })
         if (jev?.isEnabled('skill_suggestion')) void (async () => {
           try {

@@ -5,10 +5,11 @@ import { randomUUID, createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { activeEvidence, HttpError, integer, now, requiredText } from './types.ts'
 import { verbIds } from './capability-verbs.ts'
+import { validateTaskPlugins } from './task-plugins.ts'
 import type { Activity, Evidence, Fact, Finding, Goal, Graph, GraphEvent, GraphNode, Input, Json, Project, Run, Step, Worker } from './types.ts'
 
 const ACTIVE_NODE_SQL = "COALESCE(json_extract(data,'$.deleted'),0)=0 AND COALESCE(json_extract(data,'$.lifecycle'),'active')='active'"
-export interface StepUpdate { description?: string; sourceIds?: string[]; goalId?: string; priority?: number; status?: 'cancelled' | 'pending'; executionProfile?: Step['executionProfile']; requires?: string[]; expectedVersion?: number; mode?: 'amend' | 'replace' }
+export interface StepUpdate { description?: string; sourceIds?: string[]; goalId?: string; priority?: number; status?: 'cancelled' | 'pending'; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; expectedVersion?: number; mode?: 'amend' | 'replace' }
 export interface EvidenceChange { operation: 'merge' | 'archive' | 'restore'; id: string; expectedVersion: number; sourceIds?: string[]; sourceVersions?: Record<string, number>; reason: string }
 
 const AUDIT_CONVERSATION_KINDS = new Set([
@@ -396,19 +397,20 @@ export class Store {
       return goal
     })
   }
-  addStep(id: string, input: { description: string; sourceIds: string[]; goalId?: string; creator?: string; priority?: number; executionProfile?: Step['executionProfile']; requires?: string[]; bootstrap?: boolean }, maxSteps: number | null = null): Step {
+  addStep(id: string, input: { description: string; sourceIds: string[]; goalId?: string; creator?: string; priority?: number; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; bootstrap?: boolean }, maxSteps: number | null = null): Step {
     return this.transaction(() => {
       this.writable(id)
       if (maxSteps !== null && this.graph(id).steps.filter(s => ['pending', 'running', 'paused'].includes(s.status)).length >= maxSteps) throw new HttpError(409, 'Active Step limit reached')
       const goalId = input.goalId ?? 'goal'; if (this.node<Goal>(id, goalId, 'goal').status !== 'open') throw new HttpError(409, 'Goal is closed')
       const profile = input.executionProfile ?? 'direct'; if (!['direct', 'isolated'].includes(profile)) throw new HttpError(422, 'Invalid execution profile')
       const requires = input.requires ?? []
+      const plugins = validateTaskPlugins(input.plugins === undefined ? [] : input.plugins)
       if (!Array.isArray(requires) || requires.some(x => typeof x !== 'string' || x.length > 64) || requires.length > 16 || new Set(requires).size !== requires.length) throw new HttpError(422, 'Invalid requires')
       if (requires.some(verb => !verbIds.includes(verb))) throw new HttpError(422, `Unknown capability verb; valid: ${verbIds.join(', ')}`)
       const step: Step = { id: this.next(id, 'step', 'i'), projectId: id, kind: 'step', description: requiredText(input.description, 'description'),
         sourceIds: this.evidenceIds(id, input.sourceIds, true), goalId, creator: input.creator ?? 'decide', priority: integer(input.priority ?? 0, 'priority', -2147483648),
         status: 'pending', factIds: [], worker: null, executionProfile: profile, requires, attempts: 0,
-        endedAt: null, failure: null, createdAt: now(), bootstrap: input.bootstrap ?? false, planVersion: 1 }
+        endedAt: null, failure: null, createdAt: now(), bootstrap: input.bootstrap ?? false, planVersion: 1, ...(plugins.length ? { plugins } : {}) }
       this.saveNode(step); this.event(id, 'step.added', step, step); return step
     })
   }
@@ -420,7 +422,7 @@ export class Store {
       this.writable(id); const step = this.node<Step>(id, stepId, 'step')
       this.checkVersion(step, input.expectedVersion)
       if (step.status === 'done' || step.deleted) throw new HttpError(409, 'Step is already completed or deleted')
-      const definition = input.description !== undefined || input.sourceIds !== undefined || input.goalId !== undefined || input.executionProfile !== undefined || input.requires !== undefined
+      const definition = input.description !== undefined || input.sourceIds !== undefined || input.goalId !== undefined || input.executionProfile !== undefined || input.requires !== undefined || input.plugins !== undefined
       if (input.mode !== undefined && !['amend', 'replace'].includes(input.mode)) throw new HttpError(422, 'Invalid revision mode')
       if (definition && step.attempts && (!input.mode || input.expectedVersion === undefined)) throw new HttpError(409, 'Claimed Step edits require mode and expectedVersion')
       if (definition && step.status === 'cancelled') throw new HttpError(409, 'Cancelled Step definition is immutable')
@@ -439,12 +441,17 @@ export class Store {
         if (!Array.isArray(input.requires) || input.requires.length > 16 || new Set(input.requires).size !== input.requires.length || input.requires.some(v => !verbIds.includes(v))) throw new HttpError(422, 'Invalid requires capability verbs')
         next.requires = input.requires
       }
-      if (step.attempts && input.mode === 'amend' && (next.goalId !== step.goalId || next.executionProfile !== step.executionProfile || JSON.stringify(next.requires) !== JSON.stringify(step.requires))) throw new HttpError(409, 'Goal and execution permission changes require replace')
+      if (input.plugins !== undefined) {
+        const plugins = validateTaskPlugins(input.plugins)
+        if (plugins.length) next.plugins = plugins
+        else delete next.plugins
+      }
+      if (step.attempts && input.mode === 'amend' && (next.goalId !== step.goalId || next.executionProfile !== step.executionProfile || JSON.stringify(next.requires) !== JSON.stringify(step.requires) || JSON.stringify(next.plugins ?? []) !== JSON.stringify(step.plugins ?? []))) throw new HttpError(409, 'Goal and execution permission changes require replace')
       if (input.priority !== undefined) next.priority = integer(input.priority, 'priority', -2147483648)
       if (definition && step.attempts && input.mode === 'replace') {
         if (step.bootstrap) throw new HttpError(409, 'Bootstrap cannot be replaced by a planning edit')
         if (input.status !== undefined) throw new HttpError(422, 'Replacement cannot include status')
-        const replacement = this.addStep(id, { description: next.description, sourceIds: next.sourceIds, goalId: next.goalId, priority: next.priority, requires: next.requires, executionProfile: next.executionProfile, creator: step.creator })
+        const replacement = this.addStep(id, { description: next.description, sourceIds: next.sourceIds, goalId: next.goalId, priority: next.priority, requires: next.requires, plugins: next.plugins, executionProfile: next.executionProfile, creator: step.creator })
         replacement.replaces = step.id; replacement.replacementPending = true; replacement.status = 'blocked'
         step.status = 'cancelled'; step.replacedBy = replacement.id; step.endedAt = now()
         this.saveNode(step); this.event(id, 'step.updated', step, step)

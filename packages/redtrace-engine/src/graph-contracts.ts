@@ -1,4 +1,5 @@
 import { Type } from 'typebox'
+import { taskPluginsSchema } from './task-plugins.ts'
 
 const text = Type.String({ minLength: 1, pattern: '\\S' })
 const mode = Type.Optional(Type.Union([Type.Literal('amend'), Type.Literal('replace')]))
@@ -8,6 +9,7 @@ export const stepUpdateSchema = Type.Object({
   goalId: Type.Optional(text), priority: Type.Optional(Type.Integer()),
   status: Type.Optional(Type.Union([Type.Literal('pending'), Type.Literal('cancelled')])),
   executionProfile: Type.Optional(Type.Union([Type.Literal('direct'), Type.Literal('isolated')])),
+  plugins: Type.Optional(taskPluginsSchema),
   requires: Type.Optional(Type.Array(text, { maxItems: 16, uniqueItems: true })), expectedVersion: version, mode,
 })
 export const goalUpdateSchema = Type.Object({ description: Type.Optional(text),

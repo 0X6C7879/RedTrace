@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
-import { mkdtempSync, symlinkSync, rmSync, readdirSync, readFileSync } from 'node:fs'
+import { mkdtempSync, symlinkSync, rmSync, readdirSync, readFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -15,6 +15,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
   symlinkSync(path.join(root, 'static'), path.join(work, 'static'))
   const requests: any[] = []
   let held = false, holdObserved = false, timeoutHeld = false, timeoutGuardSent = false
+  let taskPluginPlans = 0
   let planFixture = false, followerId = '', followerHeld = false, producerHeld = false, reasonHeld = false
   let releaseFollower: (() => void) | undefined, releaseProducer: (() => void) | undefined, releaseReason: (() => void) | undefined
   const sendTool = (res: any, name: string, args: unknown) => {
@@ -34,7 +35,18 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
       res.end('data: {"id":"probe","object":"chat.completion.chunk","created":1,"model":"fixture","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
       return
     }
-    if (planFixture && names.includes('finish_decide')) {
+    if (text.includes('task plugin fixture') && names.includes('finish_decide')) {
+      if (taskPluginPlans < 2) {
+        name = 'add_step'; args = { description: taskPluginPlans === 0 ? 'selected REA' : 'ordinary task', sourceIds: ['origin'], ...(taskPluginPlans === 0 ? { plugins: ['redtrace-reverse'] } : {}) }
+        taskPluginPlans++
+      } else { name = 'finish_decide'; args = {} }
+    }
+    else if (text.includes('task plugin fixture') && names.includes('finish_step')) {
+      if (text.includes('selected REA') && !previous.includes('skill')) { name = 'skill'; args = { name: 'reverse-engineer-anything' } }
+      else if (text.includes('selected REA') && !previous.includes('mcp__rea__binary_session')) { name = 'mcp__rea__binary_session'; args = {} }
+      else { name = 'finish_step'; args = { summary: 'Task-scoped plugin fixture completed' } }
+    }
+    else if (planFixture && names.includes('finish_decide')) {
       if (!reasonHeld) { reasonHeld = true; releaseReason = () => sendTool(res, 'read_graph_delta', {}); return }
       if (!previous.includes('read_graph_delta')) { name = 'read_graph_delta'; args = {} }
       else {
@@ -43,10 +55,10 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
       }
     }
     else if (planFixture && text.includes('plan follower')) {
-      if (!followerHeld) { followerHeld = true; releaseFollower = () => sendTool(res, 'bash', { command: 'printf forbidden-old-direction' }); return }
+      if (!followerHeld) { followerHeld = true; releaseFollower = () => sendTool(res, 'bash', { command: 'printf forbidden-old-direction', description: 'Old plan fixture' }); return }
       if (!previous.includes('read_graph')) { name = 'read_graph'; args = { id: followerId } }
       else if (!previous.includes('sync_step')) { name = 'sync_step'; args = { planVersion: 2 } }
-      else if (previous.filter((n: string) => n === 'bash').length < 2) { name = 'bash'; args = { command: 'printf latest-plan-direction' } }
+      else if (previous.filter((n: string) => n === 'bash').length < 2) { name = 'bash'; args = { command: 'printf latest-plan-direction', description: 'Current plan fixture' } }
       else if (!previous.includes('submit_fact')) { name = 'submit_fact'; args = { description: 'Follower executed latest-plan-direction', evidence: [{ description: 'bash returned latest-plan-direction' }] } }
       else { name = 'finish_step'; args = { summary: 'Followed amended contract' } }
     }
@@ -54,9 +66,9 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
       producerHeld = true; releaseProducer = () => sendTool(res, 'finish_step', { summary: 'Producer finished after live notification' }); return
     }
     else if (names.includes('finish_decide')) { name = 'finish_decide'; args = {} }
-    else if (!previous.includes('bash')) { name = 'bash'; args = { command: 'printf native-dsh-fixture' } }
+    else if (!previous.includes('bash')) { name = 'bash'; args = { command: 'printf native-dsh-fixture', description: 'Harmless native fixture' } }
     else if (text.includes('timeout fixture') && !timeoutHeld) { timeoutHeld = true; return }
-    else if (text.includes('timeout fixture') && !timeoutGuardSent) { timeoutGuardSent = true; name = 'bash'; args = { command: 'printf forbidden-conclude-side-effect' } }
+    else if (text.includes('timeout fixture') && !timeoutGuardSent) { timeoutGuardSent = true; name = 'bash'; args = { command: 'printf forbidden-conclude-side-effect', description: 'Timeout guard fixture' } }
     else if (text.includes('pause fixture') && !held) { held = true; holdObserved = true; return }
     else if (!previous.includes('submit_fact')) { name = 'submit_fact'; args = { description: 'Native DSH executed harmless printf', evidence: [{ description: 'bash returned native-dsh-fixture' }] } }
     else { name = 'finish_step'; args = { summary: 'Native DSH fixture completed' } }
@@ -72,6 +84,11 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     raw.runtime = { max_workers: 2, max_project_workers: 2, max_running_projects: 1 }
     raw.tasks = { reason: { timeout: 15, conclude_timeout: 3 }, explore: { timeout: 15, conclude_timeout: 3 }, bootstrap: { timeout: 15, conclude_timeout: 3 } }
   })
+  // The first-run import copies <root>/skills into the managed store, so the
+  // jev-decision fixture must exist here before the child boots: with the jev
+  // plugin default-off, boot must park the skill in the disabled root.
+  mkdirSync(path.join(work, 'skills/jev-decision'), { recursive: true })
+  writeFileSync(path.join(work, 'skills/jev-decision/SKILL.md'), '---\nname: jev-decision\ndescription: Jev advisory fixture\n---\nJev fixture body\n')
   const reservation = createServer(); await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve))
   const port = (reservation.address() as any).port; await new Promise<void>(resolve => reservation.close(() => resolve()))
   const child = spawn(process.execPath, [path.join(root, 'scripts/run-redtrace-node.mjs'), '--root', work, '--host', '127.0.0.1', '--port', String(port)], { cwd: root,
@@ -95,6 +112,9 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     assert.ok(entries.some((p: any) => p.id === 'llm-pi-ai'))
     assert.equal(entries.some((p: any) => p.id === 'llm-deepseek'), false)
     assert.ok(entries.some((p: any) => p.id === 'redtrace-attachment' && p.status === 'running'))
+    assert.ok(entries.some((p: any) => p.id === 'redtrace-jev' && p.status === 'stopped'))
+    assert.ok(existsSync(path.join(work, '.redtrace/disabled-skills/jev-decision/SKILL.md')), 'stopped jev plugin must park its skill in the disabled root')
+    assert.ok(!existsSync(path.join(work, '.redtrace/skills/jev-decision')), 'stopped jev plugin must not leave its skill in the catalog root')
     let snapshot = await call('/worker-config')
     assert.equal(snapshot.workers[0].type, 'dsh')
     const probe = { expected_revision: snapshot.revision, name: 'draft-fixture', provider: 'fixture', model: 'fixture', priority: 0, max_running: 1 }
@@ -150,7 +170,14 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     const currentFollower = await call(base + `/nodes/${followerId}`)
     await call(base + `/steps/${followerId}`, 'PATCH', { description: 'plan follower amended strategy', expectedVersion: currentFollower.version, mode: 'amend' })
     const producer = await call(base + '/steps', 'POST', { description: 'evidence producer', sourceIds: ['origin'] })
-    await until(async () => reasonHeld && producerHeld, Boolean, 'Fact did not wake Reason while producer remained running')
+    await until(async () => ({ reasonHeld, producerHeld,
+      runs: (await call(base + '/runs')).map((r: any) => ({ activity: r.activity, status: r.status, error: r.error })),
+      steps: (await call(base)).steps.map((s: any) => ({ description: s.description, status: s.status })),
+      project: (await call(base)).project,
+      runtimeLimits: (await call('/runtime/config')).limits,
+      workers: (await call('/worker-config')).workers.map((w: any) => ({ name: w.name, maxRunning: w.max_running })),
+      producerEvents: await call(base + `/runs/${(await call(base + `/steps/${producer.id}/runs`))[0].id}/events?limit=100`).then(rows => rows.filter((e: any) => e.kind === 'tool.completed').map((e: any) => ({ title: e.title, error: e.error, content: String(e.content).slice(0, 1000) }))),
+    }), state => state.reasonHeld && state.producerHeld, 'Fact did not wake Reason while producer remained running')
     const runningBefore = await call(base + '/runs')
     assert.equal(runningBefore.findLast((r: any) => r.stepId === producer.id).status, 'running')
     assert.equal(runningBefore.filter((r: any) => r.activity === 'decide' && r.status === 'running').length, 1)
@@ -187,6 +214,29 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     assert.ok(sessionFiles.length > 0)
     assert.ok(!readFileSync(path.join(work, '.redtrace/redtrace.yaml'), 'utf8').includes('rotated-key'))
     assert.ok(requests.some(r => r.tools?.some((t: any) => t.function.name === 'finish_decide') && !r.tools?.some((t: any) => t.function.name === 'bash')))
+    c.commit(c.read().revision, raw => { raw.tasks!.explore.timeout = 30 })
+    await call('/runtime/config')
+    await call(base + '/status', 'PUT', { status: 'stopped' })
+    const pluginStart = requests.length
+    const taskProject = await call('/v2/projects', 'POST', { title: 'Task plugins', origin: 'task plugin fixture', goal: 'Verify scoped native REA', bootstrap: false })
+    const taskBase = `/v2/projects/${taskProject.project.id}`
+    const taskGraph = await until(() => call(taskBase), g => g.steps.length === 2 && g.steps.every((s: any) => s.status === 'done'), 'Reason-selected native REA Steps did not finish')
+    assert.deepEqual(taskGraph.steps.find((s: any) => s.description === 'selected REA').plugins, ['redtrace-reverse'])
+    assert.equal(taskGraph.steps.find((s: any) => s.description === 'ordinary task').plugins, undefined)
+    const fixtureRequests = requests.slice(pluginStart).filter(r => JSON.stringify(r.messages).includes('task plugin fixture'))
+    const reasons = fixtureRequests.filter(r => r.tools?.some((t: any) => t.function.name === 'finish_decide'))
+    const ordinary = fixtureRequests.filter(r => r.messages.some((m: any) => m.role === 'user' && JSON.stringify(m.content).includes('ordinary task')))
+    assert.ok(reasons.length && ordinary.length)
+    for (const r of [...reasons, ...ordinary]) assert.equal(r.tools.some((t: any) => t.function.name.startsWith('mcp__rea__')), false)
+    assert.ok(fixtureRequests.some(r => r.tools?.some((t: any) => t.function.name === 'mcp__rea__binary_session')))
+    const pluginRows = await call('/__redtrace/plugins'), pluginEntries = Array.isArray(pluginRows) ? pluginRows : pluginRows.plugins
+    assert.equal(pluginEntries.find((p: any) => p.id === 'redtrace-reverse').status, 'stopped', 'Reason must not start the global feature')
+    const taskRuns = await call(taskBase + '/runs')
+    for (const r of taskRuns.filter((r: any) => r.activity === 'execute')) {
+      assert.equal(r.status, 'succeeded')
+      const events = await call(taskBase + `/runs/${r.id}/events?limit=500`)
+      assert.equal(events.some((e: any) => e.kind === 'tool.completed' && e.error), false, JSON.stringify(events))
+    }
   } finally {
     if (!exited) child.kill('SIGTERM')
     await Promise.race([closed, delay(5000)])

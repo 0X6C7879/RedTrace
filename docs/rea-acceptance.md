@@ -22,9 +22,9 @@
 | `npm ci` | 成功，147 packages；未做 Docker 构建 |
 | `npm run dsh:build` | 原生底层、上游 host 和 RedTrace adapter 全部构建成功 |
 | `npm --prefix packages/redtrace-engine run check` | TypeScript 检查成功 |
-| `npm --prefix packages/redtrace-engine test` | 140 tests，134 pass，6 skip，0 fail |
-| `node --test packages/redtrace-dsh/test/*.test.mjs` | 50 tests，49 pass，1 skip，0 fail；跳过单独 opt-in 的 Ghidra 测试 |
-| `REDTRACE_REA_REAL_TESTS=1 node --test packages/redtrace-dsh/test/reverse.test.mjs` | 6 tests，6 pass，0 skip/fail |
+| `npm --prefix packages/redtrace-engine test` | 144 tests，138 pass，6 skip，0 fail |
+| `node --test packages/redtrace-dsh/test/*.test.mjs` | 52 tests，51 pass，1 skip，0 fail；跳过单独 opt-in 的 Ghidra 测试 |
+| `REDTRACE_REA_REAL_TESTS=1 node --test packages/redtrace-dsh/test/reverse.test.mjs` | 7 tests，7 pass，0 skip/fail |
 | 隔离的真实 Cordis 服务（127.0.0.1:18080） | 插件列表 / 启用 / 停用 / 再启用 HTTP 200；重启后 running 状态持久化 |
 | 真实 DSH scoped ToolRuntime | Skill 加载触发官方 MCP，Run 隔离，按需增量可见性、停止后 Schema 消失 |
 | 真实 JS 分析 | 自建 source tree 的 summary Evidence，原生 Worker 分析成功 |
@@ -78,3 +78,26 @@ ELF 约 **5.7 秒**；第二次普通函数查询在 REA 日志中约 **2–3 ms
 - 旧 ghidra-headless 批量导出和特殊平台覆盖未证明完全等价，全部脚本保留。
   Radare2/Rizin 与 GDB/angr/Z3/Unicorn/Frida/pwntools 也保留。仅移除旧 Skill
   中重复的安装说明和基础工具命令，不删除有效 CTF reference 文件。
+
+## Step 级插件声明补充验收
+
+- `Step.plugins` 为可选字段；仅 `redtrace-reverse` 可选，省略不保存空数组。
+  现有 Reason 创建/更新工具及 v2/兼容 HTTP API 共用校验；未知、重复或
+  非任务插件拒绝。旧数据库无需迁移，SQLite 重启、认领、暂停恢复及替代
+  均保留选择；已认领 Step 改权限必须 replace，不能 amend。
+- 默认未装载仍可由 Reason 选择；管理员明确停止为持久化 veto，重启后
+  仍拒绝新声明并撤销活动 Scope；启动解除 veto，不给无关 Run 广播工具。
+- 实际 native host + 本地模型响应夹具完成 Reason add_step → Scheduler
+  认领 → Explore 加载官方 Skill → 官方 MCP binary_session → Step 完成。
+  同时的普通 Step 和 Reason 的实际模型请求不含 REA Tool Schema，全局
+  插件状态保持 stopped。该夹具检验真实调度/协议，不代表真实模型选择准确率。
+- 独立新增 Store/HTTP/Reason 测试 4 项；DSH 全套 52 项，51 pass / 1 skip；
+  Engine 全套 144 项，138 pass / 6 skip；构建与 TypeScript 检查通过。
+  REA/Ghidra 显式实测 7 项全通过，保留原冷启动、取消、停用清理验收。
+- 普通 Reason 工具数量仍为 12，序列化工具输入从 8,418 增至 8,775 字节
+  （+357，含新增字段及工具描述，不含短插件目录）；两个工具参数 Schema
+  各 +125 字节，REA Schema 始终为 0。未测实际计费 Token 和模型延迟。
+- 原生闭环回归发现配置热更新时管理 API 限额已为 4、调度器仍为旧值 2；
+  profile 刷新现在同步 Scheduler 与模型快照的同一配置版本，不改变配置的
+  并发限额或选择策略。旧 Bash 夹具补齐当前 Schema 必填 description，
+  不再把无效参数调用当作有效 Shell 执行。

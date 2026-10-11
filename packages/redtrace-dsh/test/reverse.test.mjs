@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto'
 import { load, repoRoot } from '../lib/loader.js'
 import { mountExecutionTools } from '../lib/execution-tools.js'
 import { reverseEnvironment } from '../lib/reverse.js'
+import { PluginManager } from '../lib/plugins.js'
 
 const VENDOR = 'vendor/deepseek-harness/packages'
 const rea = schemas => schemas.filter(t => t.name.startsWith('mcp__rea__'))
@@ -43,6 +44,59 @@ export async function session(ctx, available) {
     dispose: async () => { await scope.dispose(); await carrier.dispose() },
   }
 }
+
+test('Reason-created Step grants only its claimant native REA; management veto revokes live scopes', { timeout: 90000 }, async t => {
+  const root = mkdtempSync(path.join(tmpdir(), 'redtrace-step-rea-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const { Store } = await import(pathToFileURL(path.join(repoRoot, 'packages/redtrace-engine/src/store.ts')))
+  const { graphTools } = await import(pathToFileURL(path.join(repoRoot, 'packages/redtrace-engine/src/runner.ts')))
+  const store = new Store(':memory:')
+  t.after(() => store.close())
+  const sessions = []
+  const fake = { plugin() { return { async await() {}, async dispose() {} } } }
+  const manager = new PluginManager(fake, { pluginsManifest: path.join(root, 'plugins.json') }, root, async () => ({}), {},
+    () => Promise.all(sessions.map(s => s.refresh())))
+  await manager.boot()
+  const id = store.createProject({ title: 'Fixture', origin: 'Authorized fixture', goal: 'Analyze', bootstrap: false }).project.id
+  const worker = { name: 'Reason', backend: 'mock' }
+  const reason = store.claim(id, 'decide', worker)
+  const tools = graphTools({ store, run: reason, worker, config: { workspaceRoot: root, maxSteps: null }, signal: new AbortController().signal,
+    taskPluginAllowed: name => manager.taskPluginAllowed(name) }, () => {})
+  const result = await tools.find(t => t.name === 'add_step').execute('reason-create', { description: 'Reverse fixture', sourceIds: ['origin'], plugins: ['redtrace-reverse'] })
+  const step = result.details
+  const claimed = store.claim(id, 'execute', { name: 'Explore', backend: 'dsh' }, step.id)
+  assert.equal(claimed.stepId, step.id)
+  assert.equal(manager.running('redtrace-reverse'), false, 'Reason never changes the global switch')
+  const ctx = await host()
+  t.after(() => ctx.fiber.dispose())
+  const selected = await session(ctx, name => manager.availableForTask(name, step.plugins))
+  const unrelated = await session(ctx, name => manager.availableForTask(name, []))
+  sessions.push(selected, unrelated)
+  for (const s of sessions) t.after(async () => { await s.dispose(); rmSync(s.cwd, { recursive: true, force: true }) })
+  const hasSkill = async s => (await s.scoped.get('skills').list({ cwd: s.cwd, scope: s.agent })).some(skill => skill.name === 'reverse-engineer-anything')
+  assert.equal(await hasSkill(selected), true)
+  assert.equal(await hasSkill(unrelated), false)
+  assert.equal(rea(selected.schemas()).length, 0)
+  assert.equal(rea(unrelated.schemas()).length, 0)
+  assert.equal((await selected.call('skill', { name: 'reverse-engineer-anything' })).isError, false)
+  assert.equal(rea(selected.schemas()).length, 14)
+  assert.equal(rea(unrelated.schemas()).length, 0)
+  const original = ctx.tools.get('mcp__rea__binary_session', selected.agent)
+  await manager.start('redtrace-reverse')
+  assert.equal(ctx.tools.get('mcp__rea__binary_session', selected.agent), original, 'stable selected scope is not remounted')
+  assert.equal(await hasSkill(unrelated), false)
+  await manager.stop('redtrace-reverse')
+  assert.equal(rea(selected.schemas()).length, 0)
+  assert.equal(await hasSkill(selected), false)
+  assert.equal((await selected.call('mcp__rea__binary_session', {})).isError, true)
+  await assert.rejects(tools.find(t => t.name === 'add_step').execute('vetoed', { description: 'Reverse again', sourceIds: ['origin'], plugins: ['redtrace-reverse'] }), /Task plugin is disabled/)
+  await manager.start('redtrace-reverse')
+  assert.equal(await hasSkill(selected), true)
+  assert.equal(rea(selected.schemas()).length, 0, 'fresh connection stays lazy')
+  assert.equal(await hasSkill(unrelated), false)
+  assert.ok(ctx.tools.get(process.platform === 'win32' ? 'pwsh' : 'bash', selected.agent), 'unrelated native shell is retained')
+  assert.equal(tools.some(t => t.name.startsWith('mcp__rea__')), false, 'Reason never receives analysis schemas')
+})
 
 test('official Skill is byte-identical to the pinned package, with complete local references', () => {
   const root = path.join(repoRoot, 'plugins/reverse')

@@ -23,6 +23,7 @@ export interface Step extends NodeBase {
   kind: 'step'; description: string; goalId: string; sourceIds: string[]; factIds: string[]
   status: StepStatus; priority: number; worker: string | null; executionProfile: 'direct' | 'isolated'
   requires: string[]; attempts: number; endedAt: string | null; failure: string | null
+  plugins?: string[]
   bootstrap: boolean; deleted?: boolean; resultGoalId?: string; sourceGoalId?: string
   failureCount?: number; retryAfter?: number | null; circuitOpen?: boolean; runtimeMs?: number
   planVersion?: number; replaces?: string; replacedBy?: string; replacementPending?: boolean

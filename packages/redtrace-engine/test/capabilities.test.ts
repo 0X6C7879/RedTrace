@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { Capabilities } from '../src/capabilities.ts'
@@ -45,5 +45,31 @@ test('REA is reserved for the per-Run reverse plugin rather than globally mounte
     c.writeMcp('unrelated', { command: 'echo' })
     assert.deepEqual(c.mcpConfigs().map(s => s.serverName), ['unrelated'])
     assert.equal(c.mcp('rea').enabled, true)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('setEnabled relocates plugin-gated skills between roots without version churn', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-capability-toggle-'))
+  try {
+    const c = new Capabilities(root)
+    c.write('gated', '---\nname: gated\ndescription: Plugin gated\n---\nBody\n', true)
+    const before = c.skill('gated')
+    c.setEnabled('gated', false)
+    assert.ok(existsSync(path.join(root, 'disabled-skills/gated/SKILL.md')))
+    assert.ok(!existsSync(path.join(root, 'skills/gated')))
+    assert.equal(c.skill('gated').enabled, false)
+    assert.equal(c.skill('gated').version, before.version)
+    assert.equal(c.skill('gated').revision, before.revision)
+    assert.ok(readFileSync(path.join(root, 'skills/.redtrace/audit.jsonl'), 'utf8').includes('"action":"disable"'))
+    c.setEnabled('gated', false)
+    c.setEnabled('missing', true)
+    c.setEnabled('gated', true)
+    assert.equal(c.skill('gated').enabled, true)
+    assert.equal(c.skill('gated').version, before.version)
+    // A skill present in both roots stays untouched: the enabled copy wins.
+    c.setEnabled('gated', false)
+    mkdirSync(path.join(root, 'skills/gated'), { recursive: true }); writeFileSync(path.join(root, 'skills/gated/SKILL.md'), '---\nname: gated\ndescription: Duplicate\n---\nDuplicate\n')
+    c.setEnabled('gated', true)
+    assert.ok(existsSync(path.join(root, 'disabled-skills/gated/SKILL.md')))
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

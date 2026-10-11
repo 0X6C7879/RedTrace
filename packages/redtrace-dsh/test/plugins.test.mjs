@@ -70,6 +70,31 @@ function scratch(name) {
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 
+test('task plugin default-off is selectable, global start stays scoped, explicit stop veto persists', async t => {
+  const root = scratch('task-policy'), manifest = path.join(root, 'plugins.json')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const { manager } = makeManager(root, manifest, async () => ({}))
+  await manager.boot()
+  assert.equal(manager.running('redtrace-reverse'), false)
+  assert.equal(manager.view('redtrace-reverse').taskSelectable, true)
+  assert.equal(manager.view('redtrace-reverse').taskAllowed, true)
+  assert.equal(manager.availableForTask('redtrace-reverse', ['redtrace-reverse']), true)
+  assert.equal(manager.availableForTask('redtrace-reverse', []), false)
+  assert.equal(manager.taskPluginAllowed('redtrace-core'), false)
+  await manager.start('redtrace-reverse')
+  assert.equal(manager.availableForTask('redtrace-reverse', []), false, 'global start never grants unselected Runs')
+  await manager.stop('redtrace-reverse')
+  assert.equal(manager.availableForTask('redtrace-reverse', ['redtrace-reverse']), false)
+  const restarted = makeManager(root, manifest, async () => ({})).manager
+  await restarted.boot()
+  assert.equal(restarted.taskPluginAllowed('redtrace-reverse'), false)
+  assert.equal(restarted.view('redtrace-reverse').taskAllowed, false)
+  await restarted.start('redtrace-reverse')
+  assert.equal(restarted.availableForTask('redtrace-reverse', ['redtrace-reverse']), true)
+  assert.equal(restarted.availableForTask('redtrace-reverse', []), false)
+  assert.equal(restarted.availableForTask('redtrace-fs-search', []), restarted.running('redtrace-fs-search'))
+})
+
 test('boot mounts enabled plugins in order; kernel entries are locked', async (t) => {
   const root = scratch('boot')
   t.after(() => rmSync(root, { recursive: true, force: true }))

@@ -18,6 +18,7 @@ import { closeWebChallenge, webTools } from './web.ts'
 import { verbIds } from './capability-verbs.ts'
 import { HttpError } from './types.ts'
 import { evidenceChangeSchema, goalUpdateSchema, stepUpdateSchema } from './graph-contracts.ts'
+import { taskPluginsSchema } from './task-plugins.ts'
 
 const json = (value: unknown): Json => JSON.parse(JSON.stringify(value))
 const execFileAsync = promisify(execFile)
@@ -93,6 +94,9 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     return { content: [{ type: 'text', text: content }], details: { id: args.id, offset, bytes: chunk.length, totalBytes: bytes.length, nextOffset } }
   } } as unknown as AgentTool)
   if (run.activity === 'decide') {
+    const checkPlugins = (plugins: string[] = []) => {
+      for (const id of plugins) if (context.taskPluginAllowed && !context.taskPluginAllowed(id)) throw new HttpError(409, `Task plugin is disabled: ${id}`)
+    }
     const origin = store.node<Fact>(run.projectId, 'origin', 'fact')
     const skill = installRoot ? path.join(installRoot, '.redtrace', 'skills', 'tsecbench-api') : ''
     if (/(?:tsecbench|tsec[\s-]*benchmark)/i.test(origin.description) && existsSync(path.join(skill, 'SKILL.md')) && existsSync(path.join(skill, 'scripts', 'tsecbench.py'))) {
@@ -103,12 +107,13 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
       )
     }
     tools.push(
-      tool('add_step', 'Create an action sourced from Scope (origin), Fact or Finding IDs to advance goalId. requires lists capability verbs (e.g. remote.command): matching verb tools are exposed to the Execute agent, which reuses existing channels automatically.', Type.Object({ description: Type.String(), sourceIds: refs, goalId: Type.Optional(Type.String()), priority: Type.Optional(Type.Integer()), requires: Type.Optional(Type.Array(Type.Union(verbIds.map(v => Type.Literal(v))), { uniqueItems: true, maxItems: 16 })), executionProfile: Type.Optional(Type.Union([Type.Literal('direct'), Type.Literal('isolated')])) }), async args => {
+      tool('add_step', 'Create an action sourced from Scope (origin), Fact or Finding IDs to advance goalId. requires lists capability verbs (e.g. remote.command): matching verb tools are exposed to the Execute agent, which reuses existing channels automatically. plugins selects optional task features for this Step only, not global switches or engine startup.', Type.Object({ description: Type.String(), sourceIds: refs, goalId: Type.Optional(Type.String()), priority: Type.Optional(Type.Integer()), requires: Type.Optional(Type.Array(Type.Union(verbIds.map(v => Type.Literal(v))), { uniqueItems: true, maxItems: 16 })), executionProfile: Type.Optional(Type.Union([Type.Literal('direct'), Type.Literal('isolated')])), plugins: Type.Optional(taskPluginsSchema) }), async args => {
+        checkPlugins(args.plugins)
         const created = store.addStep(run.projectId, args, config.maxSteps)
         const duplicate = jev?.isEnabled('step_dedup') ? await jev.suggestDuplicate(run.projectId, created, run) : undefined
         return duplicate ? { ...created, jevDuplicateSuggestion: duplicate } : created
       }),
-      tool('update_step', 'Revise, reprioritize or cancel a Step with expectedVersion. Running amend keeps objective and permissions; replace stops the old run before its replacement starts. Changed objectives, targets or permissions require replace.', Type.Object({ ...stepUpdateSchema.properties, expectedVersion: Type.Integer({ minimum: 1 }), id: Type.String(), cancel: Type.Optional(Type.Boolean()) }), args => store.updateStep(run.projectId, args.id, { ...args, ...(args.cancel ? { status: 'cancelled' as const } : {}) })),
+      tool('update_step', 'Revise, reprioritize or cancel a Step with expectedVersion. Running amend keeps objective and permissions; replace stops the old run before its replacement starts. Changed objectives, targets, plugins or permissions require replace.', Type.Object({ ...stepUpdateSchema.properties, expectedVersion: Type.Integer({ minimum: 1 }), id: Type.String(), cancel: Type.Optional(Type.Boolean()) }), args => { checkPlugins(args.plugins); return store.updateStep(run.projectId, args.id, { ...args, ...(args.cancel ? { status: 'cancelled' as const } : {}) }) }),
       tool('add_goal', 'Add a Sub Goal.', Type.Object({ description: Type.String(), parentId: Type.Optional(Type.String()) }), args => store.addGoal(run.projectId, args.description, args.parentId)),
       tool('update_goal', 'Revise a Subgoal description or state with expectedVersion. Running descendants require amend or replace; changed objectives require replace. Root description is immutable. Achievement requires active Fact/Finding evidence, not Step completion.', Type.Object({ ...goalUpdateSchema.properties, expectedVersion: Type.Integer({ minimum: 1 }), id: Type.String() }), args => store.updateGoal(run.projectId, args.id, args)),
       tool('manage_evidence', 'Maintain same-kind Fact/Finding. merge keeps id and redirects references; provide every source version. archive preserves history but rejects active references: repair blockers first. restore reactivates archived evidence. Never merge different targets, challenges, environments or contradictory conclusions; Scope is protected.', evidenceChangeSchema, args => store.manageEvidence(run.projectId, args)),
@@ -243,10 +248,30 @@ export async function boundToolOutput(output: AgentToolResult<unknown>, evidence
 }
 
 export const activityPrompt = (activity: 'decide' | 'execute', step?: Step, jevChoice = false, jevReadiness = false) => (activity === 'decide'
-  ? '你负责 Decide。FGS 的永久节点只有 Scope、Fact、Finding、Subgoal、Goal。任务首次启动允许规划；之后任一新 Fact 或 Finding 都唤醒你，不等待 Step 结束，不受 Step 数量上限阻挡。总并发和 Worker 容量仍受限，无空位时保留待办。运行时关键事件仍可触发你，失败重试保留事件边界。你是 FGS 的语义维护者：先读取活跃状态与增量；用 manage_evidence 合并同目标同环境的重复证据或归档无用节点；删除前先修复活跃引用。用 update_step/update_goal 修正过时计划并携带版本；同目标同权限边界 amend，改变目标或权限 replace，未知副作用不得重放。你的维护操作不递归唤醒自己。Hint、Observation、重新激活和普通 Step/Goal 变更不单独触发你；add_step 仍遵守容量限制。基于 Scope 和现有 Fact/Finding 评估目标与行动。Subgoal 必须是可验收的结果，先检查并复用已有目标；操作、重试、临时策略写成 Step，不要重复创建子目标。每个 Step 用 sourceIds 引用 Scope/Fact/Finding，并用 goalId 指向它推进的目标。一道题默认一个主 Explore，优先并行不同题目；仅拆分明确独立且不会争用认证会话的工作。只创建基于现有证据即可执行的 Step；依赖尚未证实的入口或权限时，等 Fact 到来再规划。需要远程命令或内网代理时先确认已有在线的程序化通道；图形桌面登录本身不提供这类通道。不要并行创建重复的目标枚举；在测试机上扫描不需要 remote.command。目标验收使用真实 Fact/Finding evidenceIds，解释这些证据如何满足目标；失败、停止尝试、Step 结束不等于目标达成。只规划，不执行解题、容器或提交操作；如提供测评查询工具，可直接查询题目或在确认扣分后查看提示。完成后调用 finish_decide，通过 throughEvidenceSeq 明确确认已处理且已完整读取的事件边界；没有处理的新事件留给下一轮。'
+  ? `你是 Reason，在 Scope 授权范围内根据 FGS 规划下一步并维护证据和计划；不亲自解题、操作容器或提交答案。
+
+1. 先读活跃状态和连续增量；Hint、Observation 不是确认事实。已有成果满足 Goal 时，用真实 Fact/Finding evidenceIds 验收并解释依据，逐项核对数量、权限等条件；失败、停止尝试或 Step 结束不等于达成。
+2. 有突破优先深入，缺少入口时拓宽，持续受阻且无新进展时换路线。只派现有证据支持、前置已满足的行动；依赖未取得的入口或权限时等待。独立且不争用会话的方向才并行，同一题默认一个主 Explore，优先并行不同题目。
+3. 比对已有 Step，不重复枚举或已覆盖工作。单次失败不等于证伪，执行结束不等于路线穷尽；中断按确认进度续接，无效路线须有新证据或不同机制才重开。副作用不明先查证，不重放。无工作时寻找未覆盖的可验证方向；依赖在跑工作则等待，无合理方向说明缺口，不硬凑任务。
+4. Step 写清行动与预期结果，用 sourceIds 引用 Scope/Fact/Finding、goalId 指向目标，按需选择 requires/plugins。Subgoal 只写可验收结果并复用；操作、重试和临时策略写 Step。远程命令或内网代理须有在线程序化通道，图形登录不等于命令通道；测试机扫描不需要 remote.command。
+5. 用 update_step/update_goal 携带版本修正计划、取消或排序 Step；同目标同权限 amend，改变目标或权限 replace。用 manage_evidence 合并同目标同环境的重复证据、归档或恢复证据，不合并矛盾结论；归档或删除前修复活跃引用，不为整理图谱延误目标。
+6. 启动、新 Fact/Finding 或关键事件出现时及时规划，不等 Step 结束。并发、Worker 和 add_step 限额遵守系统限制。测评仅用开放的只读工具，扣分提示须先确认。完成调用 finish_decide，throughEvidenceSeq 只确认完整读取并处理的连续边界，未处理事件留待下一轮。`
   : step?.bootstrap
-    ? '你负责 Bootstrap。基于 Scope、Goal 和 Hints 理解任务，按需加载 Skills 并持续推进初始探索。在得到至少一个经证据支持的客观结果前不得结束；必须先用 submit_fact 提交 Fact，再调用 finish_step。Bootstrap 成功且返回 Fact 后 Reason 才会启动。不要把猜测、计划或未验证输出写成 Fact。'
-    : '你负责 Execute。沿当前 Step 执行，推进它的 goalId。先复用共享的扫描结果、凭证和已验证远程通道；Scope、Fact、Hint 或执行结果中已有的账号口令，若资源中尚无对应凭证，就及时登记，即使远程通道尚不可用。发现可复用通道时及时登记为资源，后续操作使用匹配的通道。未验证的入口不要登记为可用通道。以工具输出验证结论并及时 submit_fact，成功、失败和限制都可形成已确认事实；可交付成果提交为引用 Fact 的 Finding。新 Fact 或 Finding 都会唤醒 Reason。计划变更时先 read_graph/read_graph_delta，再 sync_step 采纳当前版本，下一模型回合按新契约生成动作；旧工具调用树不得继续执行外部动作。Hint 和 Observation 不是已确认事实。验证码仅在授权题目内使用局部截图供当前模型识别；无法识别时记录阻塞并转向其他有效方向，不依赖人工接管或承诺通用通过。完成时调用 finish_step；Step 完成只表示本次执行结束，不表示 Goal/Subgoal 达成。')
+    ? `你是 Bootstrap，仅在项目显式启用时，根据 Scope、Goal 和 Hints 直接解题，优先独立完成简单任务，不以建立初始事实为目标。
+
+只在授权范围内操作，按需加载 Skills，优先走前置已满足的直接路径；失败后按反馈调整，不做无新信息的重复。得到一条 Fact 不是停止理由，有合理路径就继续完成 Goal。
+
+确认结果及时 submit_fact，可核验成果用 submit_finding 引用 Fact。达成目标保存验收证据；暂时无法完成保存确认进展和阻塞。猜测、计划和未验证输出不作 Fact。
+
+至少提交一条真实 Fact 后调用 finish_step；成功且返回 Fact 后 Reason 才会启动。无可信结果时说明阻塞，不伪造 Fact 或宣称已交接。`
+    : `你是 Explore，在 Scope 授权范围内深入完成当前 Step，推进它的 goalId。
+
+1. 复用共享事实、扫描结果、凭证和已验证通道，按需使用 Skills、执行工具与任务插件。在本 Step 内自主调整方法，不把每次尝试拆成新 Step；改变目标或权限边界交由 Reason 调整。
+2. 一次失败不代表方向无效。按反馈检查前置、尝试实质不同的方法，有突破继续推进，避免无新信息的重复；副作用不明先查证，不重放。Step 外线索记录实际观察和待验证点，交给 Reason，不自行扩展。
+3. Scope、Fact、Hint 或执行结果中的凭证及时登记为资源，即使尚无通道。可复用通道验证后登记、使用匹配通道，未验证入口不作可用通道。
+4. 以工具输出核验结论，及时 submit_fact，附真实证据且只写增量；成功、失败和限制均可形成确认事实。Hint、Observation 和推测不是事实，单次失败不证明整条路线无效，版本/CVE 命中不等于漏洞成立。可核验成果用 submit_finding 引用 Fact，新 Fact/Finding 会唤醒 Reason。
+5. 计划变更先 read_graph/read_graph_delta，再 sync_step 采纳当前版本；下一模型回合按新契约行动，旧调用树不得继续外部操作。
+6. 验证码仅对授权题目用局部截图供当前模型识别；失败记录阻塞并在本 Step 内转向有效方法，不依赖人工接管或承诺通用通过。Step 完成、结论证据充分或阻塞无法自行解除时，保存进展、尝试限制和阻塞，调用 finish_step；Step 结束不代表 Goal/Subgoal 达成。`)
   + (activity === 'execute' && jevChoice ? '当同一目标有两个以上真实可用的扫描器、PoC、字典或搜索来源，且选错会明显浪费时间时，可调用 jev_choose 比较。' : '')
   + (activity === 'execute' && jevReadiness ? '拟采用攻击路径但关键前置条件不明时，可调用 jev_assess_attack 评估已确认事实的支持程度。' : '')
   + (activity === 'execute' && (jevChoice || jevReadiness) ? 'Jev 只给建议，按原始证据自行决定和验证，避免为简单选择额外调用。' : '')

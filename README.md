@@ -8,7 +8,7 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 
 ## 核心能力
 
-- **可启停逆向插件**：`redtrace-reverse` 默认关闭；Explore 加载 REA 官方 Skill 后按 Run 连接 DSH 原生 MCP，按场景增量暴露原生工具；停用撤销 Skill/工具并清理分析进程，保留已保存证据。部署、可选引擎边界和真实验收见 [REA 集成说明](docs/rea-integration.md)。
+- **任务级逆向插件**：`redtrace-reverse` 默认不装载；Reason 用 Step 的 `plugins` 声明，仅认领该 Step 的 Explore 可加载 REA 官方 Skill 与按需原生 MCP，不改变全局开关；管理员停用优先，撤销 Skill/工具并清理分析进程，保留已保存证据。部署、可选引擎边界和真实验收见 [REA 集成说明](docs/rea-integration.md)。
 
 - **Decide / Execute 闭环**：每个项目最多一个无私有会话的 Decide；多个 Execute 可并行推进 Step，任一事实提交都会立即唤醒下一轮规划。
 - **唯一 FGS 图**：`Fact` 保存有来源的事实，`Goal` 保存完成条件和子目标，`Step` 保存行动与状态，`Finding` 保存可交付成果。`Hint` 与 `Observation` 保持人工输入和中间记录语义。

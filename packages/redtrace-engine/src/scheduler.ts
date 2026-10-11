@@ -4,7 +4,7 @@ import { HttpError } from './types.ts'
 import type { EngineConfig, Goal, Run, RunStatus, Worker, Step } from './types.ts'
 import type { JevService } from './jev.ts'
 
-export interface TaskContext { store: Store; run: Run; worker: Worker; config: EngineConfig; signal: AbortSignal; jev?: JevService; featureAvailable?: (id: string) => boolean }
+export interface TaskContext { store: Store; run: Run; worker: Worker; config: EngineConfig; signal: AbortSignal; jev?: JevService; featureAvailable?: (id: string) => boolean; taskPluginAllowed?: (id: string) => boolean }
 export type RunTask = (context: TaskContext) => Promise<void>
 export type SelectWorker = (worker: Worker, activity: Run['activity'], step?: Step) => Worker | undefined
 type Active = { run: Run; abort: AbortController; completion: Promise<void> }

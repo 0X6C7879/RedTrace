@@ -11,7 +11,8 @@
 import { accessSync, constants, existsSync } from 'node:fs'
 import path from 'node:path'
 import type { CordisFiber, RuntimeTask, ScopedContext } from './types.js'
-import { mount, repoRoot } from './loader.js'
+import { mount } from './loader.js'
+import { TASK_PLUGINS } from './task-plugins.js'
 
 const VENDOR = 'vendor/deepseek-harness/packages'
 
@@ -204,7 +205,7 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
     catch (error) { shellFiber = await mount(scoped, shellTool, { enableRunInBackground: background }); throw error }
   }
   const stacks: Array<[string, (use: Use) => Promise<void>]> = [
-    ['redtrace-reverse', use => use(scoped, 'packages/redtrace-dsh/lib/reverse.js', { cwd: config.cwd })],
+    ...TASK_PLUGINS.map(entry => [entry.id, (use: Use) => use(scoped, entry.modulePath, { cwd: config.cwd })] as [string, (use: Use) => Promise<void>]),
     ['redtrace-web', async use => {
       const scope = scoped.isolate('web').isolate('settings')
       await use(scope, `${VENDOR}/web/web/lib/index.js`, { searchProvider: 'web-search-free', fetchProvider: 'http' })

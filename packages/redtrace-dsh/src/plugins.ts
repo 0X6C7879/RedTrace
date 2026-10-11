@@ -17,6 +17,7 @@ import path from 'node:path'
 import type { CordisFiber, RuntimeConfig, RuntimeContext, TaskType } from './types.js'
 import { load, repoRoot } from './loader.js'
 import { state } from './state.js'
+import { TASK_PLUGINS } from './task-plugins.js'
 import * as core from './core.js'
 import * as domain from './domain.js'
 import * as scheduler from './scheduler.js'
@@ -106,6 +107,8 @@ export interface PluginView {
   canStop: boolean
   canUninstall: boolean
   error: string | null
+  taskSelectable?: boolean
+  taskAllowed?: boolean
 }
 
 const KERNEL: readonly KernelEntry[] = [
@@ -144,7 +147,7 @@ const KERNEL: readonly KernelEntry[] = [
 ]
 
 const MANAGED: readonly ManagedEntry[] = [
-  { id: 'redtrace-reverse', label: 'Reverse Engineering', category: 'feature', modulePath: 'packages/redtrace-dsh/lib/reverse.js', defaultOff: true, description: 'REA 原生逆向 Skill、CLI 与按需 MCP', intro: 'Explore 加载官方 reverse-engineer-anything Skill 后，按 Run 隔离连接 DSH 原生 REA MCP；启用本身不启动分析引擎。停用撤销 Skill/工具并清理受管会话，保留证据；通用 Shell 不受系统级限制。' },
+  ...TASK_PLUGINS.map(entry => ({ ...entry, category: 'feature' as const, defaultOff: true })),
   { id: 'redtrace-critical-events', label: '关键事件调度', category: 'feature', modulePath: 'packages/redtrace-engine/src/scheduler.ts', description: '运行时验证的关键事件提前规划', intro: '只消费平台确认或运行时验证的能力、路由及失效信号；停用后保留原 Fact＋Step 结束契约，不删除证据。' },
   { id: 'redtrace-knowledge', label: '离线知识检索', category: 'feature', modulePath: 'packages/redtrace-engine/src/knowledge.ts', description: '本地 FTS5 搜索与有界读取', intro: '只检索本地知识源；命中不是漏洞证据，不自动执行 PoC。' },
   { id: 'redtrace-browser-http', label: 'Browser + HTTP', category: 'feature', modulePath: 'packages/redtrace-engine/src/web.ts', description: '隔离持久浏览器与轻量 HTTP 批量验证', intro: '按 Project、Challenge、身份和 Session 隔离，默认串行；完整请求响应保存在权限受限的证据文件。' },
@@ -237,7 +240,7 @@ const MANAGED: readonly ManagedEntry[] = [
   {
     id: 'redtrace-jev', label: 'Jev 语义辅助', category: 'feature', modulePath: 'packages/redtrace-engine/src/jev.ts', defaultOff: true,
     description: '可热切换的 Explore 候选选择与证据就绪度建议',
-    intro: '启用后，Explore 可对已存在的扫描器、PoC、字典和搜索来源请求 Jev 排序，并评估已确认事实对攻击前置条件的支持程度。建议不自动执行。旧过滤场景默认关闭，可在 Worker 设置中单独开启。需配置 TYPESAFE_API_KEY。',
+    intro: '启用后，Explore 可对已存在的扫描器、PoC、字典和搜索来源请求 Jev 排序，并评估已确认事实对攻击前置条件的支持程度。建议不自动执行。旧过滤场景默认关闭，可在 Worker 设置中单独开启。需配置 TYPESAFE_API_KEY。停用后 jev-decision Skill 同步停用（移入停用目录，不再进入 Skill 目录）。',
   },
   {
     id: 'redtrace-credentials', label: 'Credentials', category: 'feature', module: credentials,
@@ -503,6 +506,7 @@ export class PluginManager {
         canStop: entry.protectStop !== true,
         canUninstall: false,
         error: this.errors.get(entry.id) ?? null,
+        ...(TASK_PLUGINS.some(p => p.id === entry.id) ? { taskSelectable: true, taskAllowed: this.taskPluginAllowed(entry.id) } : {}),
       })
     }
     for (const entry of PRESETS) {
@@ -549,6 +553,16 @@ export class PluginManager {
   /** Live running check for capability gating; pending boots count as down. */
   running(id: string): boolean {
     return this.statuses.get(id) === 'running'
+  }
+
+  /** Default-off is selectable; an explicit management stop is a persistent veto. */
+  taskPluginAllowed(id: string): boolean {
+    return TASK_PLUGINS.some(p => p.id === id) && !(this.manifest.disabled ?? []).includes(id) && this.statuses.get(id) !== 'error'
+  }
+
+  availableForTask(id: string, plugins: readonly string[] = []): boolean {
+    return TASK_PLUGINS.some(p => p.id === id)
+      ? plugins.includes(id) && this.taskPluginAllowed(id) : this.running(id)
   }
 
   async start(id: string): Promise<PluginView> {
