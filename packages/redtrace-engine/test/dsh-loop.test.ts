@@ -213,7 +213,15 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     assert.equal(runningBefore.findLast((r: any) => r.stepId === producer.id).status, 'running')
     assert.equal(runningBefore.filter((r: any) => r.activity === 'decide' && r.status === 'running').length, 1)
     await call(base + '/facts', 'POST', { description: 'Second evidence while Reason is busy', evidence: [{ description: 'Isolated HTTP fixture' }] })
-    await delay(100)
+    const busyReason = runningBefore.find((r: any) => r.activity === 'decide' && r.status === 'running')
+    const secondEvidenceSeq = (await call(base)).project.evidenceSeq
+    const sessionRoot = path.join(work, '.redtrace/sessions')
+    await until(async () => readdirSync(sessionRoot, { recursive: true, withFileTypes: true })
+      .filter(file => file.isFile() && file.name.endsWith('.jsonl') && file.parentPath.split(path.sep).includes(busyReason.id))
+      .flatMap(file => readFileSync(path.join(file.parentPath, file.name), 'utf8').split('\n'))
+      .some(line => line.includes('"type":"agent/inbox/spliced"') && line.includes('新增确认的 Fact/Finding')
+        && line.includes(JSON.stringify(`"evidenceSeq":${secondEvidenceSeq}`).slice(1, -1))),
+    Boolean, 'busy Reason did not queue the second-evidence reminder before release')
     releaseReason!(); releaseFollower!(); releaseProducer!()
     const followerRuns = await until(() => call(base + `/steps/${followerId}/runs`), rows => rows[0]?.status === 'succeeded' || rows[0]?.status === 'failed', 'amended native session did not finish')
     assert.equal(followerRuns.length, 1, 'amend rebuilt the session')

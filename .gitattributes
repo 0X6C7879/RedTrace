@@ -4,3 +4,6 @@
 *.sh text eol=lf
 *.py text eol=lf
 .gitattributes text eol=lf
+
+# Preserve the pinned official Skill bytes on Windows too.
+plugins/reverse/skills/** text eol=lf
