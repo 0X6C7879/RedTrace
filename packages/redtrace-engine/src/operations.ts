@@ -9,11 +9,10 @@ import { body, queryNumber, send } from './http.ts'
 import type { Router, RequestContext } from './http.ts'
 import { executeWebshell, operationCommand, operationSupported } from './operation-execution.ts'
 import { ExecutionError, commandFrame, errorResult, executionResult, parseCommandFrame, validateExecutionResult, type ExecutionResult } from './execution-result.ts'
-import { RemoteTerminalManager } from './remote-terminal.ts'
 import { PivotRuntime } from './pivot-runtime.ts'
 import { buildBeacon, compatibleOneliners, generateOneliner } from './c2-payloads.ts'
 
-export const resourceKinds = ['webshell', 'c2_listener', 'c2_session', 'c2_payload', 'c2_profile', 'proxy', 'host', 'terminal', 'entry', 'file', 'credential_ref', 'result']
+export const resourceKinds = ['webshell', 'c2_listener', 'c2_session', 'c2_payload', 'c2_profile', 'proxy', 'host', 'entry', 'file', 'credential_ref', 'result']
 export const terminalTasks = ['succeeded', 'failed', 'cancelled', 'rejected']
 export const digest = (s: string | Buffer) => createHash('sha256').update(s).digest('hex')
 const TASK_SUMMARY_LIMIT = 1000
@@ -42,12 +41,10 @@ export class Operations {
   private staleTimer: NodeJS.Timeout
   private closed = false
   private readonly isAdapterAvailable: (plugin: string) => boolean
-  readonly terminals: RemoteTerminalManager
   readonly pivots: PivotRuntime
   constructor(store: Store, root: string, isAdapterAvailable: (plugin: string) => boolean = () => true) {
     this.isAdapterAvailable = isAdapterAvailable
     this.store = store; this.outputRoot = path.join(root, '.redtrace/output')
-    this.terminals = new RemoteTerminalManager(this)
     this.pivots = new PivotRuntime(this, root)
     const oldColumns = store.db.prepare('PRAGMA table_info(operation_tasks)').all() as any[]
     const file = (store.db.prepare('PRAGMA database_list').all() as any[]).find(row => row.name === 'main')?.file
@@ -66,7 +63,7 @@ export class Operations {
     const interrupted = executionResult('Process interrupted; external result unknown. Verify before resubmitting.', null, { completion: 'unknown', error_code: 'UNKNOWN_RESULT' })
     for (const task of store.db.prepare("SELECT id FROM operation_tasks WHERE status='running'").all() as any[]) this.finish(task.id, interrupted)
     // Saved metadata cannot resurrect a socket, PTY, or tunnel after restart.
-    for (const row of store.db.prepare("SELECT * FROM shared_resources WHERE kind IN ('c2_session','terminal','proxy') AND status='available'").all() as any[]) {
+    for (const row of store.db.prepare("SELECT * FROM shared_resources WHERE (kind IN ('c2_session','proxy') AND status='available') OR (kind='terminal' AND status NOT IN ('offline','retired'))").all() as any[]) {
       const metadata = JSON.parse(row.metadata_json)
       metadata.verified_capabilities = []; metadata.connection_restored = false
       this.updateResource(row.id, { status: 'offline', metadata_json: JSON.stringify(metadata) })
@@ -121,7 +118,7 @@ export class Operations {
       })()
     }
   }
-  async close() { this.closed = true; clearInterval(this.staleTimer); for (const entry of this.running.values()) entry.abort.abort(); for (const id of new Set([...this.listeners.keys(), ...this.externalTimers.keys(), ...this.externalSyncs.keys()])) this.stopListener(id); for (const socket of this.channels.values()) socket.destroy(); await this.terminals.closeAll(); await this.pivots.closeAll(); await Promise.all([...this.running.values()].map(r => r.completion)); await new Promise<void>(resolve => setImmediate(resolve)) }
+  async close() { this.closed = true; clearInterval(this.staleTimer); for (const entry of this.running.values()) entry.abort.abort(); for (const id of new Set([...this.listeners.keys(), ...this.externalTimers.keys(), ...this.externalSyncs.keys()])) this.stopListener(id); for (const socket of this.channels.values()) socket.destroy(); await this.pivots.closeAll(); await Promise.all([...this.running.values()].map(r => r.completion)); await new Promise<void>(resolve => setImmediate(resolve)) }
   async cancelProject(project: string) {
     this.store.db.prepare("UPDATE operation_tasks SET cancel_requested=1,status=CASE WHEN status IN ('queued','running') THEN 'cancelled' ELSE status END,completed_at=CASE WHEN status IN ('queued','running') THEN ? ELSE completed_at END WHERE project_id=? AND status NOT IN ('succeeded','failed','cancelled','rejected')").run(now(), project)
     for (const [id, entry] of this.running) if (this.task(id).project_id === project) entry.abort.abort()
@@ -279,7 +276,6 @@ export class Operations {
       const resource = this.resource(this.task(id).resource_id)
       if (!this.adapterEnabled(resource.kind === 'webshell' || resource.kind === 'entry' ? 'redtrace-webshell' : 'redtrace-c2')) entry.abort.abort()
     }
-    if (!this.adapterEnabled('redtrace-remote-terminal') || !this.adapterEnabled('redtrace-c2')) await this.terminals.closeAll()
     if (!this.adapterEnabled('redtrace-pivot')) await this.pivots.closeAll()
     this.wake()
   }
@@ -300,7 +296,7 @@ export class Operations {
     } catch (error) { this.finish(task.id, executionResult(error instanceof Error ? error.message : String(error), null, { error_code: 'AUTH_FAILED' })); return false }
   }
   private actionRisk(action: string, requested = 'low') {
-    const fixed: Record<string, string> = { command: 'high', delete_file: 'high', move_file: 'high', write_file: 'high', upload_file: 'high', create_file: 'medium', create_directory: 'medium', 'pivot.open': 'high', 'terminal.signal': 'medium' }
+    const fixed: Record<string, string> = { command: 'high', delete_file: 'high', move_file: 'high', write_file: 'high', upload_file: 'high', create_file: 'medium', create_directory: 'medium', 'pivot.open': 'high' }
     const order = ['low', 'medium', 'high', 'critical']
     return order[Math.max(order.indexOf(fixed[action] ?? 'low'), Math.max(0, order.indexOf(requested)))]!
   }
@@ -342,7 +338,7 @@ export class Operations {
   create(project: string | null, input: any) {
     return this.store.transaction(() => {
       if (!resourceKinds.includes(input.kind)) throw new HttpError(400, 'Unsupported resource kind')
-      const prefixes: Record<string, string> = { webshell: 'ws', c2_listener: 'lis', c2_session: 'ses', c2_payload: 'pay', c2_profile: 'prf', proxy: 'prx', host: 'hst', terminal: 'tty', entry: 'ent', file: 'fil', credential_ref: 'cred', result: 'res' }
+      const prefixes: Record<string, string> = { webshell: 'ws', c2_listener: 'lis', c2_session: 'ses', c2_payload: 'pay', c2_profile: 'prf', proxy: 'prx', host: 'hst', entry: 'ent', file: 'fil', credential_ref: 'cred', result: 'res' }
       const id = uid(prefixes[input.kind]), metadata = { ...input.metadata }, secret = { ...input.secret }, at = now()
       if(input.actor_type==='worker') for(const key of ['verified_capabilities','verified_at','verified_endpoint','runtime_verified','verification_version','conflict_key']) delete metadata[key]
       if (input.actor_type === 'worker' && input.kind === 'file') delete secret.artifact_path

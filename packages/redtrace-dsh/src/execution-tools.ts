@@ -219,14 +219,9 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
     ['redtrace-terminal', async use => {
       const scope = scoped.isolate('terminals')
       await use(scope, `${VENDOR}/terminal/terminal/lib/index.js`)
-      await use(scope, `${VENDOR}/terminal/terminal-bash/lib/index.js`)
+      await use(scope, `${VENDOR}/terminal/terminal-bash/lib/index.js`, process.platform === 'win32' ? { shellDialect: 'pwsh' } : undefined)
       // DSH 0.2.1-alpha.2 moved the interactive terminal tool under experimental/.
       await use(scope, `${VENDOR}/experimental/tool-terminal/lib/index.js`)
-    }],
-    ['redtrace-spill', async use => {
-      const scope = scoped.isolate('spillStore')
-      await use(scope, `${VENDOR}/spill/spill-local/lib/index.js`)
-      await use(scope, `${VENDOR}/spill/spill-policy/lib/index.js`, { maxInlineBytes: 8192 })
     }],
     ['redtrace-tool-timeout', use => use(scoped, `${VENDOR}/guard/timeout-policy/lib/index.js`)],
     ['redtrace-repeat-reminder', use => config.contextualAttempts ? Promise.resolve() : use(scoped, `${VENDOR}/guard/repeat-tool-reminder/lib/index.js`, { thresholds: [3, 5, 8], argumentsPreviewChars: 500 })],

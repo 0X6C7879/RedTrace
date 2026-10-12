@@ -485,6 +485,8 @@ function auditPage() {
       if (!event || !['tool.started', 'tool.completed'].includes(event.kind)) return false;
       const title = String(this.toolTitle(event)).trim().toLowerCase().replaceAll('_', ' ');
       return ['bash', 'sh', 'shell', 'powershell', 'pwsh', 'cmd', 'command', 'terminal', 'exec'].includes(title)
+        || title === 'run code'
+        || title.startsWith('terminal ')
         || title.includes('shell')
         || title.includes('bash');
     },
@@ -504,13 +506,14 @@ function auditPage() {
 
     eventCommand(event) {
       if (event?.command) return this.displayCommand(event.command);
-      const argumentsValue = this.parseArguments(event?.arguments);
+      const argumentsValue = this.toolArguments(event);
       if (argumentsValue && typeof argumentsValue === 'object') {
-        for (const key of ['command', 'cmd', 'script', 'input']) {
+        for (const key of ['command', 'cmd', 'script', 'code', 'input', 'text']) {
           if (typeof argumentsValue[key] === 'string' && argumentsValue[key].trim()) {
             return this.displayCommand(argumentsValue[key]);
           }
         }
+        if (Array.isArray(argumentsValue.argv)) return argumentsValue.argv.map(value => JSON.stringify(value)).join(' ');
       }
       if (typeof argumentsValue === 'string' && argumentsValue.trim()) {
         return this.displayCommand(argumentsValue);
@@ -523,7 +526,9 @@ function auditPage() {
         );
         if (started && started !== event) return this.eventCommand(started);
       }
-      return 'shell command';
+      const args = this.toolArguments(event);
+      const id = args?.sessionId || args?.id || args?.session_id || args?.shell_id || '';
+      return `${this.toolTitle(event) || 'shell command'}${id ? ` ${id}` : ''}`;
     },
 
     parseArguments(value) {
@@ -585,7 +590,31 @@ function auditPage() {
     },
 
     eventPayload(event) {
-      if (event.content) return this.displayText(event.content);
+      let content = event.content || '';
+      if (content) {
+        const value = this.parseArguments(content);
+        // Only unwrap recorded output envelopes; business JSON stays intact.
+        if (value && typeof value === 'object') {
+          if (typeof value.evidenceId === 'string' && /^ev-[a-f0-9]{64}$/.test(value.evidenceId) && typeof value.preview === 'string') {
+            content = value.preview;
+          } else if (Array.isArray(value.content) && value.content.every(block => block?.type === 'text' && typeof block.text === 'string')) {
+            content = value.content.map(block => block.text).join('');
+          } else if (this.isCommand(event)) {
+            if (typeof value.output === 'string') content = value.output;
+            else if (typeof value.combined_output === 'string') content = value.combined_output;
+          }
+        }
+      }
+      const diffs = event.meta?.diffs;
+      if (['write', 'edit'].includes(this.toolTitle(event)) && Array.isArray(diffs)) {
+        const changes = diffs.filter(diff => typeof diff?.path === 'string' && typeof diff.newText === 'string'
+          && (diff.oldText === null || typeof diff.oldText === 'string'))
+          .map(diff => [diff.path, ...(diff.oldText === null ? [] : diff.oldText.split('\n').map(line => `- ${line}`)),
+            ...diff.newText.split('\n').map(line => `+ ${line}`)].join('\n')).join('\n\n');
+        if (changes) content = [content, changes].filter(Boolean).join('\n\n');
+      }
+      if (content) return this.displayText(content);
+      if (['tool.completed', 'command.completed'].includes(event.kind)) return '（未返回可显示的文本输出）';
       if (event.arguments) {
         const parsed = this.parseArguments(event.arguments);
         try { return JSON.stringify(parsed, null, 2); } catch { return String(event.arguments); }
@@ -593,7 +622,6 @@ function auditPage() {
       if (event.changes) {
         try { return JSON.stringify(event.changes, null, 2); } catch {}
       }
-      if (['tool.completed', 'command.completed'].includes(event.kind)) return '（未返回可显示的文本输出）';
       return '';
     },
 

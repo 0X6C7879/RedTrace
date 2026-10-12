@@ -56,7 +56,6 @@ const timeoutSchema = Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 
 const viaSchema = Type.Optional(Type.String({ minLength: 1, maxLength: 64 }))
 const targetSchema = Type.Optional(Type.String({ minLength: 1, maxLength: 2048 }))
 const pathSchema = Type.String({ minLength: 1, maxLength: 1024 })
-const fencingSchema = Type.Integer({ minimum: 1 })
 
 const fileVerbs = ['remote.command']
 
@@ -145,42 +144,7 @@ const VERBS: readonly VerbDefinition[] = [
     parameters: Type.Object({ path: pathSchema, timeout: timeoutSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ path: args.path, timeout: args.timeout }),
   },
-  {
-    id: 'remote.terminal.open', action: 'terminal.open', risk: 'medium', description: 'Open a persistent SSH terminal resource and acquire its exclusive write lease.',
-    parameters: Type.Object({ via: Type.String({ minLength: 1 }), name: Type.Optional(Type.String()), rows: Type.Optional(Type.Integer({ minimum: 2, maximum: 500 })), cols: Type.Optional(Type.Integer({ minimum: 2, maximum: 1000 })), ttl_seconds: Type.Optional(Type.Integer({ minimum: 5, maximum: 3600 })) }), arguments: args => ({ ...args }),
-  },
-  {
-    id: 'remote.terminal.read', action: 'terminal.read', risk: 'low', description: 'Read bounded remote terminal output from a cursor.',
-    parameters: Type.Object({ via: Type.String({ minLength: 1 }), cursor: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 262144 })) }), arguments: args => ({ ...args }),
-  },
-  {
-    id: 'remote.terminal.claim', action: 'terminal.claim', risk: 'medium', description: 'Claim an existing persistent terminal for this Run and receive a fresh fencing token.',
-    parameters: Type.Object({ via: Type.String({ minLength: 1 }), ttl_seconds: Type.Optional(Type.Integer({ minimum: 5, maximum: 3600 })) }), arguments: args => ({ ...args }),
-  },
-  {
-    id: 'remote.terminal.release', action: 'terminal.release', risk: 'low', description: 'Release this Run’s terminal lease without closing the remote terminal.',
-    parameters: Type.Object({ via: Type.String({ minLength: 1 }), fencing_token: fencingSchema }), arguments: args => ({ ...args }),
-  },
-  {
-    id: 'remote.terminal.send', action: 'terminal.send', risk: 'medium', description: 'Write to a persistent terminal using its live fencing token.',
-    parameters: Type.Object({ via: Type.String({ minLength: 1 }), data: Type.String(), fencing_token: fencingSchema, cursor: Type.Optional(Type.Integer({ minimum: 0 })) }), arguments: args => ({ ...args }),
-  },
-  {
-    id: 'remote.terminal.expect', action: 'terminal.expect', risk: 'low', description: 'Wait for literal bounded terminal text and distinguish match, timeout, and EOF.',
-    parameters: Type.Object({ via: Type.String({ minLength: 1 }), text: Type.String({ minLength: 1, maxLength: 4096 }), cursor: Type.Optional(Type.Integer({ minimum: 0 })), timeout: timeoutSchema }), arguments: args => ({ ...args }),
-  },
-  {
-    id: 'remote.terminal.resize', action: 'terminal.resize', risk: 'low', description: 'Resize a persistent PTY using its live fencing token.',
-    parameters: Type.Object({ via: Type.String({ minLength: 1 }), rows: Type.Integer({ minimum: 2, maximum: 500 }), cols: Type.Integer({ minimum: 2, maximum: 1000 }), fencing_token: fencingSchema }), arguments: args => ({ ...args }),
-  },
-  {
-    id: 'remote.terminal.signal', action: 'terminal.signal', risk: 'medium', description: 'Send an allowed POSIX signal to a persistent terminal.',
-    parameters: Type.Object({ via: Type.String({ minLength: 1 }), signal: Type.Union(['INT', 'TERM', 'HUP', 'KILL', 'QUIT'].map(v => Type.Literal(v))), fencing_token: fencingSchema }), arguments: args => ({ ...args }),
-  },
-  {
-    id: 'remote.terminal.close', action: 'terminal.close', risk: 'medium', description: 'Close a persistent terminal using its live fencing token.',
-    parameters: Type.Object({ via: Type.String({ minLength: 1 }), fencing_token: fencingSchema }), arguments: args => ({ ...args }),
-  },
+
 ]
 
 const ADAPTERS: readonly AdapterDefinition[] = [
@@ -215,11 +179,6 @@ const ADAPTERS: readonly AdapterDefinition[] = [
     id: 'proxy', label: '代理/Pivot', pluginId: 'redtrace-pivot', verbs: ['pivot.socks', 'pivot.validate', 'pivot.paths', 'pivot.close'],
     kinds: ['proxy'],
     establish: '使用 pivot.socks 建立受管 SSH Forward、Chisel 或 Ligolo 路径。',
-  },
-  {
-    id: 'remote-terminal', label: '远程终端', pluginId: 'redtrace-remote-terminal',
-    verbs: ['remote.terminal.open', 'remote.terminal.read', 'remote.terminal.claim', 'remote.terminal.release', 'remote.terminal.send', 'remote.terminal.expect', 'remote.terminal.resize', 'remote.terminal.signal', 'remote.terminal.close'],
-    kinds: ['c2_session', 'terminal'], establish: '先登记并验证 SSH Session，再用 remote.terminal.open 建立跨 Step 终端。',
   },
 ]
 
@@ -268,8 +227,6 @@ interface ChannelRow { id: string; kind: string; name: string; target: string; l
 function channelSupports(row: ChannelRow, verb: string): boolean {
   const metadata = JSON.parse(row.metadata_json || '{}'), verified = Array.isArray(metadata.verified_capabilities) ? metadata.verified_capabilities : undefined
   if (verb === 'pivot.validate' || verb === 'pivot.close') return row.kind === 'proxy'
-  if (verb === 'remote.terminal.open') return row.kind === 'c2_session' && metadata.connection_type === 'direct' && metadata.shell_type === 'ssh' && verified?.includes('remote.command') === true
-  if (verb.startsWith('remote.terminal.')) return row.kind === 'terminal' && metadata.interactive === true
   if (verb === 'remote.session.probe') return row.kind === 'webshell' || metadata.connection_type === 'direct' && metadata.shell_type === 'ssh' || (metadata.reported_capabilities ?? metadata.capabilities ?? []).includes('command')
   if (row.kind === 'c2_session' && verb.startsWith('remote.file.') && !['direct', 'external_c2'].includes(metadata.connection_type)) return false
   if (verified) return verified.includes(verb)
@@ -287,7 +244,7 @@ function candidateChannels(runtime: VerbRuntime, verb: string, projectId?: strin
     const resource = runtime.operations.resource(row.id)
     return (projectId === undefined || resource.project_id === null || resource.project_id === projectId)
       && channelSupports(row, verb)
-      && (!action || action.startsWith('pivot.') || action.startsWith('terminal.') || operationSupported(resource, action))
+      && (!action || action.startsWith('pivot.') || operationSupported(resource, action))
   })
 }
 
@@ -354,19 +311,6 @@ export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Rec
     finally { runtime.operations.releaseLease(runtime.operations.resource(channel.id),{actor_type:'worker',actor:context.worker,fencing_token:lease.fencing_token}) }
   }
   if (verb === 'pivot.close') return { route_id: channel.id, closed: await runtime.operations.pivots.close(channel.id) }
-  if (verb.startsWith('remote.terminal.')) {
-    const actor = { actor_type: 'worker', actor: context.worker }
-    if (!runtime.operations.authorized(context.projectId, definition.action, runtime.operations.resource(channel.id))) throw new Error('Remote terminal operation requires explicit project authorization')
-    if (verb === 'remote.terminal.open') return runtime.operations.terminals.open(context.projectId, channel.id, { ...args, ...actor, run_id: context.runId })
-    if (verb === 'remote.terminal.read') return runtime.operations.terminals.read(channel.id, Number(args.cursor ?? 0), Number(args.limit ?? 65536))
-    if (verb === 'remote.terminal.claim') return { terminal_id: channel.id, lease: runtime.operations.lease(resource, { owner_type: 'worker', owner: context.worker, run_id: context.runId, ttl_seconds: Number(args.ttl_seconds ?? 120) }) }
-    if (verb === 'remote.terminal.release') { runtime.operations.releaseLease(resource, { ...actor, fencing_token: args.fencing_token }); return { terminal_id: channel.id, released: true } }
-    if (verb === 'remote.terminal.send') return runtime.operations.terminals.send(channel.id, { ...args, ...actor })
-    if (verb === 'remote.terminal.expect') return runtime.operations.terminals.expect(channel.id, args)
-    if (verb === 'remote.terminal.resize') return runtime.operations.terminals.resize(channel.id, { ...args, ...actor })
-    if (verb === 'remote.terminal.signal') return runtime.operations.terminals.signal(channel.id, { ...args, ...actor })
-    if (verb === 'remote.terminal.close') return { terminal_id: channel.id, closed: await runtime.operations.terminals.close(channel.id, 'agent request', { ...args, ...actor }) }
-  }
   const task = runtime.operations.createTask(context.projectId, channel.id, {
     action: definition.action,
     arguments: definition.arguments(args),

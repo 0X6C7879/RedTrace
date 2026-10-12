@@ -14,7 +14,7 @@ Skill 无分类轴:Execute 会话统一通过 DSH 原生 skill 栈(`skill` + `sk
 | 派发器 | 同上 `dispatchVerb` | 通道选择 → `Operations.createTask` → 轮询至终态;审批等待提前返回 |
 | 工具工厂 | 同上 `verbTools` | 按 Step.requires 生成中立 AgentTool(`remote_command` 等)，仅由 DSH 宿主注册到原生工具运行时 |
 | 通道族插件 | `packages/redtrace-dsh/src/webshell.ts`、`c2.ts` | Cordis 插件 `redtrace-webshell` / `redtrace-c2`,进插件管理页,提供族专属工具(探测、listener/payload/会话)并以其运行状态门控适配器 |
-| SSH/SFTP 与远程终端 | `packages/redtrace-engine/src/operation-execution.ts`、`remote-terminal.ts` | 上传/下载仅由真实 direct SSH + 已探测 SFTP 子系统的适配器提供；远程 PTY 是 Resource 托管终端，租约校验发生在每次写入/尺寸/信号调用 |
+| SSH/SFTP | `packages/redtrace-engine/src/operation-execution.ts` | 上传/下载仅由真实 direct SSH + 已探测 SFTP 子系统的适配器提供 |
 
 ## 派发规则(通道选择)
 

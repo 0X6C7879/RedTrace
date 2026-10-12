@@ -118,8 +118,8 @@ test('TCP output delayed by 850ms is collected through its completion boundary',
 test('leases serialize conflict domains and preserve monotonic fencing after release', async () => {
   const f = fixture()
   try {
-    const a = f.operations.create(f.project.id, { kind: 'terminal', name: 'A', metadata: { conflict_key: 'shared-stream' } }).resource
-    const b = f.operations.create(f.project.id, { kind: 'terminal', name: 'B', metadata: { conflict_key: 'shared-stream' } }).resource
+    const a = f.operations.create(f.project.id, { kind: 'proxy', name: 'A', metadata: { conflict_key: 'shared-stream' } }).resource
+    const b = f.operations.create(f.project.id, { kind: 'proxy', name: 'B', metadata: { conflict_key: 'shared-stream' } }).resource
     const lease = f.operations.lease(f.operations.resource(a.id), { owner_type: 'worker', owner: 'worker-a', run_id: 'run-a' })
     assert.equal(lease.fencing_token, 1)
     assert.throws(() => f.operations.lease(f.operations.resource(b.id), { owner_type: 'worker', owner: 'worker-b' }), /lease belongs/)

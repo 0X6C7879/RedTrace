@@ -61,11 +61,19 @@ export function redactSensitive(value: unknown): unknown {
   if (!value || typeof value !== 'object') return value
   return Object.fromEntries(Object.entries(value).map(([key, item]) => {
     if (/^(?:authorization|cookie|set-cookie|password|passwd|secret|token|api[_-]?key|flag|requestBody|responseBody|(?:request|response)?BodyBase64)$/i.test(key)) return [key, '[REDACTED]']
-    if (key.toLowerCase() === 'url' && typeof item === 'string') {
+    if (['content', 'text', 'arguments'].includes(key) && typeof item === 'string') {
       try {
-        const url = new URL(item)
+        const parsed = JSON.parse(item), redacted = redactSensitive(parsed)
+        return [key, JSON.stringify(parsed) === JSON.stringify(redacted) ? item : JSON.stringify(redacted)]
+      } catch {
+        return [key, item.replace(/("?(?:authorization|cookie|set-cookie|password|secret|token|api[_-]?key|flag)"?\s*[:=]\s*")[^"]*(")/ig, '$1[REDACTED]$2')]
+      }
+    }
+    if (['url', 'location'].includes(key.toLowerCase()) && typeof item === 'string') {
+      try {
+        const url = new URL(item, 'http://redtrace.invalid')
         for (const param of [...url.searchParams.keys()]) if (/^(?:auth(?:orization)?|cookie|csrf|key|password|secret|session|token|api[_-]?key|code)$/i.test(param)) url.searchParams.set(param, '[REDACTED]')
-        return [key, url.toString()]
+        return [key, url.origin === 'http://redtrace.invalid' ? `${url.pathname}${url.search}${url.hash}` : url.toString()]
       } catch {}
     }
     return [key, redactSensitive(item)]
@@ -129,7 +137,7 @@ export class Store {
     this.db.prepare('INSERT OR IGNORE INTO metadata VALUES (?,?)').run('schema', '2')
     // Counters of deleted projects would otherwise linger forever and are never read again.
     this.db.prepare('DELETE FROM counters WHERE scope NOT IN (SELECT id FROM projects)').run()
-    try { this.migrateCurrentFgs() } catch (error) { this.db.close(); throw error }
+    try { this.migrateCurrentFgs(); this.migrateNativeTerminal() } catch (error) { this.db.close(); throw error }
     this.changes.setMaxListeners(0)
   }
   private migrateCurrentFgs() {
@@ -186,6 +194,18 @@ export class Store {
       }
       this.db.exec(`DROP INDEX IF EXISTS nodes_active; CREATE INDEX nodes_active ON nodes(project_id,kind) WHERE ${ACTIVE_NODE_SQL}`)
       this.db.prepare('INSERT INTO metadata VALUES (?,?)').run('fgs-current-only', '1')
+    })
+  }
+  private migrateNativeTerminal() {
+    this.transaction(() => {
+      for (const row of this.db.prepare(`SELECT data FROM nodes WHERE kind='step' AND ${ACTIVE_NODE_SQL} AND json_extract(data,'$.status') NOT IN ('done','cancelled')`).all()) {
+        const step = JSON.parse(String(row.data)) as Step
+        const requires = step.requires.filter(verb => !verb.startsWith('remote.terminal.'))
+        if (requires.length === step.requires.length) continue
+        step.requires = requires; step.planVersion = (step.planVersion ?? 1) + 1
+        this.saveNode(step)
+        this.event(step.projectId, 'step.revised', step, { reason: 'Interactive terminals now use DSH Terminal; removed remote.terminal.* requirements' })
+      }
     })
   }
   close() { this.notifications.clear(); this.stepNotifications.clear(); this.changes.removeAllListeners(); this.db.close() }

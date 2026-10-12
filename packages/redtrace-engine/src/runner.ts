@@ -1,7 +1,7 @@
 import { Type } from 'typebox'
 import type { TSchema, Static } from 'typebox'
 import type { AgentTool, AgentToolResult } from './tool-types.ts'
-import { mkdir, open, readFile, realpath } from 'node:fs/promises'
+import { readFile, realpath } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import os from 'node:os'
@@ -13,7 +13,7 @@ import type { Store } from './store.ts'
 import type { TaskContext } from './scheduler.ts'
 import type { EngineConfig, Fact, Json, Step, Project, Run, Goal, Input } from './types.ts'
 import { knowledgeTools } from './knowledge.ts'
-import { extractOutput } from './result-summary.ts'
+import { redactSensitive } from './store.ts'
 import { closeWebChallenge, webTools } from './web.ts'
 import { verbIds } from './capability-verbs.ts'
 import { HttpError } from './types.ts'
@@ -22,7 +22,7 @@ import { taskPluginsSchema } from './task-plugins.ts'
 
 const json = (value: unknown): Json => JSON.parse(JSON.stringify(value))
 const execFileAsync = promisify(execFile)
-const result = (value: unknown, terminate = false): AgentToolResult<unknown> => ({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value, ...(terminate ? { terminate: true } : {}) })
+const result = (value: unknown, terminate = false): AgentToolResult<unknown> => ({ content: [{ type: 'text', text: JSON.stringify(redactSensitive(value)) }], details: value, ...(terminate ? { terminate: true } : {}) })
 function tool<T extends TSchema>(name: string, description: string, parameters: T, execute: (args: Static<T>, signal?: AbortSignal) => unknown | Promise<unknown>, terminate = false): AgentTool<T> {
   return { name, label: name, description, parameters, executionMode: 'sequential', execute: async (_id, args, signal) => result(await execute(args, signal), terminate) }
 }
@@ -187,67 +187,8 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     const output = value && typeof value === 'object' && Array.isArray((value as AgentToolResult<unknown>).content)
       ? value as AgentToolResult<unknown>
       : result(value)
-    return t.name === 'evidence_read' ? output : boundToolOutput(output, evidenceRoot, run.id)
+    return output
   } }))
-}
-
-export async function boundToolOutput(output: AgentToolResult<unknown>, evidenceRoot: string, runId: string): Promise<AgentToolResult<unknown>> {
-  const text = output.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
-  const raw = Buffer.from(JSON.stringify(output.details === undefined || text === JSON.stringify(output.details)
-    ? output.details ?? text : { content: output.content, details: output.details }))
-  const hasRawBody = (value: unknown): boolean => Array.isArray(value) ? value.some(hasRawBody) : value && typeof value === 'object'
-    ? Object.entries(value).some(([key, item]) => /^(?:requestBody|responseBody|(?:request|response)?BodyBase64)$/i.test(key) || hasRawBody(item)) : false
-  if (raw.byteLength <= 8192 && Buffer.byteLength(text) <= 8192 && !hasRawBody(output.details)) return output
-  const id = `ev-${createHash('sha256').update(raw).digest('hex')}`, directory = path.join(evidenceRoot, runId)
-  await mkdir(directory, { recursive: true, mode: 0o700 })
-  const base = await realpath(evidenceRoot), realDirectory = await realpath(directory)
-  if (!realDirectory.startsWith(base + path.sep)) throw new Error('Evidence path is outside the project workspace')
-  const filename = path.join(realDirectory, `${id}.json`)
-  let handle
-  try { handle = await open(filename, 'wx', 0o600); await handle.writeFile(raw); await handle.close() }
-  catch (error) {
-    await handle?.close().catch(() => {})
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    if (!(await readFile(filename)).equals(raw)) throw new Error('Evidence ID collision')
-  }
-  const safe = (value: unknown): unknown => Array.isArray(value) ? value.map(safe) : value && typeof value === 'object'
-    ? Object.fromEntries(Object.entries(value).map(([key, item]) => {
-      if (/^(?:authorization|cookie|set-cookie|password|secret|token|api[_-]?key|flag|requestBody|responseBody|(?:request|response)?BodyBase64)$/i.test(key)) return [key, '[REDACTED]']
-      if (/^(?:url|location)$/i.test(key) && typeof item === 'string') {
-        try {
-          const url = new URL(item, 'http://redtrace.invalid')
-          for (const param of [...url.searchParams.keys()]) if (/^(?:auth(?:orization)?|cookie|csrf|key|password|secret|session|token|api[_-]?key|code)$/i.test(param)) url.searchParams.set(param, '[REDACTED]')
-          const safeUrl = url.origin === 'http://redtrace.invalid' ? `${url.pathname}${url.search}${url.hash}` : url.toString()
-          return [key, safeUrl.length > 160 ? `${safeUrl.slice(0, 157)}...` : safeUrl]
-        } catch { return [key, item.slice(0, 160)] }
-      }
-      return [key, safe(item)]
-    }))
-    : value
-  const summarize = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(summarize)
-    if (!value || typeof value !== 'object') return value
-    const record = value as Record<string, unknown>
-    if (typeof record.text === 'string') return {...record,text:undefined,extraction:extractOutput(record.text)}
-    if (Array.isArray(record.results)) return { ...Object.fromEntries(['total', 'nextOffset', 'generation', 'database', 'dataRoot', 'diagnostics', 'note'].filter(key => key in record).map(key => [key, record[key]])), results: record.results.map(item => {
-      const row = item as Record<string, unknown>
-      if (row.kind === 'vulnerability') return { ...Object.fromEntries(['id', 'candidateId', 'name', 'cves', 'status', 'versionMatch', 'modified', 'unresolved', 'validated', 'sourceCount', 'affectedVersionCount'].filter(key => key in row).map(key => [key, row[key]])), affectedVersions: Array.isArray(row.affectedVersions) ? row.affectedVersions.slice(0, 3) : [], sources: Array.isArray(row.sources) ? row.sources.slice(0, 3).map(source => { const entry = source as Record<string, unknown>; return Object.fromEntries(['id', 'source', 'path', 'sha256', 'reference'].filter(key => key in entry).map(key => [key, entry[key]])) }) : [] }
-      if (row.path && row.sha256) return Object.fromEntries(['id', 'path', 'sha256', 'snippet', 'kind', 'templateId', 'component', 'version', 'protocols', 'cves'].filter(key => key in row).map(key => [key, row[key]]))
-      return Object.fromEntries(['index', 'method', 'url', 'status', 'location', 'durationMs', 'responseBytes', 'responseSha256', 'differenceFromFirst', 'error', 'evidence', 'extraction'].filter(key => key in row).map(key => [key, row[key]]))
-    }) }
-    return Object.fromEntries(Object.entries(record).map(([key, item]) => [key, summarize(item)]))
-  }
-  const sourceDetails = output.details && typeof output.details === 'object' ? output.details as Record<string, unknown> : {}
-  const metadata = { ...(sourceDetails.outputPath ? { outputPath: sourceDetails.outputPath, readPath: `read({path:${JSON.stringify(sourceDetails.outputPath)}})` } : {}),
-    ...(sourceDetails.stdoutPath ? {stdoutPath:sourceDetails.stdoutPath,stderrPath:sourceDetails.stderrPath}:{}),
-    ...(sourceDetails.exitCode !== undefined ? { exitCode: sourceDetails.exitCode } : {}), ...(sourceDetails.bytes !== undefined ? { outputBytes: sourceDetails.bytes } : {}),
-    ...(sourceDetails.sha256 !== undefined ? { outputSha256: sourceDetails.sha256 } : {}), ...(sourceDetails.error !== undefined ? { error: String(sourceDetails.error).slice(0, 1000) } : {}) }
-  let visible = output.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
-  try { visible = JSON.stringify(safe(summarize(output.details ?? JSON.parse(visible)))) } catch { visible = visible.replace(/("?(?:authorization|cookie|set-cookie|password|secret|token|api[_-]?key|flag)"?\s*[:=]\s*")[^"]*(")/ig, '$1[REDACTED]$2') }
-  const preview = Buffer.from(visible).subarray(0, 6144).toString('utf8')
-  const summary = { ...metadata, evidenceId: id, evidenceBytes: raw.byteLength, evidenceSha256: id.slice(3), preview, read: 'evidence_read({id,offset,length})' }
-  while (Buffer.byteLength(JSON.stringify(summary)) > 8192 && summary.preview.length) summary.preview = summary.preview.slice(0, Math.floor(summary.preview.length * 0.75))
-  return { ...output, content: [{ type: 'text', text: JSON.stringify(summary) }, ...output.content.filter(block => block.type !== 'text')], details: summary }
 }
 
 export const activityPrompt = (activity: 'decide' | 'execute', step?: Step, jevChoice = false, jevReadiness = false) => (activity === 'decide'

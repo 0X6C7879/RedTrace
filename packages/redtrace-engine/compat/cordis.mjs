@@ -1,9 +1,8 @@
 import {createHash, randomUUID} from 'node:crypto'
 import path from 'node:path'
 import { mkdir, realpath } from 'node:fs/promises'
-import { watch } from 'node:fs'
+import { watch, realpathSync } from 'node:fs'
 import { createEngine } from '../src/index.ts'
-import { workerShellTools, shellInstructions } from '../src/worker-shell.ts'
 import { createPlanGuard } from '../src/plan-guard.ts'
 import { efficiencyToolAvailable, graphTools, activityPrompt, activityLimits, graphUpdate, livePlan, launchContext, runMock } from '../src/runner.ts'
 import { isJevRecoveryPath, traceCall } from '../src/jev.ts'
@@ -22,6 +21,18 @@ import { probeModel, admitToolImages } from './llm.mjs'
 export const name = 'redtrace-node'
 export const inject = ['webServer']
 const json = value => JSON.parse(JSON.stringify(value))
+
+export function reasonSpillGuard(directory, cwd) {
+  return exec => {
+    if (exec.name !== 'read') return undefined
+    try {
+      const root = realpathSync(directory), file = realpathSync(path.resolve(cwd, exec.arguments.file_path))
+      const relative = path.relative(root, file)
+      if (relative && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative)) return undefined
+    } catch { /* Missing or inaccessible spill files are denied. */ }
+    return 'Reason may read only its own spilled tool results'
+  }
+}
 
 export { providerProfiles } from '../src/models.ts'
 
@@ -301,8 +312,6 @@ export async function apply(ctx, options) {
     // plugin is stopped it must leave the catalog entirely, or every Execute
     // turn keeps paying its entry as prompt tokens.
     try { engine.capabilities.setEnabled('jev-decision', manager.running('redtrace-jev')) } catch (error) { ctx.logger.warn(error) }
-    engine.shells.enabled = manager.running('redtrace-shell')
-    if (!engine.shells.enabled) await engine.shells.closeAll()
     await engine.operations.synchronizeAdapters()
     await Promise.all([...sessionRefresh.values()].map(refresh => refresh()))
     engine.scheduler.wake()
@@ -339,8 +348,11 @@ export async function apply(ctx, options) {
     const effort = await resolveReasoningEffort(ctx.get('llm'), { provider: worker.provider, model: worker.model, reasoning: model.reasoning ?? 'auto_max' })
     const checkpoint = store.run(run.id).checkpoint, resume = !!checkpoint?.sessionId
     if (resume && !await ctx.get('sessionPersistence').stat(SessionId(run.id))) throw new Error('Execute checkpoint session is missing; refusing a new session')
+    const { sessionDir } = await load('vendor/deepseek-harness/packages/spill/spill-local/lib/index.js')
+    const ownSpillRead = reasonSpillGuard(sessionDir(path.join(runtime.sessionRoot, 'spill'), run.id), cwd)
     const setup = async scoped => {
       if (run.activity === 'decide') {
+        scoped.tools.guard(ownSpillRead)
         scoped.systemPrompt.section({ name: 'redtrace:task-plugins', order: 3, text: 'Step.plugins 仅为对应 Step 的 Explore 装载；只能选择 allowed 插件。' })
         scoped.systemPrompt.context({ name: 'redtrace:task-plugins', order: 3, required: true, interpolate: false,
           text: () => TASK_PLUGINS.map(p => `${p.id}: ${p.description} (${manager.taskPluginAllowed(p.id) ? 'allowed' : 'disabled'})`).join('\n') })
@@ -374,7 +386,8 @@ export async function apply(ctx, options) {
       if (planGuard) {
         scoped.on('session/event', (session, event) => { if (String(session.id) === run.id && event.type === 'step/start') planGuard.beginTurn() })
         scoped.on('tools/result', exec => { if (!exec.parent) planGuard.settled(String(exec.rootCallId)) })
-        scoped.tools.guard(exec => planGuard.check({ name: exec.name, rootCallId: String(exec.rootCallId) }))
+        // Native spill reads retain the existing archived-evidence recovery allowance.
+        scoped.tools.guard(exec => planGuard.check({ name: exec.name === 'read' && ownSpillRead(exec) === undefined ? 'evidence_read' : exec.name, rootCallId: String(exec.rootCallId) }))
       }
       scoped.systemPrompt.context({ name: 'redtrace:live-plan', order: 2, required: true, interpolate: false,
         text: () => livePlan(store, run.id) })
@@ -394,13 +407,9 @@ export async function apply(ctx, options) {
       const refreshJevTools = refreshToolRegistrations(tools.filter(t => t.name.startsWith('jev_')),
         t => jev?.isEnabled(t.name === 'jev_choose' ? 'candidate_choice' : 'attack_readiness'), registerTool)
       const refreshEfficiencyTools = refreshToolRegistrations(tools.filter(t => /^(?:knowledge_|trace_|web_|http_batch$)/.test(t.name)), t => efficiencyToolAvailable(context, t.name), registerTool)
-      const shellEnabled = () => manager.running('redtrace-shell') && run.activity === 'execute' && task.executionProfile === 'direct'
-      scoped.systemPrompt.section({ name: 'redtrace:shell', order: 3, text: () => shellEnabled() ? shellInstructions : '' })
-      const refreshShellTools = refreshToolRegistrations(run.activity === 'execute' && task.executionProfile === 'direct' ? workerShellTools(context, engine.shells, engine.operations, cwd) : [], () => shellEnabled(), registerTool)
       const refreshVerbTools = refreshToolRegistrations(liveVerbs, t => verbToolAvailable(verbRuntime, t.name), registerTool)
       refreshLiveTools = () => {
         refreshJevTools()
-        refreshShellTools()
         refreshVerbTools()
         refreshEfficiencyTools()
       }
@@ -410,14 +419,11 @@ export async function apply(ctx, options) {
       // session tools in this scope's own layer, which restrictions never
       // filter. The guard enforces the same-session conclude boundary.
       const graphNames = new Set(tools.map(t => t.name))
-      scoped.tools.guard(exec => concludeOnly && !graphNames.has(exec.name) ? 'Execution timed out; only summarize and submit existing evidence'
+      scoped.tools.guard(exec => concludeOnly && !graphNames.has(exec.name) && (exec.name !== 'read' || ownSpillRead(exec) !== undefined) ? 'Execution timed out; only summarize and submit existing evidence'
         : (exec.name === 'jev_choose' && !jev?.isEnabled('candidate_choice') || exec.name === 'jev_assess_attack' && !jev?.isEnabled('attack_readiness')) ? 'Jev plugin is disabled'
-          : exec.name.startsWith('shell_') && !shellEnabled() ? 'Shell plugin is disabled or execution is isolated'
           : !verbToolAvailable(verbRuntime, exec.name) ? 'Capability adapter is disabled' : undefined)
-      // Decide sees only its scoped graph tools: the tools runtime restricts
-      // global names only, so an empty allow set masks every global tool
-      // (webshell/c2 family) for this agent.
-      if (run.activity === 'decide') scoped.tools.restrict({ allow: [] })
+      // Native read is guarded above; other global capabilities stay masked.
+      if (run.activity === 'decide') scoped.tools.restrict({ allow: ['read'] })
     }
     const traceWindow = [], tracePending = new Map()
     const unlisten = ctx.on('session/event', (session, event) => {

@@ -3,7 +3,7 @@
  * plugins build on — LLM service, Session, System Prompt assembly, Tool
  * runtime, Agent registry, and the Agent Loop (plus the LLM retry policy the
  * loop's provider adapters expect), and since DSH 0.2.1-alpha.2 the host-plane
- * filesystem and working-directory services every tool injects. Everything
+ * filesystem, working-directory services and native file recovery tools. Everything
  * else in a RedTrace deployment is a separately mounted plugin; the scheduler
  * mounts shell, filesystem, skill, sandbox, and contract plugins per agent.
  * @module redtrace-core
@@ -24,6 +24,7 @@ export async function apply(ctx: RuntimeContext): Promise<void> {
   const AgentLoop = await load('vendor/deepseek-harness/packages/core/agent-loop/lib/index.js')
   const FsLocal = await load('vendor/deepseek-harness/packages/fs/fs-local/lib/index.js')
   const WorkingDirectory = await load('vendor/deepseek-harness/packages/session/working-directory/lib/index.js')
+  const ToolFs = await load('vendor/deepseek-harness/packages/fs/tool-fs/lib/index.js')
   ctx.plugin(LlmRuntime.default ?? LlmRuntime)
   ctx.plugin(SessionStore.default ?? SessionStore)
   ctx.plugin(SystemPrompt.default ?? SystemPrompt, {
@@ -42,4 +43,6 @@ export async function apply(ctx: RuntimeContext): Promise<void> {
   // keep isolating `fs`; this host copy only backs the directory service.
   ctx.plugin(FsLocal.default ?? FsLocal, { cwd: repoRoot })
   ctx.plugin(WorkingDirectory.default ?? WorkingDirectory)
+  // Execute shadows these tools with its own filesystem; Reason allows only read.
+  ctx.plugin(ToolFs.default ?? ToolFs)
 }

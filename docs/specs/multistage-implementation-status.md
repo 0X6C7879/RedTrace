@@ -8,9 +8,9 @@
 |---|---|---|
 | P0-1 执行正确性 | 版本化结果；缺帧拒绝；TCP 完成边界；CLI 退出码不冒充远端码；失败/未知/取消证据；有界摘要 | 真实 Windows/WinRM、外部 C2 契约、所有编码与大输出环境矩阵 |
 | P0-2 真实能力 | Worker 验证字段不可自报；SFTP 上传/下载独立适配器且按 `operationSupported` 在匹配阶段再次校验；via 严格匹配；同主机歧义拒绝；重启不伪造连接 | 其他通道能力的真实后端逐项验证；真实重连；身份/网络环境选择 |
-| P0-3 持久终端 | Resource 托管 SSH PTY、增量读取/expect/send/resize/signal/close；terminal Resource 跨 Step；独占写租约与 fencing；租约申请失败会关闭新建 PTY；插件默认启用；本地 SSH PTY 夹具覆盖跨 Run 接管 | 真 SSH PTY、TCP 持续交互、前端输入/接管、完整项目生命周期与真实服务端兼容 |
+| P0-3 交互终端 | 统一使用 DSH 原生 Terminal，同一 Agent 内复用 sessionId；自建 WorkerShells 与跨 Step SSH PTY 已移除 | 不提供跨 Step、Run 或重启恢复 |
 | P0-4 会话仲裁 | 单写者；释放后 fencing 单调递增；Run 租约清理；旧 token 被拒绝；本地双 Worker 交接夹具通过；Beacon 单资源串行 | 原子人工接管、租约过期后进程同步核验、Worker 崩溃全流程 |
-| P0-5 Host/Route | Host/Terminal/Entry 类型；受管 SSH Forward/Chisel Provider 与生命周期入口；已验证 TCP SOCKS HTTP(S) 端点才能列为可用路径；Pivot 插件默认启用 | 有向多跳图搜索、命名空间、实际经代理目标服务验证、依赖失效传播、TUN/Ligolo 与完整隧道清理 |
+| P0-5 Host/Route | Host/Entry 类型；受管 SSH Forward/Chisel Provider 与生命周期入口；已验证 TCP SOCKS HTTP(S) 端点才能列为可用路径；Pivot 插件默认启用 | 有向多跳图搜索、命名空间、实际经代理目标服务验证、依赖失效传播、TUN/Ligolo 与完整隧道清理 |
 | P0-6 文件正确性 | SSH 使用 SFTP；读取不要求 command；结构化输入校验；写入/创建默认不覆盖；风险不能降级；Unicode/空格路径与二进制/空文件夹具通过 | Linux/Windows/CMD/PowerShell 真实环境完整矩阵与并发修改 |
 | P1-1 可靠传输 | SSH/SFTP upload/download 使用流式传输、临时发布、SHA-256 校验、已匹配前缀续传、Artifact 目录约束；本地 Operations 夹具验证 Worker A 下载生成的共享 File 可供 Worker B 上传复用 | 其他通道传输、真实 SFTP/大文件/断线/并发修改验收；源文件变化和恢复策略矩阵 |
 | P1-2 探测/升级 | 可关闭、按 requires 调用的最小会话探测；自报与验证分离 | 探测预算/有效期、提权环境变化刷新、受控升级、原通道保留验证 |

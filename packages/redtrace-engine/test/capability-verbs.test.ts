@@ -46,7 +46,10 @@ test('verb registry: channel reuse, selection rules, approval gating and Step re
     assert.equal(verbs.data.adapters.find((a: any) => a.id === 'browser'), undefined)
     assert.equal(verbs.data.adapters.find((a: any) => a.id === 'webshell').plugin_id, 'redtrace-webshell')
     assert.equal(verbs.data.verbs.find((v: any) => v.id === 'pivot.socks').available, true)
-    assert.equal(verbs.data.verbs.find((v: any) => v.id === 'remote.terminal.open').available, true)
+    assert.equal(verbs.data.verbs.some((v: any) => v.id.startsWith('remote.terminal.')), false)
+    assert.equal(verbs.data.adapters.find((a: any) => a.id === 'remote-terminal'), undefined)
+    assert.equal('shells' in engine, false)
+    assert.equal('terminals' in engine.operations, false)
 
     // No channel: the dispatch error carries establishment guidance, no guess.
     await assert.rejects(dispatchVerb(runtime, 'remote.command', { command: 'id' }, context), (error: unknown) => {

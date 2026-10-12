@@ -27,6 +27,7 @@ import * as credentials from './credentials.js'
 import * as attachment from './attachment.js'
 import * as fileReferences from './file-references.js'
 import * as codeRuntime from './code-runtime.js'
+import * as spill from './spill.js'
 
 export const name = 'redtrace-plugins'
 export const inject = ['webServer']
@@ -184,22 +185,10 @@ const MANAGED: readonly ManagedEntry[] = [
     intro: 'DSH 原生后台任务:bash 的 run_in_background 把长耗时命令(nmap、nuclei、ffuf 等)登记为任务,模型用 job_output / job_list / job_kill 跟进,完成后自动收到通知,不必 sleep 轮询。任务随所属会话结束自动清理。',
   },
   {
-    id: 'redtrace-terminal', label: '持久终端', category: 'feature',
+    id: 'redtrace-terminal', label: 'DSH Terminal', category: 'feature',
     modulePath: 'vendor/deepseek-harness/packages/experimental/tool-terminal/lib/index.js',
     description: '交互式 PTY 终端',
-    intro: 'DSH 原生持久终端:terminal_open / send / read / signal / close / list 在多次工具调用间保留交互式 shell 状态,适合 gdb、REPL、交互式探测等持续交互进程。一次性命令仍走 bash,长命令走后台任务。隔离档案下终端被限制在工作区内。',
-  },
-  {
-    id: 'redtrace-shell', label: 'Worker 持久 Shell', category: 'feature',
-    modulePath: 'packages/redtrace-engine/src/worker-shell.ts',
-    description: '宿主 tmux 托管成熟交互 CLI，同一 Run 复用',
-    intro: '无需 MCP 或 Skill。shell_open(argv,cwd?) 启动 OpenSSH、evil-winrm-py、Penelope 等已安装 CLI；shell_send 输入，shell_read 查看有界屏幕快照，shell_list 查看当前 Run，shell_close 主动关闭。会话只属于同一 Worker Run，不跨 Run/Worker 或重启恢复；Run 结束、取消、插件停止清理。输入提交不是命令成功，CLI 退出码不是远端命令退出码；密码使用已授权 credential_id 而非 argv/text。仅 direct 执行支持宿主 tmux；HTTP WebShell 保持无状态；远端不需 tmux。',
-  },
-  {
-    id: 'redtrace-remote-terminal', label: '远程持久终端', category: 'feature',
-    modulePath: 'packages/redtrace-engine/src/remote-terminal.ts',
-    description: '跨 Step 的 Resource 托管 SSH PTY',
-    intro: '基于已验证 SSH Resource 建立远程 PTY,提供游标读取、expect、输入、信号与尺寸控制。写操作受租约 fencing token 保护,与 Agent 私有的本地 terminal_* 完全分离。',
+    intro: 'DSH 原生交互终端:terminal_open(type=shell) 返回 sessionId,同一 Worker Run 内用 terminal_send / read / signal / close / list 多次交互,保留 shell 的 cwd/env。会话仅归所属 Agent,结束或插件停止由 DSH 清理,不跨 Step、Run 或重启恢复。Linux/macOS 使用 bash,Windows 使用 pwsh；isolated 档案受工作区沙箱约束。一次性命令使用原生 shell 工具,长命令使用后台任务。',
   },
   {
     id: 'redtrace-session-probe', label: '会话能力探测', category: 'feature',
@@ -220,10 +209,10 @@ const MANAGED: readonly ManagedEntry[] = [
     intro: 'DSH 原生文件搜索:glob / grep 直接搜索当前工作区,内置结果上限、超时与大结果 spill,不需要在 shell 里拼 find / rg 命令。',
   },
   {
-    id: 'redtrace-spill', label: '大结果落盘', category: 'feature',
+    id: 'redtrace-spill', label: '大结果落盘', category: 'feature', module: spill, needsRuntimeConfig: true,
     modulePath: 'vendor/deepseek-harness/packages/spill/spill-policy/lib/index.js',
     description: '超大工具结果落盘预览',
-    intro: 'DSH 原生 Spill:超过 8 KiB 的纯文本工具结果完整写入会话文件,模型只看到头尾预览与取回指引,需要时再用 read / grep 按需读取;与工具结果裁剪互补而非替代。',
+    intro: 'DSH 原生 Spill:所有 Worker 的工具结果按官方 12500 token 预算保留头尾预览,完整输出写入会话文件并附原生取回指引,按需使用 read / grep 读取。',
   },
   {
     id: 'redtrace-tool-timeout', label: '工具超时', category: 'feature',

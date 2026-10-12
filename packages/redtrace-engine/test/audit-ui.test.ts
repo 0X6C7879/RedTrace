@@ -25,3 +25,35 @@ test('audit timeline shows paired tool names, full commands, and result text', (
 test('completed tool without text output renders an explicit placeholder', () => {
   assert.match(page.eventPayload({ kind: 'tool.completed' }), /未返回可显示的文本输出/)
 })
+
+test('standalone PTC completions display code and terminal arguments without a start row', () => {
+  page.events = []
+  const code = { kind: 'tool.completed', title: 'run_code', call_id: 'code', arguments: { code: 'console.log("hello")' }, content: 'hello' }
+  assert.equal(page.isCommand(code), true)
+  assert.equal(page.eventCommand(code), code.arguments.code)
+  assert.equal(page.eventPayload(code), 'hello')
+  const terminal = { kind: 'tool.completed', title: 'terminal_send', arguments: { sessionId: 't1', text: 'pwd' }, content: '/workspace' }
+  assert.equal(page.isCommand(terminal), true)
+  assert.equal(page.eventCommand(terminal), 'pwd')
+  assert.equal(page.eventCommand({ ...terminal, title: 'terminal_read', arguments: { sessionId: 't1' } }), 'terminal_read t1')
+  assert.match(page.eventPayload({ ...code, content: '' }), /未返回可显示的文本输出/)
+})
+
+test('legacy output envelopes unwrap but ordinary JSON and Skill presentation stay intact', () => {
+  const shell = { kind: 'tool.completed', title: 'shell_read', content: '{"output":"hello","running":true}' }
+  assert.equal(page.eventPayload(shell), 'hello')
+  const envelope = { evidenceId: `ev-${'a'.repeat(64)}`, preview: 'large output', read: 'evidence_read({id})' }
+  assert.equal(page.eventPayload({ kind: 'tool.completed', content: JSON.stringify(envelope) }), 'large output')
+  const business = { kind: 'tool.completed', title: 'read_graph', content: '{"output":"a graph field"}' }
+  assert.equal(page.eventPayload(business), business.content)
+  const skill = { kind: 'tool.completed', title: 'skill', arguments: { name: 'ctf-web' }, content: 'private skill body' }
+  assert.equal(page.isSkill(skill), true)
+  assert.equal(page.isTool(skill), false)
+  assert.equal(page.displaySkillName(skill), 'ctf-web')
+})
+
+test('native file metadata appears in the existing tool payload', () => {
+  const event = { kind: 'tool.completed', title: 'edit', content: 'File edited', meta: { diffs: [{ path: 'file.txt', oldText: 'before', newText: 'after' }] } }
+  assert.equal(page.eventPayload(event), 'File edited\n\nfile.txt\n- before\n+ after')
+  assert.equal(page.eventPayload({ ...event, meta: { diffs: [null] } }), 'File edited')
+})

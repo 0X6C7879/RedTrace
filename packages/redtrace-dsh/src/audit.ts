@@ -34,12 +34,6 @@ function reasoningBlocksOf(blocks: Array<{ type?: string; text?: string }> | und
   return (blocks ?? []).filter(block => block.type === 'reasoning').map(block => block.text ?? '').join('')
 }
 
-const TOOL_RESULT_TEXT_LIMIT = 64 * 1024
-
-function clipText(value: string): string {
-  return value.length <= TOOL_RESULT_TEXT_LIMIT ? value : `${value.slice(0, TOOL_RESULT_TEXT_LIMIT)}…[truncated]`
-}
-
 export function eventProjection(task: RuntimeTask, event: SessionEvent): Record<string, unknown>[] {
   const data = event.data ?? {}
   const base = {
@@ -96,36 +90,42 @@ export function eventProjection(task: RuntimeTask, event: SessionEvent): Record<
     task.streamedText = false
     return projected
   }
-  if (event.type === 'tool/call') {
-    const callId = String(data.callId ?? '')
+  if (event.type === 'tool/call' || event.type === 'tool/ptc-dispatch-start') {
+    const callId = String(data.subCallId ?? data.callId ?? '')
     if (callId !== '') {
-      task.toolNames ??= new Map<string, string>()
-      task.toolNames.set(callId, String(data.name ?? ''))
+      task.toolCalls ??= new Map()
+      task.toolCalls.set(callId, { name: String(data.name ?? ''), arguments: data.arguments })
     }
-    return [{ ...base, kind: 'tool.started', title: data.name, call_id: data.callId, arguments: data.arguments }]
+    return [{ ...base, kind: 'tool.started', title: data.name, call_id: callId, arguments: data.arguments,
+      ...(data.rootCallId === undefined ? {} : { root_call_id: data.rootCallId, parent_call_id: data.parentCallId }) }]
   }
-  if (event.type === 'tool/result') {
+  if (event.type === 'tool/result' || event.type === 'tool/ptc-dispatch') {
     const message = data.message as {
       toolCallId?: string
       isError?: boolean
       content?: Array<{ type?: string; text?: string; isError?: boolean; content?: Array<{ type?: string; text?: string }> }>
       source?: { callId?: string }
     } | undefined
-    const callId = message?.toolCallId ?? message?.source?.callId ?? data.callId as string | undefined
-    const blocks = message?.content ?? []
+    const callId = (data.subCallId ?? message?.toolCallId ?? message?.source?.callId ?? data.callId) as string | undefined
+    const blocks = message?.content ?? data.content as NonNullable<typeof message>['content'] ?? []
     // New DSH messages store result blocks directly; accept the old wrapper too.
     const wrapper = blocks.find(candidate => candidate.type === 'tool-result')
     const text = textBlocksOf(wrapper?.content ?? blocks)
     // The UI hides a tool.started once its completion arrives, so the tool
     // name must travel on the completion for the block header to show it.
-    const name = callId === undefined ? undefined : task.toolNames?.get(String(callId))
+    const call = callId === undefined ? undefined : task.toolCalls?.get(String(callId))
+    if (callId !== undefined) task.toolCalls?.delete(String(callId))
+    const args = data.arguments ?? call?.arguments
     return [{
       ...base,
       kind: 'tool.completed',
-      title: name,
+      title: data.name ?? call?.name,
       call_id: callId,
-      error: Boolean(data.error) || Boolean(message?.isError) || Boolean(wrapper?.isError),
-      ...(text === '' ? {} : { content: clipText(text) }),
+      error: Boolean(data.error) || Boolean(data.isError) || Boolean(message?.isError) || Boolean(wrapper?.isError),
+      ...(args === undefined ? {} : { arguments: args }),
+      ...(data.meta === undefined ? {} : { meta: data.meta }),
+      ...(data.rootCallId === undefined ? {} : { root_call_id: data.rootCallId, parent_call_id: data.parentCallId }),
+      ...(text === '' ? {} : { content: text }),
     }]
   }
   if (event.type === 'turn/end') return [{ ...base, kind: 'turn.completed' }]

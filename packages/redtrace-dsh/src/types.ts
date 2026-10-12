@@ -122,8 +122,8 @@ export interface RuntimeTask {
   streamedThinking?: boolean
   /** Last system prompt already projected to the audit stream. */
   projectedSystem?: string
-  /** callId → tool name, so tool/result events can carry the tool title. */
-  toolNames?: Map<string, string>
+  /** Pending native and PTC calls, copied onto self-contained completion rows. */
+  toolCalls?: Map<string, { name: string; arguments: unknown }>
   /** Cumulative provider usage reported on assistant/message events. */
   usage?: TaskUsage
 }

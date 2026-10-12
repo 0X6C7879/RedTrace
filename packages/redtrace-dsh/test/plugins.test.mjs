@@ -119,11 +119,11 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
     assert.ok(!/Cairn|FastAPI/i.test(`${view.description}${view.intro}`), `${view.id} leaks an external project name`)
   }
 
-  // Dependency order: core first, scheduler last. Session-scoped capabilities
-  // mount no host fiber, so the host count is unchanged.
+  // Dependency order: core first, scheduler last; spill now serves every Worker.
   assert.equal(ctx.mounts[0].module, core)
   assert.equal(ctx.mounts.at(-1).module.name, 'redtrace-scheduler')
-  assert.equal(ctx.mounts.length, 6)
+  assert.equal(ctx.mounts.length, 7)
+  assert.ok(ctx.mounts.some(mount => mount.module.name === 'redtrace-spill'))
 
   // Every builtin entry boots running unless it is explicitly opt-in (defaultOff).
   const optIn = new Set([
@@ -146,8 +146,8 @@ test('efficiency features boot enabled by default and remain explicitly switchab
   assert.equal(first.manager.view('redtrace-lsp').status, 'stopped')
   assert.equal(first.manager.view('redtrace-ptc').status, 'stopped')
   assert.equal(first.manager.view('redtrace-jev').status, 'stopped')
-  assert.equal(first.manager.view('redtrace-remote-terminal').status, 'running')
-  for (const id of ['redtrace-shell', 'redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
+  assert.ok(!first.manager.list().some(p => ['redtrace-shell', 'redtrace-remote-terminal'].includes(p.id)))
+  for (const id of ['redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
     assert.equal(first.manager.view(id).status, 'running')
   }
   assert.equal(first.manager.view('redtrace-pivot').status, 'running')
@@ -185,7 +185,8 @@ test('boot honors the manifest: disabled plugins stay unmounted', async (t) => {
   const manifestPath = path.join(root, 'plugins.json')
   writeFileSync(manifestPath, JSON.stringify({
     version: 1,
-    disabled: ['redtrace-webshell', 'redtrace-reason'],
+    disabled: ['redtrace-webshell', 'redtrace-reason', 'redtrace-shell', 'redtrace-remote-terminal'],
+    enabled: ['redtrace-shell', 'redtrace-remote-terminal'],
   }))
 
   initState({
@@ -198,6 +199,8 @@ test('boot honors the manifest: disabled plugins stay unmounted', async (t) => {
   const views = manager.list()
 
   assert.equal(views.find((view) => view.id === 'redtrace-webshell').status, 'stopped')
+  assert.equal(views.find(view => view.id === 'redtrace-terminal').status, 'running')
+  assert.ok(!views.some(view => ['redtrace-shell', 'redtrace-remote-terminal'].includes(view.id)))
   assert.equal(views.find((view) => view.id === 'redtrace-reason').status, 'stopped')
   assert.ok(ctx.mounts.every(({ module }) => module.name !== 'redtrace-webshell'))
 
@@ -352,10 +355,14 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const list = await call('GET', '/__redtrace/plugins')
   assert.equal(list.status, 200)
-  assert.equal(JSON.parse(list.body).plugins.length, 38)
+  assert.equal(JSON.parse(list.body).plugins.length, 36)
+  for (const id of ['redtrace-shell', 'redtrace-remote-terminal']) {
+    assert.ok(!JSON.parse(list.body).plugins.some(plugin => plugin.id === id))
+    assert.equal((await call('POST', `/__redtrace/plugins/${id}/start`)).status, 400)
+  }
   assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === 'redtrace-jev').status, 'stopped')
 
-  for (const id of ['redtrace-shell', 'redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
+  for (const id of ['redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
     assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === id).status, 'running')
     const started = await call('POST', `/__redtrace/plugins/${id}/start`)
     assert.equal(JSON.parse(started.body).plugin.status, 'running')

@@ -44,19 +44,21 @@ Explore 用 `sync_step({planVersion})` 接收当前 Step、祖先 Goal 和有效
 
 凡是 DSH 原生提供的通用 Agent 能力,不再自研 Skill/MCP;RedTrace 只保留安全任务编排(FGS、Bootstrap/Reason/Explore、Intent 调度、Worker/Provider 路由、Fact/Finding/Step、共享 Resource、审计)。通用能力分两类进入插件管理页(`/__redtrace/plugins`,manifest 位于 `.redtrace/plugins.json`):
 
-**会话级能力栈**——`packages/redtrace-dsh/src/execution-tools.ts` 在每个 Execute 会话的 scoped 上下文里挂载,插件运行才挂载、停止只影响新会话。每个会话先 `isolate` 再挂载服务,并发 Execute 互不冲突,会话结束自动清理(后台任务、PTY、spill 文件句柄随会话销毁):
+**会话级能力栈**——`packages/redtrace-dsh/src/execution-tools.ts` 在每个 Execute 会话的 scoped 上下文里挂载,插件运行才挂载，启停对运行中的 Execute 会话生效。每个会话先 `isolate` 再挂载服务,并发 Execute 互不冲突,会话结束自动清理(后台任务、PTY、spill 文件句柄随会话销毁):
 
 | 插件 | 挂载的 DSH 包 | 模型得到的工具 |
 |---|---|---|
 | `redtrace-web` | `web` + `web-search-deepseek` + `web-fetch-http` + `tool-web` | `web_search`(密钥 `DEEPSEEK_API_KEY`)/ `web_fetch` |
 | `redtrace-jobs` | `jobs-local` + `tool-jobs` | `job_output` / `job_list` / `job_kill`,bash `run_in_background` |
-| `redtrace-terminal` | `terminal` + `terminal-bash` + `tool-terminal` | `terminal_open/send/read/signal/close/list` |
+| `redtrace-terminal` (DSH Terminal) | `terminal` + `terminal-bash` + `experimental/tool-terminal` | `terminal_open/send/read/signal/close/list`，复用 `sessionId` |
 | `redtrace-fs-search` | `tool-fs-search` | `glob` / `grep` |
 | `redtrace-spill` | `spill-local` + `spill-policy`(50 KB) | 大结果落盘 + 预览与取回指引 |
 | `redtrace-tool-timeout` | `tool-call-timeout-policy` | 声明超时预算的工具统一截止 |
 | `redtrace-repeat-reminder` | `repeat-tool-reminder` | 3/5/8 次连续同参调用注入提醒 |
 | `redtrace-lsp` | `lsp` + `lsp-stdio` + `tool-lsp` | `lsp`(goToDefinition 等;只挂载本机已安装的语言服务器,一个都没有则整栈跳过) |
 | `redtrace-ptc` | 会话内 `agent-tool-presentation`(ptc 模式) + python PTC sandbox | `run_code` 追加在原生工具旁 |
+
+交互终端仅保留 DSH 原生实现：Linux/macOS 使用 bash，Windows 使用 pwsh；同一 Agent 内保留 cwd/env 与交互进程，所属 Agent 销毁或插件停止后由 DSH 清理，不跨 Step、Run 或重启恢复。旧版未完成 Step 的 `remote.terminal.*` 声明在启动时自动移除，其它依赖和历史记录保留；旧 terminal Resource 仅保留离线历史，不再新建。
 
 前六项(加 repeat-reminder)默认开启;LSP 与 PTC 默认关闭,在插件页开启。direct 档案下 terminal 挂非受限 sandbox-policy(danger-full-access),isolated 档案继承 workspace-write。Reason/Decide 会话不挂执行工具链,能力栈同样仅限 Execute。
 

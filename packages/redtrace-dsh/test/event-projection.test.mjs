@@ -97,7 +97,7 @@ test('projects tool call arguments and result text', () => {
     },
   }), [{
     event_uid: 'rt-test-8', run_sequence: 8, timestamp: '2026-01-01T00:00:02Z',
-    kind: 'tool.completed', title: 'bash', call_id: 'c1', error: false, content: '/workspace',
+    kind: 'tool.completed', title: 'bash', call_id: 'c1', arguments: '{"command":"pwd"}', error: false, content: '/workspace',
   }])
 })
 
@@ -116,6 +116,41 @@ test('tool result without a matching call carries no title', () => {
     event_uid: 'rt-test-9', run_sequence: 9, timestamp: '2026-01-01T00:00:03Z',
     kind: 'tool.completed', title: undefined, call_id: 'cX', error: true, content: 'boom',
   }])
+})
+
+test('projects nested PTC calls independently with self-contained completions', () => {
+  const task = { sessionId: 'ptc', type: 'explore' }
+  const data = { rootCallId: 'root', parentCallId: 'parent', subCallId: 'child', name: 'terminal_send', arguments: { id: 't1', text: 'pwd' } }
+  const start = eventProjection(task, { type: 'tool/ptc-dispatch-start', seq: 1, data })[0]
+  assert.equal(start.kind, 'tool.started')
+  assert.equal(start.call_id, 'child')
+  const content = 'result\n'.repeat(12000) + '(Full result stored at: /spill/result.txt)'
+  const end = eventProjection(task, { type: 'tool/ptc-dispatch', seq: 2,
+    data: { ...data, isError: true, content: [{ type: 'text', text: content }], meta: { cwd: '/workspace' } } })[0]
+  assert.equal(end.kind, 'tool.completed')
+  assert.equal(end.title, data.name)
+  assert.deepEqual(end.arguments, data.arguments)
+  assert.equal(end.content, content, 'projection must not truncate native output or recovery notices')
+  assert.equal(end.error, true)
+  assert.equal(end.root_call_id, 'root')
+  assert.equal(end.parent_call_id, 'parent')
+  assert.deepEqual(end.meta, { cwd: '/workspace' })
+  assert.equal(task.toolCalls.size, 0)
+})
+
+test('out-of-order PTC completions and legacy wrappers retain their own results', () => {
+  const task = { sessionId: 'ptc' }
+  for (const subCallId of ['a', 'b']) eventProjection(task, { type: 'tool/ptc-dispatch-start', data: { subCallId, name: 'read', arguments: { file_path: subCallId } } })
+  for (const subCallId of ['b', 'a']) {
+    const row = eventProjection(task, { type: 'tool/ptc-dispatch', data: { subCallId, name: 'read', arguments: { file_path: subCallId }, content: [{ type: 'text', text: subCallId }] } })[0]
+    assert.equal(row.call_id, subCallId)
+    assert.equal(row.content, subCallId)
+  }
+  const row = eventProjection(task, { type: 'tool/result', data: { message: { source: { callId: 'old' }, content: [
+    { type: 'tool-result', isError: true, content: [{ type: 'text', text: 'aborted' }] },
+  ] } } })[0]
+  assert.equal(row.content, 'aborted')
+  assert.equal(row.error, true)
 })
 
 test('projects the system prompt from request headers, deduped per task', () => {
