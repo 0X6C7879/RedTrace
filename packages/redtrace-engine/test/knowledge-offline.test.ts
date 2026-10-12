@@ -65,7 +65,7 @@ test('model-facing CVE/component/version queries need no target evidence and nev
   try {
     const before = f.store.changes.listenerCount('change')
     const tools = knowledgeTools('', f.context), search = tools.find(item => item.name === 'knowledge_search')!, read = tools.find(item => item.name === 'knowledge_read')!, match = tools.find(item => item.name === 'knowledge_match')!
-    assert.match(search.description, new RegExp(f.root))
+    assert.ok(search.description.includes(f.root))
     assert.doesNotMatch(JSON.stringify(search.parameters), /evidence_ids|fact_ids|nmap|asset/)
     const exact = (await search.execute('cve', { query: 'cve-2025-10001 Widget' }) as any).details
     assert.equal(exact.total, 1); assert.equal(exact.results[0].candidateId, 'CVE-2025-10001')

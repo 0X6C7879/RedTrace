@@ -101,8 +101,10 @@ test('real OpenSSH client reuses one authentication and one remote shell process
       const session = accept(); session.on('pty', accept => accept()); session.on('window-change', accept => accept?.())
       session.on('shell', accept => {
         sessions++; const stream = accept(), child = spawn('/bin/sh', ['-i'], { stdio: 'pipe' }); processes.add(child)
-        stream.pipe(child.stdin); child.stdout.pipe(stream, { end: false }); child.stderr.pipe(stream.stderr, { end: false })
-        stream.write('SSH_READY\n')
+        // The fixture accepts a PTY but uses pipes, so emulate its CR-to-LF input mapping.
+        stream.on('data', (data: Buffer) => child.stdin.write(data.toString().replaceAll('\r', '\n')))
+        child.stdout.pipe(stream, { end: false }); child.stderr.pipe(stream.stderr, { end: false })
+        stream.write('SSH_READY\r\n')
         child.on('exit', code => { processes.delete(child); stream.exit(code ?? 0); stream.end() })
         stream.on('close', () => child.kill('SIGKILL'))
       })

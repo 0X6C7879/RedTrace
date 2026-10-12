@@ -31,7 +31,8 @@ test('CI builds the native DSH runtime before Engine checks and tests', () => {
   const root = path.resolve(import.meta.dirname, '../../..')
   const steps = parse(readFileSync(path.join(root, '.github/workflows/dsh-mainline.yml'), 'utf8')).jobs.test.steps
   const runs = steps.map((step: { run?: string }) => step.run)
-  assert.ok(runs.indexOf('python -m pip install -r tools/knowledge/requirements.txt') < runs.indexOf('npm test --prefix packages/redtrace-engine'))
+  const requirements = runs.indexOf('python -m pip install -r tools/knowledge/requirements.txt')
+  assert.ok(requirements >= 0 && requirements < runs.indexOf('npm test --prefix packages/redtrace-engine'))
   assert.equal(steps.find((step: { run?: string }) => step.run === 'npm test --prefix packages/redtrace-engine').env.REDTRACE_KNOWLEDGE_PYTHON, '${{ steps.python.outputs.python-path }}')
   const install = runs.indexOf('npm run dsh:install'), build = runs.indexOf('npm run dsh:build')
   assert.ok(install >= 0 && build > install, 'DSH must install before building')

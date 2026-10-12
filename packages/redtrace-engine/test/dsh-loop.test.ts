@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { mkdtempSync, symlinkSync, rmSync, readdirSync, readFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
@@ -356,11 +356,14 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     assert.equal(resumedNoticeRuns.length, 1); assert.equal(resumedNoticeRuns[0].id, pausedNoticeRuns[0].id)
 
   } finally {
-    if (!exited) child.kill('SIGTERM')
+    if (!exited) {
+      if (process.platform === 'win32' && child.pid) spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore' })
+      else child.kill('SIGTERM')
+    }
     await Promise.race([closed, delay(5000)])
     if (!exited) { child.kill('SIGKILL'); await closed }
     model.closeAllConnections(); await new Promise<void>(resolve => model.close(() => resolve()))
-    rmSync(work, { recursive: true, force: true })
+    rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     const metrics = ['Bootstrap', 'Reason', 'Explore'].map(role => {
       const rows = requests.filter(r => JSON.stringify(r.messages.filter((m: any) => m.role === 'system')).includes(`你是 ${role}`))
       const first = rows[0], users = first?.messages.filter((m: any) => m.role === 'user') ?? []
