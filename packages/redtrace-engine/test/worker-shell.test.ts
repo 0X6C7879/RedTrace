@@ -13,16 +13,16 @@ import { Operations } from '../src/operations.ts'
 import { fixtureAuthorize } from './execution-fixture.ts'
 
 async function waitOutput(shells: WorkerShells, run: string, id: string, pattern: RegExp) {
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 200; i++) {
     const result = await shells.read(run, id)
     const match = pattern.exec(result.output)
     if (match) return match
     await setTimeout(50)
   }
-  throw new Error('Expected actual output not observed')
+  throw new Error('Expected actual output not observed: ' + (await shells.read(run, id)).output)
 }
 
-test('tmux retains PID/cwd/env; owns input, redacts secrets, cleans up and reports CLI exit', async () => {
+test('tmux retains PID/cwd/env; owns input, redacts secrets, cleans up and reports CLI exit', { skip: process.platform === 'win32' }, async () => {
   const shells = new WorkerShells()
   try {
     const { shell_id } = await shells.open('a', ['/bin/sh', '-i'], '/tmp')
@@ -49,7 +49,7 @@ test('tmux retains PID/cwd/env; owns input, redacts secrets, cleans up and repor
   } finally { await shells.dispose() }
 })
 
-test('validation, concurrency, missing CLI, cancellation and stop gate', async () => {
+test('validation, concurrency, missing CLI, cancellation and stop gate', { skip: process.platform === 'win32' }, async () => {
   const shells = new WorkerShells()
   try {
     await assert.rejects(shells.open('x', ['echo bad; touch /tmp/WRONG'], '/tmp'), /Invalid/)
@@ -72,7 +72,7 @@ test('validation, concurrency, missing CLI, cancellation and stop gate', async (
   } finally { await shells.dispose() }
 })
 
-test('credential tool enforces project authorization and masks password', async () => {
+test('credential tool enforces project authorization and masks password', { skip: process.platform === 'win32' }, async () => {
   const store = new Store(':memory:'), operations = new Operations(store, '/tmp'), shells = new WorkerShells()
   try {
     const { project } = store.createProject({ title: 'Shell', origin: 'fixture', goal: 'local credential test' })
@@ -90,18 +90,19 @@ test('credential tool enforces project authorization and masks password', async 
   } finally { await shells.dispose(); await operations.close(); store.close() }
 })
 
-test('real OpenSSH client reuses one authentication and one remote shell process', async () => {
+test('real OpenSSH client reuses one authentication and one remote shell process', { skip: process.platform === 'win32' }, async () => {
   const key = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs1', format: 'pem' })
   let auth = 0, sessions = 0
   const clients = new Set<any>(), processes = new Set<ReturnType<typeof spawn>>()
   const server = new ssh2.Server({ hostKeys: [key] }, client => {
     clients.add(client); client.on('error', () => {}); client.on('close', () => clients.delete(client))
-    client.on('authentication', ctx => { if (ctx.method === 'none') { auth++; ctx.accept() } else ctx.reject() })
+    client.on('authentication', async ctx => { if (ctx.method === 'none') { auth++; await setTimeout(200); ctx.accept() } else ctx.reject() })
     client.on('ready', () => client.on('session', accept => {
       const session = accept(); session.on('pty', accept => accept()); session.on('window-change', accept => accept?.())
       session.on('shell', accept => {
         sessions++; const stream = accept(), child = spawn('/bin/sh', ['-i'], { stdio: 'pipe' }); processes.add(child)
         stream.pipe(child.stdin); child.stdout.pipe(stream, { end: false }); child.stderr.pipe(stream.stderr, { end: false })
+        stream.write('SSH_READY\n')
         child.on('exit', code => { processes.delete(child); stream.exit(code ?? 0); stream.end() })
         stream.on('close', () => child.kill('SIGKILL'))
       })
@@ -112,6 +113,7 @@ test('real OpenSSH client reuses one authentication and one remote shell process
   try {
     const port = (server.address() as { port: number }).port
     const { shell_id } = await shells.open('ssh', ['ssh', '-tt', '-p', String(port), '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'BatchMode=yes', 'fixture@127.0.0.1'], '/tmp')
+    await waitOutput(shells, 'ssh', shell_id, /SSH_READY/)
     await shells.send('ssh', shell_id, `cd /tmp; export RT_STATE=kept; printf 'SSH1:%s:%s:%s\\n' "$${'$'}" "$PWD" "$RT_STATE"`)
     const first = await waitOutput(shells, 'ssh', shell_id, /SSH1:(\d+):\/tmp:kept/)
     await shells.send('ssh', shell_id, `printf 'SSH2:%s:%s:%s\\n' "$${'$'}" "$PWD" "$RT_STATE"`)
@@ -125,7 +127,7 @@ test('real OpenSSH client reuses one authentication and one remote shell process
 })
 
 const penelope = path.resolve('.redtrace/runtime/tools/bin/penelope')
-for (const mode of ['bind', 'reverse']) test(`real Penelope ${mode} CLI retains remote PID/cwd/env`, { skip: !existsSync(penelope) }, async () => {
+for (const mode of ['bind', 'reverse']) test(`real Penelope ${mode} CLI retains remote PID/cwd/env`, { skip: process.platform === 'win32' || !existsSync(penelope) }, async () => {
   const sockets = new Set<net.Socket>(), processes = new Set<ReturnType<typeof spawn>>()
   const attach = (socket: net.Socket) => {
     sockets.add(socket); const child = spawn('/bin/sh', ['-i']); processes.add(child)
@@ -156,4 +158,10 @@ for (const mode of ['bind', 'reverse']) test(`real Penelope ${mode} CLI retains 
     await shells.dispose(); for (const child of processes) child.kill('SIGKILL'); for (const socket of sockets) socket.destroy()
     if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()))
   }
+})
+
+test('Windows rejects the unsupported tmux Worker Shell explicitly', { skip: process.platform !== 'win32' }, async () => {
+  const shells = new WorkerShells()
+  try { await assert.rejects(shells.open('windows', ['cmd.exe'], process.cwd()), /macOS\/Linux tmux host/) }
+  finally { await shells.dispose() }
 })

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { WorkerShells, workerShellTools, shellInstructions } from '../../redtrace-engine/src/worker-shell.ts'
 import { refreshToolRegistrations } from '../../redtrace-engine/compat/cordis.mjs'
 
-test('Shell plugin stop revokes live tools, closes sessions, and start permits fresh shells in same Run', async () => {
+test('Shell plugin stop revokes live tools, closes sessions, and start permits fresh shells in same Run', { skip: process.platform === 'win32' }, async () => {
   const shells = new WorkerShells(), registered = new Set()
   const context = { run: { id: 'toggle' }, worker: { name: 'fixture' }, signal: new AbortController().signal }
   const tools = workerShellTools(context, shells, {}, '/tmp')

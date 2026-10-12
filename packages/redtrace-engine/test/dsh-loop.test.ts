@@ -9,6 +9,8 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { Configuration } from '../src/config.ts'
 
 const root = path.resolve(import.meta.dirname, '../../..')
+const shellName = process.platform === 'win32' ? 'pwsh' : 'bash'
+const print = (text: string) => process.platform === 'win32' ? `Write-Output '${text}'` : `printf ${text}`
 
 test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Explore; pauses and resumes natively', { timeout: 60000 }, async (t) => {
   const work = mkdtempSync(path.join(os.tmpdir(), 'redtrace-native-loop-'))
@@ -53,12 +55,12 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
         assert.ok(!text.includes('[RedTrace Reason]'), 'unread notification was replayed on resume')
         sendTool(res, 'finish_step', { summary: 'Resumed without replaying stale notice' }); return
       }
-      const isFollower = text.includes('notice follower'), calls = previous.filter((n: string) => n === 'bash').length
-      if (!calls) { name = 'bash'; args = { command: `printf notice-tool-start; while [ ! -f '${noticeRelease}' ]; do sleep 0.02; done; printf notice-tool-end`, description: 'Bounded local delivery continuity fixture' } }
+      const isFollower = text.includes('notice follower'), calls = previous.filter((n: string) => n === shellName).length
+      if (!calls) { name = shellName; args = { command: process.platform === 'win32' ? `Write-Output notice-tool-start; while (-not (Test-Path -LiteralPath '${noticeRelease}')) { Start-Sleep -Milliseconds 20 }; Write-Output notice-tool-end` : `printf notice-tool-start; while [ ! -f '${noticeRelease}' ]; do sleep 0.02; done; printf notice-tool-end`, description: 'Bounded local delivery continuity fixture' } }
       else if (isFollower && calls === 1) {
         assert.ok(text.includes('EVALUATED_HINT_PATH'), 'next native request did not contain Reason notification')
         assert.ok(!text.includes('HUMAN_ONLY_NOTIFY'), 'raw human Hint leaked to Explore')
-        name = 'bash'; args = { command: 'printf notice-adjusted-method', description: 'Use the supplemental path without Step amendment' }
+        name = shellName; args = { command: print('notice-adjusted-method'), description: 'Use the supplemental path without Step amendment' }
       } else {
         if (!isFollower) assert.ok(!text.includes('EVALUATED_HINT_PATH'), 'notification reached wrong Explore')
         name = 'finish_step'; args = { summary: 'Continued original native session' }
@@ -84,10 +86,10 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
       }
     }
     else if (planFixture && text.includes('plan follower')) {
-      if (!followerHeld) { followerHeld = true; releaseFollower = () => sendTool(res, 'bash', { command: 'printf forbidden-old-direction', description: 'Old plan fixture' }); return }
+      if (!followerHeld) { followerHeld = true; releaseFollower = () => sendTool(res, shellName, { command: print('forbidden-old-direction'), description: 'Old plan fixture' }); return }
       if (!previous.includes('read_graph')) { name = 'read_graph'; args = { id: followerId } }
       else if (!previous.includes('sync_step')) { name = 'sync_step'; args = { planVersion: 2 } }
-      else if (previous.filter((n: string) => n === 'bash').length < 2) { name = 'bash'; args = { command: 'printf latest-plan-direction', description: 'Current plan fixture' } }
+      else if (previous.filter((n: string) => n === shellName).length < 2) { name = shellName; args = { command: print('latest-plan-direction'), description: 'Current plan fixture' } }
       else if (!previous.includes('submit_fact')) { name = 'submit_fact'; args = { description: 'Follower executed latest-plan-direction', evidence: [{ description: 'bash returned latest-plan-direction' }] } }
       else { name = 'finish_step'; args = { summary: 'Followed amended contract' } }
     }
@@ -95,9 +97,9 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
       producerHeld = true; releaseProducer = () => sendTool(res, 'finish_step', { summary: 'Producer finished after live notification' }); return
     }
     else if (names.includes('finish_decide')) { name = 'finish_decide'; args = {} }
-    else if (!previous.includes('bash')) { name = 'bash'; args = { command: 'printf native-dsh-fixture', description: 'Harmless native fixture' } }
+    else if (!previous.includes(shellName)) { name = shellName; args = { command: print('native-dsh-fixture'), description: 'Harmless native fixture' } }
     else if (text.includes('timeout fixture') && !timeoutHeld) { timeoutHeld = true; return }
-    else if (text.includes('timeout fixture') && !timeoutGuardSent) { timeoutGuardSent = true; name = 'bash'; args = { command: 'printf forbidden-conclude-side-effect', description: 'Timeout guard fixture' } }
+    else if (text.includes('timeout fixture') && !timeoutGuardSent) { timeoutGuardSent = true; name = shellName; args = { command: print('forbidden-conclude-side-effect'), description: 'Timeout guard fixture' } }
     else if (text.includes('pause fixture') && !held) { held = true; holdObserved = true; return }
     else if (!previous.includes('submit_fact')) { name = 'submit_fact'; args = { description: 'Native DSH executed harmless printf', evidence: [{ description: 'bash returned native-dsh-fixture' }] } }
     else { name = 'finish_step'; args = { summary: 'Native DSH fixture completed' } }
@@ -190,7 +192,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     assert.equal(resumed[0].status, 'succeeded', JSON.stringify(resumed))
     assert.equal(resumed[0].id, paused[0].id)
     const resumedEvents = await call(base + `/runs/${resumed[0].id}/events?limit=500`)
-    assert.equal(resumedEvents.filter((e: any) => e.kind === 'tool.started' && e.title === 'bash').length, 1, 'resume replayed the completed side effect')
+    assert.equal(resumedEvents.filter((e: any) => e.kind === 'tool.started' && e.title === shellName).length, 1, 'resume replayed the completed side effect')
     c.commit(c.read().revision, raw => { raw.workers![0].max_running = 4; raw.runtime = { max_workers: 4, max_project_workers: 4, max_running_projects: 1 } })
     await call('/runtime/config')
     planFixture = true
@@ -258,7 +260,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     const sessionFiles = readdirSync(path.join(work, '.redtrace/sessions'))
     assert.ok(sessionFiles.length > 0)
     assert.ok(!readFileSync(path.join(work, '.redtrace/redtrace.yaml'), 'utf8').includes('rotated-key'))
-    assert.ok(requests.some(r => r.tools?.some((t: any) => t.function.name === 'finish_decide') && !r.tools?.some((t: any) => t.function.name === 'bash')))
+    assert.ok(requests.some(r => r.tools?.some((t: any) => t.function.name === 'finish_decide') && !r.tools?.some((t: any) => t.function.name === shellName)))
     c.commit(c.read().revision, raw => { raw.tasks!.explore.timeout = 30 })
     await call('/runtime/config')
     await call(base + '/status', 'PUT', { status: 'stopped' })

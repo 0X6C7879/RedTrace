@@ -12,7 +12,7 @@ import type { TaskContext } from '../src/scheduler.ts'
 import type { EngineConfig, Worker } from '../src/types.ts'
 
 const install = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
-const python = path.join(install, '.redtrace/runtime/knowledge/bin/python')
+const python = process.env.REDTRACE_KNOWLEDGE_PYTHON ?? path.join(install, '.redtrace/runtime/knowledge', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
 const worker: Worker = { name: 'offline-test', provider: 'mock', model: '', enabled: true, reason: false, explore: true, bootstrap: false, maxRunning: 1, priority: 0, backend: 'mock' }
 function fixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-offline-unit-'))

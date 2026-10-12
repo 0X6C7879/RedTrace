@@ -19,12 +19,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24.21.0
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r tools/knowledge/requirements.txt
+      - if: runner.os == 'macOS'
+        run: brew install tmux
       - run: npm ci
       - run: npm ci --prefix packages/redtrace-engine
       - run: npm run dsh:install
       - run: npm run dsh:build
       - run: npm run check --prefix packages/redtrace-engine
       - run: npm test --prefix packages/redtrace-engine
+        env:
+          REDTRACE_KNOWLEDGE_PYTHON: ${{ steps.python.outputs.python-path }}
       - run: node scripts/run-redtrace-node.mjs --help
       - run: npm run dsh:test
       - if: runner.os == 'Windows'
