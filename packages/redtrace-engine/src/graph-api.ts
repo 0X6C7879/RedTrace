@@ -1,4 +1,5 @@
 import { Type } from 'typebox'
+import { Check } from 'typebox/value'
 import { Router, body, queryNumber, send } from './http.ts'
 import type { RequestContext } from './http.ts'
 import { Store } from './store.ts'
@@ -16,6 +17,9 @@ const stepSchema = Type.Object({ description: text, sourceIds: refs, goalId: Typ
 
 export function graphRoutes(router: Router, store: Store, maxSteps: () => number | null = () => null) {
   const p = (c: RequestContext) => c.params.project
+  const currentOnly = (c: RequestContext) => {
+    if (c.url.searchParams.has('revision') || c.url.searchParams.has('includeInactive')) throw new HttpError(422, 'FGS history has been removed; read current state without revision/includeInactive')
+  }
   const requireActive = (id: string) => { const project = store.project(id); if (project.status !== 'active') throw new HttpError(403, `Project is ${project.status}`) }
   const intent = (id: string, sid: string) => { const step = store.node<Step>(id, sid, 'step'); if (step.deleted) throw new HttpError(404, 'Intent not found'); return legacyIntent(step, store.latestRun(id, sid)) }
   const runFor = (id: string, sid: string, worker: string, claim = false) => {
@@ -37,8 +41,8 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
     router.add('DELETE', `${prefix}/projects/:project/hints/:node`, c => { store.deleteInput(p(c), c.params.node); send(c.res, null, 204) })
   }
   router.add('GET', '/v2/projects/:project/graph', c => {
-    const includeInactive = c.url.searchParams.get('includeInactive') === 'true'
-    const graph = c.url.searchParams.has('revision') ? store.graphAt(p(c), queryNumber(c.url, 'revision', 1), includeInactive) : store.graph(p(c), includeInactive)
+    currentOnly(c)
+    const graph = store.graph(p(c))
     const view = projectFgs(graph), live = liveSteps(graph)
     // The live layer is a canvas-only virtual overlay; exports and tools keep the pure projection.
     return { ...graph, ...view, nodes: [...view.nodes, ...live.nodes], edges: [...view.edges, ...live.edges] }
@@ -52,8 +56,13 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
       .all(p(c), c.params.run, queryNumber(c.url, 'before', Number.MAX_SAFE_INTEGER), queryNumber(c.url, 'limit', 100, 1, 500))
       .map(row => ({ ...JSON.parse(String(row.data)), id: Number(row.id) })).reverse()
   })
-  for (const kind of ['goals', 'steps', 'findings', 'facts', 'observations'] as const) router.add('GET', `/v2/projects/:project/${kind}`, c => store.nodes(p(c), [kind.slice(0, -1) as 'goal' | 'step' | 'finding' | 'fact' | 'observation'], { ...(c.url.searchParams.has('limit') ? { limit: queryNumber(c.url, 'limit', 100, 1, 100), offset: queryNumber(c.url, 'offset', 0) } : {}), includeInactive: c.url.searchParams.get('includeInactive') === 'true' }))
-  router.add('POST', '/v2/projects/:project/evidence/manage', async c => store.manageEvidence(p(c), await body(c.req, evidenceChangeSchema)))
+  for (const kind of ['goals', 'steps', 'findings', 'facts', 'observations'] as const) router.add('GET', `/v2/projects/:project/${kind}`, c => { currentOnly(c); return store.nodes(p(c), [kind.slice(0, -1) as 'goal' | 'step' | 'finding' | 'fact' | 'observation'], c.url.searchParams.has('limit') ? { limit: queryNumber(c.url, 'limit', 100, 1, 100), offset: queryNumber(c.url, 'offset', 0) } : {}) })
+  router.add('POST', '/v2/projects/:project/evidence/manage', async c => {
+    const input = await body(c.req, Type.Record(Type.String(), Type.Unknown()))
+    if (input.operation === 'archive' || input.operation === 'restore') throw new HttpError(422, 'FGS archive/restore has been removed; use merge/delete')
+    if (!Check(evidenceChangeSchema, input)) throw new HttpError(422, 'Invalid request fields')
+    return store.manageEvidence(p(c), input)
+  })
   router.add('GET', '/v2/projects/:project/graph/delta', c => store.graphDelta(p(c), queryNumber(c.url, 'after', 0), queryNumber(c.url, 'limit', 100, 1, 100)))
   router.add('POST', '/v2/projects/:project/runs/:run/resolve', async c => {
     if (store.run(c.params.run).projectId !== p(c)) throw new HttpError(404, 'Run not found')

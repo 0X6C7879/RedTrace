@@ -30,11 +30,16 @@ test('HTTP graph compatibility and atomic conclude survive reopening the databas
     assert.equal(reopened.status, 200); assert.deepEqual(reopened.data.intent.from, ['goal'])
     const graph = (await request(`/v2${base}/graph`)).data
     assert.equal(graph.goals[0].kind, 'goal'); assert.equal(graph.facts.some((f: any) => f.id === 'goal'), false)
-    const replayed = (await request(`/v2${base}/graph?revision=${graph.project.revision}`)).data
-    for (const kind of ['nodes', 'edges', 'steps', 'goals', 'facts', 'findings']) assert.deepEqual(replayed[kind], graph[kind], `${kind} must replay the recorded state`)
+    const replayed = await request(`/v2${base}/graph?revision=${graph.project.revision}`)
+    assert.equal(replayed.status, 422); assert.match(replayed.data.detail, /history has been removed/)
     assert.ok(graph.nodes.every((n: any) => ['scope', 'fact', 'finding', 'subgoal', 'goal'].includes(n.nodeType)))
-    const initial = (await request(`/v2${base}/graph?revision=1`)).data
-    assert.equal(initial.nodes.length, 2); assert.equal(initial.goals[0].status, 'open'); assert.equal(initial.steps.length, 0)
+    assert.equal((await request(`/v2${base}/graph?revision=1`)).status, 422)
+    assert.equal((await request(`/v2${base}/graph?includeInactive=true`)).status, 422)
+    assert.equal((await request(`/v2${base}/facts?includeInactive=false`)).status, 422)
+    for (const operation of ['archive', 'restore']) {
+      const old = await request(`/v2${base}/evidence/manage`, 'POST', { operation, id: concluded.data.fact.id, expectedVersion: 1, reason: 'Old client' })
+      assert.equal(old.status, 422); assert.match(old.data.detail, /archive\/restore has been removed/)
+    }
     assert.equal((await request(`/v2${base}/graph?revision=999999`)).status, 422)
     const runs = (await request(`/v2${base}/steps/${step.data.id}/runs`)).data
     assert.equal(runs.length, 1)

@@ -39,8 +39,8 @@ test('FGS keeps every output, typed relationship and cancelled-step provenance',
     const reachable = new Set(['origin'])
     for (const id of reachable) for (const e of view.edges) if (e.source === id) reachable.add(e.target)
     assert.equal(reachable.size, view.nodes.length)
-    assert.equal(s.graphAt(id, s.project(id).revision).steps[0].status, 'cancelled')
-    assert.deepEqual(projectFgs(s.graphAt(id, s.project(id).revision)), view)
+    assert.equal(s.graph(id).steps[0].status, 'cancelled')
+    assert.deepEqual(projectFgs(s.graph(id)), view)
   } finally { s.close() }
 })
 
@@ -70,10 +70,10 @@ test('closing a goal cascades to descendants: no orphan open branches survive', 
   } finally { s.close() }
 })
 
-test('reference boundaries, atomic failure, and historical states never use future evidence', () => {
+test('reference boundaries and atomic failure preserve current evidence', () => {
   const s = new Store(':memory:')
   try {
-    const id = create(s), first = s.project(id).revision, other = create(s)
+    const id = create(s), other = create(s)
     const foreign = s.addFact(other, 'Foreign'), hint = s.addInput(id, 'hint', 'Unverified')
     assert.ok(projectFgs(s.graph(other)).edges.some(e => e.source === 'origin' && e.target === foreign.id && e.relation === 'scope' && e.stepIds.length === 0))
     for (const source of ['missing', hint.id, 'goal']) assert.throws(() => s.addStep(id, { description: 'Invalid', sourceIds: [source] }))
@@ -81,15 +81,15 @@ test('reference boundaries, atomic failure, and historical states never use futu
     assert.throws(() => s.addFinding(id, { title: 'Invalid', description: 'Scope is not evidence', factIds: ['origin'] }))
     assert.throws(() => s.addStep(id, { description: 'Foreign', sourceIds: [foreign.id] }))
     const step = s.addStep(id, { description: 'Work', sourceIds: ['origin'] }), run = s.claim(id, 'execute', worker, step.id)
-    const f = s.addFact(id, 'Evidence', { runId: run.id }), factRevision = s.project(id).revision
+    const f = s.addFact(id, 'Evidence', { runId: run.id })
     const finding = s.addFinding(id, { title: 'Deliverable', description: 'Result', factIds: [f.id], runId: run.id })
     s.finishRun(run.id, 'succeeded'); s.updateGoal(id, 'goal', { status: 'achieved', evidenceIds: [finding.id] })
     assert.throws(() => s.addFinding(other, { title: 'Bad', description: 'Bad', factIds: [foreign.id], runId: run.id }))
-    const initial = s.graphAt(id, first), middle = s.graphAt(id, factRevision)
-    assert.equal(initial.goals[0].description, 'Verified result'); assert.equal(initial.goals[0].status, 'open')
-    assert.equal(initial.facts.length, 1); assert.equal(initial.steps.length, 0); assert.equal(initial.findings.length, 0)
-    assert.equal(middle.findings.length, 0); assert.deepEqual(middle.goals[0].evidenceIds, []); assert.equal(middle.steps[0].status, 'running')
-    assert.throws(() => s.graphAt(id, s.project(id).revision + 1))
+    const current = s.graph(id)
+    assert.equal(current.goals[0].description, 'Verified result'); assert.equal(current.goals[0].status, 'achieved')
+    assert.equal(current.facts.length, 2); assert.equal(current.steps[0].status, 'done')
+    assert.deepEqual(current.goals[0].evidenceIds, [finding.id])
+    assert.ok(!('graphAt' in s)); assert.ok(!('historyIncomplete' in current))
   } finally { s.close() }
 })
 
@@ -162,4 +162,29 @@ test('native canvas projection renders active Steps as virtual nodes, then swaps
     assert.equal(project.hints[0].created_at, hint.createdAt)
     assert.ok([project.project.created_at, ...project.intents.map((i: any) => i.created_at)].every(t => typeof t === 'string'))
   } finally { s.close() }
+})
+
+test('current graph polling clears removed node/edge selections and keeps surviving Step details', () => {
+  const context = vm.createContext({ window: {} })
+  vm.runInContext(readFileSync(new URL('../../../static/fgs-view.js', import.meta.url), 'utf8'), context)
+  const app = { ...context.window.redtraceFgsView, fgs: { facts: [], findings: [], goals: [], steps: [{ id: 'i001' }], edges: [] }, fgsSelection: { type: 'fact', id: 'removed' }, fgsEdgeSelection: { id: 'gone-edge' }, fgsRunId: 'old-run', fgsRunEvents: [{ old: true }], jevFindingReview: { old: true } }
+  app.clearMissingFgsSelection()
+  assert.equal(app.fgsSelection, null); assert.equal(app.fgsEdgeSelection, null)
+  assert.equal(app.fgsRunId, ''); assert.equal(app.fgsRunEvents.length, 0); assert.equal(app.jevFindingReview, null)
+  app.fgsSelection = { type: 'step', id: 'i001' }; app.clearMissingFgsSelection()
+  assert.equal(app.fgsSelection.id, 'i001')
+  assert.equal(app.startFgsReplay, undefined); assert.equal(app.applyFgsReplayFrame, undefined)
+})
+
+test('detail bindings tolerate a removed record while Alpine destroys the old node template', () => {
+  const markup = readFileSync(new URL('../../../static/index.html', import.meta.url), 'utf8')
+  const detail = markup.slice(markup.indexOf('<section data-testid="fgs-node-detail"'), markup.indexOf('<section data-testid="fgs-edge-detail"'))
+  const context = vm.createContext({ fgsSelection: null, fgsSelectionRecord: () => null, formatTime: () => '', factDisplayId: () => '', replay: { active: false }, project: { project: { status: 'active' } } })
+  const bindings = [...detail.matchAll(/x-(text|show|for)="([^"]*fgsSelectionRecord\(\)[^"]*)"/g)]
+  assert.ok(bindings.length > 20)
+  for (const [, kind, binding] of bindings) {
+    const expression = kind === 'for' ? binding.split(/\s+in\s+/)[1] : binding
+    assert.doesNotThrow(() => vm.runInContext(expression, context), binding)
+    if (kind === 'for') assert.equal(vm.runInContext(expression, context).length, 0)
+  }
 })

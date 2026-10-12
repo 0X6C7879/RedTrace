@@ -6,9 +6,9 @@ RedTrace 的默认运行时是 TypeScript、Node 24.15+ 与内置 `node:sqlite`�
 
 ## 状态模型
 
-- `Fact`：有来源、可引用的事实。提交后保留历史并唤醒 Decide。
+- `Fact`：有来源、可引用的当前事实，新增后唤醒 Decide。
 - `Goal`：根目标或子目标，保存完成状态和证据引用。
-- `Step`：唯一可领取的行动单元，关联来源 Scope / Fact / Finding、目标、优先级、Worker、执行适配器与检查点。保留全部产出引用，展示在执行面板。
+- `Step`：唯一可领取的行动单元，关联来源 Scope / Fact / Finding、目标、优先级、Worker、执行适配器与检查点。保留当前有效产出引用，展示在执行面板。
 - `Finding`：面向交付的成果，引用支撑它的 Fact；可作为后续 Step 的来源或 Goal 的验收证据，新增后独立唤醒 Decide，不等待 Step 结束。
 - `Hint` 与 `Observation`：人工输入和中间记录，不自动提升为 Fact。
 
@@ -18,9 +18,11 @@ Decide 首次启动后，由任一新增 Fact 或 Finding、既有运行时关�
 
 ## 实时维护接口
 
-Reason 独占 `manage_evidence`：同类 Fact/Finding 可合并、归档、恢复；原始记录与来源均保留。合并修复 Step.sourceIds/factIds、Goal.evidenceIds、Finding.factIds，并汇总证据与产生它们的 Step。归档被活跃 Step、有效 Finding 或已达成 Goal 引用的节点返回 409 与阻塞引用清单，Reason 须先修复引用；历史引用不阻止归档。节点变更使用 expectedVersion；冲突返回当前节点，整个事务不产生部分修改。Scope 与 Root Goal 原始描述不可改写。不自动执行语义去重；Reason 必须确认目标、题目、环境和结论一致后才能合并。
+FGS 是实时更新的当前工作状态，不是历史档案库。Reason 独占 `manage_evidence`，操作为 `merge | delete`，对 Fact/Finding 拥有完整维护权。合并保留目标 ID，原子重定向 Step.sourceIds/factIds、Goal.evidenceIds、Finding.factIds，去重汇总必要证据与生产 Step 关联，再物理删除来源节点。Reason 可提交最终 description，Finding 另支持 title/details；省略时保留目标值，不自动保存来源正文或 details 副本。删除被未完成 Step 的输入、有效 Finding 或已达成 Goal 引用的节点返回 409 与阻塞引用清单，Reason 先修复引用；成功后清除其他引用并物理删除证据，不连带删除生产 Step 或 Run。两种操作均不可恢复。节点变更使用 expectedVersion，合并要求每个来源的 sourceVersions；冲突返回当前节点，整个事务不产生部分修改。Scope 与 Root Goal 原始描述不可改写。不自动执行语义去重；Reason 必须确认目标、题目、环境和结论一致后才能合并，并保留后续决策必需的状态与证据。
 
-`read_graph` 默认只读活跃证据，按 ID 可以回读历史；`includeInactive:true` 显式包含归档与合并节点。`read_graph_delta({after,limit})` 最多返回 100 个事件及相关节点，按 cursor 连续翻页。读取不代表已处理，跳过的增量不能用高水位确认。HTTP 同步提供 `POST /v2/projects/:id/evidence/manage`、`GET /v2/projects/:id/graph/delta` 和各节点列表的 includeInactive/limit/offset 参数。原 schema 2 数据默认兼容，不清库。
+`read_graph` 只读当前状态，已合并来源或删除节点按 ID 读取返回 404。`read_graph_delta({after,limit})` 最多返回 100 个轻量事件及当前仍存在的相关节点，不返回历史正文；已删除 ID 由事件表达。按 cursor 连续翻页，读取不代表已处理，跳过的增量不能用高水位确认。HTTP 同步提供 `POST /v2/projects/:id/evidence/manage`、`GET /v2/projects/:id/graph/delta` 和各节点列表的 limit/offset 参数。HTTP revision/includeInactive 参数及 archive/restore 请求返回 422，工具 schema 不再暴露历史选项。
+
+启动时在现有 schema 2 数据库内执行一次事务迁移，使用 metadata 标记完成：解析旧合并链并重定向引用，清理归档、合并、已删除 Fact/Finding 与历史字段，将 FGS 事件 payload 收敛为通知元数据。事件 ID、revision、证据/Hint 序号和确认边界保持不变，运行与审计记录继续保留。无效合并链或有效依赖丢失会回滚并报告具体节点，不猜测修复。Worker 空闲时停机升级，重启后生效；不清库，不生成历史备份，也不引入日志保留或证据文件回收策略。
 
 `update_step` 支持描述、来源、目标及执行设置。未领取 Step 可直接改；运行中同目标同权限边界用 amend，变更目标、权限或环境必须 replace。Subgoal 描述变更传播到未结束的后代 Step。替代 Step 保存 replaces/replacedBy，等待旧 Run 确认停止后才变为 pending；旧结果保留、迟到写入被拒绝。unknown 结果保持阻塞；核实后可通过 `POST /v2/projects/:id/runs/:run/resolve` 提交具体 resolution。该接口是确认记录，不替操作者核实远端副作用。
 
@@ -32,7 +34,7 @@ Explore 用 `sync_step({planVersion})` 接收当前 Step、祖先 Goal 和有效
 
 `src/fgs.ts` 在读取时投影原始记录，不建立第二份图数据库：Scope 关联目标范围；Step 的每个来源连接其全部 Fact 产出；Fact 支撑 Finding；产出关联推进的 Goal；验收证据连接 Goal；Subgoal 指向父 Goal。目标归属与验收证据分开标记，Step 结束不会自动证明 Goal 达成。取消或失败的 Step 仍保留已提交产出的来源关系。边保留 Step ID，可进入执行面板查看来源、全部产出和各次运行日志。
 
-`GET /v2/projects/:id/graph?revision=N` 按事件重建历史状态。新事件保存初始节点及状态快照；旧历史缺失创建描述等信息时返回 `historyIncomplete`，不拿最终状态填补过去。YAML Snapshot 包含完整 `fgs` 节点、关系与原始执行记录。画布支持按目标聚焦，轮询状态变化保留视口，窄窗口使用详情抽屉。
+`GET /v2/projects/:id/graph` 只返回当前状态，不提供历史图重建或回放。FGS 事件仅保存类型、ID、revision、序号和少量操作元数据，不复制节点或项目正文。YAML Snapshot 包含当前有效的 `fgs` 节点、关系及原有执行记录，不包含已删除证据或历史图副本。画布支持按目标聚焦，轮询状态变化保留视口，节点消失时清除失效选择，窄窗口使用详情抽屉。
 
 ## 执行与恢复
 

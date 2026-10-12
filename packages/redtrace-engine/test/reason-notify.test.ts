@@ -64,9 +64,9 @@ test('invalid, foreign, unready, closing, failed and completed targets report ac
     const hint = store.addInput(project.id, 'hint', 'Unverified')
     assert.equal(send('Info', [hint.id]).reason, 'invalid_source')
     assert.equal(send('Info', ['missing']).reason, 'target_or_source_missing')
-    const archived = store.addFact(project.id, 'Unused')
-    store.manageEvidence(project.id, { operation: 'archive', id: archived.id, expectedVersion: archived.version!, reason: 'Unused' })
-    assert.equal(send('Info', [archived.id]).reason, 'invalid_source')
+    const removed = store.addFact(project.id, 'Unused')
+    store.manageEvidence(project.id, { operation: 'delete', id: removed.id, expectedVersion: removed.version!, reason: 'Unused' })
+    assert.equal(send('Info', [removed.id]).reason, 'target_or_source_missing')
     const foreign = store.createProject({ title: 'Foreign', origin: 'Different scope', goal: 'Check' }).project
     task.projectId = foreign.id; assert.equal(send().reason, 'session_not_ready_or_closing'); task.projectId = project.id
     task.sessionId = 'foreign-session'; assert.equal(send().reason, 'session_not_ready_or_closing'); task.sessionId = target.id
@@ -129,7 +129,7 @@ test('Hint wakes Reason, preserves busy continuous boundaries and is never Explo
     await until(() => scheduler.activeRuns.length === 1)
     for (let i = 0; i < 12; i++) await turn()
     assert.equal(seen, 1); assert.equal(store.project(id).acknowledgedHintSeq, 3)
-    assert.equal(store.graphAt(id, store.project(id).revision).project.hintSeq, 3)
+    assert.equal(store.graph(id).project.hintSeq, 3)
     store.addInput(id, 'hint', 'Next input'); await until(() => seen === 2)
     store.addInput(id, 'hint', 'Must survive omitted acknowledgement'); release()
     await until(() => seen === 3)
@@ -158,14 +158,13 @@ test('all Fact/Finding lifecycle events, including own produced evidence, stay i
     const unusedFact = store.addFact(project.id, 'Unreferenced evidence'); noBroadcast()
     const unusedFinding = store.addFinding(project.id, { title: 'Unreferenced result', description: 'Proof', factIds: [one.id] }); noBroadcast()
     for (const node of [unusedFact, unusedFinding]) {
-      store.manageEvidence(project.id, { operation: 'archive', id: node.id, expectedVersion: store.node(project.id, node.id).version!, reason: 'Unused' }); noBroadcast()
-      store.manageEvidence(project.id, { operation: 'restore', id: node.id, expectedVersion: store.node(project.id, node.id).version!, reason: 'Reuse' }); noBroadcast()
+      store.manageEvidence(project.id, { operation: 'delete', id: node.id, expectedVersion: store.node(project.id, node.id).version!, reason: 'Unused' }); noBroadcast()
     }
     const events = store.events(project.id).map(e => e.type)
-    for (const kind of ['fact', 'finding']) for (const action of ['added', 'updated', 'merged', 'archived', 'restored']) assert.ok(events.includes(`${kind}.${action}`), `${kind}.${action} not exercised`)
+    for (const kind of ['fact', 'finding']) for (const action of ['added', 'updated', 'merged', 'deleted']) assert.ok(events.includes(`${kind}.${action}`), `${kind}.${action} not exercised`)
     assert.equal(store.project(project.id).evidenceSeq, 6)
-    assert.equal(store.graph(project.id).facts.some(node => node.id === unusedFact.id), true)
-    assert.equal(store.graph(project.id).findings.some(node => node.id === unusedFinding.id), true)
+    assert.equal(store.graph(project.id).facts.some(node => node.id === unusedFact.id), false)
+    assert.equal(store.graph(project.id).findings.some(node => node.id === unusedFinding.id), false)
   } finally { store.close() }
 })
 

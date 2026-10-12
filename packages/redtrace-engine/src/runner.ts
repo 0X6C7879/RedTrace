@@ -51,25 +51,25 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   const installRoot = config.workspaceRoot ? path.dirname(config.workspaceRoot) : undefined
   const step = run.stepId ? store.node<Step>(run.projectId, run.stepId, 'step') : undefined
   const kinds = ['fact', 'goal', 'step', 'finding', 'hint', 'observation'] as const
-  const readGraph = tool('read_graph', 'Read active project state or any node by ID, including archived/merged history. includeInactive:true explicitly includes historical evidence. SQL pagination is bounded; full:true only skips semantic filtering. Hints and observations are unverified.', Type.Object({ id: Type.Optional(Type.String()), offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), kinds: Type.Optional(Type.Array(Type.Union(kinds.map(k => Type.Literal(k))), { uniqueItems: true })), full: Type.Optional(Type.Boolean()), includeInactive: Type.Optional(Type.Boolean()) }), async args => {
+  const readGraph = tool('read_graph', 'Read current project state or a current node by ID. Merged sources and deleted evidence no longer exist. SQL pagination is bounded; full:true only skips semantic filtering. Hints and observations are unverified.', Type.Object({ id: Type.Optional(Type.String()), offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), kinds: Type.Optional(Type.Array(Type.Union(kinds.map(k => Type.Literal(k))), { uniqueItems: true })), full: Type.Optional(Type.Boolean()) }, { additionalProperties: false }), async args => {
     if (args.id) return store.node(run.projectId, args.id)
     const offset = args.offset ?? 0, limit = args.limit ?? 100, selected = new Set(args.kinds ?? kinds)
-    const project = store.project(run.projectId), page: Record<string, unknown> = { project, historyIncomplete: false, facts: [], goals: [], steps: [], findings: [], hints: [], observations: [] }, nextOffsets: Record<string, number | null> = {}
+    const project = store.project(run.projectId), page: Record<string, unknown> = { project, facts: [], goals: [], steps: [], findings: [], hints: [], observations: [] }, nextOffsets: Record<string, number | null> = {}
     for (const kind of kinds) {
       if (!selected.has(kind)) continue
-      page[kind === 'fact' ? 'facts' : kind === 'goal' ? 'goals' : kind === 'step' ? 'steps' : kind === 'finding' ? 'findings' : `${kind}s`] = store.nodes(run.projectId, [kind], { offset, limit, includeInactive: args.includeInactive })
-      const total = store.nodeCount(run.projectId, kind, args.includeInactive)
+      page[kind === 'fact' ? 'facts' : kind === 'goal' ? 'goals' : kind === 'step' ? 'steps' : kind === 'finding' ? 'findings' : `${kind}s`] = store.nodes(run.projectId, [kind], { offset, limit })
+      const total = store.nodeCount(run.projectId, kind)
       nextOffsets[kind] = offset + limit < total ? offset + limit : null
     }
     const remaining = Object.values(nextOffsets).filter((value): value is number => value !== null)
-    const filtered = !args.full && !args.includeInactive && jev?.isEnabled('context_filter') && selected.has('fact') && selected.has('step')
+    const filtered = !args.full && jev?.isEnabled('context_filter') && selected.has('fact') && selected.has('step')
       ? await jev.filterGraph(run, step, page as unknown as ReturnType<typeof store.graph>).catch(() => undefined) : undefined
     return { ...(filtered ?? page), nextOffset: remaining.length ? Math.max(...remaining) : null, nextOffsets,
       ...(jev?.isEnabled() ? { jevAdvisories: await jev.advisories(run.projectId) } : {}) }
   })
   const refs = Type.Array(Type.String())
   const tools: AgentTool[] = [readGraph]
-  tools.push(tool('read_graph_delta', 'Read a bounded committed change page including lifecycle, versions and references. Continue with cursor until hasMore is false. Reading does not acknowledge processing.', Type.Object({ after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), args => store.graphDelta(run.projectId, args.after ?? store.run(run.id).deliveredGraphCursor ?? 0, args.limit ?? 100, run.id)))
+  tools.push(tool('read_graph_delta', 'Read a bounded page of change metadata and current surviving nodes. Merged/deleted IDs have no historical body. Continue with cursor until hasMore is false. Reading does not acknowledge processing.', Type.Object({ after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), args => store.graphDelta(run.projectId, args.after ?? store.run(run.id).deliveredGraphCursor ?? 0, args.limit ?? 100, run.id)))
   tools.push({ name: 'evidence_read', label: 'evidence_read', description: 'Read at most 7.6 KiB from a large tool result by byte offset, 1-based line, or keyword. Artifacts are scoped to this run; request the next bounded slice when needed.', parameters: Type.Object({ id: Type.String({ pattern: '^ev-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), line: Type.Optional(Type.Integer({ minimum: 1 })), query: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), executionMode: 'sequential', execute: async (_toolId: string, args: { id: string; offset?: number; line?: number; query?: string; length?: number }) => {
     if (!/^ev-[a-f0-9]{64}$/.test(args.id) || [args.offset, args.line, args.query].filter(value => value !== undefined).length > 1) throw new Error('Provide a valid evidence ID and only one read selector')
     const runRoot = path.join(evidenceRoot, run.id), root = await realpath(runRoot), base = await realpath(evidenceRoot)
@@ -117,7 +117,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
       tool('update_step', 'Use notify_explore for useful information or method changes while the objective remains valid. Revise, reprioritize or cancel a Step with expectedVersion. Running amend keeps objective and permissions; replace stops the old run before its replacement starts. Changed objectives, targets, plugins or permissions require replace.', Type.Object({ ...stepUpdateSchema.properties, expectedVersion: Type.Integer({ minimum: 1 }), id: Type.String(), cancel: Type.Optional(Type.Boolean()) }), args => { checkPlugins(args.plugins); return store.updateStep(run.projectId, args.id, { ...args, ...(args.cancel ? { status: 'cancelled' as const } : {}) }) }),
       tool('add_goal', 'Add a Sub Goal.', Type.Object({ description: Type.String(), parentId: Type.Optional(Type.String()) }), args => store.addGoal(run.projectId, args.description, args.parentId)),
       tool('update_goal', 'Revise a Subgoal description or state with expectedVersion. Running descendants require amend or replace; changed objectives require replace. Root description is immutable. Achievement requires active Fact/Finding evidence, not Step completion.', Type.Object({ ...goalUpdateSchema.properties, expectedVersion: Type.Integer({ minimum: 1 }), id: Type.String() }), args => store.updateGoal(run.projectId, args.id, args)),
-      tool('manage_evidence', 'Maintain same-kind Fact/Finding. merge keeps id and redirects references; provide every source version. archive preserves history but rejects active references: repair blockers first. restore reactivates archived evidence. Never merge different targets, challenges, environments or contradictory conclusions; Scope is protected.', evidenceChangeSchema, args => store.manageEvidence(run.projectId, args)),
+      tool('manage_evidence', 'Maintain current Fact/Finding. merge keeps the target ID, redirects references and permanently removes sources; provide every source version and optionally the final description, or Finding title/details. Omitted content keeps the target value. delete permanently removes evidence after active references are repaired. Keep necessary conclusions and proof; there is no archive or restore. Never merge different targets, challenges, environments or contradictory conclusions; Scope is protected.', evidenceChangeSchema, args => store.manageEvidence(run.projectId, args)),
       tool('finish_decide', 'Finish planning. throughEvidenceSeq and throughHintSeq acknowledge delivered, processed continuous boundaries; reading alone does not acknowledge. Omitted boundaries acknowledge only launch input. Empty plans are allowed.', Type.Object({ throughEvidenceSeq: Type.Optional(Type.Integer({ minimum: 0 })), throughHintSeq: Type.Optional(Type.Integer({ minimum: 0 })) }), args => { store.transaction(() => { if (args.throughEvidenceSeq !== undefined) store.acknowledgeEvidence(run.id, args.throughEvidenceSeq); if (args.throughHintSeq !== undefined) store.acknowledgeHint(run.id, args.throughHintSeq) }); finish(); return { saved: true } }, true),
     )
   } else {
@@ -257,7 +257,7 @@ export const activityPrompt = (activity: 'decide' | 'execute', step?: Step, jevC
 2. 有突破优先深入，缺少入口时拓宽，持续受阻且无新进展时换路线。只派现有证据支持、前置已满足的行动；依赖未取得的入口或权限时等待。独立且不争用会话的方向才并行，同一题默认一个主 Explore，优先并行不同题目。
 3. 比对已有 Step，不重复枚举或已覆盖工作。单次失败不等于证伪，执行结束不等于路线穷尽；中断按确认进度续接，无效路线须有新证据或不同机制才重开。副作用不明先查证，不重放。无工作时寻找未覆盖的可验证方向；依赖在跑工作则等待，无合理方向说明缺口，不硬凑任务。
 4. Step 写清行动与预期结果，用 sourceIds 引用 Scope/Fact/Finding、goalId 指向目标，按需选择 requires/plugins。Subgoal 只写可验收结果并复用；操作、重试和临时策略写 Step。远程命令或内网代理须有在线程序化通道，图形登录不等于命令通道；测试机扫描不需要 remote.command。
-5. Explore 自主执行。新信息（包括人工 Hint）有实质帮助时才用 notify_explore 定向补充，不微观管理或重复通知；方法、策略改变但目标有效时不改 Step。Step 过时或偏离目标才用 update_step/update_goal 携带版本修正计划、取消或排序 Step；真正的同目标同权限契约变更 amend，改变目标或权限 replace。用 manage_evidence 合并同目标同环境的重复证据、归档或恢复证据，不合并矛盾结论；归档或删除前修复活跃引用，不为整理图谱延误目标。
+5. Explore 自主执行。新信息（包括人工 Hint）有实质帮助时才用 notify_explore 定向补充，不微观管理或重复通知；方法、策略改变但目标有效时不改 Step。Step 过时或偏离目标才用 update_step/update_goal 携带版本修正计划、取消或排序 Step；真正的同目标同权限契约变更 amend，改变目标或权限 replace。FGS 是当前工作状态，你拥有 Fact/Finding 的完整维护权：用 manage_evidence 合并同目标同环境的重复证据并提交整理后的有效内容，或删除不再需要的证据；保留后续决策必需的结论与证据，不合并矛盾结论。合并来源与删除节点不留备份、不可恢复，无需检查历史；删除前修复活跃引用，不为整理图谱延误目标。
 6. 启动、新 Fact/Finding 或关键事件出现时及时规划，不等 Step 结束。并发、Worker 和 add_step 限额遵守系统限制。测评仅用开放的只读工具，扣分提示须先确认。完成调用 finish_decide，throughEvidenceSeq 只确认完整读取并处理的连续边界，throughHintSeq 同样只确认完整处理的连续 Hint 边界；人工 Hint 由你评估后按需转达 Explore。未处理事件留待下一轮。`
   : step?.bootstrap
     ? `你是 Bootstrap，仅在项目显式启用时，根据 Scope、Goal 和 Hints 直接解题，优先独立完成简单任务，不以建立初始事实为目标。
@@ -336,7 +336,7 @@ export function graphUpdate(store: Store, projectId: string, cursor: number, ste
     const events = store.events(projectId, cursor, 500, stepId ?? undefined)
     cursor = events.at(-1)?.id ?? cursor
     for (const e of events) {
-      const payload = e.payload as unknown as { stepId?: string | null; evidenceSeq?: number; hintSeq?: number; nodeSnapshot?: { stepId?: string | null } }
+      const payload = e.payload as unknown as { evidenceSeq?: number; hintSeq?: number }
       const added = e.type === 'fact.added' || e.type === 'finding.added'
       const critical = stepId === null && criticalEnabled && e.type === 'planning.critical'
       const hint = ['hint.added', 'hint.deleted'].includes(e.type)

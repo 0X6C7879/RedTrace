@@ -101,12 +101,14 @@ test('13: successful planning acknowledges its start boundary and preserves late
   try {
     seen.scheduler.start(); await quiet(); const a = execution(store, id, 2), b = execution(store, id, 3)
     fact(store, a); finish(store, a, 'succeeded'); const firstPairRevision = store.project(id).revision; await until(() => seen.decisions() === 1)
+    const before = store.project(id)
     fact(store, b); finish(store, b, 'failed'); release(); await until(() => seen.decisions() === 2); await quiet()
     assert.equal(seen.decisions(), 2)
     const firstSuccess = store.events(id).find(event => event.type === 'decide.succeeded' && event.revision > firstPairRevision)!
-    const before = store.graphAt(id, firstPairRevision), acknowledged = store.graphAt(id, firstSuccess.revision)
-    assert.deepEqual([before.project.factSeq, before.project.endedSeq, before.project.acknowledgedFactSeq, before.project.acknowledgedEndedSeq], [1, 1, 0, 0])
-    assert.deepEqual([acknowledged.project.factSeq, acknowledged.project.endedSeq, acknowledged.project.acknowledgedFactSeq, acknowledged.project.acknowledgedEndedSeq], [2, 2, 1, 1])
+    const firstRun = store.run((firstSuccess.payload as { runId: string }).runId), current = store.project(id)
+    assert.deepEqual([before.factSeq, before.endedSeq, before.acknowledgedFactSeq, before.acknowledgedEndedSeq], [1, 1, 0, 0])
+    assert.deepEqual([firstRun.planningFactSeq, firstRun.planningEndedSeq], [1, 1])
+    assert.deepEqual([current.factSeq, current.endedSeq, current.acknowledgedFactSeq, current.acknowledgedEndedSeq], [2, 2, 2, 2])
   } finally { release(); await seen.scheduler.close(); store.close() }
 })
 

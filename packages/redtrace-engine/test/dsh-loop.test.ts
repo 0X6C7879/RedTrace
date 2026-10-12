@@ -232,10 +232,10 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     assert.ok(followerEvents.some((e: any) => e.kind === 'tool.completed' && !e.error && String(e.content).includes('latest-plan-direction')))
     await until(() => call(base), state => state.project.evidenceSeq === state.project.acknowledgedEvidenceSeq, 'Reason did not acknowledge delivered incremental evidence')
     assert.ok(requests.some(r => JSON.stringify(r.messages).includes('新增确认的 Fact/Finding')), 'busy Reason received no compact evidence reminder')
-    const canonical = await call(base + '/facts', 'POST', { description: 'Archive fixture', evidence: [{ description: 'Fixture' }] })
-    await call(base + '/evidence/manage', 'POST', { operation: 'archive', id: canonical.id, expectedVersion: canonical.version, reason: 'No active references' })
+    const canonical = await call(base + '/facts', 'POST', { description: 'Delete fixture', evidence: [{ description: 'Fixture' }] })
+    await call(base + '/evidence/manage', 'POST', { operation: 'delete', id: canonical.id, expectedVersion: canonical.version, reason: 'No active references' })
     assert.equal((await call(base + '/facts')).some((f: any) => f.id === canonical.id), false)
-    assert.equal((await call(base + '/facts?includeInactive=true')).some((f: any) => f.id === canonical.id), true)
+    await assert.rejects(call(base + '/facts?includeInactive=true'), /422/)
     planFixture = false
     snapshot = await call('/worker-config')
     await call('/worker-config/providers/fixture' , 'PUT', { expected_revision: snapshot.revision, name: 'fixture', api: 'openai-completions', base_url: `http://127.0.0.1:${(model.address() as any).port}/v1`, api_key: 'rotated-key', models: [{ id: 'fixture', context_window: 20000, max_tokens: 1000, reasoning_efforts: false, reasoning: 'off' }] })

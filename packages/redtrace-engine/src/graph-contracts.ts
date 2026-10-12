@@ -17,8 +17,9 @@ export const goalUpdateSchema = Type.Object({ description: Type.Optional(text),
   evidenceIds: Type.Optional(Type.Array(text, { uniqueItems: true })), expectedVersion: version, mode,
 })
 export const evidenceChangeSchema = Type.Object({
-  operation: Type.Union([Type.Literal('merge'), Type.Literal('archive'), Type.Literal('restore')]),
+  operation: Type.Union([Type.Literal('merge'), Type.Literal('delete')]),
   id: text, expectedVersion: Type.Integer({ minimum: 1 }), reason: text,
   sourceIds: Type.Optional(Type.Array(text, { minItems: 1, uniqueItems: true })),
   sourceVersions: Type.Optional(Type.Record(Type.String(), Type.Integer({ minimum: 1 }))),
+  description: Type.Optional(text), title: Type.Optional(text), details: Type.Optional(Type.Any()),
 })

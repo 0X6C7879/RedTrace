@@ -8,9 +8,20 @@ import { verbIds } from './capability-verbs.ts'
 import { validateTaskPlugins } from './task-plugins.ts'
 import type { Activity, Evidence, Fact, Finding, Goal, Graph, GraphEvent, GraphNode, Input, Json, Project, Run, Step, Worker } from './types.ts'
 
-const ACTIVE_NODE_SQL = "COALESCE(json_extract(data,'$.deleted'),0)=0 AND COALESCE(json_extract(data,'$.lifecycle'),'active')='active'"
+const ACTIVE_NODE_SQL = "COALESCE(json_extract(data,'$.deleted'),0)=0"
 export interface StepUpdate { description?: string; sourceIds?: string[]; goalId?: string; priority?: number; status?: 'cancelled' | 'pending'; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; expectedVersion?: number; mode?: 'amend' | 'replace' }
-export interface EvidenceChange { operation: 'merge' | 'archive' | 'restore'; id: string; expectedVersion: number; sourceIds?: string[]; sourceVersions?: Record<string, number>; reason: string }
+export interface EvidenceChange { operation: 'merge' | 'delete'; id: string; expectedVersion: number; sourceIds?: string[]; sourceVersions?: Record<string, number>; reason: string; description?: string; title?: string; details?: Json }
+
+// Graph events carry delivery metadata, never a second copy of graph state.
+function graphEventPayload(payload: unknown): Record<string, Json> {
+  if (!payload || typeof payload !== 'object') return {}
+  const values = payload as Record<string, unknown>, result: Record<string, Json> = {}
+  for (const key of ['runId', 'targetId', 'reason', 'mode', 'goalId', 'factSeq', 'endedSeq', 'evidenceSeq', 'hintSeq', 'criticalSeq', 'baseRevision', 'retryAfter', 'version', 'planVersion']) {
+    const value = values[key]
+    if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) result[key] = value as Json
+  }
+  return result
+}
 
 const AUDIT_CONVERSATION_KINDS = new Set([
   'system.prompt', 'user.message', 'assistant.message', 'assistant.delta',
@@ -87,7 +98,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS nodes(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
         id TEXT NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(project_id,id));
       CREATE INDEX IF NOT EXISTS nodes_project_kind ON nodes(project_id,kind);
-      CREATE INDEX IF NOT EXISTS nodes_active ON nodes(project_id,kind) WHERE COALESCE(json_extract(data,'$.deleted'),0)=0 AND COALESCE(json_extract(data,'$.lifecycle'),'active')='active';
+      CREATE INDEX IF NOT EXISTS nodes_active ON nodes(project_id,kind) WHERE COALESCE(json_extract(data,'$.deleted'),0)=0;
       CREATE TABLE IF NOT EXISTS counters(scope TEXT NOT NULL, kind TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(scope,kind));
       CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, revision INTEGER NOT NULL,
@@ -118,7 +129,64 @@ export class Store {
     this.db.prepare('INSERT OR IGNORE INTO metadata VALUES (?,?)').run('schema', '2')
     // Counters of deleted projects would otherwise linger forever and are never read again.
     this.db.prepare('DELETE FROM counters WHERE scope NOT IN (SELECT id FROM projects)').run()
+    try { this.migrateCurrentFgs() } catch (error) { this.db.close(); throw error }
     this.changes.setMaxListeners(0)
+  }
+  private migrateCurrentFgs() {
+    if (this.db.prepare('SELECT value FROM metadata WHERE key=?').get('fgs-current-only')) return
+    this.transaction(() => {
+      for (const project of this.projects()) {
+        type LegacyNode = GraphNode & { lifecycle?: string; mergedInto?: string; mergedFromIds?: string[]; sourceDetails?: unknown; deleted?: boolean }
+        const nodes = new Map<string, LegacyNode>(this.db.prepare('SELECT data FROM nodes WHERE project_id=?').all(project.id).map(row => { const node = JSON.parse(String(row.data)) as LegacyNode; return [node.id, node] }))
+        const removed = new Set([...nodes.values()].filter(n => ['fact', 'finding'].includes(n.kind) && (n.deleted || n.lifecycle && n.lifecycle !== 'active')).map(n => n.id))
+        if (removed.has('origin')) throw new Error(`FGS migration ${project.id}/origin: Scope cannot be removed`)
+        const redirects = new Map<string, string>()
+        for (const id of removed) {
+          const source = nodes.get(id)!
+          if (source.lifecycle !== 'merged') continue
+          const seen = new Set<string>([id]); let target = source
+          while (target.lifecycle === 'merged') {
+            const next = target.mergedInto
+            if (!next || seen.has(next) || !nodes.has(next)) throw new Error(`FGS migration ${project.id}/${id}: invalid merge chain`)
+            seen.add(next); target = nodes.get(next)!
+          }
+          if (target.kind !== source.kind || target.id === 'origin') throw new Error(`FGS migration ${project.id}/${id}: merge target must be evidence of the same kind`)
+          redirects.set(id, target.id)
+        }
+        for (const node of nodes.values()) {
+          if (removed.has(node.id)) continue
+          const fields = node.kind === 'step' ? ['sourceIds', 'factIds'] : node.kind === 'goal' ? ['evidenceIds'] : node.kind === 'finding' ? ['factIds'] : []
+          let contractChanged = false, changed = false
+          for (const field of fields) {
+            const refs = (node as unknown as Record<string, string[]>)[field]
+            const required = node.kind === 'step' ? field === 'sourceIds' && !node.deleted && !['done', 'cancelled'].includes(node.status) : node.kind === 'goal' ? node.status === 'achieved' : !node.deleted
+            const next: string[] = []
+            for (const ref of refs) {
+              const target = redirects.get(ref) ?? ref
+              if (removed.has(target) || !nodes.has(target)) {
+                if (required) throw new Error(`FGS migration ${project.id}/${node.id}: active ${field} reference ${ref} would be lost`)
+                continue
+              }
+              if (!next.includes(target)) next.push(target)
+            }
+            if (JSON.stringify(next) !== JSON.stringify(refs)) {
+              (node as unknown as Record<string, string[]>)[field] = next; changed = true
+              contractChanged ||= required && node.kind === 'step'
+            }
+          }
+          if (changed) node.version = (node.version ?? 1) + 1
+          if (contractChanged && node.kind === 'step') node.planVersion = (node.planVersion ?? 1) + 1
+          delete node.lifecycle; delete node.mergedInto; delete node.mergedFromIds; delete node.sourceDetails
+          this.db.prepare('UPDATE nodes SET data=? WHERE project_id=? AND id=?').run(JSON.stringify(node), project.id, node.id)
+        }
+        for (const id of removed) this.db.prepare('DELETE FROM nodes WHERE project_id=? AND id=?').run(project.id, id)
+      }
+      for (const row of this.db.prepare('SELECT id,data FROM events').iterate()) {
+        this.db.prepare('UPDATE events SET data=? WHERE id=?').run(JSON.stringify(graphEventPayload(JSON.parse(String(row.data)))), row.id)
+      }
+      this.db.exec(`DROP INDEX IF EXISTS nodes_active; CREATE INDEX nodes_active ON nodes(project_id,kind) WHERE ${ACTIVE_NODE_SQL}`)
+      this.db.prepare('INSERT INTO metadata VALUES (?,?)').run('fgs-current-only', '1')
+    })
   }
   close() { this.notifications.clear(); this.stepNotifications.clear(); this.changes.removeAllListeners(); this.db.close() }
   transaction<T>(fn: () => T): T {
@@ -193,18 +261,18 @@ export class Store {
     if (kind && value.kind !== kind) throw new HttpError(404, `${kind} not found`)
     return value
   }
-  nodes<T extends GraphNode = GraphNode>(projectId: string, kinds: T['kind'][], page?: { offset?: number; limit?: number; includeInactive?: boolean }): T[] {
+  nodes<T extends GraphNode = GraphNode>(projectId: string, kinds: T['kind'][], page?: { offset?: number; limit?: number }): T[] {
     this.project(projectId)
     if (!kinds.length) return []
     const placeholders = kinds.map(() => '?').join(',')
     const offset = integer(page?.offset ?? 0, 'node offset'), limit = page?.limit === undefined ? undefined : integer(page.limit, 'node limit', 1)
-    const sql = `SELECT data FROM nodes WHERE project_id=? AND kind IN (${placeholders}) ${page?.includeInactive ? '' : `AND ${ACTIVE_NODE_SQL}`} ORDER BY rowid${limit === undefined ? '' : ' LIMIT ? OFFSET ?'}`
+    const sql = `SELECT data FROM nodes WHERE project_id=? AND kind IN (${placeholders}) AND ${ACTIVE_NODE_SQL} ORDER BY rowid${limit === undefined ? '' : ' LIMIT ? OFFSET ?'}`
     return (this.db.prepare(sql).all(...(limit === undefined ? [projectId, ...kinds] : [projectId, ...kinds, limit, offset])) as { data: string }[])
       .map(row => ({ version: 1, ...JSON.parse(row.data) }))
   }
-  nodeCount(projectId: string, kind: GraphNode['kind'], includeInactive = false): number {
+  nodeCount(projectId: string, kind: GraphNode['kind']): number {
     this.project(projectId)
-    return Number((this.db.prepare(`SELECT COUNT(*) AS value FROM nodes WHERE project_id=? AND kind=? ${includeInactive ? '' : `AND ${ACTIVE_NODE_SQL}`}`).get(projectId, kind) as { value: number }).value)
+    return Number((this.db.prepare(`SELECT COUNT(*) AS value FROM nodes WHERE project_id=? AND kind=? AND ${ACTIVE_NODE_SQL}`).get(projectId, kind) as { value: number }).value)
   }
   private saveNode(node: GraphNode) {
     const prior = this.db.prepare('SELECT data FROM nodes WHERE project_id=? AND id=?').get(node.projectId, node.id)
@@ -212,68 +280,12 @@ export class Store {
     this.db.prepare('INSERT INTO nodes VALUES (?,?,?,?) ON CONFLICT(project_id,id) DO UPDATE SET data=excluded.data')
       .run(node.projectId, node.id, node.kind, JSON.stringify(node))
   }
-  graph(id: string, includeInactive = false): Graph {
+  graph(id: string): Graph {
     const project = this.project(id)
-    const all: GraphNode[] = (this.db.prepare(`SELECT data FROM nodes WHERE project_id=? ${includeInactive ? '' : `AND ${ACTIVE_NODE_SQL}`} ORDER BY rowid`).all(id) as { data: string }[]).map(r => JSON.parse(r.data))
-    return { project, inactiveIds: this.db.prepare(`SELECT id FROM nodes WHERE project_id=? AND NOT (${ACTIVE_NODE_SQL})`).all(id).map(row => String(row.id)), facts: all.filter((n): n is Fact => n.kind === 'fact' && (includeInactive || activeEvidence(n))), goals: all.filter((n): n is Goal => n.kind === 'goal'),
-      steps: all.filter((n): n is Step => n.kind === 'step' && (includeInactive || !n.deleted)), findings: all.filter((n): n is Finding => n.kind === 'finding' && (includeInactive || activeEvidence(n))),
+    const all: GraphNode[] = (this.db.prepare(`SELECT data FROM nodes WHERE project_id=? AND ${ACTIVE_NODE_SQL} ORDER BY rowid`).all(id) as { data: string }[]).map(r => JSON.parse(r.data))
+    return { project, facts: all.filter((n): n is Fact => n.kind === 'fact'), goals: all.filter((n): n is Goal => n.kind === 'goal'),
+      steps: all.filter((n): n is Step => n.kind === 'step'), findings: all.filter((n): n is Finding => n.kind === 'finding'),
       hints: all.filter((n): n is Input => n.kind === 'hint' && !n.deleted), observations: all.filter((n): n is Input => n.kind === 'observation' && !n.deleted) }
-  }
-  graphAt(id: string, revision: number, includeInactive = false): Graph & { historyIncomplete: boolean } {
-    const current = this.graph(id)
-    if (!Number.isSafeInteger(revision) || revision < 1 || revision > current.project.revision) throw new HttpError(422, 'Invalid graph revision')
-    const rows = this.db.prepare('SELECT revision,type,node_id,data FROM events WHERE project_id=? AND revision<=? ORDER BY revision').all(id, revision)
-    const initial = JSON.parse(String(rows[0]?.data ?? '{}'))
-    const historyIncomplete = !Array.isArray(initial.initialNodes)
-    const project: Project = { ...current.project, ...initial, status: 'active', revision: 0, planningRevision: 0, decidedRevision: 0,
-      factSeq: 0, endedSeq: 0, acknowledgedFactSeq: 0, acknowledgedEndedSeq: 0, evidenceSeq: 0, acknowledgedEvidenceSeq: 0, hintSeq: 0, acknowledgedHintSeq: 0, initialPlanningPending: true, planningRetryPending: false, retryAfter: 0 }
-    delete (project as Project & { initialNodes?: unknown }).initialNodes
-    const nodes = new Map<string, GraphNode>()
-    if (!historyIncomplete) for (const node of initial.initialNodes as GraphNode[]) nodes.set(node.id, node)
-    else {
-      const scope = current.facts.find(f => f.id === 'origin')
-      if (scope) nodes.set(scope.id, scope)
-      nodes.set('goal', { id: 'goal', kind: 'goal', projectId: id, createdAt: project.createdAt, creator: 'human', description: '历史目标（创建描述未记录）', parentId: null, status: 'open', evidenceIds: [] })
-    }
-    for (const row of rows) {
-      const payload = JSON.parse(String(row.data)), type = String(row.type), nodeId = row.node_id as string | null
-      project.revision = Number(row.revision)
-      if (['project.created', 'fact.added', 'execute.succeeded', 'execute.failed', 'project.active', 'project.reopened'].includes(type)) project.planningRevision++
-      if (type === 'fact.added') project.factSeq++
-      if (type === 'fact.added' || type === 'finding.added') project.evidenceSeq = typeof payload.evidenceSeq === 'number' ? payload.evidenceSeq : (project.evidenceSeq ?? 0) + (type === 'fact.added' ? 1 : 0)
-      if (type === 'hint.added' || type === 'hint.deleted') project.hintSeq = (project.hintSeq ?? 0) + 1
-      if ((type === 'execute.succeeded' || type === 'execute.failed') && payload.nodeSnapshot?.status !== 'cancelled') project.endedSeq++
-      if (type === 'decide.succeeded') {
-        project.decidedRevision = Math.max(project.decidedRevision, Number(payload.baseRevision) || 0)
-        project.acknowledgedFactSeq = Number(payload.factSeq) || 0
-        project.acknowledgedEndedSeq = Number(payload.endedSeq) || 0
-        project.acknowledgedEvidenceSeq = Number(payload.evidenceSeq) || Number(payload.factSeq) || 0
-        project.acknowledgedHintSeq = Number(payload.hintSeq) || 0
-        project.initialPlanningPending = false; project.planningRetryPending = false; project.retryAfter = 0
-      } else if (type.startsWith('decide.') && !['decide.started', 'decide.succeeded'].includes(type)) {
-        project.planningRetryPending = true; project.retryAfter = Number(payload.retryAfter) || 0
-      }
-      if (payload.kind && payload.id) { const { evidenceSeq: _seq, hintSeq: _hintSeq, ...snapshot } = payload; nodes.set(payload.id, snapshot) }
-      if (payload.nodeSnapshot) nodes.set(payload.nodeSnapshot.id, payload.nodeSnapshot)
-      if (type === 'fact.added' && payload.stepId) {
-        const step = nodes.get(payload.stepId)
-        if (step?.kind === 'step' && !step.factIds.includes(payload.id)) step.factIds.push(payload.id)
-      }
-      const step = nodeId ? nodes.get(nodeId) : undefined
-      if (!payload.nodeSnapshot && step?.kind === 'step' && type.startsWith('execute.')) {
-        const statuses: Record<string, Step['status']> = { started: 'running', succeeded: 'done', failed: 'blocked', unknown: 'blocked', paused: 'paused', cancelled: 'cancelled' }
-        const status = statuses[type.slice(8)]
-        if (status) step.status = status
-      }
-      if (type === 'project.completed') project.status = 'completed'
-      if (type === 'project.stopped') project.status = 'stopped'
-      if (type === 'project.active' || type === 'project.reopened') project.status = 'active'
-      if (type === 'project.renamed') project.title = payload.title
-    }
-    const all = [...nodes.values()]
-    return { project, inactiveIds: all.filter(n => !activeEvidence(n)).map(n => n.id), facts: all.filter((n): n is Fact => n.kind === 'fact' && (includeInactive || activeEvidence(n))), goals: all.filter((n): n is Goal => n.kind === 'goal'),
-      steps: all.filter((n): n is Step => n.kind === 'step' && (includeInactive || !n.deleted)), findings: all.filter((n): n is Finding => n.kind === 'finding' && (includeInactive || activeEvidence(n))),
-      hints: all.filter((n): n is Input => n.kind === 'hint' && !n.deleted), observations: all.filter((n): n is Input => n.kind === 'observation' && !n.deleted), historyIncomplete }
   }
   private event(id: string, type: string, node: GraphNode | null, payload: unknown) {
     const planning = ['project.created', 'fact.added', 'execute.succeeded', 'execute.failed', 'project.active', 'project.reopened'].includes(type)
@@ -284,7 +296,7 @@ export class Store {
     if ((type === 'execute.succeeded' || type === 'execute.failed') && node?.kind === 'step' && node.status !== 'cancelled') p.endedSeq++
     this.saveProject(p)
     this.db.prepare('INSERT INTO events(project_id,revision,type,node_id,data,created_at) VALUES (?,?,?,?,?,?)')
-      .run(id, p.revision, type, node?.id ?? null, JSON.stringify(node && payload && typeof payload === 'object' ? { ...payload, evidenceSeq: p.evidenceSeq, hintSeq: p.hintSeq ?? 0, ...(!('kind' in payload) ? { nodeSnapshot: node } : {}) } : payload), now())
+      .run(id, p.revision, type, node?.id ?? null, JSON.stringify(graphEventPayload(node ? { ...graphEventPayload(payload), evidenceSeq: p.evidenceSeq, hintSeq: p.hintSeq ?? 0, version: node.version, ...('planVersion' in node ? { planVersion: node.planVersion } : {}) } : payload)), now())
     this.pending.add(id)
     if (node?.kind === 'step') this.pendingSteps.add(`step:${id}:${node.id}`)
   }
@@ -332,7 +344,7 @@ export class Store {
       this.db.prepare('INSERT INTO projects VALUES (?,?)').run(id, JSON.stringify(p))
       this.saveNode({ id: 'origin', projectId: id, kind: 'fact', description: origin, creator: 'human', createdAt, stepId: null, evidence: [] })
       this.saveNode({ id: 'goal', projectId: id, kind: 'goal', description: goal, creator: 'human', createdAt, parentId: null, status: 'open', evidenceIds: [] })
-      this.event(id, 'project.created', null, { ...p, initialNodes: [this.node(id, 'origin'), this.node(id, 'goal')] })
+      this.event(id, 'project.created', null, {})
       for (const hint of input.hints ?? []) this.addInput(id, 'hint', hint.content, hint.creator)
       if (p.bootstrap) this.addStep(id, { description: goal, sourceIds: ['origin'], goalId: 'goal', creator: 'bootstrap', bootstrap: true })
       return this.graph(id)
@@ -560,7 +572,11 @@ export class Store {
       if (run.projectId !== projectId || run.status !== 'running') throw new HttpError(409, 'Delta reader has stopped')
       if (after <= (run.deliveredGraphCursor ?? 0)) { run.deliveredEvidenceSeq = Math.max(run.deliveredEvidenceSeq ?? 0, evidenceSeq); run.deliveredHintSeq = Math.max(run.deliveredHintSeq ?? 0, hintSeq); run.deliveredGraphCursor = Math.max(run.deliveredGraphCursor ?? 0, cursor); this.saveRun(run) }
     })
-    return { events, nodes: changed.map(id => this.node(projectId, id)), cursor, hasMore: this.events(projectId, cursor, 1).length > 0, evidenceSeq, hintSeq }
+    const nodes = changed.flatMap(id => {
+      const row = this.db.prepare(`SELECT data FROM nodes WHERE project_id=? AND id=? AND ${ACTIVE_NODE_SQL}`).get(projectId, id)
+      return row ? [{ version: 1, ...JSON.parse(String(row.data)) } as GraphNode] : []
+    })
+    return { events, nodes, cursor, hasMore: this.events(projectId, cursor, 1).length > 0, evidenceSeq, hintSeq }
   }
   manageEvidence(id: string, input: EvidenceChange) {
     return this.transaction(() => {
@@ -579,17 +595,14 @@ export class Store {
           this.checkVersion(node, input.sourceVersions[source]); return node
         })
         const union = <T>(items: T[]) => [...new Map(items.map(item => [JSON.stringify(item), item])).values()]
-        target.mergedFromIds = union([...(target.mergedFromIds ?? []), ...nodes.flatMap(n => [n.id, ...(n.mergedFromIds ?? [])])])
         target.producerStepIds = union([target, ...nodes].flatMap(n => [...(n.producerStepIds ?? []), ...(n.stepId ? [n.stepId] : [])]))
         if (target.kind === 'fact') target.evidence = union([target, ...nodes as Fact[]].flatMap(n => n.evidence))
         else {
           const findings = [target, ...nodes as Finding[]]
           target.factIds = union(findings.flatMap(n => n.factIds))
-          target.sourceDetails = union(findings.flatMap(n => [{ id: n.id, details: n.details }, ...(n.sourceDetails ?? [])]))
         }
         const set = new Set(sources), replace = (refs: string[]) => union(refs.map(ref => set.has(ref) ? target.id : ref))
-        // Query only reference-bearing kinds, not historical Fact bodies.
-        const affected = this.nodes<Step | Goal | Finding>(id, ['step', 'goal', 'finding'], { includeInactive: true })
+        const affected = this.db.prepare("SELECT data FROM nodes WHERE project_id=? AND kind IN ('step','goal','finding')").all(id).map(row => ({ version: 1, ...JSON.parse(String(row.data)) }) as Step | Goal | Finding)
         for (const node of affected) {
           if (node.id === target.id || set.has(node.id)) continue
           let changed = false, contractChanged = false
@@ -603,17 +616,30 @@ export class Store {
           }
           if (changed) { if (contractChanged && node.kind === 'step' && !['done', 'cancelled'].includes(node.status)) node.planVersion = (node.planVersion ?? 1) + 1; this.saveNode(node); this.event(id, `${node.kind}.updated`, node, node) }
         }
-        this.saveNode(target); this.event(id, `${target.kind}.updated`, target, { reason: input.reason, mergedFromIds: target.mergedFromIds })
-        for (const node of nodes) { node.lifecycle = 'merged'; node.mergedInto = target.id; this.saveNode(node); this.event(id, `${node.kind}.merged`, node, { reason: input.reason, mergedInto: target.id }) }
-      } else if (input.operation === 'archive') {
-        if (!activeEvidence(target)) throw new HttpError(409, 'Evidence is not active')
-        const blockers = this.nodes<Step | Goal | Finding>(id, ['step', 'goal', 'finding']).filter(node => node.kind === 'step' ? !['done', 'cancelled'].includes(node.status) && node.sourceIds.includes(target.id) : node.kind === 'goal' ? node.status === 'achieved' && node.evidenceIds.includes(target.id) : node.factIds.includes(target.id))
+        if (input.description !== undefined) target.description = requiredText(input.description, 'description')
+        if (target.kind === 'finding') {
+          if (input.title !== undefined) target.title = requiredText(input.title, 'title')
+          if (input.details !== undefined) target.details = input.details
+        } else if (input.title !== undefined || input.details !== undefined) throw new HttpError(422, 'title/details require a Finding')
+        this.saveNode(target); this.event(id, `${target.kind}.updated`, target, { reason: input.reason })
+        for (const node of nodes) { this.db.prepare('DELETE FROM nodes WHERE project_id=? AND id=?').run(id, node.id); this.event(id, `${node.kind}.merged`, node, { reason: input.reason, targetId: target.id }) }
+      } else if (input.operation === 'delete') {
+        const affected = this.db.prepare("SELECT data FROM nodes WHERE project_id=? AND kind IN ('step','goal','finding')").all(id).map(row => ({ version: 1, ...JSON.parse(String(row.data)) }) as Step | Goal | Finding)
+        const blockers = affected.filter(node => node.kind === 'step' ? !node.deleted && !['done', 'cancelled'].includes(node.status) && node.sourceIds.includes(target.id) : node.kind === 'goal' ? node.status === 'achieved' && node.evidenceIds.includes(target.id) : node.id !== target.id && node.factIds.includes(target.id))
         if (blockers.length) throw new HttpError(409, 'Evidence has active references', { blockers: blockers.map(n => ({ id: n.id, kind: n.kind, version: n.version })) })
-        target.lifecycle = 'archived'; this.saveNode(target); this.event(id, `${target.kind}.archived`, target, { reason: input.reason })
-      } else if (input.operation === 'restore') {
-        if (target.lifecycle !== 'archived') throw new HttpError(409, 'Only archived evidence can be restored')
-        if (target.kind === 'finding') this.factIds(id, target.factIds, false)
-        target.lifecycle = 'active'; this.saveNode(target); this.event(id, `${target.kind}.restored`, target, { reason: input.reason })
+        for (const node of affected) {
+          if (node.id === target.id) continue
+          const fields = node.kind === 'step' ? ['sourceIds', 'factIds'] : node.kind === 'goal' ? ['evidenceIds'] : ['factIds']
+          let changed = false
+          for (const field of fields) {
+            const refs = (node as unknown as Record<string, string[]>)[field]
+            if (refs.includes(target.id)) { (node as unknown as Record<string, string[]>)[field] = refs.filter(ref => ref !== target.id); changed = true }
+          }
+          if (changed) { this.saveNode(node); this.event(id, `${node.kind}.updated`, node, {}) }
+        }
+        this.db.prepare('DELETE FROM nodes WHERE project_id=? AND id=?').run(id, target.id)
+        this.event(id, `${target.kind}.deleted`, target, { reason: input.reason })
+        return { id: target.id, deleted: true }
       } else throw new HttpError(422, 'Invalid evidence operation')
       return this.node(id, target.id)
     })
@@ -667,15 +693,8 @@ export class Store {
     return JSON.parse(row.data)
   }
   releaseFact(id: string, factId: string) {
-    return this.transaction(() => {
-      if (['origin', 'goal'].includes(factId)) throw new HttpError(409, `${factId} cannot be released`)
-      const fact = this.node<Fact>(id, factId, 'fact'), graph = this.graph(id)
-      if (fact.deleted) throw new HttpError(404, 'Fact not found')
-      if (graph.steps.some(s => !s.deleted && s.sourceIds.includes(factId)) || graph.goals.some(g => g.evidenceIds.includes(factId)) || graph.findings.some(f => f.factIds.includes(factId))) throw new HttpError(409, 'Fact is still referenced')
-      fact.deleted = true; this.saveNode(fact); this.event(id, 'fact.deleted', fact, fact)
-      // Preserve the producing action and its evidence in history; hide it only from the legacy projection.
-      if (fact.stepId) { const step = this.node<Step>(id, fact.stepId, 'step'); if (step.factIds.every(fid => this.node<Fact>(id, fid, 'fact').deleted)) { step.deleted = true; this.saveNode(step); this.event(id, 'step.deleted', step, step) } }
-    })
+    const fact = this.node<Fact>(id, factId, 'fact')
+    this.manageEvidence(id, { operation: 'delete', id: factId, expectedVersion: fact.version!, reason: 'Released evidence' })
   }
   ownedRun(id: string, activity: Activity, worker: string, stepId: string | null = null): Run {
     const row = this.db.prepare('SELECT data FROM runs WHERE project_id=? AND activity=? AND step_id IS ? AND status=? LIMIT 1').get(id, activity, stepId, 'running') as { data: string } | undefined

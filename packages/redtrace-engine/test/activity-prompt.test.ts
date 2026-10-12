@@ -13,7 +13,7 @@ test('Reason keeps planning, evidence maintenance and completion contracts', () 
     /单次失败不等于证伪/, /中断.*确认进度/, /副作用不明.*不重放/,
     /sourceIds.*goalId/, /requires\/plugins/, /Subgoal.*可验收.*复用/,
     /remote\.command/, /update_step\/update_goal.*版本/, /amend.*replace/,
-    /manage_evidence.*合并.*归档.*恢复/, /修复活跃引用/,
+    /FGS 是当前工作状态/, /manage_evidence.*合并.*删除/, /不留备份、不可恢复，无需检查历史/, /修复活跃引用/,
     /新 Fact\/Finding.*关键事件.*不等 Step 结束/, /Worker.*add_step.*限制/,
     /只读工具.*扣分提示.*确认/, /finish_decide.*throughEvidenceSeq.*完整读取并处理.*连续边界/,
   ]) assert.match(prompt, rule)

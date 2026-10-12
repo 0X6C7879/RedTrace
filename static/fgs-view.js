@@ -8,6 +8,12 @@ window.redtraceFgsView = {
   fgsRunId: '',
   fgsRunEvents: [],
   fgsRunHasMore: false,
+  clearMissingFgsSelection() {
+    if (this.fgsSelection && !this.fgs?.[this.fgsSelection.type === 'fact' || this.fgsSelection.type === 'scope' ? 'facts' : this.fgsSelection.type === 'finding' ? 'findings' : this.fgsSelection.type === 'step' ? 'steps' : 'goals']?.some(n => n.id === this.fgsSelection.id)) {
+      this.fgsSelection = null; this.fgsRuns = []; this.fgsRunId = ''; this.fgsRunEvents = []; this.fgsRunHasMore = false; this.jevFindingReview = null;
+    }
+    if (this.fgsEdgeSelection && !this.fgs?.edges?.some(e => e.id === this.fgsEdgeSelection.id)) this.fgsEdgeSelection = null;
+  },
   async openIntentLog(stepId) {
     if (this.replay.active) return;
     try {
@@ -140,34 +146,5 @@ window.redtraceFgsView = {
   nativeProject(graph) {
     return { project: { ...graph.project, reason: null, bootstrap_enabled: graph.project.bootstrap, created_at: graph.project.createdAt }, facts: [...graph.facts, ...graph.goals.filter(g => g.id === 'goal')], hints: graph.hints.map(h => ({ ...h, created_at: h.createdAt })),
       intents: graph.steps.filter(s => !s.deleted).map(s => ({ ...s, from: s.sourceIds, to: s.status === 'done' ? s.resultGoalId || s.factIds.at(-1) || null : null, state: { pending: 'open', running: 'working', paused: 'open', blocked: 'blocked', done: 'concluded', cancelled: 'dropped' }[s.status], worker: s.status === 'paused' ? null : s.worker, execution_profile: s.executionProfile, created_at: s.createdAt, concluded_at: s.endedAt, failure_count: s.failureCount || 0, failure_signature: s.failure, retry_after: s.retryAfter, circuit_open: s.circuitOpen, attempt_count: s.attempts, cumulative_runtime_ms: s.runtimeMs || 0, fact_yield: s.factIds.length })) };
-  },
-  async startFgsReplay() {
-    const projectId = this.selectedProjectId;
-    const sourceProject = this.cloneData(this.project);
-    const events = []; let after = 0;
-    for (;;) {
-      const page = await this.api('GET', `/v2/projects/${projectId}/events?after=${after}&limit=500`);
-      events.push(...page); if (page.length < 500) break; after = page.at(-1).id;
-    }
-    if (!events.length) { this.showToast('无可回放事件', 'error'); return; }
-    const frames = events.map(e => ({ revision: e.revision, event: { id: `fgs-${e.id}`, type: e.type, timestamp: e.createdAt, title: e.type, actor: '', meta: [e.nodeId || '', `revision ${e.revision}`], targetType: 'fgs', targetId: e.nodeId, sourceFactIds: [] } }));
-    this.stopReplayTimer();
-    this.replay = { active: true, native: true, playing: true, stepMs: this.replay.stepMs || '1100', frameIndex: -1, frames, visibleEvents: [], sourceProject, timer: null };
-    this.polling = false; this.fgsFocusGoal = ''; this.fgsSelection = null; this.fgsEdgeSelection = null;
-    await this.applyFgsReplayFrame(0);
-    this.scheduleReplayTick();
-  },
-  async applyFgsReplayFrame(index) {
-    const replay = this.replay, frame = replay.frames[index];
-    if (!frame || replay.loading) return;
-    replay.loading = true;
-    try {
-      const graph = await this.api('GET', `/v2/projects/${this.selectedProjectId}/graph?revision=${frame.revision}`);
-      if (this.replay !== replay || !replay.active) return;
-      this.fgs = graph; this.project = this.nativeProject(graph); replay.frameIndex = index;
-      replay.visibleEvents = replay.frames.slice(0, index + 1).map(f => f.event);
-      this.updateGraph(); if (index === 0) this.fitGraph();
-    } catch (e) { replay.playing = false; this.stopReplayTimer(); this.showToast(e.message, 'error'); }
-    finally { replay.loading = false; }
   },
 };

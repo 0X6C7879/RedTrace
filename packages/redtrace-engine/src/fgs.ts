@@ -13,9 +13,9 @@ export function projectFgs(graph: Graph) {
       activeSteps: graph.steps.filter(s => !s.deleted && s.goalId === g.id && ACTIVE_STEP_STATUSES.includes(s.status)).length })),
     ...graph.findings.map(f => ({ id: f.id, nodeType: 'finding' as const, label: f.title, description: f.description })),
   ]
-  const ids = new Set(nodes.map(n => n.id)), hidden = new Set(graph.inactiveIds ?? []), edges = new Map<string, FgsEdge>(), missing = new Set<string>()
+  const ids = new Set(nodes.map(n => n.id)), edges = new Map<string, FgsEdge>(), missing = new Set<string>()
   const add = (source: string, target: string, relation: FgsEdge['relation'], stepId?: string) => {
-    if (!ids.has(source) || !ids.has(target)) { if (!hidden.has(source) && !hidden.has(target)) missing.add(`${source} → ${target}`); return }
+    if (!ids.has(source) || !ids.has(target)) { missing.add(`${source} → ${target}`); return }
     if (source === target) return
     const id = JSON.stringify([relation, source, target])
     const edge = edges.get(id) ?? { id, source, target, relation, stepIds: [] }
