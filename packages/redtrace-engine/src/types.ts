@@ -9,6 +9,7 @@ export interface Project {
   revision: number; planningRevision: number; decidedRevision: number; retryAfter: number
   factSeq: number; endedSeq: number; acknowledgedFactSeq: number; acknowledgedEndedSeq: number
   evidenceSeq?: number; acknowledgedEvidenceSeq?: number
+  hintSeq?: number; acknowledgedHintSeq?: number
   criticalSeq?: number; acknowledgedCriticalSeq?: number
   benchmarkHosts?: Record<string,string[]>
   initialPlanningPending: boolean; planningRetryPending: boolean
@@ -40,6 +41,7 @@ export interface Run {
   planningFactSeq?: number; planningEndedSeq?: number
   planningCriticalSeq?: number
   planningEvidenceSeq?: number; processedEvidenceSeq?: number; deliveredEvidenceSeq?: number; boundStepVersion?: number
+  planningHintSeq?: number; processedHintSeq?: number; deliveredHintSeq?: number
   deliveredGraphCursor?: number
   inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number
   heartbeatAt?: string; trigger?: string

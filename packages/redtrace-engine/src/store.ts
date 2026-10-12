@@ -155,6 +155,8 @@ export class Store {
     const project = JSON.parse(row.data) as Project
     project.evidenceSeq ??= project.factSeq
     project.acknowledgedEvidenceSeq ??= project.acknowledgedFactSeq
+    project.hintSeq ??= Number(this.db.prepare("SELECT COUNT(*) AS value FROM events WHERE project_id=? AND type IN ('hint.added','hint.deleted')").get(id)?.value ?? 0)
+    project.acknowledgedHintSeq ??= 0
     return project
   }
   projects(): Project[] { return (this.db.prepare('SELECT data FROM projects ORDER BY id').all() as { data: string }[]).map(r => JSON.parse(r.data)) }
@@ -209,7 +211,7 @@ export class Store {
     const initial = JSON.parse(String(rows[0]?.data ?? '{}'))
     const historyIncomplete = !Array.isArray(initial.initialNodes)
     const project: Project = { ...current.project, ...initial, status: 'active', revision: 0, planningRevision: 0, decidedRevision: 0,
-      factSeq: 0, endedSeq: 0, acknowledgedFactSeq: 0, acknowledgedEndedSeq: 0, evidenceSeq: 0, acknowledgedEvidenceSeq: 0, initialPlanningPending: true, planningRetryPending: false, retryAfter: 0 }
+      factSeq: 0, endedSeq: 0, acknowledgedFactSeq: 0, acknowledgedEndedSeq: 0, evidenceSeq: 0, acknowledgedEvidenceSeq: 0, hintSeq: 0, acknowledgedHintSeq: 0, initialPlanningPending: true, planningRetryPending: false, retryAfter: 0 }
     delete (project as Project & { initialNodes?: unknown }).initialNodes
     const nodes = new Map<string, GraphNode>()
     if (!historyIncomplete) for (const node of initial.initialNodes as GraphNode[]) nodes.set(node.id, node)
@@ -224,17 +226,19 @@ export class Store {
       if (['project.created', 'fact.added', 'execute.succeeded', 'execute.failed', 'project.active', 'project.reopened'].includes(type)) project.planningRevision++
       if (type === 'fact.added') project.factSeq++
       if (type === 'fact.added' || type === 'finding.added') project.evidenceSeq = typeof payload.evidenceSeq === 'number' ? payload.evidenceSeq : (project.evidenceSeq ?? 0) + (type === 'fact.added' ? 1 : 0)
+      if (type === 'hint.added' || type === 'hint.deleted') project.hintSeq = (project.hintSeq ?? 0) + 1
       if ((type === 'execute.succeeded' || type === 'execute.failed') && payload.nodeSnapshot?.status !== 'cancelled') project.endedSeq++
       if (type === 'decide.succeeded') {
         project.decidedRevision = Math.max(project.decidedRevision, Number(payload.baseRevision) || 0)
         project.acknowledgedFactSeq = Number(payload.factSeq) || 0
         project.acknowledgedEndedSeq = Number(payload.endedSeq) || 0
         project.acknowledgedEvidenceSeq = Number(payload.evidenceSeq) || Number(payload.factSeq) || 0
+        project.acknowledgedHintSeq = Number(payload.hintSeq) || 0
         project.initialPlanningPending = false; project.planningRetryPending = false; project.retryAfter = 0
       } else if (type.startsWith('decide.') && !['decide.started', 'decide.succeeded'].includes(type)) {
         project.planningRetryPending = true; project.retryAfter = Number(payload.retryAfter) || 0
       }
-      if (payload.kind && payload.id) { const { evidenceSeq: _seq, ...snapshot } = payload; nodes.set(payload.id, snapshot) }
+      if (payload.kind && payload.id) { const { evidenceSeq: _seq, hintSeq: _hintSeq, ...snapshot } = payload; nodes.set(payload.id, snapshot) }
       if (payload.nodeSnapshot) nodes.set(payload.nodeSnapshot.id, payload.nodeSnapshot)
       if (type === 'fact.added' && payload.stepId) {
         const step = nodes.get(payload.stepId)
@@ -261,10 +265,11 @@ export class Store {
     const p = this.project(id); p.revision++; if (planning) p.planningRevision++
     if (type === 'fact.added') p.factSeq++
     if (type === 'fact.added' || type === 'finding.added') p.evidenceSeq = (p.evidenceSeq ?? 0) + 1
+    if (type === 'hint.added' || type === 'hint.deleted') p.hintSeq = (p.hintSeq ?? 0) + 1
     if ((type === 'execute.succeeded' || type === 'execute.failed') && node?.kind === 'step' && node.status !== 'cancelled') p.endedSeq++
     this.saveProject(p)
     this.db.prepare('INSERT INTO events(project_id,revision,type,node_id,data,created_at) VALUES (?,?,?,?,?,?)')
-      .run(id, p.revision, type, node?.id ?? null, JSON.stringify(node && payload && typeof payload === 'object' ? { ...payload, evidenceSeq: p.evidenceSeq, ...(!('kind' in payload) ? { nodeSnapshot: node } : {}) } : payload), now())
+      .run(id, p.revision, type, node?.id ?? null, JSON.stringify(node && payload && typeof payload === 'object' ? { ...payload, evidenceSeq: p.evidenceSeq, hintSeq: p.hintSeq ?? 0, ...(!('kind' in payload) ? { nodeSnapshot: node } : {}) } : payload), now())
     this.pending.add(id)
   }
   events(projectId: string, after = 0, limit = 500): GraphEvent[] {
@@ -304,7 +309,7 @@ export class Store {
       const title = requiredText(input.title, 'title'), origin = requiredText(input.origin, 'origin'), goal = requiredText(input.goal, 'goal')
       const id = this.nextProjectId(), createdAt = now()
       const p: Project = { id, title, status: 'active', bootstrap: input.bootstrap ?? false, createdAt, revision: 0, planningRevision: 0, decidedRevision: 0, retryAfter: 0,
-        factSeq: 0, endedSeq: 0, acknowledgedFactSeq: 0, acknowledgedEndedSeq: 0, evidenceSeq: 0, acknowledgedEvidenceSeq: 0, initialPlanningPending: true, planningRetryPending: false }
+        factSeq: 0, endedSeq: 0, acknowledgedFactSeq: 0, acknowledgedEndedSeq: 0, evidenceSeq: 0, acknowledgedEvidenceSeq: 0, hintSeq: 0, acknowledgedHintSeq: 0, initialPlanningPending: true, planningRetryPending: false }
       this.db.prepare('INSERT INTO projects VALUES (?,?)').run(id, JSON.stringify(p))
       this.saveNode({ id: 'origin', projectId: id, kind: 'fact', description: origin, creator: 'human', createdAt, stepId: null, evidence: [] })
       this.saveNode({ id: 'goal', projectId: id, kind: 'goal', description: goal, creator: 'human', createdAt, parentId: null, status: 'open', evidenceIds: [] })
@@ -516,17 +521,27 @@ export class Store {
       run.processedEvidenceSeq = value; this.saveRun(run)
     })
   }
+  acknowledgeHint(runId: string, through: number) {
+    this.transaction(() => {
+      const run = this.run(runId)
+      if (run.status !== 'running' || run.activity !== 'decide') throw new HttpError(409, 'Decide is not running')
+      const value = integer(through, 'throughHintSeq')
+      if (value < Math.max(run.planningHintSeq ?? 0, run.processedHintSeq ?? 0) || value > (run.deliveredHintSeq ?? run.planningHintSeq ?? 0)) throw new HttpError(422, 'Acknowledgement must be within the delivered Hint boundary')
+      run.processedHintSeq = value; this.saveRun(run)
+    })
+  }
   graphDelta(projectId: string, after = 0, limit = 100, runId?: string) {
     const events = this.events(projectId, integer(after, 'after'), Math.min(100, integer(limit, 'limit', 1)))
     const cursor = events.at(-1)?.id ?? after
     const changed = [...new Set(events.map(e => e.nodeId).filter((id): id is string => id !== null))]
     const evidenceSeq = events.reduce((seq, e) => Math.max(seq, Number((e.payload as Record<string, Json>)?.evidenceSeq) || 0), 0)
+    const hintSeq = events.reduce((seq, e) => Math.max(seq, Number((e.payload as Record<string, Json>)?.hintSeq) || 0), 0)
     if (runId) this.transaction(() => {
       const run = this.run(runId)
       if (run.projectId !== projectId || run.status !== 'running') throw new HttpError(409, 'Delta reader has stopped')
-      if (after <= (run.deliveredGraphCursor ?? 0)) { run.deliveredEvidenceSeq = Math.max(run.deliveredEvidenceSeq ?? 0, evidenceSeq); run.deliveredGraphCursor = Math.max(run.deliveredGraphCursor ?? 0, cursor); this.saveRun(run) }
+      if (after <= (run.deliveredGraphCursor ?? 0)) { run.deliveredEvidenceSeq = Math.max(run.deliveredEvidenceSeq ?? 0, evidenceSeq); run.deliveredHintSeq = Math.max(run.deliveredHintSeq ?? 0, hintSeq); run.deliveredGraphCursor = Math.max(run.deliveredGraphCursor ?? 0, cursor); this.saveRun(run) }
     })
-    return { events, nodes: changed.map(id => this.node(projectId, id)), cursor, hasMore: this.events(projectId, cursor, 1).length > 0, evidenceSeq }
+    return { events, nodes: changed.map(id => this.node(projectId, id)), cursor, hasMore: this.events(projectId, cursor, 1).length > 0, evidenceSeq, hintSeq }
   }
   manageEvidence(id: string, input: EvidenceChange) {
     return this.transaction(() => {
@@ -558,13 +573,16 @@ export class Store {
         const affected = this.nodes<Step | Goal | Finding>(id, ['step', 'goal', 'finding'], { includeInactive: true })
         for (const node of affected) {
           if (node.id === target.id || set.has(node.id)) continue
-          let changed = false
+          let changed = false, contractChanged = false
           const fields = node.kind === 'step' ? ['sourceIds', 'factIds'] as const : node.kind === 'goal' ? ['evidenceIds'] as const : ['factIds'] as const
           for (const field of fields) {
             const refs = (node as unknown as Record<string, string[]>)[field]
-            if (refs.some(ref => set.has(ref))) { (node as unknown as Record<string, string[]>)[field] = replace(refs); changed = true }
+            if (refs.some(ref => set.has(ref))) {
+              (node as unknown as Record<string, string[]>)[field] = replace(refs); changed = true
+              contractChanged ||= node.kind === 'step' && field === 'sourceIds'
+            }
           }
-          if (changed) { if (node.kind === 'step' && !['done', 'cancelled'].includes(node.status)) node.planVersion = (node.planVersion ?? 1) + 1; this.saveNode(node); this.event(id, `${node.kind}.updated`, node, node) }
+          if (changed) { if (contractChanged && node.kind === 'step' && !['done', 'cancelled'].includes(node.status)) node.planVersion = (node.planVersion ?? 1) + 1; this.saveNode(node); this.event(id, `${node.kind}.updated`, node, node) }
         }
         this.saveNode(target); this.event(id, `${target.kind}.updated`, target, { reason: input.reason, mergedFromIds: target.mergedFromIds })
         for (const node of nodes) { node.lifecycle = 'merged'; node.mergedInto = target.id; this.saveNode(node); this.event(id, `${node.kind}.merged`, node, { reason: input.reason, mergedInto: target.id }) }
@@ -745,7 +763,7 @@ export class Store {
       if (paused?.pendingTools.length) throw new HttpError(409, 'Unconfirmed tool results prevent automatic resume')
       const run: Run = paused ?? { id: `run-${randomUUID()}`, projectId: id, stepId, activity, worker: worker.name, backend: worker.backend, status: 'running', startedAt: now(), endedAt: null,
         baseRevision: p.planningRevision, deliveredGraphCursor: Number(this.db.prepare('SELECT COALESCE(MAX(id),0) AS value FROM events WHERE project_id=?').get(id)?.value ?? 0), checkpoint: null, pendingTools: [], error: null, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
-        ...(activity === 'decide' ? { planningFactSeq: p.factSeq, planningEndedSeq: p.endedSeq, planningCriticalSeq: p.criticalSeq ?? 0, planningEvidenceSeq: p.evidenceSeq ?? p.factSeq, deliveredEvidenceSeq: p.evidenceSeq ?? p.factSeq } : { boundStepVersion: step?.planVersion ?? 1 }) }
+        ...(activity === 'decide' ? { planningFactSeq: p.factSeq, planningEndedSeq: p.endedSeq, planningCriticalSeq: p.criticalSeq ?? 0, planningEvidenceSeq: p.evidenceSeq ?? p.factSeq, deliveredEvidenceSeq: p.evidenceSeq ?? p.factSeq, planningHintSeq: p.hintSeq ?? 0, deliveredHintSeq: p.hintSeq ?? 0 } : { boundStepVersion: step?.planVersion ?? 1 }) }
       run.status = 'running'; run.endedAt = null
       run.deliveredGraphCursor ??= Number(this.db.prepare('SELECT COALESCE(MAX(id),0) AS value FROM events WHERE project_id=?').get(id)?.value ?? 0)
       this.saveRun(run)
@@ -778,10 +796,11 @@ export class Store {
           p.acknowledgedFactSeq = run.planningFactSeq ?? p.factSeq; p.acknowledgedEndedSeq = run.planningEndedSeq ?? p.endedSeq
           p.acknowledgedCriticalSeq = run.planningCriticalSeq ?? p.criticalSeq ?? 0
           p.acknowledgedEvidenceSeq = Math.max(p.acknowledgedEvidenceSeq ?? 0, run.processedEvidenceSeq ?? run.planningEvidenceSeq ?? run.planningFactSeq ?? 0)
+          p.acknowledgedHintSeq = Math.max(p.acknowledgedHintSeq ?? 0, run.processedHintSeq ?? run.planningHintSeq ?? 0)
           p.initialPlanningPending = false; p.planningRetryPending = false
         } else { p.retryAfter = Date.now() + 5000; p.planningRetryPending = true }
         this.saveProject(p); this.event(p.id, `decide.${status}`, null, { runId, error, baseRevision: run.baseRevision,
-          factSeq: run.planningFactSeq, endedSeq: run.planningEndedSeq, evidenceSeq: p.acknowledgedEvidenceSeq, retryAfter: p.retryAfter })
+          factSeq: run.planningFactSeq, endedSeq: run.planningEndedSeq, evidenceSeq: p.acknowledgedEvidenceSeq, hintSeq: p.acknowledgedHintSeq ?? 0, retryAfter: p.retryAfter })
       }
       return run
     })

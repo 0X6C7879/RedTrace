@@ -116,17 +116,18 @@ function availableLspServers(): Record<string, { command: string; args: string[]
  * and tunnel binaries meant to be uploaded to target machines (not local PATH
  * tools). Only asset groups present on disk are listed; an empty tools
  * directory yields no section at all. */
-function toolsSectionText(toolsDir: string): string {
+export function toolsSectionText(toolsDir: string): string {
   const lines: string[] = []
-  const group = (sub: string, text: string) => {
-    if (existsSync(path.join(toolsDir, sub))) lines.push(`- ${text}`)
+  const group = (sub: string, variable: string, text: string) => {
+    const directory = process.env[variable] ?? path.join(toolsDir, sub)
+    if (existsSync(directory)) lines.push(`${text}：$${variable}（${directory}）`)
   }
-  group('wordlists', `字典 $REDTRACE_WORDLISTS_DIR = ${path.join(toolsDir, 'wordlists')}（SecLists；ffuf/gobuster 直接 -w 引用）`)
-  group('payloads', `Payload 库 $REDTRACE_PAYLOADS_DIR = ${path.join(toolsDir, 'payloads')}（PayloadsAllTheThings）`)
-  group('poc', `漏洞 PoC 参考 $REDTRACE_POC_DIR = ${path.join(toolsDir, 'poc')}（Vulhub）`)
-  group('bin', `靶机隧道二进制 $REDTRACE_TOOLS_BIN = ${path.join(toolsDir, 'bin')}（chisel/ligolo-ng/plink，文件名含目标 OS/arch；按目标架构选择后上传靶机运行，非本机工具）`)
+  group('wordlists', 'REDTRACE_WORDLISTS_DIR', '字典 SecLists')
+  group('payloads', 'REDTRACE_PAYLOADS_DIR', 'Payload 库 PayloadsAllTheThings')
+  group('poc', 'REDTRACE_POC_DIR', 'PoC 参考 Vulhub')
+  group('bin', 'REDTRACE_TOOLS_BIN', '靶机隧道文件（按目标 OS/arch 选择上传，非本机工具）')
   if (!lines.length) return ''
-  return `本地安全资产（优先使用本地，勿从网络重新下载）：\n${lines.join('\n')}`
+  return `离线安全资产，优先复用：\n${lines.join('\n')}`
 }
 
 /** The existing filesystem, shell, Skill and isolation stack, shared by every
@@ -145,11 +146,12 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
   scoped.systemPrompt.section({
     name: 'redtrace:workspace',
     order: 1,
-    text: `Workspace 目录:${config.cwd}。任务产生的文件都放在该目录下。`,
+    interpolate: false,
+    text: `任务产物统一保存至 ${config.cwd}，不随交互 Shell 或工作目录切换改变。`,
   })
   if (config.toolsDir) {
     const toolsText = toolsSectionText(config.toolsDir)
-    if (toolsText) scoped.systemPrompt.section({ name: 'redtrace:tools', order: 2, text: toolsText })
+    if (toolsText) scoped.systemPrompt.section({ name: 'redtrace:tools', order: 2, interpolate: false, text: toolsText })
   }
   if (config.task.executionProfile === 'isolated') {
     await mount(scoped, `${VENDOR}/sandbox/sandbox-local/lib/index.js`)

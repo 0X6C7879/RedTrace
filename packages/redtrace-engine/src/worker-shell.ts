@@ -9,7 +9,7 @@ import type { TaskContext } from './scheduler.ts'
 import type { Operations } from './operations.ts'
 
 type Owner = { directory: string; socket: string; sessions: Map<string, string[]> }
-export const shellInstructions = '同一 Run 内复用 shell_id，保留交互进程的 cwd/env；不跨 Worker/Run 共享、不保证重启恢复。shell_open 用 argv 数组启动 ssh、evil-winrm-py、penelope 或其他交互 CLI；宿主需安装对应工具与 tmux，远端不需 tmux。密码使用 shell_send 的 credential_id（项目授权 shell.send），不要放入 argv/text。shell_send 仅确认输入提交，不表示命令成功；shell_read 返回有界屏幕快照，process_exit_code 只表示 CLI 退出，不是每条命令退出码。根据明确输出验证结果，完成后 shell_close；Run 结束或插件停止自动清理。HTTP WebShell 仍无状态；关闭客户端不能保证结束远端后台进程。'
+export const shellInstructions = '同一 Run 复用 shell_id，保留交互进程的 cwd/env；不跨 Worker/Run 共享，不保证重启恢复。密码仅经已授权的 credential_id 输入，不放入 argv/text。提交输入不代表命令完成或成功，须根据明确输出验证。完成后 shell_close；Run 结束或插件停止清理本地会话，但不保证远端后台进程终止。HTTP WebShell 无状态。'
 
 export class WorkerShells {
   private owners = new Map<string, Owner>()
@@ -137,7 +137,7 @@ export function workerShellTools(context: TaskContext, shells: WorkerShells, ope
     } }
   }
   return [
-    tool('shell_open', shellInstructions, Type.Object({ argv: Type.Array(Type.String(), { minItems: 1, maxItems: 128 }), cwd: Type.Optional(Type.String()) }), (a, signal) => shells.open(run, a.argv, a.cwd === undefined ? cwd : path.resolve(cwd, a.cwd), signal)),
+    tool('shell_open', '用 argv 数组启动交互 CLI（如 ssh、evil-winrm-py、penelope），返回 shell_id。cwd 默认项目工作区，相对路径在其中解析。宿主需安装对应 CLI 与 tmux；远端不需 tmux。', Type.Object({ argv: Type.Array(Type.String(), { minItems: 1, maxItems: 128 }), cwd: Type.Optional(Type.String()) }), (a, signal) => shells.open(run, a.argv, a.cwd === undefined ? cwd : path.resolve(cwd, a.cwd), signal)),
     tool('shell_send', '提交交互输入；text 与 credential_id 二选一。credential_id 读取已授权 credential Resource 的 password/value，不返回密文。submit 默认 true。不推断命令完成或成功。', Type.Object({ ...id, text: Type.Optional(Type.String()), credential_id: Type.Optional(Type.String()), submit: Type.Optional(Type.Boolean()) }), async a => {
       if ((a.text !== undefined) === (a.credential_id !== undefined)) throw new Error('Provide exactly one of text or credential_id')
       let text = a.text
@@ -151,7 +151,7 @@ export function workerShellTools(context: TaskContext, shells: WorkerShells, ope
       }
       return shells.send(run, a.shell_id, text, a.submit ?? true, a.credential_id !== undefined)
     }),
-    tool('shell_read', '读取最近屏幕快照（可重复，非增量）；CLI 退出码不是远端命令退出码。', Type.Object(id), a => shells.read(run, a.shell_id)),
+    tool('shell_read', '读取最近屏幕快照（可重复，非增量）；process_exit_code 只是 CLI 退出码，不是远端命令退出码。', Type.Object(id), a => shells.read(run, a.shell_id)),
     tool('shell_list', '仅列出当前 Run 的 Shell。', Type.Object({}), () => shells.list(run)),
     tool('shell_close', '结束当前 Run 的客户端；重复关闭无害，不保证远端后台进程终止。', Type.Object(id), a => shells.close(run, a.shell_id)),
   ]

@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Store } from '../src/store.ts'
 import { Operations } from '../src/operations.ts'
-import { criticalNotice, graphUpdate } from '../src/runner.ts'
+import { criticalNotice, graphUpdate, launchContext, livePlan } from '../src/runner.ts'
 import { extractOutput } from '../src/result-summary.ts'
 import type { Worker } from '../src/types.ts'
 const worker: Worker = {name:'fixture',backend:'mock',provider:'mock',model:'',enabled:true,reason:false,explore:true,bootstrap:false,maxRunning:1,priority:0}
@@ -41,7 +41,7 @@ test('historical native and DSH audit traces rebuild in pages, redact and enforc
   const other=store.createProject({title:'Other',origin:'other',goal:'other'}).project
   assert.throws(()=>store.traceEvent(other.id,run.id,hits[0]!.eventId,'audit'),/not found/)
   for(let i=0;i<510;i++)store.addFact(project.id,`fixture ${i}`,{})
-  const update=graphUpdate(store,project.id,0,'different');assert.ok(update.relevant)
+  const update=graphUpdate(store,project.id,0,'different');assert.equal(update.relevant,false)
   assert.equal(update.cursor,Number(store.db.prepare('SELECT MAX(id) AS id FROM events WHERE project_id=?').get(project.id)!.id))
  } finally {store.close()}
 })
@@ -79,14 +79,17 @@ test('critical planning acknowledges its start boundary only; failure, pause and
   const planner={...worker,name:'reason',reason:true}
   store.recordCriticalSignal(project.id,'verified-one',{kind:'route.verified'})
   const run=store.claim(project.id,'decide',planner)
-  assert.equal(criticalNotice(store.project(project.id),run,false),undefined)
+  assert.equal(criticalNotice(store.project(project.id),run,0),undefined)
   store.recordCriticalSignal(project.id,'verified-two',{kind:'capability.lost'})
-  assert.match(criticalNotice(store.project(project.id),run,false)!,/关键状态/)
-  assert.equal(criticalNotice(store.project(project.id),run,true),undefined)
-  assert.equal(criticalNotice(store.project(project.id),run,false,false),undefined)
+  assert.match(criticalNotice(store.project(project.id),run,0)!,/关键状态/)
+  assert.equal(criticalNotice(store.project(project.id),run,2),undefined)
+  store.recordCriticalSignal(project.id,'verified-three',{kind:'route.verified'})
+  assert.match(criticalNotice(store.project(project.id),run,2)!,/criticalSeq=3/)
+  assert.equal(criticalNotice(store.project(project.id),run,3),undefined)
+  assert.equal(criticalNotice(store.project(project.id),run,0,false),undefined)
   store.finishRun(run.id,'succeeded')
   assert.equal(store.project(project.id).acknowledgedCriticalSeq,1)
-  assert.equal(store.project(project.id).criticalSeq,2)
+  assert.equal(store.project(project.id).criticalSeq,3)
   const failed=store.claim(project.id,'decide',planner);store.finishRun(failed.id,'failed','fixture failure')
   assert.equal(store.project(project.id).acknowledgedCriticalSeq,1)
   const paused=store.claim(project.id,'decide',planner);store.finishRun(paused.id,'paused')
@@ -112,5 +115,63 @@ test('large graph SQL pages and active Run query do not load full graph or histo
   const result=await tools.find(tool=>tool.name==='read_graph')!.execute('read',{kinds:['fact'],offset:500,limit:10,full:true}) as any
   assert.equal(result.details.facts.length,10);assert.equal(result.details.nextOffsets.fact,510)
   assert.deepEqual(result.details.steps,[])
+ } finally {store.close()}
+})
+
+test('Explore receives only live contract changes, not hints, evidence or critical broadcasts', () => {
+ const {store,project,step,run}=fixture()
+ const scan=()=>graphUpdate(store,project.id,cursor,step.id,run.id)
+ let cursor=graphUpdate(store,project.id,0,step.id,run.id).cursor
+ try {
+  store.updateStep(project.id,step.id,{priority:7})
+  assert.equal(scan().relevant,false);assert.equal(scan().planChanged,false)
+  cursor=scan().cursor
+  const other=store.addStep(project.id,{description:'Other',sourceIds:['origin']})
+  const hint=store.addInput(project.id,'hint','Other hint','human',other.id)
+  assert.equal(scan().relevant,false)
+  store.deleteInput(project.id,hint.id);assert.equal(scan().relevant,false)
+  cursor=scan().cursor
+  store.addInput(project.id,'hint','Project hint');assert.equal(scan().relevant,false)
+  cursor=scan().cursor
+  store.addFact(project.id,'Self evidence',{stepId:step.id});assert.equal(scan().relevant,false)
+  store.addFact(project.id,'Unreferenced evidence',{stepId:other.id});assert.equal(scan().relevant,false)
+  cursor=scan().cursor
+  store.recordCriticalSignal(project.id,'first',{kind:'route.verified'})
+  assert.equal(scan().criticalSeq,0);assert.equal(scan().wake,false)
+  cursor=scan().cursor
+  store.recordCriticalSignal(project.id,'second',{kind:'capability.lost'})
+  assert.equal(scan().criticalSeq,0)
+  assert.equal(store.recordCriticalSignal(project.id,'second',{kind:'capability.lost'}),false)
+  cursor=scan().cursor
+  store.updateStep(project.id,step.id,{description:'New {{unknown}} 契约',mode:'amend',expectedVersion:store.node(project.id,step.id).version})
+  assert.equal(scan().planChanged,true);assert.equal(scan().wake,true)
+  assert.match(livePlan(store,run.id),/New \{\{unknown\}\} 契约/)
+  store.updateStep(project.id,step.id,{status:'cancelled'})
+  assert.equal(scan().stopped,true);assert.equal(scan().planChanged,false);assert.equal(scan().relevant,false)
+  assert.equal(store.run(run.id).deliveredGraphCursor,run.deliveredGraphCursor)
+  assert.equal(store.project(project.id).acknowledgedCriticalSeq??0,0)
+ } finally {store.close()}
+})
+
+test('Explore launch has Scope but no hints; Reason launch includes bounded hints across all Steps', () => {
+ const store=new Store(':memory:')
+ const scope='Full {{unknown}} scope Unicode 中文 "quoted" '+ 'x'.repeat(12000)
+ const project=store.createProject({title:'Launch',origin:scope,goal:'Verify'}).project
+ const step=store.addStep(project.id,{description:'Inspect',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id)
+ try {
+  const other=store.addStep(project.id,{description:'Other',sourceIds:['origin']})
+  store.addInput(project.id,'hint','Unrelated','human',other.id)
+  for(let i=0;i<9;i++)store.addInput(project.id,'hint',`Hint ${i} {{unknown}} 中文`,'human',i%2?step.id:null)
+  const launch=launchContext(store,run.id), contract=JSON.parse(livePlan(store,run.id).split('：')[1]!)
+  assert.equal(launch.scope.description,scope);assert.equal(launch.hints,undefined)
+  assert.equal('step' in launch,false);assert.equal('goal' in launch,false)
+  assert.equal(contract.id,step.id);assert.equal(contract.goals[0].id,'goal')
+  assert.equal('createdAt' in contract,false);assert.equal('factIds' in contract,false)
+  const reason=store.claim(project.id,'decide',worker)
+  const planning=launchContext(store,reason.id)
+  assert.equal(planning.scope.description,scope);assert.equal(planning.goal!.id,'goal')
+  assert.match(planning.instruction!,/活跃 FGS/);assert.equal(planning.hints!.items.length,8)
+  assert.equal(planning.hints!.unverified,true);assert.equal(planning.hints!.hasMore,true)
+  assert.equal(planning.hints!.read!.tool,'read_graph');assert.equal(planning.hints!.items[0]!.content,'Unrelated')
  } finally {store.close()}
 })

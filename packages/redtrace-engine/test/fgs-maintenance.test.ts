@@ -167,7 +167,7 @@ test('Finding-only wakes Reason; self-maintenance does not recursively wake and 
     for (let i = 0; i < 10; i++) await turn()
     assert.equal(decisions, 2)
     s.graph = () => { throw new Error('Full graph read forbidden') }
-    assert.ok(graphUpdate(s, id, 0, a.step.id).relevant)
+    assert.equal(graphUpdate(s, id, 0, a.step.id).relevant, false)
     assert.ok(s.graphDelta(id, 0, 1).hasMore)
     assert.ok(s.db.prepare("EXPLAIN QUERY PLAN SELECT data FROM nodes WHERE project_id=? AND kind='fact' AND COALESCE(json_extract(data,'$.deleted'),0)=0 AND COALESCE(json_extract(data,'$.lifecycle'),'active')='active' LIMIT 1").all(id).some(r => String(r.detail).includes('nodes_active')))
   } finally { await scheduler.close(); s.close() }
@@ -241,4 +241,25 @@ test('new Explore deltas start at claim, not at historical events; legacy deleti
     assert.deepEqual(s.graphAt(id, s.project(id).revision).steps, s.graph(id).steps)
     assert.equal(s.graphAt(id, s.project(id).revision, true).steps.length, 1)
   } finally { s.close() }
+})
+
+test('stopped contracts never ask to sync; unrelated evidence maintenance does not notify Explore', () => {
+ const s=new Store(':memory:'), id=project(s)
+ try {
+  const unrelated=s.addFact(id,'Unrelated evidence')
+  const step=s.addStep(id,{description:'Current',sourceIds:['origin']}),run=s.claim(id,'execute',worker,step.id)
+  let cursor=run.deliveredGraphCursor!
+  s.manageEvidence(id,{operation:'archive',id:unrelated.id,expectedVersion:unrelated.version!,reason:'Unreferenced'})
+  const update=graphUpdate(s,id,cursor,step.id,run.id)
+  assert.equal(update.relevant,false);cursor=update.cursor
+  s.updateStep(id,step.id,{description:'Replacement',mode:'replace',expectedVersion:s.node(id,step.id).version})
+  const replaced=graphUpdate(s,id,cursor,step.id,run.id)
+  assert.equal(replaced.stopped,true);assert.equal(replaced.planChanged,false);assert.equal(replaced.relevant,false)
+  const goal=s.addGoal(id,'Temporary subgoal')
+  const other=s.addStep(id,{description:'Goal closure',sourceIds:['origin'],goalId:goal.id})
+  const next=s.claim(id,'execute',worker,other.id)
+  s.updateGoal(id,goal.id,{status:'cancelled'})
+  const closed=graphUpdate(s,id,next.deliveredGraphCursor!,other.id,next.id)
+  assert.equal(closed.stopped,true);assert.equal(closed.planChanged,false);assert.equal(closed.relevant,false)
+ } finally {s.close()}
 })

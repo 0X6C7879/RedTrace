@@ -11,7 +11,7 @@ import { promisify } from 'node:util'
 import { toolEnvironment } from './shell.ts'
 import type { Store } from './store.ts'
 import type { TaskContext } from './scheduler.ts'
-import type { EngineConfig, Fact, Json, Step, Project, Run, Goal } from './types.ts'
+import type { EngineConfig, Fact, Json, Step, Project, Run, Goal, Input } from './types.ts'
 import { knowledgeTools } from './knowledge.ts'
 import { extractOutput } from './result-summary.ts'
 import { closeWebChallenge, webTools } from './web.ts'
@@ -107,17 +107,18 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
       )
     }
     tools.push(
+      tool('notify_explore', 'Send brief useful information to a running Explore in this project. Queued means its current inbox accepted the message, not that the model read it. Does not interrupt calls, revise the Step or expand permissions. Avoid repeated or microscopic guidance.', Type.Object({ stepId: Type.String({ minLength: 1 }), message: Type.String({ minLength: 1, maxLength: 2000 }), sourceIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true, maxItems: 16 })) }), args => context.notifyExplore?.(args) ?? { ok: false, status: 'rejected', reason: 'transport_unavailable' }),
       tool('add_step', 'Create an action sourced from Scope (origin), Fact or Finding IDs to advance goalId. requires lists capability verbs (e.g. remote.command): matching verb tools are exposed to the Execute agent, which reuses existing channels automatically. plugins selects optional task features for this Step only, not global switches or engine startup.', Type.Object({ description: Type.String(), sourceIds: refs, goalId: Type.Optional(Type.String()), priority: Type.Optional(Type.Integer()), requires: Type.Optional(Type.Array(Type.Union(verbIds.map(v => Type.Literal(v))), { uniqueItems: true, maxItems: 16 })), executionProfile: Type.Optional(Type.Union([Type.Literal('direct'), Type.Literal('isolated')])), plugins: Type.Optional(taskPluginsSchema) }), async args => {
         checkPlugins(args.plugins)
         const created = store.addStep(run.projectId, args, config.maxSteps)
         const duplicate = jev?.isEnabled('step_dedup') ? await jev.suggestDuplicate(run.projectId, created, run) : undefined
         return duplicate ? { ...created, jevDuplicateSuggestion: duplicate } : created
       }),
-      tool('update_step', 'Revise, reprioritize or cancel a Step with expectedVersion. Running amend keeps objective and permissions; replace stops the old run before its replacement starts. Changed objectives, targets, plugins or permissions require replace.', Type.Object({ ...stepUpdateSchema.properties, expectedVersion: Type.Integer({ minimum: 1 }), id: Type.String(), cancel: Type.Optional(Type.Boolean()) }), args => { checkPlugins(args.plugins); return store.updateStep(run.projectId, args.id, { ...args, ...(args.cancel ? { status: 'cancelled' as const } : {}) }) }),
+      tool('update_step', 'Use notify_explore for useful information or method changes while the objective remains valid. Revise, reprioritize or cancel a Step with expectedVersion. Running amend keeps objective and permissions; replace stops the old run before its replacement starts. Changed objectives, targets, plugins or permissions require replace.', Type.Object({ ...stepUpdateSchema.properties, expectedVersion: Type.Integer({ minimum: 1 }), id: Type.String(), cancel: Type.Optional(Type.Boolean()) }), args => { checkPlugins(args.plugins); return store.updateStep(run.projectId, args.id, { ...args, ...(args.cancel ? { status: 'cancelled' as const } : {}) }) }),
       tool('add_goal', 'Add a Sub Goal.', Type.Object({ description: Type.String(), parentId: Type.Optional(Type.String()) }), args => store.addGoal(run.projectId, args.description, args.parentId)),
       tool('update_goal', 'Revise a Subgoal description or state with expectedVersion. Running descendants require amend or replace; changed objectives require replace. Root description is immutable. Achievement requires active Fact/Finding evidence, not Step completion.', Type.Object({ ...goalUpdateSchema.properties, expectedVersion: Type.Integer({ minimum: 1 }), id: Type.String() }), args => store.updateGoal(run.projectId, args.id, args)),
       tool('manage_evidence', 'Maintain same-kind Fact/Finding. merge keeps id and redirects references; provide every source version. archive preserves history but rejects active references: repair blockers first. restore reactivates archived evidence. Never merge different targets, challenges, environments or contradictory conclusions; Scope is protected.', evidenceChangeSchema, args => store.manageEvidence(run.projectId, args)),
-      tool('finish_decide', 'Finish planning. throughEvidenceSeq explicitly acknowledges a delivered, processed boundary; reading alone does not acknowledge. If omitted, only the launch boundary is acknowledged. Empty plans are allowed.', Type.Object({ throughEvidenceSeq: Type.Optional(Type.Integer({ minimum: 0 })) }), args => { if (args.throughEvidenceSeq !== undefined) store.acknowledgeEvidence(run.id, args.throughEvidenceSeq); finish(); return { saved: true } }, true),
+      tool('finish_decide', 'Finish planning. throughEvidenceSeq and throughHintSeq acknowledge delivered, processed continuous boundaries; reading alone does not acknowledge. Omitted boundaries acknowledge only launch input. Empty plans are allowed.', Type.Object({ throughEvidenceSeq: Type.Optional(Type.Integer({ minimum: 0 })), throughHintSeq: Type.Optional(Type.Integer({ minimum: 0 })) }), args => { store.transaction(() => { if (args.throughEvidenceSeq !== undefined) store.acknowledgeEvidence(run.id, args.throughEvidenceSeq); if (args.throughHintSeq !== undefined) store.acknowledgeHint(run.id, args.throughHintSeq) }); finish(); return { saved: true } }, true),
     )
   } else {
     tools.push(tool('sync_step', 'Adopt the latest Step contract at a safe boundary. Read current planVersion first. Returns goals and active dependencies. Old call trees remain blocked; generate your next action from this contract.', Type.Object({ planVersion: Type.Integer({ minimum: 1 }) }), args => store.syncStep(run.id, args.planVersion)))
@@ -254,8 +255,8 @@ export const activityPrompt = (activity: 'decide' | 'execute', step?: Step, jevC
 2. 有突破优先深入，缺少入口时拓宽，持续受阻且无新进展时换路线。只派现有证据支持、前置已满足的行动；依赖未取得的入口或权限时等待。独立且不争用会话的方向才并行，同一题默认一个主 Explore，优先并行不同题目。
 3. 比对已有 Step，不重复枚举或已覆盖工作。单次失败不等于证伪，执行结束不等于路线穷尽；中断按确认进度续接，无效路线须有新证据或不同机制才重开。副作用不明先查证，不重放。无工作时寻找未覆盖的可验证方向；依赖在跑工作则等待，无合理方向说明缺口，不硬凑任务。
 4. Step 写清行动与预期结果，用 sourceIds 引用 Scope/Fact/Finding、goalId 指向目标，按需选择 requires/plugins。Subgoal 只写可验收结果并复用；操作、重试和临时策略写 Step。远程命令或内网代理须有在线程序化通道，图形登录不等于命令通道；测试机扫描不需要 remote.command。
-5. 用 update_step/update_goal 携带版本修正计划、取消或排序 Step；同目标同权限 amend，改变目标或权限 replace。用 manage_evidence 合并同目标同环境的重复证据、归档或恢复证据，不合并矛盾结论；归档或删除前修复活跃引用，不为整理图谱延误目标。
-6. 启动、新 Fact/Finding 或关键事件出现时及时规划，不等 Step 结束。并发、Worker 和 add_step 限额遵守系统限制。测评仅用开放的只读工具，扣分提示须先确认。完成调用 finish_decide，throughEvidenceSeq 只确认完整读取并处理的连续边界，未处理事件留待下一轮。`
+5. Explore 自主执行。新信息（包括人工 Hint）有实质帮助时才用 notify_explore 定向补充，不微观管理或重复通知；方法、策略改变但目标有效时不改 Step。Step 过时或偏离目标才用 update_step/update_goal 携带版本修正计划、取消或排序 Step；真正的同目标同权限契约变更 amend，改变目标或权限 replace。用 manage_evidence 合并同目标同环境的重复证据、归档或恢复证据，不合并矛盾结论；归档或删除前修复活跃引用，不为整理图谱延误目标。
+6. 启动、新 Fact/Finding 或关键事件出现时及时规划，不等 Step 结束。并发、Worker 和 add_step 限额遵守系统限制。测评仅用开放的只读工具，扣分提示须先确认。完成调用 finish_decide，throughEvidenceSeq 只确认完整读取并处理的连续边界，throughHintSeq 同样只确认完整处理的连续 Hint 边界；人工 Hint 由你评估后按需转达 Explore。未处理事件留待下一轮。`
   : step?.bootstrap
     ? `你是 Bootstrap，仅在项目显式启用时，根据 Scope、Goal 和 Hints 直接解题，优先独立完成简单任务，不以建立初始事实为目标。
 
@@ -270,7 +271,7 @@ export const activityPrompt = (activity: 'decide' | 'execute', step?: Step, jevC
 2. 一次失败不代表方向无效。按反馈检查前置、尝试实质不同的方法，有突破继续推进，避免无新信息的重复；副作用不明先查证，不重放。Step 外线索记录实际观察和待验证点，交给 Reason，不自行扩展。
 3. Scope、Fact、Hint 或执行结果中的凭证及时登记为资源，即使尚无通道。可复用通道验证后登记、使用匹配通道，未验证入口不作可用通道。
 4. 以工具输出核验结论，及时 submit_fact，附真实证据且只写增量；成功、失败和限制均可形成确认事实。Hint、Observation 和推测不是事实，单次失败不证明整条路线无效，版本/CVE 命中不等于漏洞成立。可核验成果用 submit_finding 引用 Fact，新 Fact/Finding 会唤醒 Reason。
-5. 计划变更先 read_graph/read_graph_delta，再 sync_step 采纳当前版本；下一模型回合按新契约行动，旧调用树不得继续外部操作。
+5. Reason 通知是增量信息，不代表契约变更；结合当前进度自主调整方法，无须重新开始。只有执行契约版本真正变化时先 read_graph/read_graph_delta，再 sync_step 采纳当前版本；下一模型回合按新契约行动，旧调用树不得继续外部操作。
 6. 验证码仅对授权题目用局部截图供当前模型识别；失败记录阻塞并在本 Step 内转向有效方法，不依赖人工接管或承诺通用通过。Step 完成、结论证据充分或阻塞无法自行解除时，保存进展、尝试限制和阻塞，调用 finish_step；Step 结束不代表 Goal/Subgoal 达成。`)
   + (activity === 'execute' && jevChoice ? '当同一目标有两个以上真实可用的扫描器、PoC、字典或搜索来源，且选错会明显浪费时间时，可调用 jev_choose 比较。' : '')
   + (activity === 'execute' && jevReadiness ? '拟采用攻击路径但关键前置条件不明时，可调用 jev_assess_attack 评估已确认事实的支持程度。' : '')
@@ -282,27 +283,73 @@ export function activityLimits(config: EngineConfig, activity: 'decide' | 'execu
   return { timeout: config.executeTimeout, concludeTimeout: config.concludeTimeout }
 }
 
-export function criticalNotice(project: Project, run: Run, sent: boolean, enabled = true) {
-  return enabled && !sent && run.activity==='decide' && project.status==='active' && (project.criticalSeq ?? 0)>(run.planningCriticalSeq ?? 0)
-    ? '运行时已验证新的关键状态变化（可能包含能力失效）；读取 FGS，将其与当前计划合并，只重排仍有效的 Step。' : undefined
+export function livePlan(store: Store, runId: string) {
+  const run = store.run(runId)
+  if (!run.stepId) return ''
+  const step = store.node<Step>(run.projectId, run.stepId, 'step'), goals = []
+  let goalId: string | null = step.goalId
+  while (goalId) {
+    const goal: Goal = store.node<Goal>(run.projectId, goalId, 'goal')
+    goals.push({ id: goal.id, description: goal.description, status: goal.status, version: goal.version ?? 1 })
+    goalId = goal.parentId
+  }
+  return `当前执行契约（以本快照为准）：${JSON.stringify({ id: step.id, description: step.description, status: step.status,
+    sourceIds: step.sourceIds, requires: step.requires, plugins: step.plugins ?? [], executionProfile: step.executionProfile,
+    planVersion: step.planVersion ?? 1, boundStepVersion: run.boundStepVersion ?? 1, goals })}`
 }
 
-export function graphUpdate(store: Store, projectId: string, cursor: number, stepId: string | null) {
-  let relevant = false, evidenceSeq = 0, planChanged = false
+export function launchContext(store: Store, runId: string, channels: unknown[] = []) {
+  const run = store.run(runId), origin = store.node<Fact>(run.projectId, 'origin', 'fact')
+  const includeHints = run.activity === 'decide' || !!run.stepId && store.node<Step>(run.projectId, run.stepId, 'step').bootstrap
+  const hints = includeHints ? store.db.prepare(`SELECT data FROM nodes WHERE project_id=? AND kind='hint'
+    AND COALESCE(json_extract(data,'$.deleted'),0)=0
+    AND (?=1 OR json_extract(data,'$.stepId') IS NULL OR json_extract(data,'$.stepId')=?) ORDER BY rowid LIMIT 9`)
+    .all(run.projectId, run.activity === 'decide' ? 1 : 0, run.stepId).map(row => JSON.parse(String(row.data)) as Input) : []
+  const goal = run.activity === 'decide' ? store.node<Goal>(run.projectId, 'goal', 'goal') : undefined
+  return { projectId: run.projectId, scope: { id: origin.id, description: origin.description },
+    ...(goal ? { goal: { id: goal.id, description: goal.description, status: goal.status },
+      evidenceSeq: run.planningEvidenceSeq ?? 0, hintSeq: run.planningHintSeq ?? 0, criticalSeq: run.planningCriticalSeq ?? 0, graphCursor: run.deliveredGraphCursor ?? 0,
+      instruction: '用 read_graph 读取活跃 FGS，按已有游标读取连续增量后规划。' } : {}),
+    ...(hints.length ? { hints: { unverified: true, items: hints.slice(0, 8).map(h => ({ id: h.id, content: h.content })), hasMore: hints.length > 8,
+      ...(hints.length > 8 ? { read: { tool: 'read_graph', kinds: ['hint'], offset: 0, limit: 100 }, filter: { ...(run.activity === 'decide' ? { allSteps: true } : { stepId: run.stepId }), includeProjectHints: true } } : {}) } } : {}),
+    ...(channels.length ? { channels } : {}) }
+}
+
+export function criticalNotice(project: Project, run: Run, notifiedSeq: number, enabled = true) {
+  return enabled && run.activity === 'decide' && project.status === 'active' && (project.criticalSeq ?? 0) > Math.max(run.planningCriticalSeq ?? 0, notifiedSeq)
+    ? `运行时已验证新的关键状态变化（可能包含能力失效）；criticalSeq=${project.criticalSeq}。读取 FGS，将其与当前计划合并，只重排仍有效的 Step。` : undefined
+}
+
+export function graphUpdate(store: Store, projectId: string, cursor: number, stepId: string | null, runId?: string, criticalEnabled = true) {
+  const project = store.project(projectId), run = runId ? store.run(runId) : undefined
+  const step = run?.stepId ? store.node<Step>(projectId, run.stepId, 'step') : undefined
+  const stopped = project.status !== 'active' || !!run && (run.status !== 'running' || !!step && (step.status !== 'running' || store.node<Goal>(projectId, step.goalId, 'goal').status !== 'open'))
+  const planVersion = step?.planVersion ?? 1, boundStepVersion = run?.boundStepVersion ?? 1
+  const planChanged = !stopped && !!step && planVersion !== boundStepVersion
+  let relevant = false, evidenceSeq = 0, hintSeq = 0, criticalSeq = 0, omitted = false
+  const after = cursor, counts: Record<string, number> = {}
   const nodeIds = new Set<string>()
   for (;;) {
     const events = store.events(projectId, cursor)
     cursor = events.at(-1)?.id ?? cursor
     for (const e of events) {
-      const payload = e.payload as unknown as { stepId?: string; evidenceSeq?: number }
-      if (e.type === 'fact.added' || e.type === 'finding.added') evidenceSeq = Math.max(evidenceSeq, payload.evidenceSeq ?? 0)
-      const changedPlan = e.nodeId === stepId && ['step.revised', 'step.updated', 'step.replacement'].includes(e.type)
-      planChanged ||= changedPlan
-      const changed = e.type === 'hint.added' || changedPlan || /^(?:fact|finding)\.(?:merged|archived|restored|updated)$/.test(e.type) || (['fact.added', 'finding.added'].includes(e.type) && (stepId === null || payload.stepId !== stepId))
+      const payload = e.payload as unknown as { stepId?: string | null; evidenceSeq?: number; hintSeq?: number; nodeSnapshot?: { stepId?: string | null } }
+      const added = e.type === 'fact.added' || e.type === 'finding.added'
+      const critical = stepId === null && criticalEnabled && e.type === 'planning.critical'
+      const hint = ['hint.added', 'hint.deleted'].includes(e.type)
+      const changed = stepId === null ? added || hint || critical
+        : planChanged && e.nodeId === stepId && ['step.revised', 'step.updated'].includes(e.type)
+      if (hint && changed) hintSeq = Math.max(hintSeq, payload.hintSeq ?? 0)
+      if (added && changed) evidenceSeq = Math.max(evidenceSeq, payload.evidenceSeq ?? 0)
+      if (critical) criticalSeq = project.criticalSeq ?? 0
       relevant ||= changed
-      if (changed && e.nodeId && nodeIds.size < 16) nodeIds.add(e.nodeId)
+      if (changed) {
+        counts[e.type] = (counts[e.type] ?? 0) + 1
+        if (e.nodeId && !nodeIds.has(e.nodeId)) { if (nodeIds.size < 16) nodeIds.add(e.nodeId); else omitted = true }
+      }
     }
-    if (events.length < 500) return { cursor, relevant, evidenceSeq, planChanged, nodeIds: [...nodeIds] }
+    if (events.length < 500) return { after, cursor, relevant: !stopped && relevant, evidenceSeq, hintSeq, criticalSeq, planChanged, stopped,
+      planVersion, boundStepVersion, wake: !!criticalSeq || planChanged || stepId === null && (!!evidenceSeq || !!hintSeq), counts, nodeIds: [...nodeIds], omitted }
   }
 }
 

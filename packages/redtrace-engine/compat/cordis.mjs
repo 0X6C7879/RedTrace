@@ -1,11 +1,11 @@
-import {createHash} from 'node:crypto'
+import {createHash, randomUUID} from 'node:crypto'
 import path from 'node:path'
 import { mkdir, realpath } from 'node:fs/promises'
 import { watch } from 'node:fs'
 import { createEngine } from '../src/index.ts'
 import { workerShellTools, shellInstructions } from '../src/worker-shell.ts'
 import { createPlanGuard } from '../src/plan-guard.ts'
-import { criticalNotice, efficiencyToolAvailable, graphTools, activityPrompt, activityLimits, graphUpdate, runMock } from '../src/runner.ts'
+import { efficiencyToolAvailable, graphTools, activityPrompt, activityLimits, graphUpdate, livePlan, launchContext, runMock } from '../src/runner.ts'
 import { isJevRecoveryPath, traceCall } from '../src/jev.ts'
 import { verbTools, verbToolAvailable, channelsFor, resourceTools } from '../src/capability-verbs.ts'
 import { PluginManager, registerPluginRoutes } from '../../redtrace-dsh/lib/plugins.js'
@@ -93,6 +93,131 @@ export function refreshToolRegistrations(tools, enabled, register) {
       if (!live && active.has(t.name)) { active.get(t.name)(); active.delete(t.name) }
     }
   }
+}
+
+const noticePrefix = '[RedTrace FGS] '
+const exploreNoticePrefix = '[RedTrace Reason] '
+const exploreNotice = message => {
+  const text = message.content?.[0]?.text
+  if (!text?.startsWith(exploreNoticePrefix)) return undefined
+  try { return JSON.parse(text.slice(exploreNoticePrefix.length)) } catch { return undefined }
+}
+const auditNotice = (store, notice, status, reason) => {
+  const row = store.db.prepare('SELECT data FROM audit_runs WHERE id=?').get(notice.fromRunId)
+  if (row) store.audit(JSON.parse(row.data), [{ event_uid: `explore-notice:${notice.notificationId}:${status}`,
+    kind: `explore.notification.${status}`, timestamp: new Date().toISOString(), data: { ...notice, ...(reason ? { reason } : {}) } }])
+}
+
+const invalidExploreNotice = (store, run, notice) => {
+  try {
+    const current = store.run(run.id), step = store.node(run.projectId, run.stepId, 'step')
+    if (store.project(run.projectId).status !== 'active' || current.status !== 'running' || step.status !== 'running' || step.deleted || step.replacedBy || store.node(run.projectId, step.goalId, 'goal').status !== 'open') return 'target_stopped'
+    if ((step.planVersion ?? 1) !== notice.planVersion) return 'contract_changed'
+    if (notice.sources.some(source => {
+      const node = store.node(run.projectId, source.id)
+      return node.deleted || node.lifecycle && node.lifecycle !== 'active' || (node.version ?? 1) !== source.version
+    })) return 'source_changed'
+  } catch { return 'target_or_source_missing' }
+}
+
+export function filterExploreNotices(store, run, messages) {
+  return messages.filter(message => {
+    const notice = exploreNotice(message), invalid = notice && invalidExploreNotice(store, run, notice)
+    if (invalid) auditNotice(store, notice, 'discarded', invalid)
+    return !invalid
+  })
+}
+
+export function pruneExploreNotices(store, run, agent, reason) {
+  for (const message of [...agent.inbox.nextStep]) {
+    const notice = exploreNotice(message)
+    if (!notice) continue
+    const invalid = reason || invalidExploreNotice(store, run, notice)
+    if (invalid && agent.inbox.remove(message.id)) auditNotice(store, notice, 'discarded', invalid)
+  }
+}
+
+export function notifyExplore(context, shared, input, message) {
+  const { store, run, signal } = context
+  const reject = reason => ({ ok: false, status: 'rejected', reason })
+  const fail = reason => ({ ok: false, status: 'failed', reason })
+  if (run.activity !== 'decide' || signal.aborted) return reject('reason_not_running')
+  let notice, agent, native
+  try {
+    if (store.run(run.id).status !== 'running') return reject('reason_not_running')
+    if (store.project(run.projectId).status !== 'active') return reject('project_inactive')
+    const text = typeof input.message === 'string' ? input.message.trim() : ''
+    const ids = input.sourceIds ?? []
+    if (!text || text.length > 2000 || !Array.isArray(ids) || ids.length > 16 || new Set(ids).size !== ids.length || ids.some(id => typeof id !== 'string' || !id.trim())) return reject('invalid_message_or_sources')
+    const step = store.node(run.projectId, input.stepId, 'step')
+    if (step.bootstrap || step.deleted || step.replacedBy || step.replacementPending || step.status !== 'running' || store.node(run.projectId, step.goalId, 'goal').status !== 'open') return reject('step_not_running')
+    const targets = store.runsByStatus('running', run.projectId).filter(r => r.activity === 'execute' && r.stepId === step.id)
+    if (targets.length !== 1) return reject('no_unique_running_target')
+    const target = targets[0], task = shared?.tasks.get(target.id)
+    if (!task || task.type !== 'explore' || task.projectId !== run.projectId || task.intentId !== step.id || task.runId !== target.id || task.sessionId !== target.id || task.committed || task.cancelled || task.concludeOnly) return reject('session_not_ready_or_closing')
+    agent = task.handle?.agent
+    if (!agent || String(agent.id) !== target.id || agent.status !== 'running') return reject('session_not_ready_or_idle')
+    const sources = [...ids].sort().map(id => {
+      const node = store.node(run.projectId, id)
+      if (!['fact', 'finding'].includes(node.kind) || node.deleted || node.lifecycle && node.lifecycle !== 'active') throw new Error('invalid_source')
+      return { id, version: node.version ?? 1 }
+    })
+    if (!task.notificationEpoch) return reject('session_not_ready')
+    const planVersion = step.planVersion ?? 1
+    const notificationId = createHash('sha256').update(JSON.stringify([run.projectId, target.id, task.notificationEpoch, planVersion, text, sources])).digest('hex')
+    notice = { notificationId, fromRunId: run.id, projectId: run.projectId, stepId: step.id, runId: target.id, sessionId: task.sessionId, planVersion, sources, message: text }
+    pruneExploreNotices(store, target, agent)
+    const pending = agent.inbox.nextStep.map(exploreNotice).filter(Boolean)
+    const response = { notificationId, stepId: step.id, runId: target.id, sessionId: task.sessionId }
+    if (pending.some(n => n.notificationId === notificationId) || store.db.prepare('SELECT 1 FROM audit_events WHERE event_uid=?').get(`explore-notice:${notificationId}:queued`)) return { ok: true, status: 'duplicate', ...response }
+    if (pending.length >= 8) return reject('queue_full')
+    native = message(`${exploreNoticePrefix}${JSON.stringify(notice)}`)
+    // Native inject is synchronous and non-waking: no check-to-send await or cancellation.
+    agent.inject(native)
+    auditNotice(store, notice, 'queued')
+    return { ok: true, status: 'queued', ...response }
+  } catch (error) {
+    if (notice && native && agent?.inbox.nextStep.some(m => m.id === native.id)) return fail('enqueue_or_audit_uncertain; do not automatically retry')
+    const reason = error instanceof Error ? error.message : String(error)
+    return error?.status === 404 || reason === 'invalid_source' ? reject(error?.status === 404 ? 'target_or_source_missing' : 'invalid_source') : fail(`delivery_failed: ${reason}`)
+  }
+}
+
+const pendingGraphNotice = agent => {
+  for (const message of agent.inbox.nextStep) {
+    const text = message.content?.[0]?.text
+    if (!text?.startsWith(noticePrefix)) continue
+    try { return { message, update: JSON.parse(text.split('\n')[0].slice(noticePrefix.length)) } } catch { /* Ignore unrelated or legacy messages. */ }
+  }
+}
+
+export function queueGraphNotice(agent, update, message) {
+  const pending = pendingGraphNotice(agent)
+  if (update.stopped) { if (pending) agent.inbox.remove(pending.message.id); return false }
+  if (!update.relevant) return false
+  let combined = update
+  if (pending) {
+    const old = pending.update, nodeIds = [...new Set([...old.nodeIds, ...update.nodeIds])]
+    const counts = { ...old.counts }
+    for (const [type, count] of Object.entries(update.counts)) counts[type] = (counts[type] ?? 0) + count
+    combined = { ...update, after: Math.min(old.after, update.after), cursor: Math.max(old.cursor, update.cursor), counts,
+      evidenceSeq: Math.max(old.evidenceSeq, update.evidenceSeq), hintSeq: Math.max(old.hintSeq ?? 0, update.hintSeq ?? 0), criticalSeq: Math.max(old.criticalSeq, update.criticalSeq),
+      nodeIds: nodeIds.slice(0, 16), omitted: old.omitted || update.omitted || nodeIds.length > 16, wake: old.wake || update.wake }
+  }
+  const instruction = `${combined.evidenceSeq ? '新增确认的 Fact/Finding。' : '共享 FGS 已更新。'}${combined.criticalSeq ? '运行时已验证新的关键状态变化（可能包含能力失效）。' : ''}`
+    + (combined.planChanged ? `当前 Step planVersion=${combined.planVersion}，boundStepVersion=${combined.boundStepVersion}。读取最新契约后在安全边界 sync_step；旧调用树不能继续执行。` : '')
+    + '从已有连续游标用 read_graph_delta 读取变更；省略的节点仍在完整增量中。读取不等于处理确认。'
+  const next = message(`${noticePrefix}${JSON.stringify(combined)}\n${instruction}`)
+  if (pending && combined.wake && agent.status === 'idle') {
+    if (!agent.inbox.remove(pending.message.id)) return queueGraphNotice(agent, update, message)
+  }
+  else if (pending) {
+    if (agent.inbox.replace(pending.message.id, next)) return true
+    return queueGraphNotice(agent, update, message)
+  }
+  if (combined.wake) agent.steer(next)
+  else agent.inject(next)
+  return true
 }
 
 export async function apply(ctx, options) {
@@ -190,20 +315,34 @@ export async function apply(ctx, options) {
     if (!shared) throw new Error('Cordis domain service is unavailable')
     const step = run.stepId ? store.node(run.projectId, run.stepId, 'step') : undefined
     const task = { usage: { inputTokens: run.inputTokens, outputTokens: run.outputTokens, cacheReadTokens: run.cacheReadTokens, cacheWriteTokens: run.cacheWriteTokens }, type: run.activity === 'decide' ? 'reason' : step?.bootstrap ? 'bootstrap' : 'explore', projectId: run.projectId, intentId: run.stepId ?? undefined,
-      worker: worker.name, sessionId: run.id, runId: run.id, committed: false, server: options.server, startedAt: Date.now(), executionProfile: step?.executionProfile ?? 'direct', ...(step?.plugins?.length ? { plugins: step.plugins } : {}) }
+      worker: worker.name, sessionId: run.id, runId: run.id, committed: false, notificationEpoch: randomUUID(), server: options.server, startedAt: Date.now(), executionProfile: step?.executionProfile ?? 'direct', ...(step?.plugins?.length ? { plugins: step.plugins } : {}) }
     if (!shared.presets.has(task.type)) throw new Error(`Cordis task preset ${task.type} is disabled`)
     const cwd = path.join(config.workspaceRoot, run.projectId); await mkdir(cwd, { recursive: true })
     let finished = false, concludeOnly = false, handle, pendingSkillNotice = ''
     let refreshLiveTools = () => {}
-    const tools = graphTools(context, () => { finished = true; task.committed = true })
+    const tools = graphTools({ ...context, notifyExplore: input => notifyExplore(context, shared, input, message) }, () => {
+      finished = true; task.committed = true
+      if (handle) {
+        const pending = pendingGraphNotice(handle.agent)
+        if (pending) handle.agent.inbox.remove(pending.message.id)
+        pruneExploreNotices(store, run, handle.agent, 'completed')
+      }
+    })
     const model = config.providers[worker.provider].models.find(m => m.id === worker.model)
     const effort = await resolveReasoningEffort(ctx.get('llm'), { provider: worker.provider, model: worker.model, reasoning: model.reasoning ?? 'auto_max' })
     const checkpoint = store.run(run.id).checkpoint, resume = !!checkpoint?.sessionId
     if (resume && !await ctx.get('sessionPersistence').stat(SessionId(run.id))) throw new Error('Execute checkpoint session is missing; refusing a new session')
     const setup = async scoped => {
-      if (run.activity === 'decide') scoped.systemPrompt.section({ name: 'redtrace:task-plugins', order: 3,
-        text: () => `Step.plugins 可选目录（仅为该 Step 的 Explore 装载）：\n${TASK_PLUGINS.map(p => `${p.id}: ${p.description} (${manager.taskPluginAllowed(p.id) ? 'allowed' : 'disabled'})`).join('\n')}` })
+      if (run.activity === 'decide') {
+        scoped.systemPrompt.section({ name: 'redtrace:task-plugins', order: 3, text: 'Step.plugins 仅为对应 Step 的 Explore 装载；只能选择 allowed 插件。' })
+        scoped.systemPrompt.context({ name: 'redtrace:task-plugins', order: 3, required: true, interpolate: false,
+          text: () => TASK_PLUGINS.map(p => `${p.id}: ${p.description} (${manager.taskPluginAllowed(p.id) ? 'allowed' : 'disabled'})`).join('\n') })
+      }
       if (run.activity === 'execute') {
+        scoped.on('agent/pre-step', async (_payload, next) => {
+          const decision = await next()
+          return decision.kind === 'enter' ? { ...decision, messages: filterExploreNotices(store, run, decision.messages) } : decision
+        })
         // Skills mount DSH-natively from the full managed skills root; the
         // agent discovers and loads them through the skill tool on demand.
         scoped = await mountExecutionTools(scoped, { task, cwd, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.availableForTask(id, task.plugins), contextualAttempts: true,
@@ -230,11 +369,8 @@ export async function apply(ctx, options) {
         scoped.on('tools/result', exec => { if (!exec.parent) planGuard.settled(String(exec.rootCallId)) })
         scoped.tools.guard(exec => planGuard.check({ name: exec.name, rootCallId: String(exec.rootCallId) }))
       }
-      scoped.systemPrompt.section({ name: 'redtrace:live-plan', order: 2, text: () => {
-        if (!run.stepId) return ''
-        const current = store.node(run.projectId, run.stepId, 'step')
-        return `当前执行契约：${JSON.stringify({ id: current.id, description: current.description, goal: store.node(run.projectId, current.goalId, 'goal'), sourceIds: current.sourceIds, planVersion: current.planVersion ?? 1, boundStepVersion: store.run(run.id).boundStepVersion ?? 1 })}`
-      } })
+      scoped.systemPrompt.context({ name: 'redtrace:live-plan', order: 2, required: true, interpolate: false,
+        text: () => livePlan(store, run.id) })
       // The DSH tools runtime projects parameters as lossless JSON; the graph
       // and verb tools carry typebox symbol annotations, so detach them into
       // plain JSON Schema before registration.
@@ -280,6 +416,7 @@ export async function apply(ctx, options) {
     const unlisten = ctx.on('session/event', (session, event) => {
       if (String(session.id) !== run.id) return
       const data = event.data ?? {}
+      if (event.type === 'user/message') { const notice = exploreNotice(data); if (notice) auditNotice(store, notice, 'admitted') }
       if (event.type === 'step/start') store.metricStart(run.id, `model-${data.turn}-${data.step}`, 'model')
       if (event.type === 'assistant/message' || event.type === 'step/end') store.metricEnd(run.id, `model-${data.turn}-${data.step}`)
       if (jev?.isEnabled('trace_observer')) {
@@ -313,34 +450,21 @@ export async function apply(ctx, options) {
         store.audit(metadata, json(eventProjection(task, event)))
       })
     })
-    const cancel = () => handle?.agent.cancel({ kind: 'hook', reason: 'FGS activity paused or cancelled' })
+    const cancel = () => { task.cancelled = true; if (handle) { pruneExploreNotices(store, run, handle.agent, 'cancelled'); handle.agent.cancel({ kind: 'hook', reason: 'FGS activity paused or cancelled' }) } }
     const message = text => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
     const prompt = text => handle.agent.followup(message(text))
     // Mid-run graph notices enter the native Agent inbox.
-    let cursor = Number(store.db.prepare('SELECT COALESCE(MAX(id),0) AS value FROM events WHERE project_id=?').get(run.projectId).value)
-    let criticalReminderSent = false, lastEvidenceNotice = run.planningEvidenceSeq ?? 0
+    let cursor = store.run(run.id).deliveredGraphCursor ?? 0
     const steer = projectId => {
-      if (projectId !== run.projectId || finished || concludeOnly || !handle) return
-      const update = graphUpdate(store, projectId, cursor, run.stepId); cursor = update.cursor
-      if (run.activity === 'decide') {
-        if (update.evidenceSeq > lastEvidenceNotice) {
-          lastEvidenceNotice = update.evidenceSeq
-          handle.agent.inject(message(`新增确认的 Fact/Finding：${update.nodeIds.join(', ')}；evidenceSeq=${update.evidenceSeq}。用 read_graph_delta 读取连续增量并更新计划；只在实际处理后确认 throughEvidenceSeq。`))
-        }
-        const project = store.project(projectId)
-        const notice=criticalNotice(project,run,criticalReminderSent,manager.running('redtrace-critical-events'))
-        if(notice){
-          criticalReminderSent = true
-          handle.agent.inject(message(notice))
-        }
-        return
-      }
-      const { relevant } = update
-      if (relevant && store.project(projectId).status === 'active') handle.agent.inject(message(update.planChanged ? '当前 Step 执行契约已修订。立即读取当前 Step，在安全边界用 sync_step 采纳新版本，再按最新目标生成下一回合动作；旧调用批次不能继续执行。' : `共享 FGS 已更新：${update.nodeIds.join(', ')}。用 read_graph_delta 获取所需变更并结合当前计划执行。`))
+      if (projectId !== run.projectId || finished || concludeOnly || signal.aborted || !handle) return
+      pruneExploreNotices(store, run, handle.agent)
+      const update = graphUpdate(store, projectId, cursor, run.stepId, run.id, manager.running('redtrace-critical-events'))
+      queueGraphNotice(handle.agent, update, message)
+      cursor = update.cursor
     }
     store.changes.on('change', steer)
     const wait = async seconds => {
-      const timer = setTimeout(() => { concludeOnly = true; handle.agent.cancel({ kind: 'hook', reason: 'Activity execution timeout' }) }, seconds * 1000)
+      const timer = setTimeout(() => { task.concludeOnly = concludeOnly = true; pruneExploreNotices(store, run, handle.agent, 'timeout'); handle.agent.cancel({ kind: 'hook', reason: 'Activity execution timeout' }) }, seconds * 1000)
       try { await handle.agent.whenIdle() } finally { clearTimeout(timer) }
     }
     try {
@@ -349,17 +473,17 @@ export async function apply(ctx, options) {
       task.handle = handle
       signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) { cancel(); return }
       store.checkpoint(run.id, { sessionId: run.id })
-      // Only the minimal launch slice; the agent reads the rest of the graph on demand.
-      const graph={project:store.project(run.projectId),goals:[store.node(run.projectId,'goal','goal')],facts:[store.node(run.projectId,'origin','fact')]}
-      prompt(resume ? '继续' : JSON.stringify({ project: graph.project, goal: graph.goals.find(g => g.id === 'goal'), step: step ?? null, origin: graph.facts[0],
-        ...(step?.requires?.length ? { channels: channelsFor(verbRuntime,step.requires,8,run.projectId) } : {}),
-        instruction: '用 read_graph 获取所需状态后推进任务。' }))
+      cursor = Math.max(cursor, pendingGraphNotice(handle.agent)?.update.cursor ?? 0)
+      prompt(resume ? '继续' : JSON.stringify(launchContext(store, run.id,
+        step?.requires?.length ? channelsFor(verbRuntime, step.requires, 8, run.projectId) : [])))
+      // Changes committed during activation remain in the event log until this scan.
+      steer(run.projectId)
       if (pendingSkillNotice && jev?.isEnabled('skill_suggestion')) void prompt(pendingSkillNotice).catch(() => {})
       pendingSkillNotice = ''
       const limits = activityLimits(config, run.activity, step)
       await wait(limits.timeout)
       if (!finished && !task.committed && !signal.aborted) {
-        concludeOnly = true
+        task.concludeOnly = concludeOnly = true
         prompt('仅提交已有证据并调用结束工具，不再执行外部操作。'); await wait(limits.concludeTimeout)
       }
       if (!finished && !task.committed && !signal.aborted) throw new Error(concludeOnly ? 'Activity ended without a structured completion' : 'Agent execution failed')

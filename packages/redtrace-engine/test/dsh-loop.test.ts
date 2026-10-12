@@ -10,12 +10,14 @@ import { Configuration } from '../src/config.ts'
 
 const root = path.resolve(import.meta.dirname, '../../..')
 
-test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Explore; pauses and resumes natively', { timeout: 60000 }, async () => {
+test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Explore; pauses and resumes natively', { timeout: 60000 }, async (t) => {
   const work = mkdtempSync(path.join(os.tmpdir(), 'redtrace-native-loop-'))
   symlinkSync(path.join(root, 'static'), path.join(work, 'static'))
   const requests: any[] = []
   let held = false, holdObserved = false, timeoutHeld = false, timeoutGuardSent = false
   let taskPluginPlans = 0
+  let noticeStepId = '', noticeFixture = false, pauseNoticeHeld = false, resumeNotice = false
+  const noticeRelease = path.join(work, 'release-notice-tool')
   let planFixture = false, followerId = '', followerHeld = false, producerHeld = false, reasonHeld = false
   let releaseFollower: (() => void) | undefined, releaseProducer: (() => void) | undefined, releaseReason: (() => void) | undefined
   const sendTool = (res: any, name: string, args: unknown) => {
@@ -35,7 +37,34 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
       res.end('data: {"id":"probe","object":"chat.completion.chunk","created":1,"model":"fixture","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
       return
     }
-    if (text.includes('task plugin fixture') && names.includes('finish_decide')) {
+    if (noticeFixture && text.includes('notice fixture') && names.includes('finish_decide')) {
+      if (text.includes('HUMAN_ONLY_NOTIFY') && !resumeNotice) {
+        if (!previous.includes('read_graph_delta')) { name = 'read_graph_delta'; args = {} }
+        else if (previous.filter((n: string) => n === 'notify_explore').length < 2) { name = 'notify_explore'; args = { stepId: noticeStepId, message: 'EVALUATED_HINT_PATH: a useful alternate method; objective unchanged.' } }
+        else {
+          const seq = (key: string) => Math.max(0, ...[...JSON.stringify(b.messages).matchAll(new RegExp('\\\\?"' + key + '\\\\?":\\s*(\\d+)', 'g'))].map(m => Number(m[1])))
+          name = 'finish_decide'; args = { throughEvidenceSeq: seq('evidenceSeq'), throughHintSeq: seq('hintSeq') }
+        }
+      } else { name = 'finish_decide'; args = {} }
+    }
+    else if (noticeFixture && text.includes('notice fixture') && names.includes('finish_step')) {
+      if (text.includes('notice pause follower')) {
+        if (!pauseNoticeHeld) { pauseNoticeHeld = true; return }
+        assert.ok(!text.includes('[RedTrace Reason]'), 'unread notification was replayed on resume')
+        sendTool(res, 'finish_step', { summary: 'Resumed without replaying stale notice' }); return
+      }
+      const isFollower = text.includes('notice follower'), calls = previous.filter((n: string) => n === 'bash').length
+      if (!calls) { name = 'bash'; args = { command: `printf notice-tool-start; while [ ! -f '${noticeRelease}' ]; do sleep 0.02; done; printf notice-tool-end`, description: 'Bounded local delivery continuity fixture' } }
+      else if (isFollower && calls === 1) {
+        assert.ok(text.includes('EVALUATED_HINT_PATH'), 'next native request did not contain Reason notification')
+        assert.ok(!text.includes('HUMAN_ONLY_NOTIFY'), 'raw human Hint leaked to Explore')
+        name = 'bash'; args = { command: 'printf notice-adjusted-method', description: 'Use the supplemental path without Step amendment' }
+      } else {
+        if (!isFollower) assert.ok(!text.includes('EVALUATED_HINT_PATH'), 'notification reached wrong Explore')
+        name = 'finish_step'; args = { summary: 'Continued original native session' }
+      }
+    }
+    else if (text.includes('task plugin fixture') && names.includes('finish_decide')) {
       if (taskPluginPlans < 2) {
         name = 'add_step'; args = { description: taskPluginPlans === 0 ? 'selected REA' : 'ordinary task', sourceIds: ['origin'], ...(taskPluginPlans === 0 ? { plugins: ['redtrace-reverse'] } : {}) }
         taskPluginPlans++
@@ -121,7 +150,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     assert.equal((await call('/worker-config/test', 'POST', probe)).ok, true)
     assert.equal((await call('/worker-config')).revision, snapshot.revision)
     assert.equal((await call('/runtime/config')).env && JSON.stringify(await call('/runtime/config')).includes('fixture-key'), false)
-    const created = await call('/v2/projects', 'POST', { title: 'Native DSH', origin: 'Harmless local native loop fixture', goal: 'Verify executor', bootstrap: true })
+    const created = await call('/v2/projects', 'POST', { title: 'Native DSH', origin: 'Harmless local native loop fixture {{unknown}} 中文 \"quoted\"', goal: 'Verify executor {{unknown}}', hints:[{content:'Unverified initial {{unknown}} hint 中文',creator:'fixture'}], bootstrap: true })
     const id = created.project.id, base = `/v2/projects/${id}`
     await until(() => call(base + '/runs'), runs => runs.some((r: any) => r.activity === 'decide' && r.status === 'succeeded'), 'Bootstrap/Reason did not complete')
     const bootRuns = await call(base + '/runs')
@@ -210,6 +239,22 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     assert.equal(rotatedRuns[0].status, 'succeeded', JSON.stringify(rotatedRuns))
     assert.ok(requests.slice(afterRotation).every(r => r.authorization === 'Bearer rotated-key'))
     assert.ok(!JSON.stringify(await call('/runtime/config')).includes('rotated-key'))
+    for (const role of ['Bootstrap','Explore']) {
+      const first=requests.find(r=>r.messages.some((m:any)=>m.role==='system'&&JSON.stringify(m.content).includes(`你是 ${role}`)))
+      assert.ok(first,role)
+      const system=JSON.stringify(first.messages.filter((m:any)=>m.role==='system'))
+      const user=JSON.stringify(first.messages.filter((m:any)=>m.role==='user'))
+      assert.ok(!system.includes('当前执行契约'), 'moving execution data must not be a System section')
+      assert.ok(user.includes('当前执行契约（以本快照为准）'), 'required context disappeared with runtime contexts disabled')
+      assert.ok(user.includes('{{unknown}}'), 'literal text was interpreted as a template')
+      const launch=first.messages.filter((m:any)=>m.role==='user').flatMap((m:any)=>typeof m.content==='string'?[m.content]:m.content.filter((c:any)=>c.type==='text').map((c:any)=>c.text)).find((text:string)=>text.startsWith('{"projectId"'))
+      assert.ok(launch)
+      const projected=JSON.parse(launch)
+      assert.equal(projected.scope.description,'Harmless local native loop fixture {{unknown}} 中文 "quoted"')
+      if(role==='Bootstrap')assert.equal(projected.hints.items[0].content,'Unverified initial {{unknown}} hint 中文')
+      else assert.equal(projected.hints,undefined,'Human hints must be evaluated by Reason, not injected at Explore launch')
+      assert.equal('step' in projected,false);assert.equal('goal' in projected,false)
+    }
     const sessionFiles = readdirSync(path.join(work, '.redtrace/sessions'))
     assert.ok(sessionFiles.length > 0)
     assert.ok(!readFileSync(path.join(work, '.redtrace/redtrace.yaml'), 'utf8').includes('rotated-key'))
@@ -237,11 +282,173 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
       const events = await call(taskBase + `/runs/${r.id}/events?limit=500`)
       assert.equal(events.some((e: any) => e.kind === 'tool.completed' && e.error), false, JSON.stringify(events))
     }
+    await call(taskBase + '/status', 'PUT', { status: 'stopped' })
+    c.commit(c.read().revision, raw => {
+      raw.providers!.fixture.models!.push({ ...raw.providers!.fixture.models![0], id: 'fixture-alt' })
+      raw.workers = [
+        { name: 'notice-reason', provider: 'fixture', model: 'fixture', backend: 'dsh', max_running: 1, reason: true, explore: false, bootstrap: false },
+        { name: 'notice-alpha', provider: 'fixture', model: 'fixture', backend: 'dsh', max_running: 1, reason: false, explore: true, bootstrap: false, priority: 0 },
+        { name: 'notice-beta', provider: 'fixture', model: 'fixture-alt', backend: 'dsh', max_running: 1, reason: false, explore: true, bootstrap: false, priority: 1 },
+      ]
+      raw.runtime = { max_workers: 3, max_project_workers: 3, max_running_projects: 1 }
+      raw.tasks!.reason.timeout = 30; raw.tasks!.explore.timeout = 30
+    })
+    await call('/runtime/config'); noticeFixture = true
+    const noticeProject = await call('/v2/projects', 'POST', { title: 'Notice', origin: 'notice fixture, harmless local commands only', goal: 'Verify targeted live communication', bootstrap: false })
+    const noticeBase = `/v2/projects/${noticeProject.project.id}`
+    await until(() => call(noticeBase + '/runs'), rs => rs.some((r: any) => r.activity === 'decide' && r.status === 'succeeded'), 'initial notification planning did not finish')
+    const followerNotice = await call(noticeBase + '/steps', 'POST', { description: 'notice follower', sourceIds: ['origin'] }); noticeStepId = followerNotice.id
+    const bystander = await call(noticeBase + '/steps', 'POST', { description: 'notice bystander', sourceIds: ['origin'] })
+    const liveRuns = await until(() => call(noticeBase + '/runs'), rs => rs.filter((r: any) => r.activity === 'execute' && r.pendingTools.length).length === 2, 'both native tools did not start')
+    const followerRun = liveRuns.find((r: any) => r.stepId === followerNotice.id), bystanderRun = liveRuns.find((r: any) => r.stepId === bystander.id)
+    assert.notEqual(followerRun.model, bystanderRun.model)
+    const localFact = await call(noticeBase + '/facts', 'POST', { description: 'NOTICE_FACT_NEVER_BROADCAST', evidence: [{ description: 'Local API fixture' }] })
+    await call(noticeBase + '/findings', 'POST', { title: 'NOTICE_FINDING_NEVER_BROADCAST', description: 'Local deliverable', factIds: [localFact.id] })
+    await until(() => call(noticeBase), g => g.project.evidenceSeq === g.project.acknowledgedEvidenceSeq, 'Fact/Finding did not wake Reason')
+    await call(noticeBase + '/hints', 'POST', { content: 'HUMAN_ONLY_NOTIFY: evaluate the alternate method for the follower', creator: 'human' })
+    const queuedRows = await until(async () => {
+      const rs = await call(noticeBase + '/runs')
+      const rows = await Promise.all(rs.filter((r: any) => r.activity === 'decide').map((r: any) => call(noticeBase + `/runs/${r.id}/events?limit=500`)))
+      return rows.flat()
+    }, rows => rows.some((e: any) => e.kind === 'tool.completed' && e.title === 'notify_explore' && String(e.content).includes('queued')) && rows.some((e: any) => e.kind === 'tool.completed' && e.title === 'notify_explore' && String(e.content).includes('duplicate')), 'Reason did not queue and deduplicate the live notification')
+    assert.equal(queuedRows.filter((e: any) => e.kind === 'explore.notification.queued').length, 1)
+    const stillRunning = await call(noticeBase + '/runs')
+    for (const r of [followerRun, bystanderRun]) {
+      const current = stillRunning.find((row: any) => row.id === r.id)
+      assert.equal(current.status, 'running'); assert.equal(current.pendingTools.length, 1)
+      assert.equal(current.boundStepVersion, 1)
+    }
+    assert.equal((await call(noticeBase + `/nodes/${followerNotice.id}`)).planVersion, 1)
+    writeFileSync(noticeRelease, 'continue')
+    await until(() => call(noticeBase + '/runs'), rs => rs.filter((r: any) => r.activity === 'execute' && r.status === 'succeeded').length === 2, 'native sessions did not continue to completion')
+    const followerHistory = await call(noticeBase + `/steps/${followerNotice.id}/runs`)
+    assert.equal(followerHistory.length, 1); assert.equal(followerHistory[0].id, followerRun.id)
+    assert.equal(followerHistory[0].checkpoint.sessionId, followerRun.id)
+    const followerNoticeEvents = await call(noticeBase + `/runs/${followerRun.id}/events?limit=500`)
+    assert.ok(followerNoticeEvents.some((e: any) => e.kind === 'tool.completed' && !e.error && String(e.content).includes('notice-tool-end')))
+    assert.ok(followerNoticeEvents.some((e: any) => e.kind === 'tool.completed' && !e.error && String(e.content).includes('notice-adjusted-method')))
+    assert.equal(followerNoticeEvents.some((e: any) => e.title === 'sync_step'), false)
+    const exploreRequests = requests.filter(r => JSON.stringify(r.messages).includes('notice fixture') && r.tools?.some((t: any) => t.function.name === 'finish_step'))
+    assert.ok(exploreRequests.length > 0)
+    for (const r of exploreRequests) {
+      const users = JSON.stringify(r.messages.filter((m: any) => m.role === 'user'))
+      assert.ok(!/HUMAN_ONLY_NOTIFY|NOTICE_FACT_NEVER_BROADCAST|NOTICE_FINDING_NEVER_BROADCAST/.test(users))
+      assert.ok(!users.includes('[RedTrace FGS]'))
+    }
+    await until(() => call(noticeBase), g => g.project.hintSeq === g.project.acknowledgedHintSeq, 'Hint acknowledgement did not settle')
+    const pauseStep = await call(noticeBase + '/steps', 'POST', { description: 'notice pause follower', sourceIds: ['origin'] }); noticeStepId = pauseStep.id
+    await until(async () => pauseNoticeHeld, Boolean, 'pause target did not enter model request')
+    await call(noticeBase + '/hints', 'POST', { content: 'HUMAN_ONLY_NOTIFY: fresh input for pause delivery test', creator: 'human' })
+    const noticeAudit = async () => {
+      const rs = await call(noticeBase + '/runs')
+      return (await Promise.all(rs.filter((r: any) => r.activity === 'decide').map((r: any) => call(noticeBase + `/runs/${r.id}/events?limit=500`)))).flat()
+    }
+    await until(noticeAudit, rows => rows.some((e: any) => e.kind === 'explore.notification.queued' && e.data?.stepId === pauseStep.id), 'pause notification never queued')
+    await call(noticeBase + '/status', 'PUT', { status: 'stopped' })
+    const pausedNoticeRuns = await until(() => call(noticeBase + `/steps/${pauseStep.id}/runs`), rs => rs[0]?.status === 'paused', 'notification target did not pause')
+    assert.equal(pausedNoticeRuns[0].pendingTools.length, 0)
+    await until(noticeAudit, rows => rows.some((e: any) => e.kind === 'explore.notification.discarded' && e.data?.stepId === pauseStep.id), 'unread pause notification was not audited as discarded')
+    resumeNotice = true
+    await call(noticeBase + '/status', 'PUT', { status: 'active' })
+    const resumedNoticeRuns = await until(() => call(noticeBase + `/steps/${pauseStep.id}/runs`), rs => rs[0]?.status === 'succeeded', 'notification target did not resume in original session')
+    assert.equal(resumedNoticeRuns.length, 1); assert.equal(resumedNoticeRuns[0].id, pausedNoticeRuns[0].id)
+
   } finally {
     if (!exited) child.kill('SIGTERM')
     await Promise.race([closed, delay(5000)])
     if (!exited) { child.kill('SIGKILL'); await closed }
     model.closeAllConnections(); await new Promise<void>(resolve => model.close(() => resolve()))
     rmSync(work, { recursive: true, force: true })
+    const metrics = ['Bootstrap', 'Reason', 'Explore'].map(role => {
+      const rows = requests.filter(r => JSON.stringify(r.messages.filter((m: any) => m.role === 'system')).includes(`你是 ${role}`))
+      const first = rows[0], users = first?.messages.filter((m: any) => m.role === 'user') ?? []
+      const text = (m: any) => typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+      const notices = new Set(rows.flatMap(r => r.messages.filter((m: any) => m.role === 'user').map(text)).filter((s: string) => /共享 FGS|新增确认的 Fact\/Finding|\[RedTrace FGS\]/.test(s)))
+      const calls=new Map(rows.flatMap(r=>r.messages.flatMap((m:any)=>m.tool_calls??[])).map((c:any)=>[c.id,c.function.name]))
+      return { role, requests: rows.length, calls:Object.fromEntries(['read_graph','read_graph_delta','sync_step'].map(name=>[name,[...calls.values()].filter(n=>n===name).length])), firstSystemBytes: Buffer.byteLength(first?.messages.filter((m: any) => m.role === 'system').map(text).join('\n') ?? ''),
+        firstUserBytes: Buffer.byteLength(users.map(text).join('\n')), notices: notices.size,
+        graphReads: rows.filter(r => r.messages.at(-1)?.role === 'tool' && /read_graph/.test(JSON.stringify(r.messages.at(-2)))).length }
+    })
+    const conversations=new Map<string,{role:string;stepId?:string;requests:number;notices:Set<string>}>()
+    for(const request of requests) {
+      const role=['Bootstrap','Reason','Explore'].find(role=>request.messages.some((m:any)=>m.role==='system'&&JSON.stringify(m.content).includes(`你是 ${role}`)))
+      if(!role)continue
+      const texts=request.messages.filter((m:any)=>m.role==='user').flatMap((m:any)=>typeof m.content==='string'?[m.content]:m.content.filter((c:any)=>c.type==='text').map((c:any)=>c.text))
+      const launch=texts.find((text:string)=>text.startsWith('{"projectId"')||text.startsWith('{"project"'))
+      assert.ok(launch,'every fixture conversation retains its launch message')
+      const stepId=texts.join('\n').match(/当前执行契约[^：]*：\s*\{\s*"id":"([^"]+)"/)?.[1]??JSON.parse(launch).step?.id
+      if(role!=='Reason')assert.ok(stepId,'execution conversation must expose its live Step identity')
+      const key=role+launch+(stepId??''), row=conversations.get(key)??{role,stepId,requests:0,notices:new Set<string>()}
+      row.requests++;for(const text of texts)if(/共享 FGS|新增确认的 Fact\/Finding|\[RedTrace FGS\]/.test(text))row.notices.add(text)
+      conversations.set(key,row)
+    }
+    const perConversation=[...conversations.values()].map((row,index)=>({fixtureConversation:index+1,role:row.role,stepId:row.stepId,requests:row.requests,notificationsEnteredRequests:row.notices.size}))
+    t.diagnostic(`INJECTION_METRICS ${JSON.stringify({ kind: 'local-protocol-fixture-not-real-token-usage', metrics,perConversation })}`)
   }
+})
+
+test('10,000 ordinary changes never broadcast to four Explore Runs; native control inbox remains bounded', async () => {
+ const {load}=await import('../../redtrace-dsh/lib/loader.js')
+ const {Context}=await load('vendor/deepseek-harness/vendor/cordis/lib/index.js')
+ const host=new Context()
+ const projections=await load('vendor/deepseek-harness/packages/session/session-projection/lib/index.js')
+ const core=await load('packages/redtrace-dsh/lib/core.js')
+ await host.plugin(projections.default??projections).await();await host.plugin(core.default??core).await()
+ for(let i=0;i<500&&!host.get('agents');i++)await delay(10)
+ const {SessionId}=await load('vendor/deepseek-harness/packages/core/session/lib/index.js')
+ const handles:any[]=[]
+ const {createUserMessage}=await load('vendor/deepseek-harness/packages/llm/llm/lib/index.js')
+ const message=(text:string)=>createUserMessage({content:[{type:'text',text}],source:{kind:'user'}})
+ const cordisPath='../compat/cordis.mjs'
+ const {queueGraphNotice}=await import(cordisPath)
+ const {Store}=await import('../src/store.ts')
+ const store=new Store(':memory:')
+ const project=store.createProject({title:'Concurrent',origin:'Local',goal:'Check'}).project
+ const agents:any[]=[], runs:any[]=[], cursors:number[]=[]
+ const worker={name:'fixture',backend:'mock' as const,provider:'mock',model:'',enabled:true,reason:false,explore:true,bootstrap:false,maxRunning:4,priority:0}
+ const {graphUpdate}=await import('../src/runner.ts')
+ try {
+  for(let i=0;i<4;i++) {
+    const step=store.addStep(project.id,{description:`Worker ${i}`,sourceIds:['origin']})
+    const run=store.claim(project.id,'execute',{...worker,name:`Worker ${i}`},step.id);runs.push(run);cursors.push(graphUpdate(store,project.id,0,step.id,run.id).cursor)
+    const handle=await host.get('agents').create({sessionId:SessionId(run.id),meta:{cwd:root},agentOptions:{},setup(){}})
+    handles.push(handle)
+    const inbox=handle.agent.inbox
+    agents.push({status:'running',inbox,wakes:0,inject(message:any){inbox.append('next-step',message)},steer(message:any){this.wakes++;inbox.append('next-step',message)}})
+  }
+  for(let i=0;i<10000;i++) {
+    const run=runs[i%4]
+    if(i%5===0)store.addInput(project.id,'observation',`noise ${i}`)
+    else if(i%5===1)store.addInput(project.id,'hint',`hint ${i}`,'human',run.stepId)
+    else if(i%5===2)store.updateStep(project.id,run.stepId,{priority:i})
+    else if(i%5===3)store.addFact(project.id,`evidence ${i}`,{stepId:run.stepId})
+    else store.recordCriticalSignal(project.id,`critical ${i}`,{kind:'route.verified'})
+    if(i%100===99)for(let j=0;j<4;j++) {
+      const update=graphUpdate(store,project.id,cursors[j]!,runs[j].stepId,runs[j].id)
+      cursors[j]=update.cursor;queueGraphNotice(agents[j],update,message)
+      assert.equal(agents[j].inbox.nextStep.length,0)
+    }
+  }
+  for(let i=0;i<4;i++) {
+    const agent=agents[i]
+    assert.equal(agent.inbox.nextStep.length,0)
+    assert.equal(store.run(runs[i].id).deliveredGraphCursor,runs[i].deliveredGraphCursor)
+    store.addFact(project.id,`New batch ${i}`,{})
+    const update=graphUpdate(store,project.id,cursors[i]!,runs[i].stepId,runs[i].id)
+    queueGraphNotice(agent,update,message)
+    assert.equal(agent.inbox.nextStep.length,0)
+    const minimal={...update,relevant:true,nodeIds:[],counts:{},after:100,cursor:101,evidenceSeq:0,criticalSeq:0,wake:false}
+    queueGraphNotice(agent,minimal,message);assert.equal(agent.inbox.nextStep.length,1)
+    agent.status='idle';const before=agent.wakes
+    queueGraphNotice(agent,{...minimal,after:101,cursor:102,criticalSeq:2001,wake:true},message)
+    assert.equal(agent.wakes,before+1);assert.equal(agent.inbox.nextStep.length,1)
+    agent.status='running'
+    const replace=agent.inbox.replace.bind(agent.inbox)
+    agent.inbox.replace=()=>{agent.inbox.claim('next-step',3);agent.inbox.replace=replace;return false}
+    queueGraphNotice(agent,{...minimal,after:102,cursor:103},message)
+    assert.equal(JSON.parse(agent.inbox.nextStep[0].content[0].text.split('\n')[0].slice('[RedTrace FGS] '.length)).after,102)
+    queueGraphNotice(agent,{...minimal,stopped:true},message);assert.equal(agent.inbox.nextStep.length,0)
+  }
+  assert.equal(store.project(project.id).acknowledgedCriticalSeq??0,0)
+ } finally {for(const handle of handles)await handle.dispose();await host.fiber.dispose();store.close()}
 })

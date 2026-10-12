@@ -468,7 +468,7 @@ export function resourceTools(context: TaskContext, runtime: VerbRuntime): Agent
   const ops = runtime.operations, worker = { actor_type: 'worker', actor: context.worker.name, worker: context.worker.name, intent_id: context.run.stepId }
   return [
     verbTool('resource_register',
-      'Register a shared resource for cross-Step reuse: channels (webshell, c2_listener, c2_session), materials (c2_payload, c2_profile, credential_ref, proxy, file). secret stores credentials server-side (never returned); use a structured family tool when available. Everything registered here is visible on the operations pages.',
+      'Register a shared resource for cross-Step reuse: channels (webshell, c2_listener, c2_session), materials (c2_payload, c2_profile, credential_ref, proxy, file). secret stays server-side; c2_session may return secret_once. Prefer a structured family tool when available.',
       Type.Object({
         kind: Type.Union(registerableKinds.map(kind => Type.Literal(kind))),
         name: Type.String({ minLength: 1, maxLength: 160 }),

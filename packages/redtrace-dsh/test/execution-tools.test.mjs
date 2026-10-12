@@ -11,7 +11,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { load } from '../lib/loader.js'
-import { mountExecutionTools } from '../lib/execution-tools.js'
+import { mountExecutionTools, toolsSectionText } from '../lib/execution-tools.js'
 import * as credentials from '../lib/credentials.js'
 import * as attachment from '../lib/attachment.js'
 import * as fileReferences from '../lib/file-references.js'
@@ -207,4 +207,18 @@ test('host capability modules publish their DSH services', async (t) => {
   assert.ok(host.get('attachments') !== undefined, 'attachments service')
   assert.ok(host.get('fileReferences') !== undefined, 'fileReferences service')
   assert.ok(host.get('ptcRuntime') !== undefined, 'ptcRuntime service')
+})
+
+test('offline assets report existing environment overrides and never expose unrelated environment', () => {
+ const cwd=scratch('assets'), previous=process.env.REDTRACE_WORDLISTS_DIR
+ try {
+  const override=path.join(cwd,'{{literal}} 中文');mkdirSync(override)
+  process.env.REDTRACE_WORDLISTS_DIR=override
+  const text=toolsSectionText(cwd)
+  assert.ok(text.includes(`$REDTRACE_WORDLISTS_DIR（${override}`))
+  assert.ok(!text.includes('REDTRACE_PAYLOADS_DIR'))
+  assert.ok(!text.includes('API_KEY'))
+  process.env.REDTRACE_WORDLISTS_DIR=path.join(cwd,'absent')
+  assert.ok(!toolsSectionText(cwd).includes('REDTRACE_WORDLISTS_DIR'))
+ } finally {if(previous===undefined)delete process.env.REDTRACE_WORDLISTS_DIR;else process.env.REDTRACE_WORDLISTS_DIR=previous;rmSync(cwd,{recursive:true,force:true})}
 })

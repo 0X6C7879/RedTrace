@@ -4,7 +4,9 @@ import { HttpError } from './types.ts'
 import type { EngineConfig, Goal, Run, RunStatus, Worker, Step } from './types.ts'
 import type { JevService } from './jev.ts'
 
-export interface TaskContext { store: Store; run: Run; worker: Worker; config: EngineConfig; signal: AbortSignal; jev?: JevService; featureAvailable?: (id: string) => boolean; taskPluginAllowed?: (id: string) => boolean }
+export interface ExploreNotice { stepId: string; message: string; sourceIds?: string[] }
+export interface ExploreNoticeResult { ok: boolean; status: 'queued' | 'duplicate' | 'rejected' | 'failed'; reason?: string; notificationId?: string; stepId?: string; runId?: string; sessionId?: string }
+export interface TaskContext { store: Store; run: Run; worker: Worker; config: EngineConfig; signal: AbortSignal; jev?: JevService; featureAvailable?: (id: string) => boolean; taskPluginAllowed?: (id: string) => boolean; notifyExplore?: (notice: ExploreNotice) => ExploreNoticeResult }
 export type RunTask = (context: TaskContext) => Promise<void>
 export type SelectWorker = (worker: Worker, activity: Run['activity'], step?: Step) => Worker | undefined
 type Active = { run: Run; abort: AbortController; completion: Promise<void> }
@@ -83,7 +85,8 @@ export class Scheduler {
           const bootstrapComplete = !p.bootstrap || !!bootstrap && bootstrap.status === 'done' && bootstrap.factIds.length > 0
           const pendingEvidence = (p.evidenceSeq ?? p.factSeq) > (p.acknowledgedEvidenceSeq ?? p.acknowledgedFactSeq)
           const pendingCritical = this.criticalEnabled() && (p.criticalSeq ?? 0) > (p.acknowledgedCriticalSeq ?? 0)
-          const needsDecide = bootstrapComplete && (p.initialPlanningPending || p.planningRetryPending || pendingEvidence || pendingCritical)
+          const pendingHint = (p.hintSeq ?? 0) > (p.acknowledgedHintSeq ?? 0)
+          const needsDecide = bootstrapComplete && (p.initialPlanningPending || p.planningRetryPending || pendingEvidence || pendingCritical || pendingHint)
             && !active.some(r => r.projectId === p.id && r.activity === 'decide')
           if (planningOnly && needsDecide) {
             if (p.retryAfter > Date.now()) retryAt = Math.min(retryAt, p.retryAfter)

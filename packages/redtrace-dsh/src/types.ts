@@ -115,6 +115,8 @@ export interface RuntimeTask {
   deliveredHints?: Set<string>
   startedAt?: number
   handle?: AgentHandle
+  /** Fresh on activation; unread notices are not replayed on resume. */
+  notificationEpoch?: string
   cancelled?: boolean
   streamedText?: boolean
   streamedThinking?: boolean
@@ -139,6 +141,13 @@ export interface Agent {
   session: unknown
   followup(message: unknown): void
   inject(message: unknown): void
+  steer(message: unknown): void
+  readonly status: 'idle' | 'running'
+  readonly inbox: {
+    readonly nextStep: readonly { id: string; content: readonly { type: string; text?: string }[] }[]
+    replace(messageId: string, message: unknown): boolean
+    remove(messageId: string): boolean
+  }
   cancel(cause: { kind: 'hook'; reason: string } | { kind: 'disposed' }): void
   whenIdle(): Promise<void>
 }
@@ -150,7 +159,10 @@ export interface AgentHandle {
 
 export interface ScopedContext {
   tools: { restrict(filter: { allow?: string[]; deny?: string[] }): () => void }
-  systemPrompt: { section(value: { name: string; order: number; text: string }): () => void }
+  systemPrompt: {
+    section(value: { name: string; order: number; text: string | (() => string); interpolate?: boolean }): () => void
+    context(value: { name: string; order: number; text: string | (() => string); required?: boolean; interpolate?: boolean }): () => void
+  }
   plugin(plugin: unknown, config?: unknown): CordisFiber
   isolate(name: string): ScopedContext
 }

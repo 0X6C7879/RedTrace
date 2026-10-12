@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { activityPrompt } from '../src/runner.ts'
@@ -65,4 +66,15 @@ test('Jev remains independently gated for both execution roles and absent in Rea
       }
     }
   } finally { store.close() }
+})
+
+test('directed guidance changes preserve the Bootstrap body byte for byte', () => {
+ const hash=(text:string)=>createHash('sha256').update(text).digest('hex')
+ assert.match(activityPrompt('decide'),/notify_explore.*不微观管理或重复通知/)
+ assert.match(activityPrompt('execute'),/Reason 通知.*不代表契约变更/)
+ const store=new Store(':memory:')
+ try {
+  const step=store.createProject({title:'Hash',origin:'Local fixture',goal:'Check',bootstrap:true}).steps[0]
+  assert.equal(hash(activityPrompt('execute',step)),'808deb593c8f62f00c5e20149dc2a4f81628967c533433e07b598e74b5d02431')
+ } finally {store.close()}
 })
