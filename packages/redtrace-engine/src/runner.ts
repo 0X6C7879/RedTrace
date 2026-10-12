@@ -229,8 +229,10 @@ export async function boundToolOutput(output: AgentToolResult<unknown>, evidence
     if (!value || typeof value !== 'object') return value
     const record = value as Record<string, unknown>
     if (typeof record.text === 'string') return {...record,text:undefined,extraction:extractOutput(record.text)}
-    if (Array.isArray(record.results)) return { results: record.results.map(item => {
+    if (Array.isArray(record.results)) return { ...Object.fromEntries(['total', 'nextOffset', 'generation', 'database', 'dataRoot', 'diagnostics', 'note'].filter(key => key in record).map(key => [key, record[key]])), results: record.results.map(item => {
       const row = item as Record<string, unknown>
+      if (row.kind === 'vulnerability') return { ...Object.fromEntries(['id', 'candidateId', 'name', 'cves', 'status', 'versionMatch', 'modified', 'unresolved', 'validated', 'sourceCount', 'affectedVersionCount'].filter(key => key in row).map(key => [key, row[key]])), affectedVersions: Array.isArray(row.affectedVersions) ? row.affectedVersions.slice(0, 3) : [], sources: Array.isArray(row.sources) ? row.sources.slice(0, 3).map(source => { const entry = source as Record<string, unknown>; return Object.fromEntries(['id', 'source', 'path', 'sha256', 'reference'].filter(key => key in entry).map(key => [key, entry[key]])) }) : [] }
+      if (row.path && row.sha256) return Object.fromEntries(['id', 'path', 'sha256', 'snippet', 'kind', 'templateId', 'component', 'version', 'protocols', 'cves'].filter(key => key in row).map(key => [key, row[key]]))
       return Object.fromEntries(['index', 'method', 'url', 'status', 'location', 'durationMs', 'responseBytes', 'responseSha256', 'differenceFromFirst', 'error', 'evidence', 'extraction'].filter(key => key in row).map(key => [key, row[key]]))
     }) }
     return Object.fromEntries(Object.entries(record).map(([key, item]) => [key, summarize(item)]))
@@ -270,7 +272,7 @@ export const activityPrompt = (activity: 'decide' | 'execute', step?: Step, jevC
 1. 复用共享事实、扫描结果、凭证和已验证通道，按需使用 Skills、执行工具与任务插件。在本 Step 内自主调整方法，不把每次尝试拆成新 Step；改变目标或权限边界交由 Reason 调整。
 2. 一次失败不代表方向无效。按反馈检查前置、尝试实质不同的方法，有突破继续推进，避免无新信息的重复；副作用不明先查证，不重放。Step 外线索记录实际观察和待验证点，交给 Reason，不自行扩展。
 3. Scope、Fact、Hint 或执行结果中的凭证及时登记为资源，即使尚无通道。可复用通道验证后登记、使用匹配通道，未验证入口不作可用通道。
-4. 以工具输出核验结论，及时 submit_fact，附真实证据且只写增量；成功、失败和限制均可形成确认事实。Hint、Observation 和推测不是事实，单次失败不证明整条路线无效，版本/CVE 命中不等于漏洞成立。可核验成果用 submit_finding 引用 Fact，新 Fact/Finding 会唤醒 Reason。
+4. 以工具输出核验结论，及时 submit_fact，附真实证据且只写增量；成功、失败和限制均可形成确认事实。Hint、Observation 和推测不是事实，单次失败不证明整条路线无效，版本/CVE 命中不等于漏洞成立。需要漏洞信息时主动 knowledge_search：query 为 CVE 编号或组件名，已知版本传 version；可用 component/vendor/cpe 精确缩小范围。工具描述提供离线库绝对路径，knowledge_read 按 CVE 或来源 id 读取详情；无版本仍可查相关漏洞，版本未知不当成不受影响。检索不扫描目标、不下载、不执行 PoC，离线无命中不阻断其他探索。可核验成果用 submit_finding 引用 Fact，新 Fact/Finding 会唤醒 Reason。
 5. Reason 通知是增量信息，不代表契约变更；结合当前进度自主调整方法，无须重新开始。只有执行契约版本真正变化时先 read_graph/read_graph_delta，再 sync_step 采纳当前版本；下一模型回合按新契约行动，旧调用树不得继续外部操作。
 6. 验证码仅对授权题目用局部截图供当前模型识别；失败记录阻塞并在本 Step 内转向有效方法，不依赖人工接管或承诺通用通过。Step 完成、结论证据充分或阻塞无法自行解除时，保存进展、尝试限制和阻塞，调用 finish_step；Step 结束不代表 Goal/Subgoal 达成。`)
   + (activity === 'execute' && jevChoice ? '当同一目标有两个以上真实可用的扫描器、PoC、字典或搜索来源，且选错会明显浪费时间时，可调用 jev_choose 比较。' : '')

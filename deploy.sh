@@ -684,6 +684,11 @@ codegraph serve --help >/dev/null 2>&1 || die "codegraph MCP entry (serve --mcp)
 ensure_rtk
 ensure_playwright_skill
 ensure_nuclei
+if node "$PROJECT_DIR/scripts/knowledge.mjs" status > "$PROJECT_DIR/.redtrace/knowledge-status.json" 2>&1; then
+  log "offline vulnerability data package is locally ready"
+else
+  warn "offline vulnerability data is not ready; import a prepared package with install-knowledge.sh --offline --package PATH (deployment will not download it)"
+fi
 if [[ "${REDTRACE_SKIP_OPTIONAL_TOOLS:-0}" != "1" ]]; then
   ensure_uv
   ensure_rsactftool

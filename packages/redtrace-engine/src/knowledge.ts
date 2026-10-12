@@ -7,6 +7,8 @@ import { Type } from 'typebox'
 import { parse as parseYaml } from 'yaml'
 import type { AgentTool } from './tool-types.ts'
 import type { TaskContext } from './scheduler.ts'
+import { knowledgeData, knowledgeEnvironment, readVulnerability, vulnerabilitySearch } from './knowledge-vuln.ts'
+import type { VulnerabilityQuery } from './knowledge-vuln.ts'
 
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
 const searchable = /\.(?:md|txt|rst|ya?ml|json)$/i
@@ -68,8 +70,8 @@ function sourceFile(repository: string, relative: string, nucleiRoot: string) {
 const normalized = (value: string) => value.trim().toLowerCase()
 // Index keys and model-visible paths stay slash-separated on every platform.
 const portable = (value: string) => value.split(path.sep).join('/')
-function localDirectory(repository: string, name: string, env: string, candidates: string[], envChild?: string) {
-  const explicit = process.env[env]
+function localDirectory(repository: string, name: string, env: string, candidates: string[], envChild?: string, environment: NodeJS.ProcessEnv = process.env) {
+  const explicit = environment[env]
   const explicitPath = explicit ? path.resolve(explicit) : undefined
   const paths = explicit ? [explicitChild(explicitPath!, envChild)] : candidates.map(value => path.resolve(repository, value))
   const found = paths.find(value => { try { return statSync(value).isDirectory() } catch { return false } })
@@ -166,40 +168,64 @@ function openIndex(root: string, filename: string, sources: string[], wordlists:
 
 export function knowledgeTools(_evidenceRoot: string, context: TaskContext): AgentTool[] {
   const repository = context.config.workspaceRoot ? path.resolve(context.config.workspaceRoot, '..') : path.join(os.tmpdir(), 'redtrace-knowledge-test', context.run.projectId)
+  const environment = knowledgeEnvironment(context.config)
+  let generation: string | undefined
+  try { const data = knowledgeData(context.config); if (data.database) generation = path.dirname(data.database) } catch {}
+  const dataRoot = environment.REDTRACE_DATA_DIR ?? '/opt/redtrace/data'
+  const nucleiPaths = [generation && path.join(generation, 'nuclei-templates'), path.join(dataRoot, 'nuclei-templates'), 'tools/wordlists/nuclei-templates', 'tools/poc/nuclei-templates', '/opt/redtrace/data/nuclei-templates', path.join(os.homedir(), 'nuclei-templates'), path.join(os.homedir(), '.nuclei-templates')].filter((value): value is string => !!value)
+  for (const config of [path.join(repository, '.redtrace/config/nuclei/.templates-config.json'), path.join(os.homedir(), 'Library/Application Support/nuclei/.templates-config.json'), path.join(environment.XDG_STATE_HOME ?? path.join(os.homedir(), '.local/state'), 'nuclei/templates.json'), path.join(os.homedir(), '.config/nuclei/.templates-config.json')]) {
+    try { const state = JSON.parse(readFileSync(config, 'utf8')); const root = state['nuclei-templates-directory'] ?? state.templatesDirectory; if (typeof root === 'string') nucleiPaths.push(root) } catch {}
+  }
+  const directory = (name: string, variable: string, paths: string[], child?: string) => localDirectory(repository, name, variable, paths, child, environment)
   const resources = [
-    localDirectory(repository, 'project-skills', 'REDTRACE_SKILLS_DIR', ['skills']),
-    localDirectory(repository, 'agent-skills', 'REDTRACE_AGENT_SKILLS_DIR', ['.agents/skills']),
-    localDirectory(repository, 'private-skills', 'REDTRACE_PRIVATE_SKILLS_DIR', ['.redtrace/skills']),
-    localDirectory(repository, 'vulhub', 'REDTRACE_VULHUB_DIR', ['tools/poc/vulhub', 'tools/vulhub', 'tools/poc/Vulhub']),
-    localDirectory(repository, 'vulhub-skills', 'REDTRACE_VULHUB_SKILLS_DIR', ['tools/poc/vulhub/.claude/skills']),
-    localDirectory(repository, 'payloads-all-the-things', 'REDTRACE_PAYLOADS_DIR', ['tools/payloads/PayloadsAllTheThings', 'tools/payloads/payloads-all-the-things'], 'PayloadsAllTheThings'),
-    localDirectory(repository, 'exploitdb', 'REDTRACE_EXPLOITDB_DIR', ['tools/poc/exploitdb', 'tools/exploitdb', '/usr/share/exploitdb']),
-    localDirectory(repository, 'nuclei-templates', 'REDTRACE_NUCLEI_TEMPLATES_DIR', ['tools/wordlists/nuclei-templates', 'tools/poc/nuclei-templates', '/opt/redtrace/data/nuclei-templates', path.join(os.homedir(), '.nuclei-templates')]),
-    localDirectory(repository, 'seclists', 'REDTRACE_WORDLISTS_DIR', ['tools/wordlists/SecLists', '/usr/share/seclists'], 'SecLists'),
+    directory('project-skills', 'REDTRACE_SKILLS_DIR', ['skills']),
+    directory('agent-skills', 'REDTRACE_AGENT_SKILLS_DIR', ['.agents/skills']),
+    directory('private-skills', 'REDTRACE_PRIVATE_SKILLS_DIR', ['.redtrace/skills']),
+    directory('vulhub', 'REDTRACE_VULHUB_DIR', ['tools/poc/vulhub', 'tools/vulhub', 'tools/poc/Vulhub']),
+    directory('vulhub-skills', 'REDTRACE_VULHUB_SKILLS_DIR', ['tools/poc/vulhub/.claude/skills']),
+    directory('payloads-all-the-things', 'REDTRACE_PAYLOADS_DIR', ['tools/payloads/PayloadsAllTheThings', 'tools/payloads/payloads-all-the-things'], 'PayloadsAllTheThings'),
+    directory('exploitdb', 'REDTRACE_EXPLOITDB_DIR', [generation && path.join(generation, 'exploitdb'), path.join(dataRoot, 'exploitdb'), 'tools/poc/exploitdb', 'tools/exploitdb', '/usr/share/exploitdb', '/opt/homebrew/opt/exploitdb/share/exploitdb', '/usr/local/opt/exploitdb/share/exploitdb'].filter((value): value is string => !!value)),
+    directory('nuclei-templates', 'REDTRACE_NUCLEI_TEMPLATES_DIR', nucleiPaths),
+    directory('seclists', 'REDTRACE_WORDLISTS_DIR', ['tools/wordlists/SecLists', '/usr/share/seclists'], 'SecLists'),
   ]
   const nucleiRoot = resources.find(item => item.name === 'nuclei-templates')!.path ?? path.resolve(repository, 'tools/poc/nuclei-templates')
-  const sources = [...new Set(resources.filter(item => item.path && item.name !== 'seclists').map(item => item.path!))]
+  const sources = [...new Set(resources.filter(item => item.path && item.name !== 'seclists' && item.name !== 'exploitdb' && !(generation && item.name === 'nuclei-templates')).map(item => item.path!))]
   const wordlists = resources.filter(item => item.name === 'seclists' && item.path).map(item => item.path!)
   const index = path.join(repository, '.redtrace', 'knowledge.sqlite')
   return [
-    { name: 'knowledge_search', label: 'knowledge_search', description: 'Search indexed local Skills, Vulhub, PayloadsAllTheThings and available local Nuclei CVE/fingerprint templates. Returns at most 5 candidates; a match is not proof a vulnerability applies.', parameters: Type.Object({ query: Type.String({ minLength: 2, maxLength: 300 }) }), executionMode: 'sequential', execute: async (_id: string, args: { query: string }) => {
-      const terms = tokenize(args.query)
-      if (!terms.length) return { content: [{ type: 'text', text: JSON.stringify({ results: [], reason: 'No searchable terms' }) }], details: { results: [] } }
+    { name: 'knowledge_search', label: 'knowledge_search', description: `Actively search offline vulnerability intelligence by CVE, component name, or component plus version. Data directory: ${dataRoot}; SQLite: ${generation ? path.join(generation, 'vuln.sqlite') : 'missing (import data first)'}. Examples: {query:"CVE-2021-41773"}, {query:"apache"}, {component:"apache",version:"2.4.49"}. Optional vendor/cpe disambiguate products. No target/evidence required; no downloads, target scans or automatic PoC execution. Paginate with offset/limit; read CVE details or source IDs with knowledge_read. Matches are not proof of a vulnerability.`, parameters: Type.Object({ query: Type.Optional(Type.String({ minLength: 2, maxLength: 300 })), component: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })), version: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })), vendor: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })), cpe: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })), version_scheme: Type.Optional(Type.Union(['intdot', 'openssl', 'semver', 'pypi', 'maven', 'debian', 'rpm'].map(value => Type.Literal(value)))), offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })), include_excluded: Type.Optional(Type.Boolean()) }), executionMode: 'sequential', execute: async (_id: string, args: VulnerabilityQuery) => {
+      const vulnerabilities = await vulnerabilitySearch(_evidenceRoot, context, args)
+      const terms = tokenize(args.query ?? '')
+      if (vulnerabilities.total || !terms.length || args.component || args.cpe || (vulnerabilities.database && /CVE-\d{4}-\d{4,}/i.test(args.query ?? ''))) {
+        const value = { ...vulnerabilities, resources, note: 'Candidates are unverified; no template or PoC was executed' }
+        return { content: [{ type: 'text', text: JSON.stringify(value) }], details: value }
+      }
       const db = openIndex(repository, index, sources, wordlists, nucleiRoot)
       try {
-      const rows = db.prepare('SELECT id,path,body,substr(body,max(1,instr(lower(body),lower(?))-160),360) AS snippet FROM docs WHERE docs MATCH ? ORDER BY bm25(docs) LIMIT 5').all(terms[0], terms.map(term => `"${term.replaceAll('"', '""')}"`).join(' OR ')) as { id: string; path: string; body: string; snippet: string }[]
+      const expression = terms.map(term => `"${term.replaceAll('"', '""')}"`).join(' OR ')
+      const rows = db.prepare('SELECT id,path,body,substr(body,max(1,instr(lower(body),lower(?))-160),360) AS snippet FROM docs WHERE docs MATCH ? ORDER BY bm25(docs),path LIMIT ? OFFSET ?').all(terms[0], expression, args.limit ?? 5, args.offset ?? 0) as { id: string; path: string; body: string; snippet: string }[]
       const results = rows.map(row => { const metadata = metadataFor(sourceFile(repository,row.path,nucleiRoot),row.body,nucleiRoot); return { id: row.id, path: row.path, sha256: row.id, snippet: row.snippet, kind: metadata.kind, templateId: metadata.templateId ?? null, name: metadata.name ?? null, severity: metadata.severity ?? 'unknown', vendor: metadata.vendor ?? 'unknown', component: metadata.component ?? 'unknown', version: metadata.version ?? 'unknown', protocols: metadata.protocols, tags: metadata.tags, cves: metadata.cves, cwes: metadata.cwes, references: metadata.references, prerequisites: metadata.prerequisites.length ? metadata.prerequisites : 'unknown', fingerprintIndicators: metadata.fingerprintIndicators, metadataParseError: metadata.parseError ?? false } })
         const indexWarnings = (db.prepare("SELECT value FROM index_state WHERE key='warnings'").get() as { value: string } | undefined)?.value
-        const value = { results, indexedSources: (db.prepare('SELECT COUNT(*) AS count FROM docs').get() as { count: number }).count, resources, indexWarnings: indexWarnings ? JSON.parse(indexWarnings) : [] }
+        const documentTotal = (db.prepare('SELECT COUNT(*) AS count FROM docs WHERE docs MATCH ?').get(expression) as { count: number }).count
+        const value = { ...vulnerabilities, results: vulnerabilities.total ? vulnerabilities.results : results, documents: vulnerabilities.total ? results : [], documentTotal, nextDocumentOffset: (args.offset ?? 0) + rows.length < documentTotal ? (args.offset ?? 0) + rows.length : null, total: vulnerabilities.total || documentTotal, nextOffset: vulnerabilities.total ? vulnerabilities.nextOffset : (args.offset ?? 0) + rows.length < documentTotal ? (args.offset ?? 0) + rows.length : null, indexedSources: (db.prepare('SELECT COUNT(*) AS count FROM docs').get() as { count: number }).count, resources, indexWarnings: indexWarnings ? JSON.parse(indexWarnings) : [] }
         return { content: [{ type: 'text', text: JSON.stringify(value) }], details: value }
       } finally { db.close() }
     } },
-    { name: 'knowledge_match', label: 'knowledge_match', description: 'Compare a local template candidate with supplied confirmed component, exact version and protocol facts. Returns candidate/not_applicable/unknown only; never confirms a vulnerability or runs a template.', parameters: Type.Object({ id: Type.String({ minLength: 64, maxLength: 64, pattern: '^[a-f0-9]{64}$' }), component: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })), version: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })), protocol: Type.Optional(Type.String({ minLength: 1, maxLength: 32 })), confirmed_prerequisites: Type.Optional(Type.Array(Type.String({ maxLength: 300 }), { maxItems: 10 })) }), executionMode: 'sequential', execute: async (_id: string, args: { id: string; component?: string; version?: string; protocol?: string; confirmed_prerequisites?: string[] }) => {
+    { name: 'knowledge_match', label: 'knowledge_match', description: 'Actively check a CVE candidate with supplied component/version/vendor/cpe against the offline NVD version ranges. Legacy source-hash IDs compare template metadata. No scanning or vulnerability confirmation.', parameters: Type.Object({ id: Type.Optional(Type.String({ minLength: 1, maxLength: 64, pattern: '^(?:CVE-[0-9]{4}-[0-9]{4,}|[a-f0-9]{64})$' })), candidate_id: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })), component: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })), vendor: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })), version: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })), cpe: Type.Optional(Type.String({ maxLength: 4096 })), version_scheme: Type.Optional(Type.String({ maxLength: 32 })), protocol: Type.Optional(Type.String({ minLength: 1, maxLength: 32 })), confirmed_prerequisites: Type.Optional(Type.Array(Type.String({ maxLength: 300 }), { maxItems: 10 })) }), executionMode: 'sequential', execute: async (_id: string, args: VulnerabilityQuery & { id?: string; candidate_id?: string; component?: string; version?: string; protocol?: string; confirmed_prerequisites?: string[] }) => {
+      if (args.candidate_id || args.id?.startsWith('CVE-')) {
+        const candidateId = args.candidate_id ?? args.id!
+        const value = await vulnerabilitySearch(_evidenceRoot, context, { ...args, query: candidateId, candidate_id: candidateId, include_excluded: true, limit: 50 })
+        const candidate = value.results.find(item => item.candidateId === candidateId)
+        const details = candidate ?? { status: 'unknown', diagnostics: value.diagnostics, reason: 'Candidate not found in this offline generation' }
+        return { content: [{ type: 'text', text: JSON.stringify(details) }], details }
+      }
+      if (!args.id) throw new Error('Provide id or candidate_id')
       const db = openIndex(repository, index, sources, wordlists, nucleiRoot)
       try {
-        const row = db.prepare('SELECT path,body FROM docs WHERE id=?').get(args.id) as { path: string; body: string } | undefined
+        const source = await readVulnerability(context.config, args.id)
+        const row = source ? { path: source.path, body: readFileSync(source.path, 'utf8') } : db.prepare('SELECT path,body FROM docs WHERE id=?').get(args.id) as { path: string; body: string } | undefined
         if (!row) throw new Error('Knowledge entry not found; search again after rebuilding the local index')
-        const metadata = metadataFor(sourceFile(repository,row.path,nucleiRoot),row.body,nucleiRoot)
+        const metadata = metadataFor(source ? source.path : sourceFile(repository,row.path,nucleiRoot),row.body,nucleiRoot)
         // shortcut: exact dotted versions only; add range parsing if local templates encode ranges.
         const checks = (['component', 'version', 'protocol'] as const).flatMap(field => {
           const expected = args[field]
@@ -217,7 +243,9 @@ export function knowledgeTools(_evidenceRoot: string, context: TaskContext): Age
         return { content: [{ type: 'text', text: JSON.stringify(value) }], details: value }
       } finally { db.close() }
     } },
-    { name: 'knowledge_read', label: 'knowledge_read', description: 'Read at most 8 KiB from a local knowledge result returned by knowledge_search.', parameters: Type.Object({ id: Type.String({ minLength: 64, maxLength: 64, pattern: '^[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 8192 })) }), executionMode: 'sequential', execute: async (_id: string, args: { id: string; offset?: number; length?: number }) => {
+    { name: 'knowledge_read', label: 'knowledge_read', description: 'Read at most 8 KiB of full NVD CVE details/configurations or a local source file. id accepts a CVE or the source hash from knowledge_search; offset/length paginate.', parameters: Type.Object({ id: Type.String({ minLength: 1, maxLength: 64, pattern: '^(?:CVE-[0-9]{4}-[0-9]{4,}|[a-f0-9]{64})$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 8192 })) }), executionMode: 'sequential', execute: async (_id: string, args: { id: string; offset?: number; length?: number }) => {
+      const local = await readVulnerability(context.config, args.id, args.offset, args.length)
+      if (local) return { content: [{ type: 'text', text: JSON.stringify(local) }], details: local }
       const db = openIndex(repository, index, sources, wordlists, nucleiRoot)
       try {
         const row = db.prepare('SELECT path,body FROM docs WHERE id=?').get(args.id) as { path: string; body: string } | undefined

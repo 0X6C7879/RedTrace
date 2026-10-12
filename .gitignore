@@ -62,6 +62,11 @@ tools/*
 !tools/tool_list.md
 !tools/requirements.txt
 !tools/scripts/
+!tools/knowledge/
+tools/knowledge/*
+!tools/knowledge/knowledge.py
+!tools/knowledge/test_knowledge.py
+!tools/knowledge/requirements.txt
 
 # 本地 agent 工具状态（freebuff/mimocode CLI）
 .freebuff/

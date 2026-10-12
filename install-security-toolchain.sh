@@ -626,7 +626,7 @@ install_ai() {
 }
 
 install_offline_data() {
-  local data_dir="${REDTRACE_DATA_DIR:-/opt/redtrace/data}"
+  local data_dir="${REDTRACE_DATA_DIR:-$PROJECT_DIR/.redtrace/data/knowledge}"
   local repo url dest
   if [[ "$DRY_RUN" == true ]]; then
     log_info "Would clone offline data corpora into $data_dir"
@@ -652,6 +652,11 @@ install_offline_data() {
       FAILED+=("data:$dest")
     fi
   done
+  if REDTRACE_DATA_DIR="$data_dir" REDTRACE_NUCLEI_TEMPLATES_DIR="$data_dir/nuclei-templates" REDTRACE_EXPLOITDB_DIR="$data_dir/exploitdb" bash "$PROJECT_DIR/install-knowledge.sh" --online >>"$LOG_FILE" 2>&1; then
+    SUCCEEDED+=("data:offline-vulnerability-index")
+  else
+    FAILED+=("data:offline-vulnerability-index")
+  fi
 }
 
 verify() {
@@ -709,7 +714,7 @@ fpylll, cysignals, SymPy, gmpy2, Z3, py_ecc, and RsaCtfTool provide the
 default Crypto workflow.
 Offline data corpora (nuclei-templates, SecLists, PayloadsAllTheThings,
 semgrep-rules, exploitdb) are cloned by the 'data' mode into
-${REDTRACE_DATA_DIR:-/opt/redtrace/data}. Run it once at image/deploy time;
+${REDTRACE_DATA_DIR:-PROJECT_DIR/.redtrace/data/knowledge}. Run data mode explicitly at maintenance time;
 agents consume these locally and must not reach the network at runtime.
 EOF
 }
@@ -738,6 +743,7 @@ run_mode() {
     blockchain) install_blockchain ;;
     ai) install_ai ;;
     data|offline-data) install_offline_data ;;
+    knowledge) if [[ "$DRY_RUN" == true ]]; then log_info "Would prepare/import local offline knowledge runtime (no downloads)"; else bash "$PROJECT_DIR/install-knowledge.sh" --offline; fi ;;
     manual) print_manual ;;
     --verify|verify) verify ;;
     all)

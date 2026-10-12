@@ -823,15 +823,14 @@ install_assets() {
         local nuclei_templates="${WORDLISTS_DIR}/nuclei-templates"
         if [[ ! -d "$nuclei_templates" || -z "$(ls -A "$nuclei_templates" 2>/dev/null)" ]]; then
             log_action "Downloading nuclei-templates ..."
-            nuclei -update-templates 2>&1 | tail -3 || true
-            # Symlink from default location
-            local default_templates
-            default_templates="$(find "$HOME/.nuclei-templates" -maxdepth 0 -type d 2>/dev/null || true)"
-            if [[ -n "$default_templates" && -d "$default_templates" ]]; then
-                ln -sf "$default_templates" "$nuclei_templates" 2>/dev/null || true
-                log_ok "nuclei-templates → $nuclei_templates"
+            if ! nuclei -update-templates -update-template-dir "$nuclei_templates"; then
+                log_err "Nuclei template update failed"
+                return 1
             fi
+            [[ -n "$(find "$nuclei_templates" -type f -name "*.yaml" -print -quit)" ]] || { log_err "No usable Nuclei templates installed"; return 1; }
+            log_ok "nuclei-templates → $nuclei_templates"
         else
+            [[ -n "$(find "$nuclei_templates" -type f -name "*.yaml" -print -quit)" ]] || { log_err "Nuclei template directory is empty/damaged"; return 1; }
             log_skip "nuclei-templates already exists"
         fi
     else

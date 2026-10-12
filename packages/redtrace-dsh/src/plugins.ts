@@ -149,7 +149,7 @@ const KERNEL: readonly KernelEntry[] = [
 const MANAGED: readonly ManagedEntry[] = [
   ...TASK_PLUGINS.map(entry => ({ ...entry, category: 'feature' as const, defaultOff: true })),
   { id: 'redtrace-critical-events', label: '关键事件调度', category: 'feature', modulePath: 'packages/redtrace-engine/src/scheduler.ts', description: '运行时验证的关键事件提前规划', intro: '只消费平台确认或运行时验证的能力、路由及失效信号；停用后保留原 Fact＋Step 结束契约，不删除证据。' },
-  { id: 'redtrace-knowledge', label: '离线知识检索', category: 'feature', modulePath: 'packages/redtrace-engine/src/knowledge.ts', description: '本地 FTS5 搜索与有界读取', intro: '只检索本地知识源；命中不是漏洞证据，不自动执行 PoC。' },
+  { id: 'redtrace-knowledge', label: '离线知识检索', category: 'feature', modulePath: 'packages/redtrace-engine/src/knowledge.ts', description: '主动查询离线 CVE、组件版本与本地模板/PoC', intro: '模型按需调用 knowledge_search：query 为 CVE 或组件名，可传 version/vendor/cpe；knowledge_read 读详情。工具描述显示库的绝对路径；无版本可查相关漏洞，不被动检索、不下载、不扫描、不自动执行 PoC。' },
   { id: 'redtrace-browser-http', label: 'Browser + HTTP', category: 'feature', modulePath: 'packages/redtrace-engine/src/web.ts', description: '隔离持久浏览器与轻量 HTTP 批量验证', intro: '按 Project、Challenge、身份和 Session 隔离，默认串行；完整请求响应保存在权限受限的证据文件。' },
   { id: 'redtrace-trace-search', label: 'Trace 检索', category: 'feature', modulePath: 'packages/redtrace-engine/src/store.ts', description: '项目内工具证据检索', intro: '按需搜索项目内工具记录；不广播完整历史，停用不删除原始证据。' },
 
