@@ -66,6 +66,10 @@ export class Store {
   readonly changes = new EventEmitter()
   private depth = 0
   private pending = new Set<string>()
+  private pendingSteps = new Set<string>()
+  private notifications = new Set<string>()
+  private stepNotifications = new Set<string>()
+  private notificationScheduled = false
   private pendingAudit: { projectId: string; data: Json }[] = []
   constructor(filename: string) {
     if (filename !== ':memory:') mkdirSync(path.dirname(path.resolve(filename)), { recursive: true })
@@ -89,6 +93,7 @@ export class Store {
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, revision INTEGER NOT NULL,
         type TEXT NOT NULL, node_id TEXT, data TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS events_project ON events(project_id,id);
+      CREATE INDEX IF NOT EXISTS events_step ON events(project_id,node_id,id);
       CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
         step_id TEXT, activity TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL);
       CREATE UNIQUE INDEX IF NOT EXISTS one_active_step ON runs(project_id,step_id) WHERE status IN ('running','paused');
@@ -115,7 +120,7 @@ export class Store {
     this.db.prepare('DELETE FROM counters WHERE scope NOT IN (SELECT id FROM projects)').run()
     this.changes.setMaxListeners(0)
   }
-  close() { this.changes.removeAllListeners(); this.db.close() }
+  close() { this.notifications.clear(); this.stepNotifications.clear(); this.changes.removeAllListeners(); this.db.close() }
   transaction<T>(fn: () => T): T {
     if (this.depth) return fn()
     this.db.exec('BEGIN IMMEDIATE')
@@ -125,11 +130,21 @@ export class Store {
       result = fn()
       if (result instanceof Promise) throw new Error('SQLite transactions must be synchronous')
       this.db.exec('COMMIT')
-    } catch (error) { this.db.exec('ROLLBACK'); this.pending.clear(); this.pendingAudit = []; throw error }
+    } catch (error) { this.db.exec('ROLLBACK'); this.pending.clear(); this.pendingSteps.clear(); this.pendingAudit = []; throw error }
     finally { this.depth-- }
-    const projects = [...this.pending]; this.pending.clear()
-    // Notify after commit. Queueing also prevents observers from re-entering a write.
-    for (const id of projects) queueMicrotask(() => this.changes.emit('change', id))
+    for (const id of this.pending) this.notifications.add(id)
+    for (const key of this.pendingSteps) this.stepNotifications.add(key)
+    this.pending.clear(); this.pendingSteps.clear()
+    // Coalesce committed changes in the same turn; rollbacks never publish Step notices.
+    if (!this.notificationScheduled && (this.notifications.size || this.stepNotifications.size)) {
+      this.notificationScheduled = true
+      queueMicrotask(() => {
+        const projects = [...this.notifications], steps = [...this.stepNotifications]
+        this.notifications.clear(); this.stepNotifications.clear(); this.notificationScheduled = false
+        for (const id of projects) this.changes.emit('change', id)
+        for (const key of steps) this.changes.emit(key)
+      })
+    }
     const audit = this.pendingAudit; this.pendingAudit = []
     for (const entry of audit) queueMicrotask(() => this.changes.emit('audit', entry.projectId, entry.data))
     return result!
@@ -271,10 +286,14 @@ export class Store {
     this.db.prepare('INSERT INTO events(project_id,revision,type,node_id,data,created_at) VALUES (?,?,?,?,?,?)')
       .run(id, p.revision, type, node?.id ?? null, JSON.stringify(node && payload && typeof payload === 'object' ? { ...payload, evidenceSeq: p.evidenceSeq, hintSeq: p.hintSeq ?? 0, ...(!('kind' in payload) ? { nodeSnapshot: node } : {}) } : payload), now())
     this.pending.add(id)
+    if (node?.kind === 'step') this.pendingSteps.add(`step:${id}:${node.id}`)
   }
-  events(projectId: string, after = 0, limit = 500): GraphEvent[] {
+  events(projectId: string, after = 0, limit = 500, stepId?: string): GraphEvent[] {
     this.project(projectId)
-    return this.db.prepare('SELECT * FROM events WHERE project_id=? AND id>? ORDER BY id LIMIT ?').all(projectId, after, limit).map((row) => ({
+    const rows = stepId === undefined
+      ? this.db.prepare('SELECT * FROM events WHERE project_id=? AND id>? ORDER BY id LIMIT ?').all(projectId, after, limit)
+      : this.db.prepare('SELECT * FROM events WHERE project_id=? AND node_id=? AND id>? ORDER BY id LIMIT ?').all(projectId, stepId, after, limit)
+    return rows.map((row) => ({
       id: Number(row.id), projectId, revision: Number(row.revision), type: String(row.type), nodeId: row.node_id as string | null,
       payload: JSON.parse(String(row.data)), createdAt: String(row.created_at),
     }))

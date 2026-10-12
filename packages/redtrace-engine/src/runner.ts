@@ -324,6 +324,7 @@ export function criticalNotice(project: Project, run: Run, notifiedSeq: number, 
 
 export function graphUpdate(store: Store, projectId: string, cursor: number, stepId: string | null, runId?: string, criticalEnabled = true) {
   const project = store.project(projectId), run = runId ? store.run(runId) : undefined
+  const latestCursor = stepId === null ? undefined : Number(store.db.prepare('SELECT MAX(id) AS id FROM events WHERE project_id=?').get(projectId)?.id ?? cursor)
   const step = run?.stepId ? store.node<Step>(projectId, run.stepId, 'step') : undefined
   const stopped = project.status !== 'active' || !!run && (run.status !== 'running' || !!step && (step.status !== 'running' || store.node<Goal>(projectId, step.goalId, 'goal').status !== 'open'))
   const planVersion = step?.planVersion ?? 1, boundStepVersion = run?.boundStepVersion ?? 1
@@ -332,7 +333,7 @@ export function graphUpdate(store: Store, projectId: string, cursor: number, ste
   const after = cursor, counts: Record<string, number> = {}
   const nodeIds = new Set<string>()
   for (;;) {
-    const events = store.events(projectId, cursor)
+    const events = store.events(projectId, cursor, 500, stepId ?? undefined)
     cursor = events.at(-1)?.id ?? cursor
     for (const e of events) {
       const payload = e.payload as unknown as { stepId?: string | null; evidenceSeq?: number; hintSeq?: number; nodeSnapshot?: { stepId?: string | null } }
@@ -350,7 +351,7 @@ export function graphUpdate(store: Store, projectId: string, cursor: number, ste
         if (e.nodeId && !nodeIds.has(e.nodeId)) { if (nodeIds.size < 16) nodeIds.add(e.nodeId); else omitted = true }
       }
     }
-    if (events.length < 500) return { after, cursor, relevant: !stopped && relevant, evidenceSeq, hintSeq, criticalSeq, planChanged, stopped,
+    if (events.length < 500) return { after, cursor: latestCursor ?? cursor, relevant: !stopped && relevant, evidenceSeq, hintSeq, criticalSeq, planChanged, stopped,
       planVersion, boundStepVersion, wake: !!criticalSeq || planChanged || stepId === null && (!!evidenceSeq || !!hintSeq), counts, nodeIds: [...nodeIds], omitted }
   }
 }

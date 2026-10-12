@@ -387,7 +387,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
   }
 })
 
-test('10,000 ordinary changes never broadcast to four Explore Runs; native control inbox remains bounded', async () => {
+test('10,000 changes skip ten native Explore listeners; only the affected Step is checked', async () => {
  const {load}=await import('../../redtrace-dsh/lib/loader.js')
  const {Context}=await load('vendor/deepseek-harness/vendor/cordis/lib/index.js')
  const host=new Context()
@@ -400,15 +400,15 @@ test('10,000 ordinary changes never broadcast to four Explore Runs; native contr
  const {createUserMessage}=await load('vendor/deepseek-harness/packages/llm/llm/lib/index.js')
  const message=(text:string)=>createUserMessage({content:[{type:'text',text}],source:{kind:'user'}})
  const cordisPath='../compat/cordis.mjs'
- const {queueGraphNotice}=await import(cordisPath)
+ const {queueGraphNotice,listenGraphChanges}=await import(cordisPath)
  const {Store}=await import('../src/store.ts')
  const store=new Store(':memory:')
  const project=store.createProject({title:'Concurrent',origin:'Local',goal:'Check'}).project
- const agents:any[]=[], runs:any[]=[], cursors:number[]=[]
+ const agents:any[]=[], runs:any[]=[], cursors:number[]=[], unlisteners:(()=>void)[]=[], checks:number[]=[]
  const worker={name:'fixture',backend:'mock' as const,provider:'mock',model:'',enabled:true,reason:false,explore:true,bootstrap:false,maxRunning:4,priority:0}
  const {graphUpdate}=await import('../src/runner.ts')
  try {
-  for(let i=0;i<4;i++) {
+  for(let i=0;i<10;i++) {
     const step=store.addStep(project.id,{description:`Worker ${i}`,sourceIds:['origin']})
     const run=store.claim(project.id,'execute',{...worker,name:`Worker ${i}`},step.id);runs.push(run);cursors.push(graphUpdate(store,project.id,0,step.id,run.id).cursor)
     const handle=await host.get('agents').create({sessionId:SessionId(run.id),meta:{cwd:root},agentOptions:{},setup(){}})
@@ -416,20 +416,34 @@ test('10,000 ordinary changes never broadcast to four Explore Runs; native contr
     const inbox=handle.agent.inbox
     agents.push({status:'running',inbox,wakes:0,inject(message:any){inbox.append('next-step',message)},steer(message:any){this.wakes++;inbox.append('next-step',message)}})
   }
-  for(let i=0;i<10000;i++) {
-    const run=runs[i%4]
-    if(i%5===0)store.addInput(project.id,'observation',`noise ${i}`)
-    else if(i%5===1)store.addInput(project.id,'hint',`hint ${i}`,'human',run.stepId)
-    else if(i%5===2)store.updateStep(project.id,run.stepId,{priority:i})
-    else if(i%5===3)store.addFact(project.id,`evidence ${i}`,{stepId:run.stepId})
-    else store.recordCriticalSignal(project.id,`critical ${i}`,{kind:'route.verified'})
-    if(i%100===99)for(let j=0;j<4;j++) {
+  await delay(0)
+  for(let j=0;j<10;j++) {
+    checks[j]=0
+    unlisteners.push(listenGraphChanges(store,runs[j],()=>{
+      checks[j]++
       const update=graphUpdate(store,project.id,cursors[j]!,runs[j].stepId,runs[j].id)
       cursors[j]=update.cursor;queueGraphNotice(agents[j],update,message)
-      assert.equal(agents[j].inbox.nextStep.length,0)
-    }
+    }))
   }
-  for(let i=0;i<4;i++) {
+  const unrelated=store.addStep(project.id,{description:'Unclaimed',sourceIds:['origin']})
+  assert.equal(store.changes.listenerCount('change'),0)
+  for(let i=0;i<10000;i++) {
+    const run=runs[i%10]
+    if(i%5===0)store.addInput(project.id,'observation',`noise ${i}`)
+    else if(i%5===1)store.addInput(project.id,'hint',`hint ${i}`,'human',run.stepId)
+    else if(i%5===2)store.updateStep(project.id,unrelated.id,{priority:i})
+    else if(i%5===3)store.addFact(project.id,`evidence ${i}`,{stepId:run.stepId})
+    else store.recordCriticalSignal(project.id,`critical ${i}`,{kind:'route.verified'})
+    await Promise.resolve() // Deliberately unbatched delivery, not a best-case burst.
+  }
+  assert.deepEqual(checks,Array(10).fill(0))
+  const revised=store.node(project.id,runs[0].stepId)
+  store.updateStep(project.id,revised.id,{description:'Latest contract',mode:'amend',expectedVersion:revised.version})
+  await Promise.resolve()
+  assert.deepEqual(checks,[1,...Array(9).fill(0)])
+  assert.equal(agents[0].inbox.nextStep.length,1)
+  agents[0].inbox.remove(agents[0].inbox.nextStep[0].id)
+  for(let i=0;i<10;i++) {
     const agent=agents[i]
     assert.equal(agent.inbox.nextStep.length,0)
     assert.equal(store.run(runs[i].id).deliveredGraphCursor,runs[i].deliveredGraphCursor)
@@ -450,5 +464,5 @@ test('10,000 ordinary changes never broadcast to four Explore Runs; native contr
     queueGraphNotice(agent,{...minimal,stopped:true},message);assert.equal(agent.inbox.nextStep.length,0)
   }
   assert.equal(store.project(project.id).acknowledgedCriticalSeq??0,0)
- } finally {for(const handle of handles)await handle.dispose();await host.fiber.dispose();store.close()}
+ } finally {for(const unlisten of unlisteners)unlisten();assert.equal(store.changes.eventNames().length,0);for(const handle of handles)await handle.dispose();await host.fiber.dispose();store.close()}
 })

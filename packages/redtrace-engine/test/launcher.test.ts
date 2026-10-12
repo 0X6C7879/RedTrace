@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
+import { parse } from 'yaml'
 
 test('platform launchers use the native DSH host without Python', () => {
   const root = path.resolve(import.meta.dirname, '../../..')
@@ -24,4 +25,14 @@ test('platform launchers use the native DSH host without Python', () => {
   const cordis = readFileSync(path.join(root, 'packages/redtrace-engine/compat/cordis.mjs'), 'utf8')
   assert.match(cordis, /database: options\.database/)
   assert.match(cordis, /sessionRoot: path\.join\(managed, 'sessions'\)/)
+})
+
+test('CI builds the native DSH runtime before Engine checks and tests', () => {
+  const root = path.resolve(import.meta.dirname, '../../..')
+  const runs = parse(readFileSync(path.join(root, '.github/workflows/dsh-mainline.yml'), 'utf8')).jobs.test.steps.map((step: { run?: string }) => step.run)
+  const install = runs.indexOf('npm run dsh:install'), build = runs.indexOf('npm run dsh:build')
+  assert.ok(install >= 0 && build > install, 'DSH must install before building')
+  for (const command of ['npm run check --prefix packages/redtrace-engine', 'npm test --prefix packages/redtrace-engine', 'npm run dsh:test']) {
+    assert.ok(runs.indexOf(command) > build, `${command} must run after DSH build`)
+  }
 })

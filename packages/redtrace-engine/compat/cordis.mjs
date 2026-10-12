@@ -220,6 +220,13 @@ export function queueGraphNotice(agent, update, message) {
   return true
 }
 
+export function listenGraphChanges(store, run, changed) {
+  const event = run.stepId ? `step:${run.projectId}:${run.stepId}` : 'change'
+  const listener = run.stepId ? () => changed(run.projectId) : changed
+  store.changes.on(event, listener)
+  return () => store.changes.off(event, listener)
+}
+
 export async function apply(ctx, options) {
   const root = path.resolve(options.root), managed = path.dirname(options.configuration)
   const { createUserMessage } = await load('vendor/deepseek-harness/packages/llm/llm/lib/index.js')
@@ -462,7 +469,7 @@ export async function apply(ctx, options) {
       queueGraphNotice(handle.agent, update, message)
       cursor = update.cursor
     }
-    store.changes.on('change', steer)
+    const unlistenGraph = listenGraphChanges(store, run, steer)
     const wait = async seconds => {
       const timer = setTimeout(() => { task.concludeOnly = concludeOnly = true; pruneExploreNotices(store, run, handle.agent, 'timeout'); handle.agent.cancel({ kind: 'hook', reason: 'Activity execution timeout' }) }, seconds * 1000)
       try { await handle.agent.whenIdle() } finally { clearTimeout(timer) }
@@ -490,7 +497,7 @@ export async function apply(ctx, options) {
     } finally {
       signal.removeEventListener('abort', cancel)
       try { if (handle) { cancel(); await handle.agent.whenIdle(); await ctx.get('sessions').flush(handle.agent.session); store.checkpoint(run.id, { sessionId: run.id }); await handle.dispose() } }
-      finally { sessionRefresh.delete(run.id); unlisten(); store.changes.off('change', steer); shared.tasks.delete(run.id) }
+      finally { sessionRefresh.delete(run.id); unlisten(); unlistenGraph(); shared.tasks.delete(run.id) }
     }
   }
 }
