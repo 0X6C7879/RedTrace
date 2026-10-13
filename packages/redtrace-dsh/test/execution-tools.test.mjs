@@ -6,7 +6,7 @@
 
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { randomUUID } from 'node:crypto'
@@ -42,6 +42,15 @@ function withTimeout(promise, label) {
     timer = setTimeout(() => reject(new Error(`${label} timed out after ${MOUNT_TIMEOUT_MS}ms`)), MOUNT_TIMEOUT_MS)
   })
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
+/** The DSH sandbox fails closed when no host backend can enforce the policy —
+ * a Linux host with neither a working bwrap nor the Landlock launcher, for
+ * example. Confined paths must then assert that refusal instead of silently
+ * skipping: skipping would score an unenforceable host as a pass. */
+const refusingToRunUnconfined = result => {
+  const text = result.content.map(block => block.text ?? '').join('')
+  return text.includes('no sandbox backend is usable') && text.includes('refusing to run the command unconfined')
 }
 
 /** A minimal host mirroring the Cordis profile: core services, the subprocess
@@ -240,13 +249,19 @@ test('native spill retains canonical values for every Worker and scoped read rec
       const presentation = await load(`${VENDOR}/core/agent-tool-presentation/lib/index.js`)
       const mode = scope.ctx.plugin(presentation, { mode: 'ptc' }); await mode.await()
       const program = await call('run_code', { description: 'Read the canonical tool value', code: 'const value = await tools.fixture({}); console.log(value.text.length); return value.text.length;' })
-      assert.equal(program.isError, false)
-      assert.match(program.content.map(block => block.text ?? '').join(''), new RegExp(String(text.length)))
-      const dispatch = events.find(event => event.type === 'tool/ptc-dispatch')
-      assert.ok(dispatch, 'DSH must emit the nested result event')
-      assert.equal(dispatch.data.name, 'fixture')
-      assert.match(dispatch.data.content[0].text, /Full formatted result stored at:/)
-      assert.ok(events.some(event => event.type === 'tool/ptc-dispatch-start'))
+      // The program runs under the session's read-only sandbox policy, so a
+      // host without a usable backend must refuse it — the fail-closed half of
+      // the same contract the confinement assertions check elsewhere.
+      if (refusingToRunUnconfined(program)) t.diagnostic('no usable sandbox backend: run_code refused the confined program')
+      else {
+        assert.equal(program.isError, false, JSON.stringify(program.content))
+        assert.match(program.content.map(block => block.text ?? '').join(''), new RegExp(String(text.length)))
+        const dispatch = events.find(event => event.type === 'tool/ptc-dispatch')
+        assert.ok(dispatch, 'DSH must emit the nested result event')
+        assert.equal(dispatch.data.name, 'fixture')
+        assert.match(dispatch.data.content[0].text, /Full formatted result stored at:/)
+        assert.ok(events.some(event => event.type === 'tool/ptc-dispatch-start'))
+      }
       unlisten(); await mode.dispose()
       const store = new Store(':memory:')
       try {
@@ -366,9 +381,18 @@ test('native Terminal retains state, isolates real Agents, and cleans up on clos
   // Exercise the native workspace sandbox through a real PTY, not just mounted schemas.
   const isolated = await worker('isolated')
   const sandboxed = await isolated.call('terminal_open', { type: 'shell' })
+  if (refusingToRunUnconfined(sandboxed)) {
+    t.diagnostic('no usable sandbox backend on this host: the isolated terminal refused to run unconfined')
+    await isolated.dispose()
+    return
+  }
   assert.equal(sandboxed.isError, false, JSON.stringify(sandboxed.content))
   const sandboxPid = await shellPid(isolated, sandboxed.value.sessionId)
-  const inside = path.join(cwd, 'terminal-inside.txt'), outside = path.join(path.dirname(cwd), `terminal-outside-${randomUUID()}.txt`)
+  // `workspace-write` grants the workspace AND the platform temp areas, so the
+  // confinement probe must aim outside every one of them: a sibling of the
+  // workspace inside tmpdir is legitimately writable, and under bwrap's
+  // ephemeral /tmp it would even look denied while the grant still stands.
+  const inside = path.join(cwd, 'terminal-inside.txt'), outside = path.join(homedir(), `redtrace-terminal-outside-${randomUUID()}.txt`)
   t.after(() => rmSync(outside, { force: true }))
   const write = file => process.platform === 'win32' ? `Set-Content -LiteralPath '${file.replaceAll("'", "''")}' -Value fixture` : `printf fixture > '${file.replaceAll("'", "'\\''")}'`
   const local = await isolated.call('terminal_send', { sessionId: sandboxed.value.sessionId, text: write(inside) })
