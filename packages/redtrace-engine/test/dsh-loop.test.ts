@@ -276,7 +276,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     const pluginStart = requests.length
     const taskProject = await call('/v2/projects', 'POST', { title: 'Task plugins', origin: 'task plugin fixture', goal: 'Verify scoped native REA', bootstrap: false })
     const taskBase = `/v2/projects/${taskProject.project.id}`
-    const taskGraph = await until(() => call(taskBase), g => g.steps.length === 2 && g.steps.every((s: any) => s.status === 'done'), 'Reason-selected native REA Steps did not finish', process.platform === 'win32' ? 40000 : 10000)
+    const taskGraph = await until(() => call(taskBase), g => g.steps.length === 2 && g.steps.every((s: any) => s.status === 'done'), 'Reason-selected native REA Steps did not finish', 40000)
     assert.deepEqual(taskGraph.steps.find((s: any) => s.description === 'selected REA').plugins, ['redtrace-reverse'])
     assert.equal(taskGraph.steps.find((s: any) => s.description === 'ordinary task').plugins, undefined)
     const fixtureRequests = requests.slice(pluginStart).filter(r => JSON.stringify(r.messages).includes('task plugin fixture'))
