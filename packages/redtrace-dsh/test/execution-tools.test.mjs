@@ -339,12 +339,12 @@ test('native Terminal retains state, isolates real Agents, and cleans up on clos
     : `export RT_TERMINAL_FIXTURE=RT_NATIVE_\"STATE_OK\"; cd '${work.replaceAll("'", "'\\''")}'`
   assert.equal((await a.call('terminal_send', { sessionId, text: set })).isError, false)
   const state = await a.call('terminal_send', { sessionId, text: process.platform === 'win32'
-    ? `Write-Output $env:RT_TERMINAL_FIXTURE; if ((Get-Location).Path -eq '${work.replaceAll("'", "''")}') { Write-Output ('RT_CWD_' + 'OK') }; $PID`
-    : 'printf "%s\\n" "$RT_TERMINAL_FIXTURE" "$PWD" "$$"' })
+    ? 'Write-Output $env:RT_TERMINAL_FIXTURE; Set-Content -LiteralPath cwd-fixture.txt -Value cwd-fixture; $PID'
+    : 'printf cwd-fixture > cwd-fixture.txt; printf "%s\\n" "$RT_TERMINAL_FIXTURE" "$PWD" "$$"' })
   assert.equal(state.isError, false, JSON.stringify(state.content))
   assert.match(state.value.viewport, /RT_NATIVE_STATE_OK/)
-  if (process.platform === 'win32') assert.match(state.value.viewport, /RT_CWD_OK/)
-  else assert.ok(state.value.viewport.includes(work))
+  // Relative I/O proves cwd even when Windows expands 8.3 path aliases.
+  assert.equal(readFileSync(path.join(work, 'cwd-fixture.txt'), 'utf8').trim(), 'cwd-fixture')
   const pid = Number(state.value.viewport.match(/^\s*(\d+)\s*$/m)?.[1])
   assert.ok(pid > 0, state.value.viewport)
   assert.deepEqual((await b.call('terminal_list')).value, [])
