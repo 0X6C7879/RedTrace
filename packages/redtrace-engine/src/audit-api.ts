@@ -22,16 +22,16 @@ export async function workspacePath(workspaces: string, projectId: string, relat
 }
 export function auditRoutes(router: Router, store: Store, workspaceRoot: string) {
   const runs = (id?: string): Record<string, any>[] => (id ? store.db.prepare('SELECT data FROM audit_runs WHERE project_id=?').all(id) : store.db.prepare('SELECT data FROM audit_runs').all()).map(r => JSON.parse(String(r.data)))
-  const usage = (id?: string) => {
+  const usage = (values = runs()) => {
     const value: Record<string, number> = { bootstrap: 0, reason: 0, explore: 0 }
-    for (const run of runs(id)) value[run.task_type] = (value[run.task_type] ?? 0) + ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens'].reduce((sum, key) => sum + Number(run[key] ?? 0), 0)
+    for (const run of values) value[run.task_type] = (value[run.task_type] ?? 0) + ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens'].reduce((sum, key) => sum + Number(run[key] ?? 0), 0)
     return { ...value, total: Object.values(value).reduce((a, b) => a + b, 0) }
   }
   router.add('GET', '/audit/usage', () => usage())
   router.add('GET', '/audit/tasks', () => store.projects().map(p => {
-    const r = runs(p.id); return { id: p.id, title: p.title, status: p.status, created_at: p.createdAt, run_count: r.length, last_run_at: r.map(r => r.started_at).sort().at(-1) ?? null, running_count: r.filter(r => r.status === 'running').length, token_total: usage(p.id).total }
+    const r = runs(p.id); return { id: p.id, title: p.title, status: p.status, created_at: p.createdAt, run_count: r.length, last_run_at: r.map(r => r.started_at).sort().at(-1) ?? null, running_count: r.filter(r => r.status === 'running').length, token_total: usage(r).total }
   }).sort((a, b) => String(b.last_run_at ?? b.created_at).localeCompare(String(a.last_run_at ?? a.created_at))))
-  router.add('GET', '/audit/tasks/:project/usage', c => { store.project(c.params.project); return usage(c.params.project) })
+  router.add('GET', '/audit/tasks/:project/usage', c => { store.project(c.params.project); return usage(runs(c.params.project)) })
   router.add('GET', '/audit/tasks/:project/costs', c => {
     store.project(c.params.project)
     return store.runsByStatus('running',c.params.project).concat(['paused','succeeded','failed','unknown','cancelled'].flatMap(status=>store.runsByStatus(status as import('./types.ts').Run['status'],c.params.project))).map(run=>store.runCosts(run.id))

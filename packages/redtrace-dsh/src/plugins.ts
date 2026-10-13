@@ -261,7 +261,7 @@ const MANAGED: readonly ManagedEntry[] = [
     id: 'redtrace-ptc', label: 'PTC', category: 'feature', module: codeRuntime,
     modulePath: 'packages/redtrace-dsh/lib/code-runtime.js', defaultOff: true,
     description: 'run_code 程序化工具调用',
-    intro: 'DSH 原生代码运行时与 PTC 呈现:宿主挂载 Python PTC 运行时(限时限量),启用后该会话的模型直接可见的工具只剩 run_code,所有已挂载的原生工具都改为在程序内部调用。实验性能力,默认关闭。',
+    intro: 'DSH 原生代码运行时与 PTC 呈现:宿主挂载 Node PTC 运行时(默认 Full Access,含 isolated Step;保留限时限量),启用后该会话的模型直接可见的工具只剩 run_code,所有已挂载的原生工具都改为在程序内部调用。实验性能力,默认关闭。',
   },
   {
     id: 'redtrace-domain', label: 'Domain', category: 'feature', module: domain, protectStop: true,

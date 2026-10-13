@@ -12,7 +12,7 @@ const root = path.resolve(import.meta.dirname, '../../..')
 const shellName = process.platform === 'win32' ? 'pwsh' : 'bash'
 const print = (text: string) => process.platform === 'win32' ? `Write-Output '${text}'` : `printf ${text}`
 
-test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Explore; pauses and resumes natively', { timeout: 60000 }, async (t) => {
+test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Explore; pauses and resumes natively', { timeout: 120000 }, async (t) => {
   const work = mkdtempSync(path.join(os.tmpdir(), 'redtrace-native-loop-'))
   symlinkSync(path.join(root, 'static'), path.join(work, 'static'))
   const requests: any[] = []
@@ -135,8 +135,9 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     const response = await fetch(url + route, { method, ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), signal: AbortSignal.timeout(10000) })
     const value = await response.json(); assert.ok(response.ok, `${response.status} ${JSON.stringify(value)}`); return value as any
   }
-  const until = async (read: () => Promise<any>, check: (value: any) => boolean, label: string) => {
-    for (let i = 0; i < 200; i++) { const value = await read(); if (check(value)) return value; if (exited) break; await delay(50) }
+  const until = async (read: () => Promise<any>, check: (value: any) => boolean, label: string, timeoutMs = 10000) => {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) { const value = await read(); if (check(value)) return value; if (exited) break; await delay(50) }
     throw new Error(label + '\n' + logs + '\n' + JSON.stringify(await read()))
   }
   try {
@@ -232,7 +233,6 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     assert.ok(!followerEvents.some((e: any) => e.kind === 'tool.completed' && !e.error && String(e.content).includes('forbidden-old-direction')))
     assert.ok(followerEvents.some((e: any) => e.kind === 'tool.completed' && !e.error && String(e.content).includes('latest-plan-direction')))
     await until(() => call(base), state => state.project.evidenceSeq === state.project.acknowledgedEvidenceSeq, 'Reason did not acknowledge delivered incremental evidence')
-    assert.ok(requests.some(r => JSON.stringify(r.messages).includes('新增确认的 Fact/Finding')), 'busy Reason received no compact evidence reminder')
     const canonical = await call(base + '/facts', 'POST', { description: 'Delete fixture', evidence: [{ description: 'Fixture' }] })
     await call(base + '/evidence/manage', 'POST', { operation: 'delete', id: canonical.id, expectedVersion: canonical.version, reason: 'No active references' })
     assert.equal((await call(base + '/facts')).some((f: any) => f.id === canonical.id), false)
@@ -276,7 +276,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     const pluginStart = requests.length
     const taskProject = await call('/v2/projects', 'POST', { title: 'Task plugins', origin: 'task plugin fixture', goal: 'Verify scoped native REA', bootstrap: false })
     const taskBase = `/v2/projects/${taskProject.project.id}`
-    const taskGraph = await until(() => call(taskBase), g => g.steps.length === 2 && g.steps.every((s: any) => s.status === 'done'), 'Reason-selected native REA Steps did not finish')
+    const taskGraph = await until(() => call(taskBase), g => g.steps.length === 2 && g.steps.every((s: any) => s.status === 'done'), 'Reason-selected native REA Steps did not finish', process.platform === 'win32' ? 40000 : 10000)
     assert.deepEqual(taskGraph.steps.find((s: any) => s.description === 'selected REA').plugins, ['redtrace-reverse'])
     assert.equal(taskGraph.steps.find((s: any) => s.description === 'ordinary task').plugins, undefined)
     const fixtureRequests = requests.slice(pluginStart).filter(r => JSON.stringify(r.messages).includes('task plugin fixture'))

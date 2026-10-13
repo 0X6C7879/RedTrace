@@ -9,7 +9,7 @@
  */
 
 import type { TaskType } from './types.js'
-import { register, request, serverOf, taskFor, text, type ToolContext } from './api-utils.js'
+import { register, request, serverOf, taskFor, type ToolContext } from './api-utils.js'
 
 export const name = 'redtrace-webshell'
 export const inject = ['tools']

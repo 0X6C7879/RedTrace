@@ -3,6 +3,7 @@ function operationsPage() {
     active: false,
     initialized: false,
     loading: false,
+    refreshing: false,
     error: '',
     pageMode: 'webshell',
     tab: 'resources',
@@ -215,7 +216,7 @@ function operationsPage() {
       const scopedProjectId = projectId || '_global';
       if (scopedProjectId !== this.lastProjectId || !this.initialized || pageChanged) {
         this.lastProjectId = scopedProjectId;
-        this.refresh(true);
+        queueMicrotask(() => { if (this.active) void this.refresh(true); });
       }
     },
 
@@ -240,16 +241,22 @@ function operationsPage() {
 
     async refresh(showLoading = true) {
       const projectId = this.projectId();
-      if (!projectId || this.loading) return;
-      if (showLoading) this.loading = true;
+      if (!projectId || this.refreshing) return;
+      const pageMode = this.pageMode;
+      this.refreshing = true;
+      this.loading = showLoading;
       this.error = '';
       try {
-        const [resourceData, taskData, auditData, summaryData] = await Promise.all([
+        const responses = await Promise.allSettled([
           this.api(`/projects/${encodeURIComponent(projectId)}/resources?limit=500`),
           this.api(`/projects/${encodeURIComponent(projectId)}/operations/tasks?limit=200`),
           this.api(`/projects/${encodeURIComponent(projectId)}/operations/audit?limit=200`),
           this.api(`/projects/${encodeURIComponent(projectId)}/operations/summary`),
         ]);
+        const failed = responses.find(response => response.status === 'rejected');
+        if (failed) throw failed.reason;
+        const [resourceData, taskData, auditData, summaryData] = responses.map(response => response.value);
+        if (!this.active || projectId !== this.projectId() || pageMode !== this.pageMode) return;
         this.resources = resourceData.resources || [];
         if (!this.payloadListenerId) {
           this.payloadListenerId = this.resources.find((item) => item.kind === 'c2_listener')?.id || '';
@@ -271,9 +278,11 @@ function operationsPage() {
         }
         this.initialized = true;
       } catch (error) {
-        this.error = error.message;
+        if (this.active && projectId === this.projectId() && pageMode === this.pageMode) this.error = error.message;
       } finally {
+        this.refreshing = false;
         this.loading = false;
+        if (this.active && (projectId !== this.projectId() || pageMode !== this.pageMode)) void this.refresh(true);
       }
     },
 
@@ -289,13 +298,16 @@ function operationsPage() {
 
     async selectResource(id) {
       if (!id || !this.projectId()) return;
+      const projectId = this.projectId(), pageMode = this.pageMode;
       const changed = id !== this.selectedResourceId;
       this.selectedResourceId = id;
       this.resultLoading = true;
       try {
-        this.detail = await this.api(
-          `/projects/${encodeURIComponent(this.projectId())}/resources/${encodeURIComponent(id)}`
+        const detail = await this.api(
+          `/projects/${encodeURIComponent(projectId)}/resources/${encodeURIComponent(id)}`
         );
+        if (!this.active || projectId !== this.projectId() || pageMode !== this.pageMode || id !== this.selectedResourceId) return;
+        this.detail = detail;
         const resource = this.detail.resource;
         const latest = (this.detail.tasks || []).find((task) => task.output_summary);
         if (resource.kind === 'webshell' && changed) this.resetWebshellWorkspace(resource);
@@ -309,9 +321,9 @@ function operationsPage() {
         }
         if (resource.kind !== 'webshell' && latest) this.terminalOutput = latest.output_summary;
       } catch (error) {
-        this.error = error.message;
+        if (this.active && projectId === this.projectId() && pageMode === this.pageMode && id === this.selectedResourceId) this.error = error.message;
       } finally {
-        this.resultLoading = false;
+        if (projectId === this.projectId() && pageMode === this.pageMode && id === this.selectedResourceId) this.resultLoading = false;
       }
     },
 

@@ -59,6 +59,14 @@ export class Operations {
       if (!taskColumns.has('attempt_id')) store.db.exec('ALTER TABLE operation_tasks ADD COLUMN attempt_id TEXT')
       if (!taskColumns.has('result_json')) store.db.exec("ALTER TABLE operation_tasks ADD COLUMN result_json TEXT NOT NULL DEFAULT '{}'")
     })
+    // Previously approval-blocked Worker tasks were never dispatched. Resume them
+    // through the ordinary queue; resource/project/adapter checks still apply.
+    store.transaction(() => {
+      for (const task of store.db.prepare("SELECT * FROM operation_tasks WHERE actor_type='worker' AND status='awaiting_approval' AND cancel_requested=0").all() as any[]) {
+        store.db.prepare("UPDATE operation_tasks SET status='queued',requires_approval=0 WHERE id=?").run(task.id)
+        this.audit(task.project_id, task.resource_id, task.id, { actor_type: 'system', actor: 'unattended-migration' }, 'operation.approval_removed', 'queued')
+      }
+    })
     // An interrupted external operation cannot be inferred safe to repeat.
     const interrupted = executionResult('Process interrupted; external result unknown. Verify before resubmitting.', null, { completion: 'unknown', error_code: 'UNKNOWN_RESULT' })
     for (const task of store.db.prepare("SELECT id FROM operation_tasks WHERE status='running'").all() as any[]) this.finish(task.id, interrupted)
@@ -217,7 +225,6 @@ export class Operations {
     for (const row of rows) {
       const connection = JSON.parse(row.metadata_json).connection_type ?? 'beacon'
       if (['beacon', 'agent'].includes(connection) && (row.status === 'offline' || Date.parse(row.last_seen_at) < cutoff)) {
-        const at = now()
         this.store.transaction(() => {
           if (row.status === 'available') this.updateResource(row.id, { status: 'offline' })
           const pending = this.store.db.prepare("SELECT * FROM operation_tasks WHERE resource_id=? AND status IN ('queued','running')").all(row.id) as any[]
@@ -290,7 +297,6 @@ export class Operations {
       if (task.actor_type === 'worker') {
         const project = this.store.project(task.project_id)
         if (project.status !== 'active') throw new HttpError(409, 'Project is not active')
-        if (!task.approved_by && !this.authorized(task.project_id, task.action, resource)) throw new HttpError(403, 'Project authorization expired, revoked, or does not match')
       }
       return true
     } catch (error) { this.finish(task.id, executionResult(error instanceof Error ? error.message : String(error), null, { error_code: 'AUTH_FAILED' })); return false }
@@ -373,10 +379,9 @@ export class Operations {
       if (!['webshell', 'c2_session', 'entry'].includes(resource.kind)) throw new HttpError(409, 'This resource type does not accept operation tasks')
       if (!operationSupported(resource, input.action)) throw new HttpError(422, 'CAPABILITY_UNSUPPORTED: channel has no implementation for this action')
       if (resource.kind === 'c2_session' && resource.status !== 'available') throw new HttpError(409, `C2 session is ${resource.status}`)
-      const risk = this.actionRisk(input.action, input.risk), preauthorized = input.actor_type === 'worker' && this.authorized(project, input.action, resource)
-      const approval = input.actor_type === 'worker' && !preauthorized, op = uid('op'), attempt = uid('try'), status = approval ? 'awaiting_approval' : 'queued'
-      this.store.db.prepare('INSERT INTO operation_tasks(id,project_id,resource_id,intent_id,fact_id,action,actor_type,actor,risk,status,input_json,requires_approval,created_at,attempt_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(op, project, id, input.intent_id ?? null, input.fact_id ?? null, input.action, input.actor_type ?? 'human', input.actor ?? 'admin', risk, status, JSON.stringify(input.arguments ?? {}), Number(approval), now(), attempt)
-      this.audit(project, id, op, input, `operation.${input.action}`, status, { risk, preauthorized, attempt_id: attempt, intent_id: input.intent_id ?? null })
+      const risk = this.actionRisk(input.action, input.risk), op = uid('op'), attempt = uid('try'), status = 'queued'
+      this.store.db.prepare('INSERT INTO operation_tasks(id,project_id,resource_id,intent_id,fact_id,action,actor_type,actor,risk,status,input_json,requires_approval,created_at,attempt_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(op, project, id, input.intent_id ?? null, input.fact_id ?? null, input.action, input.actor_type ?? 'human', input.actor ?? 'admin', risk, status, JSON.stringify(input.arguments ?? {}), 0, now(), attempt)
+      this.audit(project, id, op, input, `operation.${input.action}`, status, { risk, approval_policy: 'unattended', attempt_id: attempt, intent_id: input.intent_id ?? null })
       this.wake()
       return this.publicTask(this.task(op))
     })

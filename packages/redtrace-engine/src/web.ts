@@ -9,12 +9,11 @@ import { extractOutput } from './result-summary.ts'
 import { Type } from 'typebox'
 import type { AgentTool } from './tool-types.ts'
 import type { TaskContext } from './scheduler.ts'
-import type { Fact } from './types.ts'
 import { HttpError } from './types.ts'
 
 type Session = { session: string; challenge?: string; identity?: string }
 type NetworkItem = { id: string; request?: Request; response?: Response; status?: number; size?: number; method: string; url: string; evidence?: Awaited<ReturnType<typeof archive>>; error?: string; pending?: Promise<void> }
-type Entry = { context?: BrowserContext; page?: Page; api: APIRequestContext; queue: Promise<void>; epoch: number; touched: number; hosts: Set<string>; requests: NetworkItem[]; byRequest: WeakMap<Request,NetworkItem>; previousText?: string }
+type Entry = { context?: BrowserContext; page?: Page; api: APIRequestContext; queue: Promise<void>; epoch: number; touched: number; requests: NetworkItem[]; byRequest: WeakMap<Request,NetworkItem>; previousText?: string }
 const sessionQueues = new WeakMap<TaskContext['store'], Promise<void>>()
 const managers = new WeakMap<TaskContext['store'], Map<string, Entry>>()
 let browser: Browser | undefined
@@ -28,19 +27,6 @@ function sessions(context: TaskContext) {
   if (!result) { result = new Map(); managers.set(context.store, result) }
   return result
 }
-function scopedHosts(context: TaskContext) {
-  const scope = context.store.node<Fact>(context.run.projectId, 'origin', 'fact').description
-  const hosts=new Set(Object.values(context.store.project(context.run.projectId).benchmarkHosts ?? {}).flat())
-  for (const value of scope.match(/https?:\/\/[^\s),\]]+/gi) ?? []) {
-    try { hosts.add(new URL(value.replace(/[.,;]+$/, '')).host.toLowerCase()) } catch {}
-  }
-  return hosts
-}
-function assertScoped(context: TaskContext, value: string) {
-  const url = safeUrl(value)
-  if (!scopedHosts(context).has(url.host.toLowerCase())) throw new HttpError(403, 'Web target is not present in the project Scope')
-  return url
-}
 async function createEntry(context: TaskContext, args: Session, needsBrowser: boolean) {
   const { session, challenge = context.run.stepId ?? 'decide', identity = 'anonymous' } = args
   if (![session, challenge, identity].every(validSession)) throw new HttpError(422, 'session must be 1-96 letters, digits, dot, underscore or hyphen')
@@ -52,7 +38,7 @@ async function createEntry(context: TaskContext, args: Session, needsBrowser: bo
       const [oldest, victim] = [...entries.entries()].sort((a, b) => a[1].touched - b[1].touched)[0]
       contexts.delete(victim); await victim.queue; await Promise.all(victim.requests.map(item=>item.pending)); await victim.context?.close(); await victim.api.dispose(); entries.delete(oldest)
     }
-    entry = { api: await request.newContext(), queue: Promise.resolve(), epoch: 0, touched: Date.now(), hosts: scopedHosts(context), requests: [], byRequest: new WeakMap() }
+    entry = { api: await request.newContext(), queue: Promise.resolve(), epoch: 0, touched: Date.now(), requests: [], byRequest: new WeakMap() }
     entries.set(key, entry); contexts.add(entry)
   }
   if (needsBrowser && !entry.context) await serialized(entry, async () => {
@@ -61,12 +47,6 @@ async function createEntry(context: TaskContext, args: Session, needsBrowser: bo
       browser ??= await (browserPromise ??= chromium.launch({headless:true,...(process.env.REDTRACE_BROWSER_CHANNEL ? {channel:process.env.REDTRACE_BROWSER_CHANNEL} : !existsSync(chromium.executablePath()) && process.platform==='darwin' && existsSync('/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge') ? {channel:'msedge'} : {})}))
       const browserContext = await browser.newContext({ storageState: await entry!.api.storageState() })
       const page = await browserContext.newPage(), created = entry!
-      await page.route('**/*', async route => {
-        const value = route.request().url()
-        if (/^(?:data|blob):/i.test(value)) return route.continue()
-        try { if (created.hosts.has(new URL(value).host.toLowerCase())) return route.continue() } catch {}
-        await route.abort('blockedbyclient')
-      })
       page.on('request', request => {const item={id:`net-${++serial}`,request,method:request.method(),url:request.url()};created.byRequest.set(request,item);created.requests.push(item)})
       page.on('response', response => { const item = created.byRequest.get(response.request()); if (item) { item.response = response; item.status = response.status(); item.size = Number(response.headers()['content-length']) || undefined } })
       const persist = (request: Request, error?: string) => {
@@ -86,7 +66,6 @@ async function createEntry(context: TaskContext, args: Session, needsBrowser: bo
       await created.api.dispose(); created.api = browserContext.request
     } catch (error) { if (!browser) browserPromise = undefined; throw error }
   })
-  entry.hosts = scopedHosts(context)
   entry.touched = Date.now()
   return entry
 }
@@ -174,8 +153,8 @@ async function archive(context: TaskContext, record: unknown) {
 }
 export function webTools(context: TaskContext): AgentTool[] {
   const tools = [
-    { name: 'web_open', label: 'web_open', description: 'Open an authorized HTTP(S) page in a project/challenge/identity-isolated persistent Playwright BrowserContext. Returns a compact ARIA snapshot and live session id.', parameters: Type.Object({ url: Type.String({ minLength: 8, maxLength: 4096 }), session: Type.String({ minLength: 1, maxLength: 96 }), challenge: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })), identity: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })) }), executionMode: 'sequential', execute: async (_id: string, args: Session & { url: string; session: string }) => {
-      assertScoped(context, args.url); const entry = await entryFor(context, args)
+    { name: 'web_open', label: 'web_open', description: 'Open an HTTP(S) page (no target Host allowlist) in a project/challenge/identity-isolated persistent Playwright BrowserContext. Returns a compact ARIA snapshot and live session id.', parameters: Type.Object({ url: Type.String({ minLength: 8, maxLength: 4096 }), session: Type.String({ minLength: 1, maxLength: 96 }), challenge: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })), identity: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })) }), executionMode: 'sequential', execute: async (_id: string, args: Session & { url: string; session: string }) => {
+      safeUrl(args.url); const entry = await entryFor(context, args)
       return serialized(entry, async () => { await entry.page!.goto(args.url, { waitUntil: 'domcontentloaded', timeout: 20_000 }); return { session: args.session, ...(await snapshot(entry, context)) } })
     } },
     { name: 'web_snapshot', label: 'web_snapshot', description: 'Read a bounded local ARIA snapshot of the current page. Take a fresh snapshot after every state-changing action.', parameters: Type.Object({ session: Type.String({ minLength: 1, maxLength: 96 }), challenge: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })), identity: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })), screenshot: Type.Optional(Type.Boolean()), selector: Type.Optional(Type.String({ maxLength:500 })) }), executionMode: 'sequential', execute: async (_id: string, args: Session & { session: string; screenshot?:boolean; selector?:string }) => {
@@ -232,14 +211,14 @@ export function webTools(context: TaskContext): AgentTool[] {
         const captured = JSON.parse(await readFile(item.evidence.file, 'utf8'))
         const method = String(captured.method ?? item.method).toUpperCase(), body = captured.requestBodyBase64 ? Buffer.from(captured.requestBodyBase64, 'base64') : Buffer.alloc(0)
         if (!['GET', 'HEAD'].includes(method) || body.length) throw new Error('Replay is limited to bodyless GET/HEAD requests; reacquire current state for mutating or body-bearing requests')
-        const url = assertScoped(context, String(captured.url ?? item.url))
+        const url = safeUrl(String(captured.url ?? item.url))
         const transient = /(?:csrf|nonce|token|signature|authenticity|session|ticket|state|code)/i
         if ([...url.searchParams.keys()].some(key => transient.test(key)) || Object.keys(captured.requestHeaders ?? {}).some(key => /^(?:x-csrf|x-xsrf|x-signature|x-request-token)/i.test(key))) throw new Error('Captured request contains a one-time or state-bound value; reacquire a fresh request instead of replaying it')
         const headers = Object.fromEntries(Object.entries(captured.requestHeaders ?? {}).filter(([key]) => !/^(?:host|content-length|connection)$/i.test(key))) as Record<string, string>
         const requests = [[], ...args.variants].map((changes, index) => {
           const target = new URL(url)
           for (const change of changes) { if (transient.test(change.name)) throw new Error(`Replay cannot override state-bound parameter: ${change.name}`); target.searchParams.set(change.name, change.value) }
-          assertScoped(context, target.href)
+          safeUrl(target.href)
           return { index, url: target.href }
         })
         const results: { index: number; method: string; url: string; status: number | null; durationMs: number; responseBytes?: number; sha256?: string; location?: string | null; evidence: Awaited<ReturnType<typeof archive>>; error?: string }[] = []
@@ -259,7 +238,7 @@ export function webTools(context: TaskContext): AgentTool[] {
       })
     } },
     { name: 'http_batch', label: 'http_batch', description: 'Send up to 20 explicit HTTP requests without launching a browser; reuse its cookie jar if already open. Serial by default; set parallel only for independent requests. Returns status/timing and compact body diffs, not full response bodies.', parameters: Type.Object({ session: Type.String({ minLength: 1, maxLength: 96 }), challenge: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })), identity: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })), requests: Type.Array(Type.Object({ url: Type.String({ minLength: 8, maxLength: 4096 }), method: Type.Optional(Type.Union(['GET','POST','PUT','PATCH','DELETE','HEAD'].map(value => Type.Literal(value)))), headers: Type.Optional(Type.Record(Type.String(), Type.String({ maxLength: 4096 }))), body: Type.Optional(Type.String({ maxLength: 262144 })) }), { minItems: 1, maxItems: 20 }), parallel: Type.Optional(Type.Boolean()) }), executionMode: 'sequential', execute: async (_id: string, args: Session & { session: string; requests: { url: string; method?: string; headers?: Record<string, string>; body?: string }[]; parallel?: boolean }) => {
-      for (const item of args.requests) assertScoped(context, item.url)
+      for (const item of args.requests) safeUrl(item.url)
       const entry = await entryFor(context, args, false)
       return serialized(entry, async () => {
         const run = async (item: typeof args.requests[number], index: number) => {

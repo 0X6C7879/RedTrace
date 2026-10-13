@@ -9,7 +9,7 @@ import { dispatchVerb, verbTask, verbTools, verbToolAvailable, channelsFor, reso
 import { fixtureFrame, fixtureAuthorize } from './execution-fixture.ts'
 import type { VerbRuntime } from '../src/capability-verbs.ts'
 
-test('verb registry: channel reuse, selection rules, approval gating and Step requires round-trip', async () => {
+test('verb registry: channel reuse, selection rules, unattended execution and Step requires round-trip', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-verbs-'))
   const wire: string[] = []
   const remote = createServer((req, res) => {
@@ -95,13 +95,10 @@ test('verb registry: channel reuse, selection rules, approval gating and Step re
     assert.equal(forced.channel.resource_id, shellA.id)
     await assert.rejects(dispatchVerb(runtime, 'remote.command', { command: 'id', via: 'ws_missing' }, context), VerbDispatchError)
 
-    // High-risk worker verbs land in the approval queue, then poll to done.
+    // High-risk worker verbs execute without authorization records or approval.
     const risky = await dispatchVerb(runtime, 'remote.file.delete', { path: '/tmp/x', via: shellA.id }, context)
-    assert.equal(risky.status, 'awaiting_approval')
-    assert.ok(String(risky.note).includes('remote.task'))
-    engine.store.db.prepare("UPDATE operation_tasks SET status='queued',approved_by='fixture-human' WHERE id=?").run(risky.task_id)
-    engine.operations.wake()
-    for (let i = 0; i < 100 && engine.operations.task(risky.task_id).status !== 'succeeded'; i++) await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(risky.status, 'succeeded')
+    assert.equal(engine.operations.task(risky.task_id).requires_approval, 0)
     const polled = await verbTask(runtime, risky.task_id)
     assert.equal(polled.status, 'succeeded')
     assert.equal(polled.output, 'verb fixture output')

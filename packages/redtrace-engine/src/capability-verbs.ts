@@ -62,7 +62,7 @@ const fileVerbs = ['remote.command']
 const VERBS: readonly VerbDefinition[] = [
   {
     id: 'remote.task', action: 'task', risk: 'low',
-    description: 'Poll one operation task: status, output, and result reference. Use it after an awaiting-approval submission or a still-running dispatch.',
+    description: 'Poll one operation task: status, output, and result reference. Use it after a still-running dispatch.',
     parameters: Type.Object({ task_id: Type.String({ minLength: 1, maxLength: 64 }) }),
     arguments: () => ({}),
   },
@@ -128,7 +128,7 @@ const VERBS: readonly VerbDefinition[] = [
   },
   {
     id: 'remote.file.delete', action: 'delete_file', risk: 'high',
-    description: 'Delete a remote file or directory over an existing WebShell or C2 session channel. High risk: worker calls enter human approval. Channel selection matches remote.command.',
+    description: 'Delete a remote file or directory over an existing WebShell or C2 session channel. High risk is recorded for audit; no human approval wait. Channel selection matches remote.command.',
     parameters: Type.Object({ path: pathSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ path: args.path }),
   },
@@ -185,7 +185,7 @@ const ADAPTERS: readonly AdapterDefinition[] = [
 const STUB_VERBS: readonly VerbDefinition[] = [
   {
     id: 'pivot.socks', action: 'pivot.socks', risk: 'medium',
-    description: 'Establish a managed SSH Forward or Chisel process (Ligolo is disabled). Worker calls require matching project preauthorization.',
+    description: 'Establish a managed SSH Forward or Chisel process (Ligolo is disabled). Worker calls execute without human approval.',
     parameters: Type.Object({ provider: Type.Union(['ssh-forward', 'chisel'].map(v => Type.Literal(v))), socks_endpoint: Type.Optional(Type.String()), source_session_id: Type.Optional(Type.String()), mode: Type.Optional(Type.Union([Type.Literal('server'), Type.Literal('client')])), bind: Type.Optional(Type.String()), bind_host: Type.Optional(Type.String()), bind_port: Type.Optional(Type.Integer()), server: Type.Optional(Type.String()), remote: Type.Optional(Type.String()), target_scope: Type.Optional(Type.String()), protocols: Type.Optional(Type.Array(Type.Union([Type.Literal('tcp'), Type.Literal('udp')]))), name: Type.Optional(Type.String()) }),
     arguments: args => ({ ...args }),
   },
@@ -286,7 +286,7 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, r
 })
 
 /** Dispatch one verb call through the operation queue: channel selection,
- * task creation (risk carries the approval policy), and in-process polling. */
+ * task creation (risk is audit metadata), and in-process polling. */
 export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Record<string, unknown>, context: { projectId: string; worker: string; stepId: string | null; runId?: string; signal: AbortSignal }): Promise<any> {
   const definition = verbRegistry.find(entry => entry.id === verb)
   if (!definition) throw new Error(`Unknown capability verb: ${verb}`)
@@ -297,7 +297,6 @@ export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Rec
   if (verb === 'pivot.socks') {
     const source = typeof args.source_session_id === 'string' ? runtime.operations.resource(args.source_session_id) : { id: '', target: String(args.target_scope ?? '') }
     if ('project_id' in source && source.project_id !== null && source.project_id !== context.projectId) throw new Error('Source session belongs to another project')
-    if (!runtime.operations.authorized(context.projectId, 'pivot.open', source)) return { status: 'authorization_required', error_code: 'AUTH_FAILED', note: 'A trusted human must issue a matching project authorization before a worker opens a route.' }
     return runtime.operations.pivots.open(context.projectId, { ...args, actor_type: 'worker', actor: context.worker })
   }
   if (verb === 'pivot.paths') return { target: args.target, paths: runtime.operations.pivots.paths(context.projectId, String(args.target)) }
@@ -324,9 +323,6 @@ export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Rec
   while (Date.now() < deadline && !context.signal.aborted) {
     await sleep(200, context.signal)
     const current = runtime.operations.task(task.id)
-    if (current.status === 'awaiting_approval') {
-      return { task_id: task.id, channel: { resource_id: channel.id, kind: channel.kind, target: channel.target }, status: current.status as string, note: '操作等待人工审批;审批后用 remote.task 查询结果。' }
-    }
     if (TERMINAL.includes(current.status)) {
       const output = current.status === 'succeeded' ? String(current.output_summary ?? '') : undefined
       return { task_id: task.id, attempt_id: current.attempt_id, channel: { resource_id: channel.id, kind: channel.kind, target: channel.target }, status: current.status as string, output, result: JSON.parse(current.result_json || '{}'), result_ref: current.result_ref ?? null }
@@ -383,7 +379,7 @@ const wrapDispatch = (runtime: VerbRuntime, context: TaskContext) => async (verb
 }
 
 /** Build the verb tools a Step requires. remote.task is registered alongside
- * any dispatchable remote verb so approval waits and long tasks stay pollable. */
+ * any dispatchable remote verb so long tasks stay pollable. */
 export function verbTools(context: TaskContext, runtime: VerbRuntime, step?: Step): AgentTool[] {
   const requires = step?.requires ?? []
   if (!requires.length) return []

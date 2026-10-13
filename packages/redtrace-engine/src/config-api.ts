@@ -13,11 +13,12 @@ const providerSchema = Type.Object({ expected_revision: revision, name: text, ap
 export function configRoutes(router: Router, configuration: Configuration, probeModel?: ProbeModel) {
   const checkRevision = (expected: string) => { if (configuration.read().revision !== expected) throw new HttpError(409, 'worker configuration changed; reload before saving') }
   const workerIndex = (raw: RawConfig, name: string) => { const i = raw.workers.findIndex(w => w.name === name); if (i < 0) throw new HttpError(400, 'Worker not found'); return i }
+  const workerValue = (b: any, previous?: RawConfig['workers'][number]) => ({ ...previous, name: b.name, provider: b.provider, model: b.model ?? 'mock', enabled: b.enabled ?? true, bootstrap: b.bootstrap ?? true, reason: b.reason ?? true, explore: b.explore ?? true, priority: b.priority, max_running: b.max_running })
   const testCache = new Map<string, { at: number; value: { ok: boolean; status: number | null; duration_ms: number; detail: string; cached: boolean } }>()
   const probeWorker = async (b: any, original: string | null, signal: AbortSignal) => {
     checkRevision(b.expected_revision)
     const { raw: saved } = configuration.read(), raw = structuredClone(saved), i = original ? workerIndex(raw, original) : -1
-    const value = { ...(i >= 0 ? raw.workers[i] : {}), name: b.name, provider: b.provider, model: b.model ?? 'mock', enabled: b.enabled ?? true, bootstrap: b.bootstrap ?? true, reason: b.reason ?? true, explore: b.explore ?? true, priority: b.priority, max_running: b.max_running }
+    const value = workerValue(b, i >= 0 ? raw.workers[i] : undefined)
     if (i >= 0) raw.workers[i] = value; else raw.workers.push(value)
     const config = configuration.resolve(raw), worker = config.workers.find(w => w.name === b.name)!
     const key = createHash('sha256').update(JSON.stringify({ worker, provider: config.providers[worker.provider] })).digest('hex'), cached = testCache.get(key)
@@ -71,7 +72,7 @@ export function configRoutes(router: Router, configuration: Configuration, probe
     const result = configuration.commit(b.expected_revision, raw => {
       const i = method === 'PUT' ? workerIndex(raw, c.params.worker) : -1
       if (raw.workers.some((w, index) => index !== i && w.name === b.name)) throw new HttpError(409, 'Worker already exists')
-      const value = { ...(i >= 0 ? raw.workers[i] : {}), name: b.name, provider: b.provider, model: b.model ?? 'mock', enabled: b.enabled ?? true, bootstrap: b.bootstrap ?? true, reason: b.reason ?? true, explore: b.explore ?? true, priority: b.priority, max_running: b.max_running }
+      const value = workerValue(b, i >= 0 ? raw.workers[i] : undefined)
       if (i >= 0) raw.workers[i] = value; else raw.workers.push(value)
     })
     if (method === 'POST') { const { send } = await import('./http.ts'); send(c.res, result, 201) } else return result

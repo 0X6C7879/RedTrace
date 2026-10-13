@@ -109,7 +109,7 @@ cp redtrace.local.example.yaml redtrace.yaml
 
 ### 运行时模型
 
-启动后只有一个 Node 进程：Cordis Web 服务直接调用 Node 请求处理器并提供 Web UI（默认监听 `0.0.0.0:8000`），没有 FastAPI 反代。`mock` Worker 走进程内确定性执行器，用于开发、持久化测试和性能对照。
+启动后只有一个 Node 进程：Cordis Web 服务直接调用 Node 请求处理器并提供 Web UI（默认监听 `127.0.0.1:8000`），没有 FastAPI 反代。`mock` Worker 走进程内确定性执行器，用于开发、持久化测试和性能对照。
 
 Worker 即路由：每个 Worker 独立声明 `provider`、`model`、`bootstrap/reason/explore` 资格、`max_running` 并发与 `priority`；调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务。Worker 修改后对新任务自动生效，无需重启——设置页与直改配置文件都走同一条热加载链路，任何配置变更都不要求重启进程。
 
@@ -130,7 +130,7 @@ Compose 会构建单进程 Node 服务。Node 容器直接运行 FGS 调度器�
 REDTRACE_CONFIG_FILE=./redtrace.mock.example.yaml docker compose up --build
 ```
 
-启动完成后访问 <http://127.0.0.1:8000>。
+启动完成后访问 <http://127.0.0.1:8000>。容器入口与健康检查复用同一个具体 IPv4 接口地址，保留 DSH 禁止通配监听的限制；Compose 默认仅向宿主机回环地址发布 8000 端口。
 
 ### Mock 模式
 

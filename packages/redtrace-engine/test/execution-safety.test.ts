@@ -137,21 +137,16 @@ test('leases serialize conflict domains and preserve monotonic fencing after rel
   } finally { await f.close() }
 })
 
-test('risk cannot be lowered; revocation and exact target/route scope apply before dispatch', async () => {
+test('risk remains audit metadata; missing or revoked authorizations do not gate dispatch', async () => {
   const f = fixture()
   try {
     const awaiting = f.operations.createTask(f.project.id, f.resource.id, { action: 'command', actor_type: 'worker', actor: 'w', risk: 'low', requires_approval: false, arguments: { command: 'echo harmless' } })
-    assert.equal(awaiting.status, 'awaiting_approval'); assert.equal(awaiting.risk, 'high')
+    assert.equal(awaiting.status, 'queued'); assert.equal(awaiting.requires_approval, false); assert.equal(awaiting.risk, 'high')
+    assert.equal(f.operations.beforeDispatch(f.operations.task(awaiting.id), f.operations.resource(f.resource.id)), true)
     fixtureAuthorize(f.operations, f.project.id, f.resource.id, ['command'])
     const queued = f.operations.createTask(f.project.id, f.resource.id, { action: 'command', actor_type: 'worker', actor: 'w', arguments: { command: 'echo harmless' } })
     assert.equal(queued.status, 'queued'); f.store.db.prepare('UPDATE operation_authorizations SET revoked_at=?').run(new Date().toISOString())
-    assert.equal(f.operations.beforeDispatch(f.operations.task(queued.id), f.operations.resource(f.resource.id)), false)
-    const denied = f.operations.publicTask(f.operations.task(queued.id))
-    assert.equal(denied.result.error_code, 'AUTH_FAILED'); assert.ok(denied.result_ref)
-    f.store.db.prepare('INSERT INTO operation_authorizations VALUES (?,?,?,?,?,?,?,?,?,?)').run('exact', f.project.id, '["command"]', '[]', '["10.0.0.1"]', '["route-a"]', 'admin', new Date(Date.now()+60000).toISOString(), null, new Date().toISOString())
-    assert.equal(f.operations.authorized(f.project.id, 'command', { id: 'x', target: '10.0.0.10', metadata_json: '{"route_id":"route-a"}' }), false)
-    assert.equal(f.operations.authorized(f.project.id, 'command', { id: 'x', target: '10.0.0.1', metadata_json: '{"route_id":"route-b"}' }), false)
-    assert.equal(f.operations.authorized(f.project.id, 'command', { id: 'x', target: '10.0.0.1', metadata_json: '{"route_id":"route-a"}' }), true)
+    assert.equal(f.operations.beforeDispatch(f.operations.task(queued.id), f.operations.resource(f.resource.id)), true)
   } finally { await f.close() }
 })
 
@@ -206,7 +201,7 @@ test('migration snapshots legacy DB, keeps FGS schema 2 and never restores fake 
   } finally { await operations.close(); store.close(); rmSync(root, { recursive: true, force: true }) }
 })
 
-test('beacon ingress gates plugins, serializes tasks, rejects stale attempts and worker self-approval', async () => {
+test('beacon ingress mounts plugins, serializes tasks and rejects stale attempts', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-ingress-safety-')); let enabled = true
   const engine = await serveEngine({ root, autoStart: false, port: 0, adapterAvailability: () => () => enabled })
   const url = `http://127.0.0.1:${(engine.server.address() as { port: number }).port}`
@@ -235,12 +230,9 @@ test('beacon ingress gates plugins, serializes tasks, rejects stale attempts and
     assert.equal(payload.metadata.command, undefined)
     const listed = await fetch(`${url}${base}/resources/${payload.id}`).then(r => r.text())
     assert.ok(!listed.includes('private fixture token'))
-    assert.equal((await request(`${base}/resources/${payload.id}/material`, {}, worker)).status, 403)
     assert.equal((await request(`${base}/resources/${payload.id}/material`)).data.command, 'private fixture token')
     const queued = await request(`${base}/resources/${session.session_id}/tasks`, { action: 'command', actor_type: 'human', risk: 'low', requires_approval: false, arguments: { command: 'echo harmless' } }, worker)
-    assert.equal(queued.data.task.status, 'awaiting_approval')
-    assert.equal((await request(`${base}/operations/tasks/${queued.data.task.id}/approval`, {}, worker)).status, 403)
-    assert.equal((await request(`${base}/resources/${session.session_id}/tasks`, { action: 'command' }, { 'X-RedTrace-Worker': 'unknown' })).status, 403)
+    assert.equal(queued.data.task.status, 'queued'); assert.equal(queued.data.task.requires_approval, false)
     enabled = false
     assert.equal((await request(session.poll_path, {}, headers)).status, 409)
     assert.equal((await request(`/c2/checkin/${listener.resource.id}`, { external_id: 'new' }, { 'X-RedTrace-Listener-Token': listener.secret_once! })).status, 409)

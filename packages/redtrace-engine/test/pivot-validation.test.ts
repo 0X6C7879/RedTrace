@@ -5,7 +5,7 @@ import { createServer } from 'node:http'
 import { Store } from '../src/store.ts'
 import { Operations } from '../src/operations.ts'
 import { dispatchVerb } from '../src/capability-verbs.ts'
-test('SSH and Chisel route validation reaches the scoped target through SOCKS, not just its listener',async()=>{
+test('SSH and Chisel route validation reaches an unlisted target through SOCKS, not just its listener',async()=>{
  const target=createServer((_req,res)=>res.end('authorized fixture'))
  await new Promise<void>(resolve=>target.listen(0,'127.0.0.1',resolve))
  const targetPort=(target.address() as net.AddressInfo).port
@@ -32,7 +32,7 @@ test('SSH and Chisel route validation reaches the scoped target through SOCKS, n
  })
  await new Promise<void>(resolve=>proxy.listen(0,'127.0.0.1',resolve))
  const proxyPort=(proxy.address() as net.AddressInfo).port,store=new Store(':memory:'),ops=new Operations(store,process.cwd())
- const project=store.createProject({title:'Proxy test',origin:`http://127.0.0.1:${targetPort} http://127.0.0.1:1`,goal:'Verify route'}).project
+ const project=store.createProject({title:'Proxy test',origin:'http://scope.invalid:1',goal:'Verify route'}).project
  try {
   for(const provider of ['ssh-forward','chisel']){
    const route=ops.create(project.id,{kind:'proxy',name:provider,status:'available',target:`http://127.0.0.1:${targetPort}`,metadata:{provider,socks_endpoint:`127.0.0.1:${proxyPort}`,target_scope:`http://127.0.0.1:${targetPort}`}}).resource
@@ -68,9 +68,10 @@ test('managed local Chisel server/client forwards to an HTTP fixture and invalid
  const targetPort=(target.address() as net.AddressInfo).port,serverPort=await freePort(),socksPort=await freePort(),store=new Store(':memory:'),ops=new Operations(store,process.cwd())
  const url=`http://127.0.0.1:${targetPort}`,project=store.createProject({title:'Managed local route',origin:url,goal:'Verify Chisel process route'}).project
  try {
-  const server=ops.pivots.open(project.id,{provider:'chisel',mode:'server',bind_host:'127.0.0.1',bind_port:serverPort,target_scope:url})
+  const context={projectId:project.id,worker:'fixture',stepId:null,signal:new AbortController().signal}
+  const server=await dispatchVerb({operations:ops},'pivot.socks',{provider:'chisel',mode:'server',bind_host:'127.0.0.1',bind_port:serverPort,target_scope:url},context)
   await listen(serverPort)
-  const client=ops.pivots.open(project.id,{provider:'chisel',mode:'client',server:`http://127.0.0.1:${serverPort}`,remote:`127.0.0.1:${socksPort}:socks`,socks_endpoint:`127.0.0.1:${socksPort}`,target_scope:url,source_session_id:server.route.id})
+  const client=await dispatchVerb({operations:ops},'pivot.socks',{provider:'chisel',mode:'client',server:`http://127.0.0.1:${serverPort}`,remote:`127.0.0.1:${socksPort}:socks`,socks_endpoint:`127.0.0.1:${socksPort}`,target_scope:url,source_session_id:server.route.id},context)
   await listen(socksPort)
   assert.deepEqual(ops.pivots.paths(project.id,url),[])
   assert.equal((await ops.pivots.validate(client.route.id,{url})).http_status,200)

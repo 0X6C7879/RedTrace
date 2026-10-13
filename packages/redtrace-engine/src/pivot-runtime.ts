@@ -40,11 +40,7 @@ export class PivotRuntime {
     if (!['ssh-forward','chisel'].includes(metadata.provider)) throw new ExecutionError('CAPABILITY_UNSUPPORTED','Only SSH SOCKS and Chisel SOCKS routes are validated')
     const url = new URL(input.url ?? `http://${input.host ?? '127.0.0.1'}:${Number(input.port)}/`)
     if (!['http:','https:'].includes(url.protocol) || url.username || url.password) throw new ExecutionError('PROTOCOL_ERROR','Validation requires a credential-free HTTP(S) service URL')
-    if (!resource.project_id) throw new ExecutionError('PROTOCOL_ERROR','Route validation requires a project Scope')
-    const scope = this.operations.store.node<any>(resource.project_id,'origin','fact').description
-    const hosts = [...scope.matchAll(/https?:\/\/[^\s),\]]+/gi)].map(match=>{ try { return new URL(match[0].replace(/[.,;]+$/,'')).host } catch { return '' } })
-    hosts.push(...Object.values(this.operations.store.project(resource.project_id).benchmarkHosts ?? {}).flat())
-    if (!hosts.includes(url.host)) throw new ExecutionError('PROTOCOL_ERROR','Validation service is outside the authorized project Scope')
+    if (!resource.project_id) throw new ExecutionError('PROTOCOL_ERROR','Route validation requires a project')
     const proxy = new URL(`socks5h://${metadata.socks_endpoint ?? ''}`)
     if (!['127.0.0.1','localhost','[::1]'].includes(proxy.hostname) || !proxy.port || proxy.username || proxy.password) throw new ExecutionError('PROTOCOL_ERROR','A local managed socks_endpoint is required; listener readiness is not route validation')
     try {

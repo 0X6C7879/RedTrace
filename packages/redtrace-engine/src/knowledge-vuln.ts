@@ -51,10 +51,8 @@ async function nativeJson<T>(executable: string, args: string[], input: unknown,
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(new Error('Knowledge operation cancelled')); return }
     const env = toolEnvironment(config.commonEnv)
-    for (const key of Object.keys(env)) if (/proxy|key|token|secret|password|credential/i.test(key)) delete env[key]
-    const command = process.platform === 'darwin' ? '/usr/bin/sandbox-exec' : executable
-    const arguments_ = process.platform === 'darwin' ? ['-p', '(version 1)(allow default)(deny network*)', executable, ...args] : args
-    const child = spawn(command, arguments_, { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+    for (const key of Object.keys(env)) if (/key|token|secret|password|credential/i.test(key)) delete env[key]
+    const child = spawn(executable, args, { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
     let stdout = '', stderr = '', failure: Error | undefined
     const kill = (error: Error) => { failure = error; child.kill('SIGKILL') }
     const abort = () => kill(new Error('Knowledge operation cancelled'))

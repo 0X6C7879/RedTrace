@@ -33,22 +33,6 @@ jobs:
         env:
           REDTRACE_KNOWLEDGE_PYTHON: ${{ steps.python.outputs.python-path }}
       - run: node scripts/run-redtrace-node.mjs --help
-      # The native confinement tests demand a real Linux sandbox backend, and
-      # the provider's chain probes functionally before trusting one. Ubuntu
-      # 24.04 ships AppArmor's unprivileged-userns restriction, which breaks
-      # bwrap for the runner user, so lift it; the probe below states which
-      # outcome the suite will assert (confinement, or the provider's refusal
-      # to run unconfined).
-      - name: Provide a Linux sandbox backend for the native confinement tests
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap || true
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-          if bwrap --ro-bind / / --dev /dev --unshare-pid --proc /proc --die-with-parent true; then
-            echo "bwrap confinement available"
-          else
-            echo "bwrap unusable; the confinement tests will assert the fail-closed refusal"
-          fi
       - run: npm run dsh:test
       - if: runner.os == 'Windows'
         run: cmd /d /c start-redtrace.cmd --help

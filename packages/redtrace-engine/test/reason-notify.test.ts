@@ -56,7 +56,7 @@ test('Reason-only tool, precise non-waking delivery, bounded queue and durable a
 })
 
 test('invalid, foreign, unready, closing, failed and completed targets report actual outcomes', () => {
-  const f = fixture(), { store, project, task, agent, step, target, context, shared, message, send } = f
+  const f = fixture(), { store, project, task, agent, target, context, shared, message, send } = f
   try {
     assert.equal(send('  ').reason, 'invalid_message_or_sources')
     assert.equal(send('x'.repeat(2001)).reason, 'invalid_message_or_sources')

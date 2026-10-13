@@ -15,7 +15,7 @@
 <script defer src="/static/capabilities.js?v=20260916-skill-classification-retired-1"></script>
 <script defer src="/static/plugins.js?v=20260825-plugins-2"></script>
 <!-- Previous cache key: operations.js?v=20260810-performance-1 -->
-<script defer src="/static/operations.js?v=20260826-c2-ledger-delete-1"></script>
+<script defer src="/static/operations.js?v=20261013-audit-fix-1"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
 <style>
   [x-cloak] { display: none !important; }
@@ -646,16 +646,8 @@
             class="px-3 py-1.5 bg-white/90 backdrop-blur border border-violet-200 text-violet-700 rounded-lg shadow-sm text-xs font-medium hover:bg-violet-50 transition disabled:opacity-30 disabled:cursor-not-allowed">
             <span x-text="selectedIntentExecutionProfileLabel()"></span>
           </button>
-          <button @click="sendHeartbeatForSelectedIntent()" :disabled="!selectedActionableOpenIntentRecord()"
-            class="px-3 py-1.5 bg-white/90 backdrop-blur border border-slate-200 text-slate-600 rounded-lg shadow-sm text-xs font-medium hover:bg-slate-50 transition disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 12h3.5l2.75-6 3.5 12 2.75-7H21"/></svg>
-            <span x-text="selectedIntentPrimaryActionLabel()"></span>
-          </button>
-          <button @click="releaseSelectedGraphNode()" :disabled="!selectedReleasableOpenIntentRecord() && !selectedReleasableFactId()"
-            class="px-3 py-1.5 bg-white/90 backdrop-blur border border-amber-200 text-amber-700 rounded-lg shadow-sm text-xs font-medium hover:bg-amber-50 transition disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 10V7.75A3.75 3.75 0 1 1 16.5 7"/><path d="M7.5 10.5h9A1.5 1.5 0 0 1 18 12v6A1.5 1.5 0 0 1 16.5 19.5h-9A1.5 1.5 0 0 1 6 18v-6A1.5 1.5 0 0 1 7.5 10.5Z"/><path d="M12 14.25v1.5"/></svg>
-            释放
-          </button>
+          <button @click="releaseSelectedFact()" :disabled="!selectedReleasableFactId()"
+            class="px-3 py-1.5 bg-white/90 backdrop-blur border border-amber-200 text-amber-700 rounded-lg shadow-sm text-xs font-medium hover:bg-amber-50 transition disabled:opacity-30 disabled:cursor-not-allowed">释放证据</button>
           <button @click="selectedOpenIntentRecord() && openConclude(selectedOpenIntentRecord())" :disabled="!selectedOpenIntentRecord()"
             class="px-3 py-1.5 bg-white/90 backdrop-blur border border-teal-200 text-teal-600 rounded-lg shadow-sm text-xs font-medium hover:bg-teal-50 transition disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.25 3H7.5A2.25 2.25 0 0 0 5.25 5.25v13.5A2.25 2.25 0 0 0 7.5 21h9a2.25 2.25 0 0 0 2.25-2.25V8.25L14.25 3Z"/><path d="M14.25 3v5.25h4.5"/><path d="M9 13.5 10.875 15.375 15 11.25"/></svg>
@@ -856,8 +848,6 @@
               <template x-if="fgsSelection?.type === 'step'">
                 <div class="space-y-2">
                   <div class="flex flex-wrap gap-1.5" x-show="!replay.active && projectIsActive()">
-                    <button @click="sendHeartbeatForSelectedIntent()" :disabled="!selectedActionableOpenIntentRecord()" class="px-2.5 py-1 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50 transition disabled:opacity-30 disabled:cursor-not-allowed" x-text="selectedIntentPrimaryActionLabel()"></button>
-                    <button @click="releaseSelectedGraphNode()" :disabled="!selectedReleasableOpenIntentRecord()" class="px-2.5 py-1 rounded-lg border border-amber-200 text-xs text-amber-700 hover:bg-amber-50 transition disabled:opacity-30 disabled:cursor-not-allowed">释放</button>
                     <button @click="selectedOpenIntentRecord() && openConclude(selectedOpenIntentRecord())" :disabled="!selectedOpenIntentRecord()" class="px-2.5 py-1 rounded-lg border border-teal-200 text-xs text-teal-600 hover:bg-teal-50 transition disabled:opacity-30 disabled:cursor-not-allowed">结论</button>
                     <button @click="toggleSelectedIntentExecutionProfile()" :disabled="!selectedEditableIntentProfileRecord()" class="px-2.5 py-1 rounded-lg border border-violet-200 text-xs text-violet-700 hover:bg-violet-50 transition disabled:opacity-30 disabled:cursor-not-allowed">隔离设置</button>
                     <button @click="deleteSelectedIntent()" :disabled="!selectedDeletableIntentRecord()" class="px-2.5 py-1 rounded-lg border border-rose-200 text-xs text-rose-600 hover:bg-rose-50 transition disabled:opacity-30 disabled:cursor-not-allowed">删除</button>
@@ -2432,10 +2422,8 @@
     </div>
     <div class="flex justify-end gap-2 mt-5">
       <button @click="showIntentModal = false" class="px-4 py-2 text-sm text-slate-500 hover:bg-slate-50 rounded-xl transition">取消</button>
-      <button @click="createIntent(false)" :disabled="!intentForm.description"
+      <button @click="createIntent()" :disabled="!intentForm.description"
         class="px-5 py-2 text-sm border border-slate-200 text-slate-600 rounded-xl font-medium hover:bg-slate-50 transition disabled:opacity-30">声明</button>
-      <button @click="createIntent(true)" :disabled="!intentForm.description"
-        class="px-5 py-2 text-sm bg-brand-500 text-white rounded-xl font-medium hover:bg-brand-600 transition disabled:opacity-30 shadow-sm shadow-brand-200">声明 &amp; 认领</button>
     </div>
   </div>
 </div>
@@ -2708,7 +2696,7 @@
   <span x-text="toast.message"></span>
 </div>
 
-<script src="/static/fgs-view.js?v=20260916-detail-tab-1"></script>
+<script src="/static/fgs-view.js?v=20261013-audit-fix-1"></script>
 <script>
 // Common-env row drag reordering. Module-level state keeps the per-frame hot
 // path (1:1 pointer tracking, gap transforms, spring settle) off Alpine's
@@ -3917,19 +3905,25 @@ function redtraceApp() {
     async loadProject(id) {
       const replay = this.replay;
       const results = await Promise.allSettled([
-        this.api('GET', `/projects/${id}`),
+        this.api('GET', `/v2/projects/${encodeURIComponent(id)}/graph`),
         this.api('GET', `/audit/tasks/${encodeURIComponent(id)}/usage`),
-        this.api('GET', `/v2/projects/${id}/graph`),
       ]);
       if (id !== this.selectedProjectId || this.replay !== replay || this.replay.active) return;
-      if (results[0].status === 'fulfilled') this.project = results[0].value;
-      else this.showToast(results[0].reason.message, 'error');
       this.tokenUsage = results[1].status === 'fulfilled' ? results[1].value : null;
-      if (results[2].status === 'fulfilled') {
-        this.fgs = results[2].value;
+      if (results[0].status === 'fulfilled') {
+        this.fgs = results[0].value;
         this.clearMissingFgsSelection();
-        if (this.fgs.nodes) { const reason = this.project?.project?.reason; this.project = this.nativeProject(this.fgs); this.project.project.reason = reason || null; }
-      } else if (this.fgs?.project?.id !== id) this.fgs = null;
+        this.project = this.nativeProject(this.fgs);
+      } else {
+        try {
+          const project = await this.api('GET', `/projects/${encodeURIComponent(id)}`);
+          if (id !== this.selectedProjectId || this.replay !== replay || this.replay.active) return;
+          this.project = project;
+          this.fgs = null;
+        } catch (error) {
+          if (id === this.selectedProjectId && this.replay === replay && !this.replay.active) this.showToast(error.message, 'error');
+        }
+      }
     },
 
     selectFgsNode(type, id) {
@@ -5253,12 +5247,6 @@ function redtraceApp() {
       return intent && this.projectIsActive() && !intent.to && !intent.concluded_at && !intent.worker ? intent : null;
     },
 
-    selectedActionableOpenIntentRecord() {
-      const intent = this.selectedOpenIntentRecord();
-      if (!intent) return null;
-      const actor = this.actorName();
-      return !intent.worker || intent.worker === actor ? intent : null;
-    },
 
     selectedEditableIntentProfileRecord() {
       const intent = this.selectedOpenIntentRecord();
@@ -5270,21 +5258,12 @@ function redtraceApp() {
       return `隔离：${intent?.execution_profile || 'direct'}`;
     },
 
-    selectedReleasableOpenIntentRecord() {
-      const intent = this.selectedOpenIntentRecord();
-      return intent?.worker ? intent : null;
-    },
 
     selectedReleasableFactId() {
       const factId = this.selectedFactId();
-      return this.selectedFacts.length === 1 && !['origin', 'goal'].includes(factId) ? factId : null;
+      return !this.replay.active && this.projectIsActive() && this.selectedFacts.length === 1 && !['origin', 'goal'].includes(factId) && this.selectedFactRecord()?.kind === 'fact' ? factId : null;
     },
 
-    selectedIntentPrimaryActionLabel() {
-      const intent = this.selectedOpenIntentRecord();
-      if (!intent?.worker) return '认领';
-      return intent.worker === this.actorName() ? '心跳' : '已认领';
-    },
 
     factDisplayId(factId) {
       return factId === 'origin' ? 'scope' : factId;
@@ -5716,20 +5695,20 @@ function redtraceApp() {
       this.showIntentModal = true;
     },
 
-    async createIntent(claim = false) {
+    async createIntent() {
       try {
         const actor = this.actorName();
         await this.api('POST', `/projects/${this.selectedProjectId}/intents`, {
           from: this.selectedFacts,
           description: this.intentForm.description,
           creator: actor,
-          worker: claim ? actor : null,
+          worker: null,
           execution_profile: this.intentForm.execution_profile,
         });
         this.showIntentModal = false;
         await this.loadProject(this.selectedProjectId);
         this.updateGraph();
-        this.showToast(claim ? 'Intent 已声明且认领' : 'Intent 已声明');
+        this.showToast('Intent 已声明');
       } catch(e) { this.showToast(e.message, 'error'); }
     },
 
@@ -5745,30 +5724,7 @@ function redtraceApp() {
       } catch(e) { this.showToast(e.message, 'error'); }
     },
 
-    async sendHeartbeatForSelectedIntent() {
-      const intent = this.selectedActionableOpenIntentRecord();
-      if (!intent) return;
-      try {
-        const actor = this.actorName();
-        const claiming = !intent.worker;
-        await this.api('POST', `/projects/${this.selectedProjectId}/intents/${intent.id}/heartbeat`, { worker: actor });
-        await this.loadProject(this.selectedProjectId);
-        this.updateGraph();
-        this.showToast(claiming ? 'Intent 已认领' : '心跳已发送');
-      } catch(e) { this.showToast(e.message, 'error'); }
-    },
 
-    async releaseSelectedIntent() {
-      const intent = this.selectedReleasableOpenIntentRecord();
-      if (!intent) return;
-      try {
-        const actor = this.actorName();
-        await this.api('POST', `/projects/${this.selectedProjectId}/intents/${intent.id}/release`, { worker: actor });
-        await this.loadProject(this.selectedProjectId);
-        this.updateGraph();
-        this.showToast('Intent 已释放');
-      } catch(e) { this.showToast(e.message, 'error'); }
-    },
 
     async deleteSelectedIntent() {
       const intent = this.selectedDeletableIntentRecord();
@@ -5787,16 +5743,11 @@ function redtraceApp() {
       } catch(e) { this.showToast(e.message, 'error'); }
     },
 
-    releaseSelectedGraphNode() {
-      return this.selectedReleasableFactId()
-        ? this.releaseSelectedFact()
-        : this.releaseSelectedIntent();
-    },
 
     async releaseSelectedFact() {
       const factId = this.selectedReleasableFactId();
-      const fact = this.selectedFactRecord();
-      if (!factId || !await this.requestDangerConfirm({
+      const fact = this.selectedFactRecord(), version = fact?.version ?? 1;
+      if (!factId || !Number.isSafeInteger(version) || version < 1 || !await this.requestDangerConfirm({
         tone: 'warning',
         title: '释放图谱节点',
         description: '仅从工作台图谱移除此节点；对应的 WebShell、C2 或凭证资源仍会保留。',
@@ -5805,7 +5756,7 @@ function redtraceApp() {
         confirmLabel: '释放节点',
       })) return;
       try {
-        await this.api('DELETE', `/projects/${this.selectedProjectId}/blackboard/facts/${encodeURIComponent(factId)}`);
+        await this.api('POST', `/v2/projects/${encodeURIComponent(this.selectedProjectId)}/evidence/manage`, { operation: 'delete', id: factId, expectedVersion: version, reason: 'Human released graph evidence' });
         this.clearSelection();
         await this.loadProject(this.selectedProjectId);
         this.updateGraph();

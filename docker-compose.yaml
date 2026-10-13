@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     image: redtrace-app
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ${REDTRACE_CONFIG_FILE:-${REDTRACE_DISPATCH_CONFIG_FILE:-./redtrace.yaml}}:/redtrace/redtrace.yaml:ro
       - ./.redtrace-secrets:/redtrace/.redtrace-secrets:ro
@@ -36,7 +36,7 @@ services:
       REDTRACE_ROOT: /redtrace
       REDTRACE_DATA_ROOT: /redtrace/.redtrace
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "import('./scripts/container-host.mjs').then(({containerHost})=>fetch('http://'+containerHost()+':8000/health')).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 12

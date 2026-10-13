@@ -17,14 +17,16 @@ async function fixture(action: (tools: ReturnType<typeof webTools>, url: string,
     if(req.url==='/verify'){let body='';req.on('data',chunk=>body+=chunk);req.on('end',()=>{res.statusCode=req.headers.cookie?.includes('identity=fixture') && req.headers.authorization==='Bearer explicit' && new URLSearchParams(body).get('csrf')===nonce ? 200:403;if(res.statusCode===200)nonce='nonce-two';res.end(JSON.stringify({status:res.statusCode}))});return}
     if (req.url === '/broken') { req.socket.destroy(); return }
     if (req.url === '/set') res.setHeader('Set-Cookie', 'identity=fixture; Path=/')
-    if (req.url === '/page') { res.setHeader('Content-Type', 'text/html'); res.end('<form action="/submit"><input type="hidden" name="csrf" value="secret-csrf"><label>Name<input name="name"></label><button>Save</button></form>'); return }
+    if (req.url === '/redirect') { res.writeHead(302, { Location: `http://localhost:${(server.address() as {port:number}).port}/page` }); res.end(); return }
+    if (req.url === '/subresource') { res.setHeader('Content-Type', 'application/javascript'); res.end('document.body.dataset.loaded="yes"'); return }
+    if (req.url === '/page') { res.setHeader('Content-Type', 'text/html'); res.end(`<form action="/submit"><input type="hidden" name="csrf" value="secret-csrf"><label>Name<input name="name"></label><button>Save</button></form><script src="http://127.0.0.1:${(server.address() as {port:number}).port}/subresource"></script>`); return }
     if (req.url?.startsWith('/lookup?')) { res.end(new URL(req.url, 'http://fixture').searchParams.get('q') ?? 'missing'); return }
     if (req.url?.startsWith('/json?')) { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ stable: 1, nested: { value: new URL(req.url, 'http://fixture').searchParams.get('value') } })); return }
     res.end(req.headers.cookie ?? 'anonymous')
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const url = `http://127.0.0.1:${(server.address() as {port:number}).port}`, root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-web-')), store = new Store(':memory:')
-  const project = store.createProject({ title: 'Local fixture', origin: url, goal: 'Verify browser and HTTP isolation' }).project
+  const project = store.createProject({ title: 'Local fixture', origin: 'Hosts are selected by FGS, not an execution allowlist', goal: 'Verify browser and HTTP isolation' }).project
   const step = store.addStep(project.id, { description: 'Inspect', sourceIds: ['origin'] }), run = store.claim(project.id, 'execute', worker, step.id)
   run.workspaceRoot = root
   try { await action(webTools({ store, run, worker, config: {} as EngineConfig, signal: new AbortController().signal }), url, store) }
@@ -102,4 +104,17 @@ test('browser login cookies plus explicit Authorization/CSRF work; one-time toke
   const image=await byName('web_snapshot').execute('snapshot',{...args,screenshot:true,selector:'form'}) as any
   assert.equal(image.content[1].type,'image')
  })
+})
+
+test('unlisted browser redirects, cross-host subresources and captured HTTP replay execute', { skip: !process.env.REDTRACE_TEST_BROWSER }, async () => {
+  await fixture(async (tools, url) => {
+    const args = { session: 'unlisted-redirect' }
+    const page = await tools.find(t => t.name === 'web_open')!.execute('open', { ...args, url: url + '/redirect' }) as any
+    assert.equal(new URL(page.url).hostname, 'localhost')
+    const network = await tools.find(t => t.name === 'web_network')!.execute('network', args) as any
+    const script = network.requests.find((item: any) => item.url === url + '/subresource')
+    assert.equal(script.status, 200)
+    const result = await tools.find(t => t.name === 'http_replay')!.execute('replay', { ...args, request_id: script.id, variants: [[]] }) as any
+    assert.deepEqual(result.results.map((item: any) => item.status), [200, 200])
+  })
 })

@@ -56,7 +56,7 @@ Explore 用 `sync_step({planVersion})` 接收当前 Step、祖先 Goal 和有效
 | `redtrace-tool-timeout` | `tool-call-timeout-policy` | 声明超时预算的工具统一截止 |
 | `redtrace-repeat-reminder` | `repeat-tool-reminder` | 3/5/8 次连续同参调用注入提醒 |
 | `redtrace-lsp` | `lsp` + `lsp-stdio` + `tool-lsp` | `lsp`(goToDefinition 等;只挂载本机已安装的语言服务器,一个都没有则整栈跳过) |
-| `redtrace-ptc` | 会话内 `agent-tool-presentation`(ptc 模式) + python PTC sandbox | `run_code` 追加在原生工具旁 |
+| `redtrace-ptc` | 会话内 `agent-tool-presentation`(ptc 模式) + Node PTC runtime | `run_code` 为直接工具，原生工具在程序内调用 |
 
 交互终端仅保留 DSH 原生实现：Linux/macOS 使用 bash，Windows 使用 pwsh；同一 Agent 内保留 cwd/env 与交互进程，所属 Agent 销毁或插件停止后由 DSH 清理，不跨 Step、Run 或重启恢复。旧版未完成 Step 的 `remote.terminal.*` 声明在启动时自动移除，其它依赖和历史记录保留；旧 terminal Resource 仅保留离线历史，不再新建。
 
@@ -69,7 +69,7 @@ Explore 用 `sync_step({planVersion})` 接收当前 Step、祖先 Goal 和有效
 | `redtrace-credentials` | `ctx.credentials` | DSH 凭据文档(`$DSH_HOME/.credentials.yaml` + `.env` 回退),供 web 搜索等解析 `DEEPSEEK_API_KEY`;与 RedTrace 自管 Provider 密钥互不影响 |
 | `redtrace-attachment` | `ctx.attachments` | 原生图像附件存储；工具截图先入库再以 attachment 引用送入模型，必需且不可停止 |
 | `redtrace-file-references` | `ctx.fileReferences` | `@` 路径补全服务,为交互前端预留 |
-| `redtrace-ptc`(宿主半边) | `ctx.codeRuntime` | Python PTC 运行时；会话内使用上游 ptc 呈现模式 |
+| `redtrace-ptc`(宿主半边) | `ctx.ptcRuntime` | Node PTC 运行时，宿主默认 danger-full-access（包括 isolated Step）；会话内使用上游 ptc 呈现模式 |
 
 manifest 语义:默认开启的插件用 `disabled` 记录停用;默认关闭的用 `enabled` 记录开启,重启后按 manifest 恢复。SSH seam(`fs-ssh` 等)与 `ptc-runtime-node` 在当前 vendor 树中不存在,属 DSH master 的未引入能力,不在此列。
 

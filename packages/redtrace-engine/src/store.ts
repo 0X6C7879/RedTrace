@@ -8,7 +8,7 @@ import { verbIds } from './capability-verbs.ts'
 import { validateTaskPlugins } from './task-plugins.ts'
 import type { Activity, Evidence, Fact, Finding, Goal, Graph, GraphEvent, GraphNode, Input, Json, Project, Run, Step, Worker } from './types.ts'
 
-const ACTIVE_NODE_SQL = "COALESCE(json_extract(data,'$.deleted'),0)=0"
+export const ACTIVE_NODE_SQL = "COALESCE(json_extract(data,'$.deleted'),0)=0"
 export interface StepUpdate { description?: string; sourceIds?: string[]; goalId?: string; priority?: number; status?: 'cancelled' | 'pending'; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; expectedVersion?: number; mode?: 'amend' | 'replace' }
 export interface EvidenceChange { operation: 'merge' | 'delete'; id: string; expectedVersion: number; sourceIds?: string[]; sourceVersions?: Record<string, number>; reason: string; description?: string; title?: string; details?: Json }
 
@@ -122,6 +122,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS run_events(id INTEGER PRIMARY KEY AUTOINCREMENT,
         run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, type TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS audit_runs(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, data TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS audit_runs_project ON audit_runs(project_id);
       CREATE TABLE IF NOT EXISTS audit_events(id INTEGER PRIMARY KEY AUTOINCREMENT, event_uid TEXT UNIQUE,
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES audit_runs(id) ON DELETE CASCADE, data TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS audit_events_project ON audit_events(project_id,id);
@@ -865,7 +866,8 @@ export class Store {
   checkpoint(runId: string, checkpoint: Json) { this.transaction(() => { const run = this.run(runId); run.checkpoint = checkpoint; this.saveRun(run) }) }
   runEvent(runId: string, type: string, data: Json, recordAudit = true) {
     this.transaction(() => {
-      const run = this.run(runId), timestamp = now()
+      this.run(runId)
+      const timestamp = now()
       const safeData = redactSensitive(data) as Json
       const inserted = this.db.prepare('INSERT INTO run_events(run_id,type,data,created_at) VALUES (?,?,?,?)').run(runId, type, JSON.stringify(safeData), timestamp)
       const value = safeData && typeof safeData === 'object' && !Array.isArray(safeData) ? safeData as Record<string, Json> : {}

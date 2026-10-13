@@ -14,4 +14,4 @@ RUN npm ci --prefix packages/redtrace-engine \
 
 ENV HOME=/root TZ=Asia/Shanghai
 EXPOSE 8000
-CMD ["./start-redtrace.sh", "--config", "/redtrace/redtrace.yaml", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "host=\"$(node scripts/container-host.mjs)\" && exec ./start-redtrace.sh --config /redtrace/redtrace.yaml --host \"$host\" --port 8000"]

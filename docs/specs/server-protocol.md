@@ -1,5 +1,7 @@
 # RedTrace 协作探索协议
 
+> 历史协议：本文的旧 Worker claim / heartbeat / release 生命周期已退役，不能作为当前 API 契约。当前任务由进程内 Scheduler 调度；手动界面保留声明 Step、取消/重试和带 expectedVersion / 引用校验的证据管理。当前架构见 [调度设计](dispatcher-design.md)。
+
 ---
 
 ## 本质
