@@ -1,10 +1,14 @@
+import { DatabaseSync } from 'node:sqlite'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Store } from '../src/store.ts'
 import { Operations } from '../src/operations.ts'
 import { criticalNotice, graphUpdate, launchContext, livePlan } from '../src/runner.ts'
 import { extractOutput } from '../src/result-summary.ts'
-import type { Worker } from '../src/types.ts'
+import type { Worker, Fact } from '../src/types.ts'
 const worker: Worker = {name:'fixture',backend:'mock',provider:'mock',model:'',enabled:true,reason:false,explore:true,bootstrap:false,maxRunning:1,priority:0}
 function fixture() {
  const store = new Store(':memory:'), project = store.createProject({title:'Fixture',origin:'http://127.0.0.1:8080',goal:'Verify local efficiency'}).project
@@ -25,21 +29,17 @@ test('attempt ledger preserves parameter encoding/order, identity and challenge,
   assert.equal(store.attempt(run.id,'fresh',data),undefined)
  } finally {store.close()}
 })
-test('historical native and DSH audit traces rebuild in pages, redact and enforce project isolation',()=>{
+test('native and DSH audit records survive retirement of duplicate Trace indexes',()=>{
  const {store,project,run}=fixture()
  try {
   for(let i=0;i<510;i++)store.runEvent(run.id,'tool.started',{name:'historymarker',arguments:{index:i,token:'secret'}})
   const metadata=JSON.parse(String(store.db.prepare('SELECT data FROM audit_runs WHERE id=?').get(run.id)!.data))
   store.audit(metadata,[{kind:'tool.completed',title:'dshmarker',event_uid:'dsh-unique',content:'fixture evidence'}])
-  store.db.exec('DELETE FROM trace_fts; DELETE FROM trace_cursors')
-  const hits=store.traceSearch(project.id,'dshmarker')
-  assert.equal(hits.length,1);assert.equal(hits[0]!.source,'audit')
-  assert.match(JSON.stringify(store.traceEvent(project.id,run.id,hits[0]!.eventId,'audit')),/fixture evidence/)
-  const native=store.traceSearch(project.id,'historymarker');assert.equal(native.length,5)
-  assert.doesNotMatch(JSON.stringify(store.traceEvent(project.id,run.id,native[0]!.eventId)),/secret/)
-  store.traceSearch(project.id,'historymarker');assert.equal(Number(store.db.prepare('SELECT COUNT(*) AS count FROM trace_fts').get()!.count),510)
-  const other=store.createProject({title:'Other',origin:'other',goal:'other'}).project
-  assert.throws(()=>store.traceEvent(other.id,run.id,hits[0]!.eventId,'audit'),/not found/)
+  assert.equal(store.db.prepare('SELECT count(*) AS count FROM run_events WHERE run_id=?').get(run.id)!.count,510)
+  const audit=store.db.prepare('SELECT data FROM audit_events WHERE project_id=?').all(project.id)
+  assert.ok(audit.some(row=>String(row.data).includes('fixture evidence')))
+  assert.doesNotMatch(JSON.stringify(audit),/secret/)
+  assert.equal(store.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'trace_%'").all().length,0)
   for(let i=0;i<510;i++)store.addFact(project.id,`fixture ${i}`,{})
   const update=graphUpdate(store,project.id,0,'different');assert.equal(update.relevant,false)
   assert.equal(update.cursor,Number(store.db.prepare('SELECT MAX(id) AS id FROM events WHERE project_id=?').get(project.id)!.id))
@@ -174,4 +174,25 @@ test('Explore launch has Scope but no hints; Reason launch includes bounded hint
   assert.equal(planning.hints!.unverified,true);assert.equal(planning.hints!.hasMore,true)
   assert.equal(planning.hints!.read!.tool,'read_graph');assert.equal(planning.hints!.items[0]!.content,'Unrelated')
  } finally {store.close()}
+})
+
+test('existing duplicate Trace tables are removed on reopen without deleting raw history',()=>{
+ const root=mkdtempSync(path.join(tmpdir(),'redtrace-trace-retire-')),filename=path.join(root,'engine.sqlite')
+ try {
+  let store=new Store(filename)
+  const project=store.createProject({title:'Historical',origin:'fixture',goal:'retain audit'}).project
+  const step=store.addStep(project.id,{description:'Inspect',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id)
+  store.runEvent(run.id,'tool.started',{name:'historical',arguments:{}})
+  store.close()
+  const db=new DatabaseSync(filename)
+  db.exec("CREATE VIRTUAL TABLE trace_fts USING fts5(text); CREATE VIRTUAL TABLE trace_audit_fts USING fts5(text); CREATE TABLE trace_cursors(project_id TEXT); INSERT INTO trace_fts VALUES ('duplicate')")
+  db.close()
+  store=new Store(filename)
+  try {
+   assert.equal(store.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'trace_%'").all().length,0)
+   assert.equal(store.db.prepare('SELECT count(*) AS n FROM run_events WHERE run_id=?').get(run.id)!.n,1)
+   assert.equal(store.db.prepare('SELECT count(*) AS n FROM audit_events WHERE project_id=?').get(project.id)!.n,1)
+   assert.equal(store.node<Fact>(project.id,'origin').description,'fixture')
+  } finally {store.close()}
+ } finally {rmSync(root,{recursive:true,force:true})}
 })

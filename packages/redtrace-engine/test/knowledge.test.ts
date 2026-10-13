@@ -131,20 +131,3 @@ test('Nuclei legacy installer path is discovered and resource availability is re
     if (previous === undefined) delete process.env.REDTRACE_NUCLEI_TEMPLATES_DIR; else process.env.REDTRACE_NUCLEI_TEMPLATES_DIR = previous
   }
 })
-
-test('tool traces are indexed and readable only inside their project', () => {
-  const store = new Store(':memory:')
-  try {
-    const first = store.createProject({ title: 'A', origin: 'Scope', goal: 'Goal' }).project.id
-    const other = store.createProject({ title: 'B', origin: 'Scope', goal: 'Goal' }).project.id
-    const step = store.addStep(first, { description: 'Inspect', sourceIds: ['origin'] }), run = store.claim(first, 'execute', worker, step.id)
-    store.runEvent(run.id, 'tool.started', { name: 'http_get', arguments: { query: 'csrf marker', flag: 'TSecBench{secret}', headers: { authorization: 'Bearer private' }, url: 'http://host.test/?token=private' } })
-    const hits = store.traceSearch(first, 'http_get csrf marker')
-    assert.equal(hits.length, 1)
-    const event = store.traceEvent(first, hits[0]!.runId, hits[0]!.eventId)
-    assert.equal(event.type, 'tool.started')
-    assert.doesNotMatch(JSON.stringify(event.data), /TSecBench\{secret\}|Bearer private|token=private/)
-    assert.deepEqual(store.traceSearch(other, 'http_get csrf marker'), [])
-    assert.throws(() => store.traceEvent(other, run.id, hits[0]!.eventId), /Trace event not found/)
-  } finally { store.close() }
-})

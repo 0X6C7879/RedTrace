@@ -19,6 +19,7 @@ import { load, repoRoot } from './loader.js'
 import { state } from './state.js'
 import { TASK_PLUGINS } from './task-plugins.js'
 import * as core from './core.js'
+import * as sessionQuery from './session-query.js'
 import * as domain from './domain.js'
 import * as scheduler from './scheduler.js'
 import * as webshell from './webshell.js'
@@ -152,7 +153,6 @@ const MANAGED: readonly ManagedEntry[] = [
   { id: 'redtrace-critical-events', label: '关键事件调度', category: 'feature', modulePath: 'packages/redtrace-engine/src/scheduler.ts', description: '运行时验证的关键事件提前规划', intro: '只消费平台确认或运行时验证的能力、路由及失效信号；停用后保留原 Fact＋Step 结束契约，不删除证据。' },
   { id: 'redtrace-knowledge', label: '离线知识检索', category: 'feature', modulePath: 'packages/redtrace-engine/src/knowledge.ts', description: '主动查询离线 CVE、组件版本与本地模板/PoC', intro: '模型按需调用 knowledge_search：query 为 CVE 或组件名，可传 version/vendor/cpe；knowledge_read 读详情。工具描述显示库的绝对路径；无版本可查相关漏洞，不被动检索、不下载、不扫描、不自动执行 PoC。' },
   { id: 'redtrace-browser-http', label: 'Browser + HTTP', category: 'feature', modulePath: 'packages/redtrace-engine/src/web.ts', description: '隔离持久浏览器与轻量 HTTP 批量验证', intro: '按 Project、Challenge、身份和 Session 隔离，默认串行；完整请求响应保存在权限受限的证据文件。' },
-  { id: 'redtrace-trace-search', label: 'Trace 检索', category: 'feature', modulePath: 'packages/redtrace-engine/src/store.ts', description: '项目内工具证据检索', intro: '按需搜索项目内工具记录；不广播完整历史，停用不删除原始证据。' },
 
   {
     id: 'redtrace-core', label: 'RedTrace Core', category: 'core', module: core, protectStop: true,
@@ -160,6 +160,8 @@ const MANAGED: readonly ManagedEntry[] = [
     description: '最小运行内核',
     intro: '整个运行时的最小内核:装配 agent 循环、会话、模型调用、工具注册与系统提示词。其余全部能力都以插件形式叠加在这层之上。',
   },
+  // Preserve the existing manifest switch and UI identity; replace its implementation.
+  { id: 'redtrace-trace-search', label: 'Trace 检索', category: 'feature', module: sessionQuery, needsRuntimeConfig: true, modulePath: 'packages/redtrace-dsh/lib/session-query.js', description: 'DSH 原生项目会话检索', intro: '模型按需调用五个原生 Session Query 工具；同 Project 全部历史共享，以 Session cwd 隔离 Project。停用不删除 JSONL、FGS 或原始审计。' },
   {
     id: 'redtrace-webshell', label: 'WebShell', category: 'feature', module: webshell,
     modulePath: 'packages/redtrace-dsh/lib/webshell.js',

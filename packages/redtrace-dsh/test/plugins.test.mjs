@@ -122,7 +122,9 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
   // Dependency order: core first, scheduler last; spill now serves every Worker.
   assert.equal(ctx.mounts[0].module, core)
   assert.equal(ctx.mounts.at(-1).module.name, 'redtrace-scheduler')
-  assert.equal(ctx.mounts.length, 7)
+  assert.equal(ctx.mounts.length, 8)
+  assert.equal(ctx.mounts[1].module.name, 'redtrace-session-query')
+  assert.equal(ctx.mounts[1].config.sessionRoot, root)
   assert.ok(ctx.mounts.some(mount => mount.module.name === 'redtrace-spill'))
 
   // Every builtin entry boots running unless it is explicitly opt-in (defaultOff).

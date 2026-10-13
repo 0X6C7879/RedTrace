@@ -9,6 +9,7 @@ import { isJevRecoveryPath, traceCall } from '../src/jev.ts'
 import { verbTools, verbToolAvailable, channelsFor, resourceTools } from '../src/capability-verbs.ts'
 import { PluginManager, registerPluginRoutes } from '../../redtrace-dsh/lib/plugins.js'
 import { load, repoRoot } from '../../redtrace-dsh/lib/loader.js'
+import { SESSION_QUERY_TOOLS } from '../../redtrace-dsh/lib/session-query.js'
 import { mountExecutionTools } from '../../redtrace-dsh/lib/execution-tools.js'
 import { activateAgent, resolveReasoningEffort } from '../../redtrace-dsh/lib/agent.js'
 import { state } from '../../redtrace-dsh/lib/state.js'
@@ -402,11 +403,11 @@ export async function apply(ctx, options) {
           if (result.terminate) execution.concludeTurn?.()
           return result
         } })
-      for (const t of [...tools.filter(t => !t.name.startsWith('jev_') && !/^(?:knowledge_|trace_|web_|http_batch$)/.test(t.name)), ...(run.activity === 'execute' ? resourceTools(context, verbRuntime) : [])]) registerTool(t)
+      for (const t of [...tools.filter(t => !t.name.startsWith('jev_') && !/^(?:knowledge_|web_|http_batch$)/.test(t.name)), ...(run.activity === 'execute' ? resourceTools(context, verbRuntime) : [])]) registerTool(t)
       const liveVerbs = run.activity === 'execute' ? verbTools(context, verbRuntime, step) : []
       const refreshJevTools = refreshToolRegistrations(tools.filter(t => t.name.startsWith('jev_')),
         t => jev?.isEnabled(t.name === 'jev_choose' ? 'candidate_choice' : 'attack_readiness'), registerTool)
-      const refreshEfficiencyTools = refreshToolRegistrations(tools.filter(t => /^(?:knowledge_|trace_|web_|http_batch$)/.test(t.name)), t => efficiencyToolAvailable(context, t.name), registerTool)
+      const refreshEfficiencyTools = refreshToolRegistrations(tools.filter(t => /^(?:knowledge_|web_|http_batch$)/.test(t.name)), t => efficiencyToolAvailable(context, t.name), registerTool)
       const refreshVerbTools = refreshToolRegistrations(liveVerbs, t => verbToolAvailable(verbRuntime, t.name), registerTool)
       refreshLiveTools = () => {
         refreshJevTools()
@@ -423,7 +424,7 @@ export async function apply(ctx, options) {
         : (exec.name === 'jev_choose' && !jev?.isEnabled('candidate_choice') || exec.name === 'jev_assess_attack' && !jev?.isEnabled('attack_readiness')) ? 'Jev plugin is disabled'
           : !verbToolAvailable(verbRuntime, exec.name) ? 'Capability adapter is disabled' : undefined)
       // Native read is guarded above; other global capabilities stay masked.
-      if (run.activity === 'decide') scoped.tools.restrict({ allow: ['read'] })
+      if (run.activity === 'decide') scoped.tools.restrict({ allow: ['read', ...SESSION_QUERY_TOOLS] })
     }
     const traceWindow = [], tracePending = new Map()
     const unlisten = ctx.on('session/event', (session, event) => {

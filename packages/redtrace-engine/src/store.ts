@@ -129,12 +129,11 @@ export class Store {
       CREATE TABLE IF NOT EXISTS channel_versions(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,channel TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(project_id,channel));
       CREATE TABLE IF NOT EXISTS attempt_ledger(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,signature TEXT NOT NULL,count INTEGER NOT NULL,evidence TEXT NOT NULL,PRIMARY KEY(project_id,signature));
       CREATE TABLE IF NOT EXISTS run_metrics(run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,call_id TEXT NOT NULL,kind TEXT NOT NULL,started INTEGER NOT NULL,ended INTEGER,PRIMARY KEY(run_id,call_id));
-      CREATE TABLE IF NOT EXISTS trace_cursors(project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,native INTEGER NOT NULL DEFAULT 0,audit INTEGER NOT NULL DEFAULT 0);
-      CREATE VIRTUAL TABLE IF NOT EXISTS trace_audit_fts USING fts5(project UNINDEXED,run_id UNINDEXED,event_id UNINDEXED,kind UNINDEXED,text,tokenize='unicode61');
-      CREATE VIRTUAL TABLE IF NOT EXISTS trace_fts USING fts5(project UNINDEXED,run_id UNINDEXED,event_id UNINDEXED,kind UNINDEXED,text,tokenize='unicode61');
     `)
     if(importCriticalKeys) for(const row of this.db.prepare('SELECT id,data FROM projects').all()){const project=JSON.parse(String(row.data));for(const key of project.criticalSignals ?? [])this.db.prepare('INSERT OR IGNORE INTO critical_keys VALUES (?,?)').run(String(row.id),String(key))}
     this.db.prepare('INSERT OR IGNORE INTO metadata VALUES (?,?)').run('schema', '2')
+    // Only disposable duplicate indexes are retired; raw audit and Run events stay intact.
+    this.db.exec('DROP TABLE IF EXISTS trace_fts; DROP TABLE IF EXISTS trace_audit_fts; DROP TABLE IF EXISTS trace_cursors')
     // Counters of deleted projects would otherwise linger forever and are never read again.
     this.db.prepare('DELETE FROM counters WHERE scope NOT IN (SELECT id FROM projects)').run()
     try { this.migrateCurrentFgs(); this.migrateNativeTerminal() } catch (error) { this.db.close(); throw error }
@@ -870,10 +869,6 @@ export class Store {
       const safeData = redactSensitive(data) as Json
       const inserted = this.db.prepare('INSERT INTO run_events(run_id,type,data,created_at) VALUES (?,?,?,?)').run(runId, type, JSON.stringify(safeData), timestamp)
       const value = safeData && typeof safeData === 'object' && !Array.isArray(safeData) ? safeData as Record<string, Json> : {}
-      if (type === 'tool.started' || type === 'tool.ended') {
-        const text = JSON.stringify(safeData)
-        this.db.prepare('INSERT INTO trace_fts(project,run_id,event_id,kind,text) VALUES (?,?,?,?,?)').run(this.run(runId).projectId, runId, Number(inserted.lastInsertRowid), String(value.name ?? value.toolName ?? type), text)
-      }
       const event: { [key: string]: Json } = { event_uid: `native-${inserted.lastInsertRowid}`, run_sequence: Number(inserted.lastInsertRowid), timestamp, kind: type, data: safeData }
       if (type === 'tool.started') { event.kind = 'tool.started'; event.title = value.name ?? null; event.call_id = value.id ?? null; event.arguments = value.arguments ?? null }
       if (type === 'tool_execution_end') { event.kind = 'tool.completed'; event.title = value.toolName ?? null; event.call_id = value.toolCallId ?? null; event.error = value.isError ?? false; event.content = JSON.stringify(value.result ?? null) }
@@ -920,53 +915,6 @@ export class Store {
   }
   toolEnded(runId: string, callId: string, data: Json) {
     this.transaction(() => { const run = this.run(runId); run.pendingTools = run.pendingTools.filter(id => id !== callId); this.saveRun(run); this.metricEnd(runId, callId); this.runEvent(runId, 'tool.ended', data) })
-  }
-  refreshTraces(projectId: string) {
-    this.transaction(() => {
-      let state = this.db.prepare('SELECT native,audit FROM trace_cursors WHERE project_id=?').get(projectId) as { native: number; audit: number } | undefined
-      if (!state) { this.db.prepare('DELETE FROM trace_fts WHERE project=?').run(projectId); this.db.prepare('DELETE FROM trace_audit_fts WHERE project=?').run(projectId); state = { native: 0, audit: 0 } }
-      for (const source of ['native', 'audit'] as const) {
-        for (;;) {
-          const rows = (source === 'native'
-            ? this.db.prepare('SELECT e.id,e.run_id,e.type,e.data FROM run_events e JOIN runs r ON r.id=e.run_id WHERE r.project_id=? AND e.id>? ORDER BY e.id LIMIT 500').all(projectId, state[source])
-            : this.db.prepare('SELECT id,run_id,data FROM audit_events WHERE project_id=? AND id>? ORDER BY id LIMIT 500').all(projectId, state[source])) as { id:number; run_id:string; type?:string; data:string }[]
-          for (const row of rows) {
-            const data = redactSensitive(JSON.parse(row.data)) as Record<string, Json>, kind = source === 'native' ? row.type : String(data.kind)
-            if (source === 'native' ? !['tool.started', 'tool.ended', 'tool_execution_end'].includes(String(kind)) : !['tool.started', 'tool.completed'].includes(String(kind)) || String(data.event_uid ?? '').startsWith('native-')) continue
-            const table = source === 'native' ? 'trace_fts' : 'trace_audit_fts'
-            this.db.prepare(`DELETE FROM ${table} WHERE project=? AND event_id=?`).run(projectId, row.id)
-            this.db.prepare(`INSERT INTO ${table} VALUES (?,?,?,?,?)`).run(projectId, row.run_id, row.id, String(data.name ?? data.title ?? kind), JSON.stringify(data))
-          }
-          state[source] = rows.at(-1)?.id ?? state[source]
-          if (rows.length < 500) break
-        }
-      }
-      this.db.prepare('INSERT INTO trace_cursors VALUES (?,?,?) ON CONFLICT(project_id) DO UPDATE SET native=excluded.native,audit=excluded.audit').run(projectId,state.native,state.audit)
-    })
-  }
-  traceSearch(projectId: string, query: string, limit = 5) {
-    this.project(projectId)
-    const terms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [])].slice(0, 16)
-    if (!terms.length) return []
-    this.refreshTraces(projectId)
-    const match = terms.map(term => `"${term.replaceAll('"', '""')}"`).join(' OR ')
-    const searchTable = (table: string, source: string) => (this.db.prepare(`SELECT run_id AS runId,event_id AS eventId,kind,bm25(${table}) AS rank FROM ${table} WHERE project=? AND ${table} MATCH ? ORDER BY rank LIMIT ?`).all(projectId,match,Math.min(5,integer(limit,'trace limit',1))) as {runId:string;eventId:number;kind:string;rank:number}[]).map(row=>({...row,source}))
-    return [...searchTable('trace_fts','native'),...searchTable('trace_audit_fts','audit')].sort((a,b)=>a.rank-b.rank).slice(0,Math.min(5,limit))
-  }
-  traceEvent(projectId: string, runId: string, eventId: number, source = 'native') {
-    if (source === 'audit') {
-      this.project(projectId)
-      const row = this.db.prepare('SELECT data FROM audit_events WHERE project_id=? AND run_id=? AND id=?').get(projectId,runId,integer(eventId,'event id',1)) as {data:string} | undefined
-      if (!row) throw new HttpError(404,'Trace event not found in this project')
-      const data = redactSensitive(JSON.parse(row.data)) as Record<string,Json>
-      return {id:eventId,runId,type:String(data.kind),createdAt:String(data.timestamp ?? ''),data:data as Json}
-    }
-    if (source !== 'native') throw new HttpError(422,'Invalid trace source')
-    this.project(projectId)
-    const row = this.db.prepare('SELECT e.id,e.run_id AS runId,e.type,e.data,e.created_at AS createdAt FROM run_events e JOIN runs r ON r.id=e.run_id WHERE r.project_id=? AND e.run_id=? AND e.id=?')
-      .get(projectId, runId, integer(eventId, 'event id', 1)) as { id: number; runId: string; type: string; data: string; createdAt: string } | undefined
-    if (!row) throw new HttpError(404, 'Trace event not found in this project')
-    return { ...row, data: redactSensitive(JSON.parse(row.data)) as Json }
   }
   recover() {
     for (const run of this.runsByStatus('running')) this.finishRun(run.id, 'unknown', run.pendingTools.length ? 'Process stopped with an unconfirmed tool result; do not replay automatically' : 'Process stopped before run completion')

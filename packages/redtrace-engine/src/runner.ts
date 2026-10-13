@@ -41,7 +41,7 @@ async function tsecbenchQuery(config: EngineConfig, args: string[], signal?: Abo
 }
 
 export function efficiencyToolAvailable(context: TaskContext, name: string) {
-  const plugin = name.startsWith('knowledge_') ? 'redtrace-knowledge' : name.startsWith('trace_') ? 'redtrace-trace-search' : name.startsWith('web_') || name === 'http_batch' ? 'redtrace-browser-http' : undefined
+  const plugin = name.startsWith('knowledge_') ? 'redtrace-knowledge' : name.startsWith('web_') || name === 'http_batch' ? 'redtrace-browser-http' : undefined
   return !plugin || !context.featureAvailable || context.featureAvailable(plugin)
 }
 
@@ -150,10 +150,6 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
         tool('tsecbench_close', 'Close only the exact TSecBench challenge this Execute worker finished or abandoned, to release its container.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }) }), async args=>{const result=await tsecbenchQuery(config,['close',args.unique_code],signal);store.setBenchmarkHosts(run.projectId,args.unique_code);await closeWebChallenge(store,run.projectId,args.unique_code);return result}),
       )
     }
-    tools.push(
-      tool('trace_search', 'Search indexed tool-call traces in this project only. Returns up to 5 matching events; request a bounded trace_read for exact evidence.', Type.Object({ query: Type.String({ minLength: 2, maxLength: 300 }), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5 })) }), args => store.traceSearch(run.projectId, args.query, args.limit ?? 5)),
-      tool('trace_read', 'Read one exact tool-trace event already returned by trace_search. Results are project-scoped and large events become evidence artifacts.', Type.Object({ run_id: Type.String(), event_id: Type.Integer({ minimum: 1 }), source: Type.Optional(Type.Union([Type.Literal('native'),Type.Literal('audit')])) }), args => store.traceEvent(run.projectId, args.run_id, args.event_id, args.source)),
-    )
     tools.push(
       tool('submit_fact', 'Submit a confirmed fact and the evidence supporting it.', Type.Object({ description: Type.String(), evidence: Type.Array(Type.Object({ description: Type.String(), path: Type.Optional(Type.String()) })) }), args => store.addFact(run.projectId, args.description, { runId: run.id, evidence: args.evidence, creator: worker.name })),
       tool('submit_finding', 'Record a deliverable supported by confirmed facts. New Findings wake Reason.', Type.Object({ title: Type.String(), description: Type.String(), type: Type.Optional(Type.String()), factIds: refs }), args => store.addFinding(run.projectId, { ...args, creator: worker.name, runId: run.id })),

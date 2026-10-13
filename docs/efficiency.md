@@ -15,7 +15,7 @@
 - `web_open/snapshot/act/network/http_batch/http_replay`：明确传入 `challenge/identity/session` 可跨 Worker 复用同一身份；省略 challenge 则按 Step 隔离。简单 HTTP 不启动浏览器；需要页面时使用现有 Playwright，缺少 bundled Chromium 时本机自动使用已安装 Edge。`http_replay` 仅按同一隔离 Session 中捕获的 Request ID 重放无 Body 的 GET/HEAD，并最多串行比较 3 个查询变量；拒绝 CSRF/一次性 Token/签名字段，不自动重放写操作。
 - BrowserContext 按 Project/Challenge/身份/Session 隔离；同一会话操作串行。只访问 Scope 或 SDK 验证启动的目标。ARIA 快照提供变化标记；表单、隐藏字段和网络原文完整存证。局部截图需显式 `screenshot:true,selector`；失败动作使旧 snapshot_id 失效。
 - HTTP 串行默认；`parallel:true` 是对请求明确独立的声明，最多 4 并发。Cookie 共享不代替 Authorization/CSRF，调用者须显式提供；一次性参数不会自动重放。JSON 响应比较返回有界字段路径差异，不将差异直接当成漏洞。响应持久化后 dispose；展示差异不删除异常证据。取消使受影响的身份会话失效。验证码仅供当前模型通过授权局部截图尝试；无法识别应记录阻塞、转向，不承诺通用通过。
-- `trace_search/read` 默认前 5 项，从历史 Native Run/Audit 分页派生，强制 Project 隔离；可重建，不注入完整历史。
+- 五个 DSH 原生 Session Query 工具按需检索 Session JSONL / live 历史，以官方 cwd 授权强制 Project 隔离；不迁移旧 Trace，不自动注入历史。
 - 只有 SDK 确认得分、运行时 probe/路由验证或已验证能力失效产生关键事件。事件合并、去重，只唤醒现有 Decide；满 Step 容量可重排但 add_step 不越限。成功只确认启动边界，失败/暂停和迟到事件保留。DSH 执行器使用统一关键提醒判定。
 - Pivot 支持受管 SSH SOCKS（非交互式密钥/既有 SSH 配置）及 Chisel；监听启动不算路径成功。`pivot_validate` 通过指定本地 SOCKS 访问授权 HTTP(S) 服务并观察响应，受 Project 和租约控制。认证、上游或代理失效会撤销验证并级联使依赖通道降级；重新验证后恢复。Ligolo 不可派发。
 
@@ -34,3 +34,11 @@
 普通 Fact/Finding 新增均进入持久化待规划序列，不依赖 Execute 结束或 Step 空位；全局/项目/Worker 并发仍受限，无 Reason 预留容量。忙时只注入简短节点/边界提醒，增量读取不等于确认处理。维护默认只读活跃节点，查询过滤与分页在 SQL 层完成；没有新增模型、图数据库或后台语义合并。
 
 原生 DSH 测试通过脚本化本地模型服务验证跨 Explore 提交、Reason 忙时提醒、同会话 amend、执行前旧动作拦截与 sync_step。它不是实际模型或真实 TSecBench 收益证明；生产服务不会为这次验证自动重启，真实成功数/token/延迟对比仍需独立、可重置的测评环境。
+
+## 原生 Session Query
+
+`redtrace-trace-search` 保留既有 UI 名称和 manifest 开关，内部改为 DSH 官方 SQLite Session Query 与五个原生工具：`session_search`、`session_event_search`、`session_event_read`、`session_trace`、`session_event_trace`。Reason、Explore、Bootstrap 共享该工具栈。Reason 除五个查询工具与受限 Spill `read` 外，不获得 Shell、写文件等执行权限。
+
+所有 Session 的 header.cwd 仍是独立的 Project 工作目录。同 Project 跨 Worker、跨角色、跨题目共享全部历史，模型自行判断相关性；DSH 官方 cwd 相等授权拒绝跨 Project 读取。仅模型主动调用查询，不做自动检索或 Challenge 映射。大结果继续复用 DSH Spill，Reason 只能恢复自己的 Spill 文件。
+
+索引 `.redtrace/sessions/session-query.sqlite` 在首次搜索时打开，由官方服务从 live Session 与持久 JSONL 重建；暂停恢复沿用原 Session ID。旧 `trace_search` / `trace_read`、重复 FTS 和游标已删除；启动清理旧派生表，不迁移 Trace 历史。原始 `run_events`、`audit_events`、FGS、现有 Web 展示保留。插件停用不删除 Session 与派生索引，下次开启可继续查询。
