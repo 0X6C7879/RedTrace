@@ -23,8 +23,14 @@ test('resource operations use real HTTP, keep global provenance and enforce exis
   })
   await new Promise<void>(resolve => remote.listen(0, '127.0.0.1', resolve))
   const engine = await serveEngine({ root, port: 0, autoStart: false }), url = `http://127.0.0.1:${(engine.server.address() as { port: number }).port}`
+  // Every call takes a fresh socket. The suite runs its files concurrently, so
+  // a loaded runner can stretch the gap between requests past the Node default
+  // 5s keep-alive timeout; a pooled client that then reuses the socket the
+  // engine has just closed reports a bare ECONNRESET — the failure this test
+  // hit on the Windows runners.
   const request = async (route: string, method = 'GET', b?: unknown, headers: Record<string, string> = {}) => {
-    const res = await fetch(url + route, { method, headers: { 'Content-Type': 'application/json', ...headers }, ...(b === undefined ? {} : { body: JSON.stringify(b) }) })
+    const res = await fetch(url + route, { method, headers: { 'Content-Type': 'application/json', Connection: 'close', ...headers }, ...(b === undefined ? {} : { body: JSON.stringify(b) }) })
+      .catch(error => { (error as Error).message = `${method} ${route}: ${(error as Error).message}`; throw error })
     return { status: res.status, data: res.status === 204 ? null : res.headers.get('content-type')?.includes('application/json') ? await res.json() as any : await res.text() }
   }
   const waitFor = async (id: string, status: string) => {
@@ -82,8 +88,8 @@ test('resource operations use real HTTP, keep global provenance and enforce exis
     assert.deepEqual(kinds.data.kinds, ['curl_beacon'])
     const generated = await request(`${base}/c2/payloads/oneliner`, 'POST', { listener_id: listener.data.resource.id, kind: 'curl_beacon' })
     assert.match(generated.data.oneliner, new RegExp(`/c2/checkin/${listener.data.resource.id}`)); assert.match(generated.data.oneliner, new RegExp(listener.data.secret_once.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
-    const uploaded = await fetch(`${url}${base}/c2/payloads/upload?filename=fixture.bin&platform=linux&arch=amd64`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: 'payload-fixture' }), uploadedData: any = await uploaded.json()
-    assert.equal(uploaded.status, 201); assert.equal(await (await fetch(url + uploadedData.payload.target)).text(), 'payload-fixture')
+    const uploaded = await fetch(`${url}${base}/c2/payloads/upload?filename=fixture.bin&platform=linux&arch=amd64`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', Connection: 'close' }, body: 'payload-fixture' }), uploadedData: any = await uploaded.json()
+    assert.equal(uploaded.status, 201); assert.equal(await (await fetch(url + uploadedData.payload.target, { headers: { Connection: 'close' } })).text(), 'payload-fixture')
     const uploadedArtifact = JSON.parse(engine.operations.resource(uploadedData.payload.id).secret_json).artifact_path
     assert.equal((await request(`${base}/resources/${uploadedData.payload.id}`, 'DELETE')).status, 204); assert.equal(existsSync(uploadedArtifact), false)
 
@@ -118,11 +124,11 @@ test('resource operations use real HTTP, keep global provenance and enforce exis
 
     if (spawnSync('go', ['version']).status === 0) {
       const built = await request(`${base}/c2/payloads/build`, 'POST', { listener_id: listener.data.resource.id, callback_url: url, os: process.platform === 'win32' ? 'windows' : 'linux', arch: process.arch === 'arm64' ? 'arm64' : 'amd64' })
-      assert.equal(built.status, 201); const binary = await fetch(url + built.data.payload.target); assert.equal((await binary.arrayBuffer()).byteLength, built.data.payload.metadata.size_bytes)
+      assert.equal(built.status, 201); const binary = await fetch(url + built.data.payload.target, { headers: { Connection: 'close' } }); assert.equal((await binary.arrayBuffer()).byteLength, built.data.payload.metadata.size_bytes)
     }
-    const exported = await (await fetch(`${url}${base}/export?format=yaml`)).text()
+    const exported = await (await fetch(`${url}${base}/export?format=yaml`, { headers: { Connection: 'close' } })).text()
     assert.match(exported, /shared_resources:/); assert.match(exported, /operation_tasks:/); assert.doesNotMatch(exported, new RegExp(listener.data.secret_once.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
-    assert.equal((await fetch(`${url}${base}/export?format=json`)).status, 400)
+    assert.equal((await fetch(`${url}${base}/export?format=json`, { headers: { Connection: 'close' } })).status, 400)
   } finally {
     await engine.close(); remote.closeAllConnections(); await new Promise<void>(resolve => remote.close(() => resolve())); rmSync(root, { recursive: true, force: true })
   }
