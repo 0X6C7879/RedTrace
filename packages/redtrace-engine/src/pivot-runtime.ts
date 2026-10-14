@@ -1,3 +1,4 @@
+import { toolEnvironment } from './shell.ts'
 import { spawn, execFile, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import os from 'node:os'
@@ -18,6 +19,7 @@ export class PivotRuntime {
     let executable = '', args: string[] = []
     if (provider === 'ssh-forward') {
       if (!source) throw new ExecutionError('PROTOCOL_ERROR', 'ssh-forward requires source_session_id')
+      if (source.project_id !== project) throw new ExecutionError('AUTH_FAILED', 'Source session belongs to another Project')
       const metadata = JSON.parse(source.metadata_json), secret = JSON.parse(source.secret_json), bind = String(input.bind ?? '127.0.0.1:1080'), [host, port] = bind.split(':')
       executable = metadata.executable || 'ssh'; args = ['-N','-o','BatchMode=yes','-o','ExitOnForwardFailure=yes', '-o', 'StrictHostKeyChecking=accept-new', '-D', `${host}:${Number(port)}`, ...(metadata.port ? ['-p', String(metadata.port)] : []), ...(secret.private_key_path ? ['-i', secret.private_key_path] : []), `${secret.username || metadata.username || ''}@${source.target}`]
     } else if (provider === 'chisel') {
@@ -27,7 +29,7 @@ export class PivotRuntime {
     } else throw new ExecutionError('CAPABILITY_UNSUPPORTED', `Provider ${provider} is not route-validated; Ligolo remains disabled`)
     const resource = this.operations.create(project, { kind: 'proxy', name: input.name || `${provider}:${input.bind ?? input.server ?? ''}`, target: String(input.target_scope ?? ''), status: 'offline', summary: `Managed ${provider} route`,
       metadata: { provider, socks_endpoint: input.socks_endpoint ?? (provider === 'ssh-forward' ? input.bind ?? '127.0.0.1:1080' : null), direction: input.direction ?? 'forward', protocols: input.protocols ?? ['tcp'], source_resource_id: source?.id ?? null, target_scope: input.target_scope ?? '', dependencies: source ? [source.id] : [], command: [executable, ...args] }, actor_type: input.actor_type ?? 'worker', actor: input.actor ?? 'unknown', parent_resource_id: source?.id ?? null }).resource
-    const child = spawn(executable, args, { cwd: this.root, env: {}, stdio: ['ignore', 'pipe', 'pipe'], detached: false }), record: PivotRecord = { resourceId: resource.id, process: child, output: '' }
+    const child = spawn(executable, args, { cwd: this.root, env: toolEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], detached: false }), record: PivotRecord = { resourceId: resource.id, process: child, output: '' }
     for (const stream of [child.stdout, child.stderr]) stream?.on('data', (chunk: Buffer) => { record.output = (record.output + chunk.toString()).slice(-65536) })
     child.once('spawn', () => this.operations.updateResource(resource.id, { status: 'available', last_seen_at: new Date().toISOString() }))
     child.once('error', error => this.operations.updateResource(resource.id, { status: 'degraded', summary: error.message.slice(0, 1000) }))
@@ -53,7 +55,7 @@ export class PivotRuntime {
     } catch (error) { this.operations.updateResource(id,{status:'degraded'}); throw error }
   }
   paths(project: string | null, target: string) {
-    const resources = this.operations.store.db.prepare("SELECT * FROM shared_resources WHERE kind IN ('proxy','c2_session') AND status='available' AND (project_id IS NULL OR project_id IS ?)").all(project) as any[]
+    const resources = this.operations.store.db.prepare("SELECT * FROM shared_resources WHERE kind IN ('proxy','c2_session') AND status='available' AND project_id IS ?").all(project) as any[]
     const routes = resources.filter(row => row.kind === 'proxy').filter(row => { const metadata = JSON.parse(row.metadata_json); return ['ssh-forward','chisel'].includes(metadata.provider) && !!metadata.verified_at && metadata.runtime_verified === true && (!target || String(metadata.target_scope ?? row.target).includes(target) || target.startsWith(String(metadata.target_scope ?? row.target))) })
       .sort((a, b) => { const am = JSON.parse(a.metadata_json), bm = JSON.parse(b.metadata_json); return Number(Boolean(bm.verified_at)) - Number(Boolean(am.verified_at)) || String(b.last_seen_at ?? '').localeCompare(String(a.last_seen_at ?? '')) })
     return routes.map(row => ({ id: row.id, source_resource_id: JSON.parse(row.metadata_json).source_resource_id ?? null, target_scope: JSON.parse(row.metadata_json).target_scope ?? row.target, protocols: JSON.parse(row.metadata_json).protocols ?? ['tcp'], verified_at: JSON.parse(row.metadata_json).verified_at ?? null }))

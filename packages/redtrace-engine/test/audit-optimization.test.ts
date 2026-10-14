@@ -240,9 +240,9 @@ test('unused bindings are removed without dropping Run validation or project/ada
     assert.throws(() => store.runEvent('nonexistent-run', 'fixture', {}), /Run not found/)
     const results: any[] = []
     const allowed = Operations.prototype.beforeDispatch.call({ isAdapterAvailable: () => true, available: () => {}, store: { project: () => ({ ...project, status: 'stopped' }) }, authorized: () => false, finish(_id: string, result: any) { results.push(result) } },
-      { id: 'inert', actor_type: 'worker', project_id: project.id, action: 'command', approved_by: null }, { kind: 'webshell', status: 'available' })
+      { id: 'inert', actor_type: 'worker', project_id: project.id, action: 'command', approved_by: null }, { kind: 'webshell', status: 'available', project_id: project.id })
     assert.equal(allowed, false); assert.equal(results[0].error_code, 'AUTH_FAILED')
-    const unattended = Operations.prototype.beforeDispatch.call({ isAdapterAvailable: () => true, available: () => {}, store: { project: () => project }, authorized: () => false, finish() { throw new Error('Unattended task unexpectedly rejected') } }, { id: 'unattended', actor_type: 'worker', project_id: project.id, action: 'command', approved_by: null }, { kind: 'webshell', status: 'available' })
+    const unattended = Operations.prototype.beforeDispatch.call({ isAdapterAvailable: () => true, available: () => {}, store: { project: () => project }, authorized: () => false, finish() { throw new Error('Unattended task unexpectedly rejected') } }, { id: 'unattended', actor_type: 'worker', project_id: project.id, action: 'command', approved_by: null }, { kind: 'webshell', status: 'available', project_id: project.id })
     assert.equal(unattended, true)
   } finally { store.close() }
 })

@@ -27,8 +27,6 @@ import * as c2 from './c2.js'
 import * as credentials from './credentials.js'
 import * as attachment from './attachment.js'
 import * as fileReferences from './file-references.js'
-import * as codeRuntime from './code-runtime.js'
-import * as spill from './spill.js'
 
 export const name = 'redtrace-plugins'
 export const inject = ['webServer']
@@ -149,10 +147,10 @@ const KERNEL: readonly KernelEntry[] = [
 ]
 
 const MANAGED: readonly ManagedEntry[] = [
-  ...TASK_PLUGINS.map(entry => ({ ...entry, category: 'feature' as const, defaultOff: true })),
+  ...TASK_PLUGINS.map(entry => ({ ...entry, category: 'feature' as const })),
   { id: 'redtrace-critical-events', label: '关键事件调度', category: 'feature', modulePath: 'packages/redtrace-engine/src/scheduler.ts', description: '运行时验证的关键事件提前规划', intro: '只消费平台确认或运行时验证的能力、路由及失效信号；停用后保留原 Fact＋Step 结束契约，不删除证据。' },
   { id: 'redtrace-knowledge', label: '离线知识检索', category: 'feature', modulePath: 'packages/redtrace-engine/src/knowledge.ts', description: '主动查询离线 CVE、组件版本与本地模板/PoC', intro: '模型按需调用 knowledge_search：query 为 CVE 或组件名，可传 version/vendor/cpe；knowledge_read 读详情。工具描述显示库的绝对路径；无版本可查相关漏洞，不被动检索、不下载、不扫描、不自动执行 PoC。' },
-  { id: 'redtrace-browser-http', label: 'Browser + HTTP', category: 'feature', modulePath: 'packages/redtrace-engine/src/web.ts', description: '隔离持久浏览器与轻量 HTTP 批量验证', intro: '按 Project、Challenge、身份和 Session 隔离，默认串行；完整请求响应保存在权限受限的证据文件。' },
+  { id: 'redtrace-http', label: 'HTTP', category: 'feature', modulePath: 'packages/redtrace-engine/src/http-tools.ts', description: '独立 HTTP 批量验证与请求重放（无浏览器）', intro: 'Project 内共享 HTTP 身份与会话 Resource；默认串行，完整请求响应私有归档，不加载浏览器。' },
 
   {
     id: 'redtrace-core', label: 'RedTrace Core', category: 'core', module: core, protectStop: true,
@@ -202,7 +200,7 @@ const MANAGED: readonly ManagedEntry[] = [
     id: 'redtrace-pivot', label: '受管网络路径', category: 'feature',
     modulePath: 'packages/redtrace-engine/src/pivot-runtime.ts',
     description: 'SSH Forward、Chisel 与 Ligolo 生命周期管理',
-    intro: '建立方向明确的 TCP/UDP Route Resource,管理隧道进程、依赖、实际端点验证与清理。Worker 建路必须命中可信项目预授权；停止插件后工具与派发入口同步消失。',
+    intro: '建立方向明确的 TCP/UDP Route Resource,管理隧道进程、依赖、实际端点验证与清理。Worker 在所属项目范围内自主建路，保留资源归属、lease/fencing 和实际端点验证；停止插件后工具与派发入口同步消失。',
   },
   {
     id: 'redtrace-fs-search', label: '工作区搜索', category: 'feature',
@@ -211,10 +209,10 @@ const MANAGED: readonly ManagedEntry[] = [
     intro: 'DSH 原生文件搜索:glob / grep 直接搜索当前工作区,内置结果上限、超时与大结果 spill,不需要在 shell 里拼 find / rg 命令。',
   },
   {
-    id: 'redtrace-spill', label: '大结果落盘', category: 'feature', module: spill, needsRuntimeConfig: true,
+    id: 'redtrace-spill', label: '大结果落盘', category: 'feature',
     modulePath: 'vendor/deepseek-harness/packages/spill/spill-policy/lib/index.js',
     description: '超大工具结果落盘预览',
-    intro: 'DSH 原生 Spill:所有 Worker 的工具结果按官方 12500 token 预算保留头尾预览,完整输出写入会话文件并附原生取回指引,按需使用 read / grep 读取。',
+    intro: 'DSH 原生 Spill:仅 Explore / Bootstrap 的工具结果按官方 12500 token 预算保留头尾预览,完整输出写入会话文件并附原生取回指引。Reason 不挂载 Spill,文件默认完整读取。',
   },
   {
     id: 'redtrace-tool-timeout', label: '工具超时', category: 'feature',
@@ -227,11 +225,6 @@ const MANAGED: readonly ManagedEntry[] = [
     modulePath: 'vendor/deepseek-harness/packages/guard/repeat-tool-reminder/lib/index.js',
     description: '连续重复调用同一工具时提醒',
     intro: 'FGS 会话使用版本化尝试账本:完整输入、题目、身份、认证与通道状态一致时，第 3 次提醒一次；其他 DSH 会话保留原生重复提醒,打断死循环式的重复调用,适合长时间自主运行的 Worker。',
-  },
-  {
-    id: 'redtrace-jev', label: 'Jev 语义辅助', category: 'feature', modulePath: 'packages/redtrace-engine/src/jev.ts', defaultOff: true,
-    description: '可热切换的 Explore 候选选择与证据就绪度建议',
-    intro: '启用后，Explore 可对已存在的扫描器、PoC、字典和搜索来源请求 Jev 排序，并评估已确认事实对攻击前置条件的支持程度。建议不自动执行。旧过滤场景默认关闭，可在 Worker 设置中单独开启。需配置 TYPESAFE_API_KEY。停用后 jev-decision Skill 同步停用（移入停用目录，不再进入 Skill 目录）。',
   },
   {
     id: 'redtrace-credentials', label: 'Credentials', category: 'feature', module: credentials,
@@ -256,12 +249,6 @@ const MANAGED: readonly ManagedEntry[] = [
     modulePath: 'vendor/deepseek-harness/packages/lsp/tool-lsp/lib/index.js', defaultOff: true,
     description: '语言服务器代码导航',
     intro: 'DSH 原生 LSP:lsp 工具提供 goToDefinition / findReferences / goToImplementation / hover 精确导航,预置 typescript-language-server、pyright-langserver、clangd 三个服务端,只挂载本机已安装的部分,一个都没有时该工具不出现。适合代码审计任务,按需开启。',
-  },
-  {
-    id: 'redtrace-ptc', label: 'PTC', category: 'feature', module: codeRuntime,
-    modulePath: 'packages/redtrace-dsh/lib/code-runtime.js', defaultOff: true,
-    description: 'run_code 程序化工具调用',
-    intro: 'DSH 原生代码运行时与 PTC 呈现:宿主挂载 Node PTC 运行时(默认 Full Access,含 isolated Step;保留限时限量),启用后该会话的模型直接可见的工具只剩 run_code,所有已挂载的原生工具都改为在程序内部调用。实验性能力,默认关闭。',
   },
   {
     id: 'redtrace-domain', label: 'Domain', category: 'feature', module: domain, protectStop: true,
@@ -396,8 +383,8 @@ export class PluginManager {
       if (hasList) {
         this.manifest = {
           version: 1,
-          disabled: Array.isArray(parsed.disabled) ? [...new Set(parsed.disabled.filter(v => typeof v === 'string'))] : [],
-          enabled: Array.isArray(parsed.enabled) ? [...new Set(parsed.enabled.filter(v => typeof v === 'string'))] : [],
+          disabled: Array.isArray(parsed.disabled) ? [...new Set(parsed.disabled.filter(v => typeof v === 'string').map(v => v === 'redtrace-browser-http' ? 'redtrace-http' : v))] : [],
+          enabled: Array.isArray(parsed.enabled) ? [...new Set(parsed.enabled.filter(v => typeof v === 'string').map(v => v === 'redtrace-browser-http' ? 'redtrace-http' : v))] : [],
           user: Array.isArray(parsed.user) ? parsed.user : [],
         }
         return
@@ -497,7 +484,7 @@ export class PluginManager {
         canStop: entry.protectStop !== true,
         canUninstall: false,
         error: this.errors.get(entry.id) ?? null,
-        ...(TASK_PLUGINS.some(p => p.id === entry.id) ? { taskSelectable: true, taskAllowed: this.taskPluginAllowed(entry.id) } : {}),
+
       })
     }
     for (const entry of PRESETS) {
@@ -546,14 +533,14 @@ export class PluginManager {
     return this.statuses.get(id) === 'running'
   }
 
-  /** Default-off is selectable; an explicit management stop is a persistent veto. */
+  /** Management stop remains a persistent veto; Reason declarations do not grant tools. */
   taskPluginAllowed(id: string): boolean {
     return TASK_PLUGINS.some(p => p.id === id) && !(this.manifest.disabled ?? []).includes(id) && this.statuses.get(id) !== 'error'
   }
 
-  availableForTask(id: string, plugins: readonly string[] = []): boolean {
+  availableForTask(id: string, _legacyPlugins: readonly string[] = []): boolean {
     return TASK_PLUGINS.some(p => p.id === id)
-      ? plugins.includes(id) && this.taskPluginAllowed(id) : this.running(id)
+      ? this.running(id) && this.taskPluginAllowed(id) : this.running(id)
   }
 
   async start(id: string): Promise<PluginView> {

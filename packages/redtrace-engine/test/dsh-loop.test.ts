@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawn, spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
-import { mkdtempSync, symlinkSync, rmSync, readdirSync, readFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, symlinkSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -16,6 +16,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
   const work = mkdtempSync(path.join(os.tmpdir(), 'redtrace-native-loop-'))
   symlinkSync(path.join(root, 'static'), path.join(work, 'static'))
   const requests: any[] = []
+  const requestForResponse = new WeakMap<object, any>()
   let held = false, holdObserved = false, timeoutHeld = false, timeoutGuardSent = false
   let taskPluginPlans = 0
   let noticeStepId = '', noticeFixture = false, pauseNoticeHeld = false, resumeNotice = false
@@ -23,13 +24,18 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
   let planFixture = false, followerId = '', followerHeld = false, producerHeld = false, reasonHeld = false
   let releaseFollower: (() => void) | undefined, releaseProducer: (() => void) | undefined, releaseReason: (() => void) | undefined
   const sendTool = (res: any, name: string, args: unknown) => {
+    const request = requestForResponse.get(res)
+    if (name === 'finish_step' && !request?.messages.some((m: any) => (m.tool_calls ?? []).some((c: any) => c.function.name === 'submit_fact'))) {
+      name = 'submit_fact'
+      args = { description: 'Local model fixture verified its Step result', evidence: [{ description: 'Isolated native protocol fixture supplied the observed result before completion' }] }
+    }
     res.writeHead(200, { 'Content-Type': 'text/event-stream' })
     res.write(`data: ${JSON.stringify({ id: 'plan', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: `plan-${requests.length}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 12, completion_tokens: 8 } })}\n\n`)
     res.end('data: [DONE]\n\n')
   }
   const model = createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk
-    const b = JSON.parse(raw); requests.push({ ...b, authorization: req.headers.authorization })
+    const b = JSON.parse(raw); requestForResponse.set(res, b); requests.push({ ...b, authorization: req.headers.authorization })
     const names = (b.tools ?? []).map((t: any) => t.function.name)
     const previous = b.messages.flatMap((m: any) => m.tool_calls ?? []).map((c: any) => c.function.name)
     const text = b.messages.filter((m: any) => m.role === 'user').map((m: any) => typeof m.content === 'string' ? m.content : JSON.stringify(m.content)).join('\n')
@@ -106,10 +112,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     else if (text.includes('pause fixture') && !held) { held = true; holdObserved = true; return }
     else if (!previous.includes('submit_fact')) { name = 'submit_fact'; args = { description: 'Native DSH executed harmless printf', evidence: [{ description: 'bash returned native-dsh-fixture' }] } }
     else { name = 'finish_step'; args = { summary: 'Native DSH fixture completed' } }
-    res.writeHead(200, { 'Content-Type': 'text/event-stream' })
-    res.write(`data: ${JSON.stringify({ id: 'native', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: `call-${requests.length}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: null }] })}\n\n`)
-    res.write(`data: ${JSON.stringify({ id: 'native', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 } })}\n\n`)
-    res.end('data: [DONE]\n\n')
+    sendTool(res, name, args)
   })
   await new Promise<void>(resolve => model.listen(0, '127.0.0.1', resolve))
   const c = new Configuration(work); c.initialize(); c.commit(c.read().revision, raw => {
@@ -118,11 +121,6 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     raw.runtime = { max_workers: 2, max_project_workers: 2, max_running_projects: 1 }
     raw.tasks = { reason: { timeout: 15, conclude_timeout: 3 }, explore: { timeout: 15, conclude_timeout: 3 }, bootstrap: { timeout: 15, conclude_timeout: 3 } }
   })
-  // The first-run import copies <root>/skills into the managed store, so the
-  // jev-decision fixture must exist here before the child boots: with the jev
-  // plugin default-off, boot must park the skill in the disabled root.
-  mkdirSync(path.join(work, 'skills/jev-decision'), { recursive: true })
-  writeFileSync(path.join(work, 'skills/jev-decision/SKILL.md'), '---\nname: jev-decision\ndescription: Jev advisory fixture\n---\nJev fixture body\n')
   const reservation = createServer(); await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve))
   const port = (reservation.address() as any).port; await new Promise<void>(resolve => reservation.close(() => resolve()))
   const child = spawn(process.execPath, [path.join(root, 'scripts/run-redtrace-node.mjs'), '--root', work, '--host', '127.0.0.1', '--port', String(port)], { cwd: root,
@@ -147,9 +145,6 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     assert.ok(entries.some((p: any) => p.id === 'llm-pi-ai'))
     assert.equal(entries.some((p: any) => p.id === 'llm-deepseek'), false)
     assert.ok(entries.some((p: any) => p.id === 'redtrace-attachment' && p.status === 'running'))
-    assert.ok(entries.some((p: any) => p.id === 'redtrace-jev' && p.status === 'stopped'))
-    assert.ok(existsSync(path.join(work, '.redtrace/disabled-skills/jev-decision/SKILL.md')), 'stopped jev plugin must park its skill in the disabled root')
-    assert.ok(!existsSync(path.join(work, '.redtrace/skills/jev-decision')), 'stopped jev plugin must not leave its skill in the catalog root')
     let snapshot = await call('/worker-config')
     assert.equal(snapshot.workers[0].type, 'dsh')
     const probe = { expected_revision: snapshot.revision, name: 'draft-fixture', provider: 'fixture', model: 'fixture', priority: 0, max_running: 1 }
@@ -277,7 +272,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     const taskProject = await call('/v2/projects', 'POST', { title: 'Task plugins', origin: 'task plugin fixture', goal: 'Verify scoped native REA', bootstrap: false })
     const taskBase = `/v2/projects/${taskProject.project.id}`
     const taskGraph = await until(() => call(taskBase), g => g.steps.length === 2 && g.steps.every((s: any) => s.status === 'done'), 'Reason-selected native REA Steps did not finish', 40000)
-    assert.deepEqual(taskGraph.steps.find((s: any) => s.description === 'selected REA').plugins, ['redtrace-reverse'])
+    assert.equal(taskGraph.steps.find((s: any) => s.description === 'selected REA').plugins, undefined)
     assert.equal(taskGraph.steps.find((s: any) => s.description === 'ordinary task').plugins, undefined)
     const fixtureRequests = requests.slice(pluginStart).filter(r => JSON.stringify(r.messages).includes('task plugin fixture'))
     const reasons = fixtureRequests.filter(r => r.tools?.some((t: any) => t.function.name === 'finish_decide'))
@@ -286,7 +281,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     for (const r of [...reasons, ...ordinary]) assert.equal(r.tools.some((t: any) => t.function.name.startsWith('mcp__rea__')), false)
     assert.ok(fixtureRequests.some(r => r.tools?.some((t: any) => t.function.name === 'mcp__rea__binary_session')))
     const pluginRows = await call('/__redtrace/plugins'), pluginEntries = Array.isArray(pluginRows) ? pluginRows : pluginRows.plugins
-    assert.equal(pluginEntries.find((p: any) => p.id === 'redtrace-reverse').status, 'stopped', 'Reason must not start the global feature')
+    assert.equal(pluginEntries.find((p: any) => p.id === 'redtrace-reverse').status, 'running', 'REA is default-on independently of Reason planning')
     const taskRuns = await call(taskBase + '/runs')
     for (const r of taskRuns.filter((r: any) => r.activity === 'execute')) {
       assert.equal(r.status, 'succeeded')

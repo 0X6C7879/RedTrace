@@ -12,7 +12,7 @@ export async function request(url: string, options: { method?: string; headers?:
   return new Promise<{ data: Buffer; headers: http.IncomingHttpHeaders; status: number }>((resolve, reject) => {
     const address = new URL(url), call = (address.protocol === 'https:' ? https : http).request(address, { method: options.method ?? 'GET', headers: options.headers, rejectUnauthorized: options.verifyTls !== false, signal: options.signal }, response => {
       const chunks: Buffer[] = []; let size = 0
-      response.on('data', chunk => { size += chunk.length; if (size > 64 * 1024 * 1024) response.destroy(new ExecutionError('PROTOCOL_ERROR', 'Response exceeds 64 MiB')); else chunks.push(chunk) })
+      response.on('data', chunk => { size += chunk.length; if (size > 64 * 1024 * 1024) response.destroy(new ExecutionError('PROTOCOL_ERROR', 'Response exceeds 64 MiB; received output retained', Buffer.concat([...chunks, chunk]).toString(), { truncated: true })); else chunks.push(chunk) })
       response.on('error', reject)
       response.on('end', () => { const data = Buffer.concat(chunks); if ((response.statusCode ?? 500) >= 400) reject(new ExecutionError('TRANSPORT_ERROR', `HTTP ${response.statusCode}: ${data.toString().slice(0, 1000)}`, data.toString())); else resolve({ data, headers: response.headers, status: response.statusCode ?? 200 }) })
     })
@@ -213,5 +213,5 @@ export async function executeOperation(resource: any, task: any, cwd: string, si
   else if (['psexec', 'wmi'].includes(type)) { executable = metadata.executable || (type === 'psexec' ? 'psexec.py' : 'wmiexec.py'); const principal = domain ? `${domain}/${username}` : username; argv = [...(hash ? ['-hashes', hash] : []), `${principal}${password ? ':' + password : ''}@${resource.target}`, command] }
   else { executable = metadata.executable || type; argv = [...(metadata.arguments ?? []).map(String), resource.target, command] }
   const result = await runProcess(executable, argv, cwd, { signal, timeout, input, env })
-  return executionResult(result.text, null, { completion: 'unknown', error_code: result.exitCode === 0 ? 'UNKNOWN_RESULT' : 'TRANSPORT_ERROR', output_ref: result.outputPath, execution_context: { resource_id: resource.id, target: resource.target, client: type, client_exit_code: result.exitCode } })
+  return executionResult(readFileSync(result.outputPath, 'utf8'), null, { completion: 'unknown', error_code: result.exitCode === 0 ? 'UNKNOWN_RESULT' : 'TRANSPORT_ERROR', output_ref: result.outputPath, execution_context: { resource_id: resource.id, target: resource.target, client: type, client_exit_code: result.exitCode } })
 }

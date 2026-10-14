@@ -18,10 +18,8 @@ import { mountExecutionTools, toolsSectionText } from '../lib/execution-tools.js
 import * as credentials from '../lib/credentials.js'
 import * as attachment from '../lib/attachment.js'
 import * as fileReferences from '../lib/file-references.js'
-import * as codeRuntime from '../lib/code-runtime.js'
 import * as webshell from '../lib/webshell.js'
-import * as spill from '../lib/spill.js'
-import { reasonSpillGuard } from '../../redtrace-engine/compat/cordis.mjs'
+import { executionEvidenceReadGuard, mountReasonTools } from '../../redtrace-engine/compat/cordis.mjs'
 import { Store } from '../../redtrace-engine/src/store.ts'
 import { createPlanGuard } from '../../redtrace-engine/src/plan-guard.ts'
 
@@ -77,7 +75,7 @@ async function mountSession(host, { executionProfile, available }) {
   const task = { type: 'explore', projectId: 'p1', worker: 'w', committed: false, executionProfile }
   let refresh
   await withTimeout(
-    mountExecutionTools(scope.ctx, { task, cwd, skillsDir: path.join(cwd, 'skills'), available, onRefresh: value => { refresh = value } }),
+    mountExecutionTools(scope.ctx, { task, cwd, sessionRoot: cwd, skillsDir: path.join(cwd, 'skills'), available, onRefresh: value => { refresh = value } }),
     `${executionProfile} session mount`,
   )
   return { key, scope, cwd, refresh: () => refresh() }
@@ -86,9 +84,7 @@ async function mountSession(host, { executionProfile, available }) {
 test('capability stacks mount into concurrent Execute scopes and expose their tools', async (t) => {
   const host = await createHost()
   t.after(async () => { await host.fiber.dispose() })
-  // redtrace-ptc is excluded: under DSH ≥0.2.1-alpha.2 a PTC scope collapses
-  // to run_code alone, which the dedicated test below covers.
-  const available = id => id !== 'redtrace-ptc'
+  const available = () => true
 
   // A direct and an isolated session alive at once: every per-session service
   // must live in its own isolate, or the second mount collides in the store.
@@ -108,7 +104,7 @@ test('capability stacks mount into concurrent Execute scopes and expose their to
     for (const name of [...baseline, ...stacks]) {
       assert.ok(host.tools.get(name, session.key) !== undefined, `${session.cwd}: ${name} must be visible`)
     }
-    assert.equal(host.tools.get('run_code', session.key), undefined, `${session.cwd}: run_code must stay unmounted without redtrace-ptc`)
+    assert.equal(host.tools.get('run_code', session.key), undefined, `${session.cwd}: run_code must stay unmounted even with every capability enabled`)
   }
   for (const name of stacks) {
     assert.equal(host.tools.get(name, bare.key), undefined, `${name} must stay unmounted when gated off`)
@@ -167,120 +163,78 @@ test('running Execute session gains and loses plugin tools without restarting', 
   assert.equal(visible('web_search'), true)
 })
 
-test('PTC presentation collapses the session view to run_code alone', async (t) => {
-  const host = await createHost()
-  t.after(async () => { await host.fiber.dispose() })
-  await withTimeout(host.plugin(codeRuntime).await(), 'code-runtime mount')
-  const session = await mountSession(host, { executionProfile: 'direct', available: id => id === 'redtrace-ptc' })
-  t.after(() => rmSync(session.cwd, { recursive: true, force: true }))
-  t.after(async () => { await session.scope.dispose() })
-  assert.ok(host.tools.get('run_code', session.key) !== undefined, 'run_code must be the visible presentation transport')
-  // The collapse is a wire-level rule: the registry keeps every tool reachable
-  // for in-program dispatch, while the prompt states only run_code is direct.
-  const prompt = async () => (await host.systemPrompt.assemble({ scope: session.key })).sections.map(section => section.text).join('\n')
-  assert.match(await prompt(), /`run_code` is the only tool you can call directly/)
-})
-
-test('PTC directly creates and reads files outside direct and isolated Step workspaces', async t => {
-  const host = await createHost(), root = scratch('ptc-full-access')
-  t.after(async () => { await host.fiber.dispose(); rmSync(root, { recursive: true, force: true }) })
-  await withTimeout(host.plugin(codeRuntime).await(), 'code-runtime mount')
-  const { createScope } = await load(`${VENDOR}/core/scope/lib/index.js`)
-  for (const executionProfile of ['direct', 'isolated']) {
-    const cwd = path.join(root, executionProfile); mkdirSync(cwd)
-    const carrier = host.plugin({ inject: ['tools', 'systemPrompt'], apply() {} }); await carrier.await()
-    const agent = { options: {}, session: host.sessions.create(undefined, { cwd }) }
-    const scope = createScope(carrier.ctx, agent); agent.ctx = scope.ctx
-    try {
-      await mountExecutionTools(scope.ctx, { cwd, skillsDir: cwd, task: { type: 'explore', executionProfile }, available: id => id === 'redtrace-ptc', onRefresh() {} })
-      const outside = path.join(root, `${executionProfile}-outside.txt`)
-      const result = await host.tools.execute({ name: 'run_code', agent, callId: `ptc-${executionProfile}`, signal: new AbortController().signal,
-        arguments: { description: 'Direct Node write/read outside workspace', code: `const fs = await import('node:fs/promises'); await fs.writeFile(${JSON.stringify(outside)}, 'full-access'); console.log(await fs.readFile(${JSON.stringify(outside)}, 'utf8'));` } })
-      assert.equal(result.isError, false, JSON.stringify(result.content))
-      assert.equal(readFileSync(outside, 'utf8'), 'full-access')
-    } finally { await scope.dispose(); await carrier.dispose() }
-  }
-})
-
-test('native spill retains canonical values for every Worker and scoped read recovers the full text', async t => {
+test('Spill is Execute-only, session-isolated, hot-reloadable and preserves evidence recovery', async t => {
   const host = await createHost(), root = scratch('spill')
-  t.after(() => rmSync(root, { recursive: true, force: true }))
-  t.after(() => host.fiber.dispose())
+  t.after(async () => { await host.fiber.dispose(); rmSync(root, { recursive: true, force: true }) })
   const { createScope } = await load(`${VENDOR}/core/scope/lib/index.js`)
   const { sessionDir } = await load(`${VENDOR}/spill/spill-local/lib/index.js`)
-  let fiber = host.plugin(spill, { sessionRoot: root })
-  await fiber.await()
-  await host.plugin(codeRuntime).await()
+  const { PluginManager } = await import('../lib/plugins.js')
+  const manager = new PluginManager(host, { sessionRoot: root, pluginsManifest: path.join(root, 'plugins.json') }, root)
+  await manager.start('redtrace-trace-search')
+  await manager.start('redtrace-spill')
+  assert.equal(host.get('spillStore'), undefined, 'no global Spill service')
   const text = `HEAD\n${'tool output line\n'.repeat(20000)}TAIL\n`
+  const sessions = []
   let callId = 0
-  for (const worker of ['reason', 'explore', 'bootstrap']) {
-    const carrier = host.plugin({ inject: ['tools', 'systemPrompt'], apply() {} })
-    await carrier.await()
-    const agent = { options: {}, session: host.sessions.create(undefined, { cwd: root }) }
+  for (const type of ['reason', 'explore', 'bootstrap']) {
+    const carrier = host.plugin({ inject: ['tools', 'systemPrompt'], apply() {} }); await carrier.await()
+    const agent = { options: {}, session: host.sessions.create(undefined, { meta: { cwd: root } }) }
     const scope = createScope(carrier.ctx, agent)
-    agent.ctx = scope.ctx
-    scope.ctx.tools.register({ name: 'fixture', description: 'Native retention fixture', parameters: {},
+    let scoped = scope.ctx, refresh = async () => {}
+    agent.ctx = scoped
+    if (type === 'reason') await mountReasonTools(scoped)
+    else scoped = await mountExecutionTools(scoped, { task: { type, executionProfile: 'direct' }, cwd: root,
+      sessionRoot: root, skillsDir: root, available: id => manager.availableForTask(id), onRefresh: value => { refresh = value } })
+    agent.ctx = scoped
+    scoped.tools.register({ name: 'fixture', description: 'Native retention fixture', parameters: {},
       output: { schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }, render: (_args, value) => [{ type: 'text', text: value.text }] },
       execute: async () => ({ text }) })
-    const directory = sessionDir(path.join(root, 'spill'), String(agent.session.header.id))
-    if (worker === 'reason') {
-      scope.ctx.tools.restrict({ allow: ['read'] })
-      scope.ctx.tools.guard(reasonSpillGuard(directory, root))
-    }
     const call = (name, args) => host.tools.execute({ name, arguments: args, agent, callId: `spill-${++callId}`, signal: new AbortController().signal })
-    const result = await call('fixture', {})
-    const visible = result.content.map(block => block.text ?? '').join('')
-    assert.equal(result.value.text, text, `${worker}: canonical value must stay intact`)
-    assert.ok(visible.startsWith('HEAD\n'))
-    assert.match(visible, /TAIL/)
-    assert.doesNotMatch(visible, /evidenceId|evidence_read/)
-    const file = visible.match(/Full formatted result stored at: (.*?)\. Use read/s)?.[1]
-    assert.ok(file, `${worker}: native recovery notice must be present`)
-    assert.equal(readFileSync(file, 'utf8'), text)
-    const read = await call('read', { file_path: file, offset: 20002, limit: 1 })
-    assert.equal(read.isError, false)
-    assert.match(read.content[0].text, /TAIL/)
-    if (worker === 'explore') {
-      const events = []
-      const unlisten = host.on('session/event', (session, event) => { if (session === agent.session) events.push(event) })
-      const presentation = await load(`${VENDOR}/core/agent-tool-presentation/lib/index.js`)
-      const mode = scope.ctx.plugin(presentation, { mode: 'ptc' }); await mode.await()
-      const program = await call('run_code', { description: 'Read the canonical tool value', code: 'const value = await tools.fixture({}); console.log(value.text.length); return value.text.length;' })
-      // Full-access PTC must run; nested results still use native audit/spill.
-      {
-        assert.equal(program.isError, false, JSON.stringify(program.content))
-        assert.match(program.content.map(block => block.text ?? '').join(''), new RegExp(String(text.length)))
-        const dispatch = events.find(event => event.type === 'tool/ptc-dispatch')
-        assert.ok(dispatch, 'DSH must emit the nested result event')
-        assert.equal(dispatch.data.name, 'fixture')
-        assert.match(dispatch.data.content[0].text, /Full formatted result stored at:/)
-        assert.ok(events.some(event => event.type === 'tool/ptc-dispatch-start'))
+    const result = await call('fixture', {}), visible = result.content.map(block => block.text ?? '').join('')
+    assert.equal(result.value.text, text)
+    if (type === 'reason') {
+      assert.equal(visible, text)
+      assert.equal(scoped.get('spillStore'), undefined)
+      assert.equal(existsSync(path.join(root, 'spill')), false)
+    } else {
+      assert.ok(visible.startsWith('HEAD\n')); assert.match(visible, /TAIL/)
+      assert.doesNotMatch(visible, /evidenceId|evidence_read/)
+      const file = visible.match(/Full formatted result stored at: (.*?)\. Use read/s)?.[1]
+      assert.ok(file); assert.equal(readFileSync(file, 'utf8'), text)
+      assert.ok(file.startsWith(sessionDir(path.join(root, 'spill'), String(agent.session.header.id))))
+      const read = await call('read', { file_path: file, offset: 20002, limit: 1 })
+      assert.equal(read.isError, false); assert.match(read.content[0].text, /TAIL/)
+      if (type === 'explore') {
+        const store = new Store(':memory:')
+        try {
+          const project = store.createProject({ title: 'Spill recovery', origin: 'Local fixture', goal: 'Read existing evidence' }).project
+          const step = store.addStep(project.id, { description: 'Original plan', sourceIds: ['origin'] })
+          const run = store.claim(project.id, 'execute', { name: 'fixture', backend: 'mock' }, step.id)
+          const plan = createPlanGuard(store, run.id), recoveryRead = executionEvidenceReadGuard(sessionDir(path.join(root, 'spill'), run.id), root)
+          const releaseGuard = scoped.tools.guard(exec => plan.check({ name: exec.name === 'read' && recoveryRead(exec) === undefined ? 'evidence_read' : exec.name, rootCallId: String(exec.rootCallId) }))
+          store.updateStep(project.id, step.id, { description: 'Amended plan', mode: 'amend', expectedVersion: store.node(project.id, step.id).version })
+          assert.equal((await call('read', { file_path: file, offset: 20002, limit: 1 })).isError, false)
+          const other = path.join(root, 'other.txt'); writeFileSync(other, 'old plan')
+          assert.equal((await call('read', { file_path: other })).isError, false)
+          releaseGuard()
+        } finally { store.close() }
       }
-      unlisten(); await mode.dispose()
-      const store = new Store(':memory:')
-      try {
-        const project = store.createProject({ title: 'Spill recovery', origin: 'Local fixture', goal: 'Read existing evidence' }).project
-        const step = store.addStep(project.id, { description: 'Original plan', sourceIds: ['origin'] })
-        const run = store.claim(project.id, 'execute', { name: 'fixture', backend: 'mock' }, step.id)
-        const plan = createPlanGuard(store, run.id), ownSpillRead = reasonSpillGuard(directory, root)
-        scope.ctx.tools.guard(exec => plan.check({ name: exec.name === 'read' && ownSpillRead(exec) === undefined ? 'evidence_read' : exec.name, rootCallId: String(exec.rootCallId) }))
-        store.updateStep(project.id, step.id, { description: 'Amended plan', mode: 'amend', expectedVersion: store.node(project.id, step.id).version })
-        assert.equal((await call('read', { file_path: file, offset: 20002, limit: 1 })).isError, false, 'existing spill recovery remains safe after a plan amendment')
-        const other = path.join(root, 'other.txt'); writeFileSync(other, 'old plan')
-        assert.equal((await call('read', { file_path: other })).isError, true, 'other reads still require contract synchronization')
-      } finally { store.close() }
     }
-    if (worker === 'bootstrap') {
-      await fiber.dispose()
-      assert.equal((await call('fixture', {})).content[0].text, text, 'disabled native policy returns the original content')
-      fiber = host.plugin(spill, { sessionRoot: root }); await fiber.await()
-      assert.match((await call('fixture', {})).content[0].text, /Full formatted result stored at:/)
-      // A failed recovery write must keep successful output, as native DSH specifies.
-      host.get('spillStore').saveText = async () => { throw new Error('fixture storage unavailable') }
-      assert.equal((await call('fixture', {})).content[0].text, text)
-    }
-    await scope.dispose(); await carrier.dispose()
+    sessions.push({ type, scoped, call, refresh })
   }
+  const [reason, explore, bootstrap] = sessions
+  assert.notEqual(explore.scoped.get('spillStore'), bootstrap.scoped.get('spillStore'))
+  await manager.stop('redtrace-spill'); await Promise.all(sessions.map(s => s.refresh()))
+  for (const s of sessions) {
+    assert.equal(s.scoped.get('spillStore'), undefined)
+    assert.equal((await s.call('fixture', {})).content[0].text, text)
+  }
+  await manager.start('redtrace-spill'); await Promise.all(sessions.map(s => s.refresh()))
+  assert.equal((await reason.call('fixture', {})).content[0].text, text)
+  for (const s of [explore, bootstrap]) assert.match((await s.call('fixture', {})).content[0].text, /Full formatted result stored at:/)
+  bootstrap.scoped.get('spillStore').saveText = async () => { throw new Error('fixture storage unavailable') }
+  assert.equal((await bootstrap.call('fixture', {})).content[0].text, text)
+  assert.match((await explore.call('fixture', {})).content[0].text, /Full formatted result stored at:/)
 })
 
 test('host plugin tools disappear from an already mounted Execute session', async (t) => {
@@ -321,7 +275,7 @@ test('native Terminal retains state, isolates real Agents, and cleans up on clos
   async function worker(executionProfile = 'direct') {
     let refresh
     const handle = await host.agents.create({ sessionId: SessionId(randomUUID()), meta: { cwd },
-      setup: scoped => mountExecutionTools(scoped, { cwd, skillsDir: cwd, task: { type: 'explore', executionProfile },
+      setup: scoped => mountExecutionTools(scoped, { cwd, sessionRoot: cwd, skillsDir: cwd, task: { type: 'explore', executionProfile },
         available: id => enabled.has(id), onRefresh: value => { refresh = value } }).then(() => {}) })
     t.after(() => handle.dispose())
     let callId = 0
@@ -384,14 +338,14 @@ test('host capability modules publish their DSH services', async (t) => {
 
   const host = await createHost()
   t.after(async () => { await host.fiber.dispose() })
-  for (const module of [credentials, attachment, fileReferences, codeRuntime]) {
+  for (const module of [credentials, attachment, fileReferences]) {
     await withTimeout(host.plugin(module).await(), `${module.name} mount`)
   }
 
   assert.ok(host.get('credentials') !== undefined, 'credentials service')
   assert.ok(host.get('attachments') !== undefined, 'attachments service')
   assert.ok(host.get('fileReferences') !== undefined, 'fileReferences service')
-  assert.ok(host.get('ptcRuntime') !== undefined, 'ptcRuntime service')
+  assert.equal(host.get('ptcRuntime'), undefined, 'PTC runtime must not mount')
 })
 
 test('offline assets report existing environment overrides and never expose unrelated environment', () => {
@@ -406,4 +360,37 @@ test('offline assets report existing environment overrides and never expose unre
   process.env.REDTRACE_WORDLISTS_DIR=path.join(cwd,'absent')
   assert.ok(!toolsSectionText(cwd).includes('REDTRACE_WORDLISTS_DIR'))
  } finally {if(previous===undefined)delete process.env.REDTRACE_WORDLISTS_DIR;else process.env.REDTRACE_WORDLISTS_DIR=previous;rmSync(cwd,{recursive:true,force:true})}
+})
+
+
+test('native conclude submits a Fact and finishes directly while keeping external tools blocked', async t => {
+  const host = await createHost(), root = scratch('native-conclude')
+  t.after(async () => { await host.fiber.dispose(); rmSync(root, { recursive: true, force: true }) })
+  const { createScope } = await load(`${VENDOR}/core/scope/lib/index.js`)
+  const carrier = host.plugin({ inject: ['tools', 'systemPrompt'], apply() {} }); await carrier.await()
+  const agent = { options: {}, session: host.sessions.create(undefined, { cwd: root }) }
+  const scope = createScope(carrier.ctx, agent); agent.ctx = scope.ctx
+  let refresh, closing = false, facts = 0, completed = false, externalCalls = 0
+  await mountExecutionTools(scope.ctx, { cwd: root, sessionRoot: root, skillsDir: root, task: { type: 'explore', executionProfile: 'direct' }, available: id => id === 'redtrace-ptc', onRefresh: value => { refresh = value } })
+  const jsonOutput = { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }
+  scope.ctx.tools.register({ name: 'submit_fact', parameters: { type: 'object', additionalProperties: false }, output: jsonOutput, execute: () => ({ facts: ++facts }) })
+  scope.ctx.tools.register({ name: 'finish_step', parameters: { type: 'object', additionalProperties: false }, output: jsonOutput, execute: () => { if (!facts) throw new Error('Explore must submit at least one Fact'); completed = true; return { saved: true } } })
+  scope.ctx.tools.register({ name: 'external_effect', parameters: { type: 'object', additionalProperties: false }, output: jsonOutput, execute: () => ({ calls: ++externalCalls }) })
+  scope.ctx.tools.guard(exec => closing && !['submit_fact', 'finish_step'].includes(exec.name) ? 'Execution timed out; only summarize and submit existing evidence' : undefined)
+  const execute = (name, args = {}) => host.tools.execute({ name, arguments: args, agent, callId: `conclude-${name}-${randomUUID()}`, signal: new AbortController().signal })
+  closing = true
+  await refresh()
+  assert.equal(host.tools.get('run_code', agent), undefined)
+  assert.ok(host.tools.get('submit_fact', agent))
+  assert.equal((await execute('finish_step')).isError, true)
+  assert.equal(completed, false)
+  assert.equal((await execute('submit_fact')).isError, false)
+  assert.equal((await execute('finish_step')).isError, false)
+  assert.equal(facts, 1); assert.equal(completed, true)
+  assert.equal((await execute('external_effect')).isError, true)
+  assert.equal(externalCalls, 0)
+  const other = await mountSession(host, { executionProfile: 'direct', available: id => id === 'redtrace-ptc' })
+  assert.equal(host.tools.get('run_code', other.key), undefined, 'stale PTC availability cannot expose run_code')
+  await other.scope.dispose(); rmSync(other.cwd, { recursive: true, force: true })
+  await scope.dispose(); await carrier.dispose()
 })

@@ -2,11 +2,11 @@ import { Store } from './store.ts'
 import path from 'node:path'
 import { HttpError } from './types.ts'
 import type { EngineConfig, Goal, Run, RunStatus, Worker, Step } from './types.ts'
-import type { JevService } from './jev.ts'
+import type { Operations } from './operations.ts'
 
 export interface ExploreNotice { stepId: string; message: string; sourceIds?: string[] }
 export interface ExploreNoticeResult { ok: boolean; status: 'queued' | 'duplicate' | 'rejected' | 'failed'; reason?: string; notificationId?: string; stepId?: string; runId?: string; sessionId?: string }
-export interface TaskContext { store: Store; run: Run; worker: Worker; config: EngineConfig; signal: AbortSignal; jev?: JevService; featureAvailable?: (id: string) => boolean; taskPluginAllowed?: (id: string) => boolean; notifyExplore?: (notice: ExploreNotice) => ExploreNoticeResult }
+export interface TaskContext { store: Store; run: Run; worker: Worker; config: EngineConfig; signal: AbortSignal; operations?: Operations; currentMaxSteps?: () => number | null; featureAvailable?: (id: string) => boolean; taskPluginAllowed?: (id: string) => boolean; notifyExplore?: (notice: ExploreNotice) => ExploreNoticeResult }
 export type RunTask = (context: TaskContext) => Promise<void>
 export type SelectWorker = (worker: Worker, activity: Run['activity'], step?: Step) => Worker | undefined
 type Active = { run: Run; abort: AbortController; completion: Promise<void> }

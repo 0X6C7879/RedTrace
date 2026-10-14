@@ -15,7 +15,7 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 - **异构 Worker 协同（Worker 即路由）**：任意数量 Worker 各自声明 Provider、模型、任务资格（bootstrap/reason/explore）、并发与优先级。调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务——路由完全由 Worker 派生，而非按任务类型写死。
 - **Node 24 Agent 运行时**：DSH 原生 Agent Loop 是唯一真实模型执行器；`dsh-llm-pi-ai` 仅适配模型协议。FGS 调度器与 Cordis 插件保持单实例、原生生命周期。
 - **运行中知识同步**：证据图谱修订会通过 `agent.inject()` 增量送达正在运行的 Agent；共享 Resource 摘要随上下文注入，完整信息按需查询。
-- **上下文预算治理**：DSH 原生 Session Compaction、Tool Result Pruner 与 Spill 控制上下文压力，Graph 按需注入而不是无限堆进 Prompt；超大工具结果完整落盘、按需取回。
+- **上下文预算治理**：DSH 原生 Session Compaction、Tool Result Pruner 与 Spill 控制上下文压力，Graph 按需注入而不是无限堆进 Prompt；Explore / Bootstrap 超大工具结果完整落盘、按需取回；Reason 不挂载 Spill，文件默认全文读取，无应用层大小或路径限制。
 - **DSH 原生执行工具链**：Execute Worker 直接获得 DSH 原生能力——`web_search` / `web_fetch`、后台任务（`job_output` / `job_list` / `job_kill`，bash `run_in_background`）、持久 PTY 终端、`glob` / `grep`、工具超时与重复调用防护；LSP 代码导航与 `run_code` 程序化调用按需开启。全部在插件管理页热启停，仅对新会话生效，不自研重复 Skill/MCP。
 - **资源与操作面**：统一管理 WebShell、C2 Listener、Session、Payload、凭证、外部插件和操作结果；MSF、Sliver、Cobalt Strike 与自定义 C2 通过同一个 Adapter 合约接入。Resource 保留可变运行状态，不会隐式生成 Fact。
 - **可观测与可恢复**：任务、会话、工具事件、输出、心跳、超时、取消和资源操作均可审计，Token 用量按运行累计汇总；Server 或运行时重启后可以恢复未完成状态。
@@ -189,7 +189,7 @@ Web 控制台的「设置 → DSH 运行时」提供检查更新和更新按钮�
 
 资源（WebShell、C2 Listener/Session/Payload、凭证、流量伪装 Profile、代理、文件）由引擎统一登记，人机共用。Web UI 的运维页提供全量管理与审批；Worker 侧通过工具访问：通用的 `resource_register` / `resource_list` / `resource_get`（`resource_register` 支持 secret 存储但不回显），以及 WebShell / C2 通道族的富表单工具（`webshell_register`、`c2_listener_create`、`c2_session_create`、`c2_credential_create`、`c2_profile_create`、payload 生成与 `c2_sessions`）。Explore 在任务中建立的通道、凭证与 payload 都会出现在对应运维页面上。
 
-Step 在创建时用 `requires` 声明能力动词（`remote.command`、`remote.file.read` 等）后，Execute 会话只获得对应的动词工具；派发器自动复用已注册的可用通道（按 target 主机匹配，或 `via` 显式指定），无可用通道时返回建立指引。`GET /capabilities/verbs` 列出全部动词、适配器与通道计数，插件页的 WebShell / C2 插件可热启停对应通道族。
+Explore 自主使用已启用的能力工具，不由 Reason 的 Step `requires/plugins` 预先授权。派发器按当前 Project 资源选择通道（target 主机匹配或 `via` 显式指定），缺少验证缓存时复用轻量探测，不把未记录验证等同于工具不可用。真实连接、资源暂停、适配器支持和有状态通道串行仍须满足。`GET /capabilities/verbs` 提供管理视图；Worker 的 Resource、任务、结果与审计按 Project 隔离。自建 Browser 已删除，保留 Playwright request API 的独立 HTTP 工具，不引进 DSH 浏览器。
 
 MSF、Sliver、Cobalt Strike 与自定义 C2 通过同一个 Adapter 合约接入：RedTrace 轮询 `GET /sessions?framework=...`，向 `POST /execute` 发送会话动作，并向 `POST /payloads` 请求原生 Payload。Adapter 返回的会话自动进入全局 C2 会话页。
 

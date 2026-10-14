@@ -8,7 +8,7 @@ import { Operations, resourceKinds } from '../src/operations.ts'
 import { verbIds, dispatchVerb } from '../src/capability-verbs.ts'
 import type { Step, StepStatus } from '../src/types.ts'
 
-test('native Terminal migration changes only unfinished Step requirements and is idempotent', t => {
+test('legacy tool declarations do not rewrite Step contracts or restart unconfirmed work', t => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-native-terminal-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const filename = path.join(root, 'engine.db')
@@ -38,23 +38,21 @@ test('native Terminal migration changes only unfinished Step requirements and is
   try {
     for (const prior of originals) {
       const step = JSON.parse(String(store.db.prepare('SELECT data FROM nodes WHERE project_id=? AND id=?').get(projectId!, prior.id)!.data))
-      if (prior.deleted || ['done', 'cancelled'].includes(prior.status)) assert.deepEqual(step, prior)
-      else assert.deepEqual(step, { ...prior, requires: ['remote.command'], version: (prior.version ?? 1) + 1, planVersion: (prior.planVersion ?? 1) + 1 })
+      assert.deepEqual(step, prior)
     }
     assert.deepEqual(store.db.prepare('SELECT * FROM runs').all(), beforeRuns)
     assert.deepEqual(store.run(runId!).pendingTools, ['old-terminal-write'])
     assert.equal(store.run(runId!).status, 'unknown')
     const events = store.events(projectId!)
-    assert.deepEqual(events.slice(0, -4), beforeEvents)
-    assert.ok(events.slice(-4).every(e => e.type === 'step.revised' && /DSH Terminal/.test(String((e.payload as any).reason))))
-    assert.equal(store.project(projectId!).revision, revision! + 4)
-    assert.throws(() => store.addStep(projectId!, { description: 'Removed verb', sourceIds: ['origin'], requires: ['remote.terminal.open'] }), /Unknown capability verb/)
-    assert.throws(() => store.updateStep(projectId!, originals[0].id, { requires: ['remote.terminal.read'] }), /Invalid requires/)
+    assert.deepEqual(events, beforeEvents)
+    assert.equal(store.project(projectId!).revision, revision!)
+    const before = store.node<Step>(projectId!, originals[0].id)
+    assert.deepEqual(store.updateStep(projectId!, originals[0].id, { requires: ['remote.terminal.read'] }), before)
   } finally { store.close() }
   store = new Store(filename)
   try {
-    assert.equal(store.project(projectId!).revision, revision! + 4)
-    assert.equal(store.events(projectId!).length, (beforeEvents as any[]).length + 4)
+    assert.equal(store.project(projectId!).revision, revision!)
+    assert.equal(store.events(projectId!).length, (beforeEvents as any[]).length)
   } finally { store.close() }
 })
 

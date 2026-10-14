@@ -167,10 +167,10 @@ test('native canvas projection renders active Steps as virtual nodes, then swaps
 test('current graph polling clears removed node/edge selections and keeps surviving Step details', () => {
   const context = vm.createContext({ window: {} })
   vm.runInContext(readFileSync(new URL('../../../static/fgs-view.js', import.meta.url), 'utf8'), context)
-  const app = { ...context.window.redtraceFgsView, fgs: { facts: [], findings: [], goals: [], steps: [{ id: 'i001' }], edges: [] }, fgsSelection: { type: 'fact', id: 'removed' }, fgsEdgeSelection: { id: 'gone-edge' }, fgsRunId: 'old-run', fgsRunEvents: [{ old: true }], jevFindingReview: { old: true } }
+  const app = { ...context.window.redtraceFgsView, fgs: { facts: [], findings: [], goals: [], steps: [{ id: 'i001' }], edges: [] }, fgsSelection: { type: 'fact', id: 'removed' }, fgsEdgeSelection: { id: 'gone-edge' }, fgsRunId: 'old-run', fgsRunEvents: [{ old: true }] }
   app.clearMissingFgsSelection()
   assert.equal(app.fgsSelection, null); assert.equal(app.fgsEdgeSelection, null)
-  assert.equal(app.fgsRunId, ''); assert.equal(app.fgsRunEvents.length, 0); assert.equal(app.jevFindingReview, null)
+  assert.equal(app.fgsRunId, ''); assert.equal(app.fgsRunEvents.length, 0)
   app.fgsSelection = { type: 'step', id: 'i001' }; app.clearMissingFgsSelection()
   assert.equal(app.fgsSelection.id, 'i001')
   assert.equal(app.startFgsReplay, undefined); assert.equal(app.applyFgsReplayFrame, undefined)

@@ -35,7 +35,7 @@ export async function session(ctx, available) {
   agent.ctx = scope.ctx
   agent.session = ctx.get('sessions').create(undefined, { cwd })
   let refresh
-  const scoped = await mountExecutionTools(scope.ctx, { cwd, skillsDir: path.join(cwd, 'skills'),
+  const scoped = await mountExecutionTools(scope.ctx, { cwd, sessionRoot: cwd, skillsDir: path.join(cwd, 'skills'),
     task: { type: 'explore', executionProfile: 'direct' }, available,
     onRefresh: fn => { refresh = fn } })
   let id = 0
@@ -45,7 +45,7 @@ export async function session(ctx, available) {
   }
 }
 
-test('Reason-created Step grants only its claimant native REA; management veto revokes live scopes', { timeout: 90000 }, async t => {
+test('Explore can lazily load native REA without Reason selection; management veto revokes live scopes', { timeout: 90000 }, async t => {
   const root = mkdtempSync(path.join(tmpdir(), 'redtrace-step-rea-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const { Store } = await import(pathToFileURL(path.join(repoRoot, 'packages/redtrace-engine/src/store.ts')))
@@ -66,7 +66,7 @@ test('Reason-created Step grants only its claimant native REA; management veto r
   const step = result.details
   const claimed = store.claim(id, 'execute', { name: 'Explore', backend: 'dsh' }, step.id)
   assert.equal(claimed.stepId, step.id)
-  assert.equal(manager.running('redtrace-reverse'), false, 'Reason never changes the global switch')
+  assert.equal(manager.running('redtrace-reverse'), true, 'Default-on availability does not depend on Reason planning')
   const ctx = await host()
   t.after(() => ctx.fiber.dispose())
   const selected = await session(ctx, name => manager.availableForTask(name, step.plugins))
@@ -75,7 +75,7 @@ test('Reason-created Step grants only its claimant native REA; management veto r
   for (const s of sessions) t.after(async () => { await s.dispose(); rmSync(s.cwd, { recursive: true, force: true }) })
   const hasSkill = async s => (await s.scoped.get('skills').list({ cwd: s.cwd, scope: s.agent })).some(skill => skill.name === 'reverse-engineer-anything')
   assert.equal(await hasSkill(selected), true)
-  assert.equal(await hasSkill(unrelated), false)
+  assert.equal(await hasSkill(unrelated), manager.running('redtrace-reverse'))
   assert.equal(rea(selected.schemas()).length, 0)
   assert.equal(rea(unrelated.schemas()).length, 0)
   assert.equal((await selected.call('skill', { name: 'reverse-engineer-anything' })).isError, false)
@@ -84,16 +84,16 @@ test('Reason-created Step grants only its claimant native REA; management veto r
   const original = ctx.tools.get('mcp__rea__binary_session', selected.agent)
   await manager.start('redtrace-reverse')
   assert.equal(ctx.tools.get('mcp__rea__binary_session', selected.agent), original, 'stable selected scope is not remounted')
-  assert.equal(await hasSkill(unrelated), false)
+  assert.equal(await hasSkill(unrelated), manager.running('redtrace-reverse'))
   await manager.stop('redtrace-reverse')
   assert.equal(rea(selected.schemas()).length, 0)
   assert.equal(await hasSkill(selected), false)
   assert.equal((await selected.call('mcp__rea__binary_session', {})).isError, true)
-  await assert.rejects(tools.find(t => t.name === 'add_step').execute('vetoed', { description: 'Reverse again', sourceIds: ['origin'], plugins: ['redtrace-reverse'] }), /Task plugin is disabled/)
+  await tools.find(t => t.name === 'add_step').execute('planning-remains-available', { description: 'Reverse again', sourceIds: ['origin'] })
   await manager.start('redtrace-reverse')
   assert.equal(await hasSkill(selected), true)
   assert.equal(rea(selected.schemas()).length, 0, 'fresh connection stays lazy')
-  assert.equal(await hasSkill(unrelated), false)
+  assert.equal(await hasSkill(unrelated), manager.running('redtrace-reverse'))
   assert.ok(ctx.tools.get(process.platform === 'win32' ? 'pwsh' : 'bash', selected.agent), 'unrelated native shell is retained')
   assert.equal(tools.some(t => t.name.startsWith('mcp__rea__')), false, 'Reason never receives analysis schemas')
 })
@@ -140,6 +140,9 @@ test('native Skill loads real REA MCP only on demand, isolates Runs, bounds resu
   const loaded = await s.call('skill', { name: 'reverse-engineer-anything' })
   assert.equal(loaded.isError, false, JSON.stringify(loaded))
   assert.equal(rea(s.schemas()).length, 14, JSON.stringify(loaded.content).slice(-1800))
+  const expansionSchema = s.schemas().find(tool => tool.name === 'reverse_tools').parameters
+  assert.deepEqual(expansionSchema.required, ['group'])
+  assert.equal(expansionSchema.properties.group.required, undefined)
   assert.equal(ctx.tools.get('mcp__rea__analyze_function', s.agent), undefined, 'unused native schemas really disappear')
   assert.equal(rea(unrelated.schemas()).length, 0)
   const initial = { tools: rea(s.schemas()).length, schemaBytes: Buffer.byteLength(JSON.stringify(rea(s.schemas()))) }

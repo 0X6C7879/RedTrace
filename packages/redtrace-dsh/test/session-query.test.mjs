@@ -8,7 +8,7 @@ import { load } from "../lib/loader.js"
 import * as query from "../lib/session-query.js"
 import * as spill from "../lib/spill.js"
 import { PluginManager } from "../lib/plugins.js"
-import { reasonSpillGuard } from "../../redtrace-engine/compat/cordis.mjs"
+import { mountReasonTools } from "../../redtrace-engine/compat/cordis.mjs"
 const V = "vendor/deepseek-harness/packages"
 
 async function host(root) {
@@ -31,10 +31,10 @@ async function caller(ctx, cwd, role) {
   const agent = { options: {}, session: ctx.sessions.create(undefined, { meta: { cwd, agentPreset: role } }) }
   const scope = createScope(carrier.ctx, agent)
   agent.ctx = scope.ctx
-  if (role === "reason") {
-    scope.ctx.tools.restrict({ allow: ["read", ...query.SESSION_QUERY_TOOLS] })
-    const { sessionDir } = await load(`${V}/spill/spill-local/lib/index.js`)
-    scope.ctx.tools.guard(reasonSpillGuard(sessionDir(path.join(cwd, "spill"), agent.session.id), cwd))
+  if (role === "reason") await mountReasonTools(scope.ctx)
+  else {
+    agent.ctx = scope.ctx.isolate('spillStore')
+    await agent.ctx.plugin(spill, { sessionRoot: cwd }).await()
   }
   return agent
 }
@@ -127,20 +127,27 @@ test("JSONL history survives runtime restart, index rebuild, and resumed Session
   } finally { await ctx.fiber.dispose() }
 })
 
-test("large native Session event reads use DSH Spill and Reason recovers only its own result",async t=>{
-  const root=mkdtempSync(path.join(tmpdir(),"redtrace-query-spill-")),ctx=await host(root)
-  t.after(async()=>{await ctx.fiber.dispose();rmSync(root,{recursive:true,force:true})})
-  await ctx.plugin(query,{sessionRoot:root}).await()
-  await ctx.plugin(spill,{sessionRoot:root}).await()
-  const source=ctx.sessions.create("large-worker",{meta:{cwd:root}})
-  const event=message(source,`HEAD\n${"history evidence line\n".repeat(20000)}TAIL`)
-  const agent=await caller(ctx,root,"reason")
-  await ctx.sessionQuery.readEvent({sessionId:source.id,seq:event.seq})
-  const result=await call(ctx,agent,"session_event_read",{session_id:source.id,seq:event.seq})
-  assert.equal(result.isError,false,text(result))
-  const file=text(result).match(/Full formatted result stored at: (.*?)\. Use read/s)?.[1]
-  assert.ok(file,text(result));assert.match(readFileSync(file,"utf8"),/TAIL/)
-  const recovered=await call(ctx,agent,"read",{file_path:file,offset:1,limit:6})
-  assert.equal(recovered.isError,false,text(recovered))
-  assert.equal((await call(ctx,agent,"read",{file_path:path.join(root,"session-query.sqlite")})).isError,true)
+test("large Session event reads stay inline for Reason and Spill only for Execute", async t => {
+  const root = mkdtempSync(path.join(tmpdir(), "redtrace-query-spill-")), ctx = await host(root)
+  t.after(async () => { await ctx.fiber.dispose(); rmSync(root, { recursive: true, force: true }) })
+  await ctx.plugin(query, { sessionRoot: root }).await()
+  const source = ctx.sessions.create("large-worker", { meta: { cwd: root } })
+  const event = message(source, `HEAD\n${"history evidence line\n".repeat(20000)}TAIL`)
+  await ctx.sessionQuery.readEvent({ sessionId: source.id, seq: event.seq })
+  for (const role of ['reason', 'explore', 'bootstrap']) {
+    const agent = await caller(ctx, root, role)
+    const result = await call(ctx, agent, "session_event_read", { session_id: source.id, seq: event.seq })
+    assert.equal(result.isError, false, text(result))
+    if (role === 'reason') {
+      assert.match(text(result), /HEAD/); assert.match(text(result), /TAIL/)
+      assert.doesNotMatch(text(result), /Full formatted result stored at:/)
+      assert.equal(agent.ctx.get('spillStore'), undefined)
+      assert.equal(existsSync(path.join(root, 'spill')), false)
+    } else {
+      const file = text(result).match(/Full formatted result stored at: (.*?)\. Use read/s)?.[1]
+      assert.ok(file, text(result)); assert.match(readFileSync(file, "utf8"), /TAIL/)
+      const recovered = await call(ctx, agent, "read", { file_path: file, offset: 1, limit: 6 })
+      assert.equal(recovered.isError, false, text(recovered))
+    }
+  }
 })

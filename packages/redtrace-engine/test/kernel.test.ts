@@ -105,6 +105,7 @@ test('unavailable planner does not block execution; pause resumes the same run',
   const scheduler = new Scheduler(s, { ...config, workers: [{ ...worker, reason: false }] }, async ({ run, signal }) => {
     ids.push(run.id)
     if (ids.length === 1) await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
+    if (!signal.aborted) s.addFact(id, 'Resumed fixture verified same-Run completion', { runId: run.id, evidence: [{ description: 'Local resumed callback executed without abort' }] })
   })
   try {
     scheduler.start(); await until(() => ids.length === 1)

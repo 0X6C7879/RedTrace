@@ -26,7 +26,7 @@ FGS 是实时更新的当前工作状态，不是历史档案库。Reason 独占
 
 `update_step` 支持描述、来源、目标及执行设置。未领取 Step 可直接改；运行中同目标同权限边界用 amend，变更目标、权限或环境必须 replace。Subgoal 描述变更传播到未结束的后代 Step。替代 Step 保存 replaces/replacedBy，等待旧 Run 确认停止后才变为 pending；旧结果保留、迟到写入被拒绝。unknown 结果保持阻塞；核实后可通过 `POST /v2/projects/:id/runs/:run/resolve` 提交具体 resolution。该接口是确认记录，不替操作者核实远端副作用。
 
-Explore 用 `sync_step({planVersion})` 接收当前 Step、祖先 Goal 和有效依赖。DSH 执行前 guard 同时检查 Run 与模型回合版本；rootCallId 调用树及 PTC 后代继承原版本，旧批次即使执行了 sync_step 也不能继续外部动作，须下一回合生成新动作。已发出的命令不承诺追溯取消。纯证据提交和状态读取可保留已验证结果。
+Explore 用 `sync_step({planVersion})` 接收当前 Step、祖先 Goal 和有效依赖。DSH 执行前 guard 同时检查 Run 与模型回合版本；rootCallId 调用树及嵌套工具调用继承原版本，旧批次即使执行了 sync_step 也不能继续外部动作，须下一回合生成新动作。已发出的命令不承诺追溯取消。纯证据提交和状态读取可保留已验证结果。
 
 ## FGS 图投影
 
@@ -52,15 +52,14 @@ Explore 用 `sync_step({planVersion})` 接收当前 Step、祖先 Goal 和有效
 | `redtrace-jobs` | `jobs-local` + `tool-jobs` | `job_output` / `job_list` / `job_kill`,bash `run_in_background` |
 | `redtrace-terminal` (DSH Terminal) | `terminal` + `terminal-bash` + `experimental/tool-terminal` | `terminal_open/send/read/signal/close/list`，复用 `sessionId` |
 | `redtrace-fs-search` | `tool-fs-search` | `glob` / `grep` |
-| `redtrace-spill` | `spill-local` + `spill-policy`(50 KB) | 大结果落盘 + 预览与取回指引 |
+| `redtrace-spill` | `spill-local` + `spill-policy`(12500 tokens，Explore / Bootstrap only) | 大结果落盘 + 预览与取回指引 |
 | `redtrace-tool-timeout` | `tool-call-timeout-policy` | 声明超时预算的工具统一截止 |
 | `redtrace-repeat-reminder` | `repeat-tool-reminder` | 3/5/8 次连续同参调用注入提醒 |
 | `redtrace-lsp` | `lsp` + `lsp-stdio` + `tool-lsp` | `lsp`(goToDefinition 等;只挂载本机已安装的语言服务器,一个都没有则整栈跳过) |
-| `redtrace-ptc` | 会话内 `agent-tool-presentation`(ptc 模式) + Node PTC runtime | `run_code` 为直接工具，原生工具在程序内调用 |
 
 交互终端仅保留 DSH 原生实现：Linux/macOS 使用 bash，Windows 使用 pwsh；同一 Agent 内保留 cwd/env 与交互进程，所属 Agent 销毁或插件停止后由 DSH 清理，不跨 Step、Run 或重启恢复。旧版未完成 Step 的 `remote.terminal.*` 声明在启动时自动移除，其它依赖和历史记录保留；旧 terminal Resource 仅保留离线历史，不再新建。
 
-前六项(加 repeat-reminder)默认开启;LSP 与 PTC 默认关闭,在插件页开启。direct 档案下 terminal 挂非受限 sandbox-policy(danger-full-access),isolated 档案继承 workspace-write。Reason/Decide 会话不挂执行工具链,能力栈同样仅限 Execute。
+前六项(加 repeat-reminder)默认开启;LSP 默认关闭,在插件页开启；PTC 已移除，所有工具均使用原生调用。direct 档案下 terminal 挂非受限 sandbox-policy(danger-full-access),isolated 档案继承 workspace-write。Reason/Decide 会话不挂执行工具链,能力栈同样仅限 Execute。
 
 **宿主层服务插件**——由插件管理器作为子 Fiber 挂载、对全局生效,按服务生命周期管理:
 
@@ -69,9 +68,8 @@ Explore 用 `sync_step({planVersion})` 接收当前 Step、祖先 Goal 和有效
 | `redtrace-credentials` | `ctx.credentials` | DSH 凭据文档(`$DSH_HOME/.credentials.yaml` + `.env` 回退),供 web 搜索等解析 `DEEPSEEK_API_KEY`;与 RedTrace 自管 Provider 密钥互不影响 |
 | `redtrace-attachment` | `ctx.attachments` | 原生图像附件存储；工具截图先入库再以 attachment 引用送入模型，必需且不可停止 |
 | `redtrace-file-references` | `ctx.fileReferences` | `@` 路径补全服务,为交互前端预留 |
-| `redtrace-ptc`(宿主半边) | `ctx.ptcRuntime` | Node PTC 运行时，宿主默认 danger-full-access（包括 isolated Step）；会话内使用上游 ptc 呈现模式 |
 
-manifest 语义:默认开启的插件用 `disabled` 记录停用;默认关闭的用 `enabled` 记录开启,重启后按 manifest 恢复。SSH seam(`fs-ssh` 等)与 `ptc-runtime-node` 在当前 vendor 树中不存在,属 DSH master 的未引入能力,不在此列。
+manifest 语义:默认开启的插件用 `disabled` 记录停用;默认关闭的用 `enabled` 记录开启,重启后按 manifest 恢复。PTC 不再注册、挂载或恢复；上游 vendor 中的代码保留，不属于 RedTrace 可启用插件。
 
 ## 兼容层
 
@@ -94,3 +92,15 @@ manifest 语义:默认开启的插件用 `disabled` 记录停用;默认关闭的
 ## 验证
 
 `packages/redtrace-engine/test` 覆盖事务并发、Decide 不重入、并行事实唤醒、Step 唯一领取、规划不可用时继续执行、暂停恢复、崩溃副作用保护、旧 API、真实 DSH Bootstrap/Reason/direct/isolated Loop、暂停恢复、凭据轮换、原生 MCP、外围操作、配置和删除。`scripts/verify-node-ui.mjs` 驱动真实 Chromium 验证项目创建、FGS 操作、外围页面与持久化。
+
+## Runtime correction contracts (2026-10-13)
+
+Reason owns objectives, FGS and coordination, not Explore tool selection. Legacy Step `requires/plugins` values are ignored by admission and tool registration; goal/isolation changes still require a versioned replacement. REA is default-on and lazy; explicit administrator stop remains authoritative.
+
+`planningCapacity` exposes `maxSteps/activeSteps/remainingSteps` using the admission configuration and pending/running/paused counts. The legacy `tasks.reason.max_intents` key remains compatible; the settings UI calls it 最大 Step. `acknowledgementBoundary` is a delivered boundary, not an automatic acknowledgement.
+
+Reason uses a scoped UTF-8 `read` returning the entire file by default, with optional offset/limit and no application-level path, line, character or byte caps. Reason has no Spill service or retention policy and cannot execute shell/write; OS permissions still apply, so readable private/foreign paths are accessible. Execute retains its existing evidence-recovery containment guard. `evidence_read` accepts a same-Project producer `run_id`. Explore must explicitly submit an evidence-backed Fact before `finish_step`; conclude-only mode permits existing evidence reads and native handoff tools, never new external actions.
+
+Project owns Resource identity; built-in Resource APIs, task polling/results/audit and channel routing enforce that boundary. The global view remains operator-only; it is not an OS sandbox. Complete accepted Operation output is persisted separately from bounded previews. Transport failure preserves received data and unknown completion; no automatic replay.
+
+Custom Browser is removed without changing Playwright dependencies or mounting a DSH Browser. Standalone HTTP request sessions are private, restartable Project Resources. Native DSH search/fetch, Session Query, JSON validation, cancellation, file-edit guards remain unchanged; Spill is mounted only in Explore / Bootstrap scopes.

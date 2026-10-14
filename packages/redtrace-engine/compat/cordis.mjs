@@ -5,15 +5,13 @@ import { watch, realpathSync } from 'node:fs'
 import { createEngine } from '../src/index.ts'
 import { createPlanGuard } from '../src/plan-guard.ts'
 import { efficiencyToolAvailable, graphTools, activityPrompt, activityLimits, graphUpdate, livePlan, launchContext, runMock } from '../src/runner.ts'
-import { isJevRecoveryPath, traceCall } from '../src/jev.ts'
 import { verbTools, verbToolAvailable, channelsFor, resourceTools } from '../src/capability-verbs.ts'
 import { PluginManager, registerPluginRoutes } from '../../redtrace-dsh/lib/plugins.js'
-import { load, repoRoot } from '../../redtrace-dsh/lib/loader.js'
+import { load, mount, repoRoot } from '../../redtrace-dsh/lib/loader.js'
 import { SESSION_QUERY_TOOLS } from '../../redtrace-dsh/lib/session-query.js'
 import { mountExecutionTools } from '../../redtrace-dsh/lib/execution-tools.js'
 import { activateAgent, resolveReasoningEffort } from '../../redtrace-dsh/lib/agent.js'
 import { state } from '../../redtrace-dsh/lib/state.js'
-import { TASK_PLUGINS } from '../../redtrace-dsh/lib/task-plugins.js'
 import { apply as applyDomain, applyCommonEnv, mcpSignature } from '../../redtrace-dsh/lib/domain.js'
 import { accumulateUsage, eventProjection } from '../../redtrace-dsh/lib/audit.js'
 import { providerProfiles } from '../src/models.ts'
@@ -23,77 +21,33 @@ export const name = 'redtrace-node'
 export const inject = ['webServer']
 const json = value => JSON.parse(JSON.stringify(value))
 
-export function reasonSpillGuard(directory, cwd) {
+export function executionEvidenceReadGuard(directory, cwd) {
   return exec => {
     if (exec.name !== 'read') return undefined
     try {
-      const root = realpathSync(directory), file = realpathSync(path.resolve(cwd, exec.arguments.file_path))
-      const relative = path.relative(root, file)
-      if (relative && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative)) return undefined
-    } catch { /* Missing or inaccessible spill files are denied. */ }
-    return 'Reason may read only its own spilled tool results'
+      const file = realpathSync(path.resolve(cwd, exec.arguments.file_path))
+      for (const candidate of [directory, cwd]) {
+        let root
+        try { root = realpathSync(candidate) } catch { continue }
+        const relative = path.relative(root, file)
+        if (relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)) continue
+        if (relative.split(path.sep).some(part => /^(?:\.env(?:\..*)?|\.redtrace-secrets|\.redtrace|\.ssh|\.aws|\.credentials|secrets?)$/i.test(part))) continue
+        return undefined
+      }
+    } catch { /* Missing files and symlink escapes are denied. */ }
+    return 'Read only this Project’s evidence/outputs or own Spill; private credentials and foreign Projects are denied'
   }
+}
+
+export async function mountReasonTools(scoped) {
+  scoped.tools.restrict({ allow: ['read', ...SESSION_QUERY_TOOLS] })
+  await mount(scoped, 'packages/redtrace-dsh/lib/reason-read.js')
 }
 
 export { providerProfiles } from '../src/models.ts'
 
-export async function filterDshJevResult(jev, run, cwd, exec, result, decision) {
-  if (!jev?.isEnabled('tool_filter') && !jev?.isEnabled('external_filter')) return decision
-  if (decision.kind !== 'accept' || result.isError || Object.hasOwn(decision, 'value')) return decision
-  let args = exec.arguments ?? {}
-  if (typeof args === 'string') { try { args = JSON.parse(args) } catch { return decision } }
-  const name = String(exec.name ?? ''), content = decision.content ?? result.content
-  if (!Array.isArray(content) || !content.every(block => block?.type === 'text' && typeof block.text === 'string')) return decision
-  const text = content.map(block => block.text).join('\n')
-  if (Buffer.byteLength(text, 'utf8') <= 8 * 1024) return decision
-  let source = '', external = false
-  if (name === 'read') {
-    source = String(args.file_path ?? '')
-    if (!/\.(?:txt|md|log|rst|html)$/i.test(source)) return decision
-    let resolved, workspace, poc
-    try {
-      resolved = await realpath(path.resolve(cwd, source)); workspace = await realpath(cwd)
-      if (!(resolved === workspace || resolved.startsWith(workspace + path.sep))) {
-        try { poc = await realpath(process.env.REDTRACE_POC_DIR ?? path.join(repoRoot, 'tools', 'poc')) } catch { poc = undefined }
-      }
-    } catch { return decision }
-    if (isJevRecoveryPath(resolved)) return decision
-    if (!['.txt', '.md', '.log', '.rst', '.html'].includes(path.extname(resolved).toLowerCase())) return decision
-    external = !!poc && (resolved === poc || resolved.startsWith(poc + path.sep))
-    if (!external && resolved !== workspace && !resolved.startsWith(workspace + path.sep)) return decision
-  } else if (name === 'web_search' || name === 'web_fetch') {
-    source = name === 'web_search' ? (Array.isArray(args.queries) ? args.queries.join(', ') : name) : String(args.url ?? name)
-    external = true
-  } else if (name === 'bash' || name === 'grep' || name === 'terminal_read') {
-    source = String(args.command ?? args.pattern ?? args.id ?? args.session_id ?? name)
-  } else return decision
-  const filtered = await jev.filterToolText(run, source, text, external).catch(() => undefined)
-  return filtered ? { kind: 'accept', content: [{ type: 'text', text: filtered }], ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}) } : decision
-}
-
-export async function rankDshWebResult(jev, run, exec, result, decision) {
-  if (!jev?.isEnabled('candidate_choice') || exec.name !== 'web_search' || decision.kind !== 'accept' || result.isError || Object.hasOwn(decision, 'value')) return decision
-  const sources = result.value?.sources
-  if (!Array.isArray(sources) || sources.length < 2) return decision
-  let args = exec.arguments ?? {}
-  if (typeof args === 'string') { try { args = JSON.parse(args) } catch { return decision } }
-  const candidates = sources.slice(0, 8).map((source, index) => ({ id: `source_${index + 1}`, title: String(source.title || source.url || '').slice(0, 160),
-    detail: String(source.snippet || '').slice(0, 500), reference: String(source.url || '') }))
-  const objective = Array.isArray(args.queries) ? args.queries.join('; ').slice(0, 600) : String(args.query || '').slice(0, 600)
-  if (!objective) return decision
-  const advice = await jev.chooseCandidate(run, 'web', objective, candidates, [], true).catch(() => undefined)
-  if (advice?.status !== 'advisory') return decision
-  const selected = candidates.find(item => item.id === advice.recommendedId)
-  const note = selected ? `Jev 来源匹配建议：先读 ${selected.id} (${selected.reference})。选择置信度 ${advice.confidence.toFixed(2)}；仍需核实原文。`
-    : 'Jev 来源匹配建议：当前结果没有明显优先来源；请自行核实。'
-  return { ...decision, content: [...(decision.content ?? result.content ?? []), { type: 'text', text: note }] }
-}
-
-export function mountJevPrompt(scoped, run, step, jev) {
-  scoped.systemPrompt.section({ name: 'redtrace:fgs', order: 0, text: () => activityPrompt(run.activity, step, jev?.isEnabled('candidate_choice'), jev?.isEnabled('attack_readiness')) })
-  if (run.activity === 'execute') scoped.systemPrompt.section({ name: 'redtrace:jev-skill', order: 1,
-    text: () => jev?.isEnabled('candidate_choice') || jev?.isEnabled('attack_readiness')
-      ? '同一目标出现多个真实可用候选且选择代价明显时，按需加载 jev-decision Skill，再调用 Jev 决策工具；简单选择无需加载。typesafe-ai Skill 用于开发 TypeSafe 集成，不是执行渗透所必需。' : '' })
+export function mountActivityPrompt(scoped, run, step) {
+  scoped.systemPrompt.section({ name: 'redtrace:fgs', order: 0, text: () => activityPrompt(run.activity, step) })
 }
 
 export function refreshToolRegistrations(tools, enabled, register) {
@@ -241,7 +195,7 @@ export function listenGraphChanges(store, run, changed) {
 
 export async function apply(ctx, options) {
   const root = path.resolve(options.root), managed = path.dirname(options.configuration)
-  const { createUserMessage } = await load('vendor/deepseek-harness/packages/llm/llm/lib/index.js')
+  const { createUserMessage, HarnessError } = await load('vendor/deepseek-harness/packages/llm/llm/lib/index.js')
   const { SessionId } = await load('vendor/deepseek-harness/packages/core/session/lib/index.js')
   const engine = await createEngine({ root, database: options.database, configuration: options.configuration, autoStart: false,
     // The gate is created before the manager exists; it only dereferences it
@@ -254,9 +208,7 @@ export async function apply(ctx, options) {
       return worker
     },
     runTask: input => {
-      const selected = input.run.stepId ? input.store.node(input.run.projectId, input.run.stepId, 'step').plugins ?? [] : []
-      for (const id of selected) if (!manager.taskPluginAllowed(id)) throw new Error(`task_plugin_disabled: ${id}; management policy forbids this Step's requested feature`)
-      const context = { ...input, featureAvailable: id => manager.availableForTask(id, selected), taskPluginAllowed: id => manager.taskPluginAllowed(id) }
+      const context = { ...input, featureAvailable: id => manager.availableForTask(id) }
       return context.run.backend === 'mock' ? runMock(context) : executeDsh(context)
     } })
   const runtime = { runtime: true, root, server: options.server, sessionRoot: path.join(managed, 'sessions'), skillsDir: path.join(managed, 'skills'), workspacesDir: engine.configuration.workspaceRoot,
@@ -274,19 +226,13 @@ export async function apply(ctx, options) {
   // The engine handler serves the Web UI and the whole API; the Cordis web
   // server only owns the plugin-manager routes and falls through to it.
   ctx.effect(() => ctx.webServer.registerFallback(engine.handler))
-  let profileRevision = '', sceneRevision = '', watcher
+  let profileRevision = '', watcher
   let refreshPending = Promise.resolve()
   const refresh = () => refreshPending = refreshPending.catch(() => {}).then(refreshProfiles)
   const refreshProfiles = async () => {
     const shared = state(), mcpConfigs = engine.capabilities.mcpConfigs()
     if (shared && mcpSignature(mcpConfigs) !== shared.mcpSignature) await shared.remountMcp?.(mcpConfigs)
     const { raw, revision } = engine.configuration.read()
-    const nextScenes = JSON.stringify(raw.jev?.scenes ?? {})
-    if (nextScenes !== sceneRevision) {
-      engine.jev.setScenes(raw.jev?.scenes)
-      sceneRevision = nextScenes
-      await Promise.all([...sessionRefresh.values()].map(update => update()))
-    }
     if (revision === profileRevision) return
     const config = engine.configuration.resolve(raw), { providers } = providerProfiles(config)
     // File-watch delivery can lag; the model snapshot and scheduler must use the same revision.
@@ -308,11 +254,6 @@ export async function apply(ctx, options) {
   }
   const sessionRefresh = new Map()
   const manager = new PluginManager(ctx, runtime, repoRoot, load, replacements, async () => {
-    engine.jev.setEnabled(manager.running('redtrace-jev'))
-    // The jev-decision skill only documents this plugin's tools: while the
-    // plugin is stopped it must leave the catalog entirely, or every Execute
-    // turn keeps paying its entry as prompt tokens.
-    try { engine.capabilities.setEnabled('jev-decision', manager.running('redtrace-jev')) } catch (error) { ctx.logger.warn(error) }
     await engine.operations.synchronizeAdapters()
     await Promise.all([...sessionRefresh.values()].map(refresh => refresh()))
     engine.scheduler.wake()
@@ -328,14 +269,14 @@ export async function apply(ctx, options) {
 
   async function executeDsh(context) {
     await refresh()
-    const { store, run, config, signal, worker, jev } = context, shared = state()
+    const { store, run, config, signal, worker } = context, shared = state()
     if (!shared) throw new Error('Cordis domain service is unavailable')
     const step = run.stepId ? store.node(run.projectId, run.stepId, 'step') : undefined
     const task = { usage: { inputTokens: run.inputTokens, outputTokens: run.outputTokens, cacheReadTokens: run.cacheReadTokens, cacheWriteTokens: run.cacheWriteTokens }, type: run.activity === 'decide' ? 'reason' : step?.bootstrap ? 'bootstrap' : 'explore', projectId: run.projectId, intentId: run.stepId ?? undefined,
-      worker: worker.name, sessionId: run.id, runId: run.id, committed: false, notificationEpoch: randomUUID(), server: options.server, startedAt: Date.now(), executionProfile: step?.executionProfile ?? 'direct', ...(step?.plugins?.length ? { plugins: step.plugins } : {}) }
+      worker: worker.name, sessionId: run.id, runId: run.id, committed: false, notificationEpoch: randomUUID(), server: options.server, startedAt: Date.now(), executionProfile: step?.executionProfile ?? 'direct' }
     if (!shared.presets.has(task.type)) throw new Error(`Cordis task preset ${task.type} is disabled`)
     const cwd = path.join(config.workspaceRoot, run.projectId); await mkdir(cwd, { recursive: true })
-    let finished = false, concludeOnly = false, handle, pendingSkillNotice = ''
+    let finished = false, concludeOnly = false, handle
     let refreshLiveTools = () => {}
     const tools = graphTools({ ...context, notifyExplore: input => notifyExplore(context, shared, input, message) }, () => {
       finished = true; task.committed = true
@@ -350,13 +291,10 @@ export async function apply(ctx, options) {
     const checkpoint = store.run(run.id).checkpoint, resume = !!checkpoint?.sessionId
     if (resume && !await ctx.get('sessionPersistence').stat(SessionId(run.id))) throw new Error('Execute checkpoint session is missing; refusing a new session')
     const { sessionDir } = await load('vendor/deepseek-harness/packages/spill/spill-local/lib/index.js')
-    const ownSpillRead = reasonSpillGuard(sessionDir(path.join(runtime.sessionRoot, 'spill'), run.id), cwd)
+    const ownSpillRead = executionEvidenceReadGuard(sessionDir(path.join(runtime.sessionRoot, 'spill'), run.id), cwd)
     const setup = async scoped => {
       if (run.activity === 'decide') {
-        scoped.tools.guard(ownSpillRead)
-        scoped.systemPrompt.section({ name: 'redtrace:task-plugins', order: 3, text: 'Step.plugins 仅为对应 Step 的 Explore 装载；只能选择 allowed 插件。' })
-        scoped.systemPrompt.context({ name: 'redtrace:task-plugins', order: 3, required: true, interpolate: false,
-          text: () => TASK_PLUGINS.map(p => `${p.id}: ${p.description} (${manager.taskPluginAllowed(p.id) ? 'allowed' : 'disabled'})`).join('\n') })
+        await mountReasonTools(scoped)
       }
       if (run.activity === 'execute') {
         scoped.on('agent/pre-step', async (_payload, next) => {
@@ -365,24 +303,10 @@ export async function apply(ctx, options) {
         })
         // Skills mount DSH-natively from the full managed skills root; the
         // agent discovers and loads them through the skill tool on demand.
-        scoped = await mountExecutionTools(scoped, { task, cwd, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.availableForTask(id, task.plugins), contextualAttempts: true,
+        scoped = await mountExecutionTools(scoped, { task, cwd, sessionRoot: runtime.sessionRoot, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.availableForTask(id), contextualAttempts: true,
           onRefresh: refresh => sessionRefresh.set(run.id, async () => { await refresh(); refreshLiveTools() }) })
-        if (jev?.isEnabled('skill_suggestion')) void (async () => {
-          try {
-            const skills = await scoped.skills.list({ cwd, signal })
-            const suggestion = await jev.suggestSkill(run, step, skills)
-            if (!suggestion || signal.aborted || !jev.isEnabled('skill_suggestion')) return
-            const notice = `Jev Skill 建议（仅供参考，尚未加载）：${suggestion.name}。请判断它是否适合当前 Step，再决定是否使用。`
-            if (handle) await prompt(notice); else pendingSkillNotice = notice
-          } catch { /* Skill lookup and Jev are advisory; keep Execute available. */ }
-        })()
-        scoped.on('tools/post-execute', async (exec, result, next) => {
-          const decision = await next()
-          const filtered = await filterDshJevResult(jev, run, cwd, exec, result, decision)
-          return rankDshWebResult(jev, run, exec, result, filtered)
-        })
       }
-      mountJevPrompt(scoped, run, step, jev)
+      mountActivityPrompt(scoped, run, step)
       const planGuard = run.activity === 'execute' ? createPlanGuard(store, run.id) : undefined
       if (planGuard) {
         scoped.on('session/event', (session, event) => { if (String(session.id) === run.id && event.type === 'step/start') planGuard.beginTurn() })
@@ -399,18 +323,18 @@ export async function apply(ctx, options) {
         output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => value.content },
         async execute(args, execution) {
           if (finished || signal.aborted) throw new Error('Activity has stopped')
+          const { Check } = await import('typebox/value')
+          if (!Check(t.parameters, args)) throw new Error('Invalid tool arguments')
           const result = await admitToolImages(ctx.get('attachments'), await t.execute(execution.callId ?? '', args, execution.signal))
+          if (result.isError) throw new HarnessError(result.content.filter(block => block.type === 'text').map(block => block.text).join('\n'), result.details?.context?.code ?? 'REDTRACE_TOOL_ERROR')
           if (result.terminate) execution.concludeTurn?.()
           return result
         } })
-      for (const t of [...tools.filter(t => !t.name.startsWith('jev_') && !/^(?:knowledge_|web_|http_batch$)/.test(t.name)), ...(run.activity === 'execute' ? resourceTools(context, verbRuntime) : [])]) registerTool(t)
+      for (const t of [...tools.filter(t => !/^(?:knowledge_|http_)/.test(t.name)), ...(run.activity === 'execute' ? resourceTools(context, verbRuntime) : [])]) registerTool(t)
       const liveVerbs = run.activity === 'execute' ? verbTools(context, verbRuntime, step) : []
-      const refreshJevTools = refreshToolRegistrations(tools.filter(t => t.name.startsWith('jev_')),
-        t => jev?.isEnabled(t.name === 'jev_choose' ? 'candidate_choice' : 'attack_readiness'), registerTool)
-      const refreshEfficiencyTools = refreshToolRegistrations(tools.filter(t => /^(?:knowledge_|web_|http_batch$)/.test(t.name)), t => efficiencyToolAvailable(context, t.name), registerTool)
+      const refreshEfficiencyTools = refreshToolRegistrations(tools.filter(t => /^(?:knowledge_|http_)/.test(t.name)), t => efficiencyToolAvailable(context, t.name), registerTool)
       const refreshVerbTools = refreshToolRegistrations(liveVerbs, t => verbToolAvailable(verbRuntime, t.name), registerTool)
       refreshLiveTools = () => {
-        refreshJevTools()
         refreshVerbTools()
         refreshEfficiencyTools()
       }
@@ -419,36 +343,17 @@ export async function apply(ctx, options) {
       // restriction cannot, because the DSH capability stack registers the
       // session tools in this scope's own layer, which restrictions never
       // filter. The guard enforces the same-session conclude boundary.
-      const graphNames = new Set(tools.map(t => t.name))
-      scoped.tools.guard(exec => concludeOnly && !graphNames.has(exec.name) && (exec.name !== 'read' || ownSpillRead(exec) !== undefined) ? 'Execution timed out; only summarize and submit existing evidence'
-        : (exec.name === 'jev_choose' && !jev?.isEnabled('candidate_choice') || exec.name === 'jev_assess_attack' && !jev?.isEnabled('attack_readiness')) ? 'Jev plugin is disabled'
-          : !verbToolAvailable(verbRuntime, exec.name) ? 'Capability adapter is disabled' : undefined)
-      // Native read is guarded above; other global capabilities stay masked.
-      if (run.activity === 'decide') scoped.tools.restrict({ allow: ['read', ...SESSION_QUERY_TOOLS] })
+      const graphNames = new Set(tools.filter(t => run.activity === 'decide'
+        || ['read_graph', 'read_graph_delta', 'evidence_read', 'sync_step', 'submit_fact', 'submit_finding', 'finish_step'].includes(t.name)).map(t => t.name))
+      scoped.tools.guard(exec => concludeOnly && !graphNames.has(exec.name) && (exec.name !== 'read' || run.activity === 'execute' && ownSpillRead(exec) !== undefined) ? 'Execution timed out; only summarize and submit existing evidence'
+        : !verbToolAvailable(verbRuntime, exec.name) ? 'Capability adapter is disabled' : undefined)
     }
-    const traceWindow = [], tracePending = new Map()
     const unlisten = ctx.on('session/event', (session, event) => {
       if (String(session.id) !== run.id) return
       const data = event.data ?? {}
       if (event.type === 'user/message') { const notice = exploreNotice(data); if (notice) auditNotice(store, notice, 'admitted') }
       if (event.type === 'step/start') store.metricStart(run.id, `model-${data.turn}-${data.step}`, 'model')
       if (event.type === 'assistant/message' || event.type === 'step/end') store.metricEnd(run.id, `model-${data.turn}-${data.step}`)
-      if (jev?.isEnabled('trace_observer')) {
-        if (event.type === 'tool/call' && data.callId) tracePending.set(String(data.callId), {
-          name: String(data.name ?? 'unknown'), args: data.arguments, revision: store.project(run.projectId).revision,
-        })
-        if (event.type === 'tool/result' && data.message?.source?.callId) {
-          const id = String(data.message.source.callId), prior = tracePending.get(id)
-          tracePending.delete(id)
-          if (prior) traceWindow.push(traceCall(prior.name, prior.args, data.message.content,
-            Boolean(data.message.isError), store.project(run.projectId).revision !== prior.revision))
-          if (traceWindow.length >= 10) {
-            const recent = traceWindow.splice(0, 10)
-            void jev.observeTrace(run, step, recent).then(stalled => stalled && !signal.aborted && jev.isEnabled('trace_observer')
-              ? prompt('Jev 提醒：最近一组工具调用可能在重复工作或偏离当前 Step。请检查已有证据与目标，再决定下一步。') : undefined).catch(() => {})
-          }
-        }
-      }
       store.transaction(() => {
         // DSH's projected tool/call is the canonical audit row. The lifecycle
         // tracker still owns pendingTools, but must not emit a second started
@@ -489,16 +394,17 @@ export async function apply(ctx, options) {
       store.checkpoint(run.id, { sessionId: run.id })
       cursor = Math.max(cursor, pendingGraphNotice(handle.agent)?.update.cursor ?? 0)
       prompt(resume ? '继续' : JSON.stringify(launchContext(store, run.id,
-        step?.requires?.length ? channelsFor(verbRuntime, step.requires, 8, run.projectId) : [])))
+        channelsFor(verbRuntime, [], 8, run.projectId), (context.currentMaxSteps ? context.currentMaxSteps() : config.maxSteps))))
       // Changes committed during activation remain in the event log until this scan.
       steer(run.projectId)
-      if (pendingSkillNotice && jev?.isEnabled('skill_suggestion')) void prompt(pendingSkillNotice).catch(() => {})
-      pendingSkillNotice = ''
       const limits = activityLimits(config, run.activity, step)
       await wait(limits.timeout)
       if (!finished && !task.committed && !signal.aborted) {
         task.concludeOnly = concludeOnly = true
-        prompt('仅提交已有证据并调用结束工具，不再执行外部操作。'); await wait(limits.concludeTimeout)
+        prompt(run.activity === 'execute'
+          ? '必须直接调用原生工具 submit_fact 提交至少一条已有证据支持的汇总结论，再直接调用 finish_step；不再执行外部操作。没有成功成果时如实提交已验证的失败、限制或阻塞，禁止伪造事实。'
+          : '仅处理已交付的证据并调用 finish_decide，不再执行外部操作。')
+        await wait(limits.concludeTimeout)
       }
       if (!finished && !task.committed && !signal.aborted) throw new Error(concludeOnly ? 'Activity ended without a structured completion' : 'Agent execution failed')
     } finally {

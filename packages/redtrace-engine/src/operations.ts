@@ -12,7 +12,7 @@ import { ExecutionError, commandFrame, errorResult, executionResult, parseComman
 import { PivotRuntime } from './pivot-runtime.ts'
 import { buildBeacon, compatibleOneliners, generateOneliner } from './c2-payloads.ts'
 
-export const resourceKinds = ['webshell', 'c2_listener', 'c2_session', 'c2_payload', 'c2_profile', 'proxy', 'host', 'entry', 'file', 'credential_ref', 'result']
+export const resourceKinds = ['webshell', 'c2_listener', 'c2_session', 'c2_payload', 'c2_profile', 'proxy', 'host', 'entry', 'file', 'credential_ref', 'result', 'http_session']
 export const terminalTasks = ['succeeded', 'failed', 'cancelled', 'rejected']
 export const digest = (s: string | Buffer) => createHash('sha256').update(s).digest('hex')
 const TASK_SUMMARY_LIMIT = 1000
@@ -106,7 +106,7 @@ export class Operations {
             let executableTask = task
             if (task.action === 'upload_file') {
               const input = JSON.parse(task.input_json), artifact = this.resource(String(input.artifact_id ?? ''))
-              if (artifact.kind !== 'file' || artifact.project_id !== null && artifact.project_id !== task.project_id) throw new ExecutionError('AUTH_FAILED', 'Managed File resource is unavailable to this project')
+              if (artifact.kind !== 'file' || artifact.project_id !== task.project_id) throw new ExecutionError('AUTH_FAILED', 'Managed File resource is unavailable to this project')
               const source = realpathSync(String(JSON.parse(artifact.secret_json).artifact_path ?? '')), root = realpathSync(this.outputRoot)
               if (source !== root && !source.startsWith(root + path.sep) || !statSync(source).isFile()) throw new ExecutionError('AUTH_FAILED', 'Managed File resource points outside the controlled Artifact store')
               executableTask = { ...task, input_json: JSON.stringify({ ...input, _source_path: source }) }
@@ -199,7 +199,7 @@ export class Operations {
       const chunks: Buffer[] = []; let timeout: NodeJS.Timeout, settled = false
       const done = (error?: Error, result?: ExecutionResult) => { if (settled) return; settled = true; clearTimeout(timeout); signal.removeEventListener('abort', abort); socket.off('data', data); socket.off('close', closed); error ? reject(error) : resolve(result!) }
       let bytes = 0
-      const data = (chunk: Buffer) => { bytes += chunk.length; chunks.push(chunk); if (bytes > 2 * 1024 * 1024) { done(new ExecutionError('PROTOCOL_ERROR', 'Raw channel output exceeded 2 MiB; resynchronization required', Buffer.concat(chunks).subarray(0, 2 * 1024 * 1024).toString(), { truncated: true })); return }; const result = parseCommandFrame(Buffer.concat(chunks).toString(), frame); if (result) done(undefined, { ...result, execution_context: { protocol: 'raw_tcp' } }) }
+      const data = (chunk: Buffer) => { bytes += chunk.length; chunks.push(chunk); if (bytes > 64 * 1024 * 1024) { done(new ExecutionError('PROTOCOL_ERROR', 'Raw channel exceeded the 64 MiB transport buffer; received output retained, resynchronization required', Buffer.concat(chunks).toString(), { truncated: true })); return }; const result = parseCommandFrame(Buffer.concat(chunks).toString(), frame); if (result) done(undefined, { ...result, execution_context: { protocol: 'raw_tcp' } }) }
       const closed = () => done(new ExecutionError('TRANSPORT_ERROR', 'shell channel closed', Buffer.concat(chunks).toString()))
       const abort = () => done(new ExecutionError('CANCELLED', 'Operation cancelled; external side effects may have occurred', Buffer.concat(chunks).toString()))
       socket.on('data', data); socket.once('close', closed); signal.addEventListener('abort', abort, { once: true }); timeout = setTimeout(() => done(new ExecutionError('TIMEOUT', 'shell command timed out; external result is unknown', Buffer.concat(chunks).toString())), Math.max(.5, Math.min(300, seconds)) * 1000)
@@ -208,11 +208,21 @@ export class Operations {
   }
   scope(id: string) { if (id !== '_global') this.store.project(id); return id === '_global' ? null : id }
   resource(id: string): any { const r = this.store.db.prepare('SELECT * FROM shared_resources WHERE id=?').get(id); if (!r) throw new HttpError(404, 'Shared resource not found'); return r }
+  ownedResource(project: string, id: string) {
+    const row = this.resource(id)
+    if (row.project_id !== project) throw new HttpError(404, 'Resource not found in this Project')
+    return row
+  }
+  ownedTask(project: string, id: string) {
+    const row = this.task(id)
+    if (row.project_id !== project) throw new HttpError(404, 'Operation task not found in this Project')
+    return row
+  }
   task(id: string): any { const t = this.store.db.prepare('SELECT * FROM operation_tasks WHERE id=?').get(id); if (!t) throw new HttpError(404, 'Operation task not found'); return t }
   publicResource(row: any) {
     const { secret_json, metadata_json, ...item } = row, secret = JSON.parse(secret_json), metadata = JSON.parse(metadata_json)
     const result = { ...item, metadata, has_secret: Object.keys(secret).length > 0, worker_paused: !!item.worker_paused, locked: !!item.locked_by,
-      source_project_id: item.project_id ?? metadata.source_project_id ?? null, scope: 'global',
+      source_project_id: item.project_id ?? metadata.source_project_id ?? null, scope: item.project_id ? 'project' : 'global',
       source: { project_id: item.project_id ?? metadata.source_project_id ?? null, intent_id: item.intent_id, worker: item.worker, task_id: item.source_task_id, created_by_type: item.created_by_type, created_by: item.created_by } }
     if (item.kind === 'c2_payload') delete metadata.command
     if (item.kind === 'c2_listener') result.checkin_path = `/c2/checkin/${item.id}`
@@ -295,6 +305,7 @@ export class Operations {
       this.available(resource, task)
       if (resource.status !== 'available') throw new HttpError(409, `Resource is ${resource.status}`)
       if (task.actor_type === 'worker') {
+        if (!task.project_id || resource.project_id !== task.project_id) throw new HttpError(404, 'Resource belongs to another Project')
         const project = this.store.project(task.project_id)
         if (project.status !== 'active') throw new HttpError(409, 'Project is not active')
       }
@@ -344,13 +355,13 @@ export class Operations {
   create(project: string | null, input: any) {
     return this.store.transaction(() => {
       if (!resourceKinds.includes(input.kind)) throw new HttpError(400, 'Unsupported resource kind')
-      const prefixes: Record<string, string> = { webshell: 'ws', c2_listener: 'lis', c2_session: 'ses', c2_payload: 'pay', c2_profile: 'prf', proxy: 'prx', host: 'hst', entry: 'ent', file: 'fil', credential_ref: 'cred', result: 'res' }
+      const prefixes: Record<string, string> = { webshell: 'ws', c2_listener: 'lis', c2_session: 'ses', c2_payload: 'pay', c2_profile: 'prf', proxy: 'prx', host: 'hst', entry: 'ent', file: 'fil', credential_ref: 'cred', result: 'res', http_session: 'http' }
       const id = uid(prefixes[input.kind]), metadata = { ...input.metadata }, secret = { ...input.secret }, at = now()
       if(input.actor_type==='worker') for(const key of ['verified_capabilities','verified_at','verified_endpoint','runtime_verified','verification_version','conflict_key']) delete metadata[key]
       if (input.actor_type === 'worker' && input.kind === 'file') delete secret.artifact_path
       let status = input.status ?? 'available', secret_once: string | undefined
       if (project) metadata.source_project_id ??= project
-      if (input.parent_resource_id) this.resource(input.parent_resource_id)
+      if (input.parent_resource_id) project ? this.ownedResource(project, input.parent_resource_id) : this.resource(input.parent_resource_id)
       if (input.kind === 'c2_listener') {
         metadata.listener_type = String(metadata.listener_type ?? 'http_beacon').toLowerCase()
         if (!['http_beacon', 'https_beacon', 'tcp_reverse', 'tcp_bind', 'external_c2'].includes(metadata.listener_type)) throw new HttpError(400, 'Unsupported listener type')
@@ -375,7 +386,8 @@ export class Operations {
   }
   createTask(project: string | null, id: string, input: any) {
     return this.store.transaction(() => {
-      const resource = this.resource(id); this.available(resource, input)
+      if (input.actor_type === 'worker' && !project) throw new HttpError(403, 'Worker operations require a Project')
+      const resource = project ? this.ownedResource(project, id) : this.resource(id); this.available(resource, input)
       if (!['webshell', 'c2_session', 'entry'].includes(resource.kind)) throw new HttpError(409, 'This resource type does not accept operation tasks')
       if (!operationSupported(resource, input.action)) throw new HttpError(422, 'CAPABILITY_UNSUPPORTED: channel has no implementation for this action')
       if (resource.kind === 'c2_session' && resource.status !== 'available') throw new HttpError(409, `C2 session is ${resource.status}`)
@@ -391,10 +403,9 @@ export class Operations {
     return this.store.transaction(() => {
       const task = this.task(id); if (terminalTasks.includes(task.status) && (task.status !== 'cancelled' || task.result_ref)) return this.publicTask(task)
       const at = now(), resource = this.resource(task.resource_id), succeeded = result.completion === 'known' && result.error_code === null && result.exit_code === 0, status = task.status === 'cancelled' ? 'cancelled' : succeeded ? 'succeeded' : 'failed'
-      const output = result.combined_output, outputId = uid('out'), bytes = Buffer.from(output), truncated = bytes.length > 2 * 1024 * 1024
-      const content = truncated ? bytes.subarray(0, 2 * 1024 * 1024).toString() + '\n[output truncated by RedTrace]' : output
+      const output = result.combined_output, outputId = uid('out'), content = output
       const ref = `/projects/${task.project_id ?? '_global'}/operations/results/${outputId}`
-      result = { ...result, output_ref: ref, truncated: result.truncated || truncated, completed_at: at, execution_context: { ...result.execution_context, resource_id: resource.id, host_id: JSON.parse(resource.metadata_json).host_id ?? null, route_id: JSON.parse(resource.metadata_json).route_id ?? null } }
+      result = { ...result, output_ref: ref, truncated: result.truncated, completed_at: at, execution_context: { ...result.execution_context, resource_id: resource.id, host_id: JSON.parse(resource.metadata_json).host_id ?? null, route_id: JSON.parse(resource.metadata_json).route_id ?? null } }
       if (succeeded && task.action === 'download_file' && result.execution_context.artifact_path) {
         const artifactPath = realpathSync(String(result.execution_context.artifact_path)), root = realpathSync(this.outputRoot)
         if (!artifactPath.startsWith(root + path.sep) || !statSync(artifactPath).isFile()) throw new Error('Downloaded artifact escaped the controlled store')
@@ -402,7 +413,7 @@ export class Operations {
         result.execution_context.file_resource_id = file.id
       }
       this.store.db.prepare('INSERT INTO operation_results VALUES (?,?,?,?,?,?,?,?)').run(outputId, task.project_id, id, 'text/plain; charset=utf-8', content, Buffer.byteLength(content), digest(content), at)
-      const directory = path.join(this.outputRoot, resource.kind === 'webshell' ? 'webshell' : 'c2', 'results'); mkdirSync(directory, { recursive: true }); writeFileSync(path.join(directory, `${id}-${outputId}.txt`), content)
+      const directory = path.join(this.outputRoot, resource.kind === 'webshell' ? 'webshell' : 'c2', 'results'); mkdirSync(directory, { recursive: true }); writeFileSync(path.join(directory, `${id}-${outputId}.txt`), content, { mode: 0o600 })
       if (JSON.parse(task.input_json).publish_result) this.create(task.project_id, { kind: 'result', name: `${resource.name} · ${task.action}`, target: ref, summary: output, metadata: { result_id: outputId, task_id: id }, actor_type: task.actor_type, actor: task.actor, source_task_id: id })
       const outputSummary = summarize(output || (succeeded ? '任务已完成，未返回文本输出' : 'operation failed'))
       const bounded = { ...result, stdout: result.stdout?.slice(0, 16384) ?? null, stderr: result.stderr?.slice(0, 16384) ?? null, combined_output: result.combined_output.slice(0, 32768), truncated: result.truncated || Buffer.byteLength(output) > 32768, saved_bytes: Buffer.byteLength(content) }
@@ -435,12 +446,13 @@ export function operationRoutes(router: Router, ops: Operations) {
     if (worker !== undefined && (typeof worker !== 'string' || !worker.trim() || worker === 'unknown')) throw new HttpError(403, 'Runtime worker identity is required')
     return { ...b, actor_type: worker !== undefined ? 'worker' : b.actor_type ?? 'human', actor: worker !== undefined ? worker : b.actor ?? 'admin', intent_id: c.req.headers['x-redtrace-intent'] ?? b.intent_id ?? null }
   }
-  const add = (method: string, route: string, handler: (c: RequestContext) => unknown) => router.add(method, base + route, c => { ops.scope(c.params.project); return handler(c) })
-  const resource = (c: RequestContext) => ops.resource(c.params.resource)
+  const add = (method: string, route: string, handler: (c: RequestContext) => unknown) => router.add(method, base + route, c => { ops.scope(c.params.project); if (c.params.project === '_global' && c.req.headers['x-redtrace-worker']) throw new HttpError(403, 'Workers require Project-scoped resources'); return handler(c) })
+  const resource = (c: RequestContext) => c.params.project === '_global' ? ops.resource(c.params.resource) : ops.ownedResource(c.params.project, c.params.resource)
+  const scopedTask = (c: RequestContext) => c.params.project === '_global' ? ops.task(c.params.operation) : ops.ownedTask(c.params.project, c.params.operation)
   const auditRows = (rows: any[]) => rows.map(({ detail_json, ...event }) => ({ ...event, detail: JSON.parse(detail_json) }))
   const selected = (c: RequestContext) => {
     ops.expireStale(c.params.project === '_global' ? undefined : c.params.project)
-    const q = c.url.searchParams, clauses = [], args: any[] = []
+    const q = c.url.searchParams, clauses = c.params.project === '_global' ? [] : ['project_id=?'], args: any[] = c.params.project === '_global' ? [] : [c.params.project]
     for (const key of ['kind', 'status']) if (q.get(key)) { clauses.push(`${key}=?`); args.push(q.get(key)) }
     if (q.get('q')?.trim()) { clauses.push('(name LIKE ? OR target LIKE ? OR summary LIKE ?)'); args.push(...Array(3).fill(`%${q.get('q')!.trim()}%`)) }
     args.push(queryNumber(c.url, 'limit', 200, 1, 500), queryNumber(c.url, 'offset', 0))
@@ -448,8 +460,12 @@ export function operationRoutes(router: Router, ops: Operations) {
     if (c.req.headers['x-redtrace-worker']) ops.store.transaction(() => ops.audit(c.params.project, null, null, actor(c), 'resource.list', 'succeeded', { count: rows.length }))
     return rows.map(r => ops.publicResource(r))
   }
-  add('GET', '/resources', c => ({ project_id: c.params.project, scope: 'global', resources: selected(c) }))
-  add('GET', '/operations/summary', c => { ops.expireStale(c.params.project === '_global' ? undefined : c.params.project); return { project_id: c.params.project, scope: 'global', resources: Object.fromEntries(db.prepare("SELECT kind,COUNT(*) AS count,SUM(status='available') AS available FROM shared_resources GROUP BY kind").all().map(r => [r.kind, { count: r.count, available: r.available }])), tasks: Object.fromEntries(db.prepare('SELECT status,COUNT(*) AS n FROM operation_tasks GROUP BY status').all().map(r => [r.status, r.n])) } })
+  add('GET', '/resources', c => ({ project_id: c.params.project, scope: c.params.project === '_global' ? 'global' : 'project', resources: selected(c) }))
+  add('GET', '/operations/summary', c => {
+    ops.expireStale(c.params.project === '_global' ? undefined : c.params.project)
+    const clause = c.params.project === '_global' ? '' : ' WHERE project_id=?', args = c.params.project === '_global' ? [] : [c.params.project]
+    return { project_id: c.params.project, scope: clause ? 'project' : 'global', resources: Object.fromEntries(db.prepare("SELECT kind,COUNT(*) AS count,SUM(status='available') AS available FROM shared_resources" + clause + ' GROUP BY kind').all(...args).map(r => [r.kind, { count: r.count, available: r.available }])), tasks: Object.fromEntries(db.prepare('SELECT status,COUNT(*) AS n FROM operation_tasks' + clause + ' GROUP BY status').all(...args).map(r => [r.status, r.n])) }
+  })
   add('POST', '/resources', async c => {
     const b = actor(c, await body(c.req, Type.Object({ kind: Type.Union(resourceKinds.filter(k => k !== 'result').map(v => Type.Literal(v))), name: text(160), target: optional(Type.String({ maxLength: 4096 })), summary: optional(Type.String({ maxLength: 2000 })), status: optional(text(32)), metadata: optional(object), secret: optional(object), ...actorFields, worker: optional(Type.Union([Type.String(), Type.Null()])), parent_resource_id: optional(Type.Union([Type.String(), Type.Null()])), source_task_id: optional(Type.Union([Type.String(), Type.Null()])), publish_fact: optional(Type.Boolean()) })))
     if (b.publish_fact) throw new HttpError(409, 'Resources do not create formal Facts; conclude the owning Intent instead')
@@ -474,7 +490,7 @@ export function operationRoutes(router: Router, ops: Operations) {
     return { listener_id: listener.id, kinds: compatibleOneliners(JSON.parse(listener.metadata_json)) }
   })
   add('POST', '/c2/payloads/oneliner', async c => {
-    const b = await body(c.req, Type.Object({ listener_id: text(64), kind: text(64), callback_host: optional(Type.String({ maxLength: 512 })) })), listener = ops.resource(b.listener_id)
+    const b = await body(c.req, Type.Object({ listener_id: text(64), kind: text(64), callback_host: optional(Type.String({ maxLength: 512 })) })), listener = c.params.project === '_global' ? ops.resource(b.listener_id) : ops.ownedResource(c.params.project, b.listener_id)
     if (listener.kind !== 'c2_listener') throw new HttpError(400, 'Resource is not a C2 listener')
     try {
       const metadata = JSON.parse(listener.metadata_json), command = generateOneliner(metadata, listener.id, JSON.parse(listener.secret_json).listener_token ?? '', b.kind, b.callback_host)
@@ -484,7 +500,7 @@ export function operationRoutes(router: Router, ops: Operations) {
     } catch (error) { throw new HttpError(400, error instanceof Error ? error.message : String(error)) }
   })
   add('POST', '/c2/payloads/build', async c => {
-    const b = await body(c.req, Type.Object({ listener_id: text(64), callback_url: optional(Type.String({ maxLength: 2048 })), os: optional(Type.Union(['linux', 'windows', 'darwin'].map(v => Type.Literal(v)))), arch: optional(Type.Union(['amd64', 'arm64', '386'].map(v => Type.Literal(v)))), sleep_seconds: optional(Type.Integer({ minimum: 1, maximum: 3600 })), actor: optional(text()) })), listener = ops.resource(b.listener_id)
+    const b = await body(c.req, Type.Object({ listener_id: text(64), callback_url: optional(Type.String({ maxLength: 2048 })), os: optional(Type.Union(['linux', 'windows', 'darwin'].map(v => Type.Literal(v)))), arch: optional(Type.Union(['amd64', 'arm64', '386'].map(v => Type.Literal(v)))), sleep_seconds: optional(Type.Integer({ minimum: 1, maximum: 3600 })), actor: optional(text()) })), listener = c.params.project === '_global' ? ops.resource(b.listener_id) : ops.ownedResource(c.params.project, b.listener_id)
     if (listener.kind !== 'c2_listener') throw new HttpError(400, 'Resource is not a C2 listener')
     const token = JSON.parse(listener.secret_json).listener_token; if (!token) throw new HttpError(409, 'Listener token is unavailable; recreate the listener')
     const directory = path.join(ops.outputRoot, 'c2', 'payloads'); mkdirSync(directory, { recursive: true })
@@ -495,7 +511,7 @@ export function operationRoutes(router: Router, ops: Operations) {
     } catch (error) { throw new HttpError(400, error instanceof Error ? error.message : String(error)) }
   })
   add('POST', '/c2/payloads/external', async c => {
-    const b = await body(c.req, Type.Object({ listener_id: text(64), format: optional(text()), options: optional(object), actor: optional(text()) })), listener = ops.resource(b.listener_id)
+    const b = await body(c.req, Type.Object({ listener_id: text(64), format: optional(text()), options: optional(object), actor: optional(text()) })), listener = c.params.project === '_global' ? ops.resource(b.listener_id) : ops.ownedResource(c.params.project, b.listener_id)
     if (listener.kind !== 'c2_listener') throw new HttpError(400, 'Resource is not a C2 listener')
     const metadata = JSON.parse(listener.metadata_json), secret = JSON.parse(listener.secret_json), endpoint = String(secret.adapter_endpoint ?? metadata.adapter_endpoint ?? '').replace(/\/$/, '')
     if (!endpoint) throw new HttpError(409, 'External C2 listener has no adapter endpoint')
@@ -512,7 +528,7 @@ export function operationRoutes(router: Router, ops: Operations) {
     const bytes = await rawBody(c.req), directory = path.join(ops.outputRoot, 'c2', 'payloads'); mkdirSync(directory, { recursive: true })
     const stored = `upload-${randomBytes(8).toString('hex')}${path.extname(filename).slice(0, 16)}`, artifact = path.join(directory, stored); writeFileSync(artifact, bytes)
     try {
-      const listener = q.get('listener_id'); if (listener && ops.resource(listener).kind !== 'c2_listener') throw new HttpError(400, 'Resource is not a C2 listener')
+      const listener = q.get('listener_id'); if (listener && (c.params.project === '_global' ? ops.resource(listener) : ops.ownedResource(c.params.project, listener)).kind !== 'c2_listener') throw new HttpError(400, 'Resource is not a C2 listener')
       const payload = ops.create(ops.scope(c.params.project), { kind: 'c2_payload', name: q.get('name')?.trim() || original, target: `/projects/${c.params.project}/c2/payloads/download/${stored}`, summary: q.get('summary')?.trim() || 'Manually uploaded payload file', metadata: { listener_id: listener || null, payload_type: 'file', source_type: c.req.headers['x-redtrace-worker'] ? 'worker' : 'upload', platform: q.get('platform') ?? 'unknown', arch: q.get('arch') ?? 'unknown', filename: stored, original_filename: original, size_bytes: bytes.length, sha256: digest(bytes) }, secret: { artifact_path: artifact }, ...actor(c), parent_resource_id: listener || null }).resource
       ops.audit(c.params.project, payload.id, null, actor(c), 'c2.payload_upload', 'succeeded', { filename: original }); send(c.res, { payload }, 201)
     } catch (error) { rmSync(artifact, { force: true }); throw error }
@@ -520,12 +536,12 @@ export function operationRoutes(router: Router, ops: Operations) {
   add('GET', '/c2/payloads/download/:filename', c => {
     const filename = c.params.filename; if (filename.includes('..') || filename.includes('\\')) throw new HttpError(400, 'Invalid payload filename')
     const row: any = (db.prepare("SELECT * FROM shared_resources WHERE kind='c2_payload'").all() as any[]).find(item => JSON.parse(item.metadata_json).filename === filename)
-    if (!row) throw new HttpError(404, 'Payload not found')
+    if (!row || c.params.project !== '_global' && row.project_id !== c.params.project) throw new HttpError(404, 'Payload not found')
     const root = path.resolve(ops.outputRoot, 'c2', 'payloads'), artifact = path.resolve(String(JSON.parse(row.secret_json).artifact_path ?? ''))
     if (path.dirname(artifact) !== root || !statSync(artifact, { throwIfNoEntry: false })?.isFile()) throw new HttpError(404, 'Payload not found')
     const metadata = JSON.parse(row.metadata_json), bytes = readFileSync(artifact); c.res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': bytes.length, 'Content-Disposition': `attachment; filename="${String(metadata.original_filename ?? filename).replaceAll('"', '')}"` }); c.res.end(bytes)
   })
-  add('GET', '/resources/:resource', c => { ops.expireStale(c.params.project === '_global' ? undefined : c.params.project); return { resource: ops.publicResource(resource(c)), tasks: db.prepare('SELECT * FROM operation_tasks WHERE resource_id=? ORDER BY created_at DESC LIMIT 50').all(c.params.resource).map(t => ops.publicTask(t)), audit: auditRows(db.prepare('SELECT * FROM resource_audit_events WHERE resource_id=? ORDER BY id DESC LIMIT 100').all(c.params.resource)) } })
+  add('GET', '/resources/:resource', c => { ops.expireStale(c.params.project === '_global' ? undefined : c.params.project); return { resource: ops.publicResource(resource(c)), tasks: db.prepare('SELECT * FROM operation_tasks WHERE resource_id=? AND (?=1 OR project_id=?) ORDER BY created_at DESC LIMIT 50').all(c.params.resource, c.params.project === '_global' ? 1 : 0, c.params.project).map(t => ops.publicTask(t)), audit: auditRows(db.prepare('SELECT * FROM resource_audit_events WHERE resource_id=? AND (?=1 OR project_id=?) ORDER BY id DESC LIMIT 100').all(c.params.resource, c.params.project === '_global' ? 1 : 0, c.params.project)) } })
   add('POST', '/resources/:resource/material', c => {
     if (actor(c).actor_type !== 'human') throw new HttpError(403, 'Only human operators can retrieve payload material')
     const r = resource(c), secret = JSON.parse(r.secret_json)
@@ -533,10 +549,15 @@ export function operationRoutes(router: Router, ops: Operations) {
     ops.store.transaction(() => ops.audit(r.project_id, r.id, null, actor(c), 'resource.material_read', 'succeeded'))
     return { command: secret.command }
   })
-  add('DELETE', '/resources/:resource', c => {
+  add('DELETE', '/resources/:resource', async c => {
     const r = resource(c)
     if (db.prepare("SELECT 1 FROM operation_tasks WHERE resource_id=? AND status IN ('queued','running','awaiting_approval')").get(c.params.resource)) throw new HttpError(409, 'Cancel active tasks before deleting this resource')
     ops.stopListener(c.params.resource)
+    if (r.kind === 'http_session') {
+      ops.updateResource(r.id, { status: 'retired' })
+      await import('./http-tools.ts').then(({ disposeHttpResource }) => disposeHttpResource(ops.store, r.id, true))
+      rmSync(path.join(ops.outputRoot, 'http', 'sessions', `${r.id}.json`), { force: true })
+    }
     if (r.kind === 'c2_payload') {
       const artifact = path.resolve(String(JSON.parse(r.secret_json).artifact_path ?? '')), root = path.resolve(ops.outputRoot, 'c2', 'payloads')
       if (path.dirname(artifact) === root) rmSync(artifact, { force: true })
@@ -546,6 +567,12 @@ export function operationRoutes(router: Router, ops: Operations) {
   for (const action of ['lock', 'unlock', 'worker-control', 'state']) add('POST', `/resources/:resource/${action}`, async c => {
     const fields: Record<string, import('typebox').TSchema> = action === 'worker-control' ? { paused: Type.Boolean() } : action === 'state' ? { status: Type.Union(['available', 'offline', 'degraded', 'retired'].map(v => Type.Literal(v))) } : { actor: text(), actor_type: optional(Type.Union(['human', 'worker'].map(v => Type.Literal(v)))) }
     const b = Object.assign({ actor_type: 'human', actor: 'admin' }, await body(c.req, Type.Object({ ...fields, actor: fields.actor ?? optional(text()) }))) as any
+    const selectedResource = resource(c)
+    if (selectedResource.kind === 'http_session' && action === 'state' && b.status !== 'available') {
+      ops.updateResource(selectedResource.id, { status: b.status })
+      await import('./http-tools.ts').then(({ disposeHttpResource }) => disposeHttpResource(ops.store, selectedResource.id, b.status === 'retired'))
+      if (b.status === 'retired') rmSync(path.join(ops.outputRoot, 'http', 'sessions', `${selectedResource.id}.json`), { force: true })
+    }
     return ops.store.transaction(() => {
       const r = resource(c); let update: Record<string, any>, event = action
       if (action === 'lock') { if (r.locked_by && (r.locked_by !== b.actor || r.locked_by_type !== b.actor_type)) throw new HttpError(423, 'Resource is already locked'); update = { locked_by: b.actor, locked_by_type: b.actor_type, locked_at: now() } }
@@ -583,26 +610,28 @@ export function operationRoutes(router: Router, ops: Operations) {
     const b = actor(c, await body(c.req, Type.Object({ action: text(), arguments: optional(object), ...actorFields, risk: optional(Type.Union(['low', 'medium', 'high', 'critical'].map(v => Type.Literal(v)))), requires_approval: optional(Type.Union([Type.Boolean(), Type.Null()])) })))
     send(c.res, { task: ops.createTask(ops.scope(c.params.project), c.params.resource, b) }, 202)
   })
-  add('GET', '/operations/tasks', c => { const q = c.url.searchParams, clauses = [], args: any[] = []; for (const key of ['resource_id', 'status']) if (q.get(key)) { clauses.push(`${key}=?`); args.push(q.get(key)) }; return { project_id: c.params.project, scope: 'global', tasks: db.prepare(`SELECT * FROM operation_tasks ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''} ORDER BY created_at DESC LIMIT ?`).all(...args, queryNumber(c.url, 'limit', 200, 1, 500)).map(t => ops.publicTask(t)) } })
-  add('GET', '/operations/tasks/:operation', c => ({ task: ops.publicTask(ops.task(c.params.operation)) }))
+  add('GET', '/operations/tasks', c => { const q = c.url.searchParams, clauses = c.params.project === '_global' ? [] : ['project_id=?'], args: any[] = c.params.project === '_global' ? [] : [c.params.project]; for (const key of ['resource_id', 'status']) if (q.get(key)) { clauses.push(`${key}=?`); args.push(q.get(key)) }; return { project_id: c.params.project, scope: c.params.project === '_global' ? 'global' : 'project', tasks: db.prepare(`SELECT * FROM operation_tasks ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''} ORDER BY created_at DESC LIMIT ?`).all(...args, queryNumber(c.url, 'limit', 200, 1, 500)).map(t => ops.publicTask(t)) } })
+  add('GET', '/operations/tasks/:operation', c => ({ task: ops.publicTask(scopedTask(c)) }))
   add('POST', '/operations/tasks/:operation/approval', async c => {
     if (c.req.headers['x-redtrace-worker']) throw new HttpError(403, 'Workers cannot approve tasks')
     const b = await body(c.req, Type.Object({ actor: optional(text()), decision: optional(Type.Union(['approve', 'reject'].map(v => Type.Literal(v)))) }))
-    return ops.store.transaction(() => { const t = ops.task(c.params.operation); if (t.status !== 'awaiting_approval') throw new HttpError(409, 'Task is not awaiting approval'); const status = b.decision === 'reject' ? 'rejected' : 'queued'; db.prepare('UPDATE operation_tasks SET status=?,approved_by=?,approved_at=?,completed_at=? WHERE id=?').run(status, b.actor ?? 'admin', now(), status === 'rejected' ? now() : null, t.id); ops.audit(t.project_id, t.resource_id, t.id, b, 'operation.approval', status); ops.wake(); return { task: ops.publicTask(ops.task(t.id)) } })
+    return ops.store.transaction(() => { const t = scopedTask(c); if (t.status !== 'awaiting_approval') throw new HttpError(409, 'Task is not awaiting approval'); const status = b.decision === 'reject' ? 'rejected' : 'queued'; db.prepare('UPDATE operation_tasks SET status=?,approved_by=?,approved_at=?,completed_at=? WHERE id=?').run(status, b.actor ?? 'admin', now(), status === 'rejected' ? now() : null, t.id); ops.audit(t.project_id, t.resource_id, t.id, b, 'operation.approval', status); ops.wake(); return { task: ops.publicTask(ops.task(t.id)) } })
   })
   add('POST', '/operations/tasks/:operation/cancel', async c => {
     const b = await body(c.req, Type.Object({ actor: optional(text()), reason: optional(Type.String({ maxLength: 500 })) }))
-    return ops.store.transaction(() => { const t = ops.task(c.params.operation); if (!terminalTasks.includes(t.status)) { db.prepare("UPDATE operation_tasks SET status='cancelled',cancel_requested=1,output_summary=?,completed_at=? WHERE id=?").run(b.reason ?? 'cancelled by operator', now(), t.id); if (t.status !== 'running') ops.finish(t.id, executionResult('', null, { error_code: 'CANCELLED' })); ops.audit(t.project_id, t.resource_id, t.id, b, 'operation.cancel', 'cancelled'); ops.wake() }; return { task: ops.publicTask(ops.task(t.id)) } })
+    return ops.store.transaction(() => { const t = scopedTask(c); if (!terminalTasks.includes(t.status)) { db.prepare("UPDATE operation_tasks SET status='cancelled',cancel_requested=1,output_summary=?,completed_at=? WHERE id=?").run(b.reason ?? 'cancelled by operator', now(), t.id); if (t.status !== 'running') ops.finish(t.id, executionResult('', null, { error_code: 'CANCELLED' })); ops.audit(t.project_id, t.resource_id, t.id, b, 'operation.cancel', 'cancelled'); ops.wake() }; return { task: ops.publicTask(ops.task(t.id)) } })
   })
-  add('DELETE', '/operations/tasks/:operation', c => { const t = ops.task(c.params.operation); if (!terminalTasks.includes(t.status)) throw new HttpError(409, 'Cancel the task before deleting it'); db.prepare('DELETE FROM operation_tasks WHERE id=?').run(t.id); send(c.res, null, 204) })
-  add('DELETE', '/operations/tasks', () => ({ deleted: db.prepare("DELETE FROM operation_tasks WHERE status IN ('succeeded','failed','cancelled','rejected') AND resource_id IN (SELECT id FROM shared_resources WHERE kind='c2_session')").run().changes, remaining: db.prepare("SELECT COUNT(*) AS n FROM operation_tasks WHERE resource_id IN (SELECT id FROM shared_resources WHERE kind='c2_session')").get()!.n }))
+  add('DELETE', '/operations/tasks/:operation', c => { const t = scopedTask(c); if (!terminalTasks.includes(t.status)) throw new HttpError(409, 'Cancel the task before deleting it'); db.prepare('DELETE FROM operation_tasks WHERE id=?').run(t.id); send(c.res, null, 204) })
+  add('DELETE', '/operations/tasks', c => { const clause = c.params.project === '_global' ? '' : ' AND project_id=?', args = c.params.project === '_global' ? [] : [c.params.project]; return { deleted: db.prepare("DELETE FROM operation_tasks WHERE status IN ('succeeded','failed','cancelled','rejected') AND resource_id IN (SELECT id FROM shared_resources WHERE kind='c2_session')" + clause).run(...args).changes, remaining: db.prepare("SELECT COUNT(*) AS n FROM operation_tasks WHERE resource_id IN (SELECT id FROM shared_resources WHERE kind='c2_session')" + clause).get(...args)!.n } })
   add('GET', '/operations/results/:result', c => { const r: any = db.prepare('SELECT * FROM operation_results WHERE id=? AND project_id IS ?').get(c.params.result, ops.scope(c.params.project)); if (!r) throw new HttpError(404, 'Operation result not found'); c.res.writeHead(200, { 'Content-Type': r.content_type, 'X-RedTrace-SHA256': r.sha256, 'X-RedTrace-Task': r.task_id }); c.res.end(r.content) })
   add('GET', '/operations/audit', c => {
     const since = queryNumber(c.url, 'since', 0), args: any[] = [since], resourceId = c.url.searchParams.get('resource_id'), order = c.url.searchParams.get('order') ?? 'desc'
     if (!['asc', 'desc'].includes(order)) throw new HttpError(422, 'Invalid order')
     if (resourceId) args.push(resourceId)
-    const events = auditRows(db.prepare(`SELECT * FROM resource_audit_events WHERE id>? ${resourceId ? 'AND resource_id=?' : ''} ORDER BY id ${order.toUpperCase()} LIMIT ?`).all(...args, queryNumber(c.url, 'limit', 200, 1, 500))), cursor = Math.max(since, ...events.map(e => e.id)), latest = Number(db.prepare('SELECT COALESCE(MAX(id),0) AS n FROM resource_audit_events').get()!.n)
-    return { project_id: c.params.project, scope: 'global', audit_cursor: cursor, latest_cursor: latest, has_more: cursor < latest, events }
+    const scopeClause = c.params.project === '_global' ? '' : 'AND project_id=?'
+    if (scopeClause) args.push(c.params.project)
+    const events = auditRows(db.prepare(`SELECT * FROM resource_audit_events WHERE id>? ${resourceId ? 'AND resource_id=?' : ''} ${scopeClause} ORDER BY id ${order.toUpperCase()} LIMIT ?`).all(...args, queryNumber(c.url, 'limit', 200, 1, 500))), cursor = Math.max(since, ...events.map(e => e.id)), latest = Number(db.prepare(`SELECT COALESCE(MAX(id),0) AS n FROM resource_audit_events WHERE 1=1 ${scopeClause}`).get(...(scopeClause ? [c.params.project] : []))!.n)
+    return { project_id: c.params.project, scope: c.params.project === '_global' ? 'global' : 'project', audit_cursor: cursor, latest_cursor: latest, has_more: cursor < latest, events }
   })
   add('DELETE', '/operations/audit/:event', c => { const id = Number(c.params.event); if (!Number.isSafeInteger(id)) throw new HttpError(422, 'Invalid event id'); if (!db.prepare('DELETE FROM resource_audit_events WHERE id=?').run(id).changes) throw new HttpError(404, 'Audit event not found'); send(c.res, null, 204) })
   add('DELETE', '/operations/audit', () => ({ deleted: db.prepare(`DELETE FROM resource_audit_events WHERE ${c2Predicate}`).run().changes }))
@@ -633,7 +662,7 @@ export function operationRoutes(router: Router, ops: Operations) {
     })
   })
   router.add('POST', '/c2/sessions/:session/results/:operation', async c => {
-    const session = ops.session(c.params.session, String(c.req.headers['x-redtrace-session-token'] ?? '')), b = await body(c.req, Type.Object({ version: Type.Literal(1), attempt_id: text(64), completion: Type.Union([Type.Literal('known'), Type.Literal('unknown')]), exit_code: Type.Union([Type.Integer({ minimum: 0, maximum: 255 }), Type.Null()]), error_code: Type.Union(['COMMAND_FAILED', 'TRANSPORT_ERROR', 'AUTH_FAILED', 'PROTOCOL_ERROR', 'CAPABILITY_UNSUPPORTED', 'TIMEOUT', 'CANCELLED', 'UNKNOWN_RESULT'].map(v => Type.Literal(v)).concat(Type.Null() as any)), stdout: optional(Type.Union([Type.String({ maxLength: 2 * 1024 * 1024 }), Type.Null()])), stderr: optional(Type.Union([Type.String({ maxLength: 2 * 1024 * 1024 }), Type.Null()])), combined_output: Type.String({ maxLength: 2 * 1024 * 1024 }), summary: optional(Type.String({ maxLength: 1000 })) })), task = ops.task(c.params.operation)
+    const session = ops.session(c.params.session, String(c.req.headers['x-redtrace-session-token'] ?? '')), b = await body(c.req, Type.Object({ version: Type.Literal(1), attempt_id: text(64), completion: Type.Union([Type.Literal('known'), Type.Literal('unknown')]), exit_code: Type.Union([Type.Integer({ minimum: 0, maximum: 255 }), Type.Null()]), error_code: Type.Union(['COMMAND_FAILED', 'TRANSPORT_ERROR', 'AUTH_FAILED', 'PROTOCOL_ERROR', 'CAPABILITY_UNSUPPORTED', 'TIMEOUT', 'CANCELLED', 'UNKNOWN_RESULT'].map(v => Type.Literal(v)).concat(Type.Null() as any)), stdout: optional(Type.Union([Type.String(), Type.Null()])), stderr: optional(Type.Union([Type.String(), Type.Null()])), combined_output: Type.String(), summary: optional(Type.String({ maxLength: 1000 })) })), task = ops.task(c.params.operation)
     if (task.resource_id !== session.id) throw new HttpError(404, 'Task not found')
     if (['cancelled', 'rejected'].includes(task.status)) return { task: ops.publicTask(task) }
     if (task.attempt_id !== b.attempt_id) throw new HttpError(409, 'Stale execution attempt')

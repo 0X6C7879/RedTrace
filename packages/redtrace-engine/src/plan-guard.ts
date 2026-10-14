@@ -1,11 +1,11 @@
 import type { Store } from './store.ts'
 import type { Goal, Step } from './types.ts'
 
-/** Bind proposals, including PTC descendants, to the contract used by their model turn. */
+/** Bind proposals, including nested tool calls, to the contract used by their model turn. */
 export function createPlanGuard(store: Store, runId: string) {
   const roots = new Map<string, number>()
   let turnVersion = store.run(runId).boundStepVersion ?? 1
-  const safe = new Set(['run_code', 'read_graph', 'read_graph_delta', 'evidence_read', 'sync_step', 'submit_fact', 'submit_finding'])
+  const safe = new Set(['read_graph', 'read_graph_delta', 'evidence_read', 'sync_step', 'submit_fact', 'submit_finding'])
   return {
     beginTurn() { turnVersion = store.run(runId).boundStepVersion ?? 1 },
     settled(rootCallId: string) { roots.delete(rootCallId) },

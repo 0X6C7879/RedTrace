@@ -38,6 +38,8 @@ export class ProjectDeletion {
       this.store.markDeleting(id)
     })
     await this.operations.cancelProject(id)
+      await import('./http-tools.ts').then(({ closeHttpSessions }) => closeHttpSessions(this.store, id, true))
+      for (const row of this.store.db.prepare("SELECT id FROM shared_resources WHERE project_id=? AND kind='http_session'").all(id)) rmSync(path.join(this.operations.outputRoot, 'http', 'sessions', `${row.id}.json`), { force: true })
     queueMicrotask(() => { void this.complete(id, true) })
     return 'pending'
   }
@@ -47,6 +49,8 @@ export class ProjectDeletion {
     if (!success) { this.fail(id, error || 'runtime cleanup failed'); return false }
     try {
       await this.operations.cancelProject(id)
+      await import('./http-tools.ts').then(({ closeHttpSessions }) => closeHttpSessions(this.store, id, true))
+      for (const row of this.store.db.prepare("SELECT id FROM shared_resources WHERE project_id=? AND kind='http_session'").all(id)) rmSync(path.join(this.operations.outputRoot, 'http', 'sessions', `${row.id}.json`), { force: true })
       const sessions = new Set((this.store.db.prepare('SELECT data FROM audit_runs WHERE project_id=?').all(id) as { data: string }[]).map(row => String(JSON.parse(row.data).session_id ?? '')).filter(Boolean))
       const sessionRoot = path.join(this.root, '.redtrace/sessions')
       if (existsSync(sessionRoot)) for (const project of readdirSync(sessionRoot, { withFileTypes: true }).filter(entry => entry.isDirectory())) {

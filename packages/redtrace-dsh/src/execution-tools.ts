@@ -3,7 +3,7 @@
  * shell, filesystem, skills, and (for the isolated execution profile) the
  * sandbox stack — restricted to the assigned workspace — plus the DSH
  * native capability stacks (web, background jobs, terminal, file search,
- * spill, guards, LSP, PTC presentation) gated by the plugin manager.
+ * spill, guards, LSP) gated by the plugin manager.
  * Shared by every Execute vocabulary the engine host dispatches.
  * @module redtrace-execution-tools
  */
@@ -46,6 +46,7 @@ function webSearchFreeConfig(): Record<string, string> {
 export interface ExecutionToolsConfig {
   task: RuntimeTask
   cwd: string
+  sessionRoot: string
   skillsDir: string
   /** Repo-local security-asset root (`tools/`); when populated its map is
    * injected as a system-prompt section so agents use the local wordlists,
@@ -139,7 +140,7 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
   const available = config.available ?? (() => false)
   const active = new Map<string, CordisFiber[]>()
   const jobs = available('redtrace-jobs')
-  const services = ['shell', 'shellEnv', 'fs', 'skills', 'sandbox', 'sandboxPolicy', 'approval', 'jobs']
+  const services = ['shell', 'shellEnv', 'fs', 'skills', 'sandbox', 'sandboxPolicy', 'approval', 'jobs', 'spillStore']
   for (const service of services) {
     scoped = scoped.isolate(service)
   }
@@ -207,6 +208,7 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
     catch (error) { shellFiber = await mount(scoped, shellTool, { enableRunInBackground: background }); throw error }
   }
   const stacks: Array<[string, (use: Use) => Promise<void>]> = [
+    ['redtrace-spill', use => use(scoped, 'packages/redtrace-dsh/lib/spill.js', { sessionRoot: config.sessionRoot })],
     ...TASK_PLUGINS.map(entry => [entry.id, (use: Use) => use(scoped, entry.modulePath, { cwd: config.cwd })] as [string, (use: Use) => Promise<void>]),
     ['redtrace-web', async use => {
       const scope = scoped.isolate('web').isolate('settings')
@@ -233,10 +235,6 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
       await use(scope, `${VENDOR}/lsp/lsp-stdio/lib/index.js`, { servers })
       await use(scope, `${VENDOR}/lsp/tool-lsp/lib/index.js`)
     }],
-    // DSH 0.2.1-alpha.2 removed the `both` presentation: a PTC session's
-    // direct view is `run_code` only, and the program dispatches every other
-    // mounted tool from inside the code (native scopes never see run_code).
-    ['redtrace-ptc', use => use(scoped, `${VENDOR}/core/agent-tool-presentation/lib/index.js`, { mode: 'ptc' })],
   ]
   let last = Promise.resolve()
   const refresh = () => {

@@ -104,7 +104,7 @@ export async function apply(ctx: any, config: { cwd: string }): Promise<void> {
       'analyze_javascript_application', 'inspect_android_package', 'inspect_managed_artifact', 'inspect_firmware_regions',
       'inspect_evm_interface', 'inspect_binary_layout', 'inspect_artifact', 'list_browser_targets', 'list_electron_targets'])
     ctx.tools.register({ name: 'reverse_tools', description: 'Expand this Run’s REA native tool schemas by capability group. Stable additive sets; all makes every official tool accessible. No analysis forwarding.',
-      parameters: { type: 'object', additionalProperties: false, properties: { group: { type: 'string', enum: Object.keys(groups), required: true } } },
+      parameters: { type: 'object', additionalProperties: false, properties: { group: { type: 'string', enum: Object.keys(groups) } }, required: ['group'] },
       output: { schema: { type: 'object', additionalProperties: true }, render: (_: unknown, value: any) => [{ type: 'text', text: JSON.stringify(value) }] },
       async execute(args: any) {
         if (stopped) throw new Error('redtrace-reverse is stopped')

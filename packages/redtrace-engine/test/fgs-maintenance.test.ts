@@ -85,12 +85,12 @@ test('delete refuses active references atomically, clears concluded references a
   } finally { s.close() }
 })
 
-test('live amendment preserves Run, requires sync and rejects old PTC descendants after acknowledgement', () => {
+test('live amendment preserves Run, requires sync and rejects old tool call trees after acknowledgement', () => {
   const s = new Store(':memory:')
   try {
     const id = project(s), step = s.addStep(id, { description: 'Original', sourceIds: ['origin'] }), run = s.claim(id, 'execute', worker, step.id)
     const guard = createPlanGuard(s, run.id); guard.beginTurn()
-    assert.equal(guard.check({ name: 'run_code', rootCallId: 'old' }), undefined)
+    assert.equal(guard.check({ name: 'bash', rootCallId: 'old' }), undefined)
     const current = s.node<Step>(id, step.id), amended = s.updateStep(id, step.id, { description: 'Corrected strategy', expectedVersion: current.version, mode: 'amend' })
     assert.equal(s.run(run.id).status, 'running')
     assert.match(guard.check({ name: 'bash', rootCallId: 'old' })!, /Plan changed/)
@@ -99,7 +99,7 @@ test('live amendment preserves Run, requires sync and rejects old PTC descendant
     assert.equal(synced.step.description, 'Corrected strategy')
     assert.match(guard.check({ name: 'bash', rootCallId: 'old' })!, /Old call trees/)
     guard.beginTurn(); assert.equal(guard.check({ name: 'bash', rootCallId: 'new' }), undefined)
-    assert.throws(() => s.updateStep(id, step.id, { requires: ['remote.command'], expectedVersion: s.node(id, step.id).version, mode: 'amend' }), /require replace/)
+    assert.equal(s.updateStep(id, step.id, { requires: ['remote.command'], expectedVersion: s.node(id, step.id).version, mode: 'amend' }).planVersion, amended.planVersion)
     const version = s.node<Step>(id, step.id).planVersion
     s.addFact(id, 'Already-issued command evidence', { runId: run.id })
     assert.equal(s.node<Step>(id, step.id).planVersion, version, 'evidence arrival is not a plan revision')

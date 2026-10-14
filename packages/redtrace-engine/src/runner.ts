@@ -14,11 +14,10 @@ import type { TaskContext } from './scheduler.ts'
 import type { EngineConfig, Fact, Json, Step, Project, Run, Goal, Input } from './types.ts'
 import { knowledgeTools } from './knowledge.ts'
 import { redactSensitive } from './store.ts'
-import { closeWebChallenge, webTools } from './web.ts'
-import { verbIds } from './capability-verbs.ts'
+import { httpTools } from './http-tools.ts'
+import { Check } from 'typebox/value'
 import { HttpError } from './types.ts'
 import { evidenceChangeSchema, goalUpdateSchema, stepUpdateSchema } from './graph-contracts.ts'
-import { taskPluginsSchema } from './task-plugins.ts'
 
 const json = (value: unknown): Json => JSON.parse(JSON.stringify(value))
 const execFileAsync = promisify(execFile)
@@ -33,26 +32,32 @@ async function tsecbenchQuery(config: EngineConfig, args: string[], signal?: Abo
       cwd: path.dirname(script), env: toolEnvironment(config.commonEnv), signal, timeout: 45_000, maxBuffer: 2 * 1024 * 1024,
     })
     const response = JSON.parse(stdout)
+    if (response?.ok === false) throw new HttpError(502, response.message ?? response.error ?? 'TSecBench SDK failure', response)
     return response?.[args[0]] ?? response
   } catch (error) {
-    try { return JSON.parse((error as { stderr?: string }).stderr ?? '') }
-    catch { throw new Error('TSecBench query failed or timed out') }
+    if (error instanceof HttpError) throw error
+    const failure = error as { stdout?: string; stderr?: string; code?: string; killed?: boolean; message?: string }
+    for (const text of [failure.stderr, failure.stdout]) {
+      try { const parsed = JSON.parse(text ?? ''); throw new HttpError(502, parsed.message ?? parsed.error ?? 'TSecBench SDK failure', parsed) } catch (parsedError) { if (parsedError instanceof HttpError) throw parsedError }
+    }
+    throw new HttpError(502, failure.killed ? 'TSecBench query timed out; execution outcome may be unknown' : 'TSecBench query failed', { code: failure.code ?? null, message: failure.message ?? null })
   }
 }
 
 export function efficiencyToolAvailable(context: TaskContext, name: string) {
-  const plugin = name.startsWith('knowledge_') ? 'redtrace-knowledge' : name.startsWith('web_') || name === 'http_batch' ? 'redtrace-browser-http' : undefined
+  const plugin = name.startsWith('knowledge_') ? 'redtrace-knowledge' : name.startsWith('http_') ? 'redtrace-http' : undefined
   return !plugin || !context.featureAvailable || context.featureAvailable(plugin)
 }
 
 export function graphTools(context: TaskContext, finish: () => void): AgentTool[] {
-  const { store, run, worker, config, signal, jev } = context
+  const { store, run, worker, config, signal } = context
+  const maxSteps = () => context.currentMaxSteps ? context.currentMaxSteps() : config.maxSteps ?? null
   const evidenceRoot = path.join(run.workspaceRoot ?? path.join(config.workspaceRoot ?? path.join(os.tmpdir(), 'redtrace-workspaces'), run.projectId), '.redtrace-output', 'evidence')
   const installRoot = config.workspaceRoot ? path.dirname(config.workspaceRoot) : undefined
   const step = run.stepId ? store.node<Step>(run.projectId, run.stepId, 'step') : undefined
   const kinds = ['fact', 'goal', 'step', 'finding', 'hint', 'observation'] as const
-  const readGraph = tool('read_graph', 'Read current project state or a current node by ID. Merged sources and deleted evidence no longer exist. SQL pagination is bounded; full:true only skips semantic filtering. Hints and observations are unverified.', Type.Object({ id: Type.Optional(Type.String()), offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), kinds: Type.Optional(Type.Array(Type.Union(kinds.map(k => Type.Literal(k))), { uniqueItems: true })), full: Type.Optional(Type.Boolean()) }, { additionalProperties: false }), async args => {
-    if (args.id) return store.node(run.projectId, args.id)
+  const readGraph = tool('read_graph', 'Read current project state or a current node by ID. Merged sources and deleted evidence no longer exist. SQL pagination is bounded. Hints and observations are unverified.', Type.Object({ id: Type.Optional(Type.String()), offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), kinds: Type.Optional(Type.Array(Type.Union(kinds.map(k => Type.Literal(k))), { uniqueItems: true })) }, { additionalProperties: false }), async args => {
+    if (args.id) return { ...store.node(run.projectId, args.id), planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id) }
     const offset = args.offset ?? 0, limit = args.limit ?? 100, selected = new Set(args.kinds ?? kinds)
     const project = store.project(run.projectId), page: Record<string, unknown> = { project, facts: [], goals: [], steps: [], findings: [], hints: [], observations: [] }, nextOffsets: Record<string, number | null> = {}
     for (const kind of kinds) {
@@ -62,19 +67,22 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
       nextOffsets[kind] = offset + limit < total ? offset + limit : null
     }
     const remaining = Object.values(nextOffsets).filter((value): value is number => value !== null)
-    const filtered = !args.full && jev?.isEnabled('context_filter') && selected.has('fact') && selected.has('step')
-      ? await jev.filterGraph(run, step, page as unknown as ReturnType<typeof store.graph>).catch(() => undefined) : undefined
-    return { ...(filtered ?? page), nextOffset: remaining.length ? Math.max(...remaining) : null, nextOffsets,
-      ...(jev?.isEnabled() ? { jevAdvisories: await jev.advisories(run.projectId) } : {}) }
+    return { ...page, planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id), nextOffset: remaining.length ? Math.max(...remaining) : null, nextOffsets }
   })
   const refs = Type.Array(Type.String())
   const tools: AgentTool[] = [readGraph]
-  tools.push(tool('read_graph_delta', 'Read a bounded page of change metadata and current surviving nodes. Merged/deleted IDs have no historical body. Continue with cursor until hasMore is false. Reading does not acknowledge processing.', Type.Object({ after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), args => store.graphDelta(run.projectId, args.after ?? store.run(run.id).deliveredGraphCursor ?? 0, args.limit ?? 100, run.id)))
-  tools.push({ name: 'evidence_read', label: 'evidence_read', description: 'Read at most 7.6 KiB from a large tool result by byte offset, 1-based line, or keyword. Artifacts are scoped to this run; request the next bounded slice when needed.', parameters: Type.Object({ id: Type.String({ pattern: '^ev-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), line: Type.Optional(Type.Integer({ minimum: 1 })), query: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), executionMode: 'sequential', execute: async (_toolId: string, args: { id: string; offset?: number; line?: number; query?: string; length?: number }) => {
+  tools.push(tool('read_graph_delta', 'Read a bounded page of change metadata and current surviving nodes. Merged/deleted IDs have no historical body. Continue with cursor until hasMore is false. Reading does not acknowledge processing.', Type.Object({ after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), args => ({ ...store.graphDelta(run.projectId, args.after ?? store.run(run.id).deliveredGraphCursor ?? 0, args.limit ?? 100, run.id), planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id) })))
+  tools.push({ name: 'evidence_read', label: 'evidence_read', description: 'Read at most 7.6 KiB from a large tool result by byte offset, 1-based line, or keyword. Artifacts are scoped to this Project; pass run_id for another producer Run; request the next bounded slice when needed.', parameters: Type.Object({ run_id: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })), id: Type.String({ pattern: '^ev-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), line: Type.Optional(Type.Integer({ minimum: 1 })), query: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), executionMode: 'sequential', execute: async (_toolId: string, args: { run_id?: string; id: string; offset?: number; line?: number; query?: string; length?: number }) => {
     if (!/^ev-[a-f0-9]{64}$/.test(args.id) || [args.offset, args.line, args.query].filter(value => value !== undefined).length > 1) throw new Error('Provide a valid evidence ID and only one read selector')
-    const runRoot = path.join(evidenceRoot, run.id), root = await realpath(runRoot), base = await realpath(evidenceRoot)
-    if (!root.startsWith(base + path.sep)) throw new Error('Evidence path is outside this run')
-    const file = path.join(root, `${args.id}.json`), bytes = await readFile(file)
+    const producer = store.run(args.run_id ?? run.id)
+    if (producer.projectId !== run.projectId) throw new Error('Evidence producer belongs to another Project')
+    const runRoot = path.join(evidenceRoot, producer.id), root = await realpath(runRoot), base = await realpath(evidenceRoot)
+    const workspace = await realpath(run.workspaceRoot ?? path.dirname(path.dirname(evidenceRoot)))
+    if (!base.startsWith(workspace + path.sep)) throw new Error('Evidence root escapes this Project')
+    if (!root.startsWith(base + path.sep)) throw new Error('Evidence path is outside this Project')
+    const file = await realpath(path.join(root, `${args.id}.json`))
+    if (path.dirname(file) !== root) throw new Error('Evidence path escapes producer Run')
+    const bytes = await readFile(file)
     if (createHash('sha256').update(bytes).digest('hex') !== args.id.slice(3)) throw new Error('Evidence hash mismatch')
     const text = bytes.toString('utf8'), length = args.length ?? 7600
     let offset = args.offset ?? 0
@@ -94,9 +102,6 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     return { content: [{ type: 'text', text: content }], details: { id: args.id, offset, bytes: chunk.length, totalBytes: bytes.length, nextOffset } }
   } } as unknown as AgentTool)
   if (run.activity === 'decide') {
-    const checkPlugins = (plugins: string[] = []) => {
-      for (const id of plugins) if (context.taskPluginAllowed && !context.taskPluginAllowed(id)) throw new HttpError(409, `Task plugin is disabled: ${id}`)
-    }
     const origin = store.node<Fact>(run.projectId, 'origin', 'fact')
     const skill = installRoot ? path.join(installRoot, '.redtrace', 'skills', 'tsecbench-api') : ''
     if (/(?:tsecbench|tsec[\s-]*benchmark)/i.test(origin.description) && existsSync(path.join(skill, 'SKILL.md')) && existsSync(path.join(skill, 'scripts', 'tsecbench.py'))) {
@@ -108,13 +113,8 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     }
     tools.push(
       tool('notify_explore', 'Send brief useful information to a running Explore in this project. Queued means its current inbox accepted the message, not that the model read it. Does not interrupt calls, revise the Step or expand permissions. Avoid repeated or microscopic guidance.', Type.Object({ stepId: Type.String({ minLength: 1 }), message: Type.String({ minLength: 1, maxLength: 2000 }), sourceIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true, maxItems: 16 })) }), args => context.notifyExplore?.(args) ?? { ok: false, status: 'rejected', reason: 'transport_unavailable' }),
-      tool('add_step', 'Create an action sourced from Scope (origin), Fact or Finding IDs to advance goalId. requires lists capability verbs (e.g. remote.command): matching verb tools are exposed to the Execute agent, which reuses existing channels automatically. plugins selects optional task features for this Step only, not global switches or engine startup.', Type.Object({ description: Type.String(), sourceIds: refs, goalId: Type.Optional(Type.String()), priority: Type.Optional(Type.Integer()), requires: Type.Optional(Type.Array(Type.Union(verbIds.map(v => Type.Literal(v))), { uniqueItems: true, maxItems: 16 })), executionProfile: Type.Optional(Type.Union([Type.Literal('direct'), Type.Literal('isolated')])), plugins: Type.Optional(taskPluginsSchema) }), async args => {
-        checkPlugins(args.plugins)
-        const created = store.addStep(run.projectId, args, config.maxSteps)
-        const duplicate = jev?.isEnabled('step_dedup') ? await jev.suggestDuplicate(run.projectId, created, run) : undefined
-        return duplicate ? { ...created, jevDuplicateSuggestion: duplicate } : created
-      }),
-      tool('update_step', 'Use notify_explore for useful information or method changes while the objective remains valid. Revise, reprioritize or cancel a Step with expectedVersion. Running amend keeps objective and permissions; replace stops the old run before its replacement starts. Changed objectives, targets, plugins or permissions require replace.', Type.Object({ ...stepUpdateSchema.properties, expectedVersion: Type.Integer({ minimum: 1 }), id: Type.String(), cancel: Type.Optional(Type.Boolean()) }), args => { checkPlugins(args.plugins); return store.updateStep(run.projectId, args.id, { ...args, ...(args.cancel ? { status: 'cancelled' as const } : {}) }) }),
+      tool('add_step', 'Create an evidence-backed Step to advance goalId. Explore autonomously chooses enabled tools. Check planningCapacity before adding work; pending/running/paused Steps count toward maxSteps.', Type.Object({ description: Type.String(), sourceIds: refs, goalId: Type.Optional(Type.String()), priority: Type.Optional(Type.Integer()), executionProfile: Type.Optional(Type.Union([Type.Literal('direct'), Type.Literal('isolated')])) }), args => store.addStep(run.projectId, args, maxSteps())),
+      tool('update_step', 'Use notify_explore for information or method changes while the objective remains valid. Amend or replace a Step with expectedVersion. Changed goals or execution isolation require replace; enabled tools do not.', Type.Object({ ...stepUpdateSchema.properties, expectedVersion: Type.Integer({ minimum: 1 }), id: Type.String(), cancel: Type.Optional(Type.Boolean()) }), args => store.updateStep(run.projectId, args.id, { ...args, ...(args.cancel ? { status: 'cancelled' as const } : {}) })),
       tool('add_goal', 'Add a Sub Goal.', Type.Object({ description: Type.String(), parentId: Type.Optional(Type.String()) }), args => store.addGoal(run.projectId, args.description, args.parentId)),
       tool('update_goal', 'Revise a Subgoal description or state with expectedVersion. Running descendants require amend or replace; changed objectives require replace. Root description is immutable. Achievement requires active Fact/Finding evidence, not Step completion.', Type.Object({ ...goalUpdateSchema.properties, expectedVersion: Type.Integer({ minimum: 1 }), id: Type.String() }), args => store.updateGoal(run.projectId, args.id, args)),
       tool('manage_evidence', 'Maintain current Fact/Finding. merge keeps the target ID, redirects references and permanently removes sources; provide every source version and optionally the final description, or Finding title/details. Omitted content keeps the target value. delete permanently removes evidence after active references are repaired. Keep necessary conclusions and proof; there is no archive or restore. Never merge different targets, challenges, environments or contradictory conclusions; Scope is protected.', evidenceChangeSchema, args => store.manageEvidence(run.projectId, args)),
@@ -122,56 +122,41 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     )
   } else {
     tools.push(tool('sync_step', 'Adopt the latest Step contract at a safe boundary. Read current planVersion first. Returns goals and active dependencies. Old call trees remain blocked; generate your next action from this contract.', Type.Object({ planVersion: Type.Integer({ minimum: 1 }) }), args => store.syncStep(run.id, args.planVersion)))
-    const targetText = `${store.node<Fact>(run.projectId, 'origin', 'fact').description} ${step?.description ?? ''}`
-    if (/\b(?:web|http|https|api|url|browser|website|网页|网站|接口|浏览器|登录页)\b/i.test(targetText)) tools.push(...webTools(context))
+    tools.push(...httpTools(context))
     const benchmarkOrigin = store.node<Fact>(run.projectId, 'origin', 'fact').description
     const benchmarkSkill = installRoot ? path.join(installRoot, '.redtrace', 'skills', 'tsecbench-api') : ''
     if (/(?:tsecbench|tsec[\s-]*benchmark)/i.test(benchmarkOrigin) && existsSync(path.join(benchmarkSkill, 'SKILL.md')) && existsSync(path.join(benchmarkSkill, 'scripts', 'tsecbench.py'))) {
       tools.push(
-        tool('tsecbench_start', 'Start the explicitly selected authorized benchmark challenge. Pass the exact unique_code from tsecbench_list; no arbitrary platform or network target is accepted.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }) }), async args => {
-          const started = await tsecbenchQuery(config, ['start', args.unique_code], signal) as { unique_code?: unknown; container_addr?: unknown }
+        tool('tsecbench_list', 'Read challenge descriptions, progress and container state; no lifecycle operation.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['list'], abort)),
+        tool('tsecbench_start', 'Start the explicitly selected authorized benchmark challenge. Pass the exact unique_code from tsecbench_list; no arbitrary platform or network target is accepted.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }) }), async (args, abort) => {
+          const started = await tsecbenchQuery(config, ['start', args.unique_code], abort) as { unique_code?: unknown; container_addr?: unknown }
           if (started.unique_code !== args.unique_code || !Array.isArray(started.container_addr) || !started.container_addr.length || started.container_addr.some(address => typeof address !== 'string' || address.length > 255)) throw new Error('Benchmark start returned an invalid challenge or target list')
-          store.addFact(run.projectId, `Platform started TSecBench ${args.unique_code}; authorized targets: ${(started.container_addr as string[]).join(', ')}`, { runId: run.id, creator: worker.name, evidence: [{ description: 'TSecBench SDK start response' }] })
           const hosts=(started.container_addr as string[]).map(value=>{const url=new URL(/^https?:/.test(value)?value:`http://${value}`);if(url.username || url.password)throw new Error('Platform returned credential-bearing target');return url.host.toLowerCase()})
-          store.setBenchmarkHosts(run.projectId,args.unique_code,hosts)
+          store.transaction(() => {
+            store.setBenchmarkHosts(run.projectId, args.unique_code, hosts)
+            store.addInput(run.projectId, 'observation', `Platform started TSecBench ${args.unique_code}; authorized targets: ${(started.container_addr as string[]).join(', ')}`, worker.name, run.stepId)
+          })
           return started
         }),
-        tool('tsecbench_submit', 'Submit one flag for the active authorized challenge. Only a platform-confirmed correct result is recorded as a critical planning signal; secrets in tool arguments are redacted from audit events.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }), flag: Type.String({ minLength: 1, maxLength: 4096 }) }), async args => {
-          const submitted = await tsecbenchQuery(config, ['submit', args.unique_code, '--flag', args.flag], signal) as { correct?: unknown; matched_flag_index?: unknown; correct_flag_count?: unknown; total_flag_count?: unknown; awarded?: unknown; cumulative_score?: unknown }
-          if (submitted.correct === true && Number.isSafeInteger(submitted.correct_flag_count) && Number.isSafeInteger(submitted.total_flag_count) && Number(submitted.correct_flag_count) > 0) {
-            const count = Number(submitted.correct_flag_count), key = `tsecbench:${args.unique_code}:progress:${count}`
-            store.transaction(() => {
-              if (store.recordCriticalSignal(run.projectId, key, json({ source: 'platform-confirmed-flag', unique_code: args.unique_code, correct_flag_count: count, total_flag_count: submitted.total_flag_count, awarded: submitted.awarded, cumulative_score: submitted.cumulative_score })))
-                store.addFact(run.projectId, `TSecBench ${args.unique_code}: platform confirmed ${count}/${submitted.total_flag_count} flags; awarded ${submitted.awarded ?? 'unknown'} points`, { runId: run.id, creator: worker.name, evidence: [{ description: 'TSecBench SDK confirmed correct flag submission' }] })
-            })
-          }
-          return submitted
-        }),
-        tool('tsecbench_close', 'Close only the exact TSecBench challenge this Execute worker finished or abandoned, to release its container.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }) }), async args=>{const result=await tsecbenchQuery(config,['close',args.unique_code],signal);store.setBenchmarkHosts(run.projectId,args.unique_code);await closeWebChallenge(store,run.projectId,args.unique_code);return result}),
+        tool('tsecbench_submit', 'Submit one flag for the active authorized challenge and return the platform response. Does not create Facts or wake Reason; Explore must verify the response and explicitly submit_fact for decision-relevant results. Secrets in tool arguments are redacted from audit events.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }), flag: Type.String({ minLength: 1, maxLength: 4096 }) }), (args, abort) => tsecbenchQuery(config, ['submit', args.unique_code, '--flag', args.flag], abort)),
+        tool('tsecbench_close', 'Close only the exact TSecBench challenge this Execute worker finished or abandoned, to release its container.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }) }), async (args,abort)=>{const result=await tsecbenchQuery(config,['close',args.unique_code],abort);store.setBenchmarkHosts(run.projectId,args.unique_code);return result}),
       )
     }
     tools.push(
-      tool('submit_fact', 'Submit a confirmed fact and the evidence supporting it.', Type.Object({ description: Type.String(), evidence: Type.Array(Type.Object({ description: Type.String(), path: Type.Optional(Type.String()) })) }), args => store.addFact(run.projectId, args.description, { runId: run.id, evidence: args.evidence, creator: worker.name })),
+      tool('submit_fact', 'Publish a new decision-relevant, evidence-backed conclusion; consolidate related observations, not startup/status or duplicate Facts. Urgent goal proof, cross-Step prerequisites and real blockers must not wait.', Type.Object({ description: Type.String(), evidence: Type.Array(Type.Object({ description: Type.String(), path: Type.Optional(Type.String()) })) }), args => store.addFact(run.projectId, args.description, { runId: run.id, evidence: args.evidence, creator: worker.name })),
       tool('submit_finding', 'Record a deliverable supported by confirmed facts. New Findings wake Reason.', Type.Object({ title: Type.String(), description: Type.String(), type: Type.Optional(Type.String()), factIds: refs }), args => store.addFinding(run.projectId, { ...args, creator: worker.name, runId: run.id })),
       tool('finish_step', step?.bootstrap
         ? 'Finish Bootstrap after submitting at least one confirmed Fact. Reason remains blocked until Bootstrap succeeds with a Fact.'
-        : 'Finish this Step. Submit confirmed facts before finishing; do not invent success or evidence.', Type.Object({ summary: Type.String() }), args => {
+        : 'Finish this Step only after explicitly submitting at least one confirmed, evidence-backed Fact. Consolidate the result, including verified failures or blockers, then call finish_step; a text summary alone does not complete the Step.', Type.Object({ summary: Type.String() }), args => {
           const current = store.node<Step>(run.projectId, run.stepId!, 'step')
-          if (current.bootstrap && !current.factIds.length) throw new Error('Bootstrap must submit at least one Fact before finishing')
+          if (!current.factIds.length) throw new Error(`${current.bootstrap ? 'Bootstrap' : 'Explore'} must submit at least one Fact before finishing`)
           store.runEvent(run.id, 'step.summary', json(args)); finish(); return { saved: true }
         }, true),
     )
-    if (jev) tools.push(tool('jev_choose', 'Compare 2–8 currently available scanners, PoC files, wordlists, or web sources for one concrete objective. Advisory only; you choose and execute. References: scanner executable name/path, PoC or wordlist file path under its configured directory, or web URL.', Type.Object({
-      kind: Type.Union([Type.Literal('scanner'), Type.Literal('poc'), Type.Literal('wordlist'), Type.Literal('web')]),
-      objective: Type.String(), candidates: Type.Array(Type.Object({ id: Type.String(), title: Type.String(), detail: Type.Optional(Type.String()), reference: Type.String() }), { minItems: 2, maxItems: 8 }),
-      factIds: Type.Optional(refs),
-    }), args => jev.chooseCandidate(run, args.kind, args.objective, args.candidates, args.factIds)))
-    if (jev) tools.push(tool('jev_assess_attack', 'Rate how confirmed Facts support the necessary prerequisites of a proposed attack. Returns evidence readiness, not success probability. Advisory only.', Type.Object({
-      approach: Type.String(), prerequisites: Type.Array(Type.String(), { minItems: 1, maxItems: 8 }), factIds: refs,
-    }), args => jev.assessAttack(run, args.approach, args.prerequisites, args.factIds)))
   }
   tools.push(...knowledgeTools(evidenceRoot, context))
   return tools.map(t => ({ ...t, execute: async (...args) => {
+    if (!Check(t.parameters, args[1])) throw new HttpError(422, 'Invalid tool arguments')
     if (!efficiencyToolAvailable(context, t.name)) throw new Error('Efficiency tool plugin is disabled')
     if (signal.aborted || store.run(run.id).status !== 'running') throw new Error('Activity has stopped')
     let value
@@ -187,15 +172,15 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   } }))
 }
 
-export const activityPrompt = (activity: 'decide' | 'execute', step?: Step, jevChoice = false, jevReadiness = false) => (activity === 'decide'
+export const activityPrompt = (activity: 'decide' | 'execute', step?: Step) => (activity === 'decide'
   ? `你是 Reason，在 Scope 授权范围内根据 FGS 规划下一步并维护证据和计划；不亲自解题、操作容器或提交答案。
 
-1. 先读活跃状态和连续增量；Hint、Observation 不是确认事实。已有成果满足 Goal 时，用真实 Fact/Finding evidenceIds 验收并解释依据，逐项核对数量、权限等条件；失败、停止尝试或 Step 结束不等于达成。
+1. 先读本次触发、活跃 Step 和连续增量，只按需展开相关 Fact/Finding 及其证据，不必全量重读或重新规划；Hint、Observation 不是确认事实。已有成果满足 Goal 时，用真实 Fact/Finding evidenceIds 验收并解释依据，逐项核对数量、权限等条件；失败、停止尝试或 Step 结束不等于达成。
 2. 有突破优先深入，缺少入口时拓宽，持续受阻且无新进展时换路线。只派现有证据支持、前置已满足的行动；依赖未取得的入口或权限时等待。独立且不争用会话的方向才并行，同一题默认一个主 Explore，优先并行不同题目。
 3. 比对已有 Step，不重复枚举或已覆盖工作。单次失败不等于证伪，执行结束不等于路线穷尽；中断按确认进度续接，无效路线须有新证据或不同机制才重开。副作用不明先查证，不重放。无工作时寻找未覆盖的可验证方向；依赖在跑工作则等待，无合理方向说明缺口，不硬凑任务。
-4. Step 写清行动与预期结果，用 sourceIds 引用 Scope/Fact/Finding、goalId 指向目标，按需选择 requires/plugins。Subgoal 只写可验收结果并复用；操作、重试和临时策略写 Step。远程命令或内网代理须有在线程序化通道，图形登录不等于命令通道；测试机扫描不需要 remote.command。
-5. Explore 自主执行。新信息（包括人工 Hint）有实质帮助时才用 notify_explore 定向补充，不微观管理或重复通知；方法、策略改变但目标有效时不改 Step。Step 过时或偏离目标才用 update_step/update_goal 携带版本修正计划、取消或排序 Step；真正的同目标同权限契约变更 amend，改变目标或权限 replace。FGS 是当前工作状态，你拥有 Fact/Finding 的完整维护权：用 manage_evidence 合并同目标同环境的重复证据并提交整理后的有效内容，或删除不再需要的证据；保留后续决策必需的结论与证据，不合并矛盾结论。合并来源与删除节点不留备份、不可恢复，无需检查历史；删除前修复活跃引用，不为整理图谱延误目标。
-6. 启动、新 Fact/Finding 或关键事件出现时及时规划，不等 Step 结束。并发、Worker 和 add_step 限额遵守系统限制。测评仅用开放的只读工具，扣分提示须先确认。完成调用 finish_decide，throughEvidenceSeq 只确认完整读取并处理的连续边界，throughHintSeq 同样只确认完整处理的连续 Hint 边界；人工 Hint 由你评估后按需转达 Explore。未处理事件留待下一轮。`
+4. Step 写清行动与预期结果，用 sourceIds 引用 Scope/Fact/Finding、goalId 指向目标，工具由 Explore 自主选择。Subgoal 只写可验收结果并复用；操作、重试和临时策略写 Step。远程命令或内网代理须有在线程序化通道，图形登录不等于命令通道；测试机扫描不需要 remote.command。
+5. Explore 自主执行。新信息（包括人工 Hint）有实质帮助时才用 notify_explore 定向补充，不微观管理或重复通知；方法、策略改变但目标有效时不改 Step。Step 过时或偏离目标才用 update_step/update_goal 携带版本修正计划、取消或排序 Step；真正的同目标同权限契约变更 amend，改变目标或执行隔离 replace。FGS 是当前工作状态，你拥有 Fact/Finding 的完整维护权：用 manage_evidence 合并同目标同环境的重复证据并提交整理后的有效内容，或删除不再需要的证据；保留后续决策必需的结论与证据，不合并矛盾结论。合并来源与删除节点不留备份、不可恢复，无需检查历史；删除前修复活跃引用，不为整理图谱延误目标。
+6. 启动、新 Fact/Finding 或关键事件出现时及时规划，不等 Step 结束；事件是检查信号，不是增派任务的义务。新增信息若只有启动状态、重复确认或当前 Explore 正在处理的局部进度，且未改变目标验收、可执行前置或计划，就不新增 Step、不重复通知，让 Explore 继续，处理连续增量后尽快 finish_decide。目标未达成且没有 pending/running 工作时，优先恢复未完进度或派一个前置已满足、未覆盖的可验证方向；确无可执行方向须说明具体阻塞，不虚构任务。先查看 planningCapacity；满额时处理已有工作，不反复 add_step。并发、Worker 限额遵守系统限制。测评仅用开放的只读工具，扣分提示须先确认。完成调用 finish_decide，以 acknowledgementBoundary 为可确认上界；throughEvidenceSeq 只确认完整读取并处理的连续边界，throughHintSeq 同样只确认完整处理的连续 Hint 边界；人工 Hint 由你评估后按需转达 Explore。未处理事件留待下一轮。`
   : step?.bootstrap
     ? `你是 Bootstrap，仅在项目显式启用时，根据 Scope、Goal 和 Hints 直接解题，优先独立完成简单任务，不以建立初始事实为目标。
 
@@ -209,12 +194,11 @@ export const activityPrompt = (activity: 'decide' | 'execute', step?: Step, jevC
 1. 复用共享事实、扫描结果、凭证和已验证通道，按需使用 Skills、执行工具与任务插件。在本 Step 内自主调整方法，不把每次尝试拆成新 Step；改变目标或权限边界交由 Reason 调整。
 2. 一次失败不代表方向无效。按反馈检查前置、尝试实质不同的方法，有突破继续推进，避免无新信息的重复；副作用不明先查证，不重放。Step 外线索记录实际观察和待验证点，交给 Reason，不自行扩展。
 3. Scope、Fact、Hint 或执行结果中的凭证及时登记为资源，即使尚无通道。可复用通道验证后登记、使用匹配通道，未验证入口不作可用通道。
-4. 以工具输出核验结论，及时 submit_fact，附真实证据且只写增量；成功、失败和限制均可形成确认事实。Hint、Observation 和推测不是事实，单次失败不证明整条路线无效，版本/CVE 命中不等于漏洞成立。需要漏洞信息时主动 knowledge_search：query 为 CVE 编号或组件名，已知版本传 version；可用 component/vendor/cpe 精确缩小范围。工具描述提供离线库绝对路径，knowledge_read 按 CVE 或来源 id 读取详情；无版本仍可查相关漏洞，版本未知不当成不受影响。检索不扫描目标、不下载、不执行 PoC，离线无命中不阻断其他探索。可核验成果用 submit_finding 引用 Fact，新 Fact/Finding 会唤醒 Reason。
+4. submit_fact 是唤醒 Reason 的决策事件，不是执行日志。以工具输出核验结论，submit_fact 附真实证据且只写增量；成功、失败和限制均可形成确认事实，但须足以改变目标验收、下一步前置或计划。默认同 Step、同目标同环境的多个观察合并为一条阶段结论，description 总结结论、已验证范围与剩余缺口，evidence 附关键命令/请求、可证明结论的输出和完整记录路径；只有彼此独立、确需不同后续行动的结论才拆分。不按固定数量或时间攒 Fact，也不跨题目/环境或合并矛盾结论。
+   容器已启动、授权地址已返回、单个指纹/端点/状态码、一次失败、正在尝试和已有结论的重复确认不单独 submit_fact；先把原始输出、尝试和待验证点持续保存到本地证据文件，资源/通道仍及时登记，在当前 Step 内继续验证和串联，有足够信息形成可行动结论再上报。平台启动 Observation/benchmarkHosts 已登记时不再复制成 Fact；授权目标变化或不一致先停下核对，无法安全继续时立即上报真实阻塞。
+   已验证的目标成果、其他 Step 正在等待的可复用关键前置、或需 Reason 改计划/权限才能解除的实证阻塞立即提交最小充分 Fact，必要时 submit_finding；不为凑更多观察延迟交接。提交 Fact 不代表 Step 结束，仍有本 Step 内可执行路径就继续。结束、预算/超时收尾或不可解除阻塞前，将未上报但有决策价值的进展合并提交；需要 Reason 接续或改计划的完成/受阻结果也是决策事件，提交有证据的阶段结论，不能为少报 Fact 让规划停摆；每个 Step 完成前必须主动 submit_fact 至少一条有真实证据的汇总结论；未成功时提交已验证的尝试结果、限制或阻塞，不伪造成功，也不把启动状态充作成果。Hint、Observation 和推测不是事实，单次失败不证明整条路线无效，版本/CVE 命中不等于漏洞成立。需要漏洞信息时主动 knowledge_search：query 为 CVE 编号或组件名，已知版本传 version；可用 component/vendor/cpe 精确缩小范围。工具描述提供离线库绝对路径，knowledge_read 按 CVE 或来源 id 读取详情；无版本仍可查相关漏洞，版本未知不当成不受影响。检索不扫描目标、不下载、不执行 PoC，离线无命中不阻断其他探索。可核验成果用 submit_finding 引用 Fact，新 Fact/Finding 会唤醒 Reason。
 5. Reason 通知是增量信息，不代表契约变更；结合当前进度自主调整方法，无须重新开始。只有执行契约版本真正变化时先 read_graph/read_graph_delta，再 sync_step 采纳当前版本；下一模型回合按新契约行动，旧调用树不得继续外部操作。
-6. 验证码仅对授权题目用局部截图供当前模型识别；失败记录阻塞并在本 Step 内转向有效方法，不依赖人工接管或承诺通用通过。Step 完成、结论证据充分或阻塞无法自行解除时，保存进展、尝试限制和阻塞，调用 finish_step；Step 结束不代表 Goal/Subgoal 达成。`)
-  + (activity === 'execute' && jevChoice ? '当同一目标有两个以上真实可用的扫描器、PoC、字典或搜索来源，且选错会明显浪费时间时，可调用 jev_choose 比较。' : '')
-  + (activity === 'execute' && jevReadiness ? '拟采用攻击路径但关键前置条件不明时，可调用 jev_assess_attack 评估已确认事实的支持程度。' : '')
-  + (activity === 'execute' && (jevChoice || jevReadiness) ? 'Jev 只给建议，按原始证据自行决定和验证，避免为简单选择额外调用。' : '')
+6. 验证码仅对授权题目用局部截图供当前模型识别；失败记录阻塞并在本 Step 内转向有效方法，不依赖人工接管或承诺通用通过。Step 已完成或阻塞无法自行解除时，先主动 submit_fact 提交至少一条有证据的阶段结论，再调用 finish_step；只有工具成功返回才算结构化交接，纯文本总结或在文本中写工具名不算完成。收尾时直接调用原生工具 submit_fact、finish_step，不再执行外部操作；Step 结束不代表 Goal/Subgoal 达成。`)
 
 export function activityLimits(config: EngineConfig, activity: 'decide' | 'execute', step?: Step) {
   if (activity === 'decide') return { timeout: config.decideTimeout, concludeTimeout: config.concludeTimeout }
@@ -233,11 +217,11 @@ export function livePlan(store: Store, runId: string) {
     goalId = goal.parentId
   }
   return `当前执行契约（以本快照为准）：${JSON.stringify({ id: step.id, description: step.description, status: step.status,
-    sourceIds: step.sourceIds, requires: step.requires, plugins: step.plugins ?? [], executionProfile: step.executionProfile,
+    sourceIds: step.sourceIds, executionProfile: step.executionProfile,
     planVersion: step.planVersion ?? 1, boundStepVersion: run.boundStepVersion ?? 1, goals })}`
 }
 
-export function launchContext(store: Store, runId: string, channels: unknown[] = []) {
+export function launchContext(store: Store, runId: string, channels: unknown[] = [], maxSteps: number | null = null) {
   const run = store.run(runId), origin = store.node<Fact>(run.projectId, 'origin', 'fact')
   const includeHints = run.activity === 'decide' || !!run.stepId && store.node<Step>(run.projectId, run.stepId, 'step').bootstrap
   const hints = includeHints ? store.db.prepare(`SELECT data FROM nodes WHERE project_id=? AND kind='hint'
@@ -245,7 +229,7 @@ export function launchContext(store: Store, runId: string, channels: unknown[] =
     AND (?=1 OR json_extract(data,'$.stepId') IS NULL OR json_extract(data,'$.stepId')=?) ORDER BY rowid LIMIT 9`)
     .all(run.projectId, run.activity === 'decide' ? 1 : 0, run.stepId).map(row => JSON.parse(String(row.data)) as Input) : []
   const goal = run.activity === 'decide' ? store.node<Goal>(run.projectId, 'goal', 'goal') : undefined
-  return { projectId: run.projectId, scope: { id: origin.id, description: origin.description },
+  return { projectId: run.projectId, planningCapacity: store.planningCapacity(run.projectId, maxSteps), acknowledgementBoundary: store.acknowledgementBoundary(run.id), scope: { id: origin.id, description: origin.description },
     ...(goal ? { goal: { id: goal.id, description: goal.description, status: goal.status },
       evidenceSeq: run.planningEvidenceSeq ?? 0, hintSeq: run.planningHintSeq ?? 0, criticalSeq: run.planningCriticalSeq ?? 0, graphCursor: run.deliveredGraphCursor ?? 0,
       instruction: '用 read_graph 读取活跃 FGS，按已有游标读取连续增量后规划。' } : {}),

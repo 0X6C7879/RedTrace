@@ -11,7 +11,7 @@
  *                      /__redtrace/plugins API (owns the composition below)
  * - redtrace-webshell  WebShell channel family tools (capability adapter)
  * - redtrace-c2        C2 channel family tools (capability adapter)
- * - redtrace-credentials / attachment / file-references / ptc
+ * - redtrace-credentials / attachment / file-references
  *                      host-plane DSH native capability services
  * - web / jobs / terminal / fs-search / spill / tool-timeout /
  *   repeat-reminder / lsp

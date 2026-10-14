@@ -9,7 +9,7 @@ import { dispatchVerb, verbTask, verbTools, verbToolAvailable, channelsFor, reso
 import { fixtureFrame, fixtureAuthorize } from './execution-fixture.ts'
 import type { VerbRuntime } from '../src/capability-verbs.ts'
 
-test('verb registry: channel reuse, selection rules, unattended execution and Step requires round-trip', async () => {
+test('verb registry: channel reuse, selection rules, unattended execution without Step tool permissions', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-verbs-'))
   const wire: string[] = []
   const remote = createServer((req, res) => {
@@ -103,6 +103,13 @@ test('verb registry: channel reuse, selection rules, unattended execution and St
     assert.equal(polled.status, 'succeeded')
     assert.equal(polled.output, 'verb fixture output')
 
+    // A missing cached capability is not proof of absence, including when probe management is off.
+    engine.operations.updateResource(shellA.id, { metadata_json: JSON.stringify({ command_param: 'cmd', protocol: 'raw' }) })
+    const probeOff: VerbRuntime = { operations: engine.operations, isAdapterAvailable: id => id !== 'redtrace-session-probe' }
+    const withoutCache = await dispatchVerb(probeOff, 'remote.command', { command: 'echo cacheless', via: shellA.id }, context)
+    assert.equal(withoutCache.status, 'succeeded')
+    assert.match(wire.at(-1)!, /echo cacheless/)
+
     // Stopping the adapter plugin removes its channels from dispatch.
     const gated: VerbRuntime = { operations: engine.operations, isAdapterAvailable: () => false }
     assert.equal(verbToolAvailable(runtime, 'remote_command'), true)
@@ -116,19 +123,19 @@ test('verb registry: channel reuse, selection rules, unattended execution and St
 
     // Step.requires round-trip: creation, validation, and tool exposure.
     const step = engine.store.addStep(project.id, { description: 'run remote commands', sourceIds: ['origin'], requires: ['remote.command'] })
-    assert.deepEqual(step.requires, ['remote.command'])
-    assert.deepEqual(channelsFor(runtime, step.requires).map((c: any) => c.id).sort(), [shellA.id, shellB.id].sort())
+    assert.equal(step.requires, undefined)
+    assert.deepEqual(channelsFor(runtime, [], 8, project.id).map((c: any) => c.id).sort(), [shellA.id, shellB.id].sort())
     const tools = verbTools({ store: engine.store, run: { projectId: project.id, stepId: step.id } as any, worker: { name: 'worker-1' } as any, config: {} as any, signal: new AbortController().signal }, runtime, step)
-    assert.deepEqual(tools.map(t => t.name), ['remote_command', 'remote_task'])
-    assert.throws(() => engine.store.addStep(project.id, { description: 'bad verb', sourceIds: ['origin'], requires: ['remote.nope'] }), /Unknown capability verb/)
+    assert.ok(tools.some(t => t.name === 'remote_command')); assert.ok(tools.some(t => t.name === 'remote_task')); assert.ok(tools.some(t => t.name === 'remote_file_read'))
+    assert.equal(engine.store.addStep(project.id, { description: 'legacy declaration', sourceIds: ['origin'], requires: ['remote.nope'] }).requires, undefined)
     const api = await request(`/v2/projects/${project.id}/steps`, 'POST', { description: 'api step', sourceIds: ['origin'], requires: ['remote.file.read'] })
     assert.equal(api.status, 201)
-    assert.deepEqual(api.data.requires, ['remote.file.read'])
+    assert.equal(api.data.requires, undefined)
     const invalid = await request(`/v2/projects/${project.id}/steps`, 'POST', { description: 'api bad', sourceIds: ['origin'], requires: ['bogus.verb'] })
-    assert.equal(invalid.status, 422)
+    assert.equal(invalid.status, 201)
 
     // Steps without requires expose no verb tools.
-    assert.deepEqual(verbTools({} as any, runtime, undefined), [])
+    assert.ok(verbTools({} as any, runtime, undefined).some(t => t.name === 'remote_command'))
   } finally {
     await engine.close(); remote.close(); rmSync(root, { recursive: true, force: true })
   }

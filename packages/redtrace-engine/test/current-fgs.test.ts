@@ -41,7 +41,7 @@ test('removed bodies disappear from SQL, delta pages and Reason tools while evid
     s.acknowledgeEvidence(run.id, s.project(id).evidenceSeq!)
     const tools = graphTools({ store: s, run, worker, config, signal: new AbortController().signal }, () => {})
     for (const name of ['read_graph', 'read_graph_delta']) {
-      const output = await tools.find(tool => tool.name === name)!.execute('fixture', name === 'read_graph' ? { full: true } : { after: run.deliveredGraphCursor })
+      const output = await tools.find(tool => tool.name === name)!.execute('fixture', name === 'read_graph' ? {} : { after: run.deliveredGraphCursor })
       assert.ok(!JSON.stringify(output).includes('REMOVED_BODY_'))
     }
     assert.ok(!JSON.stringify(s.db.prepare('SELECT data FROM nodes UNION ALL SELECT data FROM events').all()).includes('REMOVED_BODY_'))

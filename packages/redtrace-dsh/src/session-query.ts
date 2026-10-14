@@ -15,4 +15,5 @@ export async function apply(ctx: RuntimeContext, config: RuntimeConfig): Promise
     openAt: 'first-search',
   })
   await mount(ctx, 'vendor/deepseek-harness/packages/experimental/tool-session-query/lib/index.js')
+  ctx.systemPrompt.section({ name: 'redtrace:session-identities', order: 4, text: 'FGS graph cursor/event IDs are not DSH Session seq numbers. Use session search hits to obtain the exact target session and seq before session_event_read; omitted session targets the current session, not another Worker. Never infer a Session seq from an FGS event ID.' })
 }

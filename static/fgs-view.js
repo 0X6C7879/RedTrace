@@ -10,7 +10,7 @@ window.redtraceFgsView = {
   fgsRunHasMore: false,
   clearMissingFgsSelection() {
     if (this.fgsSelection && !this.fgs?.[this.fgsSelection.type === 'fact' || this.fgsSelection.type === 'scope' ? 'facts' : this.fgsSelection.type === 'finding' ? 'findings' : this.fgsSelection.type === 'step' ? 'steps' : 'goals']?.some(n => n.id === this.fgsSelection.id)) {
-      this.fgsSelection = null; this.fgsRuns = []; this.fgsRunId = ''; this.fgsRunEvents = []; this.fgsRunHasMore = false; this.jevFindingReview = null;
+      this.fgsSelection = null; this.fgsRuns = []; this.fgsRunId = ''; this.fgsRunEvents = []; this.fgsRunHasMore = false;
     }
     if (this.fgsEdgeSelection && !this.fgs?.edges?.some(e => e.id === this.fgsEdgeSelection.id)) this.fgsEdgeSelection = null;
   },

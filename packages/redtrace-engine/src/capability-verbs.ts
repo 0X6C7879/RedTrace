@@ -5,14 +5,15 @@
  * (remote.command, remote.file.read); the runtime decides HOW it runs by
  * reusing an existing WebShell / C2 session resource when one matches.
  *
- * Steps declare required verbs through `requires`; the runner exposes only
- * the matching verb tools to that Execute agent. Adapter availability is
+ * Explore selects enabled tools autonomously; historical Step declarations
+ * do not gate tool availability. Adapter availability is
  * gated by the Cordis plugin that owns the channel family, so stopping the
  * plugin removes its adapters from dispatch without touching this module.
  * @module redtrace-capability-verbs
  */
 
 import { Type } from 'typebox'
+import { Check } from 'typebox/value'
 import type { TSchema, Static } from 'typebox'
 import type { AgentTool, AgentToolResult } from './tool-types.ts'
 import { resourceKinds } from './operations.ts'
@@ -21,6 +22,7 @@ import type { Operations } from './operations.ts'
 import type { Router } from './http.ts'
 import type { TaskContext } from './scheduler.ts'
 import type { Step } from './types.ts'
+import { HttpError } from './types.ts'
 
 export type VerbRisk = 'low' | 'medium' | 'high' | 'critical'
 
@@ -229,8 +231,8 @@ function channelSupports(row: ChannelRow, verb: string): boolean {
   if (verb === 'pivot.validate' || verb === 'pivot.close') return row.kind === 'proxy'
   if (verb === 'remote.session.probe') return row.kind === 'webshell' || metadata.connection_type === 'direct' && metadata.shell_type === 'ssh' || (metadata.reported_capabilities ?? metadata.capabilities ?? []).includes('command')
   if (row.kind === 'c2_session' && verb.startsWith('remote.file.') && !['direct', 'external_c2'].includes(metadata.connection_type)) return false
-  if (verified) return verified.includes(verb)
-  return false
+  if (verified?.includes(verb)) return true
+  return row.kind === 'webshell' || row.kind === 'c2_session' && verb.startsWith('remote.') && (metadata.connection_type === 'direct' && metadata.shell_type === 'ssh' || (metadata.reported_capabilities ?? metadata.capabilities ?? []).includes('command'))
 }
 
 function candidateChannels(runtime: VerbRuntime, verb: string, projectId?: string): ChannelRow[] {
@@ -242,7 +244,7 @@ function candidateChannels(runtime: VerbRuntime, verb: string, projectId?: strin
   const action = verbRegistry.find(entry => entry.id === verb)?.action
   return rows.filter(row => {
     const resource = runtime.operations.resource(row.id)
-    return (projectId === undefined || resource.project_id === null || resource.project_id === projectId)
+    return (projectId === undefined || resource.project_id === projectId)
       && channelSupports(row, verb)
       && (!action || action.startsWith('pivot.') || operationSupported(resource, action))
   })
@@ -290,19 +292,19 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, r
 export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Record<string, unknown>, context: { projectId: string; worker: string; stepId: string | null; runId?: string; signal: AbortSignal }): Promise<any> {
   const definition = verbRegistry.find(entry => entry.id === verb)
   if (!definition) throw new Error(`Unknown capability verb: ${verb}`)
-  if (verb === 'remote.task') return verbTask(runtime, String(args.task_id ?? ''))
+  if (verb === 'remote.task') return verbTask(runtime, String(args.task_id ?? ''), context.projectId)
   const adapters = availableAdapters(runtime, verb)
   const establish = [...new Set(ADAPTERS.filter(adapter => adapter.verbs.includes(verb)).map(adapter => adapter.establish))]
   if (!adapters.length) throw new VerbDispatchError({ available: [], establish }, `动词 ${verb} 当前没有可用适配器(插件已停用或尚未接入)。`)
   if (verb === 'pivot.socks') {
     const source = typeof args.source_session_id === 'string' ? runtime.operations.resource(args.source_session_id) : { id: '', target: String(args.target_scope ?? '') }
-    if ('project_id' in source && source.project_id !== null && source.project_id !== context.projectId) throw new Error('Source session belongs to another project')
+    if ('project_id' in source && source.project_id !== context.projectId) throw new Error('Source session belongs to another project')
     return runtime.operations.pivots.open(context.projectId, { ...args, actor_type: 'worker', actor: context.worker })
   }
   if (verb === 'pivot.paths') return { target: args.target, paths: runtime.operations.pivots.paths(context.projectId, String(args.target)) }
   const channel = selectChannel(runtime,verb,args as {via?:unknown;target?:unknown},context.projectId)
   const resource = runtime.operations.resource(channel.id)
-  if (resource.project_id !== null && resource.project_id !== context.projectId) throw new Error('Channel belongs to another project')
+  if (resource.project_id !== context.projectId) throw new Error('Channel belongs to another project')
   runtime.operations.available(resource,{actor_type:'worker',actor:context.worker})
   if (verb === 'pivot.validate') {
     const lease=runtime.operations.lease(resource,{owner_type:'worker',owner:context.worker,run_id:context.runId,ttl_seconds:60})
@@ -310,6 +312,11 @@ export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Rec
     finally { runtime.operations.releaseLease(runtime.operations.resource(channel.id),{actor_type:'worker',actor:context.worker,fencing_token:lease.fencing_token}) }
   }
   if (verb === 'pivot.close') return { route_id: channel.id, closed: await runtime.operations.pivots.close(channel.id) }
+  const metadata = JSON.parse(resource.metadata_json)
+  if (verb !== 'remote.session.probe' && metadata.runtime_verified !== true && operationSupported(resource, 'probe_info') && availableAdapters(runtime, 'remote.session.probe').length) {
+    const probe = await dispatchVerb(runtime, 'remote.session.probe', { via: channel.id, timeout: args.timeout }, context)
+    if (probe.status !== 'succeeded') return { ...probe, requested_verb: verb, note: 'Channel probe did not succeed; requested action was not executed' }
+  }
   const task = runtime.operations.createTask(context.projectId, channel.id, {
     action: definition.action,
     arguments: definition.arguments(args),
@@ -325,15 +332,15 @@ export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Rec
     const current = runtime.operations.task(task.id)
     if (TERMINAL.includes(current.status)) {
       const output = current.status === 'succeeded' ? String(current.output_summary ?? '') : undefined
-      return { task_id: task.id, attempt_id: current.attempt_id, channel: { resource_id: channel.id, kind: channel.kind, target: channel.target }, status: current.status as string, output, result: JSON.parse(current.result_json || '{}'), result_ref: current.result_ref ?? null }
+      return { task_id: task.id, attempt_id: current.attempt_id, channel: { resource_id: channel.id, kind: channel.kind, target: channel.target }, status: current.status as string, output: output ?? null, result: JSON.parse(current.result_json || '{}'), result_ref: current.result_ref ?? null }
     }
   }
   return { task_id: task.id, channel: { resource_id: channel.id, kind: channel.kind, target: channel.target }, status: runtime.operations.task(task.id).status as string, note: '任务仍在排队或执行;稍后用 remote.task(task_id) 查询结果。' }
 }
 
 /** The polling verb registered alongside any dispatchable remote verb. */
-export async function verbTask(runtime: VerbRuntime, taskId: string): Promise<Record<string, unknown>> {
-  const task = runtime.operations.task(taskId)
+export async function verbTask(runtime: VerbRuntime, taskId: string, projectId?: string): Promise<Record<string, unknown>> {
+  const task = projectId ? runtime.operations.ownedTask(projectId, taskId) : runtime.operations.task(taskId)
   const result = task.status === 'succeeded'
     ? runtime.operations.store.db.prepare('SELECT content FROM operation_results WHERE task_id=?').get(task.id) as { content?: string } | undefined
     : undefined
@@ -343,12 +350,13 @@ export async function verbTask(runtime: VerbRuntime, taskId: string): Promise<Re
 
 /** Available channels for a Step's declared verbs, for the launch prompt slice. */
 export function channelsFor(runtime: VerbRuntime, requires: readonly string[], limit = 8, projectId?: string) {
-  const kinds = [...new Set(requires.flatMap(verb => availableAdapters(runtime, verb).flatMap(adapter => adapter.kinds)))]
+  const requested = requires.length ? requires : verbIds
+  const kinds = [...new Set(requested.flatMap(verb => availableAdapters(runtime, verb).flatMap(adapter => adapter.kinds)))]
   if (!kinds.length) return []
   const rows = runtime.operations.store.db
     .prepare(`SELECT id,kind,name,target,status,last_seen_at,metadata_json FROM shared_resources WHERE kind IN (${kinds.map(() => '?').join(',')}) AND status='available' ORDER BY last_seen_at DESC`)
     .all(...kinds) as unknown as Array<ChannelRow & { status: string }>
-  return rows.filter(row => (projectId === undefined || runtime.operations.resource(row.id).project_id === null || runtime.operations.resource(row.id).project_id === projectId) && requires.some(verb => channelSupports(row, verb))).slice(0, limit).map(({ metadata_json: _metadata, name: _name, last_seen_at: _seen, ...row }) => row)
+  return rows.filter(row => (projectId === undefined || runtime.operations.resource(row.id).project_id === projectId) && requested.some(verb => channelSupports(row, verb))).slice(0, limit).map(({ metadata_json: _metadata, name: _name, last_seen_at: _seen, ...row }) => row)
 }
 
 // ─── Agent tool factory ───────────────────────────────────────────────────────
@@ -362,6 +370,7 @@ export const verbToolAvailable = (runtime: VerbRuntime, name: string) => {
 
 function verbTool<T extends TSchema>(name: string, description: string, parameters: T, execute: (args: Static<T>, signal?: AbortSignal) => unknown | Promise<unknown>): AgentTool<T> {
   return { name, label: name, description, parameters, executionMode: 'sequential', execute: async (_id, args, signal) => {
+    if (!Check(parameters, args)) throw new HttpError(422, 'Invalid tool arguments')
     const value = await execute(args, signal)
     return { content: [{ type: 'text', text: JSON.stringify(value) }], details: value } as AgentToolResult<unknown>
   } }
@@ -378,22 +387,11 @@ const wrapDispatch = (runtime: VerbRuntime, context: TaskContext) => async (verb
   }
 }
 
-/** Build the verb tools a Step requires. remote.task is registered alongside
- * any dispatchable remote verb so long tasks stay pollable. */
-export function verbTools(context: TaskContext, runtime: VerbRuntime, step?: Step): AgentTool[] {
-  const requires = step?.requires ?? []
-  if (!requires.length) return []
+/** Tools follow live adapter availability, never Reason declarations. */
+export function verbTools(context: TaskContext, runtime: VerbRuntime, _step?: Step): AgentTool[] {
   const dispatch = wrapDispatch(runtime, context)
-  const tools: AgentTool[] = []
-  for (const verb of verbRegistry) {
-    if (!requires.includes(verb.id)) continue
-    tools.push(verbTool(toolName(verb.id), verb.description, verb.parameters, async args => dispatch(verb.id, args as Record<string, unknown>)))
-  }
-  if (requires.some(verb => verb.startsWith('remote.')) && !requires.includes('remote.task')) {
-    const task = verbRegistry.find(entry => entry.id === 'remote.task')!
-    tools.push(verbTool('remote_task', task.description, task.parameters, async args => verbTask(runtime, String((args as Record<string, unknown>).task_id))))
-  }
-  return tools
+  return verbRegistry.filter(verb => verb.id === 'remote.task' || ADAPTERS.some(adapter => !adapter.stub && adapter.verbs.includes(verb.id)))
+    .map(verb => verbTool(toolName(verb.id), verb.description, verb.parameters, async args => dispatch(verb.id, args as Record<string, unknown>)))
 }
 
 // ─── Resource registry tools ──────────────────────────────────────────────────
@@ -427,7 +425,7 @@ export function resourceTools(context: TaskContext, runtime: VerbRuntime): Agent
       'List shared resources; filter by kind and a free-text query.',
       Type.Object({ kind: Type.Optional(Type.String()), q: Type.Optional(Type.String()), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })) }),
       args => {
-        const clauses: string[] = [], values: unknown[] = []
+        const clauses: string[] = ['project_id=?'], values: unknown[] = [context.run.projectId]
         if (typeof args.kind === 'string' && args.kind !== '') { clauses.push('kind=?'); values.push(args.kind) }
         if (typeof args.q === 'string' && args.q.trim() !== '') { clauses.push('(name LIKE ? OR target LIKE ? OR summary LIKE ?)'); values.push(...Array(3).fill(`%${args.q.trim()}%`)) }
         const rows = ops.store.db.prepare(`SELECT * FROM shared_resources ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''} ORDER BY updated_at DESC LIMIT ?`)
@@ -439,11 +437,11 @@ export function resourceTools(context: TaskContext, runtime: VerbRuntime): Agent
       'Fetch one shared resource with its recent operation tasks and audit trail.',
       Type.Object({ resource_id: Type.String({ minLength: 1, maxLength: 64 }) }),
       args => {
-        const row = ops.resource(String(args.resource_id))
+        const row = ops.ownedResource(context.run.projectId, String(args.resource_id))
         return {
           resource: ops.publicResource(row),
-          tasks: (ops.store.db.prepare('SELECT * FROM operation_tasks WHERE resource_id=? ORDER BY created_at DESC LIMIT 50').all(row.id) as unknown as Array<Record<string, unknown>>).map(task => ops.publicTask(task)),
-          audit: (ops.store.db.prepare('SELECT * FROM resource_audit_events WHERE resource_id=? ORDER BY id DESC LIMIT 100').all(row.id) as unknown as Array<Record<string, unknown>>).map(({ detail_json, ...event }) => ({ ...event, detail: JSON.parse(String(detail_json)) })),
+          tasks: (ops.store.db.prepare('SELECT * FROM operation_tasks WHERE resource_id=? AND project_id=? ORDER BY created_at DESC LIMIT 50').all(row.id, context.run.projectId) as unknown as Array<Record<string, unknown>>).map(task => ops.publicTask(task)),
+          audit: (ops.store.db.prepare('SELECT * FROM resource_audit_events WHERE resource_id=? AND project_id=? ORDER BY id DESC LIMIT 100').all(row.id, context.run.projectId) as unknown as Array<Record<string, unknown>>).map(({ detail_json, ...event }) => ({ ...event, detail: JSON.parse(String(detail_json)) })),
         }
       }),
   ]

@@ -16,7 +16,6 @@ import { Capabilities, capabilityRoutes } from './capabilities.ts'
 import { Operations, operationRoutes } from './operations.ts'
 import { verbRoutes } from './capability-verbs.ts'
 import { ProjectDeletion, deletionRoutes } from './deletion.ts'
-import { JevService } from './jev.ts'
 import { dshUpdateRoutes } from './dsh-update.ts'
 
 export { Store, Scheduler, Configuration, Router }
@@ -30,27 +29,22 @@ export async function createEngine(options: { root: string; database?: string; c
   const root = path.resolve(options.root), configuration = new Configuration(root, options.configuration)
   const managed = path.dirname(configuration.filename), staticRoot = path.join(root, 'static')
   configuration.initialize()
-  const initial = configuration.read(), config = configuration.resolve(initial.raw)
+  // Reject an invalid configuration before the scheduler starts.
+  const config = configuration.resolve(configuration.read().raw)
   const store = new Store(options.database ?? path.join(root, '.redtrace/engine.db'))
-  const jev = new JevService(store, config.workspaceRoot)
-  jev.setScenes(initial.raw.jev?.scenes)
   const adapterGate = options.adapterAvailability?.()
   const runTask: RunTask = async context => {
     try {
-      const task = { ...context, jev }
+      const task = { ...context, operations, currentMaxSteps: () => configuration.resolve(configuration.read().raw).maxSteps }
       if (options.runTask) return await options.runTask(task)
       const runner = await import('./runner.ts')
       if (task.run.backend === 'mock') return runner.runMock(task)
       throw new Error('DSH execution requires the DSH host; no alternate Agent executor is available')
-    } finally { jev.finishRun(context.run.id); operations.releaseRunLeases(context.run.id) }
+    } finally { operations.releaseRunLeases(context.run.id) }
   }
   const scheduler = new Scheduler(store,config,runTask,options.selectWorker,()=>!adapterGate || adapterGate('redtrace-critical-events')), router = new Router()
   graphRoutes(router, store, () => configuration.resolve(configuration.read().raw).maxSteps)
   router.add('GET', '/health', () => ({ status: 'ok', engine: 'fgs', node: process.versions.node, schema: 2 }))
-  router.add('GET', '/v2/projects/:project/jev/evaluations', c => jev.evaluations(c.params.project))
-  router.add('GET', '/v2/projects/:project/jev/advisories', c => jev.advisories(c.params.project))
-  router.add('GET', '/v2/projects/:project/jev/findings/:finding', c => jev.reviewForFinding(c.params.project, c.params.finding))
-  router.add('POST', '/v2/projects/:project/jev/findings/:finding/review', c => jev.reviewFinding(c.params.project, c.params.finding, true))
   configRoutes(router, configuration, options.probeModel)
   const dshUpdate = await dshUpdateRoutes(router, path.resolve(process.env.REDTRACE_SOURCE_ROOT || root), scheduler)
   auditRoutes(router, store, configuration.workspaceRoot)
@@ -64,7 +58,7 @@ export async function createEngine(options: { root: string; database?: string; c
   deletionRoutes(router, deletion)
   const watcher = watch(path.dirname(configuration.filename), (_event, filename) => {
     if (filename && String(filename) !== path.basename(configuration.filename)) return
-    try { const value = configuration.read(); scheduler.update(configuration.resolve(value.raw)); jev.setScenes(value.raw.jev?.scenes) } catch { console.error('Configuration reload failed; keeping the last valid configuration') }
+    try { const value = configuration.read(); scheduler.update(configuration.resolve(value.raw)) } catch { console.error('Configuration reload failed; keeping the last valid configuration') }
   })
   const handler = async (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
     if (await router.handle(req, res)) return
@@ -82,7 +76,7 @@ export async function createEngine(options: { root: string; database?: string; c
     send(res, { detail: 'Not Found' }, 404)
   }
   if (options.autoStart !== false) scheduler.start()
-  return { store, scheduler, configuration, capabilities, operations, deletion, jev, router, handler, async close() { watcher.close(); await dshUpdate.close(); await scheduler.close(); await import('./web.ts').then(({ closeWebSessions }) => closeWebSessions(store)); await operations.close(); jev.close(); store.close() } }
+  return { store, scheduler, configuration, capabilities, operations, deletion, router, handler, async close() { watcher.close(); await dshUpdate.close(); await scheduler.close(); await import('./http-tools.ts').then(({ closeHttpSessions }) => closeHttpSessions(store)); await operations.close(); store.close() } }
 }
 export async function serveEngine(options: Parameters<typeof createEngine>[0] & { host?: string; port?: number }) {
   const engine = await createEngine(options)

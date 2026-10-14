@@ -112,7 +112,7 @@ test('large graph SQL pages and active Run query do not load full graph or histo
   store.runs=()=>{throw new Error('full historical Run loading forbidden')}
   assert.deepEqual(store.runsByStatus('running').map(row=>row.id),[run.id])
   const tools=graphTools({store,run,worker,config:{} as EngineConfig,signal:new AbortController().signal},()=>{})
-  const result=await tools.find(tool=>tool.name==='read_graph')!.execute('read',{kinds:['fact'],offset:500,limit:10,full:true}) as any
+  const result=await tools.find(tool=>tool.name==='read_graph')!.execute('read',{kinds:['fact'],offset:500,limit:10}) as any
   assert.equal(result.details.facts.length,10);assert.equal(result.details.nextOffsets.fact,510)
   assert.deepEqual(result.details.steps,[])
  } finally {store.close()}

@@ -4,8 +4,6 @@ import path from 'node:path'
 import { randomUUID, createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { activeEvidence, HttpError, integer, now, requiredText } from './types.ts'
-import { verbIds } from './capability-verbs.ts'
-import { validateTaskPlugins } from './task-plugins.ts'
 import type { Activity, Evidence, Fact, Finding, Goal, Graph, GraphEvent, GraphNode, Input, Json, Project, Run, Step, Worker } from './types.ts'
 
 export const ACTIVE_NODE_SQL = "COALESCE(json_extract(data,'$.deleted'),0)=0"
@@ -134,10 +132,10 @@ export class Store {
     if(importCriticalKeys) for(const row of this.db.prepare('SELECT id,data FROM projects').all()){const project=JSON.parse(String(row.data));for(const key of project.criticalSignals ?? [])this.db.prepare('INSERT OR IGNORE INTO critical_keys VALUES (?,?)').run(String(row.id),String(key))}
     this.db.prepare('INSERT OR IGNORE INTO metadata VALUES (?,?)').run('schema', '2')
     // Only disposable duplicate indexes are retired; raw audit and Run events stay intact.
-    this.db.exec('DROP TABLE IF EXISTS trace_fts; DROP TABLE IF EXISTS trace_audit_fts; DROP TABLE IF EXISTS trace_cursors')
+    this.db.exec('DROP TABLE IF EXISTS trace_fts; DROP TABLE IF EXISTS trace_audit_fts; DROP TABLE IF EXISTS trace_cursors; DROP TABLE IF EXISTS jev_evaluations')
     // Counters of deleted projects would otherwise linger forever and are never read again.
     this.db.prepare('DELETE FROM counters WHERE scope NOT IN (SELECT id FROM projects)').run()
-    try { this.migrateCurrentFgs(); this.migrateNativeTerminal() } catch (error) { this.db.close(); throw error }
+    try { this.migrateCurrentFgs() } catch (error) { this.db.close(); throw error }
     this.changes.setMaxListeners(0)
   }
   private migrateCurrentFgs() {
@@ -194,18 +192,6 @@ export class Store {
       }
       this.db.exec(`DROP INDEX IF EXISTS nodes_active; CREATE INDEX nodes_active ON nodes(project_id,kind) WHERE ${ACTIVE_NODE_SQL}`)
       this.db.prepare('INSERT INTO metadata VALUES (?,?)').run('fgs-current-only', '1')
-    })
-  }
-  private migrateNativeTerminal() {
-    this.transaction(() => {
-      for (const row of this.db.prepare(`SELECT data FROM nodes WHERE kind='step' AND ${ACTIVE_NODE_SQL} AND json_extract(data,'$.status') NOT IN ('done','cancelled')`).all()) {
-        const step = JSON.parse(String(row.data)) as Step
-        const requires = step.requires.filter(verb => !verb.startsWith('remote.terminal.'))
-        if (requires.length === step.requires.length) continue
-        step.requires = requires; step.planVersion = (step.planVersion ?? 1) + 1
-        this.saveNode(step)
-        this.event(step.projectId, 'step.revised', step, { reason: 'Interactive terminals now use DSH Terminal; removed remote.terminal.* requirements' })
-      }
     })
   }
   close() { this.notifications.clear(); this.stepNotifications.clear(); this.changes.removeAllListeners(); this.db.close() }
@@ -453,20 +439,25 @@ export class Store {
       return goal
     })
   }
+  planningCapacity(id: string, maxSteps: number | null = null) {
+    const activeSteps = Number(this.db.prepare("SELECT COUNT(*) AS n FROM nodes WHERE project_id=? AND kind='step' AND COALESCE(json_extract(data,'$.deleted'),0)=0 AND json_extract(data,'$.status') IN ('pending','running','paused')").get(id)!.n)
+    return { maxSteps, activeSteps, remainingSteps: maxSteps === null ? null : Math.max(0, maxSteps - activeSteps) }
+  }
+  acknowledgementBoundary(runId: string) {
+    const run = this.run(runId)
+    return { throughEvidenceSeq: run.deliveredEvidenceSeq ?? run.planningEvidenceSeq ?? 0, throughHintSeq: run.deliveredHintSeq ?? run.planningHintSeq ?? 0 }
+  }
   addStep(id: string, input: { description: string; sourceIds: string[]; goalId?: string; creator?: string; priority?: number; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; bootstrap?: boolean }, maxSteps: number | null = null): Step {
     return this.transaction(() => {
       this.writable(id)
-      if (maxSteps !== null && this.graph(id).steps.filter(s => ['pending', 'running', 'paused'].includes(s.status)).length >= maxSteps) throw new HttpError(409, 'Active Step limit reached')
+      const capacity = this.planningCapacity(id, maxSteps)
+      if (capacity.remainingSteps === 0) throw new HttpError(409, 'Active Step limit reached', { code: 'STEP_LIMIT_REACHED', planningCapacity: capacity })
       const goalId = input.goalId ?? 'goal'; if (this.node<Goal>(id, goalId, 'goal').status !== 'open') throw new HttpError(409, 'Goal is closed')
       const profile = input.executionProfile ?? 'direct'; if (!['direct', 'isolated'].includes(profile)) throw new HttpError(422, 'Invalid execution profile')
-      const requires = input.requires ?? []
-      const plugins = validateTaskPlugins(input.plugins === undefined ? [] : input.plugins)
-      if (!Array.isArray(requires) || requires.some(x => typeof x !== 'string' || x.length > 64) || requires.length > 16 || new Set(requires).size !== requires.length) throw new HttpError(422, 'Invalid requires')
-      if (requires.some(verb => !verbIds.includes(verb))) throw new HttpError(422, `Unknown capability verb; valid: ${verbIds.join(', ')}`)
       const step: Step = { id: this.next(id, 'step', 'i'), projectId: id, kind: 'step', description: requiredText(input.description, 'description'),
         sourceIds: this.evidenceIds(id, input.sourceIds, true), goalId, creator: input.creator ?? 'decide', priority: integer(input.priority ?? 0, 'priority', -2147483648),
-        status: 'pending', factIds: [], worker: null, executionProfile: profile, requires, attempts: 0,
-        endedAt: null, failure: null, createdAt: now(), bootstrap: input.bootstrap ?? false, planVersion: 1, ...(plugins.length ? { plugins } : {}) }
+        status: 'pending', factIds: [], worker: null, executionProfile: profile, attempts: 0,
+        endedAt: null, failure: null, createdAt: now(), bootstrap: input.bootstrap ?? false, planVersion: 1 }
       this.saveNode(step); this.event(id, 'step.added', step, step); return step
     })
   }
@@ -478,7 +469,7 @@ export class Store {
       this.writable(id); const step = this.node<Step>(id, stepId, 'step')
       this.checkVersion(step, input.expectedVersion)
       if (step.status === 'done' || step.deleted) throw new HttpError(409, 'Step is already completed or deleted')
-      const definition = input.description !== undefined || input.sourceIds !== undefined || input.goalId !== undefined || input.executionProfile !== undefined || input.requires !== undefined || input.plugins !== undefined
+      const definition = input.description !== undefined || input.sourceIds !== undefined || input.goalId !== undefined || input.executionProfile !== undefined
       if (input.mode !== undefined && !['amend', 'replace'].includes(input.mode)) throw new HttpError(422, 'Invalid revision mode')
       if (definition && step.attempts && (!input.mode || input.expectedVersion === undefined)) throw new HttpError(409, 'Claimed Step edits require mode and expectedVersion')
       if (definition && step.status === 'cancelled') throw new HttpError(409, 'Cancelled Step definition is immutable')
@@ -493,21 +484,12 @@ export class Store {
         if (!['direct', 'isolated'].includes(input.executionProfile)) throw new HttpError(422, 'Invalid execution profile')
         next.executionProfile = input.executionProfile
       }
-      if (input.requires !== undefined) {
-        if (!Array.isArray(input.requires) || input.requires.length > 16 || new Set(input.requires).size !== input.requires.length || input.requires.some(v => !verbIds.includes(v))) throw new HttpError(422, 'Invalid requires capability verbs')
-        next.requires = input.requires
-      }
-      if (input.plugins !== undefined) {
-        const plugins = validateTaskPlugins(input.plugins)
-        if (plugins.length) next.plugins = plugins
-        else delete next.plugins
-      }
-      if (step.attempts && input.mode === 'amend' && (next.goalId !== step.goalId || next.executionProfile !== step.executionProfile || JSON.stringify(next.requires) !== JSON.stringify(step.requires) || JSON.stringify(next.plugins ?? []) !== JSON.stringify(step.plugins ?? []))) throw new HttpError(409, 'Goal and execution permission changes require replace')
+      if (step.attempts && input.mode === 'amend' && (next.goalId !== step.goalId || next.executionProfile !== step.executionProfile)) throw new HttpError(409, 'Goal and execution permission changes require replace')
       if (input.priority !== undefined) next.priority = integer(input.priority, 'priority', -2147483648)
       if (definition && step.attempts && input.mode === 'replace') {
         if (step.bootstrap) throw new HttpError(409, 'Bootstrap cannot be replaced by a planning edit')
         if (input.status !== undefined) throw new HttpError(422, 'Replacement cannot include status')
-        const replacement = this.addStep(id, { description: next.description, sourceIds: next.sourceIds, goalId: next.goalId, priority: next.priority, requires: next.requires, plugins: next.plugins, executionProfile: next.executionProfile, creator: step.creator })
+        const replacement = this.addStep(id, { description: next.description, sourceIds: next.sourceIds, goalId: next.goalId, priority: next.priority, executionProfile: next.executionProfile, creator: step.creator })
         replacement.replaces = step.id; replacement.replacementPending = true; replacement.status = 'blocked'
         step.status = 'cancelled'; step.replacedBy = replacement.id; step.endedAt = now()
         this.saveNode(step); this.event(id, 'step.updated', step, step)
@@ -527,6 +509,7 @@ export class Store {
         if (input.status === 'pending' && this.latestRun(id, step.id)?.status === 'unknown') throw new HttpError(409, 'Unconfirmed results must be resolved before retry')
         next.status = input.status; next.endedAt = input.status === 'cancelled' ? now() : null
       }
+      if (JSON.stringify(next) === JSON.stringify(step)) return step
       if (definition) next.planVersion = (step.planVersion ?? 1) + 1
       this.saveNode(next); this.event(id, definition ? 'step.revised' : 'step.updated', next, next); return next
     })
@@ -568,7 +551,7 @@ export class Store {
       const run = this.run(runId)
       if (run.status !== 'running' || run.activity !== 'decide') throw new HttpError(409, 'Decide is not running')
       const value = integer(through, 'throughEvidenceSeq')
-      if (value < (run.planningEvidenceSeq ?? 0) || value > (run.deliveredEvidenceSeq ?? run.planningEvidenceSeq ?? 0)) throw new HttpError(422, 'Acknowledgement must be within the delivered evidence boundary')
+      if (value < (run.planningEvidenceSeq ?? 0) || value > (run.deliveredEvidenceSeq ?? run.planningEvidenceSeq ?? 0)) throw new HttpError(422, 'Acknowledgement must be within the delivered evidence boundary', { acknowledgementBoundary: this.acknowledgementBoundary(runId), minimum: run.planningEvidenceSeq ?? 0 })
       run.processedEvidenceSeq = value; this.saveRun(run)
     })
   }
@@ -577,7 +560,7 @@ export class Store {
       const run = this.run(runId)
       if (run.status !== 'running' || run.activity !== 'decide') throw new HttpError(409, 'Decide is not running')
       const value = integer(through, 'throughHintSeq')
-      if (value < Math.max(run.planningHintSeq ?? 0, run.processedHintSeq ?? 0) || value > (run.deliveredHintSeq ?? run.planningHintSeq ?? 0)) throw new HttpError(422, 'Acknowledgement must be within the delivered Hint boundary')
+      if (value < Math.max(run.planningHintSeq ?? 0, run.processedHintSeq ?? 0) || value > (run.deliveredHintSeq ?? run.planningHintSeq ?? 0)) throw new HttpError(422, 'Acknowledgement must be within the delivered Hint boundary', { acknowledgementBoundary: this.acknowledgementBoundary(runId), minimum: Math.max(run.planningHintSeq ?? 0, run.processedHintSeq ?? 0) })
       run.processedHintSeq = value; this.saveRun(run)
     })
   }
@@ -726,6 +709,11 @@ export class Store {
     return this.transaction(() => {
       this.active(id)
       const step = this.addStep(id, { description, sourceIds: evidenceIds, creator: worker })
+      step.factIds = [...new Set(step.sourceIds.flatMap(source => {
+        const evidence = this.node<Fact | Finding>(id, source)
+        return evidence.kind === 'fact' ? [evidence.id] : evidence.factIds
+      }))]
+      this.saveNode(step)
       const run = this.claim(id, 'execute', { name: worker, backend: 'dsh' }, step.id)
       this.finishRun(run.id, 'succeeded'); const saved = this.node<Step>(id, step.id, 'step'); saved.resultGoalId = 'goal'; this.saveNode(saved)
       this.event(id, 'step.updated', saved, saved)
@@ -835,9 +823,9 @@ export class Store {
       if (run.status !== 'running') return run
       if (run.stepId && status === 'succeeded') {
         const step = this.node<Step>(run.projectId, run.stepId, 'step')
-        if (step.bootstrap && !step.factIds.length) {
+        if (!step.factIds.length) {
           status = 'failed'
-          error = 'Bootstrap must return at least one Fact before Reason can start'
+          error = step.bootstrap ? 'Bootstrap must return at least one Fact before Reason can start' : 'Explore must return at least one Fact before completing the Step'
         }
       }
       run.status = status; run.error = error; run.endedAt = status === 'paused' ? null : now(); this.saveRun(run)

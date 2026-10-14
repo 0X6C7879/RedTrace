@@ -6,26 +6,11 @@
 `npm run dsh:build`。`build-dsh.sh` / `build-dsh.cmd` 与三平台 CI 已包含
 根依赖安装。本次不构建 Docker。运行时不执行 npm/npx 下载或交互式 setup。
 
-插件管理页中的 **Reverse Engineering** 对应 `redtrace-reverse`，默认不装载。
-Reason 在现有 `add_step` / `update_step` 中声明 `plugins:["redtrace-reverse"]`，
-只有认领该 Step 的 Explore Run 获得它；省略或传 `[]` 的 Step 不装载。
-这不修改全局开关，不增加模型调用或插件控制工具。Reason 只获得稳定的
-短目录和可选字段，不挂载执行 Skill/MCP，也不承担 REA Schema。
-
-管理器显式停止是持久化强制禁用：撤销活动 Run 的 Skill/工具、取消分析，
-并拒绝 Reason 新增该声明；启动解除禁用，但不向未声明的 Run 广播插件。
-未装载的默认 `stopped` 与管理员禁止不同，管理 API 的 `taskSelectable` /
-`taskAllowed` 字段及详情说明提供这个区别。禁用后通过 HTTP 创建的声明
-不会被静默忽略：启动 Run 前返回 `task_plugin_disabled`，无需模型参与。
-旧数据库/Step 不含 `plugins` 时视为未选择，不需要数据库迁移。
-
-待执行 Step 可更新/清空声明；已认领的 Step 改变声明必须使用 `replace`
-和 `expectedVersion`，等待旧 Run 停止确认后启动替代 Step。暂停恢复、
-重试及未改变声明的替代保留原选择；管理员强制禁用优先于所有持久化声明。
-未来同类插件统一加入 `packages/redtrace-dsh/src/task-plugins.ts` 的目录，
-由校验、Reason 短目录、管理器及原生装载共享；不包含内核或全局服务插件。
-
-为选中的 Run 装载后只有官方 Skill 索引和 CLI 路径可用，未加载 Skill 时 REA 工具数为零。
+插件管理页中的 **Reverse Engineering** 对应 `redtrace-reverse`，默认启用、按需装载。
+REA 默认开启，由 Explore 自主按需加载，Reason 不再通过 Step.requires/plugins 控制工具。
+管理员明确停止会持久化禁用并撤销活动 Run 的本插件 Skill/MCP/分析能力，但不取消 Step 或阻止 Reason 规划。
+历史 Step 声明仅兼容读取，新 Step 不保存这些字段，也不因工具声明触发 Replace。
+每个启用插件的 Explore 都能发现官方 Skill 与 CLI；未加载 Skill 时 MCP 不连接、不启动分析引擎。
 Explore 调用原生 `skill({name:"reverse-engineer-anything"})`，自动创建
 该 Run 私有的 DSH MCP Client，不启动 Ghidra。模型从 14 个原生入口开始，
 调用目标入口自动扩展相应类别；`reverse_tools({group:...})` 仅控制可见性，
@@ -81,7 +66,7 @@ Session 或缓存。复用同一 Run 的连接与分析 Program，不为查询�
 默认优先 `detail:summary`、`inspect_analysis_view`、Evidence ID 与局部查询。
 大于 8 KiB 的文本结果按 SHA256 保存于 Workspace `.rea/run-*/`，模型只接收
 1500 字符预览与真实路径/摘要；相同结果不重复保存。它是**不完整预览**，
-不是可当完整 JSON 解析的成功证据。完整原生值仍供 PTC 使用，图片走原生附件。
+不是可当完整 JSON 解析的成功证据。完整原生值保留在工具结果中，图片走原生附件。
 显式 `export_evidence_bundle` 保存的 bundle 和结果文件在停用后不删除；
 **没有显式导出的 REA 内存证据不承诺跨 Run 持久化**。Fact/Finding 在现有
 Store 中保留，必须由 Explore 验证后提交，REA Evidence 不自动升级成事实。

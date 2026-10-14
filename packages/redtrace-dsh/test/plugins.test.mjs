@@ -70,28 +70,28 @@ function scratch(name) {
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 
-test('task plugin default-off is selectable, global start stays scoped, explicit stop veto persists', async t => {
+test('task plugin is default-on and autonomous; explicit stop veto persists', async t => {
   const root = scratch('task-policy'), manifest = path.join(root, 'plugins.json')
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const { manager } = makeManager(root, manifest, async () => ({}))
   await manager.boot()
-  assert.equal(manager.running('redtrace-reverse'), false)
-  assert.equal(manager.view('redtrace-reverse').taskSelectable, true)
-  assert.equal(manager.view('redtrace-reverse').taskAllowed, true)
+  assert.equal(manager.running('redtrace-reverse'), true)
+  assert.equal(manager.view('redtrace-reverse').taskSelectable, undefined)
+  assert.equal(manager.taskPluginAllowed('redtrace-reverse'), true)
   assert.equal(manager.availableForTask('redtrace-reverse', ['redtrace-reverse']), true)
-  assert.equal(manager.availableForTask('redtrace-reverse', []), false)
+  assert.equal(manager.availableForTask('redtrace-reverse', []), true)
   assert.equal(manager.taskPluginAllowed('redtrace-core'), false)
   await manager.start('redtrace-reverse')
-  assert.equal(manager.availableForTask('redtrace-reverse', []), false, 'global start never grants unselected Runs')
+  assert.equal(manager.availableForTask('redtrace-reverse', []), true, 'global start makes the lazy feature available to Explore')
   await manager.stop('redtrace-reverse')
   assert.equal(manager.availableForTask('redtrace-reverse', ['redtrace-reverse']), false)
   const restarted = makeManager(root, manifest, async () => ({})).manager
   await restarted.boot()
   assert.equal(restarted.taskPluginAllowed('redtrace-reverse'), false)
-  assert.equal(restarted.view('redtrace-reverse').taskAllowed, false)
+  assert.equal(restarted.taskPluginAllowed('redtrace-reverse'), false)
   await restarted.start('redtrace-reverse')
   assert.equal(restarted.availableForTask('redtrace-reverse', ['redtrace-reverse']), true)
-  assert.equal(restarted.availableForTask('redtrace-reverse', []), false)
+  assert.equal(restarted.availableForTask('redtrace-reverse', []), true)
   assert.equal(restarted.availableForTask('redtrace-fs-search', []), restarted.running('redtrace-fs-search'))
 })
 
@@ -119,22 +119,34 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
     assert.ok(!/Cairn|FastAPI/i.test(`${view.description}${view.intro}`), `${view.id} leaks an external project name`)
   }
 
-  // Dependency order: core first, scheduler last; spill now serves every Worker.
+  // Dependency order: core first, scheduler last; Spill belongs only to Execute scopes.
   assert.equal(ctx.mounts[0].module, core)
   assert.equal(ctx.mounts.at(-1).module.name, 'redtrace-scheduler')
-  assert.equal(ctx.mounts.length, 8)
+  assert.equal(ctx.mounts.length, 7)
   assert.equal(ctx.mounts[1].module.name, 'redtrace-session-query')
   assert.equal(ctx.mounts[1].config.sessionRoot, root)
-  assert.ok(ctx.mounts.some(mount => mount.module.name === 'redtrace-spill'))
+  assert.ok(!ctx.mounts.some(mount => mount.module.name === 'redtrace-spill'))
 
   // Every builtin entry boots running unless it is explicitly opt-in (defaultOff).
   const optIn = new Set([
     'redtrace-credentials', 'redtrace-file-references',
-    'redtrace-lsp', 'redtrace-ptc', 'redtrace-jev', 'redtrace-reverse',
+    'redtrace-lsp', 'redtrace-reverse',
   ])
   for (const view of views.filter((item) => item.source === 'builtin')) {
     assert.ok(view.status === 'running' || optIn.has(view.id), `${view.id} boots ${view.status}`)
   }
+})
+
+test('removed PTC stays absent even when an older manifest enables it', async t => {
+  const root = scratch('retired-ptc'), manifest = path.join(root, 'plugins.json')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  writeFileSync(manifest, JSON.stringify({ version: 1, enabled: ['redtrace-ptc'] }))
+  const { manager, ctx } = makeManager(root, manifest, async () => ({ apply() {} }))
+  await manager.boot()
+  assert.equal(manager.running('redtrace-ptc'), false)
+  assert.ok(!manager.list().some(p => p.id === 'redtrace-ptc'))
+  assert.ok(ctx.mounts.every(({ module }) => module?.name !== 'redtrace-code-runtime'))
+  await assert.rejects(manager.start('redtrace-ptc'), /unknown plugin/)
 })
 
 test('efficiency features boot enabled by default and remain explicitly switchable', async (t) => {
@@ -146,10 +158,11 @@ test('efficiency features boot enabled by default and remain explicitly switchab
   const first = makeManager(root, manifestPath, async () => ({ apply() {} }))
   await first.manager.boot()
   assert.equal(first.manager.view('redtrace-lsp').status, 'stopped')
-  assert.equal(first.manager.view('redtrace-ptc').status, 'stopped')
-  assert.equal(first.manager.view('redtrace-jev').status, 'stopped')
+  assert.ok(!first.manager.list().some(p => p.id === 'redtrace-ptc'))
+  await assert.rejects(first.manager.start('redtrace-ptc'), /unknown plugin/)
+  assert.equal(first.manager.view('redtrace-file-references').status, 'stopped')
   assert.ok(!first.manager.list().some(p => ['redtrace-shell', 'redtrace-remote-terminal'].includes(p.id)))
-  for (const id of ['redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
+  for (const id of ['redtrace-knowledge', 'redtrace-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
     assert.equal(first.manager.view(id).status, 'running')
   }
   assert.equal(first.manager.view('redtrace-pivot').status, 'running')
@@ -357,24 +370,24 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const list = await call('GET', '/__redtrace/plugins')
   assert.equal(list.status, 200)
-  assert.equal(JSON.parse(list.body).plugins.length, 36)
-  for (const id of ['redtrace-shell', 'redtrace-remote-terminal']) {
+  assert.equal(JSON.parse(list.body).plugins.length, 34)
+  for (const id of ['redtrace-shell', 'redtrace-remote-terminal', 'redtrace-ptc']) {
     assert.ok(!JSON.parse(list.body).plugins.some(plugin => plugin.id === id))
     assert.equal((await call('POST', `/__redtrace/plugins/${id}/start`)).status, 400)
   }
-  assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === 'redtrace-jev').status, 'stopped')
+  assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === 'redtrace-file-references').status, 'stopped')
 
-  for (const id of ['redtrace-knowledge', 'redtrace-browser-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
+  for (const id of ['redtrace-knowledge', 'redtrace-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
     assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === id).status, 'running')
     const started = await call('POST', `/__redtrace/plugins/${id}/start`)
     assert.equal(JSON.parse(started.body).plugin.status, 'running')
     const stopped = await call('POST', `/__redtrace/plugins/${id}/stop`)
     assert.equal(JSON.parse(stopped.body).plugin.status, 'stopped')
   }
-  const jevStart = await call('POST', '/__redtrace/plugins/redtrace-jev/start')
-  assert.equal(JSON.parse(jevStart.body).plugin.status, 'running')
-  const jevStop = await call('POST', '/__redtrace/plugins/redtrace-jev/stop')
-  assert.equal(JSON.parse(jevStop.body).plugin.status, 'stopped')
+  const optInStart = await call('POST', '/__redtrace/plugins/redtrace-file-references/start')
+  assert.equal(JSON.parse(optInStart.body).plugin.status, 'running')
+  const optInStop = await call('POST', '/__redtrace/plugins/redtrace-file-references/stop')
+  assert.equal(JSON.parse(optInStop.body).plugin.status, 'stopped')
 
   const added = await call('POST', '/__redtrace/plugins', {
     id: 'my-plug', module: 'plugins/my-plug/index.js', description: '介绍一下',
@@ -404,16 +417,16 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 })
 
 
-test('reverse plugin is default-off, persists opt-in and can be stopped and restarted', async t => {
+test('reverse plugin is default-on, explicit stop persists and can be restarted', async t => {
   const root = scratch('reverse')
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const manifest = path.join(root, 'plugins.json')
   const first = makeManager(root, manifest, async () => ({}))
   await first.manager.boot()
-  assert.equal(first.manager.view('redtrace-reverse').status, 'stopped')
+  assert.equal(first.manager.view('redtrace-reverse').status, 'running')
   await first.manager.start('redtrace-reverse')
   assert.equal(first.manager.view('redtrace-reverse').status, 'running')
-  assert.ok(JSON.parse(readFileSync(manifest)).enabled.includes('redtrace-reverse'))
+  assert.ok(!JSON.parse(readFileSync(manifest)).disabled.includes('redtrace-reverse'))
   const second = makeManager(root, manifest, async () => ({}))
   await second.manager.boot()
   assert.equal(second.manager.view('redtrace-reverse').status, 'running')

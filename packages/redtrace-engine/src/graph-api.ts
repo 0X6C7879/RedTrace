@@ -85,7 +85,7 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
     if (b.from.includes('goal')) throw new HttpError(400, 'goal cannot be used in from')
     if (b.worker && b.worker !== b.creator) throw new HttpError(400, 'worker must be null or equal to creator')
     const bootstrap = b.creator === 'dispatcher.bootstrap' && b.description === 'bootstrap' && b.from.length === 1 && b.from[0] === 'origin'
-    const result = store.transaction(() => { const s = store.addStep(p(c), { description: b.description, sourceIds: b.from, creator: b.creator, executionProfile: b.execution_profile, requires: b.requires, plugins: b.plugins, bootstrap }, b.max_active_intents); if (b.worker) store.claim(p(c), 'execute', { name: b.worker, backend: 'dsh' }, s.id); return intent(p(c), s.id) })
+    const result = store.transaction(() => { const s = store.addStep(p(c), { description: b.description, sourceIds: b.from, creator: b.creator, executionProfile: b.execution_profile, requires: b.requires, plugins: b.plugins, bootstrap }, maxSteps()); if (b.worker) store.claim(p(c), 'execute', { name: b.worker, backend: 'dsh' }, s.id); return intent(p(c), s.id) })
     send(c.res, result, 201)
   })
   router.add('PATCH', '/projects/:project/intents/:node/execution-profile', async c => {
