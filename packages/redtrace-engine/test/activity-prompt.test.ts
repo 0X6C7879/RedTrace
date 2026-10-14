@@ -5,35 +5,31 @@ import { activityPrompt, graphTools } from '../src/runner.ts'
 import { Store } from '../src/store.ts'
 import type { EngineConfig, Worker, Step } from '../src/types.ts'
 
-test('Reason keeps planning, evidence maintenance and completion contracts', () => {
+test('Reason receives the requested FGS planning role', () => {
   const prompt = activityPrompt('decide')
-  assert.match(prompt, /^你是 Reason/)
+  assert.match(prompt, /^你是任务的规划者\(Reason\)/)
   for (const rule of [
-    /Scope.*授权/, /本次触发.*活跃 Step.*连续增量/, /Fact\/Finding evidenceIds/, /不等于达成/,
-    /有突破优先深入/, /前置已满足/, /同一题默认一个主 Explore/, /不同题目/,
-    /单次失败不等于证伪/, /中断.*确认进度/, /副作用不明.*不重放/,
-    /sourceIds.*goalId/, /工具由 Explore 自主选择/, /Subgoal.*可验收.*复用/,
-    /remote\.command/, /update_step\/update_goal.*版本/, /amend.*replace/,
-    /FGS 是当前工作状态/, /manage_evidence.*合并.*删除/, /不留备份、不可恢复，无需检查历史/, /修复活跃引用/,
-    /新 Fact\/Finding.*关键事件.*不等 Step 结束/, /planningCapacity.*满额.*add_step.*Worker.*限制/,
-    /只读工具.*扣分提示.*确认/, /finish_decide.*throughEvidenceSeq.*完整读取并处理.*连续边界/,
+    /每次新会话先读取当前 FGS/, /read_graph_delta.*不重复全图读取/, /Hint、Observation 和推测.*不能直接作为确认事实/,
+    /逐项核对数量、权限、范围/, /引用真实 evidenceIds/, /Step 结束.*不代表 Goal 达成/,
+    /只创建前置已满足、尚未覆盖且能够验证结果的 Step/, /planningCapacity.*Worker 和并发限制/,
+    /单次失败不能否定整条路线/, /sourceIds.*goalId/, /notify_explore 定向补充/,
+    /带版本的 update_step\/update_goal/, /amend.*replace/, /FGS 保存当前有效状态/,
+    /manage_evidence.*合并/, /throughEvidenceSeq、throughHintSeq.*acknowledgementBoundary/,
   ]) assert.match(prompt, rule)
+  assert.ok(Buffer.byteLength(prompt, 'utf8') <= 8000)
 })
 
-test('Explore keeps resources and safe execution while adding local autonomy', () => {
+test('Explore receives the requested evidence-led execution role', () => {
   const prompt = activityPrompt('execute')
-  assert.match(prompt, /^你是 Explore/)
+  assert.match(prompt, /^你是执行者\(Explore\)/)
   for (const rule of [
-    /Scope.*授权/, /当前 Step.*goalId/, /Skills.*执行工具.*任务插件/,
-    /不把每次尝试拆成新 Step/, /一次失败不代表方向无效/, /实质不同的方法/,
-    /副作用不明.*不重放/, /权限边界.*Reason/, /Step 外线索.*不自行扩展/,
-    /Scope、Fact、Hint.*凭证.*即使尚无通道/, /通道验证后登记.*匹配通道/,
-    /submit_fact.*真实证据.*增量/, /成功、失败和限制.*确认事实/,
-    /Hint、Observation.*不是事实/, /submit_finding.*引用 Fact/,
-    /read_graph\/read_graph_delta.*sync_step.*当前版本/, /旧调用树不得继续外部操作/,
-    /验证码.*授权题目.*局部截图.*当前模型/, /不依赖人工接管或承诺通用通过/,
-    /finish_step.*不代表 Goal\/Subgoal 达成/,
+    /唯一任务是完成当前 Step/, /复用共享 Fact、扫描结果、凭证及已验证通道/,
+    /单次失败、无回显或工具报错不能证明路线无效/, /保存到工作目录的证据文件/,
+    /submit_fact 是唤醒 Reason 的决策事件/, /不单独提交 Fact/, /先提交对应 Fact，再用 submit_finding/,
+    /离线知识仅用于辅助判断/, /只有 Step 契约版本变化时.*sync_step/,
+    /至少一条有真实证据的汇总 Fact，再调用 finish_step/, /不依赖人工接管/,
   ]) assert.match(prompt, rule)
+  assert.ok(Buffer.byteLength(prompt, 'utf8') <= 8000)
 })
 
 test('Bootstrap is opt-in, solves directly and keeps its confirmed Fact gate', () => {
@@ -53,10 +49,10 @@ test('Bootstrap is opt-in, solves directly and keeps its confirmed Fact gate', (
   } finally { store.close() }
 })
 
-test('directed guidance changes preserve the Bootstrap body byte for byte', () => {
+test('new role prompts preserve the Bootstrap body byte for byte', () => {
  const hash=(text:string)=>createHash('sha256').update(text).digest('hex')
- assert.match(activityPrompt('decide'),/notify_explore.*不微观管理或重复通知/)
- assert.match(activityPrompt('execute'),/Reason 通知.*不代表契约变更/)
+ assert.match(activityPrompt('decide'),/人工 Hint.*notify_explore 定向补充/)
+ assert.match(activityPrompt('execute'),/notify_explore 只是增量信息.*sync_step/)
  const store=new Store(':memory:')
  try {
   const step=store.createProject({title:'Hash',origin:'Local fixture',goal:'Check',bootstrap:true}).steps[0]
@@ -65,42 +61,27 @@ test('directed guidance changes preserve the Bootstrap body byte for byte', () =
 })
 
 
-test('Explore consolidates decision events without delaying handoffs or losing evidence', () => {
+test('Explore reports only actionable, verified facts', () => {
   const prompt = activityPrompt('execute')
   for (const rule of [
-    /submit_fact 是唤醒 Reason 的决策事件，不是执行日志/,
-    /同 Step、同目标同环境.*多个观察合并为一条/,
-    /彼此独立.*不同后续行动.*拆分/,
-    /不按固定数量或时间攒 Fact/,
-    /容器已启动.*单个指纹.*一次失败.*不单独 submit_fact/,
-    /原始输出.*持续保存到本地证据文件/,
-    /资源\/通道仍及时登记/,
-    /授权目标变化或不一致先停下核对/,
-    /目标成果.*其他 Step.*关键前置.*实证阻塞立即提交/,
-    /不为凑更多观察延迟交接/,
-    /提交 Fact 不代表 Step 结束/,
-    /预算\/超时收尾.*合并提交/,
-    /阶段结论.*不能为少报 Fact 让规划停摆/,
-    /每个 Step 完成前必须主动 submit_fact 至少一条有真实证据/,
-    /Step 已完成或阻塞无法自行解除.*submit_fact.*至少一条.*finish_step/,
-    /纯文本总结.*不算完成/,
-    /直接调用原生工具 submit_fact、finish_step/,
+    /足以影响目标验收、执行前置或后续计划的新结论/,
+    /同一 Step、同一目标和环境的多个观察合并为一条阶段 Fact/,
+    /结论相互独立且需要不同后续行动时才拆分/,
+    /容器启动、目标地址返回.*不单独提交 Fact/,
+    /已验证的目标成果.*应立即提交/, /提交 Fact 后.*仍有有效路径.*继续执行/,
+    /漏洞或其他可交付成果必须有可复现的实际证据/,
+    /验证码等人机验证.*OCR识别.*不依赖人工接管/,
   ]) assert.match(prompt, rule)
-  assert.ok(Buffer.byteLength(prompt, 'utf8') <= 8000)
 })
 
-test('Reason treats events as checks, acknowledges increments and avoids idle planning', () => {
+test('Reason only replans when new information changes the plan', () => {
   const prompt = activityPrompt('decide')
   for (const rule of [
-    /只按需展开.*证据.*不必全量重读或重新规划/,
-    /事件是检查信号，不是增派任务的义务/,
-    /未改变目标验收、可执行前置或计划.*不新增 Step、不重复通知/,
-    /处理连续增量后尽快 finish_decide/,
-    /没有 pending\/running 工作.*前置已满足.*可验证方向/,
-    /无可执行方向.*具体阻塞.*不虚构任务/,
-    /throughEvidenceSeq.*完整读取并处理.*连续边界/,
+    /每次唤醒只判断新信息是否改变目标验收、可执行前置或现有计划/,
+    /没有实质变化时允许不做修改，继续等待 Explore/,
+    /处理完已交付的连续证据和 Hint 后调用 finish_decide/,
+    /未处理部分留待下一轮/,
   ]) assert.match(prompt, rule)
-  assert.ok(Buffer.byteLength(prompt, 'utf8') <= 8000)
 })
 
 

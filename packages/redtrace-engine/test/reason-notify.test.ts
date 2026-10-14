@@ -6,7 +6,7 @@ import { graphTools, graphUpdate, launchContext } from '../src/runner.ts'
 import type { EngineConfig, Step, Worker } from '../src/types.ts'
 
 const cordisPath = '../compat/cordis.mjs'
-const { notifyExplore, pruneExploreNotices, filterExploreNotices } = await import(cordisPath)
+const { notifyExplore, pruneExploreNotices, filterExploreNotices, queueGraphNotice } = await import(cordisPath)
 const worker: Worker = { name: 'fixture', backend: 'mock', provider: 'mock', model: '', enabled: true, reason: true, explore: true, bootstrap: false, maxRunning: 4, priority: 0 }
 const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 4, maxProjectWorkers: 4, maxRunningProjects: 2, maxSteps: null, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: '/tmp' }
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
@@ -22,7 +22,7 @@ function fixture() {
   const shared = { tasks: new Map([[target.id, task]]) }, controller = new AbortController()
   const context = { store, run, worker, config, signal: controller.signal }
   let serial = 0
-  const message = (text: string) => ({ id: `notice-${++serial}`, content: [{ type: 'text', text }] })
+  const message = (text: string, metadata = {}) => ({ id: `notice-${++serial}`, content: [{ type: 'text', text }], source: { kind: 'user', ...metadata } })
   const send = (text = 'Useful verified path', sourceIds: string[] = []) => notifyExplore(context, shared, { stepId: step.id, message: text, sourceIds }, message)
   return { store, project, step, target, run, agent, task, shared, context, controller, message, send }
 }
@@ -33,6 +33,11 @@ test('Reason-only tool, precise non-waking delivery, bounded queue and durable a
     const evidence = store.addFact(project.id, 'Confirmed path')
     const before = store.project(project.id), version = store.node<Step>(project.id, step.id).planVersion
     assert.equal(send('Use this path', [evidence.id]).status, 'queued')
+    assert.deepEqual(agent.inbox.nextStep[0].content, [{ type: 'text', text: 'Use this path' }])
+    const persisted = JSON.parse(JSON.stringify(agent.inbox.nextStep[0]))
+    assert.equal(persisted.source.redtraceExploreNotice.message, 'Use this path')
+    assert.deepEqual(persisted.source.redtraceExploreNotice.sources, [{ id: evidence.id, version: evidence.version ?? 1 }])
+    agent.inbox.nextStep[0] = persisted
     assert.equal(send('Use this path', [evidence.id]).status, 'duplicate'); assert.equal(agent.injected, 1)
     agent.inbox.nextStep.length = 0
     assert.equal(send('Use this path', [evidence.id]).status, 'duplicate', 'consumed notice was re-delivered')
@@ -180,5 +185,73 @@ test('canonical source reference rewrites preserve real contract sync, not evide
     assert.equal(update.planChanged, true); assert.equal(update.planVersion, 3)
     assert.deepEqual(update.counts, { 'step.updated': 1 })
     assert.equal(update.evidenceSeq, 0)
+  } finally { store.close() }
+})
+
+test('plain FGS notices retain merged metadata and do not acknowledge unread changes', () => {
+  const f = fixture(), { store, project, run, agent, message } = f
+  agent.inbox.replace = (id: string, next: any) => {
+    const index = agent.inbox.nextStep.findIndex((m: any) => m.id === id)
+    if (index < 0) return false
+    agent.inbox.nextStep[index] = next; return true
+  }
+  agent.steer = (m: any) => agent.inject(m)
+  try {
+    const cursor = store.run(run.id).deliveredGraphCursor ?? 0
+    const first = store.addFact(project.id, 'First new evidence')
+    const update = graphUpdate(store, project.id, cursor, null, run.id)
+    queueGraphNotice(agent, update, message)
+    store.addInput(project.id, 'hint', 'New hint')
+    const second = graphUpdate(store, project.id, update.cursor, null, run.id)
+    queueGraphNotice(agent, second, message)
+    assert.equal(agent.inbox.nextStep.length, 1)
+    const persisted = JSON.parse(JSON.stringify(agent.inbox.nextStep[0]))
+    assert.deepEqual(persisted.content, [{ type: 'text', text: 'FGS 出现新的状态变化，请检查未处理的增量。' }])
+    assert.equal(persisted.source.redtraceGraphUpdate.after, cursor)
+    assert.equal(persisted.source.redtraceGraphUpdate.cursor, second.cursor)
+    assert.ok(persisted.source.redtraceGraphUpdate.nodeIds.includes(first.id))
+    assert.deepEqual(persisted.source.redtraceGraphUpdate.counts, { 'fact.added': 1, 'hint.added': 1 })
+    assert.equal(store.run(run.id).deliveredGraphCursor ?? 0, cursor)
+    assert.equal(store.project(project.id).acknowledgedEvidenceSeq ?? 0, 0)
+    assert.equal(store.project(project.id).acknowledgedHintSeq ?? 0, 0)
+    agent.inbox.nextStep[0] = persisted
+    queueGraphNotice(agent, { ...second, stopped: true }, message)
+    assert.equal(agent.inbox.nextStep.length, 0)
+  } finally { store.close() }
+})
+
+test('legacy queued envelopes still merge and discard after a contract change', () => {
+  const f = fixture(), { store, project, step, target, run, agent, send, message } = f
+  try {
+    assert.equal(send().status, 'queued')
+    const native = agent.inbox.nextStep[0]
+    agent.inbox.nextStep[0] = message('[RedTrace Reason] ' + JSON.stringify(native.source.redtraceExploreNotice))
+    assert.equal(send().status, 'duplicate')
+    const claimed = [...agent.inbox.nextStep]
+    store.updateStep(project.id, step.id, { description: 'New contract', mode: 'amend', expectedVersion: store.node(project.id, step.id).version })
+    assert.deepEqual(filterExploreNotices(store, target, claimed), [])
+    pruneExploreNotices(store, target, agent)
+    store.addFact(project.id, 'New evidence')
+    const update = graphUpdate(store, project.id, 0, null, run.id)
+    agent.inbox.nextStep.push(message('[RedTrace FGS] ' + JSON.stringify(update) + '\nOld instructions'))
+    agent.inbox.replace = (id: string, next: any) => { agent.inbox.nextStep[0] = next; return true }
+    queueGraphNotice(agent, { ...update, after: update.cursor, cursor: update.cursor + 1, counts: {} }, message)
+    assert.equal(agent.inbox.nextStep.length, 1)
+    assert.equal(agent.inbox.nextStep[0].source.redtraceGraphUpdate.after, 0)
+    assert.equal(agent.inbox.nextStep[0].content[0].text, 'FGS 出现新的状态变化，请检查未处理的增量。')
+  } finally { store.close() }
+})
+
+
+test('plain notification metadata still rejects changed evidence sources', () => {
+  const f = fixture(), { store, project, target, agent, send } = f
+  try {
+    const evidence = store.addFact(project.id, 'Temporary source')
+    assert.equal(send('Check this source', [evidence.id]).status, 'queued')
+    const claimed = JSON.parse(JSON.stringify(agent.inbox.nextStep))
+    store.manageEvidence(project.id, { operation: 'delete', id: evidence.id, expectedVersion: evidence.version!, reason: 'No longer valid' })
+    assert.deepEqual(filterExploreNotices(store, target, claimed), [])
+    pruneExploreNotices(store, target, agent)
+    assert.equal(agent.inbox.nextStep.length, 0)
   } finally { store.close() }
 })

@@ -64,6 +64,7 @@ export function refreshToolRegistrations(tools, enabled, register) {
 const noticePrefix = '[RedTrace FGS] '
 const exploreNoticePrefix = '[RedTrace Reason] '
 const exploreNotice = message => {
+  if (message.source?.redtraceExploreNotice) return message.source.redtraceExploreNotice
   const text = message.content?.[0]?.text
   if (!text?.startsWith(exploreNoticePrefix)) return undefined
   try { return JSON.parse(text.slice(exploreNoticePrefix.length)) } catch { return undefined }
@@ -137,7 +138,7 @@ export function notifyExplore(context, shared, input, message) {
     const response = { notificationId, stepId: step.id, runId: target.id, sessionId: task.sessionId }
     if (pending.some(n => n.notificationId === notificationId) || store.db.prepare('SELECT 1 FROM audit_events WHERE event_uid=?').get(`explore-notice:${notificationId}:queued`)) return { ok: true, status: 'duplicate', ...response }
     if (pending.length >= 8) return reject('queue_full')
-    native = message(`${exploreNoticePrefix}${JSON.stringify(notice)}`)
+    native = message(text, { redtraceExploreNotice: notice })
     // Native inject is synchronous and non-waking: no check-to-send await or cancellation.
     agent.inject(native)
     auditNotice(store, notice, 'queued')
@@ -151,6 +152,7 @@ export function notifyExplore(context, shared, input, message) {
 
 const pendingGraphNotice = agent => {
   for (const message of agent.inbox.nextStep) {
+    if (message.source?.redtraceGraphUpdate) return { message, update: message.source.redtraceGraphUpdate }
     const text = message.content?.[0]?.text
     if (!text?.startsWith(noticePrefix)) continue
     try { return { message, update: JSON.parse(text.split('\n')[0].slice(noticePrefix.length)) } } catch { /* Ignore unrelated or legacy messages. */ }
@@ -170,10 +172,10 @@ export function queueGraphNotice(agent, update, message) {
       evidenceSeq: Math.max(old.evidenceSeq, update.evidenceSeq), hintSeq: Math.max(old.hintSeq ?? 0, update.hintSeq ?? 0), criticalSeq: Math.max(old.criticalSeq, update.criticalSeq),
       nodeIds: nodeIds.slice(0, 16), omitted: old.omitted || update.omitted || nodeIds.length > 16, wake: old.wake || update.wake }
   }
-  const instruction = `${combined.evidenceSeq ? '新增确认的 Fact/Finding。' : '共享 FGS 已更新。'}${combined.criticalSeq ? '运行时已验证新的关键状态变化（可能包含能力失效）。' : ''}`
-    + (combined.planChanged ? `当前 Step planVersion=${combined.planVersion}，boundStepVersion=${combined.boundStepVersion}。读取最新契约后在安全边界 sync_step；旧调用树不能继续执行。` : '')
-    + '从已有连续游标用 read_graph_delta 读取变更；省略的节点仍在完整增量中。读取不等于处理确认。'
-  const next = message(`${noticePrefix}${JSON.stringify(combined)}\n${instruction}`)
+  const instruction = combined.planChanged
+    ? `当前 Step planVersion=${combined.planVersion}，boundStepVersion=${combined.boundStepVersion}。读取最新契约后在安全边界 sync_step；旧调用树不能继续执行。`
+    : 'FGS 出现新的状态变化，请检查未处理的增量。'
+  const next = message(instruction, { redtraceGraphUpdate: combined })
   if (pending && combined.wake && agent.status === 'idle') {
     if (!agent.inbox.remove(pending.message.id)) return queueGraphNotice(agent, update, message)
   }
@@ -370,7 +372,7 @@ export async function apply(ctx, options) {
       })
     })
     const cancel = () => { task.cancelled = true; if (handle) { pruneExploreNotices(store, run, handle.agent, 'cancelled'); handle.agent.cancel({ kind: 'hook', reason: 'FGS activity paused or cancelled' }) } }
-    const message = text => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
+    const message = (text, metadata = {}) => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user', ...metadata } })
     const prompt = text => handle.agent.followup(message(text))
     // Mid-run graph notices enter the native Agent inbox.
     let cursor = store.run(run.id).deliveredGraphCursor ?? 0
@@ -402,7 +404,7 @@ export async function apply(ctx, options) {
       if (!finished && !task.committed && !signal.aborted) {
         task.concludeOnly = concludeOnly = true
         prompt(run.activity === 'execute'
-          ? '必须直接调用原生工具 submit_fact 提交至少一条已有证据支持的汇总结论，再直接调用 finish_step；不再执行外部操作。没有成功成果时如实提交已验证的失败、限制或阻塞，禁止伪造事实。'
+          ? '必须调用 submit_fact 提交至少一条已有证据支持的汇总结论，再调用 finish_step；不再执行外部操作。没有成功成果时如实提交已验证的失败、限制或阻塞，禁止伪造事实。'
           : '仅处理已交付的证据并调用 finish_decide，不再执行外部操作。')
         await wait(limits.concludeTimeout)
       }

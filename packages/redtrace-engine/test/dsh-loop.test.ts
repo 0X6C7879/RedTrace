@@ -11,6 +11,7 @@ import { Configuration } from '../src/config.ts'
 const root = path.resolve(import.meta.dirname, '../../..')
 const shellName = process.platform === 'win32' ? 'pwsh' : 'bash'
 const print = (text: string) => process.platform === 'win32' ? `Write-Output '${text}'` : `printf ${text}`
+const rolePrompt = (role: string) => role === 'Reason' ? '你是任务的规划者(Reason)' : role === 'Explore' ? '你是执行者(Explore)' : `你是 ${role}`
 
 test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Explore; pauses and resumes natively', { timeout: 120000 }, async (t) => {
   const work = mkdtempSync(path.join(os.tmpdir(), 'redtrace-native-loop-'))
@@ -58,13 +59,16 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     else if (noticeFixture && text.includes('notice fixture') && names.includes('finish_step')) {
       if (text.includes('notice pause follower')) {
         if (!pauseNoticeHeld) { pauseNoticeHeld = true; return }
-        assert.ok(!text.includes('[RedTrace Reason]'), 'unread notification was replayed on resume')
+        assert.ok(!text.includes('EVALUATED_HINT_PATH'), 'unread notification was replayed on resume')
         sendTool(res, 'finish_step', { summary: 'Resumed without replaying stale notice' }); return
       }
       const isFollower = text.includes('notice follower'), calls = previous.filter((n: string) => n === shellName).length
       if (!calls) { name = shellName; args = { command: process.platform === 'win32' ? `Write-Output notice-tool-start; while (-not (Test-Path -LiteralPath '${noticeRelease}')) { Start-Sleep -Milliseconds 20 }; Write-Output notice-tool-end` : `printf notice-tool-start; while [ ! -f '${noticeRelease}' ]; do sleep 0.02; done; printf notice-tool-end`, description: 'Bounded local delivery continuity fixture' } }
       else if (isFollower && calls === 1) {
-        assert.ok(text.includes('EVALUATED_HINT_PATH'), 'next native request did not contain Reason notification')
+        const notice = 'EVALUATED_HINT_PATH: a useful alternate method; objective unchanged.'
+        const users = b.messages.filter((m: any) => m.role === 'user').flatMap((m: any) => typeof m.content === 'string' ? [m.content] : m.content.filter((c: any) => c.type === 'text').map((c: any) => c.text))
+        assert.ok(users.includes(notice), 'Reason notification must contain only its generated message')
+        assert.ok(!text.includes('[RedTrace Reason]') && !text.includes('notificationId'), 'notification envelope leaked to the model')
         assert.ok(!text.includes('HUMAN_ONLY_NOTIFY'), 'raw human Hint leaked to Explore')
         name = shellName; args = { command: print('notice-adjusted-method'), description: 'Use the supplemental path without Step amendment' }
       } else {
@@ -212,14 +216,14 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     assert.equal(runningBefore.findLast((r: any) => r.stepId === producer.id).status, 'running')
     assert.equal(runningBefore.filter((r: any) => r.activity === 'decide' && r.status === 'running').length, 1)
     await call(base + '/facts', 'POST', { description: 'Second evidence while Reason is busy', evidence: [{ description: 'Isolated HTTP fixture' }] })
-    const secondEvidenceSeq = (await call(base)).project.evidenceSeq
     releaseReason!(); releaseFollower!(); releaseProducer!()
     // A native graph read can consume the queued evidence before the next prompt; verify that Reason actually sees it.
     await until(async () => requests.some(r => r.tools?.some((tool: any) => tool.function.name === 'finish_decide')
-      && (r.messages.some((m: any) => m.role === 'tool' && JSON.stringify(m.content).includes('Second evidence while Reason is busy'))
-        || JSON.stringify(r.messages).includes('新增确认的 Fact/Finding')
-          && JSON.stringify(r.messages).includes(JSON.stringify(`"evidenceSeq":${secondEvidenceSeq}`).slice(1, -1)))),
+      && r.messages.some((m: any) => m.role === 'tool' && JSON.stringify(m.content).includes('Second evidence while Reason is busy'))),
     Boolean, 'busy Reason did not receive the second evidence after release')
+    const reasonUsers = requests.filter(r => r.tools?.some((tool: any) => tool.function.name === 'finish_decide')).flatMap(r => r.messages.filter((m: any) => m.role === 'user').flatMap((m: any) => typeof m.content === 'string' ? [m.content] : m.content.filter((c: any) => c.type === 'text').map((c: any) => c.text)))
+    assert.ok(reasonUsers.includes('FGS 出现新的状态变化，请检查未处理的增量。'), 'FGS notification must contain only the short reminder')
+    assert.ok(reasonUsers.every((text: string) => !text.startsWith('[RedTrace FGS]')), 'FGS envelope leaked to Reason')
     const followerRuns = await until(() => call(base + `/steps/${followerId}/runs`), rows => rows[0]?.status === 'succeeded' || rows[0]?.status === 'failed', 'amended native session did not finish')
     assert.equal(followerRuns.length, 1, 'amend rebuilt the session')
     assert.equal(followerRuns[0].status, 'succeeded', JSON.stringify(followerRuns))
@@ -246,7 +250,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     assert.ok(requests.slice(afterRotation).every(r => r.authorization === 'Bearer rotated-key'))
     assert.ok(!JSON.stringify(await call('/runtime/config')).includes('rotated-key'))
     for (const role of ['Bootstrap','Explore']) {
-      const first=requests.find(r=>r.messages.some((m:any)=>m.role==='system'&&JSON.stringify(m.content).includes(`你是 ${role}`)))
+      const first=requests.find(r=>r.messages.some((m:any)=>m.role==='system'&&JSON.stringify(m.content).includes(rolePrompt(role))))
       assert.ok(first,role)
       const system=JSON.stringify(first.messages.filter((m:any)=>m.role==='system'))
       const user=JSON.stringify(first.messages.filter((m:any)=>m.role==='user'))
@@ -333,6 +337,10 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     const followerNoticeEvents = await call(noticeBase + `/runs/${followerRun.id}/events?limit=500`)
     assert.ok(followerNoticeEvents.some((e: any) => e.kind === 'tool.completed' && !e.error && String(e.content).includes('notice-tool-end')))
     assert.ok(followerNoticeEvents.some((e: any) => e.kind === 'tool.completed' && !e.error && String(e.content).includes('notice-adjusted-method')))
+    const reasonEvents = (await Promise.all((await call(noticeBase + '/runs')).filter((r: any) => r.activity === 'decide').map((r: any) => call(noticeBase + `/runs/${r.id}/events?limit=500`)))).flat()
+    const admitted = reasonEvents.filter((e: any) => e.kind === 'explore.notification.admitted' && e.data?.runId === followerRun.id)
+    assert.equal(admitted.length, 1)
+    assert.equal(admitted[0].data.message, 'EVALUATED_HINT_PATH: a useful alternate method; objective unchanged.')
     assert.equal(followerNoticeEvents.some((e: any) => e.title === 'sync_step'), false)
     const exploreRequests = requests.filter(r => JSON.stringify(r.messages).includes('notice fixture') && r.tools?.some((t: any) => t.function.name === 'finish_step'))
     assert.ok(exploreRequests.length > 0)
@@ -369,10 +377,10 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     model.closeAllConnections(); await new Promise<void>(resolve => model.close(() => resolve()))
     rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     const metrics = ['Bootstrap', 'Reason', 'Explore'].map(role => {
-      const rows = requests.filter(r => JSON.stringify(r.messages.filter((m: any) => m.role === 'system')).includes(`你是 ${role}`))
+      const rows = requests.filter(r => JSON.stringify(r.messages.filter((m: any) => m.role === 'system')).includes(rolePrompt(role)))
       const first = rows[0], users = first?.messages.filter((m: any) => m.role === 'user') ?? []
       const text = (m: any) => typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
-      const notices = new Set(rows.flatMap(r => r.messages.filter((m: any) => m.role === 'user').map(text)).filter((s: string) => /共享 FGS|新增确认的 Fact\/Finding|\[RedTrace FGS\]/.test(s)))
+      const notices = new Set(rows.flatMap(r => r.messages.filter((m: any) => m.role === 'user').map(text)).filter((s: string) => /FGS 出现新的状态变化|\[RedTrace FGS\]/.test(s)))
       const calls=new Map(rows.flatMap(r=>r.messages.flatMap((m:any)=>m.tool_calls??[])).map((c:any)=>[c.id,c.function.name]))
       return { role, requests: rows.length, calls:Object.fromEntries(['read_graph','read_graph_delta','sync_step'].map(name=>[name,[...calls.values()].filter(n=>n===name).length])), firstSystemBytes: Buffer.byteLength(first?.messages.filter((m: any) => m.role === 'system').map(text).join('\n') ?? ''),
         firstUserBytes: Buffer.byteLength(users.map(text).join('\n')), notices: notices.size,
@@ -380,7 +388,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     })
     const conversations=new Map<string,{role:string;stepId?:string;requests:number;notices:Set<string>}>()
     for(const request of requests) {
-      const role=['Bootstrap','Reason','Explore'].find(role=>request.messages.some((m:any)=>m.role==='system'&&JSON.stringify(m.content).includes(`你是 ${role}`)))
+      const role=['Bootstrap','Reason','Explore'].find(role=>request.messages.some((m:any)=>m.role==='system'&&JSON.stringify(m.content).includes(rolePrompt(role))))
       if(!role)continue
       const texts=request.messages.filter((m:any)=>m.role==='user').flatMap((m:any)=>typeof m.content==='string'?[m.content]:m.content.filter((c:any)=>c.type==='text').map((c:any)=>c.text))
       const launch=texts.find((text:string)=>text.startsWith('{"projectId"')||text.startsWith('{"project"'))
@@ -388,7 +396,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
       const stepId=texts.join('\n').match(/当前执行契约[^：]*：\s*\{\s*"id":"([^"]+)"/)?.[1]??JSON.parse(launch).step?.id
       if(role!=='Reason')assert.ok(stepId,'execution conversation must expose its live Step identity')
       const key=role+launch+(stepId??''), row=conversations.get(key)??{role,stepId,requests:0,notices:new Set<string>()}
-      row.requests++;for(const text of texts)if(/共享 FGS|新增确认的 Fact\/Finding|\[RedTrace FGS\]/.test(text))row.notices.add(text)
+      row.requests++;for(const text of texts)if(/FGS 出现新的状态变化|\[RedTrace FGS\]/.test(text))row.notices.add(text)
       conversations.set(key,row)
     }
     const perConversation=[...conversations.values()].map((row,index)=>({fixtureConversation:index+1,role:row.role,stepId:row.stepId,requests:row.requests,notificationsEnteredRequests:row.notices.size}))
@@ -407,7 +415,7 @@ test('10,000 changes skip ten native Explore listeners; only the affected Step i
  const {SessionId}=await load('vendor/deepseek-harness/packages/core/session/lib/index.js')
  const handles:any[]=[]
  const {createUserMessage}=await load('vendor/deepseek-harness/packages/llm/llm/lib/index.js')
- const message=(text:string)=>createUserMessage({content:[{type:'text',text}],source:{kind:'user'}})
+ const message=(text:string,metadata={})=>createUserMessage({content:[{type:'text',text}],source:{kind:'user',...metadata}})
  const cordisPath='../compat/cordis.mjs'
  const {queueGraphNotice,listenGraphChanges}=await import(cordisPath)
  const {Store}=await import('../src/store.ts')
@@ -469,7 +477,7 @@ test('10,000 changes skip ten native Explore listeners; only the affected Step i
     const replace=agent.inbox.replace.bind(agent.inbox)
     agent.inbox.replace=()=>{agent.inbox.claim('next-step',3);agent.inbox.replace=replace;return false}
     queueGraphNotice(agent,{...minimal,after:102,cursor:103},message)
-    assert.equal(JSON.parse(agent.inbox.nextStep[0].content[0].text.split('\n')[0].slice('[RedTrace FGS] '.length)).after,102)
+    assert.equal(agent.inbox.nextStep[0].source.redtraceGraphUpdate.after,102)
     queueGraphNotice(agent,{...minimal,stopped:true},message);assert.equal(agent.inbox.nextStep.length,0)
   }
   assert.equal(store.project(project.id).acknowledgedCriticalSeq??0,0)

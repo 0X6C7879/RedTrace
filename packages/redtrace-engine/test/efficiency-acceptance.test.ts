@@ -170,7 +170,7 @@ test('Explore launch has Scope but no hints; Reason launch includes bounded hint
   const reason=store.claim(project.id,'decide',worker)
   const planning=launchContext(store,reason.id)
   assert.equal(planning.scope.description,scope);assert.equal(planning.goal!.id,'goal')
-  assert.match(planning.instruction!,/活跃 FGS/);assert.equal(planning.hints!.items.length,8)
+  assert.equal('instruction' in planning,false);assert.equal(planning.hints!.items.length,8)
   assert.equal(planning.hints!.unverified,true);assert.equal(planning.hints!.hasMore,true)
   assert.equal(planning.hints!.read!.tool,'read_graph');assert.equal(planning.hints!.items[0]!.content,'Unrelated')
  } finally {store.close()}
