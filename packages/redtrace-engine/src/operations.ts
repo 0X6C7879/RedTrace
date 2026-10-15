@@ -35,8 +35,6 @@ export class Operations {
   readonly outputRoot: string
   private running = new Map<string, { abort: AbortController; completion: Promise<void> }>()
   private listeners = new Map<string, net.Server | net.Socket>()
-  private externalTimers = new Map<string, NodeJS.Timeout>()
-  private externalSyncs = new Map<string, AbortController>()
   private channels = new Map<string, net.Socket>()
   private staleTimer: NodeJS.Timeout
   private closed = false
@@ -70,12 +68,6 @@ export class Operations {
     // An interrupted external operation cannot be inferred safe to repeat.
     const interrupted = executionResult('Process interrupted; external result unknown. Verify before resubmitting.', null, { completion: 'unknown', error_code: 'UNKNOWN_RESULT' })
     for (const task of store.db.prepare("SELECT id FROM operation_tasks WHERE status='running'").all() as any[]) this.finish(task.id, interrupted)
-    // Saved metadata cannot resurrect a socket, PTY, or tunnel after restart.
-    for (const row of store.db.prepare("SELECT * FROM shared_resources WHERE (kind IN ('c2_session','proxy') AND status='available') OR (kind='terminal' AND status NOT IN ('offline','retired'))").all() as any[]) {
-      const metadata = JSON.parse(row.metadata_json)
-      metadata.verified_capabilities = []; metadata.connection_restored = false
-      this.updateResource(row.id, { status: 'offline', metadata_json: JSON.stringify(metadata) })
-    }
     this.staleTimer = setInterval(() => { if (!this.closed) this.expireStale() }, 30_000)
     this.staleTimer.unref()
     this.wake()
@@ -88,7 +80,7 @@ export class Operations {
       if (this.running.size >= 8) break
       const task = row as any, resource = this.resource(task.resource_id), abort = new AbortController()
       if ([...this.running.keys()].some(id => this.task(id).resource_id === task.resource_id)) continue
-      const connection = JSON.parse(resource.metadata_json).connection_type
+      const connection = resource.kind === 'c2_session' ? JSON.parse(resource.metadata_json).connection_type : undefined
       if (!this.beforeDispatch(task, resource)) continue
       if (resource.kind === 'c2_session' && !this.channels.has(task.resource_id) && !['direct', 'external_c2'].includes(connection)) continue
       this.store.transaction(() => { db.prepare("UPDATE operation_tasks SET status='running',started_at=? WHERE id=? AND status='queued'").run(now(), task.id); this.audit(task.project_id, task.resource_id, task.id, task, `operation.${task.action}`, 'running') })
@@ -126,7 +118,7 @@ export class Operations {
       })()
     }
   }
-  async close() { this.closed = true; clearInterval(this.staleTimer); for (const entry of this.running.values()) entry.abort.abort(); for (const id of new Set([...this.listeners.keys(), ...this.externalTimers.keys(), ...this.externalSyncs.keys()])) this.stopListener(id); for (const socket of this.channels.values()) socket.destroy(); await this.pivots.closeAll(); await Promise.all([...this.running.values()].map(r => r.completion)); await new Promise<void>(resolve => setImmediate(resolve)) }
+  async close() { this.closed = true; clearInterval(this.staleTimer); for (const entry of this.running.values()) entry.abort.abort(); for (const id of [...this.listeners.keys()]) this.stopListener(id); for (const socket of this.channels.values()) socket.destroy(); await this.pivots.closeAll(); await Promise.all([...this.running.values()].map(r => r.completion)); await new Promise<void>(resolve => setImmediate(resolve)) }
   async cancelProject(project: string) {
     this.store.db.prepare("UPDATE operation_tasks SET cancel_requested=1,status=CASE WHEN status IN ('queued','running') THEN 'cancelled' ELSE status END,completed_at=CASE WHEN status IN ('queued','running') THEN ? ELSE completed_at END WHERE project_id=? AND status NOT IN ('succeeded','failed','cancelled','rejected')").run(now(), project)
     for (const [id, entry] of this.running) if (this.task(id).project_id === project) entry.abort.abort()
@@ -143,7 +135,6 @@ export class Operations {
     this.stopListener(id)
     if (!this.adapterEnabled('redtrace-c2')) return
     if (resource.status !== 'available') return
-    if (type === 'external_c2') { void this.syncExternal(resource); return }
     if (!['tcp_reverse', 'tcp_bind'].includes(type)) return
     const port = Number(metadata.bind_port ?? metadata.target_port); if (!Number.isSafeInteger(port) || port < 1 || port > 65535) { this.updateResource(id, { status: 'degraded', summary: 'listener port must be between 1 and 65535' }); return }
     if (type === 'tcp_reverse') {
@@ -156,34 +147,9 @@ export class Operations {
     }
   }
   stopListener(id: string) {
-    const timer = this.externalTimers.get(id); if (timer) clearTimeout(timer); this.externalTimers.delete(id)
-    this.externalSyncs.get(id)?.abort(); this.externalSyncs.delete(id)
     const listener = this.listeners.get(id); this.listeners.delete(id)
     if (listener instanceof net.Server) listener.close(); else listener?.destroy()
     for (const [session, socket] of this.channels) if ((socket as any).redtraceListener === id) { socket.destroy(); this.channels.delete(session); try { this.updateResource(session, { status: 'offline' }) } catch {} }
-  }
-  private async syncExternal(listener: any) {
-    const metadata = JSON.parse(listener.metadata_json), secret = JSON.parse(listener.secret_json), endpoint = String(secret.adapter_endpoint ?? metadata.adapter_endpoint ?? '').replace(/\/$/, '')
-    if (!endpoint) { this.updateResource(listener.id, { status: 'degraded', summary: 'external C2 adapter_endpoint is required' }); return }
-    const controller = new AbortController(); this.externalSyncs.set(listener.id, controller)
-    try {
-      const response = await fetch(`${endpoint}/sessions?framework=${encodeURIComponent(metadata.listener_type ?? 'custom')}`, { headers: { Accept: 'application/json', ...(secret.token ? { Authorization: `Bearer ${secret.token}` } : {}) }, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(Math.min(30, Number(metadata.sync_interval ?? 5)) * 1000)]) })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const value: any = await response.json(), sessions = Array.isArray(value) ? value : value.sessions
-      if (!Array.isArray(sessions)) throw new Error('external C2 adapter sessions response must be a list')
-      const seen = new Set<string>(), at = now()
-      for (const raw of sessions) {
-        if (!raw || typeof raw !== 'object') continue
-        const external = String(raw.id ?? raw.session_id ?? raw.external_id ?? ''); if (!external) continue; seen.add(external)
-        const sessionMetadata = { ...raw, source_project_id: listener.project_id ?? metadata.source_project_id, framework: metadata.listener_type ?? 'custom', connection_type: 'external_c2', shell_type: raw.shell_type ?? metadata.listener_type ?? 'custom', external_session_id: external }
-        const row: any = this.store.db.prepare("SELECT * FROM shared_resources WHERE kind='c2_session' AND parent_resource_id=? AND target=?").get(listener.id, external)
-        if (!row) this.create(listener.project_id, { kind: 'c2_session', name: raw.name ?? raw.hostname ?? `${metadata.listener_type}:${external}`, target: external, summary: raw.summary ?? `${metadata.listener_type} session`, metadata: sessionMetadata, secret: { endpoint: `${endpoint}/execute`, token: secret.token ?? '' }, actor_type: 'system', actor: `listener:${listener.id}`, parent_resource_id: listener.id })
-        else this.updateResource(row.id, { status: 'available', metadata_json: JSON.stringify(sessionMetadata), last_seen_at: at })
-      }
-      for (const row of this.store.db.prepare("SELECT id,target FROM shared_resources WHERE kind='c2_session' AND parent_resource_id=?").all(listener.id) as any[]) if (!seen.has(row.target)) this.updateResource(row.id, { status: 'offline' })
-    } catch (error) { if (!this.closed && !controller.signal.aborted) this.audit(listener.project_id, listener.id, null, { actor_type: 'system', actor: 'shell-broker' }, 'c2.listener_error', 'degraded', { error: error instanceof Error ? error.message : String(error) }) }
-    finally { if (this.externalSyncs.get(listener.id) === controller) this.externalSyncs.delete(listener.id) }
-    if (!this.closed && !controller.signal.aborted) try { if (this.resource(listener.id).status === 'available') this.externalTimers.set(listener.id, setTimeout(() => void this.syncExternal(this.resource(listener.id)), Math.max(1, Math.min(300, Number(metadata.sync_interval ?? 5))) * 1000)) } catch {}
   }
   private attachChannel(listener: any, socket: net.Socket, connection: string) {
     ;(socket as any).redtraceListener = listener.id
@@ -286,7 +252,7 @@ export class Operations {
   adapterEnabled(plugin: string) { return this.isAdapterAvailable(plugin) }
   async synchronizeAdapters() {
     if (!this.adapterEnabled('redtrace-c2')) {
-      for (const id of new Set([...this.listeners.keys(), ...this.externalTimers.keys(), ...this.externalSyncs.keys()])) this.stopListener(id)
+      for (const id of [...this.listeners.keys()]) this.stopListener(id)
       for (const socket of this.channels.values()) socket.destroy()
     }
     for (const [id, entry] of this.running) {
@@ -304,6 +270,11 @@ export class Operations {
     try {
       this.available(resource, task)
       if (resource.status !== 'available') throw new HttpError(409, `Resource is ${resource.status}`)
+      const connection = resource.kind === 'c2_session' ? JSON.parse(resource.metadata_json).connection_type : undefined
+      if (resource.kind === 'c2_session' && ['reverse', 'reverse_shell', 'bind'].includes(connection) && !this.channels.has(resource.id)) {
+        this.finish(task.id, executionResult('Session transport is not connected; reconnect before submitting commands', null, { error_code: 'TRANSPORT_ERROR' }))
+        return false
+      }
       if (task.actor_type === 'worker') {
         if (!task.project_id || resource.project_id !== task.project_id) throw new HttpError(404, 'Resource belongs to another Project')
         const project = this.store.project(task.project_id)

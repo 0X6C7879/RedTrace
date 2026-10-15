@@ -305,7 +305,7 @@ export async function apply(ctx, options) {
         })
         // Skills mount DSH-natively from the full managed skills root; the
         // agent discovers and loads them through the skill tool on demand.
-        scoped = await mountExecutionTools(scoped, { task, cwd, sessionRoot: runtime.sessionRoot, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.availableForTask(id), contextualAttempts: true,
+        scoped = await mountExecutionTools(scoped, { task, cwd, sessionRoot: runtime.sessionRoot, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.availableForTask(id),
           onRefresh: refresh => sessionRefresh.set(run.id, async () => { await refresh(); refreshLiveTools() }) })
       }
       mountActivityPrompt(scoped, run, step)
@@ -361,8 +361,7 @@ export async function apply(ctx, options) {
         // tracker still owns pendingTools, but must not emit a second started
         // row through Store.runEvent.
         if (event.type === 'tool/call' && data.callId) {
-          const notice = store.toolStarted(run.id, String(data.callId), json(data), false, manager.running('redtrace-repeat-reminder'),createHash('sha256').update(JSON.stringify(config.commonEnv ?? {})).digest('hex'))
-          if (notice && handle) handle.agent.inject(message(notice))
+          store.toolStarted(run.id, String(data.callId), json(data), false)
         }
         if (event.type === 'tool/result' && data.message?.source?.callId) store.toolEnded(run.id, String(data.message.source.callId), json(data))
         accumulateUsage(task, event)

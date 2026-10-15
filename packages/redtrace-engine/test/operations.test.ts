@@ -106,9 +106,16 @@ test('resource operations use real HTTP, keep global provenance and enforce exis
     assert.equal(offlineTask.status, 409)
     assert.equal(engine.store.db.prepare("SELECT COUNT(*) AS n FROM resource_audit_events WHERE resource_id=? AND action='c2.session_offline'").get(checkin.data.session_id)!.n, 1)
 
-    const external = await request(base + '/resources', 'POST', { kind: 'c2_listener', name: 'External fixture', metadata: { listener_type: 'external_c2', adapter_endpoint: `http://127.0.0.1:${(remote.address() as { port: number }).port}`, sync_interval: 1 } })
-    let externalSession: any
-    for (let i = 0; i < 100 && !externalSession; i++) { externalSession = engine.store.db.prepare("SELECT * FROM shared_resources WHERE parent_resource_id=? AND kind='c2_session'").get(external.data.resource.id); if (!externalSession) await new Promise(r => setTimeout(r, 10)) }
+    // External C2 discovery belongs to the Agent: nothing polls the adapter
+    // endpoint on its behalf, so the Agent reads it and registers what it finds.
+    const adapter = `http://127.0.0.1:${(remote.address() as { port: number }).port}`
+    const external = await request(base + '/resources', 'POST', { kind: 'c2_listener', name: 'External fixture', metadata: { listener_type: 'external_c2', adapter_endpoint: adapter, sync_interval: 1 } })
+    const advertised = await (await fetch(`${adapter}/sessions?framework=external_c2`)).json() as { sessions: { id: string; hostname: string }[] }
+    assert.deepEqual(advertised.sessions.map(session => session.id), ['ext-1'])
+    const externalSession = (await request(base + '/resources', 'POST', {
+      kind: 'c2_session', name: advertised.sessions[0].hostname, target: advertised.sessions[0].id, parent_resource_id: external.data.resource.id,
+      metadata: { connection_type: 'external_c2', framework: 'external_c2', external_session_id: advertised.sessions[0].id },
+      secret: { endpoint: `${adapter}/execute`, token: '' } })).data.resource
     assert.equal(externalSession.target, 'ext-1')
     const externalTask = await request(`${base}/resources/${externalSession.id}/tasks`, 'POST', { action: 'command', arguments: { command: 'id' } }); await waitFor(externalTask.data.task.id, 'succeeded')
     assert.match(engine.operations.task(externalTask.data.task.id).output_summary, /external adapter verified/)

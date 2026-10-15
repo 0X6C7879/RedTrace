@@ -221,12 +221,6 @@ const MANAGED: readonly ManagedEntry[] = [
     intro: 'DSH 原生工具超时策略:为声明了超时预算的工具(web、文件搜索等)统一武装截止时间,超时以结构化错误返回而不是悬挂到任务级超时。',
   },
   {
-    id: 'redtrace-repeat-reminder', label: '重复调用提醒', category: 'feature',
-    modulePath: 'vendor/deepseek-harness/packages/guard/repeat-tool-reminder/lib/index.js',
-    description: '连续重复调用同一工具时提醒',
-    intro: 'FGS 会话使用版本化尝试账本:完整输入、题目、身份、认证与通道状态一致时，第 3 次提醒一次；其他 DSH 会话保留原生重复提醒,打断死循环式的重复调用,适合长时间自主运行的 Worker。',
-  },
-  {
     id: 'redtrace-credentials', label: 'Credentials', category: 'feature', module: credentials,
     modulePath: 'packages/redtrace-dsh/lib/credentials.js', defaultOff: true,
     description: '凭据文档服务',

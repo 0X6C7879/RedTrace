@@ -579,7 +579,7 @@ Body：
 
 创建一条 `from` 指向所列 Facts、`to` 指向 `goal` 的已结论 Intent。完成声明无探索过程，服务端将 `creator` 和 `worker` 均设为请求中的 `worker` 值。Project 状态变为 `completed`，并立即清空当前 `project.reason`。
 
-如果后续外部验证发现这次完成判断有误，可再调用 `POST /projects/{project_id}/reopen` 撤销这条完成边，并把纠错信息写成新的 Fact 后继续探索。
+如果后续外部验证发现这次完成判断有误，可再调用 `POST /projects/{project_id}/reopen` 撤销这条完成边，并把纠错信息保留为未验证 Hint，交由 Reason 重新规划。
 
 `from` 不能包含 `goal`。
 
@@ -599,54 +599,23 @@ Body：
 
 外部确认项目其实尚未完成时，显式撤销当前完成态。该接口属于项目管理操作，不属于探索写操作；仅 `completed` 项目允许调用。
 
-服务端会：
-
-- 找到当前唯一一条 `to=goal` 的完成边
-- 读取它原本的 `from`
-- 删除这条完成边，不保留“曾完成过一次”的图内历史
-- 新建一个普通 Fact，内容为调用者提供的客观纠错说明
-- 新建一条已结论 Intent，`description` 固定为 `external_feedback`，其 `from` 继承原完成边的 `from`，`to` 指向这个新 Fact
-- 将 `creator` 和 `worker` 都写为请求中的 `creator`
-- 将项目状态改回 `active`
-- 清空当前 `project.reason`
-
-这适合诸如“提交的 flag 是错的，需要继续寻找正确 flag”这类图外反馈。反馈本身被记成图中的新 Fact，而 `reopen` 只是触发这次改写的控制动作。
+服务端将项目改回 `active`、根 Goal 改回 `open` 并清空其验收引用，将调用者说明保存为未验证 Hint。Reason 按现有 Hint 调度机制重新规划；不会自动创建 Fact、Step 或 Run，已有验证证据保留。
 
 Body：
 
 ```json
 {
-  "description": "flag FLAG{fake} 是错误的，需要继续寻找正确 flag",
+  "description": "需要重新验证 flag 是否正确",
   "creator": "judge"
 }
 ```
 
-响应：
+响应包含 `project` 和 `hint`，不再返回伪造的 `fact` 或已完成 `intent`：
 
 ```json
 {
-  "project": {
-    "id": "proj_001",
-    "title": "xx渗透测试",
-    "status": "active",
-    "created_at": "2026-03-21T10:00:00Z",
-    "reason": null
-  },
-  "fact": {
-    "id": "f016",
-    "description": "flag FLAG{fake} 是错误的，需要继续寻找正确 flag"
-  },
-  "intent": {
-    "id": "i021",
-    "from": ["f008"],
-    "to": "f016",
-    "description": "external_feedback",
-    "creator": "judge",
-    "worker": "judge",
-    "last_heartbeat_at": "2026-03-21T10:10:00Z",
-    "created_at": "2026-03-21T10:10:00Z",
-    "concluded_at": "2026-03-21T10:10:00Z"
-  }
+  "project": {"id": "proj_001", "status": "active"},
+  "hint": {"id": "h001", "kind": "hint", "content": "需要重新验证 flag 是否正确", "creator": "judge"}
 }
 ```
 

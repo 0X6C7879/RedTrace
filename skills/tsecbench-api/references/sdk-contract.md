@@ -28,7 +28,9 @@ with TSecBenchmark(base_url=BENCHMARK_BASE_URL, token=BENCHMARK_TOKEN) as client
     closed = client.close_challenge(unique_code)
 ```
 
-进入上下文管理器时会自动执行 VPN 联通预检；失败抛出 `VpnCheckError`。
+进入上下文管理器时会自动执行 VPN 联通预检；失败抛出 `VpnCheckError`。该自动预检由 `auto_check_vpn` 控制，默认开启。
+
+本项目的 CLI 显式传入 `auto_check_vpn=False`：连通性由调用方决定何时探测，只有 `vpn` 子命令会运行预检，其余子命令不会替调用方测试网络。需要手动探测时直接调用 `check_vpn()`。
 
 ## Challenge
 

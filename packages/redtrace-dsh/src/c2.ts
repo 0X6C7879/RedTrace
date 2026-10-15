@@ -22,7 +22,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): vo
   })
   register(ctx, {
     name: 'c2_listener_create',
-    description: 'Create a C2 listener as a shared resource. listener_type is one of http_beacon, https_beacon, tcp_reverse, tcp_bind, external_c2; TCP listeners take bind_host/bind_port, beacon listeners take callback_host, external_c2 takes adapter_endpoint. Online sessions of the listener become reusable remote.command channels.',
+    description: 'Create a C2 listener as a shared resource. listener_type is one of http_beacon, https_beacon, tcp_reverse, tcp_bind, external_c2; TCP listeners take bind_host/bind_port, beacon listeners take callback_host, external_c2 only registers adapter_endpoint; read its sessions explicitly and use resource_register to register external sessions with connection_type=external_c2 and secret.endpoint=<adapter>/execute. TCP/beacon sessions become reusable remote.command channels when they connect.',
     parameters: {
       type: 'object',
       properties: {

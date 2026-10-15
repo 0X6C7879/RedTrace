@@ -107,6 +107,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     if (/(?:tsecbench|tsec[\s-]*benchmark)/i.test(origin.description) && existsSync(path.join(skill, 'SKILL.md')) && existsSync(path.join(skill, 'scripts', 'tsecbench.py'))) {
       tools.push(
         tool('tsecbench_list', 'List TSec Benchmark challenges with descriptions, difficulty, progress and container status. Read only.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['list'], abort)),
+        tool('tsecbench_vpn', 'Probe benchmark VPN reachability explicitly when needed; no platform operation probes automatically.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['vpn'], abort)),
         tool('tsecbench_hint', 'View a TSec Benchmark challenge hint. Viewing may reduce its flag score; requires explicit score penalty confirmation. Does not start, submit or close challenges.', Type.Object({ unique_code: Type.String(), confirm_score_penalty: Type.Boolean() }), (args, abort) =>
           args.confirm_score_penalty ? tsecbenchQuery(config, ['hint', args.unique_code, '--confirm-score-penalty'], abort) : { ok: false, error: 'score_penalty_confirmation_required' }),
       )
@@ -128,6 +129,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     if (/(?:tsecbench|tsec[\s-]*benchmark)/i.test(benchmarkOrigin) && existsSync(path.join(benchmarkSkill, 'SKILL.md')) && existsSync(path.join(benchmarkSkill, 'scripts', 'tsecbench.py'))) {
       tools.push(
         tool('tsecbench_list', 'Read challenge descriptions, progress and container state; no lifecycle operation.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['list'], abort)),
+        tool('tsecbench_vpn', 'Probe benchmark VPN reachability explicitly when needed; no platform operation probes automatically.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['vpn'], abort)),
         tool('tsecbench_start', 'Start the explicitly selected authorized benchmark challenge. Pass the exact unique_code from tsecbench_list; no arbitrary platform or network target is accepted.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }) }), async (args, abort) => {
           const started = await tsecbenchQuery(config, ['start', args.unique_code], abort) as { unique_code?: unknown; container_addr?: unknown }
           if (started.unique_code !== args.unique_code || !Array.isArray(started.container_addr) || !started.container_addr.length || started.container_addr.some(address => typeof address !== 'string' || address.length > 255)) throw new Error('Benchmark start returned an invalid challenge or target list')
@@ -229,10 +231,13 @@ export function livePlan(store: Store, runId: string) {
 export function launchContext(store: Store, runId: string, channels: unknown[] = [], maxSteps: number | null = null) {
   const run = store.run(runId), origin = store.node<Fact>(run.projectId, 'origin', 'fact')
   const includeHints = run.activity === 'decide' || !!run.stepId && store.node<Step>(run.projectId, run.stepId, 'step').bootstrap
-  const hints = includeHints ? store.db.prepare(`SELECT data FROM nodes WHERE project_id=? AND kind='hint'
-    AND COALESCE(json_extract(data,'$.deleted'),0)=0
-    AND (?=1 OR json_extract(data,'$.stepId') IS NULL OR json_extract(data,'$.stepId')=?) ORDER BY rowid LIMIT 9`)
-    .all(run.projectId, run.activity === 'decide' ? 1 : 0, run.stepId).map(row => JSON.parse(String(row.data)) as Input) : []
+  const acknowledgedHintSeq = run.activity === 'decide' ? store.project(run.projectId).acknowledgedHintSeq ?? 0 : 0
+  const hints = includeHints ? store.db.prepare(`SELECT n.data FROM nodes n JOIN events e
+    ON e.project_id=n.project_id AND e.node_id=n.id AND e.type='hint.added'
+    WHERE n.project_id=? AND n.kind='hint' AND COALESCE(json_extract(n.data,'$.deleted'),0)=0
+    AND COALESCE(json_extract(e.data,'$.hintSeq'),1)>?
+    AND (?=1 OR json_extract(n.data,'$.stepId') IS NULL OR json_extract(n.data,'$.stepId')=?) ORDER BY n.rowid LIMIT 9`)
+    .all(run.projectId, acknowledgedHintSeq, run.activity === 'decide' ? 1 : 0, run.stepId).map(row => JSON.parse(String(row.data)) as Input) : []
   const goal = run.activity === 'decide' ? store.node<Goal>(run.projectId, 'goal', 'goal') : undefined
   return { projectId: run.projectId, planningCapacity: store.planningCapacity(run.projectId, maxSteps), acknowledgementBoundary: store.acknowledgementBoundary(run.id), scope: { id: origin.id, description: origin.description },
     ...(goal ? { goal: { id: goal.id, description: goal.description, status: goal.status },

@@ -142,7 +142,7 @@ test('running Execute session gains and loses plugin tools without restarting', 
   await session.refresh()
   assert.equal(bash(), originalBash, 'unchanged plugin state must not remount tools')
 
-  for (const id of ['redtrace-web', 'redtrace-jobs', 'redtrace-fs-search', 'redtrace-terminal', 'redtrace-spill', 'redtrace-tool-timeout', 'redtrace-repeat-reminder', 'redtrace-lsp']) enabled.add(id)
+  for (const id of ['redtrace-web', 'redtrace-jobs', 'redtrace-fs-search', 'redtrace-terminal', 'redtrace-spill', 'redtrace-tool-timeout', 'redtrace-lsp']) enabled.add(id)
   await withTimeout(session.refresh(), 'hot enable')
   for (const name of ['web_search', 'web_fetch', 'job_output', 'glob', 'grep', 'terminal_open']) assert.equal(visible(name), true, name)
   assert.equal(JSON.stringify(bash().parameters).includes('run_in_background'), true)

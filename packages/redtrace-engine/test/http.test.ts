@@ -26,8 +26,15 @@ test('HTTP graph compatibility and atomic conclude survive reopening the databas
     assert.equal(concluded.status, 200); assert.equal(concluded.data.intent.to, concluded.data.fact.id)
     assert.equal((await request(`${base}/complete`, 'POST', { from: [concluded.data.fact.id], description: 'Result verified', worker: 'w1' })).data.to, 'goal')
     assert.equal((await request(`${base}/hints`, 'POST', { content: 'Review later', creator: 'human' })).status, 201)
+    const beforeReopen = engine.store.graph(id), runsBeforeReopen = engine.store.runs(id).length
     const reopened = await request(`${base}/reopen`, 'POST', { description: 'One more check', creator: 'human' })
-    assert.equal(reopened.status, 200); assert.deepEqual(reopened.data.intent.from, ['goal'])
+    assert.equal(reopened.status, 200); assert.equal(reopened.data.hint.content, 'One more check')
+    assert.equal(reopened.data.fact, undefined); assert.equal(reopened.data.intent, undefined)
+    assert.equal(engine.store.graph(id).facts.length, beforeReopen.facts.length)
+    assert.equal(engine.store.graph(id).steps.length, beforeReopen.steps.length)
+    assert.equal(engine.store.runs(id).length, runsBeforeReopen)
+    assert.equal(engine.store.project(id).status, 'active')
+    assert.equal(engine.store.graph(id).goals[0].status, 'open')
     const graph = (await request(`/v2${base}/graph`)).data
     assert.equal(graph.goals[0].kind, 'goal'); assert.equal(graph.facts.some((f: any) => f.id === 'goal'), false)
     const replayed = await request(`/v2${base}/graph?revision=${graph.project.revision}`)

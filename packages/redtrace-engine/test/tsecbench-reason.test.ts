@@ -22,10 +22,12 @@ test('Reason can only query TSecBench challenges and confirmed hints', async () 
     const run = store.claim(id, 'decide', worker)
     const tools = graphTools({ store, run, worker, config, signal: new AbortController().signal }, () => {})
     const benchmark = tools.filter(tool => tool.name.startsWith('tsecbench_'))
-    assert.deepEqual(benchmark.map(tool => tool.name), ['tsecbench_list', 'tsecbench_hint'])
+    assert.deepEqual(benchmark.map(tool => tool.name), ['tsecbench_list', 'tsecbench_vpn', 'tsecbench_hint'])
     assert.deepEqual((await benchmark[0].execute('list', {})).details, { args: ['list'] })
-    assert.deepEqual((await benchmark[1].execute('no', { unique_code: 'g-01', confirm_score_penalty: false })).details, { ok: false, error: 'score_penalty_confirmation_required' })
-    assert.deepEqual((await benchmark[1].execute('yes', { unique_code: 'g-01', confirm_score_penalty: true })).details, { args: ['hint', 'g-01', '--confirm-score-penalty'] })
+    // The VPN probe is a deliberate Reason action now that nothing runs it implicitly.
+    assert.deepEqual((await benchmark[1].execute('vpn', {})).details, { args: ['vpn'] })
+    assert.deepEqual((await benchmark[2].execute('no', { unique_code: 'g-01', confirm_score_penalty: false })).details, { ok: false, error: 'score_penalty_confirmation_required' })
+    assert.deepEqual((await benchmark[2].execute('yes', { unique_code: 'g-01', confirm_score_penalty: true })).details, { args: ['hint', 'g-01', '--confirm-score-penalty'] })
   } finally { store.close(); rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -122,7 +124,7 @@ test('Explore has native read-only list and preserves SDK business errors before
 })
 
 
-test('TSecBench CLI bypasses every proxy without changing other tool environments', () => {
+test('TSecBench CLI preserves inherited proxy settings', () => {
   const root = path.resolve(import.meta.dirname, '../../..')
   for (const relative of ['skills/tsecbench-api/scripts/tsecbench.py', '.redtrace/skills/tsecbench-api/scripts/tsecbench.py']) {
     const script = path.join(root, relative)
@@ -137,12 +139,18 @@ os.environ.update(proxies, NO_PROXY='localhost', no_proxy='localhost')
 class SDK:
     @staticmethod
     def TSecBenchmark(**kwargs):
-        assert kwargs == {'base_url': 'https://fixture.invalid', 'token': 'fixture'}
-        assert all(urllib.request.proxy_bypass_environment(host) for host in ('10.0.100.58', 'tsecbench.zc.tencent.com'))
-        assert all(os.environ[key] == value for key, value in proxies.items())
+        assert kwargs == {'base_url': 'https://fixture.invalid', 'token': 'fixture', 'auto_check_vpn': False}
+        assert all(not urllib.request.proxy_bypass_environment(host) for host in ('10.0.100.58', 'tsecbench.zc.tencent.com'))
+        assert urllib.request.proxy_bypass_environment('localhost') == bool(bypass)
+        assert dict(os.environ) == inherited
         return object()
 cli.load_sdk = lambda: SDK
-cli.client_context(argparse.Namespace(base_url='https://fixture.invalid', token='fixture'))
+for bypass in ({'NO_PROXY': 'localhost', 'no_proxy': 'localhost'}, {}):
+    for key in ('NO_PROXY', 'no_proxy'):
+        os.environ.pop(key, None)
+    os.environ.update(bypass)
+    inherited = dict(os.environ)
+    cli.client_context(argparse.Namespace(base_url='https://fixture.invalid', token='fixture'))
 `, script], { env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } })
   }
 })

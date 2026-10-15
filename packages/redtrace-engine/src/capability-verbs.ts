@@ -312,11 +312,6 @@ export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Rec
     finally { runtime.operations.releaseLease(runtime.operations.resource(channel.id),{actor_type:'worker',actor:context.worker,fencing_token:lease.fencing_token}) }
   }
   if (verb === 'pivot.close') return { route_id: channel.id, closed: await runtime.operations.pivots.close(channel.id) }
-  const metadata = JSON.parse(resource.metadata_json)
-  if (verb !== 'remote.session.probe' && metadata.runtime_verified !== true && operationSupported(resource, 'probe_info') && availableAdapters(runtime, 'remote.session.probe').length) {
-    const probe = await dispatchVerb(runtime, 'remote.session.probe', { via: channel.id, timeout: args.timeout }, context)
-    if (probe.status !== 'succeeded') return { ...probe, requested_verb: verb, note: 'Channel probe did not succeed; requested action was not executed' }
-  }
   const task = runtime.operations.createTask(context.projectId, channel.id, {
     action: definition.action,
     arguments: definition.arguments(args),

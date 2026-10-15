@@ -56,7 +56,6 @@ export interface ExecutionToolsConfig {
   /** Whether a plugin-manager catalog entry is running; gates the DSH native
    * capability stacks mounted below the shell/fs/skill baseline. */
   available?: (id: string) => boolean
-  contextualAttempts?: boolean
   onRefresh?: (refresh: () => Promise<void>) => void
 }
 
@@ -226,7 +225,6 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
       await use(scope, `${VENDOR}/experimental/tool-terminal/lib/index.js`)
     }],
     ['redtrace-tool-timeout', use => use(scoped, `${VENDOR}/guard/timeout-policy/lib/index.js`)],
-    ['redtrace-repeat-reminder', use => config.contextualAttempts ? Promise.resolve() : use(scoped, `${VENDOR}/guard/repeat-tool-reminder/lib/index.js`, { thresholds: [3, 5, 8], argumentsPreviewChars: 500 })],
     ['redtrace-lsp', async use => {
       const servers = availableLspServers()
       if (!Object.keys(servers).length) return

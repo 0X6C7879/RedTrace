@@ -370,8 +370,8 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const list = await call('GET', '/__redtrace/plugins')
   assert.equal(list.status, 200)
-  assert.equal(JSON.parse(list.body).plugins.length, 34)
-  for (const id of ['redtrace-shell', 'redtrace-remote-terminal', 'redtrace-ptc']) {
+  assert.equal(JSON.parse(list.body).plugins.length, 33)
+  for (const id of ['redtrace-repeat-reminder', 'redtrace-shell', 'redtrace-remote-terminal', 'redtrace-ptc']) {
     assert.ok(!JSON.parse(list.body).plugins.some(plugin => plugin.id === id))
     assert.equal((await call('POST', `/__redtrace/plugins/${id}/start`)).status, 400)
   }

@@ -110,5 +110,5 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
     if (b.from.includes('goal')) throw new HttpError(400, 'goal cannot be used in from')
     return legacyIntent(store.complete(p(c), b.description, b.from, b.worker))
   })
-  router.add('POST', '/projects/:project/reopen', async c => { const b = await body(c.req, Type.Object({ description: text, creator: text })), value = store.reopen(p(c), b.description, b.creator); return { project: legacyProject(store, p(c)).project, fact: { id: value.fact.id, description: value.fact.description }, intent: legacyIntent(value.step) } })
+  router.add('POST', '/projects/:project/reopen', async c => { const b = await body(c.req, Type.Object({ description: text, creator: text })), hint = store.reopen(p(c), b.description, b.creator); return { project: legacyProject(store, p(c)).project, hint } })
 }

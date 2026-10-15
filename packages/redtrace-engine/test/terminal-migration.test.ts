@@ -56,7 +56,7 @@ test('legacy tool declarations do not rewrite Step contracts or restart unconfir
   } finally { store.close() }
 })
 
-test('retired terminal Resources remain readable offline but cannot be created or dispatched', async t => {
+test('retired terminal Resources stay readable with their persisted state but cannot be created or dispatched', async t => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-terminal-history-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const store = new Store(':memory:')
@@ -75,8 +75,10 @@ test('retired terminal Resources remain readable offline but cannot be created o
     for (const [index, id] of ids.entries()) {
       const row = operations.publicResource(operations.resource(id))
       assert.equal(row.kind, 'terminal')
-      assert.equal(row.status, index === 2 ? 'retired' : 'offline')
-      if (index < 2) assert.deepEqual(row.metadata.verified_capabilities, [])
+      // A restart no longer rewrites persisted resource state; the retired kind is
+      // unreachable because dispatch only selects live kinds, not because of status.
+      assert.equal(row.status, ['available', 'degraded', 'retired'][index])
+      assert.deepEqual(row.metadata.verified_capabilities, ['remote.terminal.send'])
     }
     assert.deepEqual(store.db.prepare('SELECT * FROM resource_audit_events').all(), history)
     assert.equal(resourceKinds.includes('terminal'), false)

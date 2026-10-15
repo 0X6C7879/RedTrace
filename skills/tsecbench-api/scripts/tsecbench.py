@@ -88,9 +88,7 @@ def require_config(args: argparse.Namespace) -> tuple[str, str]:
 def client_context(args: argparse.Namespace) -> tuple[Any, Any]:
     sdk = load_sdk()
     base_url, token = require_config(args)
-    # Benchmark API and VPN traffic must stay direct, regardless of worker proxies.
-    os.environ["NO_PROXY"] = os.environ["no_proxy"] = "*"
-    return sdk, sdk.TSecBenchmark(base_url=base_url, token=token)
+    return sdk, sdk.TSecBenchmark(base_url=base_url, token=token, auto_check_vpn=False)
 
 
 def command_config(args: argparse.Namespace) -> int:

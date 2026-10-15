@@ -10,6 +10,7 @@ import { ExecutionError } from './execution-result.ts'
 interface PivotRecord { resourceId: string; process: ChildProcess; output: string }
 export class PivotRuntime {
   private readonly records = new Map<string, PivotRecord>()
+  private readonly verifiedRoutes = new Set<string>()
   private readonly operations: Operations
   private readonly root: string
   constructor(operations: Operations, root: string) { this.operations = operations; this.root = root }
@@ -51,16 +52,18 @@ export class PivotRuntime {
       if (!/^[1-5]\d{2}$/.test(stdout.trim())) throw new Error('Proxy did not return an HTTP response from the target service')
       metadata.verified_at = new Date().toISOString(); metadata.verified_endpoint = url.toString(); metadata.verified_capabilities = ['pivot.socks']
       this.operations.verifiedResource(id,{status:'available',metadata_json:JSON.stringify(metadata),last_seen_at:metadata.verified_at},'route.verified')
+      this.verifiedRoutes.add(id)
       return {route_id:id,reachable:true,endpoint:url.toString(),via:proxy.toString(),http_status:Number(stdout.trim())}
     } catch (error) { this.operations.updateResource(id,{status:'degraded'}); throw error }
   }
   paths(project: string | null, target: string) {
     const resources = this.operations.store.db.prepare("SELECT * FROM shared_resources WHERE kind IN ('proxy','c2_session') AND status='available' AND project_id IS ?").all(project) as any[]
-    const routes = resources.filter(row => row.kind === 'proxy').filter(row => { const metadata = JSON.parse(row.metadata_json); return ['ssh-forward','chisel'].includes(metadata.provider) && !!metadata.verified_at && metadata.runtime_verified === true && (!target || String(metadata.target_scope ?? row.target).includes(target) || target.startsWith(String(metadata.target_scope ?? row.target))) })
+    const routes = resources.filter(row => row.kind === 'proxy' && this.verifiedRoutes.has(row.id)).filter(row => { const metadata = JSON.parse(row.metadata_json); return ['ssh-forward','chisel'].includes(metadata.provider) && !!metadata.verified_at && metadata.runtime_verified === true && (!target || String(metadata.target_scope ?? row.target).includes(target) || target.startsWith(String(metadata.target_scope ?? row.target))) })
       .sort((a, b) => { const am = JSON.parse(a.metadata_json), bm = JSON.parse(b.metadata_json); return Number(Boolean(bm.verified_at)) - Number(Boolean(am.verified_at)) || String(b.last_seen_at ?? '').localeCompare(String(a.last_seen_at ?? '')) })
     return routes.map(row => ({ id: row.id, source_resource_id: JSON.parse(row.metadata_json).source_resource_id ?? null, target_scope: JSON.parse(row.metadata_json).target_scope ?? row.target, protocols: JSON.parse(row.metadata_json).protocols ?? ['tcp'], verified_at: JSON.parse(row.metadata_json).verified_at ?? null }))
   }
   async close(id: string) {
+    this.verifiedRoutes.delete(id)
     const record=this.records.get(id);if(!record)return false
     this.records.delete(id);record.process.kill('SIGTERM')
     if(record.process.exitCode===null && record.process.signalCode===null) await new Promise<void>(resolve=>{

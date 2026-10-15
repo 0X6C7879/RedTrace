@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
-import { randomUUID, createHash } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { activeEvidence, HttpError, integer, now, requiredText } from './types.ts'
 import type { Activity, Evidence, Fact, Finding, Goal, Graph, GraphEvent, GraphNode, Input, Json, Project, Run, Step, Worker } from './types.ts'
@@ -125,14 +125,12 @@ export class Store {
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES audit_runs(id) ON DELETE CASCADE, data TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS audit_events_project ON audit_events(project_id,id);
       CREATE TABLE IF NOT EXISTS critical_keys(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,key TEXT NOT NULL,PRIMARY KEY(project_id,key));
-      CREATE TABLE IF NOT EXISTS channel_versions(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,channel TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(project_id,channel));
-      CREATE TABLE IF NOT EXISTS attempt_ledger(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,signature TEXT NOT NULL,count INTEGER NOT NULL,evidence TEXT NOT NULL,PRIMARY KEY(project_id,signature));
       CREATE TABLE IF NOT EXISTS run_metrics(run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,call_id TEXT NOT NULL,kind TEXT NOT NULL,started INTEGER NOT NULL,ended INTEGER,PRIMARY KEY(run_id,call_id));
     `)
     if(importCriticalKeys) for(const row of this.db.prepare('SELECT id,data FROM projects').all()){const project=JSON.parse(String(row.data));for(const key of project.criticalSignals ?? [])this.db.prepare('INSERT OR IGNORE INTO critical_keys VALUES (?,?)').run(String(row.id),String(key))}
     this.db.prepare('INSERT OR IGNORE INTO metadata VALUES (?,?)').run('schema', '2')
     // Only disposable duplicate indexes are retired; raw audit and Run events stay intact.
-    this.db.exec('DROP TABLE IF EXISTS trace_fts; DROP TABLE IF EXISTS trace_audit_fts; DROP TABLE IF EXISTS trace_cursors; DROP TABLE IF EXISTS jev_evaluations')
+    this.db.exec('DROP TABLE IF EXISTS trace_fts; DROP TABLE IF EXISTS trace_audit_fts; DROP TABLE IF EXISTS trace_cursors; DROP TABLE IF EXISTS jev_evaluations; DROP TABLE IF EXISTS attempt_ledger; DROP TABLE IF EXISTS channel_versions')
     // Counters of deleted projects would otherwise linger forever and are never read again.
     this.db.prepare('DELETE FROM counters WHERE scope NOT IN (SELECT id FROM projects)').run()
     try { this.migrateCurrentFgs() } catch (error) { this.db.close(); throw error }
@@ -724,10 +722,8 @@ export class Store {
     return this.transaction(() => {
       const p = this.project(id); if (p.status !== 'completed') throw new HttpError(403, `Project is ${p.status}`)
       p.status = 'active'; this.saveProject(p); this.updateGoal(id, 'goal', { status: 'open', evidenceIds: [] })
-      const step = this.addStep(id, { description, sourceIds: ['origin'], creator }), run = this.claim(id, 'execute', { name: creator, backend: 'dsh' }, step.id)
-      const fact = this.addFact(id, description, { runId: run.id, creator, evidence: [{ description: 'Human reopened the project' }] })
-      this.finishRun(run.id, 'succeeded'); const saved = this.node<Step>(id, step.id, 'step'); saved.sourceGoalId = 'goal'; this.saveNode(saved)
-      this.event(id, 'project.reopened', saved, { description, creator }); return { fact, step: saved }
+      const hint = this.addInput(id, 'hint', description, creator)
+      this.event(id, 'project.reopened', null, { description, creator }); return hint
     })
   }
   runs(projectId?: string): Run[] {
@@ -881,18 +877,7 @@ export class Store {
     const tokens={input:run.inputTokens,output:run.outputTokens,cacheRead:run.cacheReadTokens,cacheWrite:run.cacheWriteTokens}
     return {runId,projectId:run.projectId,status:run.status,tokens,totalTokens:Object.values(tokens).reduce((a,b)=>a+b,0),wallMs:Math.max(0,end-start),modelMs:sum('model'),toolMs:sum('tool'),platformMs:sum('platform'),waitOrUninstrumentedMs:Math.max(0,end-start-covered),instrumented:metrics.length>0,incompleteCalls:metrics.filter(row=>row.ended===null).length,imageTokenBreakdown:null}
   }
-  attempt(runId: string, callId: string, data: Json, contextVersion = '') {
-    const run = this.run(runId), project = this.project(run.projectId)
-    const hasResources = this.db.prepare("SELECT 1 FROM sqlite_master WHERE name='shared_resources'").get()
-    const resources = hasResources ? this.db.prepare('SELECT id,status,metadata_json,secret_json,worker_paused,locked_by FROM shared_resources WHERE project_id=? OR project_id IS NULL ORDER BY id').all(run.projectId) : []
-    const value = data as Record<string, Json>, args = value.arguments as Record<string, Json> | undefined
-    const signature = createHash('sha256').update(JSON.stringify({ project: run.projectId, contextVersion, challenge: args?.challenge ?? args?.unique_code ?? run.stepId, name: value.name, input: value.arguments ?? data, factSeq: project.factSeq, resources, channels:this.db.prepare('SELECT channel,hash FROM channel_versions WHERE project_id=? ORDER BY channel').all(run.projectId) })).digest('hex')
-    const old = this.db.prepare('SELECT count,evidence FROM attempt_ledger WHERE project_id=? AND signature=?').get(run.projectId, signature) as { count: number; evidence: string } | undefined
-    const evidence = [...(old ? JSON.parse(old.evidence) : []), { runId, callId }].slice(-3), count = (old?.count ?? 0) + 1
-    this.db.prepare('INSERT INTO attempt_ledger VALUES (?,?,?,?) ON CONFLICT(project_id,signature) DO UPDATE SET count=excluded.count,evidence=excluded.evidence').run(run.projectId, signature, count, JSON.stringify(evidence))
-    return count === 3 ? `同一题目、身份及通道状态下已有 3 次相同尝试：${JSON.stringify(evidence)}。先检查这些调用的结果与失败边界；只有前置条件改变后再重试。未知结果或有副作用操作不会自动重放。` : undefined
-  }
-  toolStarted(runId: string, callId: string, data: Json, recordAudit = true, remind = true, contextVersion = '') {
+  toolStarted(runId: string, callId: string, data: Json, recordAudit = true) {
     return this.transaction(() => {
       const run = this.run(runId)
       if (run.status !== 'running') throw new HttpError(409, 'Run is not running')
@@ -900,7 +885,6 @@ export class Store {
       run.pendingTools.push(callId); this.saveRun(run); this.runEvent(runId, 'tool.started', data, recordAudit)
       const name = String((data as Record<string, Json>).name ?? '')
       this.metricStart(runId, callId, name.startsWith('tsecbench_') ? 'platform' : 'tool')
-      return remind ? this.attempt(runId, callId, data, contextVersion) : undefined
     })
   }
   toolEnded(runId: string, callId: string, data: Json) {

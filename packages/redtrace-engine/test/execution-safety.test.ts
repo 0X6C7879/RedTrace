@@ -181,7 +181,7 @@ test('unknown, failed, cancelled and large results retain bounded, retrievable e
   } finally { await f.close() }
 })
 
-test('migration snapshots legacy DB, keeps FGS schema 2 and never restores fake connections', async () => {
+test('migration snapshots legacy DB, keeps FGS schema 2 and never dispatches through a connection it cannot restore', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-migration-')), dbFile = path.join(root, 'fixture.db')
   let store = new Store(dbFile), operations = new Operations(store, root)
   try {
@@ -193,7 +193,14 @@ test('migration snapshots legacy DB, keeps FGS schema 2 and never restores fake 
     await operations.close(); store.db.exec('ALTER TABLE operation_tasks DROP COLUMN result_json; ALTER TABLE operation_tasks DROP COLUMN attempt_id'); store.close()
     store = new Store(dbFile); operations = new Operations(store, root)
     assert.ok(readdirSync(root).some(name => name.includes('operations-v1') && name.endsWith('.snapshot')))
-    assert.equal(operations.resource(r.id).status, 'offline')
+    // Resource state is the Agent's to reconcile; the startup path no longer rewrites it.
+    assert.equal(operations.resource(r.id).status, 'available')
+    // The actual protection is that the in-process socket is gone, so the resource
+    // can never silently serve commands through a connection that no longer exists.
+    const queued = operations.createTask(project.id, r.id, { action: 'command', arguments: { command: 'echo harmless' } })
+    operations.wake(); await new Promise<void>(resolve => setImmediate(resolve))
+    assert.equal(operations.task(queued.id).status, 'failed')
+    assert.equal(operations.publicTask(operations.task(queued.id)).result.error_code, 'TRANSPORT_ERROR')
     const restored = operations.publicTask(operations.task(t.id))
     assert.equal(restored.status, 'failed'); assert.equal(restored.result.completion, 'unknown'); assert.ok(restored.result_ref)
     assert.equal(store.project(project.id).title, 'Migration fixture')

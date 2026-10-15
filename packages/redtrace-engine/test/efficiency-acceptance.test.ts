@@ -15,18 +15,18 @@ function fixture() {
  const step = store.addStep(project.id,{description:'Inspect',sourceIds:['origin']}), run=store.claim(project.id,'execute',worker,step.id)
  return {store,project,step,run}
 }
-test('attempt ledger preserves parameter encoding/order, identity and challenge, reminds once without blocking',()=>{
- const {store,project,run}=fixture()
+test('repeated tool calls retain audit and recovery tracking without reminders or a ledger',()=>{
+ const {store,run}=fixture()
  try {
-  const data={name:'http_batch',arguments:{challenge:'q1',identity:'alice',url:'http://127.0.0.1:8080/?a=1&b=%2f'}}
-  assert.equal(store.attempt(run.id,'a',data),undefined)
-  assert.equal(store.attempt(run.id,'b',data),undefined)
-  assert.match(store.attempt(run.id,'c',data)!,/3 次相同/)
-  assert.equal(store.attempt(run.id,'d',data),undefined)
-  assert.equal(store.attempt(run.id,'env-change',data,'new-auth-version'),undefined)
-  for (const change of [{url:'http://127.0.0.1:8080/?b=%2f&a=1'},{url:'http://127.0.0.1:8080/?a=1&b=/'},{identity:'bob'},{challenge:'q2'}]) assert.equal(store.attempt(run.id,'other',{...data,arguments:{...data.arguments,...change}}),undefined)
-  store.addFact(project.id,'Authentication expired',{stepId:run.stepId!})
-  assert.equal(store.attempt(run.id,'fresh',data),undefined)
+  for(const name of ['tsecbench_list','read_graph','bash']) for(let i=0;i<8;i++) {
+   const id=`${name}-${i}`
+   assert.equal(store.toolStarted(run.id,id,{name,arguments:{}}),undefined)
+   assert.deepEqual(store.run(run.id).pendingTools,[id])
+   store.toolEnded(run.id,id,{ok:true})
+  }
+  assert.deepEqual(store.run(run.id).pendingTools,[])
+  assert.equal(store.db.prepare("SELECT count(*) AS n FROM run_events WHERE run_id=? AND type='tool.started'").get(run.id)!.n,24)
+  assert.equal(store.db.prepare("SELECT name FROM sqlite_master WHERE name='attempt_ledger'").get(),undefined)
  } finally {store.close()}
 })
 test('native and DSH audit records survive retirement of duplicate Trace indexes',()=>{
@@ -185,14 +185,32 @@ test('existing duplicate Trace tables are removed on reopen without deleting raw
   store.runEvent(run.id,'tool.started',{name:'historical',arguments:{}})
   store.close()
   const db=new DatabaseSync(filename)
-  db.exec("CREATE VIRTUAL TABLE trace_fts USING fts5(text); CREATE VIRTUAL TABLE trace_audit_fts USING fts5(text); CREATE TABLE trace_cursors(project_id TEXT); INSERT INTO trace_fts VALUES ('duplicate')")
+  db.exec("CREATE VIRTUAL TABLE trace_fts USING fts5(text); CREATE VIRTUAL TABLE trace_audit_fts USING fts5(text); CREATE TABLE trace_cursors(project_id TEXT); CREATE TABLE attempt_ledger(signature TEXT); CREATE TABLE channel_versions(channel TEXT); INSERT INTO trace_fts VALUES ('duplicate')")
   db.close()
   store=new Store(filename)
   try {
    assert.equal(store.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'trace_%'").all().length,0)
+   assert.equal(store.db.prepare("SELECT name FROM sqlite_master WHERE name='attempt_ledger'").get(),undefined)
+   assert.equal(store.db.prepare("SELECT name FROM sqlite_master WHERE name='channel_versions'").get(),undefined)
    assert.equal(store.db.prepare('SELECT count(*) AS n FROM run_events WHERE run_id=?').get(run.id)!.n,1)
    assert.equal(store.db.prepare('SELECT count(*) AS n FROM audit_events WHERE project_id=?').get(project.id)!.n,1)
    assert.equal(store.node<Fact>(project.id,'origin').description,'fixture')
   } finally {store.close()}
  } finally {rmSync(root,{recursive:true,force:true})}
+})
+
+test('Reason launch skips acknowledged hints but retains fresh human input',()=>{
+ const store=new Store(':memory:')
+ try {
+  const project=store.createProject({title:'Hints',origin:'Fixture',goal:'Inspect'}).project
+  for(let i=0;i<10;i++)store.addInput(project.id,'hint',`Old ${i}`,'human')
+  const old=store.claim(project.id,'decide',worker);store.finishRun(old.id,'succeeded')
+  store.addInput(project.id,'hint','Fresh human input','human')
+  const next=store.claim(project.id,'decide',worker)
+  assert.deepEqual(launchContext(store,next.id).hints!.items.map(h=>h.content),['Fresh human input'])
+  store.finishRun(next.id,'succeeded')
+  const quiet=store.claim(project.id,'decide',worker)
+  assert.equal(launchContext(store,quiet.id).hints,undefined)
+  assert.equal(store.nodes(project.id,['hint']).length,11)
+ } finally {store.close()}
 })
