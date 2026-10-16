@@ -88,6 +88,10 @@ def require_config(args: argparse.Namespace) -> tuple[str, str]:
 def client_context(args: argparse.Namespace) -> tuple[Any, Any]:
     sdk = load_sdk()
     base_url, token = require_config(args)
+    # The SDK would otherwise probe VPN reachability on every context entry, which
+    # turns each harness- or Worker-issued platform call into an implicit
+    # connectivity test. Probing is the caller's decision, so only the explicit
+    # `vpn` command runs it.
     return sdk, sdk.TSecBenchmark(base_url=base_url, token=token, auto_check_vpn=False)
 
 
@@ -200,7 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_config = sub.add_parser("config", help="Check local configuration without printing secrets")
     p_config.set_defaults(func=command_config)
 
-    p_vpn = sub.add_parser("vpn", help="Run SDK/VPN preflight")
+    p_vpn = sub.add_parser("vpn", help="Probe benchmark VPN reachability; the only preflight, run explicitly by the caller")
     p_vpn.set_defaults(func=command_vpn)
 
     p_list = sub.add_parser("list", help="List challenge status and progress")

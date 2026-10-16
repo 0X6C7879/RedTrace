@@ -177,6 +177,7 @@
   box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
 }
 
+.operations-dot.unverified,
 .operations-dot.degraded {
   background: #f59e0b;
   box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.13);
@@ -607,6 +608,7 @@ textarea.operations-dark-field {
   color: #4338ca;
 }
 
+.ops-status-unverified,
 .ops-status-awaiting-approval,
 .ops-status-degraded {
   border-color: #fde68a;

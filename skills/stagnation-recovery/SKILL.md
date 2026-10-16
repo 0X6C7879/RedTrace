@@ -1,176 +1,45 @@
 ---
 name: stagnation-recovery
-description: Use when stuck, looping on same approach, making no progress after multiple tool calls, or receiving a stagnation warning from the system. Also trigger when you catch yourself retrying the same command with minor variations, getting repeated Permission denied or timeout errors, or unable to advance past a specific step for 10+ tool calls.
+description: Recover when repeated attempts within the current Step produce no new evidence, capability, or reduced uncertainty. Diagnose the specific blocker and choose a bounded, informative next action instead of repeating scans or expanding scope.
 ---
 
-# Stagnation Recovery - Security Operations
+# 停滞恢复
 
-## Core Principle
+在当前 Step 的授权范围内，找出下一次能改变判断的最小验证；没有合理动作时，提交可信进展和阻塞，交由 Reason 调整计划。恢复不是重新做一轮全面侦察，也不是自动切换题目。
 
-**停下来比错误方向的加速更有价值。** 当你连续尝试同类操作无果时，问题不是执行力不够，而是方向错了。
+## 先确认是否真的停滞
 
-## Iron Rules
+- 复用当前 Step 的引用证据、已保存产物和已验证通道。只展开缺失的具体证据，不默认重读全图或完整题库；不要假定存在固定名称的进度日志。
+- 把已确认事实与假设分开。新获得的可用能力、缩小的候选范围或持续产出的有效数据都算进展；失败次数和调用次数本身不算。
+- 长任务仍在运行时，先检查已有输出和状态。工具等待结束不等于命令终止，不因暂无新输出重复启动同类作业。已有完成通知时避免反复阻塞轮询。
+- 连续几轮同一机制没有改变判断时，暂停扩大投入，判断是机制无效、输入/响应分类错误、缺少前置，还是工具/环境故障。更换字典、编码或线程数不自动成为新方向；有新证据时也不因固定尝试次数而放弃。
 
-1. **穷尽验证再放弃**：没有读过报错全文、没有搜索过文档、没有检查过前置条件的，不算尝试过。
-2. **先查后问**：你有 wss_exec/docker_exec/WebSearch/Read 等工具，在判定"不可行"之前，必须用工具验证。
-3. **换方向不是换参数**：curl 加了 `-k` 还是 403？这不叫换方向。从 client_credentials 换到 device_code flow 才叫换方向。
+## 按阻塞选择下一步
 
----
+| 阻塞 | 恢复动作 |
+|---|---|
+| 同类尝试无新增信息 | 回看原始响应和失败条件，选择能区分当前假设的小测试；没有新依据，不继续扩大扫描。 |
+| 信息不足 | 明确一个阻止推进的信息缺口，针对性获取；不要求枚举所有端口、目录、参数或在所有服务上试凭据。 |
+| 多个发现无法串联 | 用已验证能力说明缺少的一个连接条件；先验证该条件，不把组合假设记为已确认漏洞。 |
+| 语法、引号或状态处理错误 | 阅读完整报错并检查实际参数和退出码；复杂输入或多步状态改用文件中的小脚本，先验证一个正常/已知输入。 |
+| 工具或环境异常 | 核对当前可见工具的参数、执行位置、依赖和环境。只采用已验证且获授权的替代路径；权限拒绝不等于获准绕过限制。可复现且无法自行解除时报告具体阻塞，不反复重装或更换变体。 |
+| 网络响应矛盾 | 区分目标响应与代理、网关、认证层和本机响应。TCP 握手、单个状态码或改写 Host 后的陌生服务不足以证明题目漏洞；不要据此追查未授权资产。 |
 
-## Step 1: Diagnose - 识别你的卡壳模式
+扩大任务前先用小样本校准响应分类、过滤条件和吞吐。每次恢复动作应有可观察的判断标准；持续获得有效新信息就继续深入，无新信息就换机制或交接，不以“所有可能性尚未穷尽”为继续投入的理由。
 
-在采取任何行动之前，先判断你属于哪种模式：
+## 使用当前真实工具
 
-| 模式 | 信号 | 根因 |
-|------|------|------|
-| **A: 原地打转** | 反复执行同一工具、只改参数/flag | 方向错误，需要换攻击面 |
-| **B: 环境约束** | Permission denied, 工具缺失, 网络不通 | 硬限制，需要绕道或换工具链 |
-| **C: 信息不足** | 盲目尝试、猜测 API 端点/参数 | 缺少侦察，需要回退到信息收集 |
-| **D: 攻击链断裂** | 有多个发现但无法串联 | 需要停下来组合攻击链 |
-| **E: 工具使用错误** | 命令语法错、参数编码错、curl 格式错 | 需要读文档或用脚本替代手工命令 |
+以当前会话暴露的工具及其 schema 为准；未暴露的工具不能靠 Skill 文案获得。
 
----
+- 本地命令用 `bash`，文件按需用 `read`、`write`；远程操作必须使用已提供的能力工具与已验证通道，不把本地 Shell 当成靶机 Shell。
+- 已启用后台作业工具时，用 `job_output` 读取所需的新输出；用 `job_kill` 终止自己确认不再需要的作业。未确认作业结束前不要启动重复扫描。
+- FGS 按需用 `read_graph` 指定节点读取，或用 `read_graph_delta` 沿现有游标读取，不无故从零重放。跨会话证据先通过 `session_search` 定位；读取详细事件前取得真实会话与序号，不混用 FGS 事件 ID 和 Session seq。
+- 脚本和观察保存在当前工作目录的证据产物中。只有足以影响目标验收、执行前置或后续计划的、经证据验证的新结论才及时 `submit_fact`；普通状态和重复失败不逐条上报。可交付成果再用 `submit_finding` 引用已确认 Fact，假设不当作 Finding。
 
-## Step 2: Recover - 按模式执行恢复
+## 协作与收尾
 
-### Mode A: 原地打转 -> 换攻击面
+遵守当前 Step 的目标、权限和协作边界。同题协作时复用共享证据和实例，不重复启动题目，不覆盖其他 Worker 的产物，不终止其作业或关闭其仍需使用的实例。无法划分非冲突动作时，将具体阻塞交给 Reason，不自行扩大任务。
 
-**强制动作**：
-1. 列出你已尝试的所有方向（不是参数变体，是方向）
-2. 从下面的攻击树中选择一个**未尝试过**的方向
-3. 每个新方向最多尝试 3 次，无果则换下一个
+恢复后简要记录：新增的确认结论、仍未证实的假设、下一步及其判断标准。不强制生成全量历史、攻击树或长篇报告。
 
-**Web 攻击树**：
-```
-目标 Web 应用
-  ├── 认证绕过: 默认凭据 / SQL注入 / JWT伪造 / OAuth滥用 / Session固定
-  ├── 注入攻击: SQLi / XSS / SSTI / SSRF / XXE / Command Injection / LDAP Injection
-  ├── 逻辑漏洞: IDOR / 竞态条件 / 业务逻辑绕过 / 价格篡改 / 权限越权
-  ├── 文件操作: 上传绕过 / 路径遍历 / LFI/RFI / 反序列化
-  ├── 前端攻击: DOM XSS / Prototype Pollution / WebSocket劫持 / PostMessage滥用
-  └── 信息泄露: .git泄露 / 备份文件 / 错误页面 / API文档 / 源码泄露
-```
-
-**提权攻击树**：
-```
-初始访问
-  ├── Linux: SUID/SGID / sudo滥用 / cron/定时任务 / capabilities / 内核漏洞 / Docker逃逸
-  ├── Windows: 服务权限 / 注册表 / AlwaysInstallElevated / Token模拟 / SeImpersonate
-  ├── Cloud: IMDS/metadata / IAM提权 / 角色链 / SSRF到云凭据 / 存储桶误配置
-  └── K8s: ServiceAccount / RBAC滥用 / etcd / kubelet API / 挂载逃逸
-```
-
-**云安全攻击树**：
-```
-Cloud Target
-  ├── Azure: OAuth App滥用 / Managed Identity / device_code flow / Admin Consent攻击
-  │         / Dynamic Group注入 / PRT滥用 / Conditional Access绕过
-  ├── AWS: IMDS v1/v2 / IAM提权链 / Lambda环境变量 / S3 ACL / STS AssumeRole
-  └── GCP: SA密钥 / metadata server / Workload Identity / Org Policy绕过
-```
-
-### Mode B: 环境约束 -> 绕道
-
-**强制动作**：
-1. 明确列出约束（具体错误信息）
-2. 对每个约束检查：是真约束还是可绕过的？
-   - Permission denied -> 能否换用户/换路径/换工具？
-   - 工具缺失 -> 能否用替代工具？(例: 没有 nmap 用 /dev/tcp 探测)
-   - 网络不通 -> 能否通过已有代理/隧道？
-3. 确认是硬约束后，**立即放弃这个方向**，不要再尝试任何变体
-
-**常见绕道方案**：
-```
-约束: 没有编译器         -> 本地编译后传输二进制
-约束: 无法出网           -> 利用已有的合法通道（DNS/HTTP回连）
-约束: 只读文件系统       -> /tmp, /dev/shm, 内存执行
-约束: 没有交互式终端     -> 脚本化、heredoc、base64编码命令
-约束: API需要MFA        -> device_code flow, 条件访问策略绕过
-约束: reCAPTCHA/验证码  -> API直接调用（绕过前端）、自动化Cookie复用
-```
-
-### Mode C: 信息不足 -> 回退侦察
-
-**强制动作**：
-1. 停止当前攻击尝试
-2. 列出你当前已知的所有信息
-3. 识别缺口：你需要知道什么才能推进？
-4. 执行针对性侦察
-
-**信息回溯清单**：
-```
-已发现的凭据:
-  [ ] 全部尝试过了吗？在所有可能的服务上？
-  [ ] 尝试过密码复用吗？
-
-已发现的端口/服务:
-  [ ] 所有端口都枚举过了吗？
-  [ ] 每个服务的版本都识别了吗？
-  [ ] 有已知漏洞吗？（searchsploit/CVE查询）
-
-已发现的 Web 路径:
-  [ ] 做过目录爆破吗？（多个字典）
-  [ ] 检查过 robots.txt, .git, backup 文件吗？
-  [ ] 每个端点的参数都测过吗？
-
-已发现的用户/账户:
-  [ ] 尝试过弱密码/默认密码吗？
-  [ ] 做过用户枚举吗？
-  [ ] 检查过权限差异吗？
-```
-
-### Mode D: 攻击链断裂 -> 组合发现
-
-**强制动作**：
-1. 列出所有 key findings（读 progress.md 和 findings.log）
-2. 画出当前拥有的信息图：
-   ```
-   我有: [凭据A] [端口B开放] [漏洞C存在] [配置D泄露]
-   我需要: [从B进入] [用A认证] [利用C获取D中的密钥]
-   缺失: [A->B的连接方式]
-   ```
-3. 对每对发现尝试组合：A+B能做什么？B+C呢？A+C呢？
-4. 用 record_key_finding(kind='vulnerability', title='Attack Chain Hypothesis: ...', evidence='<key data points>') 记录假设
-
-### Mode E: 工具使用错误 -> 用脚本替代
-
-**强制动作**：
-1. 如果 curl 命令反复出错（参数编码、引号嵌套、特殊字符），**立即改用 Python 脚本**
-2. 如果多步操作需要中间状态（token获取 -> 使用token），**写成一个完整脚本**
-3. 通过 python_poc_exec 或 wss_exec 执行脚本，避免 shell 转义问题
-
-**典型替代**：
-```
-curl + 复杂参数  -> Python requests 脚本
-多步 API 调用    -> Python 脚本（变量传递）
-base64编码       -> Python 脚本（避免 shell 转义）
-复杂 JSON body   -> Python 脚本（用 dict 构造）
-```
-
----
-
-## Step 3: Execute - 执行新方向
-
-每个新方向必须满足：
-- 与之前**本质不同**（不是参数微调）
-- 有明确的**验证标准**（怎样算成功，怎样算失败）
-- 失败时能产生**新信息**（不是重复已知错误）
-
-执行后立即：
-- 成功 -> record_key_finding 记录
-- 失败（新信息） -> 更新 progress.md，进入下一个方向
-- 失败（无新信息） -> 停止这个方向，回到 Step 1 重新诊断
-
----
-
-## Anti-Patterns (FORBIDDEN)
-
-| 行为 | 为什么错 | 应该做什么 |
-|------|---------|-----------|
-| curl 换个 flag 重试 5 次 | 同一方向的参数微调 | 换攻击向量或用 Python 脚本 |
-| 反复刷新页面等状态变化 | 被动等待 | 分析为什么状态没变 |
-| 连续 take_snapshot 10 次 | 观察不等于行动 | 分析页面内容，决定下一步操作 |
-| 猜测 API 端点格式 | 没有侦察就攻击 | 先找到文档/源码/目录列表 |
-| 报错后不读报错内容 | 浪费信息 | 逐字读错误信息，提取线索 |
-| 有凭据但没在所有服务上试 | 遗漏攻击面 | 系统性地在每个服务上尝试 |
-| device_code 过期后重新获取但不改流程 | 不解决根因 | 写脚本一次性完成整个 flow |
+确实无法继续或收到收尾指令时，按当前执行契约汇总已有证据，提交可信 Fact，再 `finish_step`。进入仅允许汇总的收尾阶段后不发起外部操作；被禁止的清理动作只记录归属和待办，交由 Reason 安排有权限的执行者处理，不循环调用被禁工具。平台生命周期仍由对应平台 Skill 和当前契约负责，本 Skill 不授予额外控制权限。

@@ -319,7 +319,7 @@ function operationsPage() {
           };
           this.terminalHistory = [];
         }
-        if (resource.kind !== 'webshell' && latest) this.terminalOutput = latest.output_summary;
+        if (resource.kind !== 'webshell' && (changed || latest)) this.terminalOutput = latest?.output_summary || '';
       } catch (error) {
         if (this.active && projectId === this.projectId() && pageMode === this.pageMode && id === this.selectedResourceId) this.error = error.message;
       } finally {
@@ -505,16 +505,21 @@ function operationsPage() {
     },
 
     availableResources() {
-      return this.filteredResources().filter((item) => item.status === 'available').length;
+      return this.filteredResources().filter((item) => this.resourceStatus(item) === 'available').length;
     },
 
     kindLabel(kind) {
       return this.kindOptions.find((item) => item.value === kind)?.label || kind;
     },
 
+    resourceStatus(resource) {
+      return resource?.kind === 'c2_session' && resource.status === 'available' && resource.metadata?.connection_type === 'direct' && resource.metadata?.runtime_verified !== true ? 'unverified' : resource?.status;
+    },
+
     statusLabel(status) {
       return {
         available: '可用',
+        unverified: '已登记 · 待验证',
         degraded: '异常',
         offline: '离线',
         retired: '已归档',
@@ -776,7 +781,7 @@ function operationsPage() {
       try {
         const completed = await this.waitForTask(queued.id);
         let output = completed.output_summary || this.statusLabel(completed.status);
-        if (completed.result_ref) output = await this.api(completed.result_ref, { headers: {} });
+        if (completed.result_ref) output = (await this.api(completed.result_ref, { headers: {} })) || output;
         const renderedOutput = String(output || '').replace(/\s+$/, '');
         this.terminalOutput = renderedOutput;
         this.terminalHistory[recordIndex] = {

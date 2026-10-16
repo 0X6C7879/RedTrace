@@ -350,7 +350,7 @@ export class Operations {
         if (['beacon', 'agent'].includes(connection) && !secret.session_token_sha256) { secret_once = randomBytes(32).toString('base64url'); secret.session_token_sha256 = digest(secret_once) }
       }
       this.store.db.prepare(`INSERT INTO shared_resources(id,project_id,kind,name,status,target,summary,metadata_json,secret_json,created_by_type,created_by,worker,intent_id,fact_id,parent_resource_id,source_task_id,created_at,updated_at,last_seen_at) VALUES (${Array(19).fill('?').join(',')})`).run(
-        id, project, input.kind, input.name.trim(), status, input.target?.trim() ?? '', input.summary?.trim() ?? '', JSON.stringify(metadata), JSON.stringify(secret), input.actor_type ?? 'human', input.actor ?? 'admin', input.worker ?? null, input.intent_id ?? null, input.fact_id ?? null, input.parent_resource_id ?? null, input.source_task_id ?? null, at, at, input.kind === 'c2_session' ? at : null)
+        id, project, input.kind, input.name.trim(), status, input.target?.trim() ?? '', input.summary?.trim() ?? '', JSON.stringify(metadata), JSON.stringify(secret), input.actor_type ?? 'human', input.actor ?? 'admin', input.worker ?? null, input.intent_id ?? null, input.fact_id ?? null, input.parent_resource_id ?? null, input.source_task_id ?? null, at, at, input.kind === 'c2_session' && metadata.connection_type !== 'direct' ? at : null)
       this.audit(project, id, input.source_task_id ?? null, input, 'resource.register', 'succeeded', { kind: input.kind, name: input.name, target: input.target ?? '', intent_id: input.intent_id ?? null })
       return { resource: this.publicResource(this.resource(id)), ...(secret_once ? { secret_once } : {}) }
     })
@@ -386,10 +386,10 @@ export class Operations {
       this.store.db.prepare('INSERT INTO operation_results VALUES (?,?,?,?,?,?,?,?)').run(outputId, task.project_id, id, 'text/plain; charset=utf-8', content, Buffer.byteLength(content), digest(content), at)
       const directory = path.join(this.outputRoot, resource.kind === 'webshell' ? 'webshell' : 'c2', 'results'); mkdirSync(directory, { recursive: true }); writeFileSync(path.join(directory, `${id}-${outputId}.txt`), content, { mode: 0o600 })
       if (JSON.parse(task.input_json).publish_result) this.create(task.project_id, { kind: 'result', name: `${resource.name} · ${task.action}`, target: ref, summary: output, metadata: { result_id: outputId, task_id: id }, actor_type: task.actor_type, actor: task.actor, source_task_id: id })
-      const outputSummary = summarize(output || (succeeded ? '任务已完成，未返回文本输出' : 'operation failed'))
+      const outputSummary = summarize(output || (succeeded ? '任务已完成，未返回文本输出' : [result.error_code, result.execution_context.error_message].filter(Boolean).join(': ') || 'operation failed'))
       const bounded = { ...result, stdout: result.stdout?.slice(0, 16384) ?? null, stderr: result.stderr?.slice(0, 16384) ?? null, combined_output: result.combined_output.slice(0, 32768), truncated: result.truncated || Buffer.byteLength(output) > 32768, saved_bytes: Buffer.byteLength(content) }
       this.store.db.prepare('UPDATE operation_tasks SET status=?,output_summary=?,result_ref=?,result_json=?,completed_at=? WHERE id=?').run(status, outputSummary, ref, JSON.stringify(bounded), at, id)
-      const connectionError = ['TRANSPORT_ERROR', 'PROTOCOL_ERROR', 'TIMEOUT'].includes(String(result.error_code))
+      const connectionError = ['AUTH_FAILED', 'TRANSPORT_ERROR', 'PROTOCOL_ERROR', 'TIMEOUT'].includes(String(result.error_code))
       if (succeeded && resource.status === 'available') this.updateResource(resource.id, { last_seen_at: at })
       else if (connectionError && resource.status === 'available') this.updateResource(resource.id, { status: 'degraded' })
       this.audit(task.project_id, task.resource_id, id, task, `operation.${task.action}`, status, { result_ref: ref, error_code: result.error_code, completion: result.completion, summary: outputSummary })

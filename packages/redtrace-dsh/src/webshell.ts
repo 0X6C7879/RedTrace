@@ -18,7 +18,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): vo
   const types: TaskType[] = config.types ?? ['bootstrap', 'explore']
   register(ctx, {
     name: 'webshell_register',
-    description: 'Register a WebShell as a shared resource so remote.command / remote.file.* can reuse it. target is the shell URL; password and parameters must match how the shell is reached. Use webshell_test first to verify the connection.',
+    description: 'Register a WebShell as a shared resource so remote.command / remote.file.* can reuse it. target is the shell URL; password and parameters must match how the shell is reached. Use webshell_test first to verify the connection. Register only an established endpoint with known configuration/credential evidence, not speculative endpoints or batches of guessed passwords. Registration alone is not connection success. Reuse an existing matching resource; renaming/re-registering does not repair authentication or protocol failures.',
     parameters: {
       type: 'object',
       properties: {
@@ -68,7 +68,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): vo
   })
   register(ctx, {
     name: 'webshell_test',
-    description: 'Probe a WebShell endpoint before registering it. A successful probe means webshell_register can reuse this configuration.',
+    description: 'Probe a WebShell endpoint before registering it. A successful probe means webshell_register can reuse this configuration. Inspect failure details and check endpoint, protocol, parameters and credential evidence before retrying. Do not blindly repeat the same failed probe or register failed candidates as usable sessions.',
     parameters: {
       type: 'object',
       properties: {

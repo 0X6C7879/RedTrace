@@ -28,7 +28,7 @@ function tool<T extends TSchema>(name: string, description: string, parameters: 
 async function tsecbenchQuery(config: EngineConfig, args: string[], signal?: AbortSignal) {
   const script = path.join(path.dirname(config.workspaceRoot), '.redtrace', 'skills', 'tsecbench-api', 'scripts', 'tsecbench.py')
   try {
-    const { stdout } = await execFileAsync('python3', [script, ...args], {
+    const { stdout } = await execFileAsync(process.env.REDTRACE_BENCHMARK_PYTHON || 'python3', [script, ...args], {
       cwd: path.dirname(script), env: toolEnvironment(config.commonEnv), signal, timeout: 45_000, maxBuffer: 2 * 1024 * 1024,
     })
     const response = JSON.parse(stdout)
@@ -107,7 +107,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     if (/(?:tsecbench|tsec[\s-]*benchmark)/i.test(origin.description) && existsSync(path.join(skill, 'SKILL.md')) && existsSync(path.join(skill, 'scripts', 'tsecbench.py'))) {
       tools.push(
         tool('tsecbench_list', 'List TSec Benchmark challenges with descriptions, difficulty, progress and container status. Read only.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['list'], abort)),
-        tool('tsecbench_vpn', 'Probe benchmark VPN reachability explicitly when needed; no platform operation probes automatically.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['vpn'], abort)),
+        tool('tsecbench_vpn', 'Probe benchmark VPN reachability. Nothing probes it automatically, so run this when a platform call fails or before trusting challenge container addresses.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['vpn'], abort)),
         tool('tsecbench_hint', 'View a TSec Benchmark challenge hint. Viewing may reduce its flag score; requires explicit score penalty confirmation. Does not start, submit or close challenges.', Type.Object({ unique_code: Type.String(), confirm_score_penalty: Type.Boolean() }), (args, abort) =>
           args.confirm_score_penalty ? tsecbenchQuery(config, ['hint', args.unique_code, '--confirm-score-penalty'], abort) : { ok: false, error: 'score_penalty_confirmation_required' }),
       )
@@ -129,7 +129,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     if (/(?:tsecbench|tsec[\s-]*benchmark)/i.test(benchmarkOrigin) && existsSync(path.join(benchmarkSkill, 'SKILL.md')) && existsSync(path.join(benchmarkSkill, 'scripts', 'tsecbench.py'))) {
       tools.push(
         tool('tsecbench_list', 'Read challenge descriptions, progress and container state; no lifecycle operation.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['list'], abort)),
-        tool('tsecbench_vpn', 'Probe benchmark VPN reachability explicitly when needed; no platform operation probes automatically.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['vpn'], abort)),
+        tool('tsecbench_vpn', 'Probe benchmark VPN reachability. Nothing probes it automatically, so run this when a platform call fails or before trusting challenge container addresses.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['vpn'], abort)),
         tool('tsecbench_start', 'Start the explicitly selected authorized benchmark challenge. Pass the exact unique_code from tsecbench_list; no arbitrary platform or network target is accepted.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }) }), async (args, abort) => {
           const started = await tsecbenchQuery(config, ['start', args.unique_code], abort) as { unique_code?: unknown; container_addr?: unknown }
           if (started.unique_code !== args.unique_code || !Array.isArray(started.container_addr) || !started.container_addr.length || started.container_addr.some(address => typeof address !== 'string' || address.length > 255)) throw new Error('Benchmark start returned an invalid challenge or target list')
@@ -141,7 +141,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
           return started
         }),
         tool('tsecbench_submit', 'Submit one flag for the active authorized challenge and return the platform response. Does not create Facts or wake Reason; Explore must verify the response and explicitly submit_fact for decision-relevant results. Secrets in tool arguments are redacted from audit events.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }), flag: Type.String({ minLength: 1, maxLength: 4096 }) }), (args, abort) => tsecbenchQuery(config, ['submit', args.unique_code, '--flag', args.flag], abort)),
-        tool('tsecbench_close', 'Close only the exact TSecBench challenge this Execute worker finished or abandoned, to release its container.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }) }), async (args,abort)=>{const result=await tsecbenchQuery(config,['close',args.unique_code],abort);store.setBenchmarkHosts(run.projectId,args.unique_code);return result}),
+        tool('tsecbench_close', 'Close only the exact authorized TSecBench challenge that is complete or that Reason explicitly assigned this Step to close before switching challenges, to release its container.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }) }), async (args,abort)=>{const result=await tsecbenchQuery(config,['close',args.unique_code],abort);store.setBenchmarkHosts(run.projectId,args.unique_code);return result}),
       )
     }
     tools.push(
@@ -175,18 +175,18 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
 }
 
 export const activityPrompt = (activity: 'decide' | 'execute', step?: Step) => (activity === 'decide'
-  ? `你是任务的规划者(Reason)，负责根据 FGS 判断目标进展、规划下一步、协调 Explore 并维护图谱，不亲自解决任务。
+  ? `你是任务的规划者(Reason)，负责根据 FGS 判断目标进展、规划下一步、协调 Explore 并维护图谱，不亲自解决任务。FGS（Fact-Goal-Step Graph）是共享的实时任务状态图。Fact 表示有证据支持的已确认事实；Goal/Subgoal 表示需要满足的验收条件；Step 表示基于已有事实、指向特定 Goal 的执行行动；Finding 表示由 Fact 支撑的可交付成果。Step 通过 sourceIds 引用执行依据，通过 goalId 关联目标，执行产生的新 Fact/Finding 可以支持后续 Step 或作为 Goal 的验收依据。Step 完成不等于 Goal 达成，Goal 必须由真实证据验收。Hint、Observation 和未经验证的推测不属于确认事实。FGS 只维护当前有效状态，执行历史和原始日志由独立记录保存。
 
 1. 掌握态势：每次新会话先读取当前 FGS，明确 Scope、Goal、Fact/Finding 和活跃 Step。会话期间出现新事件时，通过 read_graph_delta 连续获取变化，只按需展开相关证据，不重复全图读取。Hint、Observation 和推测不能直接作为确认事实。
 2. 优先验收目标：判断现有 Fact/Finding 是否已满足 Goal，逐项核对数量、权限、范围及其他验收条件。确认达成后引用真实 evidenceIds 完成验收并说明依据。Step 结束、探索失败或路线放弃均不代表 Goal 达成。
-3. 规划有效方向：以目标达成速度和成功可能性为优先。有突破就深入，缺少入口就拓宽，持续受阻且没有新进展就换机制。只创建前置已满足、尚未覆盖且能够验证结果的 Step；依赖未取得的能力或权限时等待，不提前派发后续行动。
+3. 规划有效方向：以目标达成速度和成功可能性为优先。有突破就深入，缺少入口就拓宽，持续受阻且没有新进展就根据已经证据重新评估和规划。依赖未取得的能力或权限时等待，不提前派发后续行动。
 4. 避免重复与空转：对照已有 Step 和执行结果，区分成功、失败、阻塞、中断及真正穷尽。单次失败不能否定整条路线；中断优先续接已确认进度，已充分验证的无效路线只有出现新证据或实质不同的方法才重开。已有工作覆盖当前方向时不重复派发。目标未达成且没有待执行或运行中的 Step 时，优先续接未完工作或寻找未覆盖方向；确无可执行路径则说明具体阻塞，不虚构任务。
-5. 保持合理并发：同一方向默认由一个主 Explore 深入执行，优先并行不同且互不干扰方向；尽量保持最大 Step 数，除非距离目标完成没有多余路线可选；创建 Step 前检查 planningCapacity，遵守 Worker 和并发限制。
-6. 维护计划与协作：Step 应明确行动方向和符合对应目标，用 sourceIds 引用依据、goalId 关联目标。Subgoal 只描述可验收的阶段成果，操作和策略属于 Step。新信息或人工 Hint 对现有 Explore 有实质帮助时，用 notify_explore 定向补充；不重复通知或微观管理。Step 过时或偏离目标时才用带版本的 update_step/update_goal 修正，或替换/取消 Step。同目标、同权限的执行契约变更使用 amend；目标或执行隔离变化使用 replace。远程命令和内网代理必须具备已验证的在线程序化通道，图形登录不等于命令通道。
+5. 调度规则：效率优先，以最快速度完成目标为前提。每个 Step 都要分配至少一个题目，同一题目也可以分给多个 Step 协作完成，较困难题目(单Worker难以完成，有至少2个fact都没有重大突破的)的题目可以分多个 Step 并发共同解决(多个Step任务不能有冲突，要考虑跨Worker的协作，如果难以分出边界依旧采用单Worker执行)。同题多 Step 协作不指定固定的容器负责人。题目未解决时默认保留实例，不能仅因某个 Step 结束或失败就关闭。某题持续难以突破、占用实例槽位并影响全局进展时，可根据已有证据决定关闭并换题。先停止或调整旧题相关 Step，避免其继续操作即将关闭的实例；在新建的其他题目 Step 中明确写出需要关闭的旧题及随后要解决的新题，由执行新题的 Explore 先关闭旧题、确认槽位释放，再启动新题，无须另建专门的清理 Step。保持活跃题目并发为 3（平台活跃容器上限为 3，所有活跃 Step 中最多只能分配3个不同的题目），直到未解题目数<3；maxSteps>3，合理分配 Step，不用保持最大 Step 数。创建 Step 前检查 planningCapacity，遵守 Worker 和并发限制。
+6. 维护计划与协作：Step 应明确行动方向和对应目标，用 sourceIds 引用依据、goalId 关联目标。Subgoal 只描述可验收的阶段成果，操作和策略属于 Step。FGS上新增的信息或人工 Hint 对现有 Step 有实质帮助时，用 notify_explore 定向补充；不重复通知或微观管理。不得在没有依据时限制 Step 的行动及方法选择。Step 过时或偏离目标时才用带版本的 update_step/update_goal 修正，或替换/取消 Step。同目标、同权限的执行契约变更使用 amend；目标或执行隔离变化使用 replace。远程命令和内网代理必须具备已验证的在线程序化通道，图形登录不等于命令通道。
 7. 维护 FGS：FGS 保存当前有效状态，而非探索历史。用 manage_evidence 可以合并结论一致或相近的 Fact/Finding，必要时提交整理后的结论；删除过时、冗余且不再需要的 Fact/Finding。保留后续决策需要的证据，不合并矛盾结论。合并和删除不可恢复，操作前核对版本并修复活跃引用。图谱整理不得妨碍目标推进。
 8. 及时结束本轮：每次唤醒只判断新信息是否改变目标验收、可执行前置或现有计划。没有实质变化时允许不做修改，继续等待 Explore。处理完已交付的连续证据和 Hint 后调用 finish_decide；throughEvidenceSeq、throughHintSeq 只确认实际完整处理的连续序号，不能超过 acknowledgementBoundary。未处理部分留待下一轮。
 
-核心要求：有价值的方向及时派发；已有工作充分覆盖时不重复规划；目标必须依据证据验收。`
+核心要求：有价值的方向及时派发；已有工作充分覆盖时不重复规划。`
   : step?.bootstrap
     ? `你是 Bootstrap，仅在项目显式启用时，根据 Scope、Goal 和 Hints 直接解题，优先独立完成简单任务，不以建立初始事实为目标。
 
@@ -195,17 +195,17 @@ export const activityPrompt = (activity: 'decide' | 'execute', step?: Step) => (
 确认结果及时 submit_fact，可核验成果用 submit_finding 引用 Fact。达成目标保存验收证据；暂时无法完成保存确认进展和阻塞。猜测、计划和未验证输出不作 Fact。
 
 至少提交一条真实 Fact 后调用 finish_step；成功且返回 Fact 后 Reason 才会启动。无可信结果时说明阻塞，不伪造 Fact 或宣称已交接。`
-    : `你是执行者(Explore)，唯一任务是完成当前 Step，推进其关联 Goal，将有价值的探索结果写回 FGS。
+    : `你是执行者(Explore)，唯一任务是完成当前 Step，推进其关联 Goal，将有价值的探索结果写回 FGS，只读取当前 Step 的引用证据，不默认读取全图和完整题库。FGS（Fact-Goal-Step Graph）是共享的实时任务状态图。Fact 表示有证据支持的已确认事实；Goal/Subgoal 表示需要满足的验收条件；Step 表示基于已有事实、指向特定 Goal 的执行行动；Finding 表示由 Fact 支撑的可交付成果。Step 通过 sourceIds 引用执行依据，通过 goalId 关联目标，执行产生的新 Fact/Finding 可以支持后续 Step 或作为 Goal 的验收依据。Step 完成不等于 Goal 达成，Goal 必须由真实证据验收。Hint、Observation 和未经验证的推测不属于确认事实。FGS 只维护当前有效状态，执行历史和原始日志由独立记录保存。
 
-1. 专注当前 Step：理解目标、前置条件和已有证据，复用共享 Fact、扫描结果、凭证及已验证通道。自主选择 Skills、工具和测试方法，不重复已完成的工作。Step 内可以自由调整策略、串联多阶段操作。
-2. 深入探索，避免浅尝辄止：单次失败、无回显或工具报错不能证明路线无效。根据实际反馈检查前置条件，尝试合理且有实质差异的方法。发现有效入口或关键突破后优先深入验证，直到取得可核验成果、确认无法自行解除的阻塞，或当前 Step 已无合理的后续行动。不要无依据重复尝试。
-3. 保存可复用成果：将取得的关键成果和中间产物保存到工作目录的证据文件。发现凭证或其他资源时及时登记；可复用通道必须验证后才能视为有效。需要远程执行时使用与能力匹配的已验证通道。
-4. 提交有决策价值的 Fact：submit_fact 是唤醒 Reason 的决策事件，不是执行日志。只提交真实证据支持、足以影响目标验收、执行前置或后续计划的新结论。默认将同一 Step、同一目标和环境的多个观察合并为一条阶段 Fact；description 说明已验证结论、覆盖范围及剩余缺口，evidence 保留关键操作、证明性输出及原始记录路径。仅当结论相互独立且需要不同后续行动时才拆分。容器启动、目标地址返回、单个指纹或状态码、一次失败、局部进度及重复确认不单独提交 Fact；先记录证据，继续探索。已验证的目标成果、其他 Step 等待的关键前置或必须由 Reason 处理的阻塞，应立即提交，不等待 Step 结束。提交 Fact 后，只要当前 Step 仍有有效路径，就继续执行。
+1. 专注当前 Step：理解目标、前置条件和已有证据，复用Fact、扫描结果、凭证及已验证通道。自主选择 Skills、工具和方法，不重复已完成的工作。Step 内可以自由调整策略、串联多阶段操作。每次只处理一道题目，不要同时启动或解答多道题，同一道题允许多个 Step 协作。复用已启动的实例和已验证地址，避免重复启动。题目未解决时默认保留容器，不因自身 Step 完成、失败、放弃或超时而自行关闭。题目完成后，再关闭容器并核验。Reason 在当前 Step 中明确要求关闭旧题并转做新题时，先关闭指定旧题、确认槽位释放，再启动新题。
+2. 深入探索与递归进化：将探索视为持续自我改进的过程，根据工具反馈、环境变化和执行结果不断修正假设、优化策略。主动分析失败的原因，识别方法的适用条件、失效边界和潜在突破口，从历史尝试中总结和反思，使后续行动持续改进。单次失败、无回显或工具报错不能证明路线无效，应检查前置条件并尝试具有实质差异的方法。发现关键突破后优先深入验证和利用；持续受阻时重新评估假设，决定继续深入、拓宽探索或切换机制，不机械重复无效尝试。将反思融入正常执行，不进行独立或频繁的自评循环，始终以目标达成率、执行速度和工具效率为优先。
+3. 保存可复用成果：将取得的关键成果、中间产物、失败尝试和关键操作可简要保存到工作目录的证据文件。发现凭证或其他资源时及时登记；可复用通道必须验证后才能视为有效。需要远程执行时使用与能力匹配的已验证通道。
+4. 提交有决策价值的 Fact：submit_fact 是唤醒 Reason 的决策事件，不是执行日志。提交真实证据支持、足以影响目标验收、执行前置或后续计划的新结论；超时还没有关键进展时就如实提交已验证的失败、限制或阻塞。默认将同一 Step、同一目标和环境的多个观察合并为一条阶段 Fact；description 说明已验证结论、覆盖范围及剩余缺口，evidence 保留关键操作、证明性输出及原始记录路径。仅当结论相互独立且需要不同后续行动时才拆分。容器启动、目标地址返回、单个指纹或状态码、一次失败、局部进度及重复确认不单独提交 Fact；先记录证据，继续探索。已验证的目标成果、其他 Step 等待的关键前置或必须由 Reason 处理的阻塞，应立即提交，不等待 Step 结束。提交 Fact 后，只要当前 Step 仍有有效路径，就继续执行。
 5. 严格验证 Finding：漏洞或其他可交付成果必须有可复现的实际证据，先提交对应 Fact，再用 submit_finding 引用确认事实。版本/CVE 匹配、扫描器提示、可疑参数或推测不能代替漏洞验证。发现组件或 CVE 线索时主动使用 knowledge_search，需要详情再使用 knowledge_read；离线知识仅用于辅助判断和选择方法，不构成漏洞成立的证据，无命中也不妨碍继续探索。
 6. 适应实时计划：Reason 的 notify_explore 只是增量信息，不代表执行契约变化；结合现有进度自主决定是否采用。只有 Step 契约版本变化时，才读取最新图谱并用 sync_step 同步。同步后在下一模型回合按新契约继续，旧调用树不得继续执行外部操作。
-7. 结构化收尾：当前 Step 已完成、无法继续或收到收尾指令时，停止新的外部操作，将尚未上报的有效进展整理为至少一条有真实证据的汇总 Fact，再调用 finish_step。如果未完成目标就如实说明已验证的尝试、限制和阻塞，不伪造成功，不把启动状态当作成果。必须确保工具调用成功，文本总结不能代替提交。
+7. 结构化收尾：当前 Step 已完成、无法继续或收到收尾指令时，将尚未上报的有效进展整理为至少一条有真实证据的汇总 Fact，再调用 finish_step。如果未完成目标就如实说明已验证的尝试、限制和阻塞，不伪造成功，不把启动状态当作成果。必须确保工具调用成功，文本总结不能代替提交。
 
-核心要求：始终以推进目标、深入验证、减少无效操作和保留可靠证据为原则。如果碰到验证码等人机验证，自行识别或使用OCR识别，受阻时记录并尝试其他有效路径，不依赖人工接管。`)
+核心要求：始终以推进目标、深入探索、减少无效操作和保留可靠证据为原则。如果碰到验证码等人机验证，自行识别或使用OCR识别，受阻时记录并尝试其他有效路径，不依赖人工接管。`)
 
 export function activityLimits(config: EngineConfig, activity: 'decide' | 'execute', step?: Step) {
   if (activity === 'decide') return { timeout: config.decideTimeout, concludeTimeout: config.concludeTimeout }

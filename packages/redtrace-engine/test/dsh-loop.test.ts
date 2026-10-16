@@ -18,7 +18,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
   symlinkSync(path.join(root, 'static'), path.join(work, 'static'))
   const requests: any[] = []
   const requestForResponse = new WeakMap<object, any>()
-  let held = false, holdObserved = false, timeoutHeld = false, timeoutGuardSent = false
+  let held = false, holdObserved = false, timeoutHeld = false, timeoutReminderToolSent = false
   let taskPluginPlans = 0
   let noticeStepId = '', noticeFixture = false, pauseNoticeHeld = false, resumeNotice = false
   const noticeRelease = path.join(work, 'release-notice-tool')
@@ -110,7 +110,7 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     // Seed bounded evidence before holding the model request: pwsh startup can exceed the one-second timeout under load.
     else if (text.includes('timeout fixture') && !previous.includes('submit_fact')) { name = 'submit_fact'; args = { description: 'Existing local fixture evidence', evidence: [{ description: 'Local protocol fixture supplied evidence before timeout' }] } }
     else if (text.includes('timeout fixture') && !timeoutHeld) { timeoutHeld = true; return }
-    else if (text.includes('timeout fixture') && !timeoutGuardSent) { timeoutGuardSent = true; name = shellName; args = { command: print('forbidden-conclude-side-effect'), description: 'Timeout guard fixture' } }
+    else if (text.includes('timeout fixture') && !timeoutReminderToolSent) { timeoutReminderToolSent = true; name = shellName; args = { command: print('allowed-conclude-cleanup'), description: 'Timeout reminder cleanup fixture' } }
     else if (text.includes('timeout fixture')) { name = 'finish_step'; args = { summary: 'Concluded from existing evidence' } }
     else if (!previous.includes(shellName)) { name = shellName; args = { command: print('native-dsh-fixture'), description: 'Harmless native fixture' } }
     else if (text.includes('pause fixture') && !held) { held = true; holdObserved = true; return }
@@ -179,9 +179,9 @@ test('shipped DSH composition executes Bootstrap, Reason and direct/isolated Exp
     const timeoutRuns = await until(() => call(base + `/steps/${timeoutStep.id}/runs`), rows => rows[0]?.status === 'succeeded' || rows[0]?.status === 'failed', 'conclude fixture did not finish')
     const timeoutEvents = await call(base + `/runs/${timeoutRuns[0].id}/events?limit=500`)
     assert.equal(timeoutRuns[0].status, 'succeeded', JSON.stringify({ runs: timeoutRuns, events: timeoutEvents.slice(-10), logs }))
-    assert.ok(timeoutGuardSent)
-    assert.ok(timeoutEvents.some((e: any) => e.kind === 'tool.completed' && e.error && String(e.content).includes('only summarize')), JSON.stringify(timeoutEvents))
-    assert.ok(!timeoutEvents.some((e: any) => e.kind === 'tool.completed' && !e.error && String(e.content).includes('forbidden-conclude-side-effect')))
+    assert.ok(timeoutReminderToolSent)
+    assert.ok(timeoutEvents.some((e: any) => e.kind === 'tool.completed' && !e.error && String(e.content).includes('allowed-conclude-cleanup')), JSON.stringify(timeoutEvents))
+    assert.ok(!timeoutEvents.some((e: any) => e.kind === 'tool.completed' && e.error && String(e.content).includes('only summarize')))
     c.commit(c.read().revision, raw => { raw.tasks!.explore.timeout = 15 })
     await delay(100)
     await call('/runtime/config')

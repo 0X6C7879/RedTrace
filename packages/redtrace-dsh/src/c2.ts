@@ -65,7 +65,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): vo
   })
   register(ctx, {
     name: 'c2_session_create',
-    description: 'Register a direct-access session (SSH, Evil-WinRM, PsExec, WMI, or a custom command client) as a shared resource. Provide the target plus either secret_type material (password / hash / private_key_path) or a credential_id referencing a registered credential. Direct sessions become reusable remote.command channels immediately.',
+    description: 'Register a direct-access session (SSH, Evil-WinRM, PsExec, WMI, or a custom command client) as a shared resource. Provide the target plus either secret_type material (password / hash / private_key_path) or a credential_id referencing a registered credential. Registration is not connection or authentication success. Register credentials with a concrete source for explicit verification/reuse, not batches of guessed usernames/passwords. Reuse the same resource for the same credentials; verify with remote_session_probe. AUTH_FAILED rejects these credentials: stop this authentication branch unless new credential evidence is obtained; renaming/re-registering is not a retry strategy.',
     parameters: {
       type: 'object',
       properties: {

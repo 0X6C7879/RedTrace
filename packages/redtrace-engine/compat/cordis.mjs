@@ -341,14 +341,7 @@ export async function apply(ctx, options) {
         refreshEfficiencyTools()
       }
       refreshLiveTools()
-      // The conclude phase cuts non-graph tools at execution time: a
-      // restriction cannot, because the DSH capability stack registers the
-      // session tools in this scope's own layer, which restrictions never
-      // filter. The guard enforces the same-session conclude boundary.
-      const graphNames = new Set(tools.filter(t => run.activity === 'decide'
-        || ['read_graph', 'read_graph_delta', 'evidence_read', 'sync_step', 'submit_fact', 'submit_finding', 'finish_step'].includes(t.name)).map(t => t.name))
-      scoped.tools.guard(exec => concludeOnly && !graphNames.has(exec.name) && (exec.name !== 'read' || run.activity === 'execute' && ownSpillRead(exec) !== undefined) ? 'Execution timed out; only summarize and submit existing evidence'
-        : !verbToolAvailable(verbRuntime, exec.name) ? 'Capability adapter is disabled' : undefined)
+      scoped.tools.guard(exec => !verbToolAvailable(verbRuntime, exec.name) ? 'Capability adapter is disabled' : undefined)
     }
     const unlisten = ctx.on('session/event', (session, event) => {
       if (String(session.id) !== run.id) return
@@ -403,7 +396,7 @@ export async function apply(ctx, options) {
       if (!finished && !task.committed && !signal.aborted) {
         task.concludeOnly = concludeOnly = true
         prompt(run.activity === 'execute'
-          ? '必须调用 submit_fact 提交至少一条已有证据支持的汇总结论，再调用 finish_step；不再执行外部操作。没有成功成果时如实提交已验证的失败、限制或阻塞，禁止伪造事实。'
+          ? '已进入超时收尾，必须调用 submit_fact 提交至少一条已有证据支持的汇总结论，再调用 finish_step。题目未解决时保留容器；没有成功成果时如实提交已验证的失败、限制或阻塞，禁止伪造事实。'
           : '仅处理已交付的证据并调用 finish_decide，不再执行外部操作。')
         await wait(limits.concludeTimeout)
       }

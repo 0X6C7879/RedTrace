@@ -76,7 +76,7 @@ const VERBS: readonly VerbDefinition[] = [
   },
   {
     id: 'remote.session.probe', action: 'probe_info', risk: 'low',
-    description: 'Probe a registered channel for minimal host, identity, working-directory, and architecture data; successful output promotes only runtime-verified capabilities.',
+    description: 'Probe a registered channel for minimal host, identity, working-directory, and architecture data; successful output promotes only runtime-verified capabilities. Registration alone is not verification. AUTH_FAILED rejects the current credentials: stop that authentication branch unless new credential evidence is obtained; do not guess more passwords or rename/re-register sessions. Transport/protocol failures require checking the connection/configuration, not duplicate registrations.',
     parameters: Type.Object({ timeout: timeoutSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ timeout: args.timeout }),
   },
@@ -326,7 +326,7 @@ export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Rec
     await sleep(200, context.signal)
     const current = runtime.operations.task(task.id)
     if (TERMINAL.includes(current.status)) {
-      const output = current.status === 'succeeded' ? String(current.output_summary ?? '') : undefined
+      const output = String(current.output_summary ?? '')
       return { task_id: task.id, attempt_id: current.attempt_id, channel: { resource_id: channel.id, kind: channel.kind, target: channel.target }, status: current.status as string, output: output ?? null, result: JSON.parse(current.result_json || '{}'), result_ref: current.result_ref ?? null }
     }
   }
@@ -367,7 +367,8 @@ function verbTool<T extends TSchema>(name: string, description: string, paramete
   return { name, label: name, description, parameters, executionMode: 'sequential', execute: async (_id, args, signal) => {
     if (!Check(parameters, args)) throw new HttpError(422, 'Invalid tool arguments')
     const value = await execute(args, signal)
-    return { content: [{ type: 'text', text: JSON.stringify(value) }], details: value } as AgentToolResult<unknown>
+    const outcome = value as { status?: string; error?: string } | null
+    return { content: [{ type: 'text', text: JSON.stringify(value) }], details: value, ...(outcome?.error || ['failed', 'cancelled', 'rejected'].includes(outcome?.status ?? '') ? { isError: true } : {}) } as AgentToolResult<unknown>
   } }
 }
 
@@ -401,7 +402,7 @@ export function resourceTools(context: TaskContext, runtime: VerbRuntime): Agent
   const ops = runtime.operations, worker = { actor_type: 'worker', actor: context.worker.name, worker: context.worker.name, intent_id: context.run.stepId }
   return [
     verbTool('resource_register',
-      'Register a shared resource for cross-Step reuse: channels (webshell, c2_listener, c2_session), materials (c2_payload, c2_profile, credential_ref, proxy, file). secret stays server-side; c2_session may return secret_once. Prefer a structured family tool when available.',
+      'Register a shared resource for cross-Step reuse: channels (webshell, c2_listener, c2_session), materials (c2_payload, c2_profile, credential_ref, proxy, file). secret stays server-side; c2_session may return secret_once. Prefer a structured family tool when available. For WebShell/C2 sessions, follow family-tool verification and reuse rules: registration is not connectivity proof; do not bulk-register speculative endpoints or guessed credentials.',
       Type.Object({
         kind: Type.Union(registerableKinds.map(kind => Type.Literal(kind))),
         name: Type.String({ minLength: 1, maxLength: 160 }),

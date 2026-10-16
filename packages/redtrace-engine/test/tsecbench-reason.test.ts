@@ -154,3 +154,27 @@ for bypass in ({'NO_PROXY': 'localhost', 'no_proxy': 'localhost'}, {}):
 `, script], { env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } })
   }
 })
+
+test('TSecBench uses the configured Python even when python3 is absent from Worker PATH', async () => {
+  const python = execFileSync('python3', ['-c', 'import sys;print(sys.executable)'], { encoding: 'utf8' }).trim()
+  const root = mkdtempSync(path.join(os.tmpdir(), 'tsecbench-python-'))
+  const skill = path.join(root, '.redtrace', 'skills', 'tsecbench-api')
+  mkdirSync(path.join(skill, 'scripts'), { recursive: true })
+  writeFileSync(path.join(skill, 'SKILL.md'), 'fixture')
+  writeFileSync(path.join(skill, 'scripts', 'tsecbench.py'), 'import json,sys\nprint(json.dumps({"args":sys.argv[1:]}))\n')
+  const store = new Store(':memory:')
+  const worker: Worker = { name: 'fixture', backend: 'mock', provider: 'mock', model: '', enabled: true, reason: true, explore: false, bootstrap: false, maxRunning: 1, priority: 0 }
+  const previous = process.env.REDTRACE_BENCHMARK_PYTHON
+  try {
+    process.env.REDTRACE_BENCHMARK_PYTHON = python
+    const id = store.createProject({ title: 'Interpreter', origin: 'TSecBench', goal: 'Use configured interpreter' }).project.id
+    const run = store.claim(id, 'decide', worker)
+    const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 1, maxProjectWorkers: 1, maxRunningProjects: 1, maxSteps: null, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: path.join(root, 'workspaces'), commonEnv: { PATH: root } }
+    const tools = graphTools({ store, run, worker, config, signal: new AbortController().signal }, () => {})
+    assert.deepEqual((await tools.find(tool => tool.name === 'tsecbench_list')!.execute('list', {})).details, { args: ['list'] })
+  } finally {
+    if (previous === undefined) delete process.env.REDTRACE_BENCHMARK_PYTHON
+    else process.env.REDTRACE_BENCHMARK_PYTHON = previous
+    store.close(); rmSync(root, { recursive: true, force: true })
+  }
+})
