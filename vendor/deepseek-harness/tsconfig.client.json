@@ -9,7 +9,9 @@
   },
   "include": [],
   "exclude": [
-    "packages/client/*/tests/**/*.host.spec.ts"
+    "packages/client/*/tests/**/*.host.spec.ts",
+    "packages/client/*/tests/**/*.host.e2e.ts",
+    "packages/client/*/tests/**/*.host.ts"
   ],
   "references": [
     {
@@ -85,6 +87,9 @@
       "path": "./packages/api/session-controller/tsconfig.client.json"
     },
     {
+      "path": "./packages/api/remote-access/tsconfig.client.json"
+    },
+    {
       "path": "./packages/api/workspace-controller/tsconfig.client.json"
     },
     {
@@ -149,6 +154,9 @@
     },
     {
       "path": "./packages/client/ui-reference"
+    },
+    {
+      "path": "./packages/client/ui-secret-mask"
     },
     {
       "path": "./packages/client/ui-subagent"
@@ -245,6 +253,9 @@
     },
     {
       "path": "./packages/client/ui-plugin-manager/tsconfig.client.json"
+    },
+    {
+      "path": "./packages/client/ui-plugin-market"
     },
     {
       "path": "./packages/client/ui-settings-plugin-inventory"

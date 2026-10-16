@@ -59,9 +59,9 @@ export async function prepareRuntime(source, destination) {
   await mkdir(destination, { recursive: true })
   for (const name of ['packages', 'vendor', 'native', 'patches']) await cp(path.join(source, name), path.join(destination, name), { recursive: true, verbatimSymlinks: true, filter: filename => !['tests', 'test', 'docs', '.agents', '.claude'].includes(path.basename(filename)) && !/^README(?:\.|$)/.test(path.basename(filename)) })
   await cp(path.join(source, 'scripts/types'), path.join(destination, 'scripts/types'), { recursive: true })
-  await cp(path.join(source, 'scripts/client-build-environment.ts'), path.join(destination, 'scripts/client-build-environment.ts'))
-  await cp(path.join(source, 'scripts/experimental-package-policy.ts'), path.join(destination, 'scripts/experimental-package-policy.ts'))
-  await cp(path.join(source, 'scripts/bundle-input-isolation.ts'), path.join(destination, 'scripts/bundle-input-isolation.ts'))
+  for (const name of ['client-build-environment.ts', 'experimental-package-policy.ts', 'bundle-input-isolation.ts', 'typert-faces.ts', 'workspace-package-globs.ts']) {
+    if (existsSync(path.join(source, 'scripts', name))) await cp(path.join(source, 'scripts', name), path.join(destination, 'scripts', name))
+  }
   await mkdir(path.join(destination, 'apps/cli'), { recursive: true })
   for (const name of ['package.json', 'config']) await cp(path.join(source, 'apps/cli', name), path.join(destination, 'apps/cli', name), { recursive: true })
   for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md', '.gitignore', '.gitattributes', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.base.json', 'tsconfig.base.client.json', 'tsconfig.json', 'tsconfig.host.json', 'tsconfig.client.json', 'tsdown.config.ts']) await cp(path.join(source, name), path.join(destination, name))
@@ -74,7 +74,7 @@ export async function prepareRuntime(source, destination) {
     'build:lib:client': 'tsc -b tsconfig.client.json && tsdown --env.DSH_BUILD_FACE client',
   }
   // Inspector's host build also compiles its DevTools assets with upstream's Vite.
-  pkg.devDependencies = Object.fromEntries(['@types/js-yaml', '@types/node', 'lightningcss', 'smol-toml', 'tsdown', 'tsx', 'typescript', 'vite'].map(name => [name, pkg.devDependencies[name]]))
+  pkg.devDependencies = Object.fromEntries(['@types/js-yaml', '@types/node', '@types/react', '@types/react-dom', 'lightningcss', 'smol-toml', 'tsdown', 'tsx', 'typescript', 'vite'].map(name => [name, pkg.devDependencies[name]]))
   await save(path.join(destination, 'package.json'), pkg)
   // RedTrace serves its own UI; the upstream Web frontend is not part of this runtime.
   const webApp = path.join(destination, 'packages/bundle/web-app/package.json')
@@ -82,7 +82,7 @@ export async function prepareRuntime(source, destination) {
   delete webPackage.dependencies['@deepseek-ai/dsh-web-frontend']
   await save(webApp, webPackage)
   const workspace = path.join(destination, 'pnpm-workspace.yaml')
-  await writeFile(workspace, (await readFile(workspace, 'utf8')).replace(/^  - (benchmarks|website|python\/sdk-runtime)\r?\n/gm, '').replace(/^  lefthook: true\r?\n/gm, '').replace(/^  ['"]?@(electron\/osx-sign|yao-pkg\/pkg)@[^\n]+\r?\n/gm, ''))
+  await writeFile(workspace, (await readFile(workspace, 'utf8')).replace(/^  - (benchmarks|website|python\/sdk-runtime)\r?\n/gm, '').replace(/^  lefthook: true\r?\n/gm, '').replace(/^  ['"]?(?:@(electron\/osx-sign|yao-pkg\/pkg)|app-builder-lib)@[^\n]+\r?\n/gm, ''))
   for (const name of ['tsconfig.host.json', 'tsconfig.client.json']) {
     const ts = upstreamTypeScript()
     // TypeScript 5.x throws its own "Debug Failure" path assertion on Windows
@@ -103,7 +103,7 @@ export async function prepareRuntime(source, destination) {
     await save(path.join(destination, name), config)
   }
   const bundler = path.join(destination, 'tsdown.config.ts')
-  await writeFile(bundler, (await readFile(bundler, 'utf8')).replace(/, 'apps\/[^']+'/g, ''))
+  await writeFile(bundler, (await readFile(bundler, 'utf8')).replace(/,? ?'apps\/[^']+'/g, ''))
   await run('git', ['apply', '--check', path.join(repository, 'scripts/dsh-local.patch')], destination)
   await run('git', ['apply', path.join(repository, 'scripts/dsh-local.patch')], destination)
 }

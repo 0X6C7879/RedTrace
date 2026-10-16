@@ -64,6 +64,9 @@
       "path": "./packages/experimental/voice-input-bundle"
     },
     {
+      "path": "./packages/experimental/plugin-market-bundle"
+    },
+    {
       "path": "./packages/client/locale/tsconfig.host.json"
     },
     {
@@ -124,6 +127,12 @@
       "path": "./packages/experimental/computer-use-cua-driver-native"
     },
     {
+      "path": "./packages/experimental/cua"
+    },
+    {
+      "path": "./packages/experimental/cua-macos"
+    },
+    {
       "path": "./packages/client/ui-sidebar-documentpreview/tsconfig.host.json"
     },
     {
@@ -182,6 +191,9 @@
     },
     {
       "path": "./packages/util/package-manifest"
+    },
+    {
+      "path": "./packages/util/plugin-market-index"
     },
     {
       "path": "./packages/util/http-proxy"
@@ -278,6 +290,9 @@
     },
     {
       "path": "./packages/api/settings-controller"
+    },
+    {
+      "path": "./packages/api/remote-access/tsconfig.host.json"
     },
     {
       "path": "./packages/api/workspace-controller/tsconfig.host.json"
@@ -449,6 +464,9 @@
     },
     {
       "path": "./packages/context/session-reference"
+    },
+    {
+      "path": "./packages/context/harness-dev-context"
     },
     {
       "path": "./packages/interaction/user-questions"
@@ -848,6 +866,9 @@
     },
     {
       "path": "./packages/boot/plugin-manager"
+    },
+    {
+      "path": "./packages/boot/plugin-market"
     },
     {
       "path": "./packages/llm/plugin-package-inventory-deepseek"
