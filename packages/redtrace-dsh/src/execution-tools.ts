@@ -126,6 +126,8 @@ export function toolsSectionText(toolsDir: string): string {
   group('payloads', 'REDTRACE_PAYLOADS_DIR', 'Payload 库 PayloadsAllTheThings')
   group('poc', 'REDTRACE_POC_DIR', 'PoC 参考 Vulhub')
   group('bin', 'REDTRACE_TOOLS_BIN', '靶机隧道文件（按目标 OS/arch 选择上传，非本机工具）')
+  const skillResources = path.join(toolsDir, 'skill-resources')
+  if (existsSync(skillResources)) lines.push(`补充 Skill 参考资料（按需读取）：${skillResources}`)
   if (!lines.length) return ''
   return `离线安全资产，优先复用：\n${lines.join('\n')}`
 }

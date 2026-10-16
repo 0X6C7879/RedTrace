@@ -394,3 +394,20 @@ test('native conclude submits a Fact and finishes directly while keeping externa
   await other.scope.dispose(); rmSync(other.cwd, { recursive: true, force: true })
   await scope.dispose(); await carrier.dispose()
 })
+
+test('offline assets advertise skill resources only when present without inlining content', () => {
+  const cwd = scratch('skill-resources')
+  const resources = path.join(cwd, 'skill-resources')
+  try {
+    assert.ok(!toolsSectionText(cwd).includes(resources))
+    mkdirSync(path.join(resources, 'example'), { recursive: true })
+    writeFileSync(path.join(resources, 'example', 'SKILL.md'), 'DO_NOT_INLINE_RESOURCE_BODY')
+    const text = toolsSectionText(cwd)
+    assert.ok(text.includes(`补充 Skill 参考资料（按需读取）：${resources}`))
+    assert.ok(!text.includes('DO_NOT_INLINE_RESOURCE_BODY'))
+    rmSync(resources, { recursive: true })
+    assert.ok(!toolsSectionText(cwd).includes(resources))
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
