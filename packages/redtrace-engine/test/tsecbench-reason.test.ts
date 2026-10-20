@@ -22,12 +22,11 @@ test('Reason can only query TSecBench challenges and confirmed hints', async () 
     const run = store.claim(id, 'decide', worker)
     const tools = graphTools({ store, run, worker, config, signal: new AbortController().signal }, () => {})
     const benchmark = tools.filter(tool => tool.name.startsWith('tsecbench_'))
-    assert.deepEqual(benchmark.map(tool => tool.name), ['tsecbench_list', 'tsecbench_vpn', 'tsecbench_hint'])
+    assert.deepEqual(benchmark.map(tool => tool.name), ['tsecbench_list', 'tsecbench_hint'])
     assert.deepEqual((await benchmark[0].execute('list', {})).details, { args: ['list'] })
-    // The VPN probe is a deliberate Reason action now that nothing runs it implicitly.
-    assert.deepEqual((await benchmark[1].execute('vpn', {})).details, { args: ['vpn'] })
-    assert.deepEqual((await benchmark[2].execute('no', { unique_code: 'g-01', confirm_score_penalty: false })).details, { ok: false, error: 'score_penalty_confirmation_required' })
-    assert.deepEqual((await benchmark[2].execute('yes', { unique_code: 'g-01', confirm_score_penalty: true })).details, { args: ['hint', 'g-01', '--confirm-score-penalty'] })
+    assert.ok(!tools.some(tool => tool.name.startsWith('knowledge_')))
+    assert.deepEqual((await benchmark[1].execute('no', { unique_code: 'g-01', confirm_score_penalty: false })).details, { ok: false, error: 'score_penalty_confirmation_required' })
+    assert.deepEqual((await benchmark[1].execute('yes', { unique_code: 'g-01', confirm_score_penalty: true })).details, { args: ['hint', 'g-01', '--confirm-score-penalty'] })
   } finally { store.close(); rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -53,6 +52,8 @@ print(json.dumps({'ok':True,cmd:value}))
     const step = store.addStep(id, { description: 'Start and submit b-01', sourceIds: ['origin'] })
     const run = store.claim(id, 'execute', worker, step.id)
     const tools = graphTools({ store, run, worker, config, signal: new AbortController().signal }, () => {})
+    assert.ok(!tools.some(tool => tool.name === 'tsecbench_vpn'))
+    assert.deepEqual(tools.filter(tool => tool.name.startsWith('knowledge_')).map(tool => tool.name).sort(), ['knowledge_match', 'knowledge_read', 'knowledge_search'])
     const byName = (name: string) => tools.find(item => item.name === name)!
     const cursor = () => store.events(id, 0, 500).at(-1)?.id ?? 0
     const startCursor = cursor(), evidenceBefore = store.project(id).evidenceSeq ?? store.project(id).factSeq

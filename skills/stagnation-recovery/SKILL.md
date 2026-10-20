@@ -33,7 +33,7 @@ description: Recover when repeated attempts within the current Step produce no n
 
 - 本地命令用 `bash`，文件按需用 `read`、`write`；远程操作必须使用已提供的能力工具与已验证通道，不把本地 Shell 当成靶机 Shell。
 - 已启用后台作业工具时，用 `job_output` 读取所需的新输出；用 `job_kill` 终止自己确认不再需要的作业。未确认作业结束前不要启动重复扫描。
-- FGS 按需用 `read_graph` 指定节点读取，或用 `read_graph_delta` 沿现有游标读取，不无故从零重放。跨会话证据先通过 `session_search` 定位；读取详细事件前取得真实会话与序号，不混用 FGS 事件 ID 和 Session seq。
+- FGS 按需用 `read_graph` 指定节点读取，或用 `read_graph_delta` 沿现有游标读取，不无故从零重放。跨 Step 的确认结论通过 FGS Fact/Finding 及其引用证据共享，不查询其他会话。
 - 脚本和观察保存在当前工作目录的证据产物中。只有足以影响目标验收、执行前置或后续计划的、经证据验证的新结论才及时 `submit_fact`；普通状态和重复失败不逐条上报。可交付成果再用 `submit_finding` 引用已确认 Fact，假设不当作 Finding。
 
 ## 协作与收尾

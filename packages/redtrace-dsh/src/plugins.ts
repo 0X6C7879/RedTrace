@@ -19,7 +19,6 @@ import { load, repoRoot } from './loader.js'
 import { state } from './state.js'
 import { TASK_PLUGINS } from './task-plugins.js'
 import * as core from './core.js'
-import * as sessionQuery from './session-query.js'
 import * as domain from './domain.js'
 import * as scheduler from './scheduler.js'
 import * as webshell from './webshell.js'
@@ -158,8 +157,6 @@ const MANAGED: readonly ManagedEntry[] = [
     description: '最小运行内核',
     intro: '整个运行时的最小内核:装配 agent 循环、会话、模型调用、工具注册与系统提示词。其余全部能力都以插件形式叠加在这层之上。',
   },
-  // Preserve the existing manifest switch and UI identity; replace its implementation.
-  { id: 'redtrace-trace-search', label: 'Trace 检索', category: 'feature', module: sessionQuery, needsRuntimeConfig: true, modulePath: 'packages/redtrace-dsh/lib/session-query.js', description: 'DSH 原生项目会话检索', intro: '模型按需调用五个原生 Session Query 工具；同 Project 全部历史共享，以 Session cwd 隔离 Project。停用不删除 JSONL、FGS 或原始审计。' },
   {
     id: 'redtrace-webshell', label: 'WebShell', category: 'feature', module: webshell,
     modulePath: 'packages/redtrace-dsh/lib/webshell.js',

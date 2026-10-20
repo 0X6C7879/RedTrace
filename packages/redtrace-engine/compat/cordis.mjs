@@ -8,7 +8,6 @@ import { efficiencyToolAvailable, graphTools, activityPrompt, activityLimits, gr
 import { verbTools, verbToolAvailable, channelsFor, resourceTools } from '../src/capability-verbs.ts'
 import { PluginManager, registerPluginRoutes } from '../../redtrace-dsh/lib/plugins.js'
 import { load, mount, repoRoot } from '../../redtrace-dsh/lib/loader.js'
-import { SESSION_QUERY_TOOLS } from '../../redtrace-dsh/lib/session-query.js'
 import { mountExecutionTools } from '../../redtrace-dsh/lib/execution-tools.js'
 import { activateAgent, resolveReasoningEffort } from '../../redtrace-dsh/lib/agent.js'
 import { state } from '../../redtrace-dsh/lib/state.js'
@@ -40,7 +39,7 @@ export function executionEvidenceReadGuard(directory, cwd) {
 }
 
 export async function mountReasonTools(scoped) {
-  scoped.tools.restrict({ allow: ['read', ...SESSION_QUERY_TOOLS] })
+  scoped.tools.restrict({ allow: ['read'] })
   await mount(scoped, 'packages/redtrace-dsh/lib/reason-read.js')
 }
 

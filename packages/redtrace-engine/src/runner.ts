@@ -107,7 +107,6 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     if (/(?:tsecbench|tsec[\s-]*benchmark)/i.test(origin.description) && existsSync(path.join(skill, 'SKILL.md')) && existsSync(path.join(skill, 'scripts', 'tsecbench.py'))) {
       tools.push(
         tool('tsecbench_list', 'List TSec Benchmark challenges with descriptions, difficulty, progress and container status. Read only.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['list'], abort)),
-        tool('tsecbench_vpn', 'Probe benchmark VPN reachability. Nothing probes it automatically, so run this when a platform call fails or before trusting challenge container addresses.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['vpn'], abort)),
         tool('tsecbench_hint', 'View a TSec Benchmark challenge hint. Viewing may reduce its flag score; requires explicit score penalty confirmation. Does not start, submit or close challenges.', Type.Object({ unique_code: Type.String(), confirm_score_penalty: Type.Boolean() }), (args, abort) =>
           args.confirm_score_penalty ? tsecbenchQuery(config, ['hint', args.unique_code, '--confirm-score-penalty'], abort) : { ok: false, error: 'score_penalty_confirmation_required' }),
       )
@@ -129,7 +128,6 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     if (/(?:tsecbench|tsec[\s-]*benchmark)/i.test(benchmarkOrigin) && existsSync(path.join(benchmarkSkill, 'SKILL.md')) && existsSync(path.join(benchmarkSkill, 'scripts', 'tsecbench.py'))) {
       tools.push(
         tool('tsecbench_list', 'Read challenge descriptions, progress and container state; no lifecycle operation.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['list'], abort)),
-        tool('tsecbench_vpn', 'Probe benchmark VPN reachability. Nothing probes it automatically, so run this when a platform call fails or before trusting challenge container addresses.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['vpn'], abort)),
         tool('tsecbench_start', 'Start the explicitly selected authorized benchmark challenge. Pass the exact unique_code from tsecbench_list; no arbitrary platform or network target is accepted.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }) }), async (args, abort) => {
           const started = await tsecbenchQuery(config, ['start', args.unique_code], abort) as { unique_code?: unknown; container_addr?: unknown }
           if (started.unique_code !== args.unique_code || !Array.isArray(started.container_addr) || !started.container_addr.length || started.container_addr.some(address => typeof address !== 'string' || address.length > 255)) throw new Error('Benchmark start returned an invalid challenge or target list')
@@ -156,7 +154,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
         }, true),
     )
   }
-  tools.push(...knowledgeTools(evidenceRoot, context))
+  if (run.activity === 'execute') tools.push(...knowledgeTools(evidenceRoot, context))
   return tools.map(t => ({ ...t, execute: async (...args) => {
     if (!Check(t.parameters, args[1])) throw new HttpError(422, 'Invalid tool arguments')
     if (!efficiencyToolAvailable(context, t.name)) throw new Error('Efficiency tool plugin is disabled')

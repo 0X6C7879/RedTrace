@@ -122,9 +122,8 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
   // Dependency order: core first, scheduler last; Spill belongs only to Execute scopes.
   assert.equal(ctx.mounts[0].module, core)
   assert.equal(ctx.mounts.at(-1).module.name, 'redtrace-scheduler')
-  assert.equal(ctx.mounts.length, 7)
-  assert.equal(ctx.mounts[1].module.name, 'redtrace-session-query')
-  assert.equal(ctx.mounts[1].config.sessionRoot, root)
+  assert.equal(ctx.mounts.length, 6)
+  assert.ok(!ctx.mounts.some(mount => mount.module.name === 'redtrace-session-query'))
   assert.ok(!ctx.mounts.some(mount => mount.module.name === 'redtrace-spill'))
 
   // Every builtin entry boots running unless it is explicitly opt-in (defaultOff).
@@ -162,7 +161,7 @@ test('efficiency features boot enabled by default and remain explicitly switchab
   await assert.rejects(first.manager.start('redtrace-ptc'), /unknown plugin/)
   assert.equal(first.manager.view('redtrace-file-references').status, 'stopped')
   assert.ok(!first.manager.list().some(p => ['redtrace-shell', 'redtrace-remote-terminal'].includes(p.id)))
-  for (const id of ['redtrace-knowledge', 'redtrace-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
+  for (const id of ['redtrace-knowledge', 'redtrace-http', 'redtrace-critical-events']) {
     assert.equal(first.manager.view(id).status, 'running')
   }
   assert.equal(first.manager.view('redtrace-pivot').status, 'running')
@@ -370,14 +369,14 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const list = await call('GET', '/__redtrace/plugins')
   assert.equal(list.status, 200)
-  assert.equal(JSON.parse(list.body).plugins.length, 33)
-  for (const id of ['redtrace-repeat-reminder', 'redtrace-shell', 'redtrace-remote-terminal', 'redtrace-ptc']) {
+  assert.equal(JSON.parse(list.body).plugins.length, 32)
+  for (const id of ['redtrace-trace-search', 'redtrace-repeat-reminder', 'redtrace-shell', 'redtrace-remote-terminal', 'redtrace-ptc']) {
     assert.ok(!JSON.parse(list.body).plugins.some(plugin => plugin.id === id))
     assert.equal((await call('POST', `/__redtrace/plugins/${id}/start`)).status, 400)
   }
   assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === 'redtrace-file-references').status, 'stopped')
 
-  for (const id of ['redtrace-knowledge', 'redtrace-http', 'redtrace-trace-search', 'redtrace-critical-events']) {
+  for (const id of ['redtrace-knowledge', 'redtrace-http', 'redtrace-critical-events']) {
     assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === id).status, 'running')
     const started = await call('POST', `/__redtrace/plugins/${id}/start`)
     assert.equal(JSON.parse(started.body).plugin.status, 'running')

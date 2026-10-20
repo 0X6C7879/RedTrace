@@ -170,7 +170,6 @@ test('Spill is Execute-only, session-isolated, hot-reloadable and preserves evid
   const { sessionDir } = await load(`${VENDOR}/spill/spill-local/lib/index.js`)
   const { PluginManager } = await import('../lib/plugins.js')
   const manager = new PluginManager(host, { sessionRoot: root, pluginsManifest: path.join(root, 'plugins.json') }, root)
-  await manager.start('redtrace-trace-search')
   await manager.start('redtrace-spill')
   assert.equal(host.get('spillStore'), undefined, 'no global Spill service')
   const text = `HEAD\n${'tool output line\n'.repeat(20000)}TAIL\n`

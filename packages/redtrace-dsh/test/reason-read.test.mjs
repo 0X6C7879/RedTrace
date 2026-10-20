@@ -20,7 +20,7 @@ async function fixture(t) {
     const module = await load(entry); await ctx.plugin(module.default ?? module).await()
   }
   const manager = new PluginManager(ctx, { sessionRoot: root, pluginsManifest: path.join(root, 'plugins.json') }, root)
-  await manager.start('redtrace-trace-search'); await manager.start('redtrace-spill')
+  await manager.start('redtrace-spill')
   const carrier = ctx.plugin({ inject: ['tools', 'systemPrompt'], apply() {} }); await carrier.await()
   const { createScope } = await load(`${V}/core/scope/lib/index.js`)
   const agent = { options: {}, session: ctx.sessions.create(undefined, { meta: { cwd } }) }
