@@ -1,0 +1,12 @@
+{
+  "status": 0,
+  "signal": null,
+  "output": [
+    null,
+    "",
+    "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/frontend-console-20261111/14-commander-native-desktop.png\n/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/frontend-console-20261111/15-commander-mobile.png\n{ width: 390, pageWidth: 390, errors: [], roleColors: [ 'rgb(82, 214, 255)', 'rgb(82, 214, 255)' ] }\n\n"
+  ],
+  "pid": 83393,
+  "stdout": "",
+  "stderr": "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/frontend-console-20261111/14-commander-native-desktop.png\n/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/frontend-console-20261111/15-commander-mobile.png\n{ width: 390, pageWidth: 390, errors: [], roleColors: [ 'rgb(82, 214, 255)', 'rgb(82, 214, 255)' ] }\n\n"
+}

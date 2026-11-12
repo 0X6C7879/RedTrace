@@ -19,6 +19,7 @@ export async function apply(ctx: RuntimeContext): Promise<void> {
   const SessionStore = await load('vendor/deepseek-harness/packages/core/session/lib/index.js')
   const SystemPrompt = await load('vendor/deepseek-harness/packages/core/system-prompt/lib/index.js')
   const ToolRuntime = await load('vendor/deepseek-harness/packages/core/tools/lib/index.js')
+  const NativeToolExecutor = await load('vendor/deepseek-harness/packages/core/tool-executor-native/lib/index.js')
   const AgentRegistry = await load('vendor/deepseek-harness/packages/core/agent/lib/index.js')
   const llmRetry = await load('vendor/deepseek-harness/packages/llm/llm-retry/lib/index.js')
   const AgentLoop = await load('vendor/deepseek-harness/packages/core/agent-loop/lib/index.js')
@@ -33,6 +34,7 @@ export async function apply(ctx: RuntimeContext): Promise<void> {
     persona: '',
   })
   ctx.plugin(ToolRuntime.default ?? ToolRuntime)
+  ctx.plugin(NativeToolExecutor.default ?? NativeToolExecutor)
   ctx.plugin(AgentRegistry.default ?? AgentRegistry)
   ctx.plugin(llmRetry.default ?? llmRetry)
   ctx.plugin(AgentLoop.default ?? AgentLoop, { agents: [] })

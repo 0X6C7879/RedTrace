@@ -1,3 +1,5 @@
+import{LegionStore}from'../src/legion-store.ts'
+import{legionTools}from'../src/legion-tools.ts'
 import { test } from 'node:test'
 import { execFileSync } from 'node:child_process'
 import assert from 'node:assert/strict'
@@ -8,99 +10,10 @@ import { Store } from '../src/store.ts'
 import { graphTools, graphUpdate } from '../src/runner.ts'
 import type { EngineConfig, Worker, Step, Input } from '../src/types.ts'
 
-test('Reason can only query TSecBench challenges and confirmed hints', async () => {
-  const root = mkdtempSync(path.join(os.tmpdir(), 'tsecbench-reason-'))
-  const skill = path.join(root, '.redtrace', 'skills', 'tsecbench-api')
-  mkdirSync(path.join(skill, 'scripts'), { recursive: true })
-  writeFileSync(path.join(skill, 'SKILL.md'), '---\nname: tsecbench-api\ndescription: test\n---\n')
-  writeFileSync(path.join(skill, 'scripts', 'tsecbench.py'), 'import json,sys\nprint(json.dumps({"args":sys.argv[1:]}))\n')
-  const store = new Store(':memory:')
-  const worker: Worker = { name: 'reason', backend: 'mock', provider: 'mock', model: '', enabled: true, reason: true, explore: false, bootstrap: false, maxRunning: 1, priority: 0 }
-  const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 1, maxProjectWorkers: 1, maxRunningProjects: 1, maxSteps: null, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: path.join(root, 'workspaces') }
-  try {
-    const id = store.createProject({ title: 'Benchmark', origin: 'Complete TSec Benchmark', goal: 'Solve challenges' }).project.id
-    const run = store.claim(id, 'decide', worker)
-    const tools = graphTools({ store, run, worker, config, signal: new AbortController().signal }, () => {})
-    const benchmark = tools.filter(tool => tool.name.startsWith('tsecbench_'))
-    assert.deepEqual(benchmark.map(tool => tool.name), ['tsecbench_list', 'tsecbench_hint'])
-    assert.deepEqual((await benchmark[0].execute('list', {})).details, { args: ['list'] })
-    assert.ok(!tools.some(tool => tool.name.startsWith('knowledge_')))
-    assert.deepEqual((await benchmark[1].execute('no', { unique_code: 'g-01', confirm_score_penalty: false })).details, { ok: false, error: 'score_penalty_confirmation_required' })
-    assert.deepEqual((await benchmark[1].execute('yes', { unique_code: 'g-01', confirm_score_penalty: true })).details, { args: ['hint', 'g-01', '--confirm-score-penalty'] })
-  } finally { store.close(); rmSync(root, { recursive: true, force: true }) }
-})
+test('Commander owns platform lifecycle and paid hints require explicit confirmation',async()=>{const root=mkdtempSync(path.join(os.tmpdir(),'legion-platform-')),skill=path.join(root,'.redtrace/skills/tsecbench-api');mkdirSync(skill+'/scripts',{recursive:true});writeFileSync(skill+'/scripts/tsecbench.py','import json,sys\nprint(json.dumps({"args":sys.argv[1:]}))\n');const store=new Store(':memory:');try{const p=store.createProject({title:'Benchmark',origin:'TSecBench authorized fixture',goal:'verify'}).project;new LegionStore(store).claimCommand();const tools=legionTools(store,'commander',undefined,null,()=>{},{workspaceRoot:root+'/workspaces'} as EngineConfig);assert.deepEqual((await tools.find(t=>t.name==='legion_platform_list')!.execute('list',{projectId:p.id})).details,{args:['list']});const hint=tools.find(t=>t.name==='legion_platform_hint')!;await assert.rejects(hint.execute('no',{projectId:p.id,taskKey:'a',confirmScorePenalty:false}),/Score penalty/);assert.deepEqual((await hint.execute('yes',{projectId:p.id,taskKey:'a',confirmScorePenalty:true})).details,{args:['hint','a','--confirm-score-penalty']});assert.equal(store.nodeCount(p.id,'fact'),1)}finally{store.close();rmSync(root,{recursive:true,force:true})}})
 
-test('Explore owns Fact publication; TSecBench lifecycle tools never publish Facts', async () => {
-  const root = mkdtempSync(path.join(os.tmpdir(), 'tsecbench-explore-'))
-  const skill = path.join(root, '.redtrace', 'skills', 'tsecbench-api')
-  mkdirSync(path.join(skill, 'scripts'), { recursive: true })
-  writeFileSync(path.join(skill, 'SKILL.md'), '---\nname: tsecbench-api\ndescription: test\n---\n')
-  writeFileSync(path.join(skill, 'scripts', 'tsecbench.py'), `import json,sys
-cmd=sys.argv[1]
-value={
- 'start': {'unique_code':sys.argv[2], 'container_addr':['127.0.0.1:8080']},
- 'submit': {'correct':True, 'correct_flag_count':1, 'total_flag_count':4, 'awarded':300},
- 'close': {'unique_code':sys.argv[2], 'closed':True},
-}[cmd]
-print(json.dumps({'ok':True,cmd:value}))
-`)
-  const store = new Store(':memory:')
-  const worker: Worker = { name: 'explore', backend: 'mock', provider: 'mock', model: '', enabled: true, reason: false, explore: true, bootstrap: false, maxRunning: 1, priority: 0 }
-  const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 1, maxProjectWorkers: 1, maxRunningProjects: 1, maxSteps: null, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: path.join(root, 'workspaces') }
-  try {
-    const id = store.createProject({ title: 'Benchmark', origin: 'Authorized TSecBench b-01 web target', goal: 'Complete it' }).project.id
-    const step = store.addStep(id, { description: 'Start and submit b-01', sourceIds: ['origin'] })
-    const run = store.claim(id, 'execute', worker, step.id)
-    const tools = graphTools({ store, run, worker, config, signal: new AbortController().signal }, () => {})
-    assert.ok(!tools.some(tool => tool.name === 'tsecbench_vpn'))
-    assert.deepEqual(tools.filter(tool => tool.name.startsWith('knowledge_')).map(tool => tool.name).sort(), ['knowledge_match', 'knowledge_read', 'knowledge_search'])
-    const byName = (name: string) => tools.find(item => item.name === name)!
-    const cursor = () => store.events(id, 0, 500).at(-1)?.id ?? 0
-    const startCursor = cursor(), evidenceBefore = store.project(id).evidenceSeq ?? store.project(id).factSeq
-    assert.deepEqual((await byName('tsecbench_start').execute('start', { unique_code: 'b-01' })).details, { unique_code: 'b-01', container_addr: ['127.0.0.1:8080'] })
-    assert.equal(store.project(id).evidenceSeq, evidenceBefore)
-    assert.deepEqual(store.project(id).benchmarkHosts, { 'b-01': ['127.0.0.1:8080'] })
-    const observations = store.nodes<Input>(id, ['observation'])
-    assert.equal(observations.length, 1)
-    assert.equal(observations[0].stepId, step.id)
-    assert.match(observations[0].content, /Platform started TSecBench b-01.*127\.0\.0\.1:8080/)
-    assert.equal(store.node<Step>(id, step.id, 'step').factIds.length, 0)
-    assert.equal(graphUpdate(store, id, startCursor, null).wake, false)
-    const submitCursor = cursor(), criticalBefore = store.project(id).criticalSeq ?? 0
-    assert.equal(((await byName('tsecbench_submit').execute('submit', { unique_code: 'b-01', flag: 'flag{fixture}' })).details as { correct: boolean }).correct, true)
-    assert.equal(store.project(id).evidenceSeq, evidenceBefore)
-    assert.equal(store.project(id).criticalSeq ?? 0, criticalBefore)
-    assert.equal(graphUpdate(store, id, submitCursor, null).wake, false)
-    await byName('tsecbench_submit').execute('duplicate', { unique_code: 'b-01', flag: 'flag{fixture}' })
-    assert.equal(store.project(id).evidenceSeq, evidenceBefore)
-    assert.equal(store.node<Step>(id, step.id, 'step').factIds.length, 0)
-    assert.equal(store.project(id).criticalSeq ?? 0, criticalBefore)
-    assert.equal(graphUpdate(store, id, submitCursor, null).wake, false)
-    const factCursor = cursor()
-    await byName('submit_fact').execute('explore-fact', {
-      description: 'Explore verified platform confirmed 1/4 flags',
-      evidence: [{ description: 'Fixture SDK returned correct=true, correct_flag_count=1, total_flag_count=4' }],
-    })
-    assert.equal(store.project(id).evidenceSeq, evidenceBefore + 1)
-    assert.equal(store.node<Step>(id, step.id, 'step').factIds.length, 1)
-    assert.equal(graphUpdate(store, id, factCursor, null).wake, true)
-    assert.equal((graphTools.toString().match(/store\.addFact\(/g) ?? []).length, 1)
-    assert.deepEqual((await byName('tsecbench_close').execute('close', { unique_code: 'b-01' })).details, { unique_code: 'b-01', closed: true })
-    assert.deepEqual(store.project(id).benchmarkHosts, {})
-    assert.match(store.graph(id).facts.map(fact => fact.description).join('\n'), /platform confirmed 1\/4 flags/)
-    for (const response of [
-      { unique_code: 'wrong-challenge', container_addr: ['127.0.0.1:8080'] },
-      { unique_code: 'b-01', container_addr: [] },
-      { unique_code: 'b-01', container_addr: ['http://user:password@127.0.0.1:8080'] },
-    ]) {
-      writeFileSync(path.join(skill, 'scripts', 'tsecbench.py'), `import json\nprint(${JSON.stringify(JSON.stringify({ start: response }))})\n`)
-      await assert.rejects(byName('tsecbench_start').execute('invalid-start', { unique_code: 'b-01' }), /invalid challenge or target list|credential-bearing target/)
-      assert.equal(store.project(id).evidenceSeq, evidenceBefore + 1)
-      assert.equal(store.nodes<Input>(id, ['observation']).length, 1)
-      assert.deepEqual(store.project(id).benchmarkHosts, {})
-    }
-  } finally { store.close(); rmSync(root, { recursive: true, force: true }) }
-})
+test('Soldier keeps list/submission but cannot start or close shared instances; SDK submission never publishes a Fact',async()=>{const root=mkdtempSync(path.join(os.tmpdir(),'legion-platform-worker-')),skill=path.join(root,'.redtrace/skills/tsecbench-api');mkdirSync(skill+'/scripts',{recursive:true});writeFileSync(skill+'/SKILL.md','fixture');writeFileSync(skill+'/scripts/tsecbench.py','import json,sys\nprint(json.dumps({"ok":True,"submit":{"correct":True,"awarded":300}}))\n');const store=new Store(':memory:'),worker={name:'soldier',backend:'mock' as const,provider:'mock',model:'mock',enabled:true,maxRunning:1,priority:0};try{const p=store.createProject({title:'Benchmark',origin:'TSecBench authorized fixture',goal:'verify'}).project,step=store.addStep(p.id,{description:'submit',sourceIds:['origin']}),run=store.claim(p.id,'execute',worker,step.id),tools=graphTools({store,run,worker,config:{workspaceRoot:root+'/workspaces',maxSteps:null} as EngineConfig,signal:new AbortController().signal},()=>{});assert.deepEqual(tools.filter(t=>t.name.startsWith('tsecbench_')).map(t=>t.name),['tsecbench_list','tsecbench_submit']);const result=await tools.find(t=>t.name==='tsecbench_submit')!.execute('submit',{unique_code:'a',flag:'flag{fixture}'});assert.equal((result.details as any).correct,true);assert.equal(store.nodeCount(p.id,'fact'),1);await tools.find(t=>t.name==='submit_fact')!.execute('proof',{description:'SDK confirmed fixture submission correct; 300 awarded',evidence:[{description:'actual SDK response correct=true, awarded=300'}]});assert.equal(store.nodeCount(p.id,'fact'),2)}finally{store.close();rmSync(root,{recursive:true,force:true})}})
+
 
 
 test('Explore has native read-only list and preserves SDK business errors before target validation', async () => {
@@ -115,7 +28,7 @@ test('Explore has native read-only list and preserves SDK business errors before
     const step=store.addStep(project.id,{description:'check',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id)
     const tools=graphTools({store,run,worker,config:{workspaceRoot:path.join(root,'workspaces'),maxSteps:null} as EngineConfig,signal:new AbortController().signal},()=>{})
     assert.ok(tools.some(tool=>tool.name==='tsecbench_list'))
-    const result:any=await tools.find(tool=>tool.name==='tsecbench_start')!.execute('start',{unique_code:'fixture'})
+    const result:any=await tools.find(tool=>tool.name==='tsecbench_list')!.execute('list',{})
     assert.equal(result.isError,true)
     assert.equal(result.details.error,'VPN fixture returned 502')
     assert.equal(result.details.context.code,'vpn_check_failed')
@@ -169,7 +82,7 @@ test('TSecBench uses the configured Python even when python3 is absent from Work
   try {
     process.env.REDTRACE_BENCHMARK_PYTHON = python
     const id = store.createProject({ title: 'Interpreter', origin: 'TSecBench', goal: 'Use configured interpreter' }).project.id
-    const run = store.claim(id, 'decide', worker)
+    const run = store.claim(id,'execute',worker,store.addStep(id,{description:'Read SDK fixture',sourceIds:['origin']}).id)
     const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 1, maxProjectWorkers: 1, maxRunningProjects: 1, maxSteps: null, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: path.join(root, 'workspaces'), commonEnv: { PATH: root } }
     const tools = graphTools({ store, run, worker, config, signal: new AbortController().signal }, () => {})
     assert.deepEqual((await tools.find(tool => tool.name === 'tsecbench_list')!.execute('list', {})).details, { args: ['list'] })

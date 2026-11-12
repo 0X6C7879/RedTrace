@@ -7,17 +7,15 @@ description: Attack-surface crawling with the crawl tool — BFS link/form/hidde
 
 crawl 走真实浏览器访问目标，必须遵守浏览器 scope 与速率约定；页面预算用最小够用的值，不要无差别扫全站。
 
-## RiftX Workflow
+## RedTrace Workflow
 
-1. **拿到入口就爬**：`browser navigate` 建立首屏基线后，立即 `crawl` 一次性拿到结构化攻击面清单——这比手工逐页 snapshot 快一个数量级，且不会漏掉 JS 路由
-2. **参数选择**：默认 `maxPages=15, maxDepth=2`；小型站点可 `maxPages=30`；只要单页深度信息时 `maxDepth=0`（只提取入口页自身的链接/表单/JS 路由）
-3. **读清单的顺序**：
-   - **JS-discovered routes**——SPA 的 API 地图，模型最容易漏的就是这里的非标准端点；逐个对照后续 exploit skill 的注入面清单
-   - **Forms（含 hidden 字段）**——隐藏域是 mass assignment 与越权测试的入口（`exploit-authz`）
-   - **AUTH 标记的页面**——login-walled 端点用 `use_identity` + `cookies_import` 带认证会话再测；匿名可达面优先测未授权访问
-   - **Cross-host leads**——crawl 不跟随跨主机链接，但记下了 host 清单：核对后可扩大 scope 或交给 `recon-subdomain`/`recon-dir-scan`
-4. **分流**：爬完把端点清单交给对应的 exploit skill（/api/* → `api-testing`；表单反射 → `exploit-xss`；下载/文件参数 → `exploit-file-download`）；大站可 `spawn_subagent` 并行处理不同端点组
-5. **记录**：爬到的**暴露面**（无需认证的管理端点、泄露的调试接口）验证后 `record_finding`；普通端点清单留在对话里即可，不要把每个 URL 都记成 finding
+1. 读取当前 Step 的 FGS 契约及引用证据，复用同题已验证身份、Session、地址与已有成果。
+2. 用 `http_batch` 保存基线与变体请求；通过返回的 Session Resource 和 Request ID 调用 `http_replay`。请求默认并发；只有测试需要身份或状态隔离时才创建独立 Session。需要前序登录结果的请求，待登录完成后再发。
+3. 需要爬取、fuzz 或专用协议时，用 `bash` 运行现有 `curl`、`ffuf`、`sqlmap` 或本 Skill 脚本；真实浏览器交互使用 `playwright-skill` 的脚本和独立 BrowserContext，不假定存在浏览器专用工具。显式向命令传递已验证 Cookie/Authorization，不假定 HTTP Resource 会自动向外部工具导出会话。
+4. 同一 Step 内并发测试独立输入；跨题调度交给 Commander；仅 General 可通过 legion_spawn 委派同题小队，Soldier/Scout 不自行派生 Agent。复用下方 Payload、打法和 references，按实际反馈深入验证。
+5. 保存完整请求/响应、对照与实际影响到证据文件。确认关键结论后 `submit_fact({description,evidence:[{description,path}]})`；真实可交付漏洞再 `submit_finding({title,description,factIds})` 引用 Fact。线索不冒充已确认漏洞。
+6. 当前 Step 结束前至少提交一条真实证据支持的汇总 Fact；无突破则如实汇总验证范围、失败或阻塞，再 `finish_step({summary})`。普通局部观察先留在证据文件。
+
 
 ---
 
@@ -48,13 +46,13 @@ crawl 走真实浏览器访问目标，必须遵守浏览器 scope 与速率约�
 - [ ] AUTH 页面带认证身份复测
 - [ ] cross-host leads 核对后决定是否扩大 scope
 - [ ] 大站按端点组分派 subagent 并行
-- [ ] 暴露面验证后 record_finding
+- [ ] 暴露面验证后 submit_finding
 
 ---
 
 ### Recording Results
 
-Recon observations are working data, not findings — summarize them in the conversation. Reserve `record_finding` for actual exposures the crawl reveals (an unauthenticated admin endpoint, a leaked debug interface, a sensitive file in a linked path): one finding per concrete, evidence-backed conclusion, `confidence` set honestly, and `evidence` pointing at the proving tool call (`{ "type": "tool", "toolCallId": "<id>", "toolName": "crawl" }`). Findings persist with the session; there is no separate results database to write to.
+已验证的暴露面先提交 `submit_fact`，再用 `submit_finding` 引用 Fact ID 与证据文件；普通端点清单保存在证据文件，不逐 URL 创建 Finding。
 
 ---
 

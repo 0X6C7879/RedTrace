@@ -216,6 +216,7 @@ export class Operations {
     }
   }
   audit(project: string | null, resource: string | null, task: string | null, actor: any, action: string, status: string, detail = {}) {
+    if (task) queueMicrotask(() => this.store.changes.emit(`operation:${task}`))
     this.store.db.prepare('INSERT INTO resource_audit_events(project_id,resource_id,task_id,actor_type,actor,action,status,detail_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)').run(project === '_global' ? null : project, resource, task, actor.actor_type ?? 'human', actor.actor ?? 'admin', action, status, JSON.stringify(detail), now())
   }
   verifiedResource(id: string, fields: Record<string, any>, kind = 'capability.verified') {
@@ -367,6 +368,20 @@ export class Operations {
       this.audit(project, id, op, input, `operation.${input.action}`, status, { risk, approval_policy: 'unattended', attempt_id: attempt, intent_id: input.intent_id ?? null })
       this.wake()
       return this.publicTask(this.task(op))
+    })
+  }
+  waitTask(id: string, timeoutMs: number, signal: AbortSignal): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const event = `operation:${id}`
+      const clean = () => { clearTimeout(timer); this.store.changes.off(event, check); signal.removeEventListener('abort', abort) }
+      const abort = () => { clean(); reject(new Error('Operation cancelled')) }
+      const check = () => {
+        try { const task = this.task(id); if (terminalTasks.includes(task.status)) { clean(); resolve(task) } }
+        catch (error) { clean(); reject(error) }
+      }
+      const timer = setTimeout(() => { clean(); try { resolve(this.task(id)) } catch (error) { reject(error) } }, timeoutMs)
+      this.store.changes.on(event, check); signal.addEventListener('abort', abort, { once: true })
+      if (signal.aborted) abort(); else check()
     })
   }
   finish(id: string, result: ExecutionResult) {

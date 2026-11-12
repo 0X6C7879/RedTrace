@@ -1,0 +1,10 @@
+{
+  "cmd": [
+    "node",
+    "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/smoke.mjs",
+    "/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-legion-rollback-l1Oiqs"
+  ],
+  "status": 0,
+  "stdout": "LEGION_SUPPORTED=false\n",
+  "stderr": ""
+}

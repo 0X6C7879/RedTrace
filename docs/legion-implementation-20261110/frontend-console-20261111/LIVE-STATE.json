@@ -1,0 +1,10 @@
+{
+  "capturedAt": "2026-11-11T08:38:36.312Z",
+  "endpoint": "http://127.0.0.1:8000",
+  "campaignStatus": "stopped",
+  "projects": 0,
+  "messages": 0,
+  "serviceRestarted": false,
+  "runtimeDataModified": false,
+  "fixtureServerStopped": true
+}

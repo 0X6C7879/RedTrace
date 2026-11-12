@@ -1,0 +1,27 @@
+[
+  {
+    "name": "typecheck",
+    "command": [
+      "/opt/homebrew/opt/node@24/bin/node",
+      "node_modules/typescript/bin/tsc",
+      "--noEmit"
+    ],
+    "cwd": "/Users/lxy/Downloads/RedTrace/packages/redtrace-engine",
+    "status": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "name": "dsh-build",
+    "command": [
+      "/opt/homebrew/opt/node@24/bin/node",
+      "/Users/lxy/Downloads/RedTrace/packages/redtrace-engine/node_modules/typescript/bin/tsc",
+      "-p",
+      "packages/redtrace-dsh/tsconfig.json"
+    ],
+    "cwd": "/Users/lxy/Downloads/RedTrace",
+    "status": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+]

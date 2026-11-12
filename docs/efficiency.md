@@ -13,12 +13,23 @@
 - `knowledge_search/read/match` 是模型主动使用的离线检索工具，不订阅 Fact 事件，不解析 HTTP/Nmap，不自动扫描或执行 PoC。工具描述显示库的绝对路径；`query:"CVE-2021-41773"` 精确查编号，`query:"apache"` 查组件，`component:"apache",version:"2.4.49"` 查版本范围，也接受 `query:"Apache 2.4.49"`。可用 vendor/CPE 消歧；没有版本仍返回相关漏洞，未知版本/环境保持 unknown。SQLite 主键、组件索引和 FTS5 完成检索，返回分页短摘要、版本范围、来源路径；`knowledge_read` 按 CVE 或来源哈希每次读取最多 8 KiB。数据库和源文件做 SHA256 完整性校验（不是数字签名）。本地库查询不依赖互联网，不自动下载、更新或在线回退；辅助进程不强制断网，并保留网络代理环境。维护用 `./install-knowledge.sh --online` 获取 NVD 2.0、Nuclei、ExploitDB 快照；离线安装用 `./install-knowledge.sh --offline --package /absolute/path/data.tar.gz`，Python wheelhouse 需按平台提前准备。默认数据目录为仓库的 `.redtrace/data/knowledge`，可用 `REDTRACE_DATA_DIR` 覆盖；`node scripts/knowledge.mjs status|export|rollback` 管理数据代际。
 - `http_batch/http_replay`：仅使用 Playwright request API，不创建 Browser、BrowserContext 或 Page；Playwright 和依赖保留。HTTP 会话作为 `http_session` Resource 在同 Project 内跨 Step/Worker 共享，`session` 可省略，返回 Resource id 可显式复用。身份或显式 challenge namespace 可分开 Cookie；不按 Step 隔离、不按固定 8 个或 15 分钟销毁。Cookie 状态私有落盘，停止 Project 不删除；Resource 关闭/退役/删除或 Project 删除时清理。完整请求响应按哈希归档。
 - 自建 `web_open/web_snapshot/web_act/web_network` 已删除，不引进任何 DSH Browser Provider。DSH `web_search/web_fetch` 是搜索与公开页面抓取，不是浏览器，保持原生实现。
-- `http_replay` 使用 `http_batch` 返回的 Request ID、原始方法/Body/Headers 和当前 Cookie，允许明确的 POST/Token/查询变体；只执行显式变体，不增加隐藏 baseline 请求，不自动重试。批量请求按最多 4 个并行分批，不以固定批量数量拒绝。
-- BrowserContext 按 Project/Challenge/身份/Session 隔离；同一会话操作串行。不按 Scope 或 SDK Host 白名单拦截访问；目标选择由 FGS 负责。ARIA 快照提供变化标记；表单、隐藏字段和网络原文完整存证。局部截图需显式 `screenshot:true,selector`；失败动作使旧 snapshot_id 失效。
-- HTTP 串行默认；`parallel:true` 是对请求明确独立的声明，最多 4 并发。Cookie 共享不代替 Authorization/CSRF，调用者须显式提供；一次性参数不会自动重放。JSON 响应比较返回有界字段路径差异，不将差异直接当成漏洞。响应持久化后 dispose；展示差异不删除异常证据。取消使受影响的身份会话失效。验证码仅供当前模型通过授权局部截图尝试；无法识别应记录阻塞、转向，不承诺通用通过。
+- `http_replay` 使用 `http_batch` 返回的 Request ID、原始方法/Body/Headers 和当前 Cookie，允许明确的 POST/Token/查询变体；只执行显式变体，不增加隐藏 baseline 请求，不自动重试。所有显式请求默认并发；有前序认证依赖时分为先后两次工具调用。
+- 同 Project、challenge、identity、session 的 HTTP Resource 默认跨 Worker 共享，只有需要隔离时创建独立 Session。需要真实浏览器时用 `playwright-skill`，默认 headless；截图、DOM 与请求证据由脚本显式保存，不存在 snapshot_id 专用工具。
+- HTTP 请求在批内及跨 Worker 并发，不再以 Session 请求队列串行；旧 `parallel` 参数兼容接收但不限制并发。Cookie 共享不代替 Authorization/CSRF，调用者须显式提供；一次性参数不会自动重放。JSON 响应比较返回有界字段路径差异，不将差异直接当成漏洞。响应持久化后 dispose；展示差异不删除异常证据。取消单个 Worker 不销毁队友共享的 Session；已发出请求保留实际结果，不自动重放。验证码通过 Playwright 脚本保存授权截图后由模型/OCR 尝试；无法识别应记录阻塞、转向，不承诺通用通过。
 - 五个 DSH 原生 Session Query 工具按需检索 Session JSONL / live 历史，以官方 cwd 授权强制 Project 隔离；不迁移旧 Trace，不自动注入历史。
 - 只有 SDK 确认得分、运行时 probe/路由验证或已验证能力失效产生关键事件。事件合并、去重，只唤醒现有 Decide；满 Step 容量可重排但 add_step 不越限。成功只确认启动边界，失败/暂停和迟到事件保留。DSH 执行器使用统一关键提醒判定。
 - Pivot 支持受管 SSH SOCKS（非交互式密钥/既有 SSH 配置）及 Chisel；监听启动不算路径成功。`pivot_validate` 通过指定本地 SOCKS 访问授权 HTTP(S) 服务并观察响应，受 Project 和租约控制。认证、上游或代理失效会撤销验证并级联使依赖通道降级；重新验证后恢复。Ligolo 不可派发。
+
+## 审计修复（2026-11-03）
+
+- 角色和 Skill 不注入固定活跃实例数；比赛限制由任务输入提供，Worker/Step 调度容量仍有效。
+- 模型工具结果、run_events、audit_events 原样保存，不再脱敏；审计文件/API 含完整凭据及响应，须按敏感数据控制访问。配置密钥的加密存储与原有文件访问边界保留。
+- Step 结束仍必须显式 submit_fact；无突破时提交经验证的失败、限制或阻塞汇总，不以 Observation 或纯文本代替。
+- SQLite 使用 WAL/NORMAL；文本/推理 delta 只推送内存 SSE，定稿消息和生命周期仍落库。NORMAL 在系统断电时可能丢失最近提交，不能视为 FULL 的耐久性等价替代。
+- 配置及 MCP 解析缓存按文件指纹失效；live-plan 复用相同图版本快照，契约变更仍保留同步与旧调用树保护，不承诺供应商 Prompt Cache 命中。
+- 调度查询排除已结束历史 Step，但保留 Bootstrap 门控。Fact 合并只改引用，不改 planVersion；真实 amend/replace 仍使旧契约失效。
+- 远程操作使用完成事件唤醒；本地文本索引改为 Worker 线程且刷新间隔 15 分钟。复杂 CPE/版本匹配保留既有 Python 语义，同一数据库复用短暂查询进程，空闲 30 秒退出（空闲管道 unref，不阻止引擎退出）；未重写为纯 Node 版本比较器。首次 SHA256 校验保留，防止跳过完整性验证。
+- Reason 默认分页 2000 行，拒绝超过 8 MiB 的文件及含 NUL 的二进制文件；不改变路径访问规则。webshell/c2 注册接口仍复用现有本机 HTTP API，未绕过其校验。
 
 ## 成本与冻结
 

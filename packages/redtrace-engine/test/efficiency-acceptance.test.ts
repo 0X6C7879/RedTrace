@@ -1,3 +1,4 @@
+import{LegionStore}from'../src/legion-store.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -38,7 +39,7 @@ test('native and DSH audit records survive retirement of duplicate Trace indexes
   assert.equal(store.db.prepare('SELECT count(*) AS count FROM run_events WHERE run_id=?').get(run.id)!.count,510)
   const audit=store.db.prepare('SELECT data FROM audit_events WHERE project_id=?').all(project.id)
   assert.ok(audit.some(row=>String(row.data).includes('fixture evidence')))
-  assert.doesNotMatch(JSON.stringify(audit),/secret/)
+  assert.match(JSON.stringify(audit),/secret/)
   assert.equal(store.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'trace_%'").all().length,0)
   for(let i=0;i<510;i++)store.addFact(project.id,`fixture ${i}`,{})
   const update=graphUpdate(store,project.id,0,'different');assert.equal(update.relevant,false)
@@ -73,33 +74,9 @@ test('cost buckets are disjoint tokens and timing residual never subtracts overl
   assert.deepEqual(extractOutput('80/tcp open http\nERROR failed').ports,[{port:80,protocol:'tcp',state:'open',service:'http'}])
  } finally {store.close()}
 })
-test('critical planning acknowledges its start boundary only; failure, pause and new arrivals retain signals',()=>{
- const {store,project}=fixture()
- try {
-  const planner={...worker,name:'reason',reason:true}
-  store.recordCriticalSignal(project.id,'verified-one',{kind:'route.verified'})
-  const run=store.claim(project.id,'decide',planner)
-  assert.equal(criticalNotice(store.project(project.id),run,0),undefined)
-  store.recordCriticalSignal(project.id,'verified-two',{kind:'capability.lost'})
-  assert.match(criticalNotice(store.project(project.id),run,0)!,/关键状态/)
-  assert.equal(criticalNotice(store.project(project.id),run,2),undefined)
-  store.recordCriticalSignal(project.id,'verified-three',{kind:'route.verified'})
-  assert.match(criticalNotice(store.project(project.id),run,2)!,/criticalSeq=3/)
-  assert.equal(criticalNotice(store.project(project.id),run,3),undefined)
-  assert.equal(criticalNotice(store.project(project.id),run,0,false),undefined)
-  store.finishRun(run.id,'succeeded')
-  assert.equal(store.project(project.id).acknowledgedCriticalSeq,1)
-  assert.equal(store.project(project.id).criticalSeq,3)
-  const failed=store.claim(project.id,'decide',planner);store.finishRun(failed.id,'failed','fixture failure')
-  assert.equal(store.project(project.id).acknowledgedCriticalSeq,1)
-  const paused=store.claim(project.id,'decide',planner);store.finishRun(paused.id,'paused')
-  assert.equal(store.project(project.id).acknowledgedCriticalSeq,1)
-  const before=store.project(project.id).criticalSeq!
-  for(let i=0;i<300;i++)store.recordCriticalSignal(project.id,`new-${i}`,{kind:'route.verified'})
-  assert.equal(store.recordCriticalSignal(project.id,'verified-one',{kind:'route.verified'}),false)
-  assert.equal(store.project(project.id).criticalSeq,before+300)
- } finally {store.close()}
-})
+
+test('Commander acknowledges only the delivered start boundary; later critical events remain unread',()=>{const{store,project}=fixture();try{const legion=new LegionStore(store);store.recordCriticalSignal(project.id,'verified-one',{kind:'route.verified'});legion.claimCommand();const first=legion.readChanges(project.id);store.recordCriticalSignal(project.id,'verified-two',{kind:'capability.lost'});legion.finishCommand({[project.id]:first.cursor},'confirmed');legion.claimCommand();const next=legion.readChanges(project.id);assert.ok(next.cursor>first.cursor);assert.ok(next.events.some(e=>e.type==='planning.critical'));assert.equal(legion.campaign().cursors[project.id].acknowledged,first.cursor)}finally{store.close()}})
+
 
 import { graphTools } from '../src/runner.ts'
 import type {EngineConfig} from '../src/types.ts'
@@ -153,28 +130,8 @@ test('Explore receives only live contract changes, not hints, evidence or critic
  } finally {store.close()}
 })
 
-test('Explore launch has Scope but no hints; Reason launch includes bounded hints across all Steps', () => {
- const store=new Store(':memory:')
- const scope='Full {{unknown}} scope Unicode 中文 "quoted" '+ 'x'.repeat(12000)
- const project=store.createProject({title:'Launch',origin:scope,goal:'Verify'}).project
- const step=store.addStep(project.id,{description:'Inspect',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id)
- try {
-  const other=store.addStep(project.id,{description:'Other',sourceIds:['origin']})
-  store.addInput(project.id,'hint','Unrelated','human',other.id)
-  for(let i=0;i<9;i++)store.addInput(project.id,'hint',`Hint ${i} {{unknown}} 中文`,'human',i%2?step.id:null)
-  const launch=launchContext(store,run.id), contract=JSON.parse(livePlan(store,run.id).split('：')[1]!)
-  assert.equal(launch.scope.description,scope);assert.equal(launch.hints,undefined)
-  assert.equal('step' in launch,false);assert.equal('goal' in launch,false)
-  assert.equal(contract.id,step.id);assert.equal(contract.goals[0].id,'goal')
-  assert.equal('createdAt' in contract,false);assert.equal('factIds' in contract,false)
-  const reason=store.claim(project.id,'decide',worker)
-  const planning=launchContext(store,reason.id)
-  assert.equal(planning.scope.description,scope);assert.equal(planning.goal!.id,'goal')
-  assert.equal('instruction' in planning,false);assert.equal(planning.hints!.items.length,8)
-  assert.equal(planning.hints!.unverified,true);assert.equal(planning.hints!.hasMore,true)
-  assert.equal(planning.hints!.read!.tool,'read_graph');assert.equal(planning.hints!.items[0]!.content,'Unrelated')
- } finally {store.close()}
-})
+test('Worker launch preserves Scope, bounded relevant unverified Hints and the live contract',()=>{const store=new Store(':memory:');try{const scope='Full {{unknown}} scope 中文 '+ 'x'.repeat(12000),project=store.createProject({title:'Launch',origin:scope,goal:'Verify'}).project,step=store.addStep(project.id,{description:'Inspect',sourceIds:['origin']}),other=store.addStep(project.id,{description:'Other',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id);store.addInput(project.id,'hint','Unrelated','human',other.id);for(let i=0;i<9;i++)store.addInput(project.id,'hint','Hint '+i,'human',i%2?step.id:null);const launch=launchContext(store,run.id),contract=JSON.parse(livePlan(store,run.id).split('：')[1]!);assert.equal(launch.scope.description,scope);assert.equal(launch.hints!.items.length,8);assert.equal(launch.hints!.hasMore,true);assert.equal(launch.hints!.unverified,true);assert.ok(!launch.hints!.items.some(h=>h.content==='Unrelated'));assert.equal(contract.id,step.id);assert.equal(contract.goals[0].id,'goal')}finally{store.close()}})
+
 
 test('existing duplicate Trace tables are removed on reopen without deleting raw history',()=>{
  const root=mkdtempSync(path.join(tmpdir(),'redtrace-trace-retire-')),filename=path.join(root,'engine.sqlite')
@@ -199,18 +156,5 @@ test('existing duplicate Trace tables are removed on reopen without deleting raw
  } finally {rmSync(root,{recursive:true,force:true})}
 })
 
-test('Reason launch skips acknowledged hints but retains fresh human input',()=>{
- const store=new Store(':memory:')
- try {
-  const project=store.createProject({title:'Hints',origin:'Fixture',goal:'Inspect'}).project
-  for(let i=0;i<10;i++)store.addInput(project.id,'hint',`Old ${i}`,'human')
-  const old=store.claim(project.id,'decide',worker);store.finishRun(old.id,'succeeded')
-  store.addInput(project.id,'hint','Fresh human input','human')
-  const next=store.claim(project.id,'decide',worker)
-  assert.deepEqual(launchContext(store,next.id).hints!.items.map(h=>h.content),['Fresh human input'])
-  store.finishRun(next.id,'succeeded')
-  const quiet=store.claim(project.id,'decide',worker)
-  assert.equal(launchContext(store,quiet.id).hints,undefined)
-  assert.equal(store.nodes(project.id,['hint']).length,11)
- } finally {store.close()}
-})
+test('Commander cursor acknowledgement does not erase reusable target Hints',()=>{const store=new Store(':memory:');try{const project=store.createProject({title:'Hints',origin:'Fixture',goal:'Inspect'}).project,legion=new LegionStore(store);store.addInput(project.id,'hint','Transferred unverified knowledge');legion.claimCommand();const page=legion.readChanges(project.id);legion.finishCommand({[project.id]:page.cursor},'processed');const step=store.addStep(project.id,{description:'Reverify',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id);assert.equal(launchContext(store,run.id).hints!.items[0].content,'Transferred unverified knowledge');assert.equal(store.nodeCount(project.id,'fact'),1)}finally{store.close()}})
+

@@ -1,3 +1,5 @@
+import{LegionStore}from'../src/legion-store.ts'
+import{legionTools}from'../src/legion-tools.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -49,27 +51,8 @@ test('legacy tool declarations do not revise a running contract; real replacemen
   } finally { store.close() }
 })
 
-test('Reason schemas do not select tools and plugin management does not block planning goals', async () => {
-  const store = new Store(':memory:')
-  try {
-    const id = store.createProject({ title: 'Tasks', origin: 'Scope', goal: 'Analyze', bootstrap: false }).project.id
-    const run = store.claim(id, 'decide', worker)
-    let allowed = true
-    const tools = graphTools({ store, run, worker, config, signal: new AbortController().signal, taskPluginAllowed: () => allowed }, () => {})
-    assert.equal(tools.some(t => /mcp__rea__|reverse_tools|start_plugin/.test(t.name)), false)
-    const add = tools.find(t => t.name === 'add_step')!, update = tools.find(t => t.name === 'update_step')!
-    assert.equal(JSON.parse(JSON.stringify(add.parameters)).properties.plugins, undefined)
-    assert.equal(JSON.parse(JSON.stringify(add.parameters)).properties.requires, undefined)
-    await add.execute('create', input)
-    const step = store.nodes<Step>(id, ['step'])[0]
-    assert.equal(step.plugins, undefined)
-    allowed = false
-    await add.execute('disabled-policy-does-not-change-goal', input)
-    assert.equal(store.nodes(id, ['step']).length, 2)
-    await update.execute('clear', { id: step.id, expectedVersion: step.version, plugins: [] })
-    assert.equal(store.node<Step>(id, step.id, 'step').plugins, undefined)
-  } finally { store.close() }
-})
+test('Commander Mission schemas do not select plugins and preserve native FGS routing',async()=>{const store=new Store(':memory:');try{const id=store.createProject({title:'Task',origin:'Scope',goal:'Analyze'}).project.id;new LegionStore(store).claimCommand();const tools=legionTools(store,'commander',undefined,null,()=>{}),spawn=tools.find(t=>t.name==='legion_spawn')!;const schema=JSON.parse(JSON.stringify(spawn.parameters)).properties;assert.equal(schema.plugins,undefined);assert.equal(schema.requires,undefined);const result=await spawn.execute('create',{projectId:id,role:'soldier',taskKey:'a',description:'Analyze fixture',sourceIds:['origin']});assert.equal((result.details as Step).plugins,undefined);assert.ok(!tools.some(t=>/mcp__rea__|reverse_tools|start_plugin/.test(t.name)))}finally{store.close()}})
+
 
 test('v2 and legacy HTTP contracts ignore valid legacy declarations and preserve input validation', async t => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-step-plugins-api-'))

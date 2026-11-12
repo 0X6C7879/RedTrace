@@ -39,13 +39,13 @@ export function eventProjection(task: RuntimeTask, event: SessionEvent): Record<
   const base = {
     event_uid: `${task.sessionId}-${event.seq ?? crypto.randomUUID()}`,
     run_sequence: event.seq ?? 0,
-    timestamp: event.ts ?? new Date().toISOString(),
+    timestamp: event.time === undefined ? event.ts ?? new Date().toISOString() : new Date(event.time).toISOString(),
   }
-  if (event.type === 'request/header') {
-    // The request header carries the exact system prompt the model received;
-    // it is logged on the first step and whenever the assembly changes. A
-    // config/tool-only change re-logs the same prompt, so dedupe per task.
-    const system = (data.header as { system?: string } | undefined)?.system ?? ''
+  if (event.type === 'system/message' || event.type === 'request/header') {
+    // Current DSH stores system messages separately; old headers can retain the same prompt.
+    const system = event.type === 'system/message'
+      ? textBlocksOf((data.message as { content?: Array<{ type?: string; text?: string }> } | undefined)?.content)
+      : (data.header as { system?: string } | undefined)?.system ?? ''
     if (system === '' || system === task.projectedSystem) return []
     task.projectedSystem = system
     return [{ ...base, kind: 'system.prompt', role: 'system', content: system }]

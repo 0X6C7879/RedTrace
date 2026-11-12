@@ -4,7 +4,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { activeEvidence, HttpError, integer, now, requiredText } from './types.ts'
-import type { Activity, Evidence, Fact, Finding, Goal, Graph, GraphEvent, GraphNode, Input, Json, Project, Run, Step, Worker } from './types.ts'
+import type { Activity, Evidence, Fact, Finding, Goal, Graph, GraphEvent, GraphNode, Input, Json, LegionAssignment, Project, Run, Step, Worker } from './types.ts'
 
 export const ACTIVE_NODE_SQL = "COALESCE(json_extract(data,'$.deleted'),0)=0"
 export interface StepUpdate { description?: string; sourceIds?: string[]; goalId?: string; priority?: number; status?: 'cancelled' | 'pending'; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; expectedVersion?: number; mode?: 'amend' | 'replace' }
@@ -54,29 +54,6 @@ export function conversationAuditEvents(event: Record<string, Json>): Record<str
   return content === event.content ? [event] : [{ ...event, content }]
 }
 
-export function redactSensitive(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redactSensitive)
-  if (!value || typeof value !== 'object') return value
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => {
-    if (/^(?:authorization|cookie|set-cookie|password|passwd|secret|token|api[_-]?key|flag|requestBody|responseBody|(?:request|response)?BodyBase64)$/i.test(key)) return [key, '[REDACTED]']
-    if (['content', 'text', 'arguments'].includes(key) && typeof item === 'string') {
-      try {
-        const parsed = JSON.parse(item), redacted = redactSensitive(parsed)
-        return [key, JSON.stringify(parsed) === JSON.stringify(redacted) ? item : JSON.stringify(redacted)]
-      } catch {
-        return [key, item.replace(/("?(?:authorization|cookie|set-cookie|password|secret|token|api[_-]?key|flag)"?\s*[:=]\s*")[^"]*(")/ig, '$1[REDACTED]$2')]
-      }
-    }
-    if (['url', 'location'].includes(key.toLowerCase()) && typeof item === 'string') {
-      try {
-        const url = new URL(item, 'http://redtrace.invalid')
-        for (const param of [...url.searchParams.keys()]) if (/^(?:auth(?:orization)?|cookie|csrf|key|password|secret|session|token|api[_-]?key|code)$/i.test(param)) url.searchParams.set(param, '[REDACTED]')
-        return [key, url.origin === 'http://redtrace.invalid' ? `${url.pathname}${url.search}${url.hash}` : url.toString()]
-      } catch {}
-    }
-    return [key, redactSensitive(item)]
-  }))
-}
 
 export class Store {
   readonly db: DatabaseSync
@@ -98,7 +75,7 @@ export class Store {
       if (version?.value !== '2') { this.db.close(); throw new Error(`Unsupported engine schema ${version?.value ?? 'unknown'}; remove the old engine database before starting RedTrace`) }
     }
     const importCriticalKeys=!this.db.prepare("SELECT 1 FROM sqlite_master WHERE name='critical_keys'").get()
-    this.db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+    this.db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
       CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS nodes(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -278,7 +255,7 @@ export class Store {
     this.project(projectId)
     return Number((this.db.prepare(`SELECT COUNT(*) AS value FROM nodes WHERE project_id=? AND kind=? AND ${ACTIVE_NODE_SQL}`).get(projectId, kind) as { value: number }).value)
   }
-  private saveNode(node: GraphNode) {
+  saveNode(node: GraphNode) {
     const prior = this.db.prepare('SELECT data FROM nodes WHERE project_id=? AND id=?').get(node.projectId, node.id)
     node.version = prior ? (JSON.parse(String(prior.data)).version ?? 1) + 1 : 1
     this.db.prepare('INSERT INTO nodes VALUES (?,?,?,?) ON CONFLICT(project_id,id) DO UPDATE SET data=excluded.data')
@@ -291,7 +268,7 @@ export class Store {
       steps: all.filter((n): n is Step => n.kind === 'step'), findings: all.filter((n): n is Finding => n.kind === 'finding'),
       hints: all.filter((n): n is Input => n.kind === 'hint' && !n.deleted), observations: all.filter((n): n is Input => n.kind === 'observation' && !n.deleted) }
   }
-  private event(id: string, type: string, node: GraphNode | null, payload: unknown) {
+  event(id: string, type: string, node: GraphNode | null, payload: unknown) {
     const planning = ['project.created', 'fact.added', 'execute.succeeded', 'execute.failed', 'project.active', 'project.reopened'].includes(type)
     const p = this.project(id); p.revision++; if (planning) p.planningRevision++
     if (type === 'fact.added') p.factSeq++
@@ -350,7 +327,7 @@ export class Store {
       this.saveNode({ id: 'goal', projectId: id, kind: 'goal', description: goal, creator: 'human', createdAt, parentId: null, status: 'open', evidenceIds: [] })
       this.event(id, 'project.created', null, {})
       for (const hint of input.hints ?? []) this.addInput(id, 'hint', hint.content, hint.creator)
-      if (p.bootstrap) this.addStep(id, { description: goal, sourceIds: ['origin'], goalId: 'goal', creator: 'bootstrap', bootstrap: true })
+      if (p.bootstrap) this.addStep(id, { description: goal, sourceIds: ['origin'], goalId: 'goal', creator: 'commander', role: 'soldier', taskKey: 'initial', bootstrap: true })
       return this.graph(id)
     })
   }
@@ -445,17 +422,24 @@ export class Store {
     const run = this.run(runId)
     return { throughEvidenceSeq: run.deliveredEvidenceSeq ?? run.planningEvidenceSeq ?? 0, throughHintSeq: run.deliveredHintSeq ?? run.planningHintSeq ?? 0 }
   }
-  addStep(id: string, input: { description: string; sourceIds: string[]; goalId?: string; creator?: string; priority?: number; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; bootstrap?: boolean }, maxSteps: number | null = null): Step {
+  addStep(id: string, input: { description: string; sourceIds: string[]; goalId?: string; creator?: string; priority?: number; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; bootstrap?: boolean } & Pick<LegionAssignment, 'role' | 'taskKey' | 'parentStepId'>, maxSteps: number | null = null): Step {
     return this.transaction(() => {
       this.writable(id)
       const capacity = this.planningCapacity(id, maxSteps)
       if (capacity.remainingSteps === 0) throw new HttpError(409, 'Active Step limit reached', { code: 'STEP_LIMIT_REACHED', planningCapacity: capacity })
       const goalId = input.goalId ?? 'goal'; if (this.node<Goal>(id, goalId, 'goal').status !== 'open') throw new HttpError(409, 'Goal is closed')
       const profile = input.executionProfile ?? 'direct'; if (!['direct', 'isolated'].includes(profile)) throw new HttpError(422, 'Invalid execution profile')
+      if (input.role !== undefined && !['general', 'soldier', 'scout'].includes(input.role)) throw new HttpError(422, 'Invalid Legion role')
+      if (input.role !== undefined || input.taskKey !== undefined || input.parentStepId !== undefined) requiredText(input.taskKey, 'taskKey')
+      if (input.parentStepId) {
+        const parent = this.node<Step>(id, input.parentStepId, 'step')
+        if (parent.taskKey !== input.taskKey) throw new HttpError(422, 'Parent Step belongs to another task')
+      }
       const step: Step = { id: this.next(id, 'step', 'i'), projectId: id, kind: 'step', description: requiredText(input.description, 'description'),
-        sourceIds: this.evidenceIds(id, input.sourceIds, true), goalId, creator: input.creator ?? 'decide', priority: integer(input.priority ?? 0, 'priority', -2147483648),
+        sourceIds: this.evidenceIds(id, input.sourceIds, true), goalId, creator: input.creator ?? 'commander', priority: integer(input.priority ?? 0, 'priority', -2147483648),
         status: 'pending', factIds: [], worker: null, executionProfile: profile, attempts: 0,
-        endedAt: null, failure: null, createdAt: now(), bootstrap: input.bootstrap ?? false, planVersion: 1 }
+        endedAt: null, failure: null, createdAt: now(), bootstrap: input.bootstrap ?? false, planVersion: 1,
+        role: input.role ?? 'soldier', taskKey: input.taskKey ?? goalId, ...(input.parentStepId ? { parentStepId: input.parentStepId } : {}) }
       this.saveNode(step); this.event(id, 'step.added', step, step); return step
     })
   }
@@ -606,16 +590,15 @@ export class Store {
         const affected = this.db.prepare("SELECT data FROM nodes WHERE project_id=? AND kind IN ('step','goal','finding')").all(id).map(row => ({ version: 1, ...JSON.parse(String(row.data)) }) as Step | Goal | Finding)
         for (const node of affected) {
           if (node.id === target.id || set.has(node.id)) continue
-          let changed = false, contractChanged = false
+          let changed = false
           const fields = node.kind === 'step' ? ['sourceIds', 'factIds'] as const : node.kind === 'goal' ? ['evidenceIds'] as const : ['factIds'] as const
           for (const field of fields) {
             const refs = (node as unknown as Record<string, string[]>)[field]
             if (refs.some(ref => set.has(ref))) {
               (node as unknown as Record<string, string[]>)[field] = replace(refs); changed = true
-              contractChanged ||= node.kind === 'step' && field === 'sourceIds'
             }
           }
-          if (changed) { if (contractChanged && node.kind === 'step' && !['done', 'cancelled'].includes(node.status)) node.planVersion = (node.planVersion ?? 1) + 1; this.saveNode(node); this.event(id, `${node.kind}.updated`, node, node) }
+          if (changed) { this.saveNode(node); this.event(id, `${node.kind}.updated`, node, node) }
         }
         if (input.description !== undefined) target.description = requiredText(input.description, 'description')
         if (target.kind === 'finding') {
@@ -758,10 +741,10 @@ export class Store {
   saveRun(run: Run) {
     this.db.prepare('INSERT INTO runs VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,data=excluded.data').run(run.id, run.projectId, run.stepId, run.activity, run.status, JSON.stringify(run))
     const step = run.stepId ? this.node<Step>(run.projectId, run.stepId, 'step') : undefined
-    this.audit({ id: run.id, project_id: run.projectId, intent_id: run.stepId, task_type: run.activity === 'decide' ? 'reason' : step?.bootstrap ? 'bootstrap' : 'explore', phase: run.activity,
+    this.audit({ id: run.id, project_id: run.projectId, intent_id: run.stepId, task_type: step?.role ?? 'soldier', phase: run.activity,
       worker: run.worker, provider: run.provider ?? run.backend, engine: run.backend, model: run.model ?? null, execution_profile: step?.executionProfile ?? 'direct', session_id: run.id,
       workspace_kind: 'local', workspace_ref: '', workspace_root: run.workspaceRoot ?? '', status: run.status === 'succeeded' ? 'completed' : run.status,
-      started_at: run.startedAt, ended_at: run.endedAt, exit_code: run.status === 'succeeded' ? 0 : null, timed_out: false, cancelled: run.status === 'cancelled',
+      started_at: run.startedAt, ended_at: run.endedAt, error: run.error, exit_code: run.status === 'succeeded' ? 0 : null, timed_out: false, cancelled: run.status === 'cancelled',
       input_tokens: run.inputTokens, output_tokens: run.outputTokens, cache_read_tokens: run.cacheReadTokens, cache_write_tokens: run.cacheWriteTokens }, [])
   }
   audit(metadata: { [key: string]: Json }, events: { [key: string]: Json }[]) {
@@ -777,8 +760,12 @@ export class Store {
         result.session_id ??= saved.session_id
       }
       this.db.prepare('INSERT INTO audit_runs VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(id, projectId, JSON.stringify(result))
+      // Run rows are the durable state; publish transitions through the existing audit stream.
+      if (saved?.status !== result.status && ['running','paused','completed','failed','unknown','cancelled'].includes(String(result.status))) {
+        this.pendingAudit.push({ projectId, data: { event_uid: 'run-state-' + randomUUID(), timestamp: now(), kind: result.status === 'running' ? 'run.started' : 'run.completed', run_id: id, project_id: projectId, task_type: result.task_type, worker: result.worker, status: result.status, error: result.error ?? null, exit_code: result.exit_code ?? null } })
+      }
       for (const data of events) {
-        const event: { [key: string]: Json } = { ...redactSensitive(data) as { [key: string]: Json }, project_id: projectId, run_id: id, task_type: data.task_type ?? metadata.task_type, worker: data.worker ?? metadata.worker, provider: data.provider ?? metadata.provider }
+        const event: { [key: string]: Json } = { ...data, project_id: projectId, run_id: id, task_type: data.task_type ?? metadata.task_type, worker: data.worker ?? metadata.worker, provider: data.provider ?? metadata.provider }
         if (!['assistant.delta', 'thinking.delta', 'thinking.completed'].includes(String(data.kind))) {
           const inserted = this.db.prepare('INSERT OR IGNORE INTO audit_events(event_uid,project_id,run_id,data) VALUES (?,?,?,?)').run(typeof event.event_uid === 'string' ? event.event_uid : null, projectId, id, JSON.stringify(event))
           if (inserted.changes) event.id = Number(inserted.lastInsertRowid)
@@ -790,8 +777,8 @@ export class Store {
   }
   claim(id: string, activity: Activity, worker: Pick<Worker, 'name' | 'backend'>, stepId: string | null = null): Run {
     return this.transaction(() => {
+      if (activity !== 'execute') throw new HttpError(410, 'Independent Reason execution was replaced by Commander')
       const p = this.active(id)
-      if (activity === 'decide' && this.db.prepare("SELECT 1 FROM runs WHERE project_id=? AND activity='decide' AND status='running' LIMIT 1").get(id)) throw new HttpError(409, 'Decide already running')
       let step: Step | undefined
       if (activity === 'execute') {
         if (!stepId) throw new HttpError(422, 'Step required')
@@ -804,8 +791,9 @@ export class Store {
       if (paused && (paused.worker !== worker.name || paused.backend !== worker.backend)) throw new HttpError(409, 'Resume must keep the original worker and backend')
       if (paused?.pendingTools.length) throw new HttpError(409, 'Unconfirmed tool results prevent automatic resume')
       const run: Run = paused ?? { id: `run-${randomUUID()}`, projectId: id, stepId, activity, worker: worker.name, backend: worker.backend, status: 'running', startedAt: now(), endedAt: null,
+        ...(step?.predecessorRunId ? { predecessorRunId: step.predecessorRunId, handoff: step.handoff } : {}),
         baseRevision: p.planningRevision, deliveredGraphCursor: Number(this.db.prepare('SELECT COALESCE(MAX(id),0) AS value FROM events WHERE project_id=?').get(id)?.value ?? 0), checkpoint: null, pendingTools: [], error: null, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
-        ...(activity === 'decide' ? { planningFactSeq: p.factSeq, planningEndedSeq: p.endedSeq, planningCriticalSeq: p.criticalSeq ?? 0, planningEvidenceSeq: p.evidenceSeq ?? p.factSeq, deliveredEvidenceSeq: p.evidenceSeq ?? p.factSeq, planningHintSeq: p.hintSeq ?? 0, deliveredHintSeq: p.hintSeq ?? 0 } : { boundStepVersion: step?.planVersion ?? 1 }) }
+        boundStepVersion: step?.planVersion ?? 1 }
       run.status = 'running'; run.endedAt = null
       run.deliveredGraphCursor ??= Number(this.db.prepare('SELECT COALESCE(MAX(id),0) AS value FROM events WHERE project_id=?').get(id)?.value ?? 0)
       this.saveRun(run)
@@ -821,13 +809,13 @@ export class Store {
         const step = this.node<Step>(run.projectId, run.stepId, 'step')
         if (!step.factIds.length) {
           status = 'failed'
-          error = step.bootstrap ? 'Bootstrap must return at least one Fact before Reason can start' : 'Explore must return at least one Fact before completing the Step'
+          error = step.bootstrap ? 'Initial Soldier Mission must return at least one Fact' : 'Legion Worker must return at least one Fact before completing the Step'
         }
       }
       run.status = status; run.error = error; run.endedAt = status === 'paused' ? null : now(); this.saveRun(run)
       if (run.stepId) {
         const step = this.node<Step>(run.projectId, run.stepId, 'step')
-        if (step.status !== 'cancelled') step.status = status === 'succeeded' ? 'done' : status === 'paused' ? 'paused' : status === 'cancelled' ? 'cancelled' : 'blocked'
+        if (!['cancelled', 'parked'].includes(step.status)) step.status = status === 'succeeded' ? 'done' : status === 'paused' ? 'paused' : status === 'cancelled' ? 'cancelled' : 'blocked'
         step.failure = error; step.endedAt = run.endedAt; this.saveNode(step)
         this.event(run.projectId, `execute.${status}`, step, { runId, error })
         if (!['running', 'paused', 'unknown'].includes(status)) this.releaseReplacement(step)
@@ -852,7 +840,7 @@ export class Store {
     this.transaction(() => {
       this.run(runId)
       const timestamp = now()
-      const safeData = redactSensitive(data) as Json
+      const safeData = data
       const inserted = this.db.prepare('INSERT INTO run_events(run_id,type,data,created_at) VALUES (?,?,?,?)').run(runId, type, JSON.stringify(safeData), timestamp)
       const value = safeData && typeof safeData === 'object' && !Array.isArray(safeData) ? safeData as Record<string, Json> : {}
       const event: { [key: string]: Json } = { event_uid: `native-${inserted.lastInsertRowid}`, run_sequence: Number(inserted.lastInsertRowid), timestamp, kind: type, data: safeData }

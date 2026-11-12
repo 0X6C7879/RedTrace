@@ -1,0 +1,43 @@
+{
+  "target": "/Users/lxy/Downloads/RedTrace",
+  "roles": [
+    {
+      "role": "MODIFIED_FILE",
+      "path": "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/MODIFIED_FILE.tar.gz",
+      "sha256": "19b90728864af5bf45152ed33c4ca06a9bf85a6a2b6d379398f00647ee816bd6",
+      "bytes": 56751
+    },
+    {
+      "role": "DIFF_FILE",
+      "path": "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/DIFF_FILE.patch",
+      "sha256": "c6cfae302b51dbe65a5092ecff28ba4a01c36763e36de4bdbf8cbd8e0b8a5141",
+      "bytes": 86198
+    },
+    {
+      "role": "VERIFICATION",
+      "path": "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/VERIFICATION.txt",
+      "sha256": "6c932931e1298d1dc414b6e0d4edf500ddd81d772f97832a4f6a8558d9414799",
+      "bytes": 162945
+    },
+    {
+      "role": "ROLLBACK",
+      "path": "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/ROLLBACK.sh",
+      "sha256": "fa6e04a1b4704755d2d97d4d5a5d0bbd20a59d065afa6a96daa9e3d99b07e3e8",
+      "bytes": 526
+    }
+  ],
+  "archiveFilesMatch": 10,
+  "unrelatedSourceDrift": [],
+  "rollbackExecutable": true,
+  "rollbackSyntax": {
+    "command": "sh",
+    "args": [
+      "-n",
+      "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/ROLLBACK.sh"
+    ],
+    "cwd": "/Users/lxy/Downloads/RedTrace",
+    "status": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+}

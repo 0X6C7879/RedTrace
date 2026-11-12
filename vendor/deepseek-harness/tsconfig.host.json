@@ -22,6 +22,18 @@
   ],
   "references": [
     {
+      "path": "./packages/experimental/action-cards"
+    },
+    {
+      "path": "./packages/experimental/creation-recommendations"
+    },
+    {
+      "path": "./packages/experimental/plugin-recommendations"
+    },
+    {
+      "path": "./packages/experimental/personalized-recommendations"
+    },
+    {
       "path": "./packages/experimental/client-ui-cot-translation/tsconfig.host.json"
     },
     {
@@ -127,7 +139,10 @@
       "path": "./packages/experimental/computer-use-cua-driver-native"
     },
     {
-      "path": "./packages/experimental/cua"
+      "path": "./packages/experimental/cua/tsconfig.host.json"
+    },
+    {
+      "path": "./packages/experimental/cua-bundle"
     },
     {
       "path": "./packages/experimental/cua-macos"
@@ -193,6 +208,9 @@
       "path": "./packages/util/package-manifest"
     },
     {
+      "path": "./packages/util/plugin-detail"
+    },
+    {
       "path": "./packages/util/plugin-market-index"
     },
     {
@@ -214,6 +232,9 @@
       "path": "./packages/client/ui-plugin-manager/tsconfig.host.json"
     },
     {
+      "path": "./packages/client/ui-trajectory/tsconfig.host.json"
+    },
+    {
       "path": "./packages/util/time"
     },
     {
@@ -233,6 +254,9 @@
     },
     {
       "path": "./packages/util/workspace-path"
+    },
+    {
+      "path": "./packages/util/file-drag"
     },
     {
       "path": "./packages/util/code-language"
@@ -394,6 +418,21 @@
       "path": "./packages/experimental/tool-worktree"
     },
     {
+      "path": "./packages/experimental/forge"
+    },
+    {
+      "path": "./packages/experimental/forge-github"
+    },
+    {
+      "path": "./packages/experimental/forge-session"
+    },
+    {
+      "path": "./packages/experimental/forge-bundle"
+    },
+    {
+      "path": "./packages/experimental/client-ui-forge/tsconfig.host.json"
+    },
+    {
       "path": "./packages/session/tool-working-directory"
     },
     {
@@ -485,6 +524,12 @@
     },
     {
       "path": "./packages/core/tools"
+    },
+    {
+      "path": "./packages/core/tool-executor-native"
+    },
+    {
+      "path": "./packages/core/tool-executor-ptc"
     },
     {
       "path": "./packages/core/agent-tool-presentation"
@@ -613,6 +658,9 @@
       "path": "./packages/shell/tool-bash"
     },
     {
+      "path": "./packages/deliverables/deliverable-file-references"
+    },
+    {
       "path": "./packages/deliverables/tool-present"
     },
     {
@@ -623,6 +671,9 @@
     },
     {
       "path": "./packages/fs/fs-local"
+    },
+    {
+      "path": "./packages/fs/fs-patch"
     },
     {
       "path": "./packages/fs/fs-observation-policy"
@@ -667,6 +718,9 @@
       "path": "./packages/web/web-search-deepseek"
     },
     {
+      "path": "./packages/web/web-deepseek-api"
+    },
+    {
       "path": "./packages/web/web-fetch-http"
     },
     {
@@ -688,6 +742,9 @@
       "path": "./packages/test-support/agent-loop-testkit"
     },
     {
+      "path": "./packages/test-support/tool-testkit"
+    },
+    {
       "path": "./packages/acp/acp"
     },
     {
@@ -707,6 +764,9 @@
     },
     {
       "path": "./packages/bundle/web-app"
+    },
+    {
+      "path": "./packages/util/official-bundles"
     },
     {
       "path": "./packages/boot/app-boot"
@@ -763,6 +823,12 @@
       "path": "./packages/subagent/subagent-codex"
     },
     {
+      "path": "./packages/experimental/subagent-oar"
+    },
+    {
+      "path": "./packages/experimental/tool-subagent-oar"
+    },
+    {
       "path": "./packages/subagent/subagent-dsh-sdk"
     },
     {
@@ -782,6 +848,12 @@
     },
     {
       "path": "./packages/experimental/inspector-profile"
+    },
+    {
+      "path": "./packages/experimental/liveshare-protocol/tsconfig.host.json"
+    },
+    {
+      "path": "./packages/experimental/liveshare/tsconfig.host.json"
     },
     {
       "path": "./packages/experimental/tool-agent-team"

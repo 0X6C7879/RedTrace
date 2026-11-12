@@ -1,0 +1,12 @@
+{
+  "command": "/opt/homebrew/opt/node@24/bin/node",
+  "args": [
+    "--input-type=module",
+    "-e",
+    "import assert from'node:assert/strict';import{readdirSync}from'node:fs';import{Store}from'./packages/redtrace-engine/src/store.ts';import{LegionStore}from'./packages/redtrace-engine/src/legion-store.ts';const s=new Store(\"/Users/lxy/Downloads/RedTrace/.redtrace/engine.db\"),l=new LegionStore(s),c=l.campaign();try{assert.equal(c.status,'stopped');assert.equal(c.workerName,undefined);assert.equal(c.previousSessionId,undefined);assert.equal(s.projects().length,0);assert.equal(s.runs().length,0);assert.deepEqual(readdirSync(\"/Users/lxy/Downloads/RedTrace/.redtrace/sessions\"),[]);assert.equal(JSON.parse(s.db.prepare(\"SELECT value FROM metadata WHERE key='legion-cutover'\").get().value).backupSha256,\"a38f21cf88edf3d34b90552763497101a62deb669a896960b0282eef15f3f0a6\");l.saveCampaign({...c,hasSession:false});console.log('Fresh never-activated cutover Commander marked hasSession=false; no historical Session ignored')}finally{s.close()}"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "status": 0,
+  "stdout": "Fresh never-activated cutover Commander marked hasSession=false; no historical Session ignored\n",
+  "stderr": ""
+}

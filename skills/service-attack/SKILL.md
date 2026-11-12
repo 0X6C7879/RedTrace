@@ -15,22 +15,12 @@ description: "直连网络服务攻击链。用于已经识别/枚举的非专�
 
 ## 开局与收尾
 
-开局第一件事：Read `./notes.md`。没有则 `python ~/.claude/skills/bin/notes.py init`。只按已拿下/凭据继续。
-走到哪条链，才 Read **一份** `references/<file>.md`。禁止开局全读、禁止凭记忆写 payload。
-监听 / sudo / 输密码 / Permission denied：立刻停，说明等操作者做什么，等回报。不要假装已成功。
-收尾：
-1. 追加 `./notes.md`
-2. `python ~/.claude/skills/bin/modules.py tail <本模块名>`
-   Read 备用：`~/.claude/skills/shared/modules.yaml`
-   禁止 `./modules.yaml` 和 `python ../bin/...`
-3. 优先 `default_next`；`never_default` 不得当作默认（操作者点名除外）
-4. 名册外的名字不许建议
-5. 停。等操作者选 `/模块` 或 `/clear`
-`/edr-bypass` 半条链未完：打通后回本模块，不要 /clear。
-
+读取当前 Step 契约、引用的 Fact 与已有证据文件，只按已验证通道和凭据继续；按当前链路只加载必要 reference。
+监听、权限或认证失败时核对反馈与前置条件，尝试授权范围内的有效替代路径；不等待操作者选择模块，也不伪造成功。
+将关键命令、输出和可复用进展保存到工作目录证据文件；关键突破及时 `submit_fact`。当前目标仍有可执行路径时自动继续，跨题调度交给 Commander，同题协作交给 General。
+Step 结束前必须提交至少一条有真实证据的汇总 Fact；无突破则汇总已验证失败、限制和阻塞，再调用 `finish_step({summary})`。可交付成果通过 `submit_finding` 引用 Fact。
 
 ---
-
 ## 0. 工作方式
 
 每条攻击链按你的半自动模式写：
@@ -233,4 +223,4 @@ vendor + exact model/product
 
 ## 完成后
 
-写入 `./notes.md`。候选只按「开局与收尾」跑 `python ~/.claude/skills/bin/modules.py tail`。
+写入 `./notes.md`。按「开局与收尾」提交真实 Fact 后继续当前目标。

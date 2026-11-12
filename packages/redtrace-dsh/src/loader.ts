@@ -7,7 +7,7 @@ const codeRoot = path.resolve(process.env.REDTRACE_CODE_ROOT || repoRoot)
 
 /** Load a module from the DSH harness or this repository by repo-relative path. */
 export async function load(relative: string): Promise<any> {
-  const root = relative.startsWith('vendor/deepseek-harness/') ? codeRoot : repoRoot
+  const root = relative.startsWith('vendor/deepseek-harness/') || relative.startsWith('packages/redtrace-dsh/lib/') ? codeRoot : repoRoot
   return import(pathToFileURL(path.join(root, relative)).href)
 }
 

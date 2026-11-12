@@ -1,0 +1,23 @@
+{
+  "before": {
+    "steps": 0,
+    "runs": 0,
+    "auditRuns": 0
+  },
+  "after": {
+    "steps": 0,
+    "runs": 0,
+    "auditRuns": 0
+  },
+  "projects": [],
+  "agentSessionsPendingRemoval": [],
+  "agentSessions": 0,
+  "backup": {
+    "path": "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/E7-cutover/runtime-backup-1794381373725/BACKUP.tar.gz",
+    "sha256": "a38f21cf88edf3d34b90552763497101a62deb669a896960b0282eef15f3f0a6"
+  },
+  "configurationMigrated": true,
+  "installedSkillsMigrated": 18,
+  "retainedArtifacts": 0,
+  "serviceStarted": false
+}

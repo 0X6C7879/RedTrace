@@ -1,0 +1,92 @@
+[
+  {
+    "path": "skills/ad-attack/SKILL.md",
+    "before": "0c86e669e1d9afcd76f94e20de05c763d221d3f20a6627647e7055ee8bab9750",
+    "after": "b9e6e21147d06748c15bce1b9275fb2b90af9465eacdd9184f57d1e770545cd8"
+  },
+  {
+    "path": "skills/api-testing/SKILL.md",
+    "before": "ee06d82e191d8d73993c9374e21528845c4ad86bf10e8df9894a2b8404a9d229",
+    "after": "99bdc04871be4de7f042d3c5eccbaf22069f5d58c3b6b677e17b4162c4fa8326"
+  },
+  {
+    "path": "skills/exploit-file-upload/SKILL.md",
+    "before": "f5796ac2797ede821fc02a60e9cf5e34ac141ca0c6fc92d604de6b458e751c99",
+    "after": "7e3668a736437a20e0455266d2f350872e07b898af9d0f6cabc721d847284129"
+  },
+  {
+    "path": "skills/exploit-logic/SKILL.md",
+    "before": "69b0d3f3e8310c522e42134af723604894122f1fa0c536dbc9dcdb555afb4668",
+    "after": "ee5c8cabdc706ff0952d1b7a3bcdb41ac5a87e8cd4785c1ab415854b6915121c"
+  },
+  {
+    "path": "skills/exploit-race/SKILL.md",
+    "before": "318db9a6a3bfb935f766290261fcd0f69264d3547d2197c262cd45221cbc7d99",
+    "after": "ec5f9951d7a8f453169ac9f1d2c61f3568e9f184c6890c869c9d055c0cab2429"
+  },
+  {
+    "path": "skills/exploit-smuggling/SKILL.md",
+    "before": "5348147108e6ddfc74a0f61ec680b8b941bd5f0f0cd9a81178b796c56fabd191",
+    "after": "06c524c148d434a6ca68b847dbd5031c01b09e297d181f168e9a6fbb24888491"
+  },
+  {
+    "path": "skills/exploit-sqli/SKILL.md",
+    "before": "e309504842920c736e124780314fdd0ec099f1a74a10b2c9ab73b1a444508421",
+    "after": "993111d00daf402752f27d53e0acd3c26f262ad6fe31efc49c0ff0a0d0a16621"
+  },
+  {
+    "path": "skills/exploit-ssrf/SKILL.md",
+    "before": "f53d9893599e0532753ca5c251fae15eb1778cfd2f41cb62fbd0978d226ef97d",
+    "after": "6af7333aa28743f7a35ac226be882d29cac476b33b616230f4abf1f3aeed003d"
+  },
+  {
+    "path": "skills/exploit-xss/SKILL.md",
+    "before": "dc861d90a4de7c47b71455255acb0e67618ea6961b9821119aa258e9bbb16e59",
+    "after": "fd36e7831a6bb597130cc952eb6c6e7fdc198a086571a97ff9ed8dc1e213a3c6"
+  },
+  {
+    "path": "skills/privesc-linux/SKILL.md",
+    "before": "eb48b1579bbdfa214fa330390c5db3d966531cbab03cdce4208c4ea4c02fb981",
+    "after": "5b399066107375f3d4f10b08cad8338f25cda1c672293db0d1e660957220180b"
+  },
+  {
+    "path": "skills/privesc-win/SKILL.md",
+    "before": "54b99742c66dbe6966d08cd33777a6188e2b728a7636ab6a72ffdbade9f0147c",
+    "after": "91e8937113520b6f1ce171d0f3b2813751419286da3be556c7215b7c67dc8172"
+  },
+  {
+    "path": "skills/recon-crawl/SKILL.md",
+    "before": "843dc88cbf27807c3505f9556eb9913fcc3d0c73397ef1f69b5264ecbedbb740",
+    "after": "9972ed4d1b3cc2166d434ea2def0077f1c97109e9e0ee1cd4e74bd07918bef83"
+  },
+  {
+    "path": "skills/service-attack/SKILL.md",
+    "before": "09e226d7daf73e493f70ee1cde35a9923a5ddc0b04572ab58596b639d8b81175",
+    "after": "be3e63b4722d7ed8ab0c2325a2e0efaedaa85991eb5904c2619963f2531c5364"
+  },
+  {
+    "path": "skills/shell/SKILL.md",
+    "before": "bbc4d26337cad4d11416de8f047c29d9b71fd9996d3e797ab183c81fd236e8ec",
+    "after": "3f34d2c8c9a5206b1fe7b34106e06802e0048a4a28089625f10e07c4dac4d334"
+  },
+  {
+    "path": "skills/stagnation-recovery/SKILL.md",
+    "before": "fb0f62216637922e860b8de1ff1905a77637a5884b4b8df3ca5c89fa1ca089eb",
+    "after": "919de301b1191f0ef81594061f41f9f27d0e27d5f6373146cf68c6e27e2404c3"
+  },
+  {
+    "path": "skills/targeted-pentest/SKILL.md",
+    "before": "fdad7dc577a747c4d697a77804c854234e70929bf0efe2fc84c63c432e3bee5b",
+    "after": "7bbdd02431a4db073eca9e760b5a4fb91a76a535ae775c7054752c8f3220b5cf"
+  },
+  {
+    "path": "skills/tsecbench-api/SKILL.md",
+    "before": "033f57f7234967f7abda59940bef78fbd4abcab433d20a24518c3810427dee18",
+    "after": "df2f452e8e56eb387e731ab66ea812c05000bdc4454d29550a69b4007f03548c"
+  },
+  {
+    "path": "skills/tunnel/SKILL.md",
+    "before": "4dad71054229d6bbce7d084b701218a7e4bcc3439b33204732be186d37983106",
+    "after": "b948c2ba9796cd94173a7348c121917a65976ac19a88c042689a61e78e4a6859"
+  }
+]

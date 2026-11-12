@@ -16,10 +16,10 @@ const project = (s: Store) => s.createProject({ title: 'Current FGS', origin: 'L
 const remove = (s: Store, id: string, node: { id: string; version?: number }) => s.manageEvidence(id, { operation: 'delete', id: node.id, expectedVersion: node.version!, reason: 'No longer needed' })
 const merge = (s: Store, id: string, target: Fact | Finding, source: Fact | Finding) => s.manageEvidence(id, { operation: 'merge', id: target.id, expectedVersion: target.version!, sourceIds: [source.id], sourceVersions: { [source.id]: source.version! }, reason: 'Same confirmed result' })
 
-test('removed bodies disappear from SQL, delta pages and Reason tools while evidence and current content survive', async t => {
+test('removed bodies disappear from SQL, delta pages and Worker read tools while evidence and current content survive', async t => {
   const s = new Store(':memory:')
   try {
-    const id = project(s), run = s.claim(id, 'decide', worker), marker = 'REMOVED_BODY_' + 'x'.repeat(12000)
+    const id = project(s), run = s.claim(id,'execute',worker,s.addStep(id,{description:'Legion read-only fixture',sourceIds:['origin'],role:'soldier',taskKey:'fixture'}).id), marker = 'REMOVED_BODY_' + 'x'.repeat(12000)
     const a = s.addFact(id, 'Canonical', { evidence: [{ description: 'First tool proof', toolCallId: 'one' }] })
     const b = s.addFact(id, marker, { evidence: [{ description: 'Second tool proof', toolCallId: 'two' }] })
     const c = s.addFact(id, marker + 'deleted')
@@ -38,7 +38,6 @@ test('removed bodies disappear from SQL, delta pages and Reason tools while evid
     } while (page.hasMore)
     assert.ok(events.some(e => e.type === 'fact.deleted' && e.nodeId === c.id))
     assert.ok(events.some(e => e.type === 'fact.merged' && (e.payload as any).targetId === a.id))
-    s.acknowledgeEvidence(run.id, s.project(id).evidenceSeq!)
     const tools = graphTools({ store: s, run, worker, config, signal: new AbortController().signal }, () => {})
     for (const name of ['read_graph', 'read_graph_delta']) {
       const output = await tools.find(tool => tool.name === name)!.execute('fixture', name === 'read_graph' ? {} : { after: run.deliveredGraphCursor })
@@ -77,7 +76,7 @@ test('merge defaults preserve target content and invalid content rolls back all 
       assert.equal(s.node(id, b.id).id, b.id)
     }
     assert.equal((s.manageEvidence(id, input) as Fact).description, 'Keep target')
-    assert.equal(s.node<Step>(id, step.id).planVersion, 2)
+    assert.equal(s.node<Step>(id, step.id).planVersion, 1)
   } finally { s.close() }
 })
 

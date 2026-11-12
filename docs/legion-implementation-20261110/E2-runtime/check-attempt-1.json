@@ -1,0 +1,13 @@
+{
+  "command": "npm",
+  "args": [
+    "--prefix",
+    "/Users/lxy/Downloads/RedTrace/packages/redtrace-engine",
+    "run",
+    "check"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "status": 2,
+  "stdout": "\n> @redtrace/engine@0.4.0 check\n> tsc --noEmit\n\nsrc/legion-tools.ts(18,150): error TS2345: Argument of type '{ receiver: TString; type: TUnion<TLiteral<string>[]>; content: TString; projectId: TString; } | { receiver: TString; type: TUnion<TLiteral<string>[]>; content: TString; projectId?: undefined; }' is not assignable to parameter of type 'TProperties'.\n  Type '{ receiver: Type.TString; type: Type.TUnion<Type.TLiteral<string>[]>; content: Type.TString; projectId?: undefined; }' is not assignable to type 'TProperties'.\n    Property 'projectId' is incompatible with index signature.\n      Type 'undefined' is not assignable to type 'TSchema'.\nsrc/legion-tools.ts(19,146): error TS2345: Argument of type '{ projectId: TString; } | { projectId?: undefined; }' is not assignable to parameter of type 'TProperties'.\n  Type '{ projectId?: undefined; }' is not assignable to type 'TProperties'.\n    Property 'projectId' is incompatible with index signature.\n      Type 'undefined' is not assignable to type 'TSchema'.\nsrc/legion-tools.ts(20,182): error TS2345: Argument of type '{ after: TInteger; projectId: TString; } | { after: TInteger; projectId?: undefined; }' is not assignable to parameter of type 'TProperties'.\n  Type '{ after: Type.TInteger; projectId?: undefined; }' is not assignable to type 'TProperties'.\n    Property 'projectId' is incompatible with index signature.\n      Type 'undefined' is not assignable to type 'TSchema'.\nsrc/legion-tools.ts(23,244): error TS2345: Argument of type '{ role: TUnion<TLiteral<string>[]>; taskKey: TString; description: TString; sourceIds: TArray<TString>; goalId: TOptional<TString>; executionProfile: TOptional<...>; projectId: TString; } | { ...; }' is not assignable to parameter of type 'TProperties'.\n  Type '{ role: Type.TUnion<Type.TLiteral<string>[]>; taskKey: Type.TString; description: Type.TString; sourceIds: Type.TArray<Type.TString>; goalId: Type.TOptional<...>; executionProfile: Type.TOptional<...>; projectId?: undefined; }' is not assignable to type 'TProperties'.\n    Property 'projectId' is incompatible with index signature.\n      Type 'undefined' is not assignable to type 'TSchema'.\n",
+  "stderr": ""
+}

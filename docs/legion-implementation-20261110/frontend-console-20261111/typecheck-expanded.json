@@ -1,0 +1,10 @@
+{
+  "command": [
+    "/opt/homebrew/opt/node@24/bin/node",
+    "node_modules/typescript/bin/tsc",
+    "--noEmit"
+  ],
+  "status": 0,
+  "stdout": "",
+  "stderr": ""
+}

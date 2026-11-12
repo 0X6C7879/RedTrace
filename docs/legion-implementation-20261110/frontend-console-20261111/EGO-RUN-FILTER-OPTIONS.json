@@ -1,0 +1,12 @@
+{
+  "status": 0,
+  "signal": null,
+  "output": [
+    null,
+    "",
+    "[ { value: 'all', text: '全部执行会话' }, { value: 'run-8dff7046-b8ab-4048-8e4f-416960dbdd64', text: 'Soldier · soldier · 成功 · run-8dff7046-b8ab-4048-8e4f-416960dbdd64' }, { value: 'run-de63e21c-71d0-4d0d-ae17-262bc15d6eaa', text: 'Soldier · soldier · 成功 · run-de63e21c-71d0-4d0d-ae17-262bc15d6eaa' }, { value: 'run-eac15412-4350-4f53-bc8d-c84e35fee745', text: 'General · general · 成功 · run-eac15412-4350-4f53-bc8d-c84e35fee745' }, { value: 'run-f565e2a5-bee7-4bb9-a0e4-c8f500b3b3bb', text: 'Scout · scout · 成功 · run-f565e2a5-bee7-4bb9-a0e4-c8f500b3b3bb' } ]\n\n"
+  ],
+  "pid": 82924,
+  "stdout": "",
+  "stderr": "[ { value: 'all', text: '全部执行会话' }, { value: 'run-8dff7046-b8ab-4048-8e4f-416960dbdd64', text: 'Soldier · soldier · 成功 · run-8dff7046-b8ab-4048-8e4f-416960dbdd64' }, { value: 'run-de63e21c-71d0-4d0d-ae17-262bc15d6eaa', text: 'Soldier · soldier · 成功 · run-de63e21c-71d0-4d0d-ae17-262bc15d6eaa' }, { value: 'run-eac15412-4350-4f53-bc8d-c84e35fee745', text: 'General · general · 成功 · run-eac15412-4350-4f53-bc8d-c84e35fee745' }, { value: 'run-f565e2a5-bee7-4bb9-a0e4-c8f500b3b3bb', text: 'Scout · scout · 成功 · run-f565e2a5-bee7-4bb9-a0e4-c8f500b3b3bb' } ]\n\n"
+}

@@ -1,0 +1,45 @@
+[
+  {
+    "cmd": [
+      "npm",
+      "--prefix",
+      "/Users/lxy/Downloads/RedTrace/packages/redtrace-engine",
+      "run",
+      "check"
+    ],
+    "status": 0,
+    "stdout": "\n> @redtrace/engine@0.4.0 check\n> tsc --noEmit\n\n",
+    "stderr": ""
+  },
+  {
+    "cmd": [
+      "npm",
+      "--prefix",
+      "/Users/lxy/Downloads/RedTrace/packages/redtrace-engine",
+      "test"
+    ],
+    "status": 1,
+    "stdout": "RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)\n      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:103:13)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1402:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)\n      at Test.postRun (node:internal/test_runner/test:1542:19)\n      at Test.run (node:internal/test_runner/test:1467:12) {\n    errno: -2,\n    code: 'ENOENT',\n    syscall: 'spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',\n    path: '/Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',\n    spawnargs: [ '/Users/lxy/Downloads/RedTrace/tools/knowledge/knowledge.py', 'build', '--root', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-sIARA6/data', '--nuclei', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-sIARA6/nuclei', '--exploitdb', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-sIARA6/edb', '--nvd', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-sIARA6/nvd', '--allow-partial' ],\n    error: Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT\n        at Object.spawnSync (node:internal/child_process:1160:20)\n        at spawnSync (node:child_process:928:24)\n        at execFileSync (node:child_process:971:15)\n        at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)\n        at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:103:13)\n        at Test.runInAsyncScope (node:async_hooks:227:14)\n        at Test.run (node:internal/test_runner/test:1402:25)\n        at Test.processPendingSubtests (node:internal/test_runner/test:974:18)\n        at Test.postRun (node:internal/test_runner/test:1542:19)\n        at Test.run (node:internal/test_runner/test:1467:12),\n    status: null,\n    signal: null,\n    output: null,\n    pid: 0,\n    stdout: undefined,\n    stderr: undefined\n  }\n",
+    "stderr": ""
+  },
+  {
+    "cmd": [
+      "npm",
+      "run",
+      "dsh:build:redtrace"
+    ],
+    "status": 0,
+    "stdout": "paction-basic, /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/compaction/compaction-tool-result-pruner; /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/core/agent-default-model, /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/settings/settings; /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/experimental/client-ui-creation-recommendations, /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/experimental/creation-recommendations; /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/experimental/client-ui-plugin-recommendations, /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/experimental/plugin-recommendations; /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/llm/llm-deepseek, /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/llm/llm-deepseek-api-key; /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/preset/agent-preset, /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/preset/agent-preset-registry; /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/sandbox/sandbox-local, /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/sandbox/sandbox-windows-acl; /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/session/tool-working-directory, /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/session/working-directory; /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/ssh/fs-ssh, /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/ssh/ssh; /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/subagent/subagent-spawn-in-process, /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/subagent/tool-subagent; /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/vendor/cordis, /Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/vendor/include\n✓ Lockfile passes supply-chain policies (verified 6d ago)\nLockfile is up to date, resolution step is skipped\nAlready up to date\n\npackages/subprocess/subprocess-local postinstall$ node scripts/ensure-spawn-helper.mjs\npackages/subprocess/subprocess-local postinstall: Done\nDone in 2.9s using pnpm v11.28.5\n",
+    "stderr": ""
+  },
+  {
+    "cmd": [
+      "npm",
+      "run",
+      "dsh:test"
+    ],
+    "status": 0,
+    "stdout": " metadata (0.313792ms)\n✔ Explore can lazily load native REA without Reason selection; management veto revokes live scopes (3560.354583ms)\n✔ official Skill is byte-identical to the pinned package, with complete local references (5.162291ms)\n✔ reverse env defaults compact, preserves overrides and does not copy model credentials (0.112583ms)\n✔ native Skill loads real REA MCP only on demand, isolates Runs, bounds results and revokes live tools (2417.806334ms)\nℹ {\"initial\":{\"tools\":14,\"schemaBytes\":17999},\"activeTools\":170,\"compactSchemaBytes\":254673,\"statusPreviewBytes\":2025}\n✔ compact and full native MCP input schemas retain identical validation semantics (4802.612583ms)\nℹ {\"checked\":736,\"fullBytes\":436594,\"compactBytes\":254673,\"maxCompactParametersBytes\":11026}\n{\"level\":30,\"time\":1794310547900,\"application\":\"rea\",\"mode\":\"mcp\",\"layer\":\"server\",\"tool\":\"analyze_javascript_application\",\"durationMs\":2426.59,\"status\":\"ok\",\"msg\":\"MCP tool execution completed\"}\n{\"level\":40,\"time\":1794310547920,\"application\":\"rea\",\"mode\":\"mcp\",\"layer\":\"server\",\"tool\":\"inspect_evm_interface\",\"durationMs\":0.68,\"status\":\"error\",\"msg\":\"MCP tool execution completed\"}\n{\"level\":30,\"time\":1794310549031,\"application\":\"rea\",\"mode\":\"mcp\",\"layer\":\"server\",\"tool\":\"inspect_managed_artifact\",\"durationMs\":17.99,\"status\":\"ok\",\"msg\":\"MCP tool execution completed\"}\n{\"level\":30,\"time\":1794310549074,\"application\":\"rea\",\"mode\":\"mcp\",\"layer\":\"server\",\"tool\":\"inspect_managed_members\",\"durationMs\":5.6,\"status\":\"ok\",\"msg\":\"MCP tool execution completed\"}\n{\"level\":40,\"time\":1794310549111,\"application\":\"rea\",\"mode\":\"mcp\",\"layer\":\"server\",\"tool\":\"inspect_jeb_client\",\"durationMs\":17.4,\"status\":\"error\",\"msg\":\"MCP tool execution completed\"}\n✔ real JavaScript/managed evidence and CLI, with structured EVM/optional-provider boundaries (5686.624ms)\n﹣ real Ghidra ELF/PE decompilation, same-Run reuse, cancellation and process cleanup (0.100125ms) # SKIP\n✔ session query and identities stay absent for all roles, including an older manifest (84.842625ms)\n✔ channel plugin toggle updates live remote tool registrations (0.923416ms)\nℹ tests 58\nℹ suites 0\nℹ pass 57\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 16688.833958\n",
+    "stderr": ""
+  }
+]

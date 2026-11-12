@@ -46,8 +46,8 @@ Common installation paths:
    multiple results. Ask for a URL or offer to start a server when none exist.
 2. Write reusable scripts to `$TMP_DIR/playwright-test-*.js` unless the user
    asks to save them in the project. Use `PW_SCRIPT_DIR` to preserve scripts.
-3. Use a visible browser by default. Use `headless: true` only when requested
-   or when the environment has no display.
+3. Use `headless: true` by default for unattended Workers and containers.
+   Use a visible browser only when explicitly needed and a display is available.
 4. Put the target URL in a constant or environment variable.
 5. Run scripts with `node "$SKILL_DIR/run.js" <script.js>`.
 6. Report actions, failures, and artifact paths. Do not claim success without
@@ -75,7 +75,7 @@ const targetUrl = process.env.TARGET_URL || 'http://localhost:3000';
 const artifactDir = process.env.PW_ARTIFACT_DIR || os.tmpdir();
 
 (async () => {
-  const browser = await chromium.launch({ headless: false });
+  const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
     await page.goto(targetUrl);
@@ -96,7 +96,7 @@ node "$SKILL_DIR/run.js" "$TMP_DIR/playwright-test-page.js"
 For short one-off tasks, use inline execution:
 
 ```bash
-node "$SKILL_DIR/run.js" -e "const browser = await chromium.launch({headless: false}); try { const page = await browser.newPage(); await page.goto('https://example.com'); console.log(await page.title()); } finally { await browser.close(); }"
+node "$SKILL_DIR/run.js" -e "const browser = await chromium.launch({headless: true}); try { const page = await browser.newPage(); await page.goto('https://example.com'); console.log(await page.title()); } finally { await browser.close(); }"
 ```
 
 The `-e` process exits as soon as the snippet settles, so close the browser

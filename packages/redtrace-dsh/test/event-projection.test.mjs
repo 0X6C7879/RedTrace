@@ -204,3 +204,17 @@ test('accumulateUsage ignores events without provider usage', () => {
   assert.equal(task.usage, undefined)
 })
 
+
+
+test('native persisted event times and separate system messages survive repeated historical projection', () => {
+  const event={type:'system/message',seq:7,time:Date.parse('2026-11-01T01:02:03.000Z'),data:{message:{role:'system',content:[{type:'text',text:'You are COMMANDER. Verify actual target evidence.'}]}}}
+  const project=()=>eventProjection({sessionId:'native-command',type:'commander'},event)
+  const first=project(),second=project()
+  assert.equal(first[0].timestamp,'2026-11-01T01:02:03.000Z')
+  assert.deepEqual(first,second)
+  assert.equal(first[0].kind,'system.prompt')
+  assert.equal(first[0].content,'You are COMMANDER. Verify actual target evidence.')
+  const task={sessionId:'native-command',type:'commander'}
+  assert.equal(eventProjection(task,event).length,1)
+  assert.equal(eventProjection(task,{...event,seq:8}).length,0)
+})

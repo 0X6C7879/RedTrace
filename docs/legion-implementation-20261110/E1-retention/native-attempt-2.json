@@ -1,0 +1,11 @@
+{
+  "command": "node",
+  "args": [
+    "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/E1-retention/smoke.mjs",
+    "/Users/lxy/Downloads/RedTrace"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "status": 1,
+  "stdout": "",
+  "stderr": "node:internal/modules/run_main:107\n    triggerUncaughtException(\n    ^\n\nAssertionError [ERR_ASSERTION]: [{\"owner\":\"run-7b9fcc02-af3b-4aee-96e9-20ee56565156\",\"pointer\":\"\",\"reason\":\"session \\\"run-7b9fcc02-af3b-4aee-96e9-20ee56565156\\\": stored log is corrupt: SessionFormatError: format v4 message requires a producer-owned source kind (raw log: /var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/legion-native-retention-OwpfqF/sessions/--var-folders-l0-qt5vh8dd3mj49wyzx0c5xpww0000gp-T-legion-native-retention-OwpfqF-proj_001--/run-7b9fcc02-af3b-4aee-96e9-20ee56565156/session.v4.jsonl)\"}]\n\nfalse !== true\n\n    at file:///Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/E1-retention/smoke.mjs:41:10 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n\nNode.js v24.21.0\n"
+}

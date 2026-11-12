@@ -7,6 +7,10 @@ function auditPage() {
     runs: [],
     events: [],
     selectedTaskId: '',
+    selectedScope: 'project',
+    selectedRun: 'all',
+    commanderCampaign: null, commanderCursor: 0, commanderAvailable: false, commanderHasMore: false,
+    streamState: 'idle', workspaceError: '',
     taskUsage: null,
     selectedProvider: 'all',
     selectedWorker: 'all',
@@ -16,6 +20,7 @@ function auditPage() {
     usageTimer: 0,
     workspacePath: '',
     workspaceSource: '',
+    auditEvidence: null,
     workspaceEntries: [],
     selectedFile: null,
     fileLoading: false,
@@ -38,6 +43,8 @@ function auditPage() {
       }
       if (!this.initialized) {
         await this.initAudit();
+      } else if (this.selectedScope === 'commander') {
+        await this.loadCommanderLog();
       } else if (this.selectedTaskId) {
         await this.selectTask(this.selectedTaskId);
       }
@@ -48,10 +55,11 @@ function auditPage() {
       this.loading = true;
       try {
         await this.loadTasks();
+        if (this.selectedScope === 'commander' || this.selectedTaskId) return;
         if (this.tasks.length) await this.selectTask(this.tasks[0].id);
+        else await this.selectCommander();
       } catch (error) {
         this.error = error.message;
-      } finally {
         this.loading = false;
       }
     },
@@ -83,10 +91,13 @@ function auditPage() {
 
     async selectTask(projectId) {
       if (!projectId) return;
+      const switching = this.selectedScope !== 'project' || this.selectedTaskId !== projectId;
       this.disconnectStream();
+      this.loading = true;
+      this.selectedScope = 'project';
       this.selectedTaskId = projectId;
-      this.selectedProvider = 'all';
-      this.selectedWorker = 'all';
+      if (switching) { this.selectedRun = 'all'; this.selectedProvider = 'all'; this.selectedWorker = 'all'; }
+      this.auditEvidence = null;
       this.events = [];
       this.runs = [];
       this.renderWindow = 150;
@@ -106,6 +117,7 @@ function auditPage() {
         this.request(`/audit/tasks/${encodeURIComponent(projectId)}/usage`),
         this.loadWorkspace(''),
       ]);
+      if (this.selectedScope !== 'project' || this.selectedTaskId !== projectId) return;
       if (results[0].status === 'fulfilled') this.runs = results[0].value;
       if (results[1].status === 'fulfilled') {
         this.events = results[1].value;
@@ -113,10 +125,60 @@ function auditPage() {
         if (this.events.length < 500) this._hasServerMore = false;
       }
       if (results[2].status === 'fulfilled') this.taskUsage = results[2].value;
-      if (results[1].status === 'rejected') this.error = results[1].reason.message;
+      this.error = results.slice(0, 3).flatMap((result, index) => result.status === 'rejected' ? [(['运行记录', '会话日志', '用量'][index])+ '读取失败：' + result.reason.message] : []).join('；');
       if (this.active) this.connectStream();
       this.$nextTick(() => this.scrollToBottom());
+      this.loading = false;
     },
+
+    async selectCommander() {
+      this.disconnectStream();
+      this.selectedScope = 'commander'; this.selectedTaskId = ''; this.selectedRun = 'all';
+      this.selectedProvider = 'all'; this.selectedWorker = 'all';
+      this.events = []; this.runs = []; this.taskUsage = null; this.workspaceEntries = [];
+      this.selectedFile = null; this.workspaceError = ''; this.commanderCursor = 0;
+      this.renderWindow = 150; this.reindexEvents();
+      await this.loadCommanderLog(true);
+    },
+    async loadCommanderLog(reset = false) {
+      this.loading = true; this.error = '';
+      try {
+        const board = await this.request('/v2/legion');
+        if (this.selectedScope !== 'commander') return;
+        if (reset || this.commanderCampaign?.sessionId !== board.campaign.sessionId) {
+          this.commanderCursor = 0; this.events = []; this.reindexEvents();
+        }
+        this.commanderCampaign = board.campaign;
+        const page = await this.request('/v2/legion/session/events?offset=' + this.commanderCursor + '&limit=100');
+        if (this.selectedScope !== 'commander') return;
+        if (page.sessionId !== this.commanderCampaign.sessionId) throw Error('Commander 会话已切换，请刷新当前会话');
+        for (const event of page.events) if (!this._eventKeys.has(this.eventKey(event))) { this.events.push(event); this.indexEvent(event); }
+        this.commanderCursor = page.nextOffset; this.commanderAvailable = page.available; this.commanderHasMore = page.hasMore;
+        this.renderWindow = this.events.length;
+        if (this.autoFollow) this.$nextTick(() => this.scrollToBottom());
+      } catch (error) { if (this.selectedScope === 'commander') this.error = 'Commander 原生日志读取失败：' + error.message; }
+      finally { if (this.selectedScope === 'commander') this.loading = false; }
+    },
+    commanderTokens() {
+      const usage = this.commanderCampaign?.usage;
+      return usage ? ['inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens'].reduce((sum,key)=>sum+Number(usage[key]||0),0) : null;
+    },
+    async refreshAudit() {
+      try { await this.loadTasks(); if (this.selectedScope === 'commander') await this.loadCommanderLog(); else if (this.selectedTaskId) await this.selectTask(this.selectedTaskId); }
+      catch (error) { this.error = error.message; }
+    },
+    runStatusLabel(status) {
+      return ({running:'执行中',paused:'执行暂停（非 Park）',unknown:'结果待核验',completed:'成功',succeeded:'成功',failed:'失败',cancelled:'已取消',stopped:'已停止',active:'进行中'})[status] || status || '状态未记录';
+    },
+    completionStatus(event) {
+      return event.data?.status || event.status || this.runFor(event)?.status || (event.error ? 'failed' : event.exit_code === 0 ? 'completed' : event.exit_code != null ? 'failed' : 'unknown');
+    },
+    eventTone(event) {
+      if (event.kind === 'run.completed') return ['completed','succeeded'].includes(this.completionStatus(event)) ? 'audit-state-success' : this.completionStatus(event) === 'failed' ? 'audit-state-error' : 'audit-state-warning';
+      if (event.error || event.exit_code != null && event.exit_code !== 0) return 'audit-state-error';
+      return event.kind.endsWith('completed') || event.kind === 'file.changed' ? 'audit-state-success' : 'audit-state-warning';
+    },
+    runChoice(run) { return this.providerLabel(run.task_type) + ' · ' + run.worker + ' · ' + this.runStatusLabel(run.status) + ' · ' + run.id; },
 
     connectStream() {
       if (!this.active || !this.selectedTaskId || this.source) return;
@@ -126,13 +188,16 @@ function auditPage() {
       source.addEventListener('audit', event => {
         try { this.queueEvent(JSON.parse(event.data)); } catch (_) {}
       });
-      source.onerror = () => {};
+      source.onopen = () => { if (this.source === source) this.streamState = 'connected'; };
+      source.onerror = () => { if (this.source === source) this.streamState = 'disconnected'; };
+      this.streamState = 'connecting';
       this.source = source;
     },
 
     disconnectStream() {
       this.source?.close();
       this.source = null;
+      this.streamState = 'idle';
       if (this._frameRequest) cancelAnimationFrame(this._frameRequest);
       this._frameRequest = 0;
       this._pendingEvents = [];
@@ -183,7 +248,8 @@ function auditPage() {
       }
       if (event.kind === 'run.started' || event.kind === 'run.completed') {
         this.refreshRuns();
-        this.loadTasks();
+        this.loadTasks().catch(error => { this.error = error.message; });
+        this.scheduleUsageRefresh();
       }
       // Durable assistant output is where provider usage lands on the run row.
       if (event.kind === 'assistant.message' || event.kind === 'thinking.message') {
@@ -202,12 +268,12 @@ function auditPage() {
     },
 
     async refreshUsage() {
-      if (!this.selectedTaskId) return;
+      const projectId = this.selectedTaskId;
+      if (!projectId || this.selectedScope !== 'project') return;
       try {
-        this.taskUsage = await this.request(
-          `/audit/tasks/${encodeURIComponent(this.selectedTaskId)}/usage`
-        );
-      } catch (_) {}
+        const usage = await this.request('/audit/tasks/' + encodeURIComponent(projectId) + '/usage');
+        if (this.selectedTaskId === projectId && this.selectedScope === 'project') this.taskUsage = usage;
+      } catch (error) { if (this.selectedTaskId === projectId) this.error = '用量读取失败：' + error.message; }
     },
 
     formatTokens(value) {
@@ -273,10 +339,12 @@ function auditPage() {
     },
 
     async refreshRuns() {
-      if (!this.selectedTaskId) return;
-      this.runs = await this.request(
-        `/audit/tasks/${encodeURIComponent(this.selectedTaskId)}/runs`
-      );
+      const projectId = this.selectedTaskId;
+      if (!projectId || this.selectedScope !== 'project') return;
+      try {
+        const runs = await this.request('/audit/tasks/' + encodeURIComponent(projectId) + '/runs');
+        if (this.selectedTaskId === projectId && this.selectedScope === 'project') this.runs = runs;
+      } catch (error) { if (this.selectedTaskId === projectId) this.error = '运行状态读取失败：' + error.message; }
     },
 
     workers() {
@@ -293,6 +361,7 @@ function auditPage() {
       if (['command.started', 'tool.started', 'skill.started'].includes(event.kind)) {
         if (this.hasCompletion(event) || this.isRedundantStarted(event)) return false;
       }
+      if (this.selectedRun !== 'all' && event.run_id !== this.selectedRun) return false;
       if (this.selectedProvider !== 'all' && this.eventAgent(event) !== this.selectedProvider) return false;
       return this.selectedWorker === 'all' || event.worker === this.selectedWorker;
     },
@@ -327,6 +396,7 @@ function auditPage() {
     },
 
     loadMoreOnScroll() {
+      if (this.selectedScope !== 'project') return;
       const scroller = this.$refs.auditTimeline;
       if (scroller?.scrollTop <= 120) this.loadMoreEvents();
     },
@@ -334,6 +404,7 @@ function auditPage() {
     async loadMoreEvents() {
       if (this._loadingMore || !this.hasMoreEvents() || !this.selectedTaskId) return;
       const scroller = this.$refs.auditTimeline;
+      const projectId = this.selectedTaskId;
       this._loadingMore = true;
       try {
         if (this.events.length > this.renderWindow) {
@@ -351,6 +422,7 @@ function auditPage() {
           const older = await this.request(
             `/audit/tasks/${encodeURIComponent(this.selectedTaskId)}/events${query}`
           );
+          if (this.selectedScope !== 'project' || this.selectedTaskId !== projectId) return;
           if (!older.length) {
             this._hasServerMore = false;
             return;
@@ -368,8 +440,8 @@ function auditPage() {
           await new Promise(resolve => this.$nextTick(resolve));
           if (scroller) scroller.scrollTop = previousTop + scroller.scrollHeight - previousHeight;
         }
-      } catch (_) {
-        this._hasServerMore = false;
+      } catch (error) {
+        this.error = '更早日志读取失败：' + error.message;
       } finally {
         this._loadingMore = false;
       }
@@ -377,9 +449,10 @@ function auditPage() {
 
     providerLabel(provider) {
       return {
-        bootstrap: 'Bootstrap',
-        reason: 'Reason',
-        explore: 'Explore',
+        commander: 'Commander',
+        general: 'General',
+        soldier: 'Soldier',
+        scout: 'Scout',
         dsh: 'DSH',
         mock: 'Mock',
       }[provider] || provider;
@@ -552,9 +625,16 @@ function auditPage() {
     },
 
     eventStatus(event) {
+      if (event.kind === 'run.completed') return this.runStatusLabel(this.completionStatus(event));
       if (event?.error) return '失败';
-      if (event?.exit_code != null) return `退出码 ${event.exit_code}`;
-      return event?.kind?.endsWith('completed') ? '已完成' : '运行中';
+      if (event?.exit_code != null) return '退出码 ' + event.exit_code;
+      if (event.kind === 'file.changed') return '变更已记录';
+      if (event?.kind?.endsWith('completed')) return '已完成';
+      const run = this.runFor(event);
+      if (run?.status === 'unknown') return '结果待核验';
+      if (run?.status === 'paused') return '执行暂停，结果未确认';
+      if (run && run.status !== 'running') return '未记录完成结果';
+      return '执行中';
     },
 
     displayText(value) {
@@ -625,6 +705,26 @@ function auditPage() {
       return '';
     },
 
+    retainedEvidence(event) {
+      const value = this.parseArguments(event.content);
+      return value && typeof value === 'object' && /^ev-[a-f0-9]{64}$/.test(value.evidenceId) ? value.evidenceId : '';
+    },
+    async readRetainedEvidence(event, more = false) {
+      const id = this.retainedEvidence(event), projectId = this.selectedTaskId;
+      if (!id || !projectId || this.selectedScope !== 'project') return;
+      if (!more) this.auditEvidence = { key:this.eventKey(event), projectId, id, content:'', meta:null, loading:false, error:'' };
+      const view = this.auditEvidence;
+      if (!view || view.id !== id) return;
+      view.loading = true; view.error = '';
+      try {
+        const page = await this.request('/v2/projects/' + encodeURIComponent(projectId) + '/evidence/' + encodeURIComponent(id) + '?offset=' + (more ? view.meta.nextOffset : 0));
+        if (this.auditEvidence !== view || this.selectedTaskId !== projectId) return;
+        if (page.encoding === 'base64') throw Error('二进制证据不能作为文本预览');
+        view.content += page.content; view.meta = { ...page, bytes:page.offset + page.bytes };
+      } catch (error) { view.error = error.message; }
+      finally { view.loading = false; }
+    },
+
     runFor(event) {
       return this.runs.find(run => run.id === event.run_id) || null;
     },
@@ -653,17 +753,22 @@ function auditPage() {
 
     async loadWorkspace(path = '') {
       if (!this.selectedTaskId) return;
+      const projectId = this.selectedTaskId;
       const query = new URLSearchParams({ path });
+      this.workspaceError = '';
       try {
         const data = await this.request(
           `/audit/tasks/${encodeURIComponent(this.selectedTaskId)}/workspace?${query}`
         );
+        if (this.selectedScope !== 'project' || this.selectedTaskId !== projectId) return;
         this.workspacePath = data.path || '';
         this.workspaceSource = data.source || '';
         this.workspaceEntries = data.entries || [];
       } catch (error) {
+        if (this.selectedTaskId !== projectId) return;
         this.workspaceEntries = [];
         this.workspaceSource = '';
+        this.workspaceError = error.message;
       }
     },
 
@@ -684,12 +789,15 @@ function auditPage() {
         await this.loadWorkspace(entry.path);
         return;
       }
+      const projectId = this.selectedTaskId;
       this.fileLoading = true;
       try {
-        this.selectedFile = await this.request(
+        const file = await this.request(
           `/audit/tasks/${encodeURIComponent(this.selectedTaskId)}/workspace/file?path=${encodeURIComponent(entry.path)}`
         );
+        if (this.selectedTaskId === projectId && this.selectedScope === 'project') this.selectedFile = file;
       } catch (error) {
+        if (this.selectedTaskId !== projectId || this.selectedScope !== 'project') return;
         this.selectedFile = { path: entry.path, content: '', binary: true, error: error.message };
       } finally {
         this.fileLoading = false;

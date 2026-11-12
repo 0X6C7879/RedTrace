@@ -13,7 +13,7 @@ import { taskPluginsSchema } from './task-plugins.ts'
 const text = Type.String({ minLength: 1, pattern: '\\S' }), refs = Type.Array(text, { minItems: 1 })
 const profile = Type.Union([Type.Literal('direct'), Type.Literal('isolated')])
 const requires = Type.Array(Type.String(), { uniqueItems: true, maxItems: 16 })
-const stepSchema = Type.Object({ description: text, sourceIds: refs, goalId: Type.Optional(text), creator: Type.Optional(text), priority: Type.Optional(Type.Integer()), executionProfile: Type.Optional(profile), requires: Type.Optional(requires), plugins: Type.Optional(taskPluginsSchema) })
+const stepSchema = Type.Object({ role: Type.Optional(Type.Union([Type.Literal('general'), Type.Literal('soldier'), Type.Literal('scout')])), taskKey: Type.Optional(text), parentStepId: Type.Optional(text), description: text, sourceIds: refs, goalId: Type.Optional(text), creator: Type.Optional(text), priority: Type.Optional(Type.Integer()), executionProfile: Type.Optional(profile), requires: Type.Optional(requires), plugins: Type.Optional(taskPluginsSchema) })
 
 export function graphRoutes(router: Router, store: Store, maxSteps: () => number | null = () => null) {
   const p = (c: RequestContext) => c.params.project
@@ -45,8 +45,7 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
     const graph = store.graph(p(c))
     const view = projectFgs(graph), live = liveSteps(graph)
     // The live layer is a canvas-only virtual overlay; exports and tools keep the pure projection.
-    const reason = legacyProjectInfo(graph.project, store.runsByStatus('running', p(c)).find(run => run.activity === 'decide')).reason
-    return { ...graph, reason, ...view, nodes: [...view.nodes, ...live.nodes], edges: [...view.edges, ...live.edges] }
+    return { ...graph, ...view, nodes: [...view.nodes, ...live.nodes], edges: [...view.edges, ...live.edges] }
   })
   router.add('GET', '/v2/projects/:project/nodes/:node', c => store.node(p(c), c.params.node))
   router.add('GET', '/v2/projects/:project/runs', c => { store.project(p(c)); return store.runs(p(c)) })
@@ -75,7 +74,7 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
   router.add('POST', '/v2/projects/:project/steps', async c => send(c.res, store.addStep(p(c), await body(c.req, stepSchema), maxSteps()), 201))
   router.add('PATCH', '/v2/projects/:project/steps/:node', async c => store.updateStep(p(c), c.params.node, await body(c.req, stepUpdateSchema)))
   router.add('DELETE', '/v2/projects/:project/steps/:node', c => store.updateStep(p(c), c.params.node, { status: 'cancelled' }))
-  router.add('POST', '/v2/projects/:project/facts', async c => { const b = await body(c.req, Type.Object({ description: text, creator: Type.Optional(text), evidence: Type.Array(Type.Object({ description: text, path: Type.Optional(text), runId: Type.Optional(text), toolCallId: Type.Optional(text) })) })); send(c.res, store.addFact(p(c), b.description, { creator: b.creator ?? 'human', evidence: b.evidence }), 201) })
+  router.add('POST', '/v2/projects/:project/facts', async c => { const b = await body(c.req, Type.Object({ description: text, creator: Type.Optional(text), evidence: Type.Array(Type.Object({ description: text, path: Type.Optional(text), artifactId: Type.Optional(text), runId: Type.Optional(text), toolCallId: Type.Optional(text) })) })); send(c.res, store.addFact(p(c), b.description, { creator: b.creator ?? 'human', evidence: b.evidence }), 201) })
   router.add('POST', '/v2/projects/:project/findings', async c => send(c.res, store.addFinding(p(c), await body(c.req, Type.Object({ title: text, description: text, type: Type.Optional(text), factIds: refs, creator: Type.Optional(text) }))), 201))
   router.add('POST', '/v2/projects/:project/observations', async c => { const b = await body(c.req, Type.Object({ content: text, creator: Type.Optional(text), stepId: Type.Optional(text) })); send(c.res, store.addInput(p(c), 'observation', b.content, b.creator, b.stepId), 201) })
   router.add('GET', '/v2/projects/:project/events', c => store.events(p(c), queryNumber(c.url, 'after', 0), queryNumber(c.url, 'limit', 100, 1, 500)))

@@ -1,0 +1,56 @@
+{
+  "state": {
+    "integrity": "ok",
+    "projects": 0,
+    "steps": 0,
+    "runs": 0,
+    "auditRuns": 0,
+    "credentialValuesSha256": "1af8c7f83307adf2b745bd2b819f1a52fae3acc1a388a0071f965eae63dfde44",
+    "resourcesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "resourceCount": 0,
+    "tasks": [
+      "commander",
+      "general",
+      "soldier",
+      "scout"
+    ],
+    "workers": [
+      {
+        "name": "local-flash",
+        "roles": [
+          "commander",
+          "general",
+          "soldier",
+          "scout"
+        ],
+        "maxRunning": 2
+      }
+    ],
+    "campaign": "stopped"
+  },
+  "sessions": [],
+  "process": {
+    "command": "pgrep",
+    "args": [
+      "-fl",
+      "run-redtrace-node|redtrace-engine/src/cli"
+    ],
+    "cwd": "/Users/lxy/Downloads/RedTrace",
+    "status": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  "command": {
+    "command": "/opt/homebrew/opt/node@24/bin/node",
+    "args": [
+      "--input-type=module",
+      "-e",
+      "import{DatabaseSync}from'node:sqlite';import{Configuration}from'/Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/config.ts';import{createHash}from'node:crypto';import{readdirSync}from'node:fs';const root=process.argv[1],d=new DatabaseSync(root+'/.redtrace/engine.db',{readOnly:true}),c=new Configuration(root),config=c.resolvedSnapshot().config,hash=x=>createHash('sha256').update(x).digest('hex');console.log(JSON.stringify({integrity:d.prepare('PRAGMA integrity_check').get().integrity_check,projects:d.prepare('SELECT COUNT(*) AS n FROM projects').get().n,steps:d.prepare(\"SELECT COUNT(*) AS n FROM nodes WHERE kind='step'\").get().n,runs:d.prepare('SELECT COUNT(*) AS n FROM runs').get().n,auditRuns:d.prepare('SELECT COUNT(*) AS n FROM audit_runs').get().n,credentialValuesSha256:hash(JSON.stringify(Object.entries(config.providers).map(([name,p])=>({name,key:p.apiKey,env:p.apiKeyEnv})))),resourcesSha256:hash(JSON.stringify(d.prepare('SELECT * FROM shared_resources ORDER BY id').all())),resourceCount:d.prepare('SELECT COUNT(*) AS n FROM shared_resources').get().n,tasks:Object.keys(c.read().raw.tasks??{}),workers:config.workers.map(w=>({name:w.name,roles:w.roles,maxRunning:w.maxRunning})),campaign:d.prepare(\"SELECT 1 FROM sqlite_master WHERE name='campaign'\").get()?JSON.parse(d.prepare('SELECT data FROM campaign').get()?.data??'null')?.status:null},null,2));d.close()",
+      "/Users/lxy/Downloads/RedTrace"
+    ],
+    "cwd": "/Users/lxy/Downloads/RedTrace",
+    "status": 0,
+    "stdout": "{\n  \"integrity\": \"ok\",\n  \"projects\": 0,\n  \"steps\": 0,\n  \"runs\": 0,\n  \"auditRuns\": 0,\n  \"credentialValuesSha256\": \"1af8c7f83307adf2b745bd2b819f1a52fae3acc1a388a0071f965eae63dfde44\",\n  \"resourcesSha256\": \"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\",\n  \"resourceCount\": 0,\n  \"tasks\": [\n    \"commander\",\n    \"general\",\n    \"soldier\",\n    \"scout\"\n  ],\n  \"workers\": [\n    {\n      \"name\": \"local-flash\",\n      \"roles\": [\n        \"commander\",\n        \"general\",\n        \"soldier\",\n        \"scout\"\n      ],\n      \"maxRunning\": 2\n    }\n  ],\n  \"campaign\": \"stopped\"\n}\n",
+    "stderr": ""
+  }
+}

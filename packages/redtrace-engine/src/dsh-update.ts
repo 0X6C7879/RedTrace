@@ -56,7 +56,7 @@ export async function dshUpdateRoutes(router: Router, root: string, scheduler: S
     if (codeRoot !== root) throw new HttpError(409, '独立运行目录请在源码目录执行 npm run dsh:update 后重新部署')
     if (job.state === 'running') throw new HttpError(409, 'DSH 更新正在进行')
     if ((await snapshot()).restartRequired) throw new HttpError(409, '请先重启 RedTrace，使已安装的 DSH 生效')
-    if (scheduler.activeRuns.length) throw new HttpError(409, '还有 Worker 正在运行，请等待任务结束后更新 DSH')
+    if (scheduler.activeRuns.length || scheduler.commanderRunning) throw new HttpError(409, '还有 Worker 正在运行，请等待任务结束后更新 DSH')
     scheduler.maintenance = true
     job = { state: 'running', message: '正在下载、构建并验证 DSH；调度已暂停' }
     const child = spawn(process.execPath, [path.join(root, 'scripts/update-dsh.mjs'), '--root', root], { cwd: root, env: { ...process.env, PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ''}` }, stdio: ['ignore', 'pipe', 'pipe'] })

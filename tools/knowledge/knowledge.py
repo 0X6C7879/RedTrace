@@ -449,14 +449,28 @@ def import_package(args):
         pointer = root / (".current-" + uuid.uuid4().hex); pointer.write_text(json.dumps(manifest)); pointer.replace(root / "current.json")
         print(json.dumps({"imported": manifest["generation"], "root": str(root), "network": "not used"}))
 
+def query_server(args):
+    import contextlib
+    import io
+    stream = sys.stdin
+    for line in stream:
+        try:
+            output = io.StringIO()
+            sys.stdin = io.StringIO(line)
+            with contextlib.redirect_stdout(output): query(args)
+            print(json.dumps({"result": json.loads(output.getvalue())}), flush=True)
+        except Exception as error: print(json.dumps({"error": str(error)}), flush=True)
+        finally: sys.stdin = stream
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(); commands = parser.add_subparsers(dest="command", required=True)
     builder = commands.add_parser("build"); builder.add_argument("--root", required=True)
     for name in ["nuclei", "exploitdb", "nvd", "searchsploit"]: builder.add_argument("--" + name)
     builder.add_argument("--allow-partial", action="store_true"); builder.add_argument("--update-from", nargs="+")
     search = commands.add_parser("query"); search.add_argument("--database", required=True)
+    server = commands.add_parser("query-server"); server.add_argument("--database", required=True)
     downloader = commands.add_parser("fetch"); downloader.add_argument("--directory", required=True); downloader.add_argument("--years", nargs="+", required=True)
     importer = commands.add_parser("import"); importer.add_argument("--root", required=True); importer.add_argument("--package", required=True); importer.add_argument("--allow-partial", action="store_true")
     args = parser.parse_args()
-    try: {"build": build, "query": query, "fetch": fetch, "import": import_package}[args.command](args)
+    try: {"build": build, "query": query, "query-server": query_server, "fetch": fetch, "import": import_package}[args.command](args)
     except Exception as error: print(json.dumps({"error": str(error)}), file=sys.stderr); sys.exit(1)

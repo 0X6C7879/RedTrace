@@ -1,3 +1,7 @@
+import { mountLegionContext } from './legion-context.mjs'
+import { Type } from 'typebox'
+import { body, queryNumber } from '../src/http.ts'
+import { attachLegionMailbox, runCommander, createCommanderController, readCommanderLog } from './legion.mjs'
 import {createHash, randomUUID} from 'node:crypto'
 import path from 'node:path'
 import { mkdir, realpath } from 'node:fs/promises'
@@ -38,11 +42,6 @@ export function executionEvidenceReadGuard(directory, cwd) {
   }
 }
 
-export async function mountReasonTools(scoped) {
-  scoped.tools.restrict({ allow: ['read'] })
-  await mount(scoped, 'packages/redtrace-dsh/lib/reason-read.js')
-}
-
 export { providerProfiles } from '../src/models.ts'
 
 export function mountActivityPrompt(scoped, run, step) {
@@ -61,94 +60,6 @@ export function refreshToolRegistrations(tools, enabled, register) {
 }
 
 const noticePrefix = '[RedTrace FGS] '
-const exploreNoticePrefix = '[RedTrace Reason] '
-const exploreNotice = message => {
-  if (message.source?.redtraceExploreNotice) return message.source.redtraceExploreNotice
-  const text = message.content?.[0]?.text
-  if (!text?.startsWith(exploreNoticePrefix)) return undefined
-  try { return JSON.parse(text.slice(exploreNoticePrefix.length)) } catch { return undefined }
-}
-const auditNotice = (store, notice, status, reason) => {
-  const row = store.db.prepare('SELECT data FROM audit_runs WHERE id=?').get(notice.fromRunId)
-  if (row) store.audit(JSON.parse(row.data), [{ event_uid: `explore-notice:${notice.notificationId}:${status}`,
-    kind: `explore.notification.${status}`, timestamp: new Date().toISOString(), data: { ...notice, ...(reason ? { reason } : {}) } }])
-}
-
-const invalidExploreNotice = (store, run, notice) => {
-  try {
-    const current = store.run(run.id), step = store.node(run.projectId, run.stepId, 'step')
-    if (store.project(run.projectId).status !== 'active' || current.status !== 'running' || step.status !== 'running' || step.deleted || step.replacedBy || store.node(run.projectId, step.goalId, 'goal').status !== 'open') return 'target_stopped'
-    if ((step.planVersion ?? 1) !== notice.planVersion) return 'contract_changed'
-    if (notice.sources.some(source => {
-      const node = store.node(run.projectId, source.id)
-      return node.deleted || node.lifecycle && node.lifecycle !== 'active' || (node.version ?? 1) !== source.version
-    })) return 'source_changed'
-  } catch { return 'target_or_source_missing' }
-}
-
-export function filterExploreNotices(store, run, messages) {
-  return messages.filter(message => {
-    const notice = exploreNotice(message), invalid = notice && invalidExploreNotice(store, run, notice)
-    if (invalid) auditNotice(store, notice, 'discarded', invalid)
-    return !invalid
-  })
-}
-
-export function pruneExploreNotices(store, run, agent, reason) {
-  for (const message of [...agent.inbox.nextStep]) {
-    const notice = exploreNotice(message)
-    if (!notice) continue
-    const invalid = reason || invalidExploreNotice(store, run, notice)
-    if (invalid && agent.inbox.remove(message.id)) auditNotice(store, notice, 'discarded', invalid)
-  }
-}
-
-export function notifyExplore(context, shared, input, message) {
-  const { store, run, signal } = context
-  const reject = reason => ({ ok: false, status: 'rejected', reason })
-  const fail = reason => ({ ok: false, status: 'failed', reason })
-  if (run.activity !== 'decide' || signal.aborted) return reject('reason_not_running')
-  let notice, agent, native
-  try {
-    if (store.run(run.id).status !== 'running') return reject('reason_not_running')
-    if (store.project(run.projectId).status !== 'active') return reject('project_inactive')
-    const text = typeof input.message === 'string' ? input.message.trim() : ''
-    const ids = input.sourceIds ?? []
-    if (!text || text.length > 2000 || !Array.isArray(ids) || ids.length > 16 || new Set(ids).size !== ids.length || ids.some(id => typeof id !== 'string' || !id.trim())) return reject('invalid_message_or_sources')
-    const step = store.node(run.projectId, input.stepId, 'step')
-    if (step.bootstrap || step.deleted || step.replacedBy || step.replacementPending || step.status !== 'running' || store.node(run.projectId, step.goalId, 'goal').status !== 'open') return reject('step_not_running')
-    const targets = store.runsByStatus('running', run.projectId).filter(r => r.activity === 'execute' && r.stepId === step.id)
-    if (targets.length !== 1) return reject('no_unique_running_target')
-    const target = targets[0], task = shared?.tasks.get(target.id)
-    if (!task || task.type !== 'explore' || task.projectId !== run.projectId || task.intentId !== step.id || task.runId !== target.id || task.sessionId !== target.id || task.committed || task.cancelled || task.concludeOnly) return reject('session_not_ready_or_closing')
-    agent = task.handle?.agent
-    if (!agent || String(agent.id) !== target.id || agent.status !== 'running') return reject('session_not_ready_or_idle')
-    const sources = [...ids].sort().map(id => {
-      const node = store.node(run.projectId, id)
-      if (!['fact', 'finding'].includes(node.kind) || node.deleted || node.lifecycle && node.lifecycle !== 'active') throw new Error('invalid_source')
-      return { id, version: node.version ?? 1 }
-    })
-    if (!task.notificationEpoch) return reject('session_not_ready')
-    const planVersion = step.planVersion ?? 1
-    const notificationId = createHash('sha256').update(JSON.stringify([run.projectId, target.id, task.notificationEpoch, planVersion, text, sources])).digest('hex')
-    notice = { notificationId, fromRunId: run.id, projectId: run.projectId, stepId: step.id, runId: target.id, sessionId: task.sessionId, planVersion, sources, message: text }
-    pruneExploreNotices(store, target, agent)
-    const pending = agent.inbox.nextStep.map(exploreNotice).filter(Boolean)
-    const response = { notificationId, stepId: step.id, runId: target.id, sessionId: task.sessionId }
-    if (pending.some(n => n.notificationId === notificationId) || store.db.prepare('SELECT 1 FROM audit_events WHERE event_uid=?').get(`explore-notice:${notificationId}:queued`)) return { ok: true, status: 'duplicate', ...response }
-    if (pending.length >= 8) return reject('queue_full')
-    native = message(text, { redtraceExploreNotice: notice })
-    // Native inject is synchronous and non-waking: no check-to-send await or cancellation.
-    agent.inject(native)
-    auditNotice(store, notice, 'queued')
-    return { ok: true, status: 'queued', ...response }
-  } catch (error) {
-    if (notice && native && agent?.inbox.nextStep.some(m => m.id === native.id)) return fail('enqueue_or_audit_uncertain; do not automatically retry')
-    const reason = error instanceof Error ? error.message : String(error)
-    return error?.status === 404 || reason === 'invalid_source' ? reject(error?.status === 404 ? 'target_or_source_missing' : 'invalid_source') : fail(`delivery_failed: ${reason}`)
-  }
-}
-
 const pendingGraphNotice = agent => {
   for (const message of agent.inbox.nextStep) {
     if (message.source?.redtraceGraphUpdate) return { message, update: message.source.redtraceGraphUpdate }
@@ -198,13 +109,14 @@ export async function apply(ctx, options) {
   const root = path.resolve(options.root), managed = path.dirname(options.configuration)
   const { createUserMessage, HarnessError } = await load('vendor/deepseek-harness/packages/llm/llm/lib/index.js')
   const { SessionId } = await load('vendor/deepseek-harness/packages/core/session/lib/index.js')
+  let commanderController
   const engine = await createEngine({ root, database: options.database, configuration: options.configuration, autoStart: false,
     // The gate is created before the manager exists; it only dereferences it
     // when a request or dispatch actually asks, long after boot settles.
     adapterAvailability: () => pluginId => manager.running(pluginId),
     probeModel: (config, worker, signal) => probeModel(ctx, engine.configuration, config, worker, signal),
     selectWorker: (worker, activity, step) => {
-      const preset = activity === 'decide' ? 'reason' : step?.bootstrap ? 'bootstrap' : 'explore'
+      const preset = step?.role ?? 'soldier'
       if (!state()?.presets.has(preset)) return undefined
       return worker
     },
@@ -213,7 +125,7 @@ export async function apply(ctx, options) {
       return context.run.backend === 'mock' ? runMock(context) : executeDsh(context)
     } })
   const runtime = { runtime: true, root, server: options.server, sessionRoot: path.join(managed, 'sessions'), skillsDir: path.join(managed, 'skills'), workspacesDir: engine.configuration.workspaceRoot,
-    pluginsManifest: path.join(managed, 'plugins.json'), engineScheduler: engine.scheduler }
+    pluginsManifest: path.join(managed, 'plugins.json'), engineScheduler: { start() { engine.scheduler.start(); commanderController?.start() }, async close() { await commanderController?.close(); await engine.scheduler.close() } } }
   // The repo-local security-asset map (wordlists / payloads / PoC references /
   // target-upload tunnel binaries) as stable env names every worker can use.
   // `??=` keeps a user-provided override; the names are neither credential-
@@ -227,26 +139,26 @@ export async function apply(ctx, options) {
   // The engine handler serves the Web UI and the whole API; the Cordis web
   // server only owns the plugin-manager routes and falls through to it.
   ctx.effect(() => ctx.webServer.registerFallback(engine.handler))
-  let profileRevision = '', watcher
+  let profileRevision = '', profileSignature = '', watcher
   let refreshPending = Promise.resolve()
   const refresh = () => refreshPending = refreshPending.catch(() => {}).then(refreshProfiles)
   const refreshProfiles = async () => {
     const shared = state(), mcpConfigs = engine.capabilities.mcpConfigs()
     if (shared && mcpSignature(mcpConfigs) !== shared.mcpSignature) await shared.remountMcp?.(mcpConfigs)
-    const { raw, revision } = engine.configuration.read()
-    if (revision === profileRevision) return
-    const config = engine.configuration.resolve(raw), { providers } = providerProfiles(config)
+    const { raw, revision, config, signature } = engine.configuration.resolvedSnapshot()
+    if (signature === profileSignature) return
+    const { providers } = providerProfiles(config)
     // File-watch delivery can lag; the model snapshot and scheduler must use the same revision.
     engine.scheduler.update(config)
     applyCommonEnv(config.commonEnv)
     const adapter = [...ctx.get('loader').entries()].find(entry => entry.options.id === 'llm-pi-ai')
     if (!adapter) throw new Error('DSH llm-pi-ai profile entry is missing')
     await adapter.fiber.await()
-    await adapter.update({ config: { providers, credentialSource: { root: engine.configuration.root, filename: engine.configuration.filename, revision } } })
+    await adapter.update({ config: { providers, polling: config.llmPolling, credentialSource: { root: engine.configuration.root, filename: engine.configuration.filename, revision } } })
     await adapter.fiber.await()
     if (shared) shared.snapshot = { revision, workers: config.workers.map(w => ({ ...w })), providers, env: {}, commonEnv: config.commonEnv, tasks: raw.tasks, mcpConfigs,
       limits: { maxWorkers: config.maxWorkers, maxProjectWorkers: config.maxProjectWorkers, maxRunningProjects: config.maxRunningProjects, interval: 0 } }
-    profileRevision = revision
+    profileRevision = revision; profileSignature = signature
   }
   const replacements = {
     // The domain replacement merges fresh MCP configs and pulls the first
@@ -257,34 +169,46 @@ export async function apply(ctx, options) {
   const manager = new PluginManager(ctx, runtime, repoRoot, load, replacements, async () => {
     await engine.operations.synchronizeAdapters()
     await Promise.all([...sessionRefresh.values()].map(refresh => refresh()))
-    engine.scheduler.wake()
+    engine.scheduler.wake(); commanderController?.wake()
   })
   try {
     await manager.boot(); registerPluginRoutes(ctx, manager)
+    commanderController = createCommanderController(ctx, engine,()=>!!state()?.presets.has('commander'))
+    if (manager.running('redtrace-scheduler')) commanderController.start()
     engine.router.add('GET', '/runtime/config', async () => { await refresh(); return state()?.snapshot ?? { revision: '', workers: [] } })
+    engine.router.add('GET', '/v2/legion/session/events', c => readCommanderLog(ctx, engine, queryNumber(c.url, 'offset', 0), queryNumber(c.url, 'limit', 100, 1, 500), c.signal))
+    engine.router.add('POST','/v2/legion/resume',()=>commanderController.resume())
+    engine.router.add('POST','/v2/legion/pause',async()=>{await commanderController.close();await engine.scheduler.close();engine.legion.saveCampaign({...engine.legion.campaign(),status:'stopped'});return engine.legion.board()})
+    engine.router.add('POST','/v2/legion/deadline',async c=>{const input=await body(c.req,Type.Object({deadline:Type.Integer({minimum:1})}));return engine.legion.setDeadline(input.deadline)})
+    engine.router.add('POST', '/v2/legion/command', async c => {
+      const input = await body(c.req, Type.Object({ worker: Type.String({ minLength: 1 }) }))
+      const config = engine.configuration.resolvedSnapshot().config
+      if(!state()?.presets.has('commander'))throw new Error('Commander preset is disabled')
+      return runCommander(ctx, engine, config.workers.find(worker => worker.name === input.worker), AbortSignal.timeout(config.decideTimeout * 1000))
+    })
     watcher = watch(path.dirname(engine.configuration.filename), (_event, filename) => {
       if (!filename || String(filename) === path.basename(engine.configuration.filename)) void refresh().catch(error => ctx.logger.warn(error))
     })
-    ctx.effect(() => async () => { watcher.close(); await engine.close() })
+    ctx.effect(() => async () => { watcher.close(); await commanderController?.close(); await engine.close() })
   } catch (error) { watcher?.close(); await engine.close(); throw error }
 
   async function executeDsh(context) {
     await refresh()
     const { store, run, config, signal, worker } = context, shared = state()
+    if (run.activity !== 'execute') throw new Error('Independent Reason execution was removed')
     if (!shared) throw new Error('Cordis domain service is unavailable')
     const step = run.stepId ? store.node(run.projectId, run.stepId, 'step') : undefined
-    const task = { usage: { inputTokens: run.inputTokens, outputTokens: run.outputTokens, cacheReadTokens: run.cacheReadTokens, cacheWriteTokens: run.cacheWriteTokens }, type: run.activity === 'decide' ? 'reason' : step?.bootstrap ? 'bootstrap' : 'explore', projectId: run.projectId, intentId: run.stepId ?? undefined,
+    const task = { usage: { inputTokens: run.inputTokens, outputTokens: run.outputTokens, cacheReadTokens: run.cacheReadTokens, cacheWriteTokens: run.cacheWriteTokens }, type: step?.role ?? 'soldier', projectId: run.projectId, intentId: run.stepId ?? undefined,
       worker: worker.name, sessionId: run.id, runId: run.id, committed: false, notificationEpoch: randomUUID(), server: options.server, startedAt: Date.now(), executionProfile: step?.executionProfile ?? 'direct' }
     if (!shared.presets.has(task.type)) throw new Error(`Cordis task preset ${task.type} is disabled`)
     const cwd = path.join(config.workspaceRoot, run.projectId); await mkdir(cwd, { recursive: true })
-    let finished = false, concludeOnly = false, handle
+    let finished = false, concludeOnly = false, handle, legionMailbox
     let refreshLiveTools = () => {}
-    const tools = graphTools({ ...context, notifyExplore: input => notifyExplore(context, shared, input, message) }, () => {
+    const tools = graphTools(context, () => {
       finished = true; task.committed = true
       if (handle) {
         const pending = pendingGraphNotice(handle.agent)
         if (pending) handle.agent.inbox.remove(pending.message.id)
-        pruneExploreNotices(store, run, handle.agent, 'completed')
       }
     })
     const model = config.providers[worker.provider].models.find(m => m.id === worker.model)
@@ -294,19 +218,13 @@ export async function apply(ctx, options) {
     const { sessionDir } = await load('vendor/deepseek-harness/packages/spill/spill-local/lib/index.js')
     const ownSpillRead = executionEvidenceReadGuard(sessionDir(path.join(runtime.sessionRoot, 'spill'), run.id), cwd)
     const setup = async scoped => {
-      if (run.activity === 'decide') {
-        await mountReasonTools(scoped)
-      }
       if (run.activity === 'execute') {
-        scoped.on('agent/pre-step', async (_payload, next) => {
-          const decision = await next()
-          return decision.kind === 'enter' ? { ...decision, messages: filterExploreNotices(store, run, decision.messages) } : decision
-        })
         // Skills mount DSH-natively from the full managed skills root; the
         // agent discovers and loads them through the skill tool on demand.
         scoped = await mountExecutionTools(scoped, { task, cwd, sessionRoot: runtime.sessionRoot, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.availableForTask(id),
           onRefresh: refresh => sessionRefresh.set(run.id, async () => { await refresh(); refreshLiveTools() }) })
       }
+      mountLegionContext(scoped,ctx,{store,legion:engine.legion,run,task,message})
       mountActivityPrompt(scoped, run, step)
       const planGuard = run.activity === 'execute' ? createPlanGuard(store, run.id) : undefined
       if (planGuard) {
@@ -345,7 +263,10 @@ export async function apply(ctx, options) {
     const unlisten = ctx.on('session/event', (session, event) => {
       if (String(session.id) !== run.id) return
       const data = event.data ?? {}
-      if (event.type === 'user/message') { const notice = exploreNotice(data); if (notice) auditNotice(store, notice, 'admitted') }
+      if (event.type === 'assistant/chunk' && ['text-delta', 'reasoning-delta'].includes(data.chunk?.type)) {
+        for (const projected of eventProjection(task, event)) store.changes.emit('audit', run.projectId, { ...projected, project_id: run.projectId, run_id: run.id })
+        return
+      }
       if (event.type === 'step/start') store.metricStart(run.id, `model-${data.turn}-${data.step}`, 'model')
       if (event.type === 'assistant/message' || event.type === 'step/end') store.metricEnd(run.id, `model-${data.turn}-${data.step}`)
       store.transaction(() => {
@@ -361,22 +282,22 @@ export async function apply(ctx, options) {
         const metadata = JSON.parse(store.db.prepare('SELECT data FROM audit_runs WHERE id=?').get(run.id).data)
         store.audit(metadata, json(eventProjection(task, event)))
       })
+      if(event.type==='tool/result')engine.legion.settleHandoff(run.id)
     })
-    const cancel = () => { task.cancelled = true; if (handle) { pruneExploreNotices(store, run, handle.agent, 'cancelled'); handle.agent.cancel({ kind: 'hook', reason: 'FGS activity paused or cancelled' }) } }
+    const cancel = () => { task.cancelled = true; if (handle) { handle.agent.cancel({ kind: 'hook', reason: 'FGS activity paused or cancelled' }) } }
     const message = (text, metadata = {}) => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user', ...metadata } })
     const prompt = text => handle.agent.followup(message(text))
     // Mid-run graph notices enter the native Agent inbox.
     let cursor = store.run(run.id).deliveredGraphCursor ?? 0
     const steer = projectId => {
       if (projectId !== run.projectId || finished || concludeOnly || signal.aborted || !handle) return
-      pruneExploreNotices(store, run, handle.agent)
       const update = graphUpdate(store, projectId, cursor, run.stepId, run.id, manager.running('redtrace-critical-events'))
       queueGraphNotice(handle.agent, update, message)
       cursor = update.cursor
     }
     const unlistenGraph = listenGraphChanges(store, run, steer)
     const wait = async seconds => {
-      const timer = setTimeout(() => { task.concludeOnly = concludeOnly = true; pruneExploreNotices(store, run, handle.agent, 'timeout'); handle.agent.cancel({ kind: 'hook', reason: 'Activity execution timeout' }) }, seconds * 1000)
+      const timer = setTimeout(() => { task.concludeOnly = concludeOnly = true; handle.agent.cancel({ kind: 'hook', reason: 'Activity execution timeout' }) }, seconds * 1000)
       try { await handle.agent.whenIdle() } finally { clearTimeout(timer) }
     }
     try {
@@ -388,6 +309,7 @@ export async function apply(ctx, options) {
       cursor = Math.max(cursor, pendingGraphNotice(handle.agent)?.update.cursor ?? 0)
       prompt(resume ? '继续' : JSON.stringify(launchContext(store, run.id,
         channelsFor(verbRuntime, [], 8, run.projectId), (context.currentMaxSteps ? context.currentMaxSteps() : config.maxSteps))))
+      if (step?.role) legionMailbox = attachLegionMailbox(ctx, engine.legion, { projectId: run.projectId, actor: run.id, sessionId: run.id, agent: handle.agent, message, closing: () => finished || signal.aborted })
       // Changes committed during activation remain in the event log until this scan.
       steer(run.projectId)
       const limits = activityLimits(config, run.activity, step)
@@ -401,7 +323,7 @@ export async function apply(ctx, options) {
       }
       if (!finished && !task.committed && !signal.aborted) throw new Error(concludeOnly ? 'Activity ended without a structured completion' : 'Agent execution failed')
     } finally {
-      signal.removeEventListener('abort', cancel)
+      signal.removeEventListener('abort', cancel); legionMailbox?.()
       try { if (handle) { cancel(); await handle.agent.whenIdle(); await ctx.get('sessions').flush(handle.agent.session); store.checkpoint(run.id, { sessionId: run.id }); await handle.dispose() } }
       finally { sessionRefresh.delete(run.id); unlisten(); unlistenGraph(); shared.tasks.delete(run.id) }
     }

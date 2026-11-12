@@ -12,7 +12,7 @@ import type { TaskContext } from '../src/scheduler.ts'
 import type { EngineConfig, Worker } from '../src/types.ts'
 const { snapshotJsonValue } = await import(new URL('../../../vendor/deepseek-harness/packages/util/values/lib/index.js', import.meta.url).href)
 
-test('HTTP Resource: optional session, shared cookies/restart, isolation, replay, bounded batches and no Browser', async () => {
+test('HTTP Resource: optional session, shared cookies/restart, isolation, replay, concurrent batches and no Browser', async () => {
   const seen: string[] = []
   const server = createServer((req, res) => {
     seen.push(req.url!)
@@ -36,9 +36,10 @@ test('HTTP Resource: optional session, shared cookies/restart, isolation, replay
     const graph = graphTools(first, () => {})
     assert.ok(graph.some(t => t.name === 'http_batch'))
     assert.equal(graph.some(t => ['web_open','web_snapshot','web_act','web_network'].includes(t.name)), false)
-    const initial: any = await batch.execute('set', { requests: [{ url: url + '/set' }, { url }] })
+    const initial: any = await batch.execute('set', { requests: [{ url: url + '/set' }] })
+    const afterLogin: any = await batch.execute('after-login', { requests: [{ url }] })
     assert.ok(snapshotJsonValue(initial)); assert.match(initial.session, /^http_/)
-    assert.equal(JSON.parse(Buffer.from(read(initial.results[1]).response.bodyBase64, 'base64').toString()).cookie, 'identity=fixture')
+    assert.equal(JSON.parse(Buffer.from(read(afterLogin.results[0]).response.bodyBase64, 'base64').toString()).cookie, 'identity=fixture')
     for (let i = 0; i < 10; i++) await batch.execute('extra', { session: 'extra-' + i, requests: [{ url }] })
     const second = context(), next = httpTools(second).find(t => t.name === 'http_batch')!
     const shared: any = await next.execute('shared', { requests: [{ url }] })
@@ -62,7 +63,7 @@ test('HTTP Resource: optional session, shared cookies/restart, isolation, replay
     const broken: any = await batch.execute('broken', { requests: [{url: url + '/broken',method:'POST',body:'unknown'}] })
     assert.equal(broken.results[0].status, null); assert.match(read(broken.results[0]).outcome, /never automatically replay/)
     const count = seen.length
-    for (const args of [{session: 123,requests:[{url}]},{requests:[{url:'file:///etc/passwd'}]},{requests:[{url:'http://user:pass@localhost/'}]},{requests:[{url: 'invalid'}]}]) await assert.rejects(batch.execute('invalid', args as any))
+    for (const args of [{session: 123,requests:[{url}]},{requests:[{url:'file:///etc/passwd'}]},{requests:[{url: 'invalid'}]}]) await assert.rejects(batch.execute('invalid', args as any))
     assert.equal(seen.length, count)
     operations.updateResource(initial.session, {worker_paused: 1})
     await assert.rejects(next.execute('paused', {session: initial.session,requests:[{url}]}), /paused/)

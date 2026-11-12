@@ -16,7 +16,7 @@ export const name = 'redtrace-c2'
 export const inject = ['tools']
 
 export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): void {
-  const types: TaskType[] = config.types ?? ['bootstrap', 'explore']
+  const types: TaskType[] = config.types ?? ['general','soldier','scout']
   const resourceBody = (task: ReturnType<typeof taskFor>, kind: string, name: string, rest: Record<string, unknown>) => ({
     kind, name, ...rest, actor_type: 'worker', actor: task.worker, worker: task.worker, ...(task.intentId === undefined ? {} : { intent_id: task.intentId }), publish_fact: false,
   })

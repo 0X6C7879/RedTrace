@@ -1,0 +1,10 @@
+{
+  "command": "/opt/homebrew/opt/node@24/bin/node",
+  "args": [
+    "packages/redtrace-engine/test/legion-commander-context.fixture.mjs"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "status": 0,
+  "stdout": "COMMANDER_NATIVE_RELAY=true; native_compaction=1; fresh_session=true; successor_finishes=true; no_recursive_state_growth=true\n",
+  "stderr": "{\"compactions\":1,\"finishes\":1}\n"
+}

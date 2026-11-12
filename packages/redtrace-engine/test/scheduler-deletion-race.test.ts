@@ -15,7 +15,7 @@ test('aborted runs survive their project being deleted mid-flight', async () => 
   try {
     const store = new Store(path.join(root, 'engine.db'))
     const config: EngineConfig = {
-      workers: [{ name: 'fake-reason', provider: 'mock', model: 'mock', enabled: true, reason: true, explore: false, bootstrap: false, maxRunning: 1, priority: 0, backend: 'dsh' }],
+      workers: [{ name: 'fake-reason', provider: 'mock', model: 'mock', enabled: true, roles: ['soldier'], reason: true, explore: false, bootstrap: false, maxRunning: 1, priority: 0, backend: 'dsh' }],
       providers: {}, maxWorkers: 2, maxProjectWorkers: 1, maxRunningProjects: 2, maxSteps: null,
       decideTimeout: 60000, executeTimeout: 60000, concludeTimeout: 60000, bootstrapTimeout: 60000, bootstrapConcludeTimeout: 60000,
       workspaceRoot: path.join(root, 'workspaces'),
@@ -25,7 +25,8 @@ test('aborted runs survive their project being deleted mid-flight', async () => 
     })
     scheduler.start()
     const { project } = store.createProject({ title: 'Race', origin: 'o', goal: 'g' })
-    for (let i = 0; i < 100 && !store.runs(project.id).some(r => r.activity === 'decide' && r.status === 'running'); i++) await new Promise(r => setTimeout(r, 10))
+    store.addStep(project.id,{description:'Active deletion fixture',sourceIds:['origin']})
+    for (let i = 0; i < 100 && !store.runs(project.id).some(r => r.activity === 'execute' && r.status === 'running'); i++) await new Promise(r => setTimeout(r, 10))
     assert.equal(store.runs(project.id).length, 1)
     store.transaction(() => store.db.prepare('DELETE FROM projects WHERE id=?').run(project.id))
     store.changes.emit('change', project.id)

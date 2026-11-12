@@ -280,15 +280,8 @@ function selectChannel(runtime: VerbRuntime, verb: string, args: { via?: unknown
 }
 
 const TERMINAL = ['succeeded', 'failed', 'cancelled', 'rejected']
-const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
-  const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, ms)
-  const abort = () => { clearTimeout(timer); reject(new Error('Operation cancelled')) }
-  if (signal.aborted) abort()
-  else signal.addEventListener('abort', abort, { once: true })
-})
-
 /** Dispatch one verb call through the operation queue: channel selection,
- * task creation (risk is audit metadata), and in-process polling. */
+ * task creation (risk is audit metadata), and event-driven completion. */
 export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Record<string, unknown>, context: { projectId: string; worker: string; stepId: string | null; runId?: string; signal: AbortSignal }): Promise<any> {
   const definition = verbRegistry.find(entry => entry.id === verb)
   if (!definition) throw new Error(`Unknown capability verb: ${verb}`)
@@ -321,14 +314,10 @@ export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Rec
     risk: definition.risk,
   })
   const waitSeconds = Math.min(300, Math.max(30, Number(args.timeout ?? 60) + 30))
-  const deadline = Date.now() + waitSeconds * 1000
-  while (Date.now() < deadline && !context.signal.aborted) {
-    await sleep(200, context.signal)
-    const current = runtime.operations.task(task.id)
-    if (TERMINAL.includes(current.status)) {
-      const output = String(current.output_summary ?? '')
-      return { task_id: task.id, attempt_id: current.attempt_id, channel: { resource_id: channel.id, kind: channel.kind, target: channel.target }, status: current.status as string, output: output ?? null, result: JSON.parse(current.result_json || '{}'), result_ref: current.result_ref ?? null }
-    }
+  const current = await runtime.operations.waitTask(task.id, waitSeconds * 1000, context.signal)
+  if (TERMINAL.includes(current.status)) {
+    const output = String(current.output_summary ?? '')
+    return { task_id: task.id, attempt_id: current.attempt_id, channel: { resource_id: channel.id, kind: channel.kind, target: channel.target }, status: current.status as string, output, result: JSON.parse(current.result_json || '{}'), result_ref: current.result_ref ?? null }
   }
   return { task_id: task.id, channel: { resource_id: channel.id, kind: channel.kind, target: channel.target }, status: runtime.operations.task(task.id).status as string, note: '任务仍在排队或执行;稍后用 remote.task(task_id) 查询结果。' }
 }

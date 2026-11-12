@@ -1,0 +1,12 @@
+{
+  "command": "node",
+  "args": [
+    "--input-type=module",
+    "-e",
+    "import {Configuration} from './packages/redtrace-engine/src/config.ts'; const c=new Configuration(process.cwd()); const {config}=c.resolvedSnapshot();console.log(JSON.stringify({path:c.filename,workers:config.workers.map(w=>({name:w.name,enabled:w.enabled,provider:w.provider,model:w.model,roles:w.roles,backend:w.backend})),providers:Object.entries(config.providers).map(([name,p])=>({name,api:p.api,models:p.models.map(m=>m.id),credentialConfigured:!!p.apiKey||!!p.apiKeyEnv}))}));"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "status": 0,
+  "stdout": "{\"path\":\"/Users/lxy/Downloads/RedTrace/.redtrace/redtrace.yaml\",\"workers\":[{\"name\":\"local-flash\",\"enabled\":true,\"provider\":\"venus\",\"model\":\"deepseek-flash\",\"backend\":\"dsh\"}],\"providers\":[{\"name\":\"venus\",\"api\":\"anthropic-messages\",\"models\":[\"deepseek-flash\"],\"credentialConfigured\":true}]}\n",
+  "stderr": ""
+}

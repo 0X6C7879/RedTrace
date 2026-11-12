@@ -1,0 +1,22 @@
+{
+  "MODIFIED_FILE": {
+    "path": "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/MODIFIED_FILE.tar.gz",
+    "bytes": 50478,
+    "sha256": "8e9321d311f40b947d9e3b8aeb360138aa791088f9e89419594cbd7d67b6e153"
+  },
+  "DIFF_FILE": {
+    "path": "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/DIFF_FILE.patch",
+    "bytes": 57539,
+    "sha256": "c7b6b5875620afb8ada3652b197a66c367477cd240a83af99f91f46cd2eb1bea"
+  },
+  "VERIFICATION": {
+    "path": "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/VERIFICATION.txt",
+    "bytes": 99867,
+    "sha256": "67ef52bff83b60c637cfe8a6b13b1f1e4b20570a3011d339ba07ad7e68bc3828"
+  },
+  "ROLLBACK": {
+    "path": "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/ROLLBACK.sh",
+    "bytes": 526,
+    "sha256": "fa6e04a1b4704755d2d97d4d5a5d0bbd20a59d065afa6a96daa9e3d99b07e3e8"
+  }
+}

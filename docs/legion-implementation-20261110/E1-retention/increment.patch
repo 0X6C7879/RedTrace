@@ -1,0 +1,483 @@
+--- a/packages/redtrace-engine/src/project-evidence.ts
++++ b/packages/redtrace-engine/src/project-evidence.ts
+@@ -1,13 +1,30 @@
+ import { createHash } from 'node:crypto'
++import { isUtf8 } from 'node:buffer'
+ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+ import path from 'node:path'
+ import { Store } from './store.ts'
+ import { HttpError, integer } from './types.ts'
+-import type { Evidence, Fact } from './types.ts'
++import type { Evidence, Fact, Finding, Json, GraphNode } from './types.ts'
+ 
+ export interface ProjectArtifact {
+   id: string; projectId: string; path: string; sha256: string; bytes: number; source: Evidence
+ }
++
++/** Structural slice of the mounted DSH services; storage formats stay owned by DSH. */
++export interface EvidenceSessionServices {
++  sessionPersistence: {
++    list(): Promise<readonly { header: { id: string; cwd?: string }; revision: unknown }[]>
++    stat(id: string): Promise<{ revision: unknown } | undefined>
++    open(id: string, access: 'read'): Promise<{ read(): Promise<{ events: readonly unknown[] }>; close(): Promise<void> }>
++  }
++  attachments: {
++    readImage(ref: any): Promise<{ data: Uint8Array }>
++    readFileStream(ref: any): AsyncIterable<Uint8Array>
++  }
++}
++export interface RetentionIssue { owner: string; pointer: string; reason: string }
++export interface RetainedReference { owner: string; pointer: string; artifactId: string }
++
+ const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
+ 
+ /** Provenance is retained without keeping the producer Run or Session alive. */
+@@ -17,7 +34,8 @@
+   constructor(store: Store, workspaceRoot: string) {
+     this.store = store; this.workspaceRoot = workspaceRoot
+     store.db.exec('CREATE TABLE IF NOT EXISTS project_artifacts(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,' +
+-      'id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(project_id,id));')
++      'id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(project_id,id));' +
++      'CREATE TABLE IF NOT EXISTS project_evidence_refs(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, owner TEXT NOT NULL, pointer TEXT NOT NULL, data TEXT NOT NULL, artifact_id TEXT NOT NULL, PRIMARY KEY(project_id,owner,pointer));')
+   }
+   private projectRoot(projectId: string) {
+     this.store.project(projectId)
+@@ -52,6 +70,42 @@
+     const root = this.projectRoot(projectId), filename = this.contained(root, path.resolve(root, evidence.path))
+     return this.publish(projectId, readFileSync(filename), evidence)
+   }
++  private promoteSource(projectId: string, source: Evidence): ProjectArtifact {
++    if (source.artifactId) { this.verifyArtifact(projectId, source.artifactId); return this.artifact(projectId, source.artifactId) }
++    let artifact: ProjectArtifact
++    if (source.path) artifact = this.promoteFile(projectId, source)
++    else if (source.runId && source.toolCallId) {
++      const run = this.store.run(source.runId)
++      if (run.projectId !== projectId) throw new HttpError(403, 'Evidence producer belongs to another Project')
++      const rows = this.store.db.prepare("SELECT data FROM audit_events WHERE project_id=? AND run_id=? AND json_extract(data,'$.kind')='tool.completed' AND json_extract(data,'$.call_id')=? ORDER BY id").all(projectId, source.runId, source.toolCallId)
++      if (!rows.length) throw new HttpError(404, 'Referenced tool result is missing')
++      const records = rows.map(row => JSON.parse(String(row.data)))
++      const spillIds = [...new Set(JSON.stringify(records).match(/ev-[a-f0-9]{64}/g) ?? [])]
++      const attachments: { id: string; artifactId: string }[] = []
++      for (const id of spillIds) {
++        const filename = path.join(this.projectRoot(projectId), '.redtrace-output', 'evidence', run.id, id + '.json')
++        if (!existsSync(filename)) throw new HttpError(404, 'Referenced spill evidence is missing: ' + id)
++        const bytes = readFileSync(this.contained(this.projectRoot(projectId), filename))
++        if (digest(bytes) !== id.slice(3)) throw new HttpError(409, 'Referenced spill evidence hash mismatch')
++        attachments.push({ id, artifactId: this.publish(projectId, bytes, source).id })
++      }
++      artifact = this.publish(projectId, Buffer.from(JSON.stringify({ records, attachments })), source)
++    } else if (source.runId || source.toolCallId) throw new HttpError(422, 'Run evidence needs an explicit file or tool call reference')
++    else artifact = this.publish(projectId, Buffer.from(JSON.stringify(source)), source)
++    return artifact
++  }
++  private verifyArtifact(projectId: string, id: string) {
++    this.read(projectId, id)
++    const artifact = this.artifact(projectId, id)
++    if (artifact.source.runId && artifact.source.toolCallId && !artifact.source.path) {
++      const root = this.projectRoot(projectId)
++      const content = readFileSync(this.contained(root, path.resolve(root, artifact.path)), 'utf8')
++      // Only promoteSource's envelope has child artifacts; provenance alone does not make raw bytes JSON.
++      if (!content.startsWith('{"records":[')) return
++      const value = JSON.parse(content)
++      for (const attachment of value.attachments ?? []) this.read(projectId, attachment.artifactId)
++    }
++  }
+   promoteFacts(projectId: string) {
+     this.store.project(projectId)
+     const promoted: { factId: string; artifactIds: string[] }[] = []
+@@ -62,27 +116,8 @@
+       for (let index = 0; index < evidence.length; index++) {
+         const source = evidence[index]
+         try {
+-          if (source.artifactId) { this.read(projectId, source.artifactId); artifactIds.push(source.artifactId); continue }
+-          let artifact: ProjectArtifact
+-          if (source.path) artifact = this.promoteFile(projectId, source)
+-          else if (source.runId && source.toolCallId) {
+-            const run = this.store.run(source.runId)
+-            if (run.projectId !== projectId) throw new HttpError(403, 'Evidence producer belongs to another Project')
+-            const rows = this.store.db.prepare("SELECT data FROM audit_events WHERE project_id=? AND run_id=? AND json_extract(data,'$.kind')='tool.completed' AND json_extract(data,'$.call_id')=? ORDER BY id").all(projectId, source.runId, source.toolCallId)
+-            if (!rows.length) throw new HttpError(404, 'Referenced tool result is missing')
+-            const records = rows.map(row => JSON.parse(String(row.data)))
+-            const spillIds = [...new Set(JSON.stringify(records).match(/ev-[a-f0-9]{64}/g) ?? [])]
+-            const attachments: { id: string; artifactId: string }[] = []
+-            for (const id of spillIds) {
+-              const filename = path.join(this.projectRoot(projectId), '.redtrace-output', 'evidence', run.id, id + '.json')
+-              if (!existsSync(filename)) throw new HttpError(404, 'Referenced spill evidence is missing: ' + id)
+-              const bytes = readFileSync(this.contained(this.projectRoot(projectId), filename))
+-              if (digest(bytes) !== id.slice(3)) throw new HttpError(409, 'Referenced spill evidence hash mismatch')
+-              attachments.push({ id, artifactId: this.publish(projectId, bytes, source).id })
+-            }
+-            artifact = this.publish(projectId, Buffer.from(JSON.stringify({ records, attachments })), source)
+-          } else if (source.runId || source.toolCallId) throw new HttpError(422, 'Run evidence needs an explicit file or tool call reference')
+-          else artifact = this.publish(projectId, Buffer.from(JSON.stringify(source)), source)
++          if (source.artifactId) { this.verifyArtifact(projectId, source.artifactId); artifactIds.push(source.artifactId); continue }
++          const artifact = this.promoteSource(projectId, source)
+           evidence[index] = { ...source, artifactId: artifact.id }; artifactIds.push(artifact.id); changed = true
+         } catch (error) {
+           unresolved.push({ factId: fact.id, evidenceIndex: index, reason: error instanceof Error ? error.message : String(error) })
+@@ -98,6 +133,149 @@
+     }
+     return { projectId, scope: 'fact-evidence' as const, promoted, unresolved, factsReady: unresolved.length === 0 }
+   }
++
++  /** Preserve explicit references without turning arbitrary prose into evidence. */
++  async promoteRetained(projectId: string, services: EvidenceSessionServices) {
++    const facts = this.promoteFacts(projectId)
++    const unresolved: RetentionIssue[] = facts.unresolved.map(item => ({ owner: item.factId, pointer: '/evidence/' + item.evidenceIndex, reason: item.reason }))
++    const references: RetainedReference[] = []
++    let expectedRevision = this.store.project(projectId).revision
++    const checkRevision = () => {
++      if (this.store.project(projectId).revision !== expectedRevision) unresolved.push({ owner: projectId, pointer: '', reason: 'Project changed during evidence preservation' })
++    }
++    const record = (owner: string, pointer: string, source: unknown, artifactId: string) => {
++      this.store.db.prepare('INSERT INTO project_evidence_refs VALUES (?,?,?,?,?) ON CONFLICT(project_id,owner,pointer) DO UPDATE SET data=CASE WHEN artifact_id=excluded.artifact_id THEN data ELSE excluded.data END,artifact_id=excluded.artifact_id')
++        .run(projectId, owner, pointer, JSON.stringify(source), artifactId)
++      references.push({ owner, pointer, artifactId })
++    }
++    const visit = async (value: unknown, owner: string, pointer: string, attachmentsOnly = false): Promise<any> => {
++      if (Array.isArray(value)) return Promise.all(value.map((item, index) => visit(item, owner, pointer + '/' + index, attachmentsOnly)))
++      if (!value || typeof value !== 'object') {
++        // Free-text local references have no reliable grammar: require explicit resolution, never silently declare them safe.
++        if (!attachmentsOnly && typeof value === 'string' && /(?:file:\/\/|(?:^|[\s(])(?:\/|\.\.?\/)|ev-[a-f0-9]{64}|attachmentId|sessionId)/.test(value))
++          unresolved.push({ owner, pointer, reason: 'Unstructured reference requires explicit evidence mapping' })
++        return value
++      }
++      const input = value as Record<string, any>
++      try {
++        if ('attachmentId' in input) {
++          if (typeof input.attachmentId !== 'string') throw new HttpError(422, 'Invalid attachment reference')
++          if (!attachmentsOnly && !this.store.db.prepare("SELECT 1 FROM project_evidence_refs WHERE project_id=? AND json_extract(data,'$.attachmentId')=?").get(projectId, input.attachmentId))
++            throw new HttpError(403, 'Attachment has no preserved Session reference in this Project')
++          const hash = /^sha256:([a-f0-9]{64})$/.exec(input.attachmentId)?.[1]
++          if (!hash || !Number.isSafeInteger(input.bytes) || input.bytes < 0) throw new HttpError(422, 'Invalid attachment reference')
++          const saved = this.store.db.prepare('SELECT data,artifact_id FROM project_evidence_refs WHERE project_id=? AND owner=? AND pointer=?').get(projectId, owner, pointer)
++          let artifact: ProjectArtifact
++          if (saved && String(saved.data) === JSON.stringify(input)) {
++            artifact = this.artifact(projectId, String(saved.artifact_id)); this.read(projectId, artifact.id)
++          } else {
++            let bytes: Uint8Array
++            if (input.mediaType) bytes = (await services.attachments.readImage(input)).data
++            else {
++              const chunks: Uint8Array[] = []
++              for await (const chunk of services.attachments.readFileStream(input)) chunks.push(chunk)
++              bytes = Buffer.concat(chunks)
++            }
++            if (digest(bytes) !== hash || bytes.byteLength !== input.bytes) throw new HttpError(409, 'Attachment hash or byte count mismatch')
++            artifact = this.publish(projectId, bytes, { description: owner + pointer })
++          }
++          if (artifact.sha256 !== hash || artifact.bytes !== input.bytes) throw new HttpError(409, 'Preserved attachment does not match reference')
++          record(owner, pointer, input, artifact.id)
++          return { artifactId: artifact.id }
++        }
++        if (!attachmentsOnly && ['path', 'artifactId', 'runId', 'toolCallId'].some(key => key in input)) {
++          for (const key of ['path', 'artifactId', 'runId', 'toolCallId']) if (key in input && typeof input[key] !== 'string') throw new HttpError(422, 'Invalid evidence field: ' + key)
++          const artifact = this.promoteSource(projectId, { ...input, description: input.description || owner + pointer })
++          record(owner, pointer, input, artifact.id)
++          const retained: Record<string, unknown> = { artifactId: artifact.id }
++          for (const [key, child] of Object.entries(input)) if (!['path', 'artifactId', 'runId', 'toolCallId'].includes(key)) retained[key] = await visit(child, owner, pointer + '/' + key)
++          return retained
++        }
++        if (!attachmentsOnly && ('sessionId' in input || 'filePath' in input || 'attachment' in input && !input.attachment))
++          throw new HttpError(422, 'Unsupported reference requires explicit evidence mapping')
++        const result: Record<string, unknown> = {}
++        for (const [key, child] of Object.entries(input)) result[key] = await visit(child, owner, pointer + '/' + key.replaceAll('~', '~0').replaceAll('/', '~1'), attachmentsOnly)
++        return result
++      } catch (error) {
++        unresolved.push({ owner, pointer, reason: error instanceof Error ? error.message : String(error) })
++        return value
++      }
++    }
++    const runs = this.store.runs(projectId)
++    const audit = this.store.db.prepare('SELECT data FROM audit_runs WHERE project_id=?').all(projectId).map(row => JSON.parse(String(row.data)))
++    const expected = new Set(runs.filter(run => run.backend === 'dsh').map(run => run.id))
++    for (const run of audit) if (run.engine === 'dsh' && run.session_id) expected.add(run.session_id)
++    const sessions: string[] = [], root = this.projectRoot(projectId)
++    try {
++      const inventory = await services.sessionPersistence.list()
++      for (const snapshot of inventory) {
++        const { id, cwd } = snapshot.header
++        const directory = cwd ? (existsSync(cwd) ? realpathSync(cwd) : path.resolve(cwd)) : ''
++        const belongs = directory === root || directory.startsWith(root + path.sep)
++        if (!belongs && !expected.has(id)) continue
++        sessions.push(id); expected.delete(id)
++        if (!belongs) { unresolved.push({ owner: id, pointer: '', reason: 'Session workspace belongs to another Project' }); continue }
++        try {
++          const handle = await services.sessionPersistence.open(id, 'read')
++          try { await visit((await handle.read()).events, 'session:' + id, '/events', true) }
++          finally { await handle.close() }
++          if ((await services.sessionPersistence.stat(id))?.revision !== snapshot.revision) throw new HttpError(409, 'Session changed during evidence preservation')
++        } catch (error) { unresolved.push({ owner: id, pointer: '', reason: error instanceof Error ? error.message : String(error) }) }
++      }
++      for (const id of expected) unresolved.push({ owner: id, pointer: '', reason: 'Referenced Agent Session is missing' })
++    } catch (error) { unresolved.push({ owner: 'sessions', pointer: '', reason: error instanceof Error ? error.message : String(error) }) }
++    for (const finding of this.store.nodes<Finding>(projectId, ['finding'])) {
++      const details = await visit(finding.details, finding.id, '/details') as Json
++      checkRevision()
++      if (JSON.stringify(details) !== JSON.stringify(finding.details)) this.store.transaction(() => {
++        const current = this.store.node<Finding>(projectId, finding.id, 'finding')
++        if (current.version !== finding.version) throw new HttpError(409, 'Finding changed while preserving evidence')
++        current.details = details; this.store.saveNode(current); this.store.event(projectId, 'finding.evidence_promoted', current, {})
++        expectedRevision = this.store.project(projectId).revision
++      })
++    }
++    checkRevision()
++    return { projectId, scope: 'retained-evidence' as const, facts, references, sessions, unresolved, evidenceReady: unresolved.length === 0 }
++  }
++  retainedReferences(projectId: string): RetainedReference[] {
++    this.store.project(projectId)
++    return this.store.db.prepare('SELECT owner,pointer,artifact_id FROM project_evidence_refs WHERE project_id=?').all(projectId)
++      .map(row => ({ owner: String(row.owner), pointer: String(row.pointer), artifactId: String(row.artifact_id) }))
++  }
++  /** This produces evidence and a detach plan, never a deletion authorization or runtime-stop claim. */
++  async preflightReset(projectId: string, services: EvidenceSessionServices) {
++    const preservation = await this.promoteRetained(projectId, services)
++    const blockers: RetentionIssue[] = [...preservation.unresolved]
++    const block = (owner: string, reason: string) => blockers.push({ owner, pointer: '', reason })
++    if (!['stopped', 'completed'].includes(this.store.project(projectId).status)) block(projectId, 'Project scheduling is not stopped')
++    for (const run of this.store.runs(projectId)) if (['running', 'paused', 'unknown'].includes(run.status) || run.pendingTools.length) block(run.id, 'Execution or tool outcome is not confirmed stopped')
++    const table = (name: string) => !!this.store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)
++    if (table('campaign')) {
++      const row = this.store.db.prepare('SELECT data FROM campaign WHERE id=1').get()
++      if (row && JSON.parse(String(row.data)).status === 'running') block('commander', 'Commander is running')
++    }
++    if (table('operation_tasks')) for (const row of this.store.db.prepare("SELECT id FROM operation_tasks WHERE project_id=? AND status NOT IN ('succeeded','failed','cancelled','rejected')").all(projectId)) block(String(row.id), 'Resource operation has not settled')
++    if (table('resource_leases')) for (const row of this.store.db.prepare("SELECT l.run_id FROM resource_leases l JOIN shared_resources r ON r.id=l.resource_id WHERE (r.project_id=? OR l.run_id IN (SELECT id FROM runs WHERE project_id=?)) AND l.expires_at>?").all(projectId, projectId, new Date().toISOString())) block(String(row.run_id), 'Resource lease is still active')
++    const nodes = this.store.nodes(projectId, ['fact', 'finding', 'goal', 'hint', 'observation', 'step']), retained = nodes.filter(node => node.kind !== 'step'), ids = new Set(retained.map(node => node.id))
++    const detachments: { nodeId: string; before: GraphNode; after: GraphNode }[] = []
++    for (const node of nodes) {
++      if (node.kind === 'step') { if (['running', 'paused'].includes(node.status)) block(node.id, 'Step execution is not stopped'); continue }
++      const dependencies = node.kind === 'goal' ? [...node.evidenceIds, ...(node.parentId ? [node.parentId] : [])] : node.kind === 'finding' ? node.factIds : []
++      for (const id of dependencies) if (!ids.has(id)) block(node.id, 'Retained graph dependency is missing: ' + id)
++      const after = structuredClone(node)
++      if ('stepId' in after) after.stepId = null
++      if ('producerStepIds' in after) after.producerStepIds = []
++      if (after.kind === 'fact') after.evidence = after.evidence.map(source => source.artifactId ? { artifactId: source.artifactId, description: source.description } : source)
++      if (JSON.stringify(node) !== JSON.stringify(after)) detachments.push({ nodeId: node.id, before: node, after })
++    }
++    for (const ref of this.retainedReferences(projectId)) {
++      try { this.verifyArtifact(projectId, ref.artifactId) }
++      catch (error) { blockers.push({ owner: ref.owner, pointer: ref.pointer, reason: error instanceof Error ? error.message : String(error) }) }
++    }
++    return { projectId, scope: 'project-runtime-reset' as const, observedRevision: this.store.project(projectId).revision, preservation, detachments, blockers,
++      dataReady: blockers.length === 0, cleanupAllowed: false as const, remainingGate: 'E2-E6 acceptance, confirmed runtime stop and consistent backup are required at E7' }
++  }
++
+   artifact(projectId: string, id: string): ProjectArtifact {
+     this.store.project(projectId)
+     const row = this.store.db.prepare('SELECT data FROM project_artifacts WHERE project_id=? AND id=?').get(projectId, id)
+@@ -111,8 +289,8 @@
+     const bytes = readFileSync(this.contained(root, path.resolve(root, artifact.path)))
+     if (digest(bytes) !== artifact.sha256 || bytes.length !== artifact.bytes) throw new HttpError(409, 'Project evidence hash mismatch')
+     if (offset > bytes.length) throw new HttpError(422, 'Offset is outside this artifact')
+-    const end = Math.min(bytes.length, offset + length)
++    const end = Math.min(bytes.length, offset + length), chunk = bytes.subarray(offset, end), text = isUtf8(chunk)
+     return { id, sha256: artifact.sha256, offset, bytes: end - offset, totalBytes: bytes.length,
+-      nextOffset: end < bytes.length ? end : null, content: bytes.subarray(offset, end).toString('utf8') }
++      nextOffset: end < bytes.length ? end : null, content: chunk.toString(text ? 'utf8' : 'base64'), ...(text ? {} : { encoding: 'base64' as const }) }
+   }
+ }
+--- a/packages/redtrace-engine/src/runner.ts
++++ b/packages/redtrace-engine/src/runner.ts
+@@ -71,7 +71,7 @@
+   })
+   const refs = Type.Array(Type.String())
+   const tools: AgentTool[] = [readGraph]
+-  tools.push(tool('project_evidence_read', 'Read hash-verified Project evidence independently of the producer Run or Session. Artifact IDs are Project-scoped.', Type.Object({ artifact_id: Type.String({ pattern: '^artifact-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), args => new ProjectEvidence(store, config.workspaceRoot).read(run.projectId, args.artifact_id, args.offset, args.length)))
++  tools.push(tool('project_evidence_read', 'Read hash-verified Project evidence independently of the producer Run or Session. Artifact IDs are Project-scoped. Binary pages return encoding=base64; decode content accordingly.', Type.Object({ artifact_id: Type.String({ pattern: '^artifact-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), args => new ProjectEvidence(store, config.workspaceRoot).read(run.projectId, args.artifact_id, args.offset, args.length)))
+   tools.push(tool('read_graph_delta', 'Read a bounded page of change metadata and current surviving nodes. Merged/deleted IDs have no historical body. Continue with cursor until hasMore is false. Reading does not acknowledge processing.', Type.Object({ after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), args => ({ ...store.graphDelta(run.projectId, args.after ?? store.run(run.id).deliveredGraphCursor ?? 0, args.limit ?? 100, run.id), planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id) })))
+   tools.push({ name: 'evidence_read', label: 'evidence_read', description: 'Read at most 7.6 KiB from a large tool result by byte offset, 1-based line, or keyword. Artifacts are scoped to this Project; pass run_id for another producer Run; request the next bounded slice when needed.', parameters: Type.Object({ run_id: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })), id: Type.String({ pattern: '^ev-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), line: Type.Optional(Type.Integer({ minimum: 1 })), query: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), executionMode: 'sequential', execute: async (_toolId: string, args: { run_id?: string; id: string; offset?: number; line?: number; query?: string; length?: number }) => {
+     if (!/^ev-[a-f0-9]{64}$/.test(args.id) || [args.offset, args.line, args.query].filter(value => value !== undefined).length > 1) throw new Error('Provide a valid evidence ID and only one read selector')
+--- a/packages/redtrace-engine/test/legion-state.test.ts
++++ b/packages/redtrace-engine/test/legion-state.test.ts
+@@ -1,7 +1,7 @@
+ import { createHash } from 'node:crypto'
+ import test from 'node:test'
+ import assert from 'node:assert/strict'
+-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs'
++import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs'
+ import { tmpdir } from 'node:os'
+ import path from 'node:path'
+ import { Store } from '../src/store.ts'
+@@ -250,4 +250,182 @@
+   assert.equal(bad.status, 422)
+   const missing = await fetch(base + '/v2/projects/missing/evidence/' + artifact.id)
+   assert.equal(missing.status, 404)
++})
++
++
++function sessionServices(root: string, projectId: string, entries: { id: string; events: unknown[]; cwd?: string }[] = [], objects = new Map<string, Uint8Array>()) {
++  const closed: string[] = []
++  const read = (ref: any) => { const bytes = objects.get(ref.attachmentId); if (!bytes) throw new Error('Attachment object is missing'); return bytes }
++  return { closed, objects, entries, sessionPersistence: {
++    async list() { return entries.map(entry => ({ header: { id: entry.id, cwd: entry.cwd ?? path.join(root, projectId) }, revision: 'fixture-1' })) },
++    async stat() { return { revision: 'fixture-1' } },
++    async open(id: string, access: 'read') { assert.equal(access, 'read'); return { async read() { return { events: entries.find(entry => entry.id === id)!.events } }, async close() { closed.push(id) } } },
++  }, attachments: { async readImage(ref: any) { return { data: read(ref) } }, async *readFileStream(ref: any) { yield read(ref) } } }
++}
++function attachment(bytes: string, image = false) {
++  const data = Buffer.from(bytes), attachmentId = 'sha256:' + createHash('sha256').update(data).digest('hex')
++  return { data, ref: { attachmentId, bytes: data.length, name: 'fixture.bin', ...(image ? { mediaType: 'image/png', width: 1, height: 1 } : {}) } }
++}
++
++test('reset preflight retains nested Finding files, tools and Session attachments after fixture deletion', async t => {
++  const { store, legion, project, root, evidence } = fixture(t)
++  const step = legion.spawn(project.id, mission), run = store.claim(project.id, 'execute', worker, step.id)
++  writeFileSync(path.join(root, project.id, 'proof.txt'), 'finding proof')
++  const fact = store.addFact(project.id, 'proof', { runId: run.id, evidence: [{ path: 'proof.txt', runId: run.id, description: 'fact file' }] })
++  store.runEvent(run.id, 'tool_execution_end', { toolName: 'fixture', toolCallId: 'finding-call', result: { content: [{ type: 'text', text: 'tool proof' }] } })
++  const file = attachment('session file'), image = attachment('image bytes', true)
++  const finding = store.addFinding(project.id, { title: 'result', description: 'retained', factIds: [fact.id], runId: run.id, details: { nested: [{ path: 'proof.txt' }, { runId: run.id, toolCallId: 'finding-call' }], image: image.ref, text: 'unchanged result' } })
++  const services = sessionServices(root, project.id, [{ id: run.id, events: [{ content: [{ type: 'file', attachment: file.ref }, { type: 'image', attachment: image.ref }] }] }], new Map([[file.ref.attachmentId, file.data], [image.ref.attachmentId, image.data]]))
++  store.finishRun(run.id, 'succeeded'); store.setStatus(project.id, 'stopped')
++  const report = await evidence.preflightReset(project.id, services)
++  assert.equal(report.dataReady, true, JSON.stringify(report.blockers)); assert.equal(report.cleanupAllowed, false)
++  assert.equal(report.preservation.references.length, 5)
++  assert.deepEqual(services.closed, [run.id])
++  const details = store.node<any>(project.id, finding.id).details
++  assert.equal(details.text, 'unchanged result'); assert.equal(details.nested[0].path, undefined)
++  const refs = evidence.retainedReferences(project.id), hashes = refs.map(ref => evidence.read(project.id, ref.artifactId).sha256)
++  // Destructive operations exist ONLY in this temporary fixture, not in the preflight implementation.
++  store.transaction(() => {
++    for (const item of report.detachments) store.saveNode(item.after)
++    store.db.prepare('DELETE FROM runs WHERE project_id=?').run(project.id)
++    store.db.prepare('DELETE FROM audit_runs WHERE project_id=?').run(project.id)
++    store.db.prepare("DELETE FROM nodes WHERE project_id=? AND kind='step'").run(project.id)
++  })
++  services.entries.splice(0); services.objects.clear(); rmSync(path.join(root, project.id, 'proof.txt'))
++  assert.deepEqual(refs.map(ref => evidence.read(project.id, ref.artifactId).sha256), hashes)
++  assert.equal((await evidence.preflightReset(project.id, services)).dataReady, true)
++  for (const node of store.nodes<any>(project.id, ['fact', 'finding', 'hint', 'observation'])) {
++    assert.equal(node.stepId, null); assert.equal(node.producerStepIds?.length ?? 0, 0)
++  }
++  assert.ok(store.node(project.id, finding.id)); assert.ok(store.node(project.id, 'goal'))
++  const reopened = new Store(path.join(root, 'engine.db'))
++  try { assert.deepEqual(new ProjectEvidence(reopened, root).retainedReferences(project.id), evidence.retainedReferences(project.id)) }
++  finally { reopened.close() }
++})
++
++test('preflight reports running, paused, unknown and pending tools without stopping or deleting anything', async t => {
++  const { store, legion, project, root, evidence } = fixture(t)
++  const services = sessionServices(root, project.id)
++  const step = legion.spawn(project.id, mission), run = store.claim(project.id, 'execute', worker, step.id)
++  for (const status of ['running', 'paused', 'unknown', 'succeeded'] as const) {
++    run.status = status; run.pendingTools = status === 'succeeded' ? ['uncertain'] : []; store.saveRun(run)
++    const report = await evidence.preflightReset(project.id, services)
++    assert.equal(report.dataReady, false); assert.ok(report.blockers.some(b => b.owner === run.id))
++    assert.equal(store.run(run.id).status, status); assert.equal(store.runs(project.id).length, 1)
++  }
++  assert.equal(store.project(project.id).status, 'active')
++})
++
++test('missing or corrupt Finding/Session evidence stays explicit and never produces cleanup readiness', async t => {
++  const { store, project, root, evidence } = fixture(t)
++  const fact = store.addFact(project.id, 'retained')
++  const bad = attachment('missing'), corrupt = attachment('expected')
++  const finding = store.addFinding(project.id, { title: 'incomplete', description: 'needs recovery', factIds: [fact.id], details: { file: { path: 'missing.txt' }, attachment: bad.ref, prose: 'file:///missing-proof', wrong: corrupt.ref } })
++  const services = sessionServices(root, project.id, [{ id: 'orphan-session', events: [{ attachment: bad.ref }, { attachment: corrupt.ref }] }], new Map([[corrupt.ref.attachmentId, Buffer.from('wrong')]]))
++  store.setStatus(project.id, 'stopped')
++  const report = await evidence.preflightReset(project.id, services)
++  assert.equal(report.dataReady, false); assert.equal(report.preservation.unresolved.length, 6)
++  assert.ok(report.blockers.some(b => b.reason.includes('hash')))
++  assert.deepEqual(store.node<any>(project.id, finding.id).details.attachment, bad.ref)
++  assert.equal(evidence.retainedReferences(project.id).length, 0)
++})
++
++test('Session inventory failures, missing sessions, foreign workspace and concurrent changes block preflight', async t => {
++  const { store, legion, project, root, evidence } = fixture(t)
++  const step = legion.spawn(project.id, mission), run = store.claim(project.id, 'execute', { ...worker, backend: 'dsh' }, step.id)
++  store.finishRun(run.id, 'succeeded'); store.setStatus(project.id, 'stopped')
++  const services = sessionServices(root, project.id)
++  assert.ok((await evidence.preflightReset(project.id, services)).blockers.some(b => /Session is missing/.test(b.reason)))
++  services.entries.push({ id: run.id, cwd: root, events: [] })
++  assert.ok((await evidence.preflightReset(project.id, services)).blockers.some(b => /another Project/.test(b.reason)))
++  services.entries[0].cwd = path.join(root, project.id)
++  services.sessionPersistence.stat = async () => ({ revision: 'changed' })
++  assert.ok((await evidence.preflightReset(project.id, services)).blockers.some(b => /changed during/.test(b.reason)))
++  services.sessionPersistence.list = async () => { throw new Error('Unreadable session inventory') }
++  assert.ok((await evidence.preflightReset(project.id, services)).blockers.some(b => /Unreadable/.test(b.reason)))
+ })
++
++test('repeat promotion verifies spill children and detects loss even with an intact tool manifest', t => {
++  const { store, legion, project, root, evidence } = fixture(t)
++  const step = legion.spawn(project.id, mission), run = store.claim(project.id, 'execute', worker, step.id)
++  const bytes = Buffer.from('spill evidence'), hash = createHash('sha256').update(bytes).digest('hex'), id = 'ev-' + hash
++  const directory = path.join(root, project.id, '.redtrace-output/evidence', run.id)
++  mkdirSync(directory, { recursive: true }); writeFileSync(path.join(directory, id + '.json'), bytes)
++  store.runEvent(run.id, 'tool_execution_end', { toolName: 'fixture', toolCallId: 'spill', result: { content: [{ type: 'text', text: id }] } })
++  store.addFact(project.id, 'spill proof', { runId: run.id, evidence: [{ runId: run.id, toolCallId: 'spill', description: 'result' }] })
++  assert.equal(evidence.promoteFacts(project.id).factsReady, true)
++  rmSync(path.join(root, project.id, '.redtrace-output/project-evidence', hash))
++  assert.equal(evidence.promoteFacts(project.id).factsReady, false)
++})
++
++
++test('Finding attachments cannot import a foreign Session object through the shared DSH attachment store', async t => {
++  const { store, project, root, evidence } = fixture(t)
++  const file = attachment('foreign private bytes'), fact = store.addFact(project.id, 'retained')
++  store.addFinding(project.id, { title: 'wrong scope', description: 'must not import', factIds: [fact.id], details: { attachment: file.ref } })
++  const services = sessionServices(root, project.id, [{ id: 'foreign', cwd: root, events: [{ attachment: file.ref }] }], new Map([[file.ref.attachmentId, file.data]]))
++  store.setStatus(project.id, 'stopped')
++  const report = await evidence.preflightReset(project.id, services)
++  assert.equal(report.dataReady, false); assert.ok(report.blockers.some(b => /no preserved Session reference/.test(b.reason)))
++  assert.equal(evidence.retainedReferences(project.id).length, 0); assert.equal(services.closed.length, 0)
++})
++
++test('preflight detects concurrent retained graph edits instead of certifying a stale scan', async t => {
++  const { store, project, root, evidence } = fixture(t)
++  const services = sessionServices(root, project.id)
++  store.setStatus(project.id, 'stopped')
++  services.sessionPersistence.list = async () => { store.rename(project.id, 'changed during scan'); return [] }
++  const report = await evidence.preflightReset(project.id, services)
++  assert.equal(report.dataReady, false); assert.ok(report.blockers.some(b => /Project changed/.test(b.reason)))
++})
++
++test('preflight rejects dangling retained graph edges and running Commander', async t => {
++  const { store, legion, project, root, evidence } = fixture(t)
++  const fact = store.addFact(project.id, 'proof')
++  const finding = store.addFinding(project.id, { title: 'result', description: 'result', factIds: [fact.id] })
++  store.db.prepare('DELETE FROM nodes WHERE project_id=? AND id=?').run(project.id, fact.id)
++  legion.claimCommand(); store.setStatus(project.id, 'stopped')
++  const report = await evidence.preflightReset(project.id, sessionServices(root, project.id))
++  assert.equal(report.dataReady, false)
++  assert.ok(report.blockers.some(b => b.owner === finding.id && /dependency is missing/.test(b.reason)))
++  assert.ok(report.blockers.some(b => b.owner === 'commander'))
++})
++
++
++test('preflight keeps HTTP/credential resources and blocks queued operations and live global-resource leases', async t => {
++  const { store, legion, project, root, evidence } = fixture(t)
++  store.db.exec(readFileSync(new URL('../src/operations.sql', import.meta.url), 'utf8'))
++  const step = legion.spawn(project.id, mission), run = store.claim(project.id, 'execute', worker, step.id)
++  store.finishRun(run.id, 'succeeded'); store.setStatus(project.id, 'stopped')
++  for (const kind of ['http_session', 'credential_ref']) store.db.prepare('INSERT INTO shared_resources(id,project_id,kind,name,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?)').run(kind, kind === 'credential_ref' ? null : project.id, kind, 'fixture', 'fixture', 'fixture', 'fixture')
++  store.db.prepare('INSERT INTO operation_tasks(id,project_id,resource_id,action,actor_type,actor,created_at) VALUES (?,?,?,?,?,?,?)').run('op', project.id, 'http_session', 'fixture', 'human', 'fixture', 'fixture')
++  store.db.prepare('INSERT INTO resource_leases VALUES (?,?,?,?,?,?,?,?)').run('fixture', 'credential_ref', 'worker', 'fixture', run.id, 1, '2999-01-01T00:00:00.000Z', 'fixture')
++  const services = sessionServices(root, project.id), report = await evidence.preflightReset(project.id, services)
++  assert.equal(report.dataReady, false)
++  assert.ok(report.blockers.some(b => b.owner === 'op')); assert.ok(report.blockers.some(b => b.owner === run.id && /lease/.test(b.reason)))
++  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM shared_resources').get()!.n, 2)
++  store.db.prepare("UPDATE operation_tasks SET status='succeeded' WHERE id='op'").run()
++  store.db.prepare("UPDATE resource_leases SET expires_at='2000-01-01T00:00:00.000Z'").run()
++  assert.equal((await evidence.preflightReset(project.id, services)).dataReady, true)
++  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM shared_resources').get()!.n, 2)
++})
++
++
++test('binary evidence pages round-trip exact attachment bytes rather than lossy UTF-8', t => {
++  const { evidence, project } = fixture(t)
++  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0xff])
++  const artifact = evidence.publish(project.id, bytes, { description: 'binary fixture' })
++  const page = evidence.read(project.id, artifact.id)
++  assert.equal(page.encoding, 'base64')
++  assert.deepEqual(Buffer.from(page.content, page.encoding), bytes)
++  const tail = evidence.read(project.id, artifact.id, 4, 2)
++  assert.deepEqual(Buffer.from(tail.content, tail.encoding ?? 'utf8'), bytes.subarray(4))
++})
++
++
++test('raw published evidence with tool provenance is not mistaken for a tool-result envelope', t => {
++  const { store, project, evidence } = fixture(t)
++  const artifact = evidence.publish(project.id, Buffer.from('raw evidence'), { runId: 'retired-run', toolCallId: 'retired-call', description: 'already preserved' })
++  store.addFact(project.id, 'raw evidence', { evidence: [{ artifactId: artifact.id, description: 'raw evidence' }] })
++  assert.equal(evidence.promoteFacts(project.id).factsReady, true)
++})

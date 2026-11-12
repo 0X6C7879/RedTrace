@@ -15,6 +15,21 @@
   ],
   "references": [
     {
+      "path": "./packages/experimental/client-ui-action-cards"
+    },
+    {
+      "path": "./packages/experimental/client-ui-creation-recommendations"
+    },
+    {
+      "path": "./packages/experimental/client-ui-plugin-recommendations"
+    },
+    {
+      "path": "./packages/client/ui-file-drag"
+    },
+    {
+      "path": "./packages/session/message-quotes"
+    },
+    {
       "path": "./packages/experimental/client-ui-cot-translation/tsconfig.client.json"
     },
     {
@@ -37,6 +52,12 @@
     },
     {
       "path": "./packages/ptc-runtime/ptc-runtime"
+    },
+    {
+      "path": "./packages/core/tool-executor-native"
+    },
+    {
+      "path": "./packages/core/tool-executor-ptc"
     },
     {
       "path": "./packages/client/ui-settings-account"
@@ -66,7 +87,16 @@
       "path": "./packages/experimental/inspector/tsconfig.client.json"
     },
     {
+      "path": "./packages/experimental/liveshare-protocol/tsconfig.client.json"
+    },
+    {
+      "path": "./packages/experimental/liveshare/tsconfig.client.json"
+    },
+    {
       "path": "./packages/experimental/session-inspector"
+    },
+    {
+      "path": "./packages/experimental/client-ui-forge/tsconfig.client.json"
     },
     {
       "path": "./packages/client/hmr"
@@ -108,10 +138,19 @@
       "path": "./packages/test-support/remote-mock"
     },
     {
+      "path": "./packages/test-support/tool-testkit"
+    },
+    {
       "path": "./packages/client/shortcuts/tsconfig.client.json"
     },
     {
       "path": "./packages/client/ui-shortcuts"
+    },
+    {
+      "path": "./packages/client/ui-context-menu"
+    },
+    {
+      "path": "./packages/client/ui-file-actions"
     },
     {
       "path": "./packages/client/ui-layout"
@@ -165,10 +204,16 @@
       "path": "./packages/experimental/client-ui-agent-team"
     },
     {
+      "path": "./packages/experimental/client-ui-stats"
+    },
+    {
       "path": "./packages/client/ui-dockkit"
     },
     {
       "path": "./packages/client/ui-sidebar-right"
+    },
+    {
+      "path": "./packages/client/ui-entry-customization"
     },
     {
       "path": "./packages/client/ui-sidebar-documentpreview/tsconfig.client.json"
@@ -219,6 +264,9 @@
       "path": "./packages/client/ui-settings-agent-loop"
     },
     {
+      "path": "./packages/experimental/cua/tsconfig.client.json"
+    },
+    {
       "path": "./packages/client/ui-settings-session-log"
     },
     {
@@ -231,7 +279,7 @@
       "path": "./packages/client/ui-user-questions"
     },
     {
-      "path": "./packages/client/ui-trajectory"
+      "path": "./packages/client/ui-trajectory/tsconfig.client.json"
     },
     {
       "path": "./packages/session-query/session-log-export/tsconfig.client.json"

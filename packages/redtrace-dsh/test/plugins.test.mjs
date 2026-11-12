@@ -199,7 +199,7 @@ test('boot honors the manifest: disabled plugins stay unmounted', async (t) => {
   const manifestPath = path.join(root, 'plugins.json')
   writeFileSync(manifestPath, JSON.stringify({
     version: 1,
-    disabled: ['redtrace-webshell', 'redtrace-reason', 'redtrace-shell', 'redtrace-remote-terminal'],
+    disabled: ['redtrace-webshell', 'redtrace-commander', 'redtrace-shell', 'redtrace-remote-terminal'],
     enabled: ['redtrace-shell', 'redtrace-remote-terminal'],
   }))
 
@@ -215,13 +215,13 @@ test('boot honors the manifest: disabled plugins stay unmounted', async (t) => {
   assert.equal(views.find((view) => view.id === 'redtrace-webshell').status, 'stopped')
   assert.equal(views.find(view => view.id === 'redtrace-terminal').status, 'running')
   assert.ok(!views.some(view => ['redtrace-shell', 'redtrace-remote-terminal'].includes(view.id)))
-  assert.equal(views.find((view) => view.id === 'redtrace-reason').status, 'stopped')
+  assert.equal(views.find((view) => view.id === 'redtrace-commander').status, 'stopped')
   assert.ok(ctx.mounts.every(({ module }) => module.name !== 'redtrace-webshell'))
 
   // The scheduler consults this set: reason must not be dispatchable.
   const shared = (await import('../lib/state.js')).state()
-  assert.equal(shared.presets.has('reason'), false)
-  assert.equal(shared.presets.has('bootstrap'), true)
+  assert.equal(shared.presets.has('commander'), false)
+  assert.equal(shared.presets.has('soldier'), true)
 })
 
 test('stop and start toggle fibers live and persist across restarts', async (t) => {
@@ -369,7 +369,7 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const list = await call('GET', '/__redtrace/plugins')
   assert.equal(list.status, 200)
-  assert.equal(JSON.parse(list.body).plugins.length, 32)
+  assert.equal(JSON.parse(list.body).plugins.length, 33)
   for (const id of ['redtrace-trace-search', 'redtrace-repeat-reminder', 'redtrace-shell', 'redtrace-remote-terminal', 'redtrace-ptc']) {
     assert.ok(!JSON.parse(list.body).plugins.some(plugin => plugin.id === id))
     assert.equal((await call('POST', `/__redtrace/plugins/${id}/start`)).status, 400)

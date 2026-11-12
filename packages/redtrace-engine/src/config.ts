@@ -1,5 +1,5 @@
 import { createHash, createHmac, createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'node:crypto'
-import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { parse, stringify } from 'yaml'
 import { HttpError, integer, requiredText } from './types.ts'
@@ -7,8 +7,8 @@ import type { EngineConfig, Provider, Worker } from './types.ts'
 
 type RawModel = { id: string; context_window: number; max_tokens: number; reasoning?: string; reasoning_efforts?: Record<string, string | null> | boolean | null; thinking_format?: string }
 type RawProvider = { api: Provider['api']; base_url: string; api_key?: string; api_key_env?: string; models: RawModel[] }
-type RawWorker = { name: string; provider: string; model?: string; enabled?: boolean; bootstrap?: boolean; reason?: boolean; explore?: boolean; max_running?: number; priority?: number; backend?: Worker['backend'] | 'pi' }
-export interface RawConfig { providers?: Record<string, RawProvider>; workers: RawWorker[]; runtime?: Record<string, unknown>; tasks?: Record<string, { timeout: number; conclude_timeout: number; max_intents?: number }>; common_env?: Record<string, string>; [key: string]: unknown }
+type RawWorker = { roles?: Worker['roles']; name: string; provider: string; model?: string; enabled?: boolean; bootstrap?: boolean; reason?: boolean; explore?: boolean; max_running?: number; priority?: number; backend?: Worker['backend'] | 'pi' }
+export interface RawConfig { providers?: Record<string, RawProvider>; workers: RawWorker[]; runtime?: Record<string, unknown>; tasks?: Record<string, { timeout: number; conclude_timeout: number; max_intents?: number }>; common_env?: Record<string, string>; llm_polling?: { enabled?: boolean; models?: Record<string, string[]> }; [key: string]: unknown }
 const secretPattern = /^\$\{REDTRACE_SECRET:([a-f0-9]{32})\}$/
 const sensitiveEnvironment = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD)$/
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
@@ -44,6 +44,15 @@ export class Configuration {
   readonly root: string
   readonly secretRoot: string
   readonly workspaceRoot: string
+  private cached?: { signature: string; raw: RawConfig; revision: string; config: EngineConfig }
+  resolvedSnapshot() {
+    const signature = [this.filename, ...['master.key', 'worker-config.enc'].map(file => path.join(this.secretRoot, file))].map(file => {
+      try { const s = statSync(file, { bigint: true }); return `${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}` }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'; throw error }
+    }).join('|')
+    if (this.cached?.signature !== signature) { const value = this.read(); const config = this.resolve(value.raw); this.cached = { signature, ...value, config } }
+    return this.cached
+  }
   constructor(root: string, filename = path.join(root, '.redtrace/redtrace.yaml')) {
     this.root = path.resolve(root); this.filename = path.resolve(filename)
     this.secretRoot = path.join(path.dirname(this.filename), '.redtrace-secrets')
@@ -63,7 +72,7 @@ export class Configuration {
         mkdirSync(this.secretRoot, { recursive: true }); copyFileSync(path.join(sourceSecrets, file), path.join(this.secretRoot, file))
       }
       atomicWrite(this.filename, readFileSync(source))
-    } else atomicWrite(this.filename, stringify({ providers: {}, workers: [], runtime: { max_workers: 4, max_project_workers: 4, max_running_projects: 1 }, tasks: { reason: { timeout: 300, conclude_timeout: 30, max_intents: 4 }, explore: { timeout: 900, conclude_timeout: 30 }, bootstrap: { timeout: 900, conclude_timeout: 30 } } } satisfies RawConfig))
+    } else atomicWrite(this.filename, stringify({ providers: {}, workers: [], runtime: { max_workers: 4, max_project_workers: 4, max_running_projects: 1 }, tasks: { commander: { timeout: 300, conclude_timeout: 30, max_intents: 4 }, general: { timeout: 900, conclude_timeout: 30 }, soldier: { timeout: 900, conclude_timeout: 30 }, scout: { timeout: 240, conclude_timeout: 30 } } } satisfies RawConfig))
     this.commit(this.read().revision, () => {})
   }
   read(): { raw: RawConfig; revision: string } {
@@ -95,27 +104,34 @@ export class Configuration {
       providers[name] = { api: p.api, baseUrl: p.base_url, apiKey: resolve(p.api_key), apiKeyEnv: p.api_key_env,
         models: p.models.map(m => ({ id: requiredText(m.id, 'model id'), contextWindow: integer(m.context_window ?? 1000000, 'context_window', 1), maxTokens: integer(m.max_tokens ?? 128000, 'max_tokens', 1), reasoning: m.reasoning ?? 'auto_max', reasoningEfforts: m.reasoning_efforts, thinkingFormat: m.thinking_format ?? 'auto' })) }
     }
+    const llmPolling = { enabled: raw.llm_polling?.enabled ?? true, models: raw.llm_polling?.models ?? {} }
+    if (typeof llmPolling.enabled !== 'boolean' || typeof llmPolling.models !== 'object' || Array.isArray(llmPolling.models)) throw new HttpError(422, 'Invalid LLM polling configuration')
+    for (const [model, names] of Object.entries(llmPolling.models)) {
+      if (!Array.isArray(names) || new Set(names).size !== names.length || names.some(name => typeof name !== 'string' || !Object.hasOwn(providers, name) || !providers[name].models.some(m => m.id === model))) throw new HttpError(422, 'LLM polling references duplicate or missing providers/models')
+    }
     const workers = raw.workers.map(w => {
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(w.name)) throw new HttpError(422, 'Invalid worker name')
       if (w.provider !== 'mock' && !providers[w.provider]?.models.some(m => m.id === w.model)) throw new HttpError(422, 'Worker references missing provider or model')
       if (w.backend && !['pi', 'dsh', 'mock'].includes(w.backend)) throw new HttpError(422, 'Invalid backend')
-      return { name: w.name, provider: w.provider, model: w.model ?? 'mock', enabled: w.enabled ?? true, reason: w.reason ?? true, explore: w.explore ?? true, bootstrap: w.bootstrap ?? true,
+      if (w.roles !== undefined && (!Array.isArray(w.roles) || new Set(w.roles).size !== w.roles.length || w.roles.some(role => !['commander','general','soldier','scout'].includes(role)))) throw new HttpError(422, 'Invalid Legion roles')
+      return { roles: [...(w.roles ?? ['commander','general','soldier','scout'] as const)], name: w.name, provider: w.provider, model: w.model ?? 'mock', enabled: w.enabled ?? true, 
         priority: integer(w.priority ?? 0, 'priority', -2147483648), maxRunning: integer(w.max_running ?? 1, 'max_running', 1), backend: w.provider === 'mock' ? 'mock' as const : 'dsh' as const }
     })
     if (new Set(workers.map(w => w.name)).size !== workers.length) throw new HttpError(422, 'Worker names must be unique')
-    return { workers, providers, commonEnv: Object.fromEntries(Object.entries(raw.common_env ?? {}).map(([name, value]) => { if (!/^[A-Z][A-Z0-9_]*$/.test(name) || typeof value !== 'string') throw new HttpError(422, 'Invalid common environment'); return [name, resolve(value)!] })), maxWorkers: integer(raw.runtime?.max_workers ?? 4, 'max_workers', 1), maxProjectWorkers: integer(raw.runtime?.max_project_workers ?? 4, 'max_project_workers', 1), maxRunningProjects: integer(raw.runtime?.max_running_projects ?? 1, 'max_running_projects', 1),
-      maxSteps: raw.tasks?.reason?.max_intents === undefined ? null : integer(raw.tasks.reason.max_intents, 'max_intents', 1), decideTimeout: integer(raw.tasks?.reason?.timeout ?? 300, 'reason timeout', 1), executeTimeout: integer(raw.tasks?.explore?.timeout ?? 900, 'execute timeout', 1), concludeTimeout: integer(raw.tasks?.explore?.conclude_timeout ?? 30, 'conclude timeout', 1),
-      bootstrapTimeout: integer(raw.tasks?.bootstrap?.timeout ?? 900, 'bootstrap timeout', 1), bootstrapConcludeTimeout: integer(raw.tasks?.bootstrap?.conclude_timeout ?? 30, 'bootstrap conclude timeout', 1), workspaceRoot: this.workspaceRoot }
+    return { workers, providers, llmPolling, taskLimits: Object.fromEntries(['commander','general','soldier','scout'].map(role=>[role,{timeout:integer(raw.tasks?.[role]?.timeout??(role==='scout'?240:role==='commander'?300:900),role+' timeout',1),concludeTimeout:integer(raw.tasks?.[role]?.conclude_timeout??30,role+' conclude timeout',1)}])), commonEnv: Object.fromEntries(Object.entries(raw.common_env ?? {}).map(([name, value]) => { if (!/^[A-Z][A-Z0-9_]*$/.test(name) || typeof value !== 'string') throw new HttpError(422, 'Invalid common environment'); return [name, resolve(value)!] })), maxWorkers: integer(raw.runtime?.max_workers ?? 4, 'max_workers', 1), maxProjectWorkers: integer(raw.runtime?.max_project_workers ?? 4, 'max_project_workers', 1), maxRunningProjects: integer(raw.runtime?.max_running_projects ?? 1, 'max_running_projects', 1),
+      maxSteps: raw.tasks?.commander?.max_intents === undefined ? null : integer(raw.tasks.commander.max_intents, 'max_intents', 1), decideTimeout: integer(raw.tasks?.commander?.timeout ?? 300, 'commander timeout', 1), executeTimeout: integer(raw.tasks?.soldier?.timeout ?? 900, 'execute timeout', 1), concludeTimeout: integer(raw.tasks?.soldier?.conclude_timeout ?? 30, 'conclude timeout', 1),
+      bootstrapTimeout: integer(raw.tasks?.soldier?.timeout ?? 900, 'bootstrap timeout', 1), bootstrapConcludeTimeout: integer(raw.tasks?.soldier?.conclude_timeout ?? 30, 'bootstrap conclude timeout', 1), workspaceRoot: this.workspaceRoot }
   }
   snapshot() {
     const { raw, revision } = this.read(), config = this.resolve(raw)
     return { revision, engine: config.workers.every(w => w.backend === 'mock') ? 'mock' : 'dsh', execution: 'local', runtime_max_workers: config.maxWorkers,
       runtime: { max_workers: config.maxWorkers, max_project_workers: config.maxProjectWorkers, max_running_projects: config.maxRunningProjects },
-      tasks: raw.tasks ?? {}, common_env: Object.entries(config.commonEnv ?? {}).map(([name, value]) => ({ name, value })),
+      llm_polling: config.llmPolling,
+      tasks: Object.fromEntries(Object.entries(config.taskLimits!).map(([role,limits])=>[role,{timeout:limits.timeout,conclude_timeout:limits.concludeTimeout,...(role==='commander'&&config.maxSteps!==null?{max_intents:config.maxSteps}:{})}])), common_env: Object.entries(config.commonEnv ?? {}).map(([name, value]) => ({ name, value })),
       providers: Object.entries(raw.providers ?? {}).map(([name, p]) => ({ name, api: p.api, base_url: p.base_url, api_key_configured: !!p.api_key, api_key_env: p.api_key_env ?? null,
         models: p.models.map(m => ({ ...m, reasoning: m.reasoning ?? 'auto_max', reasoning_efforts: m.reasoning_efforts ?? null, thinking_format: m.thinking_format ?? 'auto' })), referenced: config.workers.some(w => w.provider === name) })),
-      workers: config.workers.map(w => ({ name: w.name, type: w.provider === 'mock' ? 'mock' : 'dsh', provider: w.provider, model: w.model, enabled: w.enabled,
-        bootstrap: w.bootstrap, reason: w.reason, explore: w.explore, task_types: [w.reason ? 'reason' : '', w.explore ? 'explore' : '', w.bootstrap ? 'bootstrap' : ''].filter(Boolean), priority: w.priority, max_running: w.maxRunning, editable: w.provider !== 'mock' })) }
+      workers: config.workers.map(w => ({ ...(w.roles ? { roles: w.roles } : {}), name: w.name, type: w.provider === 'mock' ? 'mock' : 'dsh', provider: w.provider, model: w.model, enabled: w.enabled,
+        task_types: w.roles ?? [], priority: w.priority, max_running: w.maxRunning, editable: w.provider !== 'mock' })) }
   }
   commit(expected: string, mutate: (raw: RawConfig) => void) {
     const { raw, revision } = this.read()

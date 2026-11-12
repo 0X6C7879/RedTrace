@@ -1,0 +1,242 @@
+{
+  "provider": "acceptance",
+  "model": "auto/deepseek-flash",
+  "status": "idle",
+  "projectStatus": "completed",
+  "steps": [
+    {
+      "id": "i001",
+      "role": "scout",
+      "status": "done"
+    },
+    {
+      "id": "i002",
+      "role": "general",
+      "status": "done"
+    },
+    {
+      "id": "i003",
+      "role": "soldier",
+      "parentStepId": "i002",
+      "status": "done"
+    },
+    {
+      "id": "i004",
+      "role": "soldier",
+      "parentStepId": "i002",
+      "status": "done"
+    }
+  ],
+  "facts": [
+    {
+      "id": "f001",
+      "description": "CLASSIFICATION=hard (coordination). The current Step i001 contract and FGS Fact origin confirm this is a LOCAL harness acceptance for multi-actor orchestration, not offensive work: no network targets, reconn, exploits, flag/platform ops or credentials are authorized. Scope coverage confirmed — origin's scope text and the i001 contract agree on taskKey=local-coordination, sourceIds=[origin], goalId=goal, executionProfile=isolated, and the same input data. Why hard: completion requires mandatory multi-actor sequencing with hard dependencies rather than a single linear task — Scout done -> General active -> exactly two disjoint Soldier lanes -> General verifies both Facts from shared FGS -> Commander accepts goal only after all four Steps. Data validated: lane A=[2,3] sum 5, lane B=[3,4] sum 7, total 12; matches goal (\"lane A=5, B=7, total=12\"). Constraints to preserve: Soldiers must be exactly two (no third on lane failure), filenames exactly lane-a.txt / lane-b.txt, evidence must be real regular files in the Project cwd (never origin/Fact IDs as paths), each producer Step ends via submit_fact + REPORT + finish_step. Project cwd currently empty (no lane files yet); lanes are Soldier-owned, so Scout creates none. No contradictions found. Verdict: classify as coordination-hard; Commander may now dispatch one General.",
+      "evidence": [
+        {
+          "description": "FGS Fact origin (kind=fact, creator=human) states: LOCAL FIXTURE ONLY, sourceIds=[origin], goalId=goal, taskKey=local-coordination, no network/recon/exploit/credentials authorized, lanes A=[2,3] and B=[3,4] with expected sums 5 and 7, exact filenames lane-a.txt/lane-b.txt, mandatory Scout->General->2 Soldiers->General integration->Commander accept sequencing, no third Soldier on failure."
+        },
+        {
+          "description": "Goal node goal (status=open): 'exactly one Scout, one General and two specialist Soldiers; lane A=5, B=7, total=12; real file-backed Facts; all producer Steps complete before Commander accepts this Goal' — consistent with origin scope, no conflict."
+        },
+        {
+          "description": "Step contract i001 (boundStepVersion=1, planVersion=1, sourceIds=[origin], executionProfile=isolated) permits classification only and explicitly forbids spawning actors, creating lane files, or computing lane sums for the Scout."
+        },
+        {
+          "description": "Arithmetic check on authorized inputs: 2+3=5, 3+4=7, 5+7=12 — consistent with the stated expected lane sums and goal total."
+        },
+        {
+          "description": "Project cwd listing (pwd=/tmp/redtrace-legion-real-model-JN6lTZ/workspaces/proj_001) was empty at Scout time: no lane-a.txt/lane-b.txt present yet, as expected since Soldiers own those artifacts."
+        }
+      ]
+    },
+    {
+      "id": "f002",
+      "description": "Lane B complete: ONE local shell command computed 3+4=7, wrote it to relative file lane-b.txt in the Project cwd, and verified in the same command (test -f, exact-content grep -qx '7', cat output \"RESULT: 7\"). ls confirms lane-b.txt is a real regular file (-rw-r--r--, 2 bytes). Lane B expected sum 7 matches. Lane A untouched; no total computed; Goal not accepted. No network, recon, exploits or credentials used.",
+      "evidence": [
+        {
+          "artifactId": "artifact-10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58",
+          "description": "lane-b.txt regular file containing lane B sum 7, written and verified by the single lane-B command"
+        }
+      ]
+    },
+    {
+      "id": "f003",
+      "description": "Lane A complete: one local shell command computed 2+3 in the Project cwd and wrote the sum to relative file lane-a.txt, then cat/test verified the content equals \"5\" (ls shows a 2-byte regular file). No network, recon, exploits or credentials used; lane-b.txt untouched and total not computed (lane B owned by the other Soldier). Evidence path is the real regular file lane-a.txt.",
+      "evidence": [
+        {
+          "artifactId": "artifact-f0b5c2c2211c8d67ed15e75e656c7862d086e9245420892a7de62cd9ec582a06",
+          "description": "lane-a.txt in Project cwd, written by the lane A command and verified by cat/test to contain 5 (2+3)"
+        }
+      ]
+    },
+    {
+      "id": "f004",
+      "description": "INTEGRATION VERIFIED, total=12. Both disjoint Soldier lanes completed and were re-verified by the General from shared FGS plus independent file reads in the Project cwd. Lane A (Step i003, Fact f003): lane-a.txt contains exactly 5 (2+3), 2-byte regular file. Lane B (Step i004, Fact f002): lane-b.txt contains exactly 7 (3+4), 2-byte regular file. General re-read both files (test -f, cat, integer strip) and recomputed 5+7=12, matching the Goal. Exactly two Soldiers were delegated, both Steps ended with their own Fact + REPORT + finish_step; no third Soldier spawned, no lane failure occurred. Integration result written to relative regular file total.txt (3 bytes, content 12). Scope respected: local-only, isolated profile, no network/recon/exploit/credentials, no host/runtime/config inspection, no Fact IDs used as file paths. Goal not accepted by the General — Commander acceptance is next.",
+      "evidence": [
+        {
+          "artifactId": "artifact-f0b5c2c2211c8d67ed15e75e656c7862d086e9245420892a7de62cd9ec582a06",
+          "description": "General re-verified lane A regular file containing 5"
+        },
+        {
+          "artifactId": "artifact-10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58",
+          "description": "General re-verified lane B regular file containing 7"
+        },
+        {
+          "artifactId": "artifact-a1fb50e6c86fae1679ef3351296fd6713411a08cf8dd1790a4fd05fae8688164",
+          "description": "Integration total 12 written from the two verified lane files"
+        }
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "id": "run-b489e090-987d-455d-9896-3e61e7dd4a8d",
+      "status": "succeeded",
+      "worker": "scout",
+      "stepId": "i001",
+      "startedAt": "2026-11-11T07:10:38.399Z",
+      "endedAt": "2026-11-11T07:10:56.583Z",
+      "pendingTools": []
+    },
+    {
+      "id": "run-f33335e4-9ad1-489a-8892-09e4e9f2b0a7",
+      "status": "succeeded",
+      "worker": "general",
+      "stepId": "i002",
+      "startedAt": "2026-11-11T07:11:02.601Z",
+      "endedAt": "2026-11-11T07:11:36.171Z",
+      "pendingTools": []
+    },
+    {
+      "id": "run-1c78b0b5-e51d-486d-85f2-f9527c0f29de",
+      "status": "succeeded",
+      "worker": "soldier",
+      "stepId": "i003",
+      "startedAt": "2026-11-11T07:11:10.693Z",
+      "endedAt": "2026-11-11T07:11:24.165Z",
+      "pendingTools": []
+    },
+    {
+      "id": "run-ad2b0f35-7ca3-457a-ace9-89f6b5c677ce",
+      "status": "succeeded",
+      "worker": "soldier",
+      "stepId": "i004",
+      "startedAt": "2026-11-11T07:11:10.737Z",
+      "endedAt": "2026-11-11T07:11:24.484Z",
+      "pendingTools": []
+    }
+  ],
+  "messageStatuses": [
+    {
+      "type": "REPORT",
+      "status": "admitted"
+    },
+    {
+      "type": "REPORT",
+      "status": "admitted"
+    },
+    {
+      "type": "REPORT",
+      "status": "admitted"
+    },
+    {
+      "type": "REPORT",
+      "status": "admitted"
+    },
+    {
+      "type": "MESSAGE",
+      "status": "admitted"
+    },
+    {
+      "type": "REPORT",
+      "status": "admitted"
+    },
+    {
+      "type": "REPORT",
+      "status": "admitted"
+    }
+  ],
+  "stateSaved": true,
+  "familyTransfer": {
+    "sourceExperienceId": 2,
+    "targetProject": "proj_002",
+    "targetStatus": "completed",
+    "transfer": {
+      "id": "transfer-99b10bbc-eee9-468f-9aa1-9c207045c915",
+      "sourceProjectId": "proj_001",
+      "sourceFactIds": [
+        "f001",
+        "f002",
+        "f003",
+        "f004"
+      ],
+      "targetProject": "proj_002",
+      "taskKey": "target-recheck",
+      "hintId": "h001",
+      "brief": "Source local computation succeeded, but source inputs/results differ. Recompute target6+8, verify exact regular file target-sum.txt=14, publish target-task Fact and confirm this transfer natively. Source12 is NOT target proof.",
+      "confirmedFactIds": [
+        "f002"
+      ],
+      "status": "target-verified"
+    },
+    "steps": [
+      {
+        "id": "i001",
+        "role": "scout",
+        "taskKey": "target-recheck",
+        "status": "done"
+      },
+      {
+        "id": "i002",
+        "role": "soldier",
+        "taskKey": "target-recheck",
+        "status": "done"
+      }
+    ],
+    "facts": [
+      {
+        "id": "f001",
+        "projectId": "proj_002",
+        "kind": "fact",
+        "description": "SCOUT CLASSIFICATION — easy. Scope: FGS Fact origin (proj_002) limits this to a LOCAL FIXTURE with no network/platform/credential operations; only relative files inside /tmp/redtrace-legion-real-model-JN6lTZ/workspaces/proj_002 are permitted. Mission shape: one Soldier, one local shell computation, one exact relative regular file target-sum.txt, one file-backed target Fact, then Step finish; no extra squads or delegation needed. Target inputs are [6,8] with expected sum 14, which differs from proj_001's source result 12; the workspace is currently empty (no target-sum.txt present, no prior target artifacts). Hint h001 is an UNVERIFIED Family Transfer hint for transfer-99b10bbc-eee9-468f-9aa1-9c207045c915 (source proj_001 / family local-integer-arithmetic); its value 12 is not target proof and must not be promoted. Required native re-verification: Soldier must independently compute 6+8 in the local shell, write target-sum.txt containing exactly 14, and publish the target-recheck Fact; Commander must then call legion_confirm_transfer with transfer id transfer-99b10bbc-eee9-468f-9aa1-9c207045c915 and the actual target Fact id before accepting goal. No blockers found.",
+        "stepId": "i001",
+        "creator": "scout",
+        "evidence": [
+          {
+            "description": "FGS read: Fact origin scope (local fixture only), Goal goal, Step i001 (scout, taskKey=target-recheck), and Hint h001 (unverified transfer-99b10bbc) present; workspace directory listing shows an empty project workspace with no target-sum.txt"
+          }
+        ],
+        "createdAt": "2026-11-11T07:12:16.903Z",
+        "version": 1
+      },
+      {
+        "id": "f002",
+        "projectId": "proj_002",
+        "kind": "fact",
+        "description": "TARGET RECHECK (proj_002, local fixture only; no network/platform ops). Independently recomputed 6+8 in the local project shell — result 14 — and wrote it to the exact relative regular file target-sum.txt (2 bytes, content \"14\"; verified with test -f and cat in the same command, rc=0). This is natively computed in this target, not copied: the source value 12 from hint h001 / transfer-99b10bbc-eee9-468f-9aa1-9c207045c915 is NOT target proof and was not used. Target inputs [6,8] differ from the source inputs; transfer status remains unverified until legion_confirm_transfer is called by Commander with this Fact id. Workspace previously empty (Scout f001); no other files written.",
+        "stepId": "i002",
+        "creator": "soldier",
+        "evidence": [
+          {
+            "artifactId": "artifact-8527a891e224136950ff32ca212b45bc93f69fbb801c3b1ebedac52775f99e61",
+            "description": "Relative regular file target-sum.txt in project cwd containing exactly 14 (6+8 computed locally; verified regular file, 2 bytes)"
+          }
+        ],
+        "createdAt": "2026-11-11T07:12:34.292Z",
+        "version": 1
+      }
+    ],
+    "runs": [
+      {
+        "id": "run-9c09dd78-e442-4a02-ad69-ae4e59520459",
+        "status": "succeeded",
+        "pendingTools": []
+      },
+      {
+        "id": "run-02daa816-4988-413e-925e-41d63c886687",
+        "status": "succeeded",
+        "pendingTools": []
+      }
+    ]
+  }
+}

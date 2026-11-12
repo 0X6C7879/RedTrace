@@ -1,0 +1,1864 @@
+diff --git a/README.md b/README.md
+index 2fd990a8..5ad786cf 100644
+--- a/README.md
++++ b/README.md
+@@ -111,7 +111,19 @@ cp redtrace.local.example.yaml redtrace.yaml
+ 
+ 启动后只有一个 Node 进程：Cordis Web 服务直接调用 Node 请求处理器并提供 Web UI（默认监听 `127.0.0.1:8000`），没有 FastAPI 反代。`mock` Worker 走进程内确定性执行器，用于开发、持久化测试和性能对照。
+ 
+-Worker 即路由：每个 Worker 独立声明 `provider`、`model`、`bootstrap/reason/explore` 资格、`max_running` 并发与 `priority`；调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务。Worker 修改后对新任务自动生效，无需重启——设置页与直改配置文件都走同一条热加载链路，任何配置变更都不要求重启进程。
++Worker 声明逻辑路由：每个 Worker 独立声明 `provider`、`model`、`bootstrap/reason/explore` 资格、`max_running` 并发与 `priority`；调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务。Worker 修改后对新任务自动生效，无需重启——设置页与直改配置文件都走同一条热加载链路，任何配置变更都不要求重启进程。
++
++#### 同模型供应商轮询与故障切换
++
++参考 ARTEX 的供应商池和首输出前故障转移设计：在设置页新增多个 Provider，分别填写自己的协议、地址和密钥，并给它们添加**完全相同的模型 ID**，即可自动组成轮询池；不需要重复创建 Worker。不同模型 ID 不会混用，单供应商保持原行为。
++
++在**运行设置 → Provider 模型服务 → 轮询配置**中，可以开关轮询、按模型勾选供应商，并用上下箭头调整顺序；保存后通过原有配置热加载生效。只有一家参与时不轮询，关闭时始终使用 Worker 指定的 Provider。未勾选 Worker 指定的供应商时，该 Worker 保持直连。设置持久化在 `llm_polling.enabled` 和 `llm_polling.models.<模型 ID>`（供应商名称数组）中；旧配置默认保持开启和自动分组。
++
++每次模型请求轮换起点（手动设置顺序后首次从列表第一家开始，否则首次从 Worker 指定的 Provider 开始），故障时按配置顺序继续尝试同 ID 的其他 Provider，每个请求最多尝试每家一次。支持 OpenAI Completions、Responses 和 Anthropic Messages 混合供应商；同 ID 必须指向同一个模型，并配置兼容的上下文、输出上限和 reasoning 能力，请求参数不会为切换而降级。
++
++- 仅在尚未输出内容时，对鉴权/余额不足、404、408、429、5xx、网络及连接超时等供应商故障切换。400、上下文超限、调用取消，以及已经输出文本、思考或工具调用的流不会重放；全部失败时保留最后一家供应商的原始错误。
++- Worker 并发配额、任务会话和权限不变；没有全局锁、排队、额外退避或持久化熔断。故障供应商仍会在后续轮次被尝试，轮询游标在配置热加载/重启后重置。
++- 连接测试只检查选中的供应商，避免备用供应商掩盖错误配置。会话记录中的 `llm/polling` / `llm/polling-failed` 标记实际调用及切换失败；Worker/助手消息的 provider 仍表示逻辑路由，跨供应商的私有重放状态不复用，失败尝试已报告的 token 用量计入合计。
+ 
+ Agent 继承启动用户的宿主机权限；isolated 执行 profile 可按 Intent 启用沙箱。请只在已隔离且获得授权的环境中使用。
+ 
+diff --git a/packages/redtrace-dsh/src/core.ts b/packages/redtrace-dsh/src/core.ts
+index 75dd71b3..16da7952 100644
+--- a/packages/redtrace-dsh/src/core.ts
++++ b/packages/redtrace-dsh/src/core.ts
+@@ -19,6 +19,7 @@ export async function apply(ctx: RuntimeContext): Promise<void> {
+   const SessionStore = await load('vendor/deepseek-harness/packages/core/session/lib/index.js')
+   const SystemPrompt = await load('vendor/deepseek-harness/packages/core/system-prompt/lib/index.js')
+   const ToolRuntime = await load('vendor/deepseek-harness/packages/core/tools/lib/index.js')
++  const NativeToolExecutor = await load('vendor/deepseek-harness/packages/core/tool-executor-native/lib/index.js')
+   const AgentRegistry = await load('vendor/deepseek-harness/packages/core/agent/lib/index.js')
+   const llmRetry = await load('vendor/deepseek-harness/packages/llm/llm-retry/lib/index.js')
+   const AgentLoop = await load('vendor/deepseek-harness/packages/core/agent-loop/lib/index.js')
+@@ -33,6 +34,7 @@ export async function apply(ctx: RuntimeContext): Promise<void> {
+     persona: '',
+   })
+   ctx.plugin(ToolRuntime.default ?? ToolRuntime)
++  ctx.plugin(NativeToolExecutor.default ?? NativeToolExecutor)
+   ctx.plugin(AgentRegistry.default ?? AgentRegistry)
+   ctx.plugin(llmRetry.default ?? llmRetry)
+   ctx.plugin(AgentLoop.default ?? AgentLoop, { agents: [] })
+diff --git a/packages/redtrace-dsh/src/loader.ts b/packages/redtrace-dsh/src/loader.ts
+index a1e307d8..b98a531f 100644
+--- a/packages/redtrace-dsh/src/loader.ts
++++ b/packages/redtrace-dsh/src/loader.ts
+@@ -7,7 +7,7 @@ const codeRoot = path.resolve(process.env.REDTRACE_CODE_ROOT || repoRoot)
+ 
+ /** Load a module from the DSH harness or this repository by repo-relative path. */
+ export async function load(relative: string): Promise<any> {
+-  const root = relative.startsWith('vendor/deepseek-harness/') ? codeRoot : repoRoot
++  const root = relative.startsWith('vendor/deepseek-harness/') || relative.startsWith('packages/redtrace-dsh/lib/') ? codeRoot : repoRoot
+   return import(pathToFileURL(path.join(root, relative)).href)
+ }
+ 
+diff --git a/packages/redtrace-dsh/src/reason-read.ts b/packages/redtrace-dsh/src/reason-read.ts
+index aea5864c..7bbf7fcf 100644
+--- a/packages/redtrace-dsh/src/reason-read.ts
++++ b/packages/redtrace-dsh/src/reason-read.ts
+@@ -1,4 +1,4 @@
+-/** Reason-only full-file reads; Execute keeps the native bounded read tool. */
++/** Reason-only paged text reads; Execute keeps the native bounded read tool. */
+ import { load } from './loader.js'
+ 
+ export const name = 'redtrace-reason-read'
+@@ -17,9 +17,9 @@ export async function apply(ctx: any): Promise<void> {
+   if (!native) throw new Error('Reason requires the native read tool')
+   ctx.tools.register({
+     ...native,
+-    description: 'Read a UTF-8 text file in full by default, with optional offset/limit and no path or output-size cap.',
++    description: 'Read UTF-8 text files up to 8 MiB; default 2000 lines. Use offset/limit to page.',
+     parameters: { ...native.parameters, properties: { ...native.parameters.properties,
+-      limit: { type: 'number', description: 'Optional number of lines to return. Omitted reads through end of file.' },
++      limit: { type: 'number', description: 'Optional number of lines to return. Defaults to 2000 lines.' },
+     } },
+     output: { ...native.output, render: (_args: unknown, value: ReadValue) => {
+       const end = value.lines.at(-1)?.number ?? Math.max(0, value.offset - 1)
+@@ -43,12 +43,14 @@ export async function apply(ctx: any): Promise<void> {
+         throw new FsError(`cannot read "${target.displayPath}": not found`, 'FS_NOT_FOUND')
+       }
+       if (info.type !== 'file') throw new FsError(`cannot read "${target.displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE')
++      if (info.size !== undefined && info.size > 8 * 1024 * 1024) throw new Error('Reason read exceeds 8 MiB; ask Explore to extract a focused evidence file')
+       const text = await ctx.fs.readText(target, exec.signal)
++      if (Buffer.byteLength(text) > 8 * 1024 * 1024 || text.includes('\0')) throw new Error('Reason read requires a UTF-8 text file up to 8 MiB')
+       const lines: string[] = text ? text.split('\n') : []
+       if (text.endsWith('\n')) lines.pop()
+       const offset = args.offset ?? 1
+       if (offset > lines.length && !(lines.length === 0 && offset === 1)) throw new FsError(`offset ${offset} is out of range for "${target.displayPath}" (${lines.length} lines)`, 'FS_NOT_FOUND')
+-      const selected = lines.slice(offset - 1, args.limit === undefined ? undefined : offset - 1 + args.limit)
++      const selected = lines.slice(offset - 1, offset - 1 + (args.limit ?? 2000))
+       exec.signal.throwIfAborted()
+       ctx.emit('fs/observed', target, { kind: 'present', version: info.version }, exec)
+       return { path: ctx.fs.processPath(target), offset, totalLines: lines.length,
+@@ -57,6 +59,6 @@ export async function apply(ctx: any): Promise<void> {
+     },
+   })
+   ctx.systemPrompt.section({ name: 'tool:read', order: ctx.systemPrompt.getSectionOrder('TOOL_READ'),
+-    text: 'Use read to inspect UTF-8 text files. It returns the complete file by default, without path, line, character or byte caps. Use offset/limit only when you intentionally want a partial read.',
++    text: 'Use read to inspect UTF-8 text files. Files must be text up to 8 MiB. It returns 2000 lines by default. Use offset and limit to continue reading large files.',
+   })
+ }
+diff --git a/packages/redtrace-engine/compat/cordis.mjs b/packages/redtrace-engine/compat/cordis.mjs
+index e0594d1f..ef125994 100644
+--- a/packages/redtrace-engine/compat/cordis.mjs
++++ b/packages/redtrace-engine/compat/cordis.mjs
+@@ -227,26 +227,26 @@ export async function apply(ctx, options) {
+   // The engine handler serves the Web UI and the whole API; the Cordis web
+   // server only owns the plugin-manager routes and falls through to it.
+   ctx.effect(() => ctx.webServer.registerFallback(engine.handler))
+-  let profileRevision = '', watcher
++  let profileRevision = '', profileSignature = '', watcher
+   let refreshPending = Promise.resolve()
+   const refresh = () => refreshPending = refreshPending.catch(() => {}).then(refreshProfiles)
+   const refreshProfiles = async () => {
+     const shared = state(), mcpConfigs = engine.capabilities.mcpConfigs()
+     if (shared && mcpSignature(mcpConfigs) !== shared.mcpSignature) await shared.remountMcp?.(mcpConfigs)
+-    const { raw, revision } = engine.configuration.read()
+-    if (revision === profileRevision) return
+-    const config = engine.configuration.resolve(raw), { providers } = providerProfiles(config)
++    const { raw, revision, config, signature } = engine.configuration.resolvedSnapshot()
++    if (signature === profileSignature) return
++    const { providers } = providerProfiles(config)
+     // File-watch delivery can lag; the model snapshot and scheduler must use the same revision.
+     engine.scheduler.update(config)
+     applyCommonEnv(config.commonEnv)
+     const adapter = [...ctx.get('loader').entries()].find(entry => entry.options.id === 'llm-pi-ai')
+     if (!adapter) throw new Error('DSH llm-pi-ai profile entry is missing')
+     await adapter.fiber.await()
+-    await adapter.update({ config: { providers, credentialSource: { root: engine.configuration.root, filename: engine.configuration.filename, revision } } })
++    await adapter.update({ config: { providers, polling: config.llmPolling, credentialSource: { root: engine.configuration.root, filename: engine.configuration.filename, revision } } })
+     await adapter.fiber.await()
+     if (shared) shared.snapshot = { revision, workers: config.workers.map(w => ({ ...w })), providers, env: {}, commonEnv: config.commonEnv, tasks: raw.tasks, mcpConfigs,
+       limits: { maxWorkers: config.maxWorkers, maxProjectWorkers: config.maxProjectWorkers, maxRunningProjects: config.maxRunningProjects, interval: 0 } }
+-    profileRevision = revision
++    profileRevision = revision; profileSignature = signature
+   }
+   const replacements = {
+     // The domain replacement merges fresh MCP configs and pulls the first
+@@ -345,6 +345,10 @@ export async function apply(ctx, options) {
+     const unlisten = ctx.on('session/event', (session, event) => {
+       if (String(session.id) !== run.id) return
+       const data = event.data ?? {}
++      if (event.type === 'assistant/chunk' && ['text-delta', 'reasoning-delta'].includes(data.chunk?.type)) {
++        for (const projected of eventProjection(task, event)) store.changes.emit('audit', run.projectId, { ...projected, project_id: run.projectId, run_id: run.id })
++        return
++      }
+       if (event.type === 'user/message') { const notice = exploreNotice(data); if (notice) auditNotice(store, notice, 'admitted') }
+       if (event.type === 'step/start') store.metricStart(run.id, `model-${data.turn}-${data.step}`, 'model')
+       if (event.type === 'assistant/message' || event.type === 'step/end') store.metricEnd(run.id, `model-${data.turn}-${data.step}`)
+diff --git a/packages/redtrace-engine/compat/llm.mjs b/packages/redtrace-engine/compat/llm.mjs
+index 2db2b35e..e8cc7090 100644
+--- a/packages/redtrace-engine/compat/llm.mjs
++++ b/packages/redtrace-engine/compat/llm.mjs
+@@ -22,6 +22,75 @@ export async function apply(ctx, config) {
+   // Generated model keys remain read-only, never copied into a plaintext store or process.env.
+   await mount(scoped, 'vendor/deepseek-harness/packages/credentials/credentials-local/lib/index.js', { watch: false })
+   await mount(scoped, 'vendor/deepseek-harness/packages/llm/llm-pi-ai/lib/index.js', { providers: config.providers ?? {} })
++  installModelPolling(ctx, config.providers ?? {}, config.polling)
++}
++
++// pi-ai can emit usage before a failed finish; only content commits an attempt.
++function canFailover(reason, signal) {
++  if (signal?.aborted || reason.kind !== 'error') return false
++  const failure = reason.failure
++  if (['INVALID_REQUEST', 'CONTEXT_WINDOW_EXCEEDED', 'ABORTED'].includes(failure.code)) return false
++  const status = failure.status ?? Number(failure.message.match(/\b([45]\d{2})\b/)?.[1])
++  if (status) return [401, 402, 403, 404, 408, 429].includes(status) || status >= 500
++  return ['AUTH', 'QUOTA_EXCEEDED', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT', 'STREAM_CLOSED', 'EMPTY_RESPONSE', 'MISSING_CREDENTIAL', 'INVALID_CREDENTIAL'].includes(failure.code)
++}
++
++const addUsage = (left = {}, right = {}) => Object.fromEntries(
++  [...new Set([...Object.keys(left), ...Object.keys(right)])].map(key => [key, (left[key] ?? 0) + (right[key] ?? 0)]),
++)
++
++/** Same exact model ID shares one round-robin cursor across Workers. */
++export function installModelPolling(ctx, providers, polling = {}) {
++  if (polling.enabled === false) return
++  const groups = new Map(), cursors = new Map(), routed = new WeakSet()
++  for (const [provider, profile] of Object.entries(providers)) {
++    for (const model of profile.models ?? []) {
++      const members = groups.get(model.id) ?? []
++      if (!members.includes(provider)) members.push(provider)
++      groups.set(model.id, members)
++    }
++  }
++  for (const [model, names] of Object.entries(polling.models ?? {})) groups.set(model, names.filter(name => groups.get(model)?.includes(name)))
++  ctx.on('llm/stream', async function* (options, next) {
++    const members = groups.get(options.model)
++    if (routed.has(options) || !members?.includes(options.provider) || members.length < 2) { yield* next(); return }
++    const start = cursors.get(options.model) ?? (Object.hasOwn(polling.models ?? {}, options.model) ? 0 : members.indexOf(options.provider))
++    cursors.set(options.model, (start + 1) % members.length)
++    const session = options.sessionId ? ctx.get('sessions')?.get(options.sessionId) : undefined
++    let spent = {}
++    for (let attempt = 0; attempt < members.length; attempt++) {
++      if (options.signal?.aborted) {
++        yield { type: 'finish', reason: { kind: 'aborted', failure: { code: 'ABORTED', message: 'LLM polling aborted by caller' } } }
++        return
++      }
++      const provider = members[(start + attempt) % members.length]
++      const changed = provider !== options.provider
++      // A response from another endpoint must not replay opaque state attributed to the Worker's endpoint.
++      const request = changed ? { ...options, provider, messages: options.messages.map(message =>
++        message.role === 'assistant' && message.source?.replayState !== undefined
++          ? { ...message, source: { ...message.source, replayState: undefined } } : message) } : options
++      if (changed) routed.add(request)
++      session?.append('llm/polling', { requestedProvider: options.provider, provider, model: options.model, attempt: attempt + 1 })
++      let emitted = false, usage
++      for await (const chunk of changed ? ctx.get('llm').stream(request) : next()) {
++        if (chunk.type === 'usage') { usage = chunk.usage; continue }
++        if (chunk.type === 'finish') {
++          if (!emitted && attempt + 1 < members.length && canFailover(chunk.reason, options.signal)) {
++            spent = addUsage(spent, usage)
++            const code = chunk.reason.failure.code
++            session?.append('llm/polling-failed', { provider, model: options.model, code })
++            ctx.logger.warn('LLM polling: %s/%s failed (%s); trying next provider', provider, options.model, code)
++            break
++          }
++          if (usage || Object.keys(spent).length) yield { type: 'usage', usage: addUsage(spent, usage) }
++          yield changed ? { ...chunk, replayState: undefined } : chunk
++          return
++        }
++        emitted = true
++        yield chunk
++      }
++    }
++  })
+ }
+ 
+ export async function probeModel(ctx, configuration, config, worker, signal) {
+@@ -30,7 +99,8 @@ export async function probeModel(ctx, configuration, config, worker, signal) {
+   const fiber = ctx.isolate('llm').plugin(async scoped => {
+     await mount(scoped, 'vendor/deepseek-harness/packages/llm/llm/lib/index.js')
+     await mount(scoped, 'packages/redtrace-engine/compat/llm.mjs', {
+-      providers: providerProfiles(config).providers,
++      // Connection tests must exercise the selected endpoint, never a healthy sibling.
++      providers: { [worker.provider]: providerProfiles(config).providers[worker.provider] },
+       credentialSource: { root: configuration.root, filename: configuration.filename, revision: saved.revision },
+     })
+     llm = scoped.get('llm')
+diff --git a/packages/redtrace-engine/src/capabilities.ts b/packages/redtrace-engine/src/capabilities.ts
+index bba41e0a..a05173d6 100644
+--- a/packages/redtrace-engine/src/capabilities.ts
++++ b/packages/redtrace-engine/src/capabilities.ts
+@@ -1,4 +1,4 @@
+-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, appendFileSync, unlinkSync, realpathSync, cpSync, symlinkSync } from 'node:fs'
++import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, appendFileSync, unlinkSync, realpathSync, cpSync, symlinkSync, statSync } from 'node:fs'
+ import path from 'node:path'
+ import { createHash } from 'node:crypto'
+ import { parse } from 'yaml'
+@@ -122,7 +122,16 @@ export class Capabilities {
+     return { name, enabled: config.enabled ?? true, transport: common.transport ?? common.type ?? (common.url ? 'http' : 'stdio'), command: common.command ?? null, url: common.url ?? null, agents: ['dsh'], config }
+   }
+   servers() { return readdirSync(this.mcpDir).filter(n => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\.json$/.test(n)).sort().map(n => this.mcp(n.slice(0, -5))) }
++  private mcpCache?: { signature: string; configs: Record<string, any>[] }
+   mcpConfigs() {
++    const signature = readdirSync(this.mcpDir).filter(n => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\.json$/.test(n)).sort().map(n => {
++      const state = statSync(path.join(this.mcpDir, n), { bigint: true }); return `${n}:${state.ino}:${state.size}:${state.mtimeNs}:${state.ctimeNs}`
++    }).join('|')
++    if (this.mcpCache?.signature === signature) return structuredClone(this.mcpCache.configs)
++    const configs = this.buildMcpConfigs()
++    this.mcpCache = { signature, configs }; return structuredClone(configs)
++  }
++  private buildMcpConfigs() {
+     return this.servers().filter(s => s.enabled && s.name.toLowerCase() !== 'rea').map(s => {
+       const config = { ...s.config, ...s.config.agents?.dsh, serverName: s.name }
+       for (const key of ['enabled', 'agents', 'name']) delete config[key]
+diff --git a/packages/redtrace-engine/src/capability-verbs.ts b/packages/redtrace-engine/src/capability-verbs.ts
+index b3d12c4a..9e6741ff 100644
+--- a/packages/redtrace-engine/src/capability-verbs.ts
++++ b/packages/redtrace-engine/src/capability-verbs.ts
+@@ -280,15 +280,8 @@ function selectChannel(runtime: VerbRuntime, verb: string, args: { via?: unknown
+ }
+ 
+ const TERMINAL = ['succeeded', 'failed', 'cancelled', 'rejected']
+-const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
+-  const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, ms)
+-  const abort = () => { clearTimeout(timer); reject(new Error('Operation cancelled')) }
+-  if (signal.aborted) abort()
+-  else signal.addEventListener('abort', abort, { once: true })
+-})
+-
+ /** Dispatch one verb call through the operation queue: channel selection,
+- * task creation (risk is audit metadata), and in-process polling. */
++ * task creation (risk is audit metadata), and event-driven completion. */
+ export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Record<string, unknown>, context: { projectId: string; worker: string; stepId: string | null; runId?: string; signal: AbortSignal }): Promise<any> {
+   const definition = verbRegistry.find(entry => entry.id === verb)
+   if (!definition) throw new Error(`Unknown capability verb: ${verb}`)
+@@ -321,14 +314,10 @@ export async function dispatchVerb(runtime: VerbRuntime, verb: string, args: Rec
+     risk: definition.risk,
+   })
+   const waitSeconds = Math.min(300, Math.max(30, Number(args.timeout ?? 60) + 30))
+-  const deadline = Date.now() + waitSeconds * 1000
+-  while (Date.now() < deadline && !context.signal.aborted) {
+-    await sleep(200, context.signal)
+-    const current = runtime.operations.task(task.id)
+-    if (TERMINAL.includes(current.status)) {
+-      const output = String(current.output_summary ?? '')
+-      return { task_id: task.id, attempt_id: current.attempt_id, channel: { resource_id: channel.id, kind: channel.kind, target: channel.target }, status: current.status as string, output: output ?? null, result: JSON.parse(current.result_json || '{}'), result_ref: current.result_ref ?? null }
+-    }
++  const current = await runtime.operations.waitTask(task.id, waitSeconds * 1000, context.signal)
++  if (TERMINAL.includes(current.status)) {
++    const output = String(current.output_summary ?? '')
++    return { task_id: task.id, attempt_id: current.attempt_id, channel: { resource_id: channel.id, kind: channel.kind, target: channel.target }, status: current.status as string, output, result: JSON.parse(current.result_json || '{}'), result_ref: current.result_ref ?? null }
+   }
+   return { task_id: task.id, channel: { resource_id: channel.id, kind: channel.kind, target: channel.target }, status: runtime.operations.task(task.id).status as string, note: '任务仍在排队或执行;稍后用 remote.task(task_id) 查询结果。' }
+ }
+diff --git a/packages/redtrace-engine/src/config-api.ts b/packages/redtrace-engine/src/config-api.ts
+index ca92170c..558960e4 100644
+--- a/packages/redtrace-engine/src/config-api.ts
++++ b/packages/redtrace-engine/src/config-api.ts
+@@ -34,6 +34,10 @@ export function configRoutes(router: Router, configuration: Configuration, probe
+     testCache.set(key, { at: Date.now(), value: result }); return result
+   }
+   router.add('GET', '/worker-config', () => configuration.snapshot())
++  router.add('PUT', '/worker-config/llm-polling', async c => {
++    const b = await body(c.req, Type.Object({ expected_revision: revision, enabled: Type.Boolean(), models: Type.Record(Type.String(), Type.Array(text, { uniqueItems: true })) }))
++    return configuration.commit(b.expected_revision, raw => { raw.llm_polling = { enabled: b.enabled, models: b.models } })
++  })
+   const task = Type.Object({ timeout: Type.Integer({ minimum: 5 }), conclude_timeout: Type.Integer({ minimum: 5 }) })
+   router.add('PUT', '/worker-config/runtime-tasks', async c => {
+     const b = await body(c.req, Type.Object({ expected_revision: revision, runtime: Type.Object({ max_workers: positive, max_project_workers: positive, max_running_projects: positive }), tasks: Type.Object({ reason: Type.Object({ timeout: Type.Integer({ minimum: 5 }), conclude_timeout: Type.Integer({ minimum: 5 }), max_intents: Type.Optional(positive) }), explore: task, bootstrap: task }) }))
+@@ -55,12 +59,15 @@ export function configRoutes(router: Router, configuration: Configuration, probe
+         api_key_env: b.api_key_env ?? undefined, models: b.models.map(m => ({ id: m.id, context_window: m.context_window ?? 1000000, max_tokens: m.max_tokens ?? 128000, reasoning: m.reasoning ?? 'auto_max', reasoning_efforts: m.reasoning_efforts, thinking_format: m.thinking_format ?? 'auto' })) }
+       if (method === 'PUT' && b.name !== c.params.provider) { delete raw.providers[c.params.provider]; for (const w of raw.workers) if (w.provider === c.params.provider) w.provider = b.name }
+       raw.providers[b.name] = value
++      for (const [model, names] of Object.entries(raw.llm_polling?.models ?? {})) raw.llm_polling!.models![model] = names
++        .map(name => method === 'PUT' && name === c.params.provider ? b.name : name)
++        .filter(name => raw.providers![name]?.models.some(m => m.id === model))
+     })
+     if (method === 'POST') { c.res.statusCode = 201; const { send } = await import('./http.ts'); send(c.res, result, 201) } else return result
+   })
+   router.add('DELETE', '/worker-config/providers/:provider', c => {
+     const expected = c.url.searchParams.get('expected_revision') ?? ''; if (!/^[a-f0-9]{64}$/.test(expected)) throw new HttpError(422, 'Invalid expected_revision')
+-    return configuration.commit(expected, raw => { if (!raw.providers?.[c.params.provider]) throw new HttpError(400, 'Provider not found'); if (raw.workers.some(w => w.provider === c.params.provider)) throw new HttpError(409, 'Provider is referenced by workers'); delete raw.providers[c.params.provider] })
++    return configuration.commit(expected, raw => { if (!raw.providers?.[c.params.provider]) throw new HttpError(400, 'Provider not found'); if (raw.workers.some(w => w.provider === c.params.provider)) throw new HttpError(409, 'Provider is referenced by workers'); delete raw.providers[c.params.provider]; for (const names of Object.values(raw.llm_polling?.models ?? {})) { const i = names.indexOf(c.params.provider); if (i >= 0) names.splice(i, 1) } })
+   })
+   for (const method of ['POST', 'PUT']) router.add(method, `/worker-config/workers${method === 'PUT' ? '/:worker' : ''}`, async c => {
+     const b = await body(c.req, workerSchema)
+diff --git a/packages/redtrace-engine/src/config.ts b/packages/redtrace-engine/src/config.ts
+index 09b89711..dca15af7 100644
+--- a/packages/redtrace-engine/src/config.ts
++++ b/packages/redtrace-engine/src/config.ts
+@@ -1,5 +1,5 @@
+ import { createHash, createHmac, createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'node:crypto'
+-import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
++import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+ import path from 'node:path'
+ import { parse, stringify } from 'yaml'
+ import { HttpError, integer, requiredText } from './types.ts'
+@@ -8,7 +8,7 @@ import type { EngineConfig, Provider, Worker } from './types.ts'
+ type RawModel = { id: string; context_window: number; max_tokens: number; reasoning?: string; reasoning_efforts?: Record<string, string | null> | boolean | null; thinking_format?: string }
+ type RawProvider = { api: Provider['api']; base_url: string; api_key?: string; api_key_env?: string; models: RawModel[] }
+ type RawWorker = { name: string; provider: string; model?: string; enabled?: boolean; bootstrap?: boolean; reason?: boolean; explore?: boolean; max_running?: number; priority?: number; backend?: Worker['backend'] | 'pi' }
+-export interface RawConfig { providers?: Record<string, RawProvider>; workers: RawWorker[]; runtime?: Record<string, unknown>; tasks?: Record<string, { timeout: number; conclude_timeout: number; max_intents?: number }>; common_env?: Record<string, string>; [key: string]: unknown }
++export interface RawConfig { providers?: Record<string, RawProvider>; workers: RawWorker[]; runtime?: Record<string, unknown>; tasks?: Record<string, { timeout: number; conclude_timeout: number; max_intents?: number }>; common_env?: Record<string, string>; llm_polling?: { enabled?: boolean; models?: Record<string, string[]> }; [key: string]: unknown }
+ const secretPattern = /^\$\{REDTRACE_SECRET:([a-f0-9]{32})\}$/
+ const sensitiveEnvironment = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD)$/
+ const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
+@@ -44,6 +44,15 @@ export class Configuration {
+   readonly root: string
+   readonly secretRoot: string
+   readonly workspaceRoot: string
++  private cached?: { signature: string; raw: RawConfig; revision: string; config: EngineConfig }
++  resolvedSnapshot() {
++    const signature = [this.filename, ...['master.key', 'worker-config.enc'].map(file => path.join(this.secretRoot, file))].map(file => {
++      try { const s = statSync(file, { bigint: true }); return `${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}` }
++      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'; throw error }
++    }).join('|')
++    if (this.cached?.signature !== signature) { const value = this.read(); const config = this.resolve(value.raw); this.cached = { signature, ...value, config } }
++    return this.cached
++  }
+   constructor(root: string, filename = path.join(root, '.redtrace/redtrace.yaml')) {
+     this.root = path.resolve(root); this.filename = path.resolve(filename)
+     this.secretRoot = path.join(path.dirname(this.filename), '.redtrace-secrets')
+@@ -95,6 +104,11 @@ export class Configuration {
+       providers[name] = { api: p.api, baseUrl: p.base_url, apiKey: resolve(p.api_key), apiKeyEnv: p.api_key_env,
+         models: p.models.map(m => ({ id: requiredText(m.id, 'model id'), contextWindow: integer(m.context_window ?? 1000000, 'context_window', 1), maxTokens: integer(m.max_tokens ?? 128000, 'max_tokens', 1), reasoning: m.reasoning ?? 'auto_max', reasoningEfforts: m.reasoning_efforts, thinkingFormat: m.thinking_format ?? 'auto' })) }
+     }
++    const llmPolling = { enabled: raw.llm_polling?.enabled ?? true, models: raw.llm_polling?.models ?? {} }
++    if (typeof llmPolling.enabled !== 'boolean' || typeof llmPolling.models !== 'object' || Array.isArray(llmPolling.models)) throw new HttpError(422, 'Invalid LLM polling configuration')
++    for (const [model, names] of Object.entries(llmPolling.models)) {
++      if (!Array.isArray(names) || new Set(names).size !== names.length || names.some(name => typeof name !== 'string' || !Object.hasOwn(providers, name) || !providers[name].models.some(m => m.id === model))) throw new HttpError(422, 'LLM polling references duplicate or missing providers/models')
++    }
+     const workers = raw.workers.map(w => {
+       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(w.name)) throw new HttpError(422, 'Invalid worker name')
+       if (w.provider !== 'mock' && !providers[w.provider]?.models.some(m => m.id === w.model)) throw new HttpError(422, 'Worker references missing provider or model')
+@@ -103,7 +117,7 @@ export class Configuration {
+         priority: integer(w.priority ?? 0, 'priority', -2147483648), maxRunning: integer(w.max_running ?? 1, 'max_running', 1), backend: w.provider === 'mock' ? 'mock' as const : 'dsh' as const }
+     })
+     if (new Set(workers.map(w => w.name)).size !== workers.length) throw new HttpError(422, 'Worker names must be unique')
+-    return { workers, providers, commonEnv: Object.fromEntries(Object.entries(raw.common_env ?? {}).map(([name, value]) => { if (!/^[A-Z][A-Z0-9_]*$/.test(name) || typeof value !== 'string') throw new HttpError(422, 'Invalid common environment'); return [name, resolve(value)!] })), maxWorkers: integer(raw.runtime?.max_workers ?? 4, 'max_workers', 1), maxProjectWorkers: integer(raw.runtime?.max_project_workers ?? 4, 'max_project_workers', 1), maxRunningProjects: integer(raw.runtime?.max_running_projects ?? 1, 'max_running_projects', 1),
++    return { workers, providers, llmPolling, commonEnv: Object.fromEntries(Object.entries(raw.common_env ?? {}).map(([name, value]) => { if (!/^[A-Z][A-Z0-9_]*$/.test(name) || typeof value !== 'string') throw new HttpError(422, 'Invalid common environment'); return [name, resolve(value)!] })), maxWorkers: integer(raw.runtime?.max_workers ?? 4, 'max_workers', 1), maxProjectWorkers: integer(raw.runtime?.max_project_workers ?? 4, 'max_project_workers', 1), maxRunningProjects: integer(raw.runtime?.max_running_projects ?? 1, 'max_running_projects', 1),
+       maxSteps: raw.tasks?.reason?.max_intents === undefined ? null : integer(raw.tasks.reason.max_intents, 'max_intents', 1), decideTimeout: integer(raw.tasks?.reason?.timeout ?? 300, 'reason timeout', 1), executeTimeout: integer(raw.tasks?.explore?.timeout ?? 900, 'execute timeout', 1), concludeTimeout: integer(raw.tasks?.explore?.conclude_timeout ?? 30, 'conclude timeout', 1),
+       bootstrapTimeout: integer(raw.tasks?.bootstrap?.timeout ?? 900, 'bootstrap timeout', 1), bootstrapConcludeTimeout: integer(raw.tasks?.bootstrap?.conclude_timeout ?? 30, 'bootstrap conclude timeout', 1), workspaceRoot: this.workspaceRoot }
+   }
+@@ -111,6 +125,7 @@ export class Configuration {
+     const { raw, revision } = this.read(), config = this.resolve(raw)
+     return { revision, engine: config.workers.every(w => w.backend === 'mock') ? 'mock' : 'dsh', execution: 'local', runtime_max_workers: config.maxWorkers,
+       runtime: { max_workers: config.maxWorkers, max_project_workers: config.maxProjectWorkers, max_running_projects: config.maxRunningProjects },
++      llm_polling: config.llmPolling,
+       tasks: raw.tasks ?? {}, common_env: Object.entries(config.commonEnv ?? {}).map(([name, value]) => ({ name, value })),
+       providers: Object.entries(raw.providers ?? {}).map(([name, p]) => ({ name, api: p.api, base_url: p.base_url, api_key_configured: !!p.api_key, api_key_env: p.api_key_env ?? null,
+         models: p.models.map(m => ({ ...m, reasoning: m.reasoning ?? 'auto_max', reasoning_efforts: m.reasoning_efforts ?? null, thinking_format: m.thinking_format ?? 'auto' })), referenced: config.workers.some(w => w.provider === name) })),
+diff --git a/packages/redtrace-engine/src/http-tools.ts b/packages/redtrace-engine/src/http-tools.ts
+index 860fe266..2bc8ceb1 100644
+--- a/packages/redtrace-engine/src/http-tools.ts
++++ b/packages/redtrace-engine/src/http-tools.ts
+@@ -11,17 +11,17 @@ import type { AgentTool } from './tool-types.ts'
+ import type { TaskContext } from './scheduler.ts'
+ 
+ type Session = { session?: string; challenge?: string; identity?: string }
+-type RequestInput = { url: string; method?: string; headers?: Record<string, string>; body?: string }
+-type Entry = { api: APIRequestContext; queue: Promise<void>; resourceId: string; stateFile: string }
++type RequestInput = { url: string; method?: string; headers?: Record<string, string>; body?: string; followRedirects?: boolean }
++type Entry = { api: APIRequestContext; pending: Set<Promise<unknown>>; saving?: Promise<void>; dirty: boolean; closed: boolean; resourceId: string; stateFile: string }
+ const managers = new WeakMap<TaskContext['store'], Map<string, Entry>>()
+ const openings = new WeakMap<TaskContext['store'], Promise<void>>()
+ const sessionSchema = { session: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })), challenge: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })), identity: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })) }
+-const requestSchema = Type.Object({ url: Type.String({ minLength: 8, maxLength: 4096 }), method: Type.Optional(Type.Union(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map(value => Type.Literal(value)))), headers: Type.Optional(Type.Record(Type.String(), Type.String({ maxLength: 4096 }))), body: Type.Optional(Type.String({ maxLength: 262144 })) })
++const requestSchema = Type.Object({ url: Type.String({ minLength: 8, maxLength: 4096 }), method: Type.Optional(Type.String({ pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$", maxLength: 64 })), headers: Type.Optional(Type.Record(Type.String(), Type.String({ maxLength: 4096 }))), body: Type.Optional(Type.String({ maxLength: 262144 })), followRedirects: Type.Optional(Type.Boolean()) })
+ 
+ function safeUrl(value: string) {
+   let url: URL
+   try { url = new URL(value) } catch { throw new HttpError(422, 'A valid absolute URL is required') }
+-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new HttpError(422, 'Only credential-free HTTP(S) URLs are supported')
++  if (!['http:', 'https:'].includes(url.protocol)) throw new HttpError(422, 'Only HTTP(S) URLs are supported')
+   return url
+ }
+ function sessions(context: TaskContext) {
+@@ -45,7 +45,7 @@ async function entryFor(context: TaskContext, args: Session) {
+       const stateFile = path.join(ops.outputRoot, 'http', 'sessions', `${resource.id}.json`)
+       let state: Awaited<ReturnType<APIRequestContext['storageState']>> | undefined
+       try { state = JSON.parse(await readFile(stateFile, 'utf8')) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+-      entry = { resourceId: resource.id, stateFile, queue: Promise.resolve(), api: await request.newContext({ ...(state ? { storageState: state } : {}) }) }
++      entry = { resourceId: resource.id, stateFile, pending: new Set(), dirty: false, closed: false, api: await request.newContext({ ...(state ? { storageState: state } : {}) }) }
+       sessions(context).set(resource.id, entry)
+     }
+     result = entry
+@@ -54,28 +54,33 @@ async function entryFor(context: TaskContext, args: Session) {
+   return result
+ }
+ async function persist(entry: Entry) {
+-  const state = await entry.api.storageState()
+-  await mkdir(path.dirname(entry.stateFile), { recursive: true, mode: 0o700 })
+-  const temporary = `${entry.stateFile}.${randomUUID()}.tmp`
+-  try { await writeFile(temporary, JSON.stringify(state), { mode: 0o600 }); await rename(temporary, entry.stateFile) }
+-  finally { await rm(temporary, { force: true }) }
++  entry.dirty = true
++  if (!entry.saving) entry.saving = (async () => {
++    await mkdir(path.dirname(entry.stateFile), { recursive: true, mode: 0o700 })
++    while (entry.dirty) {
++      entry.dirty = false
++      const state = await entry.api.storageState(), temporary = `${entry.stateFile}.${randomUUID()}.tmp`
++      try { await writeFile(temporary, JSON.stringify(state), { mode: 0o600 }); await rename(temporary, entry.stateFile) }
++      finally { await rm(temporary, { force: true }) }
++    }
++  })().finally(() => { entry.saving = undefined })
++  await entry.saving
+ }
+ export async function disposeHttpResource(store: TaskContext['store'], id: string, destroy = false) {
+   const entry = managers.get(store)?.get(id)
+   if (!entry) return
++  entry.closed = true
++  await Promise.allSettled([...entry.pending])
++  if (entry.saving) await entry.saving
+   if (!destroy) await persist(entry)
+   managers.get(store)?.delete(id); await entry.api.dispose()
+-  await entry.queue
+   if (destroy) await rm(entry.stateFile, { force: true })
+ }
+ export async function closeHttpSessions(store: TaskContext['store'], projectId?: string, destroy = false) {
+-  for (const [id, entry] of managers.get(store) ?? []) {
++  for (const [id] of managers.get(store) ?? []) {
+     const resource = store.db.prepare('SELECT project_id FROM shared_resources WHERE id=?').get(id)
+     if (projectId && resource?.project_id !== projectId) continue
+-    await entry.queue
+-    if (!destroy && resource) await persist(entry)
+-    await entry.api.dispose(); managers.get(store)?.delete(id)
+-    if (destroy) await rm(entry.stateFile, { force: true })
++    await disposeHttpResource(store, id, destroy || !resource)
+   }
+ }
+ async function archive(context: TaskContext, record: unknown) {
+@@ -97,7 +102,7 @@ function changedFields(left: Buffer, right: Buffer): string[] | null {
+     return [...new Set([...before.keys(), ...after.keys()])].filter(key => before.get(key) !== after.get(key)).slice(0, 20)
+   } catch { return null }
+ }
+-async function batch(context: TaskContext, entry: Entry, requests: RequestInput[], parallel = false) {
++async function batch(context: TaskContext, entry: Entry, requests: RequestInput[]) {
+   const ops = context.operations!
+   const send = async (item: RequestInput, index: number) => {
+     if (context.signal.aborted) throw new Error('HTTP operation cancelled; no automatic replay')
+@@ -107,7 +112,7 @@ async function batch(context: TaskContext, entry: Entry, requests: RequestInput[
+     const started = Date.now(), requestId = `req-${randomUUID()}`
+     let response
+     try {
+-      response = await entry.api.fetch(item.url, { method: item.method ?? 'GET', headers: item.headers, data: item.body, timeout: 20_000, maxRedirects: 0, maxRetries: 0 })
++      response = await entry.api.fetch(item.url, { method: item.method ?? 'GET', headers: item.headers, data: item.body, timeout: 20_000, maxRedirects: item.followRedirects ? 20 : 0, maxRetries: 0 })
+       const body = await response.body(), headers = response.headers(), evidence = await archive(context, { request: item, response: { status: response.status(), headers, bodyBase64: body.toString('base64') } })
+       const row = ops.ownedResource(context.run.projectId, entry.resourceId), metadata = JSON.parse(row.metadata_json)
+       metadata.requests ??= {}
+@@ -116,13 +121,10 @@ async function batch(context: TaskContext, entry: Entry, requests: RequestInput[
+       return { index, request_id: requestId, method: item.method ?? 'GET', url: item.url, status: response.status(), location: headers.location ?? null, durationMs: Date.now() - started, responseBytes: body.length, responseSha256: createHash('sha256').update(body).digest('hex'), extraction: extractOutput(body.toString(), headers['content-type']), evidence, error: null }
+     } catch (error) {
+       const message = error instanceof Error ? error.message : String(error), evidence = await archive(context, { request: item, error: message, outcome: 'unknown; never automatically replay' })
+-      const publicError = Object.entries(item.headers ?? {}).filter(([key]) => /authorization|cookie|token|key/i.test(key)).reduce((text, [, value]) => text.split(value).join('[REDACTED]'), message).slice(0, 500)
+-      return { index, request_id: requestId, method: item.method ?? 'GET', url: item.url, status: null, location: null, durationMs: Date.now() - started, responseBytes: null, responseSha256: null, evidence, error: publicError }
++      return { index, request_id: requestId, method: item.method ?? 'GET', url: item.url, status: null, location: null, durationMs: Date.now() - started, responseBytes: null, responseSha256: null, evidence, error: message }
+     } finally { await response?.dispose() }
+   }
+-  const results: Awaited<ReturnType<typeof send>>[] = []
+-  if (parallel) for (let i = 0; i < requests.length; i += 4) results.push(...await Promise.all(requests.slice(i, i + 4).map((item, j) => send(item, i + j))))
+-  else for (const [index, item] of requests.entries()) results.push(await send(item, index))
++  const results = await Promise.all(requests.map(send))
+   const baseline = results.find(item => item.error === null)
+   const baselineBody = baseline ? Buffer.from(JSON.parse(await readFile(baseline.evidence.file, 'utf8')).response.bodyBase64, 'base64') : undefined
+   const displayed = []
+@@ -137,8 +139,8 @@ async function batch(context: TaskContext, entry: Entry, requests: RequestInput[
+ }
+ export function httpTools(context: TaskContext): AgentTool[] {
+   const tools = [
+-    { name: 'http_batch', label: 'http_batch', description: 'Send explicit HTTP requests without a browser. Project Resource cookies persist across Steps and restart. Session is optional; return its Resource id for reuse. Serial by default; parallel uses bounded groups of four. Full evidence is archived, failures are not automatically replayed.', parameters: Type.Object({ ...sessionSchema, requests: Type.Array(requestSchema, { minItems: 1 }), parallel: Type.Optional(Type.Boolean()) }), execute: async (_id: string, args: Session & { requests: RequestInput[]; parallel?: boolean }, entry: Entry) => batch(context, entry, args.requests, args.parallel) },
+-    { name: 'http_replay', label: 'http_replay', description: 'Explicitly replay an archived http_batch Request ID in its Project HTTP Resource. Uses the original method/body/headers and current cookies; supports query variants and explicit overrides. No hidden baseline request or automatic retry. Token names are not a permission gate.', parameters: Type.Object({ ...sessionSchema, request_id: Type.String({ minLength: 1, maxLength: 64 }), variants: Type.Array(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 128 }), value: Type.String({ maxLength: 4096 }) })), { minItems: 1 }), method: requestSchema.properties.method, body: requestSchema.properties.body, headers: requestSchema.properties.headers }), execute: async (_id: string, args: Session & { request_id: string; variants: { name: string; value: string }[][]; method?: string; body?: string; headers?: Record<string, string> }, entry: Entry) => {
++    { name: 'http_batch', label: 'http_batch', description: 'Send explicit HTTP requests without a browser. Project Resource cookies persist across Steps and restart. Session is optional; return its Resource id for reuse. All requests and Workers run concurrently in a shared Session by default; use a distinct session only for isolation. followRedirects is optional per request (default false). Full evidence is archived, failures are not automatically replayed.', parameters: Type.Object({ ...sessionSchema, requests: Type.Array(requestSchema, { minItems: 1 }), parallel: Type.Optional(Type.Boolean()) }), execute: async (_id: string, args: Session & { requests: RequestInput[]; parallel?: boolean }, entry: Entry) => batch(context, entry, args.requests) },
++    { name: 'http_replay', label: 'http_replay', description: 'Explicitly replay an archived http_batch Request ID in its Project HTTP Resource. Uses the original method/body/headers and current cookies; supports query variants and explicit overrides. No hidden baseline request or automatic retry. Token names are not a permission gate.', parameters: Type.Object({ ...sessionSchema, request_id: Type.String({ minLength: 1, maxLength: 64 }), variants: Type.Array(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 128 }), value: Type.String({ maxLength: 4096 }) })), { minItems: 1 }), method: requestSchema.properties.method, body: requestSchema.properties.body, headers: requestSchema.properties.headers, followRedirects: requestSchema.properties.followRedirects }), execute: async (_id: string, args: Session & { request_id: string; variants: { name: string; value: string }[][]; method?: string; body?: string; headers?: Record<string, string>; followRedirects?: boolean }, entry: Entry) => {
+       const record = JSON.parse(context.operations!.ownedResource(context.run.projectId, entry.resourceId).metadata_json).requests[args.request_id]
+       if (!record) throw new Error('HTTP Request ID not found in this Project Resource')
+       const bytes = await readFile(record.file)
+@@ -147,24 +149,27 @@ export function httpTools(context: TaskContext): AgentTool[] {
+       const requests = args.variants.map(variant => {
+         const url = safeUrl(captured.url)
+         for (const field of variant) url.searchParams.set(field.name, field.value)
+-        return { ...captured, url: url.href, ...(args.method ? { method: args.method } : {}), ...(args.body !== undefined ? { body: args.body } : {}), ...(args.headers ? { headers: args.headers } : {}) }
++        return { ...captured, url: url.href, ...(args.method ? { method: args.method } : {}), ...(args.body !== undefined ? { body: args.body } : {}), ...(args.headers ? { headers: args.headers } : {}), ...(args.followRedirects !== undefined ? { followRedirects: args.followRedirects } : {}) }
+       })
+       return { request_id: args.request_id, ...await batch(context, entry, requests) }
+     } },
+   ]
+-  return tools.map(tool => ({ ...tool, executionMode: 'sequential', execute: async (_id: string, args: any) => {
++  return tools.map(tool => ({ ...tool, executionMode: 'parallel', execute: async (_id: string, args: any) => {
+     if (!Check(tool.parameters, args)) throw new HttpError(422, 'Invalid HTTP tool arguments')
+     if (context.signal.aborted) throw new Error('HTTP operation cancelled before launch')
+     if ('requests' in args) for (const item of args.requests) safeUrl(item.url)
+     const entry = await entryFor(context, args)
+-    const work = entry.queue.then(async () => {
++    if (entry.closed || sessions(context).get(entry.resourceId) !== entry) throw new Error('HTTP session was closed before launch')
++    const work = (async () => {
+       if (context.signal.aborted) throw new Error('HTTP operation cancelled before launch')
+-      if (sessions(context).get(entry.resourceId) !== entry) throw new Error('HTTP session was closed or cancelled before this queued call; no request was executed')
+-      const cancel = () => { sessions(context).delete(entry.resourceId); void entry.api.dispose() }
+-      context.signal.addEventListener('abort', cancel, { once: true })
+-      try { return await (tool.execute as (id: string, args: any, entry: Entry) => Promise<unknown>)(_id, args, entry) }
+-      finally { context.signal.removeEventListener('abort', cancel); if (!context.signal.aborted && sessions(context).get(entry.resourceId) === entry) await persist(entry) }
+-    })
+-    entry.queue = work.then(() => {}, () => {}); return work
++      // A cancelled Worker must not dispose the Session used by its peers.
++      return await (tool.execute as (id: string, args: any, entry: Entry) => Promise<unknown>)(_id, args, entry)
++    })()
++    entry.pending.add(work)
++    try { return await work }
++    finally {
++      entry.pending.delete(work)
++      if (!entry.pending.size && !entry.closed && sessions(context).get(entry.resourceId) === entry) await persist(entry)
++    }
+   } })) as unknown as AgentTool[]
+ }
+diff --git a/packages/redtrace-engine/src/index.ts b/packages/redtrace-engine/src/index.ts
+index 68f7a330..566ffd1c 100644
+--- a/packages/redtrace-engine/src/index.ts
++++ b/packages/redtrace-engine/src/index.ts
+@@ -30,12 +30,12 @@ export async function createEngine(options: { root: string; database?: string; c
+   const managed = path.dirname(configuration.filename), staticRoot = path.join(root, 'static')
+   configuration.initialize()
+   // Reject an invalid configuration before the scheduler starts.
+-  const config = configuration.resolve(configuration.read().raw)
++  const config = configuration.resolvedSnapshot().config
+   const store = new Store(options.database ?? path.join(root, '.redtrace/engine.db'))
+   const adapterGate = options.adapterAvailability?.()
+   const runTask: RunTask = async context => {
+     try {
+-      const task = { ...context, operations, currentMaxSteps: () => configuration.resolve(configuration.read().raw).maxSteps }
++      const task = { ...context, operations, currentMaxSteps: () => configuration.resolvedSnapshot().config.maxSteps }
+       if (options.runTask) return await options.runTask(task)
+       const runner = await import('./runner.ts')
+       if (task.run.backend === 'mock') return runner.runMock(task)
+@@ -43,7 +43,7 @@ export async function createEngine(options: { root: string; database?: string; c
+     } finally { operations.releaseRunLeases(context.run.id) }
+   }
+   const scheduler = new Scheduler(store,config,runTask,options.selectWorker,()=>!adapterGate || adapterGate('redtrace-critical-events')), router = new Router()
+-  graphRoutes(router, store, () => configuration.resolve(configuration.read().raw).maxSteps)
++  graphRoutes(router, store, () => configuration.resolvedSnapshot().config.maxSteps)
+   router.add('GET', '/health', () => ({ status: 'ok', engine: 'fgs', node: process.versions.node, schema: 2 }))
+   configRoutes(router, configuration, options.probeModel)
+   const dshUpdate = await dshUpdateRoutes(router, path.resolve(process.env.REDTRACE_SOURCE_ROOT || root), scheduler)
+@@ -58,7 +58,7 @@ export async function createEngine(options: { root: string; database?: string; c
+   deletionRoutes(router, deletion)
+   const watcher = watch(path.dirname(configuration.filename), (_event, filename) => {
+     if (filename && String(filename) !== path.basename(configuration.filename)) return
+-    try { const value = configuration.read(); scheduler.update(configuration.resolve(value.raw)) } catch { console.error('Configuration reload failed; keeping the last valid configuration') }
++    try { scheduler.update(configuration.resolvedSnapshot().config) } catch { console.error('Configuration reload failed; keeping the last valid configuration') }
+   })
+   const handler = async (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
+     if (await router.handle(req, res)) return
+diff --git a/packages/redtrace-engine/src/knowledge-vuln.ts b/packages/redtrace-engine/src/knowledge-vuln.ts
+index bfc7f794..19cb2976 100644
+--- a/packages/redtrace-engine/src/knowledge-vuln.ts
++++ b/packages/redtrace-engine/src/knowledge-vuln.ts
+@@ -1,4 +1,5 @@
+ import { spawn } from 'node:child_process'
++import { createInterface } from 'node:readline'
+ import { createHash } from 'node:crypto'
+ import { createReadStream, existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
+ import { DatabaseSync } from 'node:sqlite'
+@@ -47,28 +48,47 @@ export function knowledgeData(config: EngineConfig) {
+   return { root, database: path.join(root, 'generations', value.generation, 'vuln.sqlite'), manifest: value }
+ }
+ 
+-async function nativeJson<T>(executable: string, args: string[], input: unknown, config: EngineConfig, signal?: AbortSignal): Promise<T> {
+-  return new Promise((resolve, reject) => {
+-    if (signal?.aborted) { reject(new Error('Knowledge operation cancelled')); return }
+-    const env = toolEnvironment(config.commonEnv)
+-    for (const key of Object.keys(env)) if (/key|token|secret|password|credential/i.test(key)) delete env[key]
+-    const child = spawn(executable, args, { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+-    let stdout = '', stderr = '', failure: Error | undefined
+-    const kill = (error: Error) => { failure = error; child.kill('SIGKILL') }
+-    const abort = () => kill(new Error('Knowledge operation cancelled'))
+-    const timer = setTimeout(() => kill(new Error('Offline knowledge helper timed out')), 30_000)
+-    signal?.addEventListener('abort', abort, { once: true })
+-    child.stdin.on('error', () => {}); child.stdin.end(JSON.stringify(input))
+-    child.stdout.on('data', (data: Buffer) => { stdout += data.toString('utf8'); if (Buffer.byteLength(stdout) > 16 * 1024 * 1024) kill(new Error('Offline helper output exceeded 16 MiB')) })
+-    child.stderr.on('data', (data: Buffer) => { stderr = (stderr + data.toString('utf8')).slice(-8192) })
+-    child.on('error', error => { failure = error })
+-    child.on('close', code => {
+-      clearTimeout(timer); signal?.removeEventListener('abort', abort)
+-      if (failure) reject(failure)
+-      else if (code !== 0) reject(new Error(`Offline helper exit ${code}: ${stderr}`))
+-      else { try { resolve(JSON.parse(stdout) as T) } catch { reject(new Error('Invalid offline helper JSON output')) } }
+-    })
++type QueryServer = { child: ReturnType<typeof spawn>; queue: Promise<unknown>; request: (input: unknown, signal?: AbortSignal) => Promise<VulnerabilityPage>; idle?: NodeJS.Timeout }
++const queryServers = new Map<string, QueryServer>()
++function queryServer(database: string, config: EngineConfig): QueryServer {
++  const executable = python(config), env = toolEnvironment(config.commonEnv)
++  for (const name of Object.keys(env)) if (/key|token|secret|password|credential/i.test(name)) delete env[name]
++  const key = JSON.stringify([executable, database, hash(JSON.stringify(env))])
++  let server = queryServers.get(key)
++  if (server) return server
++  const child = spawn(executable, [path.join(installRoot, 'tools/knowledge/knowledge.py'), 'query-server', '--database', database], { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
++  const reference = (method: 'ref' | 'unref') => {
++    for (const stream of [child, child.stdin, child.stdout, child.stderr]) (stream as unknown as { ref?: () => void; unref?: () => void })[method]?.()
++  }
++  let pending: { resolve: (page: VulnerabilityPage) => void; reject: (error: Error) => void } | undefined, stderr = ''
++  const fail = (error: Error) => { if (queryServers.get(key) === server) queryServers.delete(key); if (server?.idle) clearTimeout(server.idle); pending?.reject(error); pending = undefined; child.kill('SIGKILL') }
++  child.on('error', fail); child.on('close', code => fail(new Error(`Offline helper exited ${code}: ${stderr}`)))
++  child.stdin!.on('error', fail); child.stderr!.on('data', data => { stderr = (stderr + data.toString()).slice(-8192) })
++  let outputBytes = 0
++  child.stdout!.on('data', (chunk: Buffer) => { outputBytes += chunk.length; if (outputBytes > 16 * 1024 * 1024) fail(new Error('Offline helper output exceeded 16 MiB')) })
++  createInterface({ input: child.stdout! }).on('line', line => {
++    outputBytes = 0
++    const current = pending; pending = undefined
++    if (!current) return
++    try { const value = JSON.parse(line); if (value.error) current.reject(new Error(value.error)); else current.resolve(value.result) }
++    catch { current.reject(new Error('Invalid offline helper JSON output')) }
+   })
++  server = { child, queue: Promise.resolve(), request(input, signal) {
++    const execute = () => new Promise<VulnerabilityPage>((resolve, reject) => {
++      if (signal?.aborted || child.killed || child.exitCode !== null) { reject(new Error('Knowledge operation cancelled or helper stopped')); return }
++      if (server!.idle) clearTimeout(server!.idle)
++      reference('ref')
++      const abort = () => fail(new Error('Knowledge operation cancelled'))
++      const timer = setTimeout(() => fail(new Error('Offline knowledge helper timed out')), 30_000)
++      const clean = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); server!.idle = setTimeout(() => { if (queryServers.get(key) === server) queryServers.delete(key); child.kill() }, 30_000); server!.idle.unref(); reference('unref') }
++      pending = { resolve: value => { clean(); resolve(value) }, reject: error => { clean(); reject(error) } }
++      signal?.addEventListener('abort', abort, { once: true })
++      child.stdin!.write(JSON.stringify(input) + '\n')
++    })
++    const result = server!.queue.then(execute); server!.queue = result.catch(() => {})
++    return result
++  } }
++  queryServers.set(key, server); return server
+ }
+ function python(config: EngineConfig) { return knowledgeEnvironment(config).REDTRACE_KNOWLEDGE_PYTHON ?? path.join(installRoot, '.redtrace/runtime/knowledge', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python') }
+ 
+@@ -83,7 +103,7 @@ export async function vulnerabilitySearch(_evidenceRoot: string, context: TaskCo
+   if (!cache) { cache = new Map(); caches.set(context.store, cache) }
+   let result = cache.get(key)
+   if (!result) {
+-    result = verifyKnowledgeIndex(data.database).then(() => nativeJson<VulnerabilityPage>(python(context.config), [path.join(installRoot, 'tools/knowledge/knowledge.py'), 'query', '--database', data.database!], args, context.config, context.signal))
++    result = verifyKnowledgeIndex(data.database).then(() => queryServer(data.database!, context.config).request(args, context.signal))
+       .then(value => {
+         for (const item of value.results) item.id = item.candidateId.startsWith('CVE-') ? item.candidateId : item.sources.find(source => source.id)?.id
+         return { ...value, ...location }
+diff --git a/packages/redtrace-engine/src/knowledge.ts b/packages/redtrace-engine/src/knowledge.ts
+index 7b68776f..c002e2d0 100644
+--- a/packages/redtrace-engine/src/knowledge.ts
++++ b/packages/redtrace-engine/src/knowledge.ts
+@@ -1,3 +1,4 @@
++import { Worker } from 'node:worker_threads'
+ import { DatabaseSync } from 'node:sqlite'
+ import { createHash } from 'node:crypto'
+ import { mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
+@@ -132,12 +133,12 @@ function collectWordlistCatalog(root: string, repository: string) {
+   }), truncated: pending.length > 0 || visited >= 10_000 || scanned >= 80_000 }
+ }
+ 
+-function openIndex(root: string, filename: string, sources: string[], wordlists: string[], nucleiRoot: string) {
++export function openIndex(root: string, filename: string, sources: string[], wordlists: string[], nucleiRoot: string) {
+   mkdirSync(path.dirname(filename), { recursive: true })
+   const db = new DatabaseSync(filename)
+   db.exec("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS index_state(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(id UNINDEXED,path UNINDEXED,body,tokenize='unicode61')")
+   const state = db.prepare("SELECT value FROM index_state WHERE key='updated' ").get() as { value: string } | undefined
+-  if (!state || Date.now() - Number(state.value) > 60_000) {
++  if (!state || Date.now() - Number(state.value) > 15 * 60_000) {
+     const files: string[] = []
+     const warnings: string[] = []
+     for (const source of sources) if (collect(source, files)) warnings.push(`Source indexing limit reached; some files were not indexed: ${source}`)
+@@ -166,6 +167,26 @@ function openIndex(root: string, filename: string, sources: string[], wordlists:
+   return db
+ }
+ 
++const indexing = new Map<string, Promise<void>>()
++async function readyIndex(root: string, filename: string, sources: string[], wordlists: string[], nucleiRoot: string) {
++  let refresh = indexing.get(filename)
++  if (!refresh) {
++    mkdirSync(path.dirname(filename), { recursive: true })
++    const db = new DatabaseSync(filename)
++    let updated = 0
++    try { if (db.prepare("SELECT 1 FROM sqlite_master WHERE name='index_state'").get()) updated = Number(db.prepare("SELECT value FROM index_state WHERE key='updated'").get()?.value ?? 0) }
++    finally { db.close() }
++    if (Date.now() - updated <= 15 * 60_000) return new DatabaseSync(filename)
++    refresh = new Promise<void>((resolve, reject) => {
++      const worker = new Worker(new URL('./knowledge-index-worker.ts', import.meta.url), { workerData: [root, filename, sources, wordlists, nucleiRoot] })
++      worker.once('error', reject); worker.once('exit', code => code === 0 ? resolve() : reject(new Error(`Knowledge indexing worker exited ${code}`)))
++    }).finally(() => { indexing.delete(filename) })
++    indexing.set(filename, refresh)
++  }
++  await refresh
++  return new DatabaseSync(filename)
++}
++
+ export function knowledgeTools(_evidenceRoot: string, context: TaskContext): AgentTool[] {
+   const repository = context.config.workspaceRoot ? path.resolve(context.config.workspaceRoot, '..') : path.join(os.tmpdir(), 'redtrace-knowledge-test', context.run.projectId)
+   const environment = knowledgeEnvironment(context.config)
+@@ -200,7 +221,7 @@ export function knowledgeTools(_evidenceRoot: string, context: TaskContext): Age
+         const value = { ...vulnerabilities, resources, note: 'Candidates are unverified; no template or PoC was executed' }
+         return { content: [{ type: 'text', text: JSON.stringify(value) }], details: value }
+       }
+-      const db = openIndex(repository, index, sources, wordlists, nucleiRoot)
++      const db = await readyIndex(repository, index, sources, wordlists, nucleiRoot)
+       try {
+       const expression = terms.map(term => `"${term.replaceAll('"', '""')}"`).join(' OR ')
+       const rows = db.prepare('SELECT id,path,body,substr(body,max(1,instr(lower(body),lower(?))-160),360) AS snippet FROM docs WHERE docs MATCH ? ORDER BY bm25(docs),path LIMIT ? OFFSET ?').all(terms[0], expression, args.limit ?? 5, args.offset ?? 0) as { id: string; path: string; body: string; snippet: string }[]
+@@ -220,7 +241,7 @@ export function knowledgeTools(_evidenceRoot: string, context: TaskContext): Age
+         return { content: [{ type: 'text', text: JSON.stringify(details) }], details }
+       }
+       if (!args.id) throw new Error('Provide id or candidate_id')
+-      const db = openIndex(repository, index, sources, wordlists, nucleiRoot)
++      const db = await readyIndex(repository, index, sources, wordlists, nucleiRoot)
+       try {
+         const source = await readVulnerability(context.config, args.id)
+         const row = source ? { path: source.path, body: readFileSync(source.path, 'utf8') } : db.prepare('SELECT path,body FROM docs WHERE id=?').get(args.id) as { path: string; body: string } | undefined
+@@ -246,7 +267,7 @@ export function knowledgeTools(_evidenceRoot: string, context: TaskContext): Age
+     { name: 'knowledge_read', label: 'knowledge_read', description: 'Read at most 8 KiB of full NVD CVE details/configurations or a local source file. id accepts a CVE or the source hash from knowledge_search; offset/length paginate.', parameters: Type.Object({ id: Type.String({ minLength: 1, maxLength: 64, pattern: '^(?:CVE-[0-9]{4}-[0-9]{4,}|[a-f0-9]{64})$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 8192 })) }), executionMode: 'sequential', execute: async (_id: string, args: { id: string; offset?: number; length?: number }) => {
+       const local = await readVulnerability(context.config, args.id, args.offset, args.length)
+       if (local) return { content: [{ type: 'text', text: JSON.stringify(local) }], details: local }
+-      const db = openIndex(repository, index, sources, wordlists, nucleiRoot)
++      const db = await readyIndex(repository, index, sources, wordlists, nucleiRoot)
+       try {
+         const row = db.prepare('SELECT path,body FROM docs WHERE id=?').get(args.id) as { path: string; body: string } | undefined
+         if (!row) throw new Error('Knowledge entry not found; search again after rebuilding the local index')
+diff --git a/packages/redtrace-engine/src/operations.ts b/packages/redtrace-engine/src/operations.ts
+index cd44fbca..6b8a1eea 100644
+--- a/packages/redtrace-engine/src/operations.ts
++++ b/packages/redtrace-engine/src/operations.ts
+@@ -216,6 +216,7 @@ export class Operations {
+     }
+   }
+   audit(project: string | null, resource: string | null, task: string | null, actor: any, action: string, status: string, detail = {}) {
++    if (task) queueMicrotask(() => this.store.changes.emit(`operation:${task}`))
+     this.store.db.prepare('INSERT INTO resource_audit_events(project_id,resource_id,task_id,actor_type,actor,action,status,detail_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)').run(project === '_global' ? null : project, resource, task, actor.actor_type ?? 'human', actor.actor ?? 'admin', action, status, JSON.stringify(detail), now())
+   }
+   verifiedResource(id: string, fields: Record<string, any>, kind = 'capability.verified') {
+@@ -369,6 +370,20 @@ export class Operations {
+       return this.publicTask(this.task(op))
+     })
+   }
++  waitTask(id: string, timeoutMs: number, signal: AbortSignal): Promise<any> {
++    return new Promise((resolve, reject) => {
++      const event = `operation:${id}`
++      const clean = () => { clearTimeout(timer); this.store.changes.off(event, check); signal.removeEventListener('abort', abort) }
++      const abort = () => { clean(); reject(new Error('Operation cancelled')) }
++      const check = () => {
++        try { const task = this.task(id); if (terminalTasks.includes(task.status)) { clean(); resolve(task) } }
++        catch (error) { clean(); reject(error) }
++      }
++      const timer = setTimeout(() => { clean(); try { resolve(this.task(id)) } catch (error) { reject(error) } }, timeoutMs)
++      this.store.changes.on(event, check); signal.addEventListener('abort', abort, { once: true })
++      if (signal.aborted) abort(); else check()
++    })
++  }
+   finish(id: string, result: ExecutionResult) {
+     result = validateExecutionResult(result)
+     return this.store.transaction(() => {
+diff --git a/packages/redtrace-engine/src/runner.ts b/packages/redtrace-engine/src/runner.ts
+index d061c434..bd7c0110 100644
+--- a/packages/redtrace-engine/src/runner.ts
++++ b/packages/redtrace-engine/src/runner.ts
+@@ -13,7 +13,6 @@ import type { Store } from './store.ts'
+ import type { TaskContext } from './scheduler.ts'
+ import type { EngineConfig, Fact, Json, Step, Project, Run, Goal, Input } from './types.ts'
+ import { knowledgeTools } from './knowledge.ts'
+-import { redactSensitive } from './store.ts'
+ import { httpTools } from './http-tools.ts'
+ import { Check } from 'typebox/value'
+ import { HttpError } from './types.ts'
+@@ -21,7 +20,7 @@ import { evidenceChangeSchema, goalUpdateSchema, stepUpdateSchema } from './grap
+ 
+ const json = (value: unknown): Json => JSON.parse(JSON.stringify(value))
+ const execFileAsync = promisify(execFile)
+-const result = (value: unknown, terminate = false): AgentToolResult<unknown> => ({ content: [{ type: 'text', text: JSON.stringify(redactSensitive(value)) }], details: value, ...(terminate ? { terminate: true } : {}) })
++const result = (value: unknown, terminate = false): AgentToolResult<unknown> => ({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value, ...(terminate ? { terminate: true } : {}) })
+ function tool<T extends TSchema>(name: string, description: string, parameters: T, execute: (args: Static<T>, signal?: AbortSignal) => unknown | Promise<unknown>, terminate = false): AgentTool<T> {
+   return { name, label: name, description, parameters, executionMode: 'sequential', execute: async (_id, args, signal) => result(await execute(args, signal), terminate) }
+ }
+@@ -138,7 +137,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
+           })
+           return started
+         }),
+-        tool('tsecbench_submit', 'Submit one flag for the active authorized challenge and return the platform response. Does not create Facts or wake Reason; Explore must verify the response and explicitly submit_fact for decision-relevant results. Secrets in tool arguments are redacted from audit events.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }), flag: Type.String({ minLength: 1, maxLength: 4096 }) }), (args, abort) => tsecbenchQuery(config, ['submit', args.unique_code, '--flag', args.flag], abort)),
++        tool('tsecbench_submit', 'Submit one flag for the active authorized challenge and return the platform response. Does not create Facts or wake Reason; Explore must verify the response and explicitly submit_fact for decision-relevant results. Tool arguments and results are retained verbatim in audit events.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }), flag: Type.String({ minLength: 1, maxLength: 4096 }) }), (args, abort) => tsecbenchQuery(config, ['submit', args.unique_code, '--flag', args.flag], abort)),
+         tool('tsecbench_close', 'Close only the exact authorized TSecBench challenge that is complete or that Reason explicitly assigned this Step to close before switching challenges, to release its container.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }) }), async (args,abort)=>{const result=await tsecbenchQuery(config,['close',args.unique_code],abort);store.setBenchmarkHosts(run.projectId,args.unique_code);return result}),
+       )
+     }
+@@ -179,7 +178,7 @@ export const activityPrompt = (activity: 'decide' | 'execute', step?: Step) => (
+ 2. 优先验收目标：判断现有 Fact/Finding 是否已满足 Goal，逐项核对数量、权限、范围及其他验收条件。确认达成后引用真实 evidenceIds 完成验收并说明依据。Step 结束、探索失败或路线放弃均不代表 Goal 达成。
+ 3. 规划有效方向：以目标达成速度和成功可能性为优先。有突破就深入，缺少入口就拓宽，持续受阻且没有新进展就根据已经证据重新评估和规划。依赖未取得的能力或权限时等待，不提前派发后续行动。
+ 4. 避免重复与空转：对照已有 Step 和执行结果，区分成功、失败、阻塞、中断及真正穷尽。单次失败不能否定整条路线；中断优先续接已确认进度，已充分验证的无效路线只有出现新证据或实质不同的方法才重开。已有工作覆盖当前方向时不重复派发。目标未达成且没有待执行或运行中的 Step 时，优先续接未完工作或寻找未覆盖方向；确无可执行路径则说明具体阻塞，不虚构任务。
+-5. 调度规则：效率优先，以最快速度完成目标为前提。每个 Step 都要分配至少一个题目，同一题目也可以分给多个 Step 协作完成，较困难题目(单Worker难以完成，有至少2个fact都没有重大突破的)的题目可以分多个 Step 并发共同解决(多个Step任务不能有冲突，要考虑跨Worker的协作，如果难以分出边界依旧采用单Worker执行)。同题多 Step 协作不指定固定的容器负责人。题目未解决时默认保留实例，不能仅因某个 Step 结束或失败就关闭。某题持续难以突破、占用实例槽位并影响全局进展时，可根据已有证据决定关闭并换题。先停止或调整旧题相关 Step，避免其继续操作即将关闭的实例；在新建的其他题目 Step 中明确写出需要关闭的旧题及随后要解决的新题，由执行新题的 Explore 先关闭旧题、确认槽位释放，再启动新题，无须另建专门的清理 Step。保持活跃题目并发为 3（平台活跃容器上限为 3，所有活跃 Step 中最多只能分配3个不同的题目），直到未解题目数<3；maxSteps>3，合理分配 Step，不用保持最大 Step 数。创建 Step 前检查 planningCapacity，遵守 Worker 和并发限制。
++5. 调度规则：效率优先，以最快速度完成目标为前提。每个 Step 都要分配至少一个题目，同一题目也可以分给多个 Step 协作完成，较困难题目(单Worker难以完成，有至少2个fact都没有重大突破的)的题目可以分多个 Step 并发共同解决(多个Step任务不能有冲突，要考虑跨Worker的协作，如果难以分出边界依旧采用单Worker执行)。同题多 Step 协作不指定固定的容器负责人。题目未解决时默认保留实例，不能仅因某个 Step 结束或失败就关闭。某题持续难以突破、占用实例槽位并影响全局进展时，可根据已有证据决定关闭并换题。先停止或调整旧题相关 Step，避免其继续操作即将关闭的实例；在新建的其他题目 Step 中明确写出需要关闭的旧题及随后要解决的新题，由执行新题的 Explore 先关闭旧题、确认槽位释放，再启动新题，无须另建专门的清理 Step。合理分配 Step，不用保持最大 Step 数。创建 Step 前检查 planningCapacity，遵守 Worker 和并发限制。
+ 6. 维护计划与协作：Step 应明确行动方向和对应目标，用 sourceIds 引用依据、goalId 关联目标。Subgoal 只描述可验收的阶段成果，操作和策略属于 Step。FGS上新增的信息或人工 Hint 对现有 Step 有实质帮助时，用 notify_explore 定向补充；不重复通知或微观管理。不得在没有依据时限制 Step 的行动及方法选择。Step 过时或偏离目标时才用带版本的 update_step/update_goal 修正，或替换/取消 Step。同目标、同权限的执行契约变更使用 amend；目标或执行隔离变化使用 replace。远程命令和内网代理必须具备已验证的在线程序化通道，图形登录不等于命令通道。
+ 7. 维护 FGS：FGS 保存当前有效状态，而非探索历史。用 manage_evidence 可以合并结论一致或相近的 Fact/Finding，必要时提交整理后的结论；删除过时、冗余且不再需要的 Fact/Finding。保留后续决策需要的证据，不合并矛盾结论。合并和删除不可恢复，操作前核对版本并修复活跃引用。图谱整理不得妨碍目标推进。
+ 8. 及时结束本轮：每次唤醒只判断新信息是否改变目标验收、可执行前置或现有计划。没有实质变化时允许不做修改，继续等待 Explore。处理完已交付的连续证据和 Hint 后调用 finish_decide；throughEvidenceSeq、throughHintSeq 只确认实际完整处理的连续序号，不能超过 acknowledgementBoundary。未处理部分留待下一轮。
+@@ -198,7 +197,7 @@ export const activityPrompt = (activity: 'decide' | 'execute', step?: Step) => (
+ 1. 专注当前 Step：理解目标、前置条件和已有证据，复用Fact、扫描结果、凭证及已验证通道。自主选择 Skills、工具和方法，不重复已完成的工作。Step 内可以自由调整策略、串联多阶段操作。每次只处理一道题目，不要同时启动或解答多道题，同一道题允许多个 Step 协作。复用已启动的实例和已验证地址，避免重复启动。题目未解决时默认保留容器，不因自身 Step 完成、失败、放弃或超时而自行关闭。题目完成后，再关闭容器并核验。Reason 在当前 Step 中明确要求关闭旧题并转做新题时，先关闭指定旧题、确认槽位释放，再启动新题。
+ 2. 深入探索与递归进化：将探索视为持续自我改进的过程，根据工具反馈、环境变化和执行结果不断修正假设、优化策略。主动分析失败的原因，识别方法的适用条件、失效边界和潜在突破口，从历史尝试中总结和反思，使后续行动持续改进。单次失败、无回显或工具报错不能证明路线无效，应检查前置条件并尝试具有实质差异的方法。发现关键突破后优先深入验证和利用；持续受阻时重新评估假设，决定继续深入、拓宽探索或切换机制，不机械重复无效尝试。将反思融入正常执行，不进行独立或频繁的自评循环，始终以目标达成率、执行速度和工具效率为优先。
+ 3. 保存可复用成果：将取得的关键成果、中间产物、失败尝试和关键操作可简要保存到工作目录的证据文件。发现凭证或其他资源时及时登记；可复用通道必须验证后才能视为有效。需要远程执行时使用与能力匹配的已验证通道。
+-4. 提交有决策价值的 Fact：submit_fact 是唤醒 Reason 的决策事件，不是执行日志。提交真实证据支持、足以影响目标验收、执行前置或后续计划的新结论；超时还没有关键进展时就如实提交已验证的失败、限制或阻塞。默认将同一 Step、同一目标和环境的多个观察合并为一条阶段 Fact；description 说明已验证结论、覆盖范围及剩余缺口，evidence 保留关键操作、证明性输出及原始记录路径。仅当结论相互独立且需要不同后续行动时才拆分。容器启动、目标地址返回、单个指纹或状态码、一次失败、局部进度及重复确认不单独提交 Fact；先记录证据，继续探索。已验证的目标成果、其他 Step 等待的关键前置或必须由 Reason 处理的阻塞，应立即提交，不等待 Step 结束。提交 Fact 后，只要当前 Step 仍有有效路径，就继续执行。
++4. 提交有决策价值的 Fact：submit_fact 是唤醒 Reason 的决策事件，不是执行日志。提交真实证据支持、足以影响目标验收、执行前置或后续计划的新结论；超时还没有关键进展时就如实提交已验证的失败、限制或阻塞。默认将同一 Step、同一目标和环境的多个观察合并为一条阶段 Fact；description 说明已验证结论、覆盖范围及剩余缺口，evidence 保留关键操作、证明性输出及原始记录路径。仅当结论相互独立且需要不同后续行动时才拆分。探索期间，容器启动、目标地址返回、单个指纹或状态码、一次失败、局部进度及重复确认不单独提交 Fact；先记录证据，继续探索。收尾时仍须提交至少一条有证据的汇总 Fact；无突破则如实汇总已验证的失败、限制、覆盖范围及剩余缺口，不虚构成功。已验证的目标成果、其他 Step 等待的关键前置或必须由 Reason 处理的阻塞，应立即提交，不等待 Step 结束。提交 Fact 后，只要当前 Step 仍有有效路径，就继续执行。
+ 5. 严格验证 Finding：漏洞或其他可交付成果必须有可复现的实际证据，先提交对应 Fact，再用 submit_finding 引用确认事实。版本/CVE 匹配、扫描器提示、可疑参数或推测不能代替漏洞验证。发现组件或 CVE 线索时主动使用 knowledge_search，需要详情再使用 knowledge_read；离线知识仅用于辅助判断和选择方法，不构成漏洞成立的证据，无命中也不妨碍继续探索。
+ 6. 适应实时计划：Reason 的 notify_explore 只是增量信息，不代表执行契约变化；结合现有进度自主决定是否采用。只有 Step 契约版本变化时，才读取最新图谱并用 sync_step 同步。同步后在下一模型回合按新契约继续，旧调用树不得继续执行外部操作。
+ 7. 结构化收尾：当前 Step 已完成、无法继续或收到收尾指令时，将尚未上报的有效进展整理为至少一条有真实证据的汇总 Fact，再调用 finish_step。如果未完成目标就如实说明已验证的尝试、限制和阻塞，不伪造成功，不把启动状态当作成果。必须确保工具调用成功，文本总结不能代替提交。
+@@ -211,9 +210,15 @@ export function activityLimits(config: EngineConfig, activity: 'decide' | 'execu
+   return { timeout: config.executeTimeout, concludeTimeout: config.concludeTimeout }
+ }
+ 
++const livePlans = new WeakMap<Store, Map<string, { revision: number; bound: number; text: string }>>()
+ export function livePlan(store: Store, runId: string) {
+   const run = store.run(runId)
+   if (!run.stepId) return ''
++  const revision = store.project(run.projectId).revision, bound = run.boundStepVersion ?? 1
++  let cache = livePlans.get(store)
++  if (!cache) { cache = new Map(); livePlans.set(store, cache) }
++  const saved = cache.get(runId)
++  if (saved?.revision === revision && saved.bound === bound) return saved.text
+   const step = store.node<Step>(run.projectId, run.stepId, 'step'), goals = []
+   let goalId: string | null = step.goalId
+   while (goalId) {
+@@ -221,9 +226,11 @@ export function livePlan(store: Store, runId: string) {
+     goals.push({ id: goal.id, description: goal.description, status: goal.status, version: goal.version ?? 1 })
+     goalId = goal.parentId
+   }
+-  return `当前执行契约（以本快照为准）：${JSON.stringify({ id: step.id, description: step.description, status: step.status,
++  const text = `当前执行契约（以本快照为准）：${JSON.stringify({ id: step.id, description: step.description, status: step.status,
+     sourceIds: step.sourceIds, executionProfile: step.executionProfile,
+     planVersion: step.planVersion ?? 1, boundStepVersion: run.boundStepVersion ?? 1, goals })}`
++  cache.set(runId, { revision, bound, text }); if (cache.size > 128) cache.delete(cache.keys().next().value!)
++  return text
+ }
+ 
+ export function launchContext(store: Store, runId: string, channels: unknown[] = [], maxSteps: number | null = null) {
+diff --git a/packages/redtrace-engine/src/scheduler.ts b/packages/redtrace-engine/src/scheduler.ts
+index a59a4b58..794eb0c1 100644
+--- a/packages/redtrace-engine/src/scheduler.ts
++++ b/packages/redtrace-engine/src/scheduler.ts
+@@ -1,4 +1,4 @@
+-import { Store } from './store.ts'
++import { Store, ACTIVE_NODE_SQL } from './store.ts'
+ import path from 'node:path'
+ import { HttpError } from './types.ts'
+ import type { EngineConfig, Goal, Run, RunStatus, Worker, Step } from './types.ts'
+@@ -74,7 +74,9 @@ export class Scheduler {
+           if (!active.some(r => r.projectId === project.id) && new Set(active.map(r => r.projectId)).size >= this.config.maxRunningProjects) continue
+           const p = this.store.project(project.id)
+           if (p.status !== 'active') continue
+-          const nodes = this.store.nodes<Step | Goal>(p.id, ['step', 'goal'])
++          const nodes = this.store.db.prepare(`SELECT data FROM nodes WHERE project_id=? AND ${ACTIVE_NODE_SQL}
++            AND (kind='goal' OR (kind='step' AND (json_extract(data,'$.status') IN ('pending','paused') OR json_extract(data,'$.bootstrap')=1)))`)
++            .all(p.id).map(row => JSON.parse(String(row.data)) as Step | Goal)
+           const steps = nodes.filter((node): node is Step => node.kind === 'step')
+           const goals = new Map(nodes.filter(node => node.kind === 'goal').map(goal => [goal.id, goal]))
+           // Bootstrap is a strict project gate, not merely the first runnable
+diff --git a/packages/redtrace-engine/src/store.ts b/packages/redtrace-engine/src/store.ts
+index 6cb05d46..8147c3bf 100644
+--- a/packages/redtrace-engine/src/store.ts
++++ b/packages/redtrace-engine/src/store.ts
+@@ -54,29 +54,6 @@ export function conversationAuditEvents(event: Record<string, Json>): Record<str
+   return content === event.content ? [event] : [{ ...event, content }]
+ }
+ 
+-export function redactSensitive(value: unknown): unknown {
+-  if (Array.isArray(value)) return value.map(redactSensitive)
+-  if (!value || typeof value !== 'object') return value
+-  return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+-    if (/^(?:authorization|cookie|set-cookie|password|passwd|secret|token|api[_-]?key|flag|requestBody|responseBody|(?:request|response)?BodyBase64)$/i.test(key)) return [key, '[REDACTED]']
+-    if (['content', 'text', 'arguments'].includes(key) && typeof item === 'string') {
+-      try {
+-        const parsed = JSON.parse(item), redacted = redactSensitive(parsed)
+-        return [key, JSON.stringify(parsed) === JSON.stringify(redacted) ? item : JSON.stringify(redacted)]
+-      } catch {
+-        return [key, item.replace(/("?(?:authorization|cookie|set-cookie|password|secret|token|api[_-]?key|flag)"?\s*[:=]\s*")[^"]*(")/ig, '$1[REDACTED]$2')]
+-      }
+-    }
+-    if (['url', 'location'].includes(key.toLowerCase()) && typeof item === 'string') {
+-      try {
+-        const url = new URL(item, 'http://redtrace.invalid')
+-        for (const param of [...url.searchParams.keys()]) if (/^(?:auth(?:orization)?|cookie|csrf|key|password|secret|session|token|api[_-]?key|code)$/i.test(param)) url.searchParams.set(param, '[REDACTED]')
+-        return [key, url.origin === 'http://redtrace.invalid' ? `${url.pathname}${url.search}${url.hash}` : url.toString()]
+-      } catch {}
+-    }
+-    return [key, redactSensitive(item)]
+-  }))
+-}
+ 
+ export class Store {
+   readonly db: DatabaseSync
+@@ -98,7 +75,7 @@ export class Store {
+       if (version?.value !== '2') { this.db.close(); throw new Error(`Unsupported engine schema ${version?.value ?? 'unknown'}; remove the old engine database before starting RedTrace`) }
+     }
+     const importCriticalKeys=!this.db.prepare("SELECT 1 FROM sqlite_master WHERE name='critical_keys'").get()
+-    this.db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
++    this.db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
+       CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+       CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, data TEXT NOT NULL);
+       CREATE TABLE IF NOT EXISTS nodes(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+@@ -606,16 +583,15 @@ export class Store {
+         const affected = this.db.prepare("SELECT data FROM nodes WHERE project_id=? AND kind IN ('step','goal','finding')").all(id).map(row => ({ version: 1, ...JSON.parse(String(row.data)) }) as Step | Goal | Finding)
+         for (const node of affected) {
+           if (node.id === target.id || set.has(node.id)) continue
+-          let changed = false, contractChanged = false
++          let changed = false
+           const fields = node.kind === 'step' ? ['sourceIds', 'factIds'] as const : node.kind === 'goal' ? ['evidenceIds'] as const : ['factIds'] as const
+           for (const field of fields) {
+             const refs = (node as unknown as Record<string, string[]>)[field]
+             if (refs.some(ref => set.has(ref))) {
+               (node as unknown as Record<string, string[]>)[field] = replace(refs); changed = true
+-              contractChanged ||= node.kind === 'step' && field === 'sourceIds'
+             }
+           }
+-          if (changed) { if (contractChanged && node.kind === 'step' && !['done', 'cancelled'].includes(node.status)) node.planVersion = (node.planVersion ?? 1) + 1; this.saveNode(node); this.event(id, `${node.kind}.updated`, node, node) }
++          if (changed) { this.saveNode(node); this.event(id, `${node.kind}.updated`, node, node) }
+         }
+         if (input.description !== undefined) target.description = requiredText(input.description, 'description')
+         if (target.kind === 'finding') {
+@@ -778,7 +754,7 @@ export class Store {
+       }
+       this.db.prepare('INSERT INTO audit_runs VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(id, projectId, JSON.stringify(result))
+       for (const data of events) {
+-        const event: { [key: string]: Json } = { ...redactSensitive(data) as { [key: string]: Json }, project_id: projectId, run_id: id, task_type: data.task_type ?? metadata.task_type, worker: data.worker ?? metadata.worker, provider: data.provider ?? metadata.provider }
++        const event: { [key: string]: Json } = { ...data, project_id: projectId, run_id: id, task_type: data.task_type ?? metadata.task_type, worker: data.worker ?? metadata.worker, provider: data.provider ?? metadata.provider }
+         if (!['assistant.delta', 'thinking.delta', 'thinking.completed'].includes(String(data.kind))) {
+           const inserted = this.db.prepare('INSERT OR IGNORE INTO audit_events(event_uid,project_id,run_id,data) VALUES (?,?,?,?)').run(typeof event.event_uid === 'string' ? event.event_uid : null, projectId, id, JSON.stringify(event))
+           if (inserted.changes) event.id = Number(inserted.lastInsertRowid)
+@@ -852,7 +828,7 @@ export class Store {
+     this.transaction(() => {
+       this.run(runId)
+       const timestamp = now()
+-      const safeData = redactSensitive(data) as Json
++      const safeData = data
+       const inserted = this.db.prepare('INSERT INTO run_events(run_id,type,data,created_at) VALUES (?,?,?,?)').run(runId, type, JSON.stringify(safeData), timestamp)
+       const value = safeData && typeof safeData === 'object' && !Array.isArray(safeData) ? safeData as Record<string, Json> : {}
+       const event: { [key: string]: Json } = { event_uid: `native-${inserted.lastInsertRowid}`, run_sequence: Number(inserted.lastInsertRowid), timestamp, kind: type, data: safeData }
+diff --git a/packages/redtrace-engine/src/types.ts b/packages/redtrace-engine/src/types.ts
+index ac3aa5fb..aff51b83 100644
+--- a/packages/redtrace-engine/src/types.ts
++++ b/packages/redtrace-engine/src/types.ts
+@@ -58,7 +58,9 @@ export interface Provider {
+   apiKey?: string; apiKeyEnv?: string
+   models: { id: string; contextWindow: number; maxTokens: number; reasoning?: string; reasoningEfforts?: Record<string, string | null> | boolean | null; thinkingFormat?: string }[]
+ }
++export interface LlmPolling { enabled: boolean; models: Record<string, string[]> }
+ export interface EngineConfig {
++  llmPolling?: LlmPolling
+   workers: Worker[]; providers: Record<string, Provider>; maxWorkers: number; maxProjectWorkers: number
+   maxRunningProjects: number; maxSteps: number | null; decideTimeout: number; executeTimeout: number
+   concludeTimeout: number; bootstrapTimeout: number; bootstrapConcludeTimeout: number
+diff --git a/redtrace.local.example.yaml b/redtrace.local.example.yaml
+index 4583e5a3..94e338ef 100644
+--- a/redtrace.local.example.yaml
++++ b/redtrace.local.example.yaml
+@@ -28,6 +28,8 @@ tasks:
+ # concurrency, and priority. Each model entry carries its own capacities and
+ # reasoning policy. Omitted reasoning means auto_max; custom gateways may
+ # declare exact reasoning_efforts when the model catalog has no metadata.
++# Same exact model ID across Providers enables per-request round-robin and
++# pre-output failover. Use equivalent model capacities/reasoning capabilities.
+ providers:
+   deepseek:
+     api: openai-completions
+@@ -47,6 +49,17 @@ providers:
+         max_tokens: 128000
+         reasoning_efforts: false
+ 
++  # Optional: a second supplier for the same model (uncomment and fill its key).
++  # deepseek-backup:
++  #   api: openai-completions
++  #   base_url: https://backup.example.com/v1
++  #   api_key: replace-me
++  #   models:
++  #     - id: deepseek-chat
++  #       context_window: 1000000
++  #       max_tokens: 128000
++  #       reasoning_efforts: false
++
+ workers:
+   - name: "local-reasoner"
+     provider: "deepseek"
+diff --git a/skills/ad-attack/SKILL.md b/skills/ad-attack/SKILL.md
+index 3c45f858..7f1c46f7 100644
+--- a/skills/ad-attack/SKILL.md
++++ b/skills/ad-attack/SKILL.md
+@@ -5,7 +5,7 @@ description: "Active Directory exploitation after domain credentials exist: Kerb
+ 
+ # /ad-attack — 域攻击
+ 
+-> **scope：** 已有域凭据，把 **当前这条 AD 链** 打到 **DA / 等价域控制 / 目标主机 SYSTEM**。要到的 TGS/AS-REP **当场按 etype 砸，爆了立刻用**，不要切 `/creds`。不做主机 C2、数据外带、LSASS 配方。▸ 整条链打完后候选只认 `~/.claude/skills/shared/modules.yaml`（`modules.py tail`）。
++> **scope：** 已有域凭据，把 **当前这条 AD 链** 打到 **DA / 等价域控制 / 目标主机 SYSTEM**。要到的 TGS/AS-REP **当场按 etype 砸，爆了立刻用**，不要切 `/creds`。不做主机 C2、数据外带、LSASS 配方。▸ 整条链打完后后续按当前 Step 目标和已有证据自动推进。
+ 
+ 工具：`../shared/tools.md`。CVE 有 DC build 才读 `../shared/cve-enrichment.md`。LAPS 读取不在本模块（`../ad-recon/references/windows-laps.md`，仅当你在做 LAPS 卡片）。Kerberoast 砸票查 `-m` 才读 `../creds/references/hash-types.md`（不换模块）。
+ 
+@@ -24,22 +24,12 @@ description: "Active Directory exploitation after domain credentials exist: Kerb
+ 
+ ## 开局与收尾
+ 
+-开局第一件事：Read `./notes.md`。没有则 `python ~/.claude/skills/bin/notes.py init`。只按已拿下/凭据继续。
+-走到哪条链，才 Read **一份** `references/<file>.md`。禁止开局全读、禁止凭记忆写 payload。
+-监听 / sudo / 输密码 / Permission denied：立刻停，说明等操作者做什么，等回报。不要假装已成功。
+-收尾：
+-1. 追加 `./notes.md`
+-2. `python ~/.claude/skills/bin/modules.py tail <本模块名>`
+-   Read 备用：`~/.claude/skills/shared/modules.yaml`
+-   禁止 `./modules.yaml` 和 `python ../bin/...`
+-3. 优先 `default_next`；`never_default` 不得当作默认（操作者点名除外）
+-4. 名册外的名字不许建议
+-5. 停。等操作者选 `/模块` 或 `/clear`
+-`/edr-bypass` 半条链未完：打通后回本模块，不要 /clear。
+-
++读取当前 Step 契约、引用的 Fact 与已有证据文件，只按已验证通道和凭据继续；按当前链路只加载必要 reference。
++监听、权限或认证失败时核对反馈与前置条件，尝试授权范围内的有效替代路径；不等待操作者选择模块，也不伪造成功。
++将关键命令、输出和可复用进展保存到工作目录证据文件；关键突破及时 `submit_fact`。当前目标仍有可执行路径时自动继续，跨 Step 协作交给 Reason。
++Step 结束前必须提交至少一条有真实证据的汇总 Fact；无突破则汇总已验证失败、限制和阻塞，再调用 `finish_step({summary})`。可交付成果通过 `submit_finding` 引用 Fact。
+ 
+ ---
+-
+ ## 0. 成功条件
+ 
+ 当前选中的 AD 链打到目标身份或 DA/主机 SYSTEM。DCSync、Golden、RBCD、Shadow、ESC8/11、Certighost 都是攻击原语。会改密的标 IMPACT/RESTORE。
+@@ -148,4 +138,4 @@ WAC 无稳定端到端 PoC → `references/management-plane.md`，不编命令
+ 
+ ## 6. 完成后
+ 
+-写入 `./notes.md`。候选只按「开局与收尾」跑 `python ~/.claude/skills/bin/modules.py tail`。
++写入 `./notes.md`。按「开局与收尾」提交真实 Fact 后继续当前目标。
+diff --git a/skills/api-testing/SKILL.md b/skills/api-testing/SKILL.md
+index 7315098f..1c5ae819 100644
+--- a/skills/api-testing/SKILL.md
++++ b/skills/api-testing/SKILL.md
+@@ -5,12 +5,15 @@ description: API security testing 接口安全测试：REST/GraphQL 面发现、
+ 
+ # API 安全测试
+ 
+-## RiftX Workflow
++## RedTrace Workflow
++
++1. 读取当前 Step 的 FGS 契约及引用证据，复用同题已验证身份、Session、地址与已有成果。
++2. 用 `http_batch` 保存基线与变体请求；通过返回的 Session Resource 和 Request ID 调用 `http_replay`。请求默认并发；只有测试需要身份或状态隔离时才创建独立 Session。需要前序登录结果的请求，待登录完成后再发。
++3. 需要爬取、fuzz 或专用协议时，用 `bash` 运行现有 `curl`、`ffuf`、`sqlmap` 或本 Skill 脚本；真实浏览器交互使用 `playwright-skill` 的脚本和独立 BrowserContext，不假定存在浏览器专用工具。显式向命令传递已验证 Cookie/Authorization，不假定 HTTP Resource 会自动向外部工具导出会话。
++4. 同一 Step 内并发测试独立输入；跨 Step 协作由 Reason 调度，不自行调用子 Agent 工具。复用下方 Payload、打法和 references，按实际反馈深入验证。
++5. 保存完整请求/响应、对照与实际影响到证据文件。确认关键结论后 `submit_fact({description,evidence:[{description,path}]})`；真实可交付漏洞再 `submit_finding({title,description,factIds})` 引用 Fact。线索不冒充已确认漏洞。
++6. 当前 Step 结束前至少提交一条真实证据支持的汇总 Fact；无突破则如实汇总验证范围、失败或阻塞，再 `finish_step({summary})`。普通局部观察先留在证据文件。
+ 
+-1. **API 面发现靠浏览器的网络记录**：以正常用户在浏览器里走完全部功能，`requests` 自动记录所有 XHR/fetch——这是最真实的 API 清单（比 swagger 文档更接近实际部署）；`request_detail` 逐个看真实结构（方法、路径、头、体、token 形态）
+-2. **文档端点用浏览器确认**：`/swagger` `/openapi.json` `/api-docs` `/graphql` `/graphiql`——命中即拿到全量接口定义（本身若未鉴权也是一个 finding，`confidence: likely`）
+-3. **重放与篡改在 bash**：`cookies_export` 导出会话 → curl 重放修改（换方法/换路径/加字段/改 token）；GraphQL 在浏览器 `evaluate` 里发 query 最方便（页面上下文自带 token 与同源策略）
+-4. **并行**：参数/端点 fuzz 交给 `spawn_subagent`，主会话手工做逻辑类测试（越权、mass assignment——交叉 `exploit-authz`）
+ 
+ ---
+ 
+@@ -60,7 +63,7 @@ description: API security testing 接口安全测试：REST/GraphQL 面发现、
+ - [ ] 对象级越权（交叉 exploit-authz 打法）
+ - [ ] GraphQL：introspection/字段建议/mutation 越权
+ - [ ] 限流验证
+-- [ ] 每个确认点：`request_detail` 证据 + `record_finding`
++- [ ] 每个确认点：`http_batch` 归档的请求/响应文件 + `submit_fact` 后 `submit_finding`
+ 
+ ---
+ 
+diff --git a/skills/exploit-file-upload/SKILL.md b/skills/exploit-file-upload/SKILL.md
+index fc0cc5e8..5aa070ea 100644
+--- a/skills/exploit-file-upload/SKILL.md
++++ b/skills/exploit-file-upload/SKILL.md
+@@ -7,23 +7,15 @@ description: File upload vulnerability testing 文件上传漏洞：扩展名/Co
+ 
+ webshell 仅用于验证执行原语（`id`/`whoami` 级别），不做持久化、不横向移动。
+ 
+-## RiftX Workflow
+-
+-1. **上传点侦察在浏览器**：找到上传表单 → `snapshot` 拿到 `input[type=file]` 与提交按钮的 ref；观察前端校验（accept 属性、JS 校验逻辑可用 `evaluate` 直接读）
+-2. **上传执行——两条路**：
+-   - **bash `curl -F`**（需要会话时先 `cookies_export` 导出浏览器登录态）：
+-     ```bash
+-     curl -F "avatar=@shell.php.jpg;type=image/jpeg" -F "submit=1" \
+-          -H "Cookie: <导出的会话>" https://target.com/upload
+-     ```
+-   - **浏览器 `evaluate` 在页面上下文构造上传**（自动带会话、绕过前端校验）：
+-     ```javascript
+-     const file = new File(["GIF89a<?php system($_GET['c']); ?>"], "shell.php.jpg", {type: "image/jpeg"});
+-     const form = new FormData(); form.append("avatar", file);
+-     await fetch("/upload", {method: "POST", body: form}).then(r => r.text());
+-     ```
+-3. **上传后定位与验证**：响应里的路径提示 → `recon-dir-scan` 扫 `/uploads/` 等目录 → 浏览器 `navigate` 访问上传文件确认是否被解析执行（`.php.jpg` 解析成 PHP = 漏洞实锤）
+-4. **证据**：上传请求 `request_detail` + 访问执行结果的 `screenshot`/响应体 → `record_finding`
++## RedTrace Workflow
++
++1. 读取当前 Step 的 FGS 契约及引用证据，复用同题已验证身份、Session、地址与已有成果。
++2. 用 `http_batch` 保存基线与变体请求；通过返回的 Session Resource 和 Request ID 调用 `http_replay`。请求默认并发；只有测试需要身份或状态隔离时才创建独立 Session。需要前序登录结果的请求，待登录完成后再发。
++3. 需要爬取、fuzz 或专用协议时，用 `bash` 运行现有 `curl`、`ffuf`、`sqlmap` 或本 Skill 脚本；真实浏览器交互使用 `playwright-skill` 的脚本和独立 BrowserContext，不假定存在浏览器专用工具。显式向命令传递已验证 Cookie/Authorization，不假定 HTTP Resource 会自动向外部工具导出会话。
++4. 同一 Step 内并发测试独立输入；跨 Step 协作由 Reason 调度，不自行调用子 Agent 工具。复用下方 Payload、打法和 references，按实际反馈深入验证。
++5. 保存完整请求/响应、对照与实际影响到证据文件。确认关键结论后 `submit_fact({description,evidence:[{description,path}]})`；真实可交付漏洞再 `submit_finding({title,description,factIds})` 引用 Fact。线索不冒充已确认漏洞。
++6. 当前 Step 结束前至少提交一条真实证据支持的汇总 Fact；无突破则如实汇总验证范围、失败或阻塞，再 `finish_step({summary})`。普通局部观察先留在证据文件。
++
+ 
+ ---
+ 
+@@ -59,7 +51,7 @@ webshell 仅用于验证执行原语（`id`/`whoami` 级别），不做持久化
+ - [ ] Content-Type / 魔数 / 图片马
+ - [ ] 上传路径定位 + 解析确认（访问执行）
+ - [ ] SVG → XSS、文件名遍历、竞态
+-- [ ] 每个确认点：上传请求 + 执行结果证据 + `record_finding`
++- [ ] 每个确认点：上传请求 + 执行结果证据 + `submit_fact` 后 `submit_finding`
+ 
+ ---
+ 
+diff --git a/skills/exploit-logic/SKILL.md b/skills/exploit-logic/SKILL.md
+index b424e578..79797bf5 100644
+--- a/skills/exploit-logic/SKILL.md
++++ b/skills/exploit-logic/SKILL.md
+@@ -7,13 +7,15 @@ description: 业务逻辑漏洞测试：支付/订单金额篡改、负数与整
+ 
+ 资金/订单类验证用最小金额并在完成后恢复（取消测试订单）；不产生真实资损。
+ 
+-## RiftX Workflow
++## RedTrace Workflow
++
++1. 读取当前 Step 的 FGS 契约及引用证据，复用同题已验证身份、Session、地址与已有成果。
++2. 用 `http_batch` 保存基线与变体请求；通过返回的 Session Resource 和 Request ID 调用 `http_replay`。请求默认并发；只有测试需要身份或状态隔离时才创建独立 Session。需要前序登录结果的请求，待登录完成后再发。
++3. 需要爬取、fuzz 或专用协议时，用 `bash` 运行现有 `curl`、`ffuf`、`sqlmap` 或本 Skill 脚本；真实浏览器交互使用 `playwright-skill` 的脚本和独立 BrowserContext，不假定存在浏览器专用工具。显式向命令传递已验证 Cookie/Authorization，不假定 HTTP Resource 会自动向外部工具导出会话。
++4. 同一 Step 内并发测试独立输入；跨 Step 协作由 Reason 调度，不自行调用子 Agent 工具。复用下方 Payload、打法和 references，按实际反馈深入验证。
++5. 保存完整请求/响应、对照与实际影响到证据文件。确认关键结论后 `submit_fact({description,evidence:[{description,path}]})`；真实可交付漏洞再 `submit_finding({title,description,factIds})` 引用 Fact。线索不冒充已确认漏洞。
++6. 当前 Step 结束前至少提交一条真实证据支持的汇总 Fact；无突破则如实汇总验证范围、失败或阻塞，再 `finish_step({summary})`。普通局部观察先留在证据文件。
+ 
+-1. **先理解业务再动手**：以正常用户走完整业务流（浏览→下单→支付→售后），`requests` 记录全部接口——逻辑漏洞的本质是"实现与业务意图的偏差"，不理解意图就测不出
+-2. **按手册场景矩阵逐类过**：金额/数量参数客户端信任（改单价、负数数量、溢出）、流程步骤跳过（直接调第 3 步）、顺序重放、优惠规则叠加滥用、状态机非法迁移（已退款再发货）
+-3. **双身份对比**：`use_identity` 普通用户与管理员、买家与卖家，交叉操作对方的业务对象
+-4. **差分在 bash**：`cookies_export` 导出会话重放篡改请求，一次只改一个业务参数，响应与后续状态变化都记录
+-5. **留证**：篡改请求 + 实际业务后果（订单状态/余额变化截图或响应）进 `record_finding`——逻辑漏洞必须有"实际占了便宜"的证据，理论可能不立项
+ 
+ ## 何时读哪篇
+ 
+diff --git a/skills/exploit-race/SKILL.md b/skills/exploit-race/SKILL.md
+index 698d3eb4..bd79f3cc 100644
+--- a/skills/exploit-race/SKILL.md
++++ b/skills/exploit-race/SKILL.md
+@@ -7,13 +7,15 @@ description: Race condition / TOCTOU 竞态条件测试：优惠券/红包/签
+ 
+ 写操作的越权验证遵守最小伤害：先加自己的测试数据、再删自己刚加的；不动他人的既有记录。
+ 
+-## RiftX Workflow
++## RedTrace Workflow
++
++1. 读取当前 Step 的 FGS 契约及引用证据，复用同题已验证身份、Session、地址与已有成果。
++2. 用 `http_batch` 保存基线与变体请求；通过返回的 Session Resource 和 Request ID 调用 `http_replay`。请求默认并发；只有测试需要身份或状态隔离时才创建独立 Session。需要前序登录结果的请求，待登录完成后再发。
++3. 需要爬取、fuzz 或专用协议时，用 `bash` 运行现有 `curl`、`ffuf`、`sqlmap` 或本 Skill 脚本；真实浏览器交互使用 `playwright-skill` 的脚本和独立 BrowserContext，不假定存在浏览器专用工具。显式向命令传递已验证 Cookie/Authorization，不假定 HTTP Resource 会自动向外部工具导出会话。
++4. 同一 Step 内并发测试独立输入；跨 Step 协作由 Reason 调度，不自行调用子 Agent 工具。复用下方 Payload、打法和 references，按实际反馈深入验证。
++5. 保存完整请求/响应、对照与实际影响到证据文件。确认关键结论后 `submit_fact({description,evidence:[{description,path}]})`；真实可交付漏洞再 `submit_finding({title,description,factIds})` 引用 Fact。线索不冒充已确认漏洞。
++6. 当前 Step 结束前至少提交一条真实证据支持的汇总 Fact；无突破则如实汇总验证范围、失败或阻塞，再 `finish_step({summary})`。普通局部观察先留在证据文件。
+ 
+-1. **找竞争窗口**：先以正常用户在浏览器走完领取/支付/兑换流程，`requests` 拿到关键请求（`request_detail` 看完整结构与响应耗时）——目标是"检查与执行分离"的接口（领券、签到、抽奖、兑换码、提现、余额支付）
+-2. **并发重放在 bash**：`cookies_export` 导出会话 → 按深度手册用 Turbo Intruder（HTTP/2 单包最大并发）或最后字节同步打同一请求 N 次；服务器侧不支持 HTTP/2 时退化为并发连接 + 短路径
+-3. **判定看差分**：响应里出现一个成功 + N-1 个失败之外的结果（多张券到账、余额扣少、库存超卖、积分多加）即命中；只凭"接口没锁"不算漏洞，要有实际多记账证据
+-4. **计数与留证**：成功差分的完整请求/响应（`record_finding`，evidence 引用重放工具调用）；领券/签到类竞态按目标奖励规则评估等级
+-5. **大目标并行**：多个独立竞争点（领取、支付、提现）`spawn_subagent` 分头打，主会话汇总
+ 
+ ## 何时读哪篇
+ 
+diff --git a/skills/exploit-smuggling/SKILL.md b/skills/exploit-smuggling/SKILL.md
+index 83f1c50a..eb0190a2 100644
+--- a/skills/exploit-smuggling/SKILL.md
++++ b/skills/exploit-smuggling/SKILL.md
+@@ -7,13 +7,15 @@ description: HTTP request smuggling 请求走私：CL.TE / TE.CL / TE.TE 差异
+ 
+ 高危但易误伤：探测会向目标发畸形请求，节奏受控、不做高压，确认差异后立即转为最小验证。
+ 
+-## RiftX Workflow
++## RedTrace Workflow
++
++1. 读取当前 Step 的 FGS 契约及引用证据，复用同题已验证身份、Session、地址与已有成果。
++2. 用 `http_batch` 保存基线与变体请求；通过返回的 Session Resource 和 Request ID 调用 `http_replay`。请求默认并发；只有测试需要身份或状态隔离时才创建独立 Session。需要前序登录结果的请求，待登录完成后再发。
++3. 需要爬取、fuzz 或专用协议时，用 `bash` 运行现有 `curl`、`ffuf`、`sqlmap` 或本 Skill 脚本；真实浏览器交互使用 `playwright-skill` 的脚本和独立 BrowserContext，不假定存在浏览器专用工具。显式向命令传递已验证 Cookie/Authorization，不假定 HTTP Resource 会自动向外部工具导出会话。
++4. 同一 Step 内并发测试独立输入；跨 Step 协作由 Reason 调度，不自行调用子 Agent 工具。复用下方 Payload、打法和 references，按实际反馈深入验证。
++5. 保存完整请求/响应、对照与实际影响到证据文件。确认关键结论后 `submit_fact({description,evidence:[{description,path}]})`；真实可交付漏洞再 `submit_finding({title,description,factIds})` 引用 Fact。线索不冒充已确认漏洞。
++6. 当前 Step 结束前至少提交一条真实证据支持的汇总 Fact；无突破则如实汇总验证范围、失败或阻塞，再 `finish_step({summary})`。普通局部观察先留在证据文件。
+ 
+-1. **判架构再动手**：`recon-fingerprint` 定前端（CDN/反代/Nginx/HAProxy）与后端组合；无已知差异组合的直接跳过，不盲打
+-2. **差分探测在 bash**：curl/脚本按手册发 CL.TE / TE.CL / TE.TE 探针（超时差异、二次请求错位响应是主要信号）；HTTP/2 站点优先测 H2 系（前端降级、头部注入）
+-3. **危害证明**：走私成功的标准是"借别人的请求上下文"——让后续无辜请求吃到注入的响应头/体，或把他人请求走私进后台；能接上会话/缓存的记 Critical
+-4. **联动**：命中后通常接 `exploit-cache`（把走私响应钉进缓存放大影响）
+-5. **留证**：完整探针请求与错位响应原样进 `record_finding`，evidence 引用工具调用
+ 
+ ## 何时读哪篇
+ 
+diff --git a/skills/exploit-sqli/SKILL.md b/skills/exploit-sqli/SKILL.md
+index 5d990923..30bc346b 100644
+--- a/skills/exploit-sqli/SKILL.md
++++ b/skills/exploit-sqli/SKILL.md
+@@ -9,14 +9,15 @@ description: SQL injection detection and exploitation using sqlmap, manual techn
+ 
+ SQL injection payloads can damage or destroy data: use detection-level payloads first, keep destructive sqlmap options off unless the specific check requires them, and confirm impact without extracting or altering real data.
+ 
+-## RiftX Workflow
++## RedTrace Workflow
+ 
+-1. **认证后的注入点优先在浏览器里找**：登录表单、需要会话的接口——`browser navigate` + `snapshot` 拿到表单 ref，`fill` 提交探测 payload，直接观察错误回显与行为差异
+-2. **请求级证据**：`request_detail` / `response_body` 记录注入前后的请求与响应差异；`requests` 列表可按 ref 回溯——`{ "type": "request", "requestRef": "r1" }` 直接作为 record_finding 证据
+-3. **会话桥接**：浏览器里已认证的会话用 `cookies_export` 导出，写入请求文件后在 bash 侧跑 sqlmap（`sqlmap -r request.txt` 带完整 Cookie），不必重新手工登录
+-4. **并行**：确认注入点后，参数批量验证/数据枚举可派 `spawn_subagent` 跑 sqlmap，主会话继续手工深挖其他注入面
++1. 读取当前 Step 的 FGS 契约及引用证据，复用同题已验证身份、Session、地址与已有成果。
++2. 用 `http_batch` 保存基线与变体请求；通过返回的 Session Resource 和 Request ID 调用 `http_replay`。请求默认并发；只有测试需要身份或状态隔离时才创建独立 Session。需要前序登录结果的请求，待登录完成后再发。
++3. 需要爬取、fuzz 或专用协议时，用 `bash` 运行现有 `curl`、`ffuf`、`sqlmap` 或本 Skill 脚本；真实浏览器交互使用 `playwright-skill` 的脚本和独立 BrowserContext，不假定存在浏览器专用工具。显式向命令传递已验证 Cookie/Authorization，不假定 HTTP Resource 会自动向外部工具导出会话。
++4. 同一 Step 内并发测试独立输入；跨 Step 协作由 Reason 调度，不自行调用子 Agent 工具。复用下方 Payload、打法和 references，按实际反馈深入验证。
++5. 保存完整请求/响应、对照与实际影响到证据文件。确认关键结论后 `submit_fact({description,evidence:[{description,path}]})`；真实可交付漏洞再 `submit_finding({title,description,factIds})` 引用 Fact。线索不冒充已确认漏洞。
++6. 当前 Step 结束前至少提交一条真实证据支持的汇总 Fact；无突破则如实汇总验证范围、失败或阻塞，再 `finish_step({summary})`。普通局部观察先留在证据文件。
+ 
+-发现确认后立即 `record_finding`（见下方 Recording Findings）。RiftX 没有独立的结果数据库。
+ 
+ ---
+ 
+@@ -74,7 +75,7 @@ URL 参数、POST body（含 JSON 字段）、Cookie、User-Agent / Referer / X-
+ - [ ] GraphQL / API 端点
+ - [ ] 错误 → 布尔 → 时间 → UNION 的检测顺序
+ - [ ] WAF 存在时的 tamper/编码策略
+-- [ ] 每个确认点：证据 + `record_finding`
++- [ ] 每个确认点：证据 + `submit_fact` 后 `submit_finding`
+ 
+ ---
+ 
+diff --git a/skills/exploit-ssrf/SKILL.md b/skills/exploit-ssrf/SKILL.md
+index 40e46e92..b0a1ad73 100644
+--- a/skills/exploit-ssrf/SKILL.md
++++ b/skills/exploit-ssrf/SKILL.md
+@@ -5,13 +5,15 @@ description: Server-side request forgery (SSRF) 服务端请求伪造测试：UR
+ 
+ # SSRF（服务端请求伪造）测试
+ 
+-## RiftX Workflow
++## RedTrace Workflow
++
++1. 读取当前 Step 的 FGS 契约及引用证据，复用同题已验证身份、Session、地址与已有成果。
++2. 用 `http_batch` 保存基线与变体请求；通过返回的 Session Resource 和 Request ID 调用 `http_replay`。请求默认并发；只有测试需要身份或状态隔离时才创建独立 Session。需要前序登录结果的请求，待登录完成后再发。
++3. 需要爬取、fuzz 或专用协议时，用 `bash` 运行现有 `curl`、`ffuf`、`sqlmap` 或本 Skill 脚本；真实浏览器交互使用 `playwright-skill` 的脚本和独立 BrowserContext，不假定存在浏览器专用工具。显式向命令传递已验证 Cookie/Authorization，不假定 HTTP Resource 会自动向外部工具导出会话。
++4. 同一 Step 内并发测试独立输入；跨 Step 协作由 Reason 调度，不自行调用子 Agent 工具。复用下方 Payload、打法和 references，按实际反馈深入验证。
++5. 保存完整请求/响应、对照与实际影响到证据文件。确认关键结论后 `submit_fact({description,evidence:[{description,path}]})`；真实可交付漏洞再 `submit_finding({title,description,factIds})` 引用 Fact。线索不冒充已确认漏洞。
++6. 当前 Step 结束前至少提交一条真实证据支持的汇总 Fact；无突破则如实汇总验证范围、失败或阻塞，再 `finish_step({summary})`。普通局部观察先留在证据文件。
+ 
+-1. **候选参数在浏览器里找**：带 URL 语义的输入（`url=`、`callback=`、`webhook=`、`avatar_url=`、`feed=`、`import=`、`redirect=`）出现在表单/设置页时，`snapshot` + `fill` 直接提交探测值——服务器发起的出站请求在 `requests` 里**不可见**（那是浏览器侧的网络记录），判定要看响应与回调
+-2. **回显型判定**：提交 `http://<自有回调地址>`（bash 起 `python3 -m http.server 8000` 或 interactsh）——服务器是否真发起了请求看回调命中；响应内容是否回显（feed 抓取类常直接回显）
+-3. **盲型判定**：无回显时只靠回调命中（DNS/HTTP）；interactsh 每次用唯一子域归因到具体参数
+-4. **内网/元数据探测走 bash**：`curl http://127.0.0.1:<port>`、`http://169.254.169.254/latest/meta-data/`（AWS）等由服务器代发——构造对应 SSRF payload 后在回调/响应差异里判端口与路径存活；浏览器 scope 管不到服务器侧行为
+-5. **证据**：回调命中记录 + 响应差异的工具调用输出 → `record_finding`
+ 
+ ---
+ 
+@@ -52,7 +54,7 @@ description: Server-side request forgery (SSRF) 服务端请求伪造测试：UR
+ - [ ] 盲型：唯一子域归因
+ - [ ] 端口扫描（本机）→ 内网段 → 云元数据
+ - [ ] 过滤绕过变体（有校验时）
+-- [ ] 每个确认点：回调证据 + `record_finding`（元数据泄露=Critical）
++- [ ] 每个确认点：回调证据 + `submit_fact` 后 `submit_finding`（元数据泄露=Critical）
+ 
+ ---
+ 
+diff --git a/skills/exploit-xss/SKILL.md b/skills/exploit-xss/SKILL.md
+index 9df16a75..72e75120 100644
+--- a/skills/exploit-xss/SKILL.md
++++ b/skills/exploit-xss/SKILL.md
+@@ -5,17 +5,15 @@ description: Cross-site scripting (XSS) vulnerability detection and exploitation
+ 
+ # Cross-Site Scripting (XSS) Detection & Exploitation
+ 
+-## RiftX Workflow（browser-first）
++## RedTrace Workflow
+ 
+-XSS 在真实浏览器里验证远比 curl 可靠：过滤、编码、渲染行为与受害者完全一致。
++1. 读取当前 Step 的 FGS 契约及引用证据，复用同题已验证身份、Session、地址与已有成果。
++2. 用 `http_batch` 保存基线与变体请求；通过返回的 Session Resource 和 Request ID 调用 `http_replay`。请求默认并发；只有测试需要身份或状态隔离时才创建独立 Session。需要前序登录结果的请求，待登录完成后再发。
++3. 需要爬取、fuzz 或专用协议时，用 `bash` 运行现有 `curl`、`ffuf`、`sqlmap` 或本 Skill 脚本；真实浏览器交互使用 `playwright-skill` 的脚本和独立 BrowserContext，不假定存在浏览器专用工具。显式向命令传递已验证 Cookie/Authorization，不假定 HTTP Resource 会自动向外部工具导出会话。
++4. 同一 Step 内并发测试独立输入；跨 Step 协作由 Reason 调度，不自行调用子 Agent 工具。复用下方 Payload、打法和 references，按实际反馈深入验证。
++5. 保存完整请求/响应、对照与实际影响到证据文件。确认关键结论后 `submit_fact({description,evidence:[{description,path}]})`；真实可交付漏洞再 `submit_finding({title,description,factIds})` 引用 Fact。线索不冒充已确认漏洞。
++6. 当前 Step 结束前至少提交一条真实证据支持的汇总 Fact；无突破则如实汇总验证范围、失败或阻塞，再 `finish_step({summary})`。普通局部观察先留在证据文件。
+ 
+-1. **找反射点**：`browser navigate` 到目标页 → `snapshot` 拿到元素 ref 与页面结构 → 对每个输入点用 `fill` / `press` 提交探测 payload（ref 直接来自 snapshot，不需要猜选择器）
+-2. **验证执行**：注入 `alert(1)` 类 payload 后用 `console` action 读取捕获的对话框与未捕获错误——**捕获到的 dialog 就是 XSS 成立的直接证明**
+-3. **DOM XSS**：`evaluate` 检查 source→sink 数据流（`location.hash/search` → `innerHTML`/`eval` 等），`snapshot` 确认 DOM 实际变化
+-4. **Stored XSS 跨身份验证**：`use_identity` 建立角色隔离——低权身份提交 payload，管理员身份打开承载页确认在更高权限上下文执行；`cookies_export` 可把已认证会话带给 bash 侧工具（dalfox 等）
+-5. **证据**：`screenshot`（执行现场）+ `request_detail`（注入请求）作为 `record_finding` 的 evidence（如 `{ "type": "screenshot", "screenshotId": "..." }`）；浏览器外发起的请求用 `{ "type": "request", "requestRef": "r1" }`
+-
+-发现确认后立即记录（见下方 Recording Findings）。RiftX 没有独立的结果数据库。
+ 
+ ---
+ 
+@@ -30,7 +28,7 @@ XSS 在真实浏览器里验证远比 curl 可靠：过滤、编码、渲染行
+ | Blind XSS | `dalfox file req.txt --blind <interactsh/collaborator>`；每个注入点用唯一 payload 以便归因 |
+ | 管道组合 | `subfinder example.com \| httpx \| dalfox pipe`（侦察→批量，可交给 subagent） |
+ 
+-需要并行时把批量扫描派给 `spawn_subagent`，主会话在浏览器里做手工深挖。
++需要并行时把批量扫描派给 由 Reason 分配的并行 Step，主会话在浏览器里做手工深挖。
+ 
+ ---
+ 
+@@ -70,7 +68,7 @@ XSS 在真实浏览器里验证远比 curl 可靠：过滤、编码、渲染行
+ - [ ] 存储型：提交 → 跨身份/跨页面确认执行
+ - [ ] Blind：唯一 payload + 回调地址
+ - [ ] CSP 与框架特有向量覆盖
+-- [ ] 每个确认的漏洞：screenshot + request 证据 + `record_finding`
++- [ ] 每个确认的漏洞：screenshot + request 证据 + `submit_fact` 后 `submit_finding`
+ 
+ ---
+ 
+diff --git a/skills/playwright-skill/API_REFERENCE.md b/skills/playwright-skill/API_REFERENCE.md
+index 6d4b74fb..f3b07ea1 100644
+--- a/skills/playwright-skill/API_REFERENCE.md
++++ b/skills/playwright-skill/API_REFERENCE.md
+@@ -84,7 +84,7 @@ const { chromium } = require('playwright');
+ (async () => {
+   // Launch browser
+   const browser = await chromium.launch({
+-    headless: false,  // Set to true for headless mode
++    headless: true,  // Headless works without a display server
+     slowMo: 50       // Slow down operations by 50ms
+   });
+ 
+diff --git a/skills/playwright-skill/SKILL.md b/skills/playwright-skill/SKILL.md
+index 8e002881..cd008865 100644
+--- a/skills/playwright-skill/SKILL.md
++++ b/skills/playwright-skill/SKILL.md
+@@ -46,8 +46,8 @@ Common installation paths:
+    multiple results. Ask for a URL or offer to start a server when none exist.
+ 2. Write reusable scripts to `$TMP_DIR/playwright-test-*.js` unless the user
+    asks to save them in the project. Use `PW_SCRIPT_DIR` to preserve scripts.
+-3. Use a visible browser by default. Use `headless: true` only when requested
+-   or when the environment has no display.
++3. Use `headless: true` by default for unattended Workers and containers.
++   Use a visible browser only when explicitly needed and a display is available.
+ 4. Put the target URL in a constant or environment variable.
+ 5. Run scripts with `node "$SKILL_DIR/run.js" <script.js>`.
+ 6. Report actions, failures, and artifact paths. Do not claim success without
+@@ -75,7 +75,7 @@ const targetUrl = process.env.TARGET_URL || 'http://localhost:3000';
+ const artifactDir = process.env.PW_ARTIFACT_DIR || os.tmpdir();
+ 
+ (async () => {
+-  const browser = await chromium.launch({ headless: false });
++  const browser = await chromium.launch({ headless: true });
+   try {
+     const page = await browser.newPage();
+     await page.goto(targetUrl);
+@@ -96,7 +96,7 @@ node "$SKILL_DIR/run.js" "$TMP_DIR/playwright-test-page.js"
+ For short one-off tasks, use inline execution:
+ 
+ ```bash
+-node "$SKILL_DIR/run.js" -e "const browser = await chromium.launch({headless: false}); try { const page = await browser.newPage(); await page.goto('https://example.com'); console.log(await page.title()); } finally { await browser.close(); }"
++node "$SKILL_DIR/run.js" -e "const browser = await chromium.launch({headless: true}); try { const page = await browser.newPage(); await page.goto('https://example.com'); console.log(await page.title()); } finally { await browser.close(); }"
+ ```
+ 
+ The `-e` process exits as soon as the snippet settles, so close the browser
+diff --git a/skills/privesc-linux/SKILL.md b/skills/privesc-linux/SKILL.md
+index 2d5001ac..0061f998 100644
+--- a/skills/privesc-linux/SKILL.md
++++ b/skills/privesc-linux/SKILL.md
+@@ -5,7 +5,7 @@ description: "Linux local privilege escalation from a low-privilege shell to roo
+ 
+ # /privesc-linux — Linux 本机提权
+ 
+-> **scope：** 已有低权限 Linux foothold，打到 **`uid=0` root shell**。不做横移、数据外带、主机持久化、K8s RBAC/集群控制。▸ 拿到 root 后记 notes，候选只认 `~/.claude/skills/shared/modules.yaml`（`modules.py tail`），由操作者选。
++> **scope：** 已有低权限 Linux foothold，打到 **`uid=0` root shell**。不做横移、数据外带、主机持久化、K8s RBAC/集群控制。▸ 拿到 root 后记 notes，后续按当前 Step 目标和已有证据自动推进。
+ 
+ 本模块是红队攻击模块。`sudo -l` 能 GTFOBins 就立刻 root，不要停在“发现可 sudo find”。写 cron/改 unit 是手段，**`id` 显示 `uid=0` 才是成功**。
+ 
+@@ -21,22 +21,12 @@ description: "Linux local privilege escalation from a low-privilege shell to roo
+ 
+ ## 开局与收尾
+ 
+-开局第一件事：Read `./notes.md`。没有则 `python ~/.claude/skills/bin/notes.py init`。只按已拿下/凭据继续。
+-走到哪条链，才 Read **一份** `references/<file>.md`。禁止开局全读、禁止凭记忆写 payload。
+-监听 / sudo / 输密码 / Permission denied：立刻停，说明等操作者做什么，等回报。不要假装已成功。
+-收尾：
+-1. 追加 `./notes.md`
+-2. `python ~/.claude/skills/bin/modules.py tail <本模块名>`
+-   Read 备用：`~/.claude/skills/shared/modules.yaml`
+-   禁止 `./modules.yaml` 和 `python ../bin/...`
+-3. 优先 `default_next`；`never_default` 不得当作默认（操作者点名除外）
+-4. 名册外的名字不许建议
+-5. 停。等操作者选 `/模块` 或 `/clear`
+-`/edr-bypass` 半条链未完：打通后回本模块，不要 /clear。
+-
++读取当前 Step 契约、引用的 Fact 与已有证据文件，只按已验证通道和凭据继续；按当前链路只加载必要 reference。
++监听、权限或认证失败时核对反馈与前置条件，尝试授权范围内的有效替代路径；不等待操作者选择模块，也不伪造成功。
++将关键命令、输出和可复用进展保存到工作目录证据文件；关键突破及时 `submit_fact`。当前目标仍有可执行路径时自动继续，跨 Step 协作交给 Reason。
++Step 结束前必须提交至少一条有真实证据的汇总 Fact；无突破则汇总已验证失败、限制和阻塞，再调用 `finish_step({summary})`。可交付成果通过 `submit_finding` 引用 Fact。
+ 
+ ---
+-
+ ## 0. 成功条件与攻击强度
+ 
+ ```text
+@@ -287,6 +277,6 @@ ip a
+ ```
+ 
+ 记 notes：原语、版本、是否改了 passwd/sudoers/unit、容器是否逃到 host。
+-候选只按「开局与收尾」跑 `python ~/.claude/skills/bin/modules.py tail`。
++按「开局与收尾」提交真实 Fact 后继续当前目标。
+ 
+ RESTORE：删 stage 目录、恢复 unit/cron/passwd、卸恶意 SUID、Copy Fail 后按 PoC 清理 page-cache 副作用。
+diff --git a/skills/privesc-win/SKILL.md b/skills/privesc-win/SKILL.md
+index 41c1acf8..51be59e2 100644
+--- a/skills/privesc-win/SKILL.md
++++ b/skills/privesc-win/SKILL.md
+@@ -5,7 +5,7 @@ description: "Windows local privilege escalation from a low-privilege shell to A
+ 
+ # /privesc-win — Windows 本机提权
+ 
+-> **scope：** 已有低权限 Windows foothold，打到 **Administrator（High IL）或 `NT AUTHORITY\SYSTEM`**。不做横移、域持久化、LSASS/NTDS 凭据收割、主机持久化。▸ 拿到 SYSTEM 后记 notes，候选只认 `~/.claude/skills/shared/modules.yaml`（`modules.py tail`），由操作者选。
++> **scope：** 已有低权限 Windows foothold，打到 **Administrator（High IL）或 `NT AUTHORITY\SYSTEM`**。不做横移、域持久化、LSASS/NTDS 凭据收割、主机持久化。▸ 拿到 SYSTEM 后记 notes，后续按当前 Step 目标和已有证据自动推进。
+ 
+ 本模块是红队攻击模块。条件成立就打到对应权限，不要停在“发现 SeImpersonate / 服务可写”。加用户只是 holster，**SYSTEM shell 才是成功**。
+ 
+@@ -21,22 +21,12 @@ description: "Windows local privilege escalation from a low-privilege shell to A
+ 
+ ## 开局与收尾
+ 
+-开局第一件事：Read `./notes.md`。没有则 `python ~/.claude/skills/bin/notes.py init`。只按已拿下/凭据继续。
+-走到哪条链，才 Read **一份** `references/<file>.md`。禁止开局全读、禁止凭记忆写 payload。
+-监听 / sudo / 输密码 / Permission denied：立刻停，说明等操作者做什么，等回报。不要假装已成功。
+-收尾：
+-1. 追加 `./notes.md`
+-2. `python ~/.claude/skills/bin/modules.py tail <本模块名>`
+-   Read 备用：`~/.claude/skills/shared/modules.yaml`
+-   禁止 `./modules.yaml` 和 `python ../bin/...`
+-3. 优先 `default_next`；`never_default` 不得当作默认（操作者点名除外）
+-4. 名册外的名字不许建议
+-5. 停。等操作者选 `/模块` 或 `/clear`
+-`/edr-bypass` 半条链未完：打通后回本模块，不要 /clear。
+-
++读取当前 Step 契约、引用的 Fact 与已有证据文件，只按已验证通道和凭据继续；按当前链路只加载必要 reference。
++监听、权限或认证失败时核对反馈与前置条件，尝试授权范围内的有效替代路径；不等待操作者选择模块，也不伪造成功。
++将关键命令、输出和可复用进展保存到工作目录证据文件；关键突破及时 `submit_fact`。当前目标仍有可执行路径时自动继续，跨 Step 协作交给 Reason。
++Step 结束前必须提交至少一条有真实证据的汇总 Fact；无突破则汇总已验证失败、限制和阻塞，再调用 `finish_step({summary})`。可交付成果通过 `submit_finding` 引用 Fact。
+ 
+ ---
+-
+ ## 0. 成功条件与攻击强度
+ 
+ ```text
+@@ -314,6 +304,6 @@ ipconfig
+ ```
+ 
+ 记 notes：如何拿到 SYSTEM、用了哪条原语、是否需要还原服务/任务/注册表。
+-候选只按「开局与收尾」跑 `python ~/.claude/skills/bin/modules.py tail`。不要在这里另列名单。
++按「开局与收尾」提交真实 Fact 后继续当前目标。不要在这里另列名单。
+ 
+ 还原：服务 exe 从 `.bak` 拷回、计划任务/COM/UAC 注册表恢复、LocalPotato/kernel 后重启评估。具体 → 对应 reference 的 RESTORE。
+diff --git a/skills/recon-crawl/SKILL.md b/skills/recon-crawl/SKILL.md
+index 7a6e665c..8146e7a2 100644
+--- a/skills/recon-crawl/SKILL.md
++++ b/skills/recon-crawl/SKILL.md
+@@ -7,17 +7,15 @@ description: Attack-surface crawling with the crawl tool — BFS link/form/hidde
+ 
+ crawl 走真实浏览器访问目标，必须遵守浏览器 scope 与速率约定；页面预算用最小够用的值，不要无差别扫全站。
+ 
+-## RiftX Workflow
+-
+-1. **拿到入口就爬**：`browser navigate` 建立首屏基线后，立即 `crawl` 一次性拿到结构化攻击面清单——这比手工逐页 snapshot 快一个数量级，且不会漏掉 JS 路由
+-2. **参数选择**：默认 `maxPages=15, maxDepth=2`；小型站点可 `maxPages=30`；只要单页深度信息时 `maxDepth=0`（只提取入口页自身的链接/表单/JS 路由）
+-3. **读清单的顺序**：
+-   - **JS-discovered routes**——SPA 的 API 地图，模型最容易漏的就是这里的非标准端点；逐个对照后续 exploit skill 的注入面清单
+-   - **Forms（含 hidden 字段）**——隐藏域是 mass assignment 与越权测试的入口（`exploit-authz`）
+-   - **AUTH 标记的页面**——login-walled 端点用 `use_identity` + `cookies_import` 带认证会话再测；匿名可达面优先测未授权访问
+-   - **Cross-host leads**——crawl 不跟随跨主机链接，但记下了 host 清单：核对后可扩大 scope 或交给 `recon-subdomain`/`recon-dir-scan`
+-4. **分流**：爬完把端点清单交给对应的 exploit skill（/api/* → `api-testing`；表单反射 → `exploit-xss`；下载/文件参数 → `exploit-file-download`）；大站可 `spawn_subagent` 并行处理不同端点组
+-5. **记录**：爬到的**暴露面**（无需认证的管理端点、泄露的调试接口）验证后 `record_finding`；普通端点清单留在对话里即可，不要把每个 URL 都记成 finding
++## RedTrace Workflow
++
++1. 读取当前 Step 的 FGS 契约及引用证据，复用同题已验证身份、Session、地址与已有成果。
++2. 用 `http_batch` 保存基线与变体请求；通过返回的 Session Resource 和 Request ID 调用 `http_replay`。请求默认并发；只有测试需要身份或状态隔离时才创建独立 Session。需要前序登录结果的请求，待登录完成后再发。
++3. 需要爬取、fuzz 或专用协议时，用 `bash` 运行现有 `curl`、`ffuf`、`sqlmap` 或本 Skill 脚本；真实浏览器交互使用 `playwright-skill` 的脚本和独立 BrowserContext，不假定存在浏览器专用工具。显式向命令传递已验证 Cookie/Authorization，不假定 HTTP Resource 会自动向外部工具导出会话。
++4. 同一 Step 内并发测试独立输入；跨 Step 协作由 Reason 调度，不自行调用子 Agent 工具。复用下方 Payload、打法和 references，按实际反馈深入验证。
++5. 保存完整请求/响应、对照与实际影响到证据文件。确认关键结论后 `submit_fact({description,evidence:[{description,path}]})`；真实可交付漏洞再 `submit_finding({title,description,factIds})` 引用 Fact。线索不冒充已确认漏洞。
++6. 当前 Step 结束前至少提交一条真实证据支持的汇总 Fact；无突破则如实汇总验证范围、失败或阻塞，再 `finish_step({summary})`。普通局部观察先留在证据文件。
++
+ 
+ ---
+ 
+@@ -48,13 +46,13 @@ crawl 走真实浏览器访问目标，必须遵守浏览器 scope 与速率约
+ - [ ] AUTH 页面带认证身份复测
+ - [ ] cross-host leads 核对后决定是否扩大 scope
+ - [ ] 大站按端点组分派 subagent 并行
+-- [ ] 暴露面验证后 record_finding
++- [ ] 暴露面验证后 submit_finding
+ 
+ ---
+ 
+ ### Recording Results
+ 
+-Recon observations are working data, not findings — summarize them in the conversation. Reserve `record_finding` for actual exposures the crawl reveals (an unauthenticated admin endpoint, a leaked debug interface, a sensitive file in a linked path): one finding per concrete, evidence-backed conclusion, `confidence` set honestly, and `evidence` pointing at the proving tool call (`{ "type": "tool", "toolCallId": "<id>", "toolName": "crawl" }`). Findings persist with the session; there is no separate results database to write to.
++已验证的暴露面先提交 `submit_fact`，再用 `submit_finding` 引用 Fact ID 与证据文件；普通端点清单保存在证据文件，不逐 URL 创建 Finding。
+ 
+ ---
+ 
+diff --git a/skills/service-attack/SKILL.md b/skills/service-attack/SKILL.md
+index 7206ff33..412cf3d8 100644
+--- a/skills/service-attack/SKILL.md
++++ b/skills/service-attack/SKILL.md
+@@ -15,22 +15,12 @@ description: "直连网络服务攻击链。用于已经识别/枚举的非专
+ 
+ ## 开局与收尾
+ 
+-开局第一件事：Read `./notes.md`。没有则 `python ~/.claude/skills/bin/notes.py init`。只按已拿下/凭据继续。
+-走到哪条链，才 Read **一份** `references/<file>.md`。禁止开局全读、禁止凭记忆写 payload。
+-监听 / sudo / 输密码 / Permission denied：立刻停，说明等操作者做什么，等回报。不要假装已成功。
+-收尾：
+-1. 追加 `./notes.md`
+-2. `python ~/.claude/skills/bin/modules.py tail <本模块名>`
+-   Read 备用：`~/.claude/skills/shared/modules.yaml`
+-   禁止 `./modules.yaml` 和 `python ../bin/...`
+-3. 优先 `default_next`；`never_default` 不得当作默认（操作者点名除外）
+-4. 名册外的名字不许建议
+-5. 停。等操作者选 `/模块` 或 `/clear`
+-`/edr-bypass` 半条链未完：打通后回本模块，不要 /clear。
+-
++读取当前 Step 契约、引用的 Fact 与已有证据文件，只按已验证通道和凭据继续；按当前链路只加载必要 reference。
++监听、权限或认证失败时核对反馈与前置条件，尝试授权范围内的有效替代路径；不等待操作者选择模块，也不伪造成功。
++将关键命令、输出和可复用进展保存到工作目录证据文件；关键突破及时 `submit_fact`。当前目标仍有可执行路径时自动继续，跨 Step 协作交给 Reason。
++Step 结束前必须提交至少一条有真实证据的汇总 Fact；无突破则汇总已验证失败、限制和阻塞，再调用 `finish_step({summary})`。可交付成果通过 `submit_finding` 引用 Fact。
+ 
+ ---
+-
+ ## 0. 工作方式
+ 
+ 每条攻击链按你的半自动模式写：
+@@ -233,4 +223,4 @@ vendor + exact model/product
+ 
+ ## 完成后
+ 
+-写入 `./notes.md`。候选只按「开局与收尾」跑 `python ~/.claude/skills/bin/modules.py tail`。
++写入 `./notes.md`。按「开局与收尾」提交真实 Fact 后继续当前目标。
+diff --git a/skills/shell/SKILL.md b/skills/shell/SKILL.md
+index f3c61881..0b279cd3 100644
+--- a/skills/shell/SKILL.md
++++ b/skills/shell/SKILL.md
+@@ -11,22 +11,12 @@ description: "Shell and session operations after an attack module already establ
+ 
+ ## 开局与收尾
+ 
+-开局第一件事：Read `./notes.md`。没有则 `python ~/.claude/skills/bin/notes.py init`。只按已拿下/凭据继续。
+-走到哪条链，才 Read **一份** `references/<file>.md`。禁止开局全读、禁止凭记忆写 payload。
+-监听 / sudo / 输密码 / Permission denied：立刻停，说明等操作者做什么，等回报。不要假装已成功。
+-收尾：
+-1. 追加 `./notes.md`
+-2. `python ~/.claude/skills/bin/modules.py tail <本模块名>`
+-   Read 备用：`~/.claude/skills/shared/modules.yaml`
+-   禁止 `./modules.yaml` 和 `python ../bin/...`
+-3. 优先 `default_next`；`never_default` 不得当作默认（操作者点名除外）
+-4. 名册外的名字不许建议
+-5. 停。等操作者选 `/模块` 或 `/clear`
+-`/edr-bypass` 半条链未完：打通后回本模块，不要 /clear。
+-
++读取当前 Step 契约、引用的 Fact 与已有证据文件，只按已验证通道和凭据继续；按当前链路只加载必要 reference。
++监听、权限或认证失败时核对反馈与前置条件，尝试授权范围内的有效替代路径；不等待操作者选择模块，也不伪造成功。
++将关键命令、输出和可复用进展保存到工作目录证据文件；关键突破及时 `submit_fact`。当前目标仍有可执行路径时自动继续，跨 Step 协作交给 Reason。
++Step 结束前必须提交至少一条有真实证据的汇总 Fact；无突破则汇总已验证失败、限制和阻塞，再调用 `finish_step({summary})`。可交付成果通过 `submit_finding` 引用 Fact。
+ 
+ ---
+-
+ ## 0. 输入条件
+ 
+ 至少满足一个：
+@@ -47,7 +37,7 @@ existing interactive remote session
+ 
+ ## 1. Session bootstrap
+ 
+-当原 Attack 模块已经证明 single-command execution，但当前 operator 明确选择 `/shell` 来改善会话时，可以从现有 execution primitive 建立 callback。
++当原 Attack 模块已经证明 single-command execution，但当前 Step 需要改善会话 来改善会话时，可以从现有 execution primitive 建立 callback。
+ 
+ 这不改变攻击链所有权：最终 foothold 仍属于原模块。
+ 
+@@ -150,4 +140,4 @@ Generic:
+ 
+ ## 完成后
+ 
+-写入 `./notes.md`。候选只按「开局与收尾」跑 `python ~/.claude/skills/bin/modules.py tail`。
++写入 `./notes.md`。按「开局与收尾」提交真实 Fact 后继续当前目标。
+diff --git a/skills/targeted-pentest/SKILL.md b/skills/targeted-pentest/SKILL.md
+index 18787954..162dc5a1 100644
+--- a/skills/targeted-pentest/SKILL.md
++++ b/skills/targeted-pentest/SKILL.md
+@@ -1,6 +1,6 @@
+ ---
+ name: targeted-pentest
+-description: 用于 pentest-agent 的 targeted-pentest 子 agent，在已锁定的 hypothesis_id、kind 与 entry_point 上执行单假设定向验证。适用于 Web、API、认证、浏览器端、服务端、Node.js 与 CVE 线索的验证场景；在同一假设内完成基线确认、payload 研究、最小化利用、证据收集、结论判定与 goal 提交。不用于宽泛 recon、不切换到其他假设、也不做与当前假设无关的发散测试。
++description: 用于 RedTrace Explore 的定向验证，在已锁定的 hypothesis_id、kind 与 entry_point 上执行单假设定向验证。适用于 Web、API、认证、浏览器端、服务端、Node.js 与 CVE 线索的验证场景；在同一假设内完成基线确认、payload 研究、最小化利用、证据收集、结论判定与 goal 提交。不用于宽泛 recon、不切换到其他假设、也不做与当前假设无关的发散测试。
+ ---
+ 
+ # 定向验证
+@@ -12,7 +12,7 @@ description: 用于 pentest-agent 的 targeted-pentest 子 agent，在已锁定
+ - 一旦得到足够的 `verified` 证据或目标证明，立即收束并提交，不继续横向发散。
+ 
+ ## 工作流
+-1. **对齐假设**：读取 `scope.md`、`run-policy.json`、输入证据与锁定的 `hypothesis_id`，明确成功条件、前置条件、允许动作。
++1. **对齐假设**：读取当前 Step 的 FGS 契约、Scope、Goal、引用证据及已指定的假设（如有 `hypothesis_id`），明确成功条件、前置条件、允许动作。
+ 2. **建立基线**：为当前入口保存至少一组正常请求/响应、认证状态、角色状态、关键参数与预期行为。
+ 3. **选择最小验证路径**：优先验证最小原语，例如单次越权读取、单个模板求值、单次内部请求、单个 token 伪造、单个执行信号。
+ 4. **在同一假设内收敛 payload**：按当前入口逐步调整编码、语法、parser 差异、过滤绕过和环境前提，但不要切换到其他入口或其他漏洞方向。
+@@ -83,9 +83,7 @@ Use [references/field-notes.md](references/field-notes.md) once you have confirm
+ - 所有 `evidence_refs` 必须指向可追溯文件，不要只写口头总结。
+ 
+ ## 提交契约
+-- 结束前必须且只能调用一次 `submit_sub_agent_output`。
+-- `hypotheses` 必须且只能包含 1 条记录，并匹配输入的锁定 `hypothesis_id`。
+-- `candidate_findings` 可以是 `candidate|verified|rejected`，但必须保持在同一 `kind` 与 `entry_point` 上。
+-- `goal` 为必填：`{ achieved, proof, evidence_refs }`。
+-- 当 `goal.achieved=true` 时，至少要有一个 `verified` finding，且 `goal.evidence_refs` 必须能在 `evidence_refs` 中追溯。
+-- 可选 Markdown 说明仅供人工阅读，不是机器真相源。
++- 关键结论用 `submit_fact({description,evidence:[{description,path}]})` 写回 FGS；证据路径指向已保存的可核验原始记录。
++- 已确认可交付成果用 `submit_finding({title,description,factIds})` 引用真实 Fact；候选和未复现输出不得当作确认漏洞。
++- 目标达成证明、覆盖范围和剩余缺口写入结论，Goal 是否达成由 Reason 引用真实证据验收，不写异构 `goal.achieved` 提交对象。
++- 结束前至少提交一条证据支持的 Fact；无突破则如实汇总已验证失败或阻塞，再调用 `finish_step({summary})`。文本总结不能代替工具提交。
+diff --git a/skills/tsecbench-api/SKILL.md b/skills/tsecbench-api/SKILL.md
+index 426aa113..01392159 100644
+--- a/skills/tsecbench-api/SKILL.md
++++ b/skills/tsecbench-api/SKILL.md
+@@ -11,8 +11,8 @@ description: >-
+ ## 接入与工具
+ 
+ - 使用环境中的 `BENCHMARK_BASE_URL`、`BENCHMARK_TOKEN`，不输出或写入 token。CLI 也支持 `TSEC_BASE_URL`、`TSEC_TOKEN` 备用别名，优先使用 BENCHMARK 变量。
+-- 优先使用原生工具。Reason：`tsecbench_list`、`tsecbench_hint`；Explore：`tsecbench_list`、`tsecbench_start`、`tsecbench_submit`、`tsecbench_close`，取提示使用 CLI。Reason 不启动/关闭实例、不提交 flag、不发布 Fact。
+-- Explore 需要 CLI 时，在本 Skill 根目录执行 `python scripts/tsecbench.py <命令>`：`config`、`vpn`、`list [--incomplete]`、`start <unique_code>`、`submit <unique_code> --flag '<flag>'`、`hint <unique_code> --confirm-score-penalty`、`close <unique_code>`。`config` 只检查配置和 SDK，不请求平台。原生工具和 CLI 已处理认证，不必手写 HTTP 请求。
++- 优先使用原生工具。Reason：`tsecbench_list`、`tsecbench_hint`；Explore：`tsecbench_list`、`tsecbench_start`、`tsecbench_submit`、`tsecbench_close`。取扣分提示仅由 Reason 决策并调用 `tsecbench_hint`；Explore 不通过 CLI 绕过，需提示时向 Reason 提交有依据的阻塞 Fact。Reason 不启动/关闭实例、不提交 flag、不发布 Fact。
++- Explore 需要 CLI 时，在本 Skill 根目录执行 `python scripts/tsecbench.py <命令>`：`config`、`vpn`、`list [--incomplete]`、`start <unique_code>`、`submit <unique_code> --flag '<flag>'`、`close <unique_code>`。`config` 只检查配置和 SDK，不请求平台。原生工具和 CLI 已处理认证，不必手写 HTTP 请求。
+ 
+ ## 流程
+ 
+@@ -25,8 +25,8 @@ description: >-
+ 
+ ## 平台约束与错误
+ 
+-- 活跃实例最多 3 个；`max active` 时先查状态，不盲目重试或擅自关闭其他题。仅按上述完成/换题规则释放槽位。
+-- 默认不用 hint。确需提示时先权衡扣分并明确确认：原生工具传 `confirm_score_penalty=true`，CLI 带确认开关；提示会折减后续 flag 得分，已通关题不可取提示。提示只辅助探索，不作确认 Fact。
++- `max active` 时先查状态，不盲目重试或擅自关闭其他题。仅按上述完成/换题规则释放槽位。
++- 默认不用 hint。仅 Reason 可决定获取，确需提示时先权衡扣分并明确确认：原生工具传 `confirm_score_penalty=true`，CLI 带确认开关；提示会折减后续 flag 得分，已通关题不可取提示。提示只辅助探索，不作确认 Fact。
+ - `task_not_found`：停止并上报任务/凭证问题，不泄露 token。
+ - `challenge_not_found`：核对题号与当前清单，修正或跳过，不猜目标。
+ - `invalid_state`：按 message 区分任务已结束、实例上限、题目状态不允许等；任务已结束才停止整轮，不能将所有 409 都当超时。
+diff --git a/skills/tunnel/SKILL.md b/skills/tunnel/SKILL.md
+index 7b38b414..1c06d9a8 100644
+--- a/skills/tunnel/SKILL.md
++++ b/skills/tunnel/SKILL.md
+@@ -13,22 +13,12 @@ description: "Network reachability and pivoting after an operator already has a
+ 
+ ## 开局与收尾
+ 
+-开局第一件事：Read `./notes.md`。没有则 `python ~/.claude/skills/bin/notes.py init`。只按已拿下/凭据继续。
+-走到哪条链，才 Read **一份** `references/<file>.md`。禁止开局全读、禁止凭记忆写 payload。
+-监听 / sudo / 输密码 / Permission denied：立刻停，说明等操作者做什么，等回报。不要假装已成功。
+-收尾：
+-1. 追加 `./notes.md`
+-2. `python ~/.claude/skills/bin/modules.py tail <本模块名>`
+-   Read 备用：`~/.claude/skills/shared/modules.yaml`
+-   禁止 `./modules.yaml` 和 `python ../bin/...`
+-3. 优先 `default_next`；`never_default` 不得当作默认（操作者点名除外）
+-4. 名册外的名字不许建议
+-5. 停。等操作者选 `/模块` 或 `/clear`
+-`/edr-bypass` 半条链未完：打通后回本模块，不要 /clear。
+-
++读取当前 Step 契约、引用的 Fact 与已有证据文件，只按已验证通道和凭据继续；按当前链路只加载必要 reference。
++监听、权限或认证失败时核对反馈与前置条件，尝试授权范围内的有效替代路径；不等待操作者选择模块，也不伪造成功。
++将关键命令、输出和可复用进展保存到工作目录证据文件；关键突破及时 `submit_fact`。当前目标仍有可执行路径时自动继续，跨 Step 协作交给 Reason。
++Step 结束前必须提交至少一条有真实证据的汇总 Fact；无突破则汇总已验证失败、限制和阻塞，再调用 `finish_step({summary})`。可交付成果通过 `submit_finding` 引用 Fact。
+ 
+ ---
+-
+ ## 0. 输入
+ 
+ ```text
+@@ -54,9 +44,9 @@ temporary public exposure of a local service
+ 
+ ---
+ 
+-## 1. P0：Ligolo-ng
++## 1. 参考：Ligolo-ng（非受管通道）
+ 
+-现代默认首选之一。官方当前支持 TUN、TCP/UDP/ICMP、多 agent、多 tunnel、listener/bind、自动恢复；0.8+ 还加入 Web UI/API、daemon、auto-bind、autoroute，当前 release 已到 0.9.x。
++RedTrace 受管 Pivot 优先用 SSH SOCKS 或 Chisel；Ligolo 不可通过 `pivot.socks` 派发，也不能仅凭监听启动就登记为已验证通道。以下保留独立工具参考，只有当前 Step 明确需要时才使用。官方当前支持 TUN、TCP/UDP/ICMP、多 agent、多 tunnel、listener/bind、自动恢复；0.8+ 还加入 Web UI/API、daemon、auto-bind、autoroute，当前 release 已到 0.9.x。
+ 
+ 适合：
+ 
+@@ -171,4 +161,4 @@ curl -k https://10.20.30.40:8443/
+ 
+ ## 完成后
+ 
+-写入 `./notes.md`。候选只按「开局与收尾」跑 `python ~/.claude/skills/bin/modules.py tail`。
++写入 `./notes.md`。按「开局与收尾」提交真实 Fact 后继续当前目标。
+diff --git a/static/index.html b/static/index.html
+index c45f5f96..05a83bfc 100644
+--- a/static/index.html
++++ b/static/index.html
+@@ -18,6 +18,7 @@
+ <script defer src="/static/operations.js?v=20261015-c2-auth-1"></script>
+ <script defer src="/static/vendor/alpine.min.js"></script>
+ <style>
++  dialog::backdrop { background: rgb(15 23 42 / 55%); }
+   [x-cloak] { display: none !important; }
+   .env-row-dragging {
+     position: relative;
+@@ -2215,11 +2216,18 @@
+     <div class="mt-8 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-end">
+       <div>
+         <h2 class="text-sm font-semibold text-slate-700">Provider 模型服务</h2>
++        <p class="mt-1 text-xs leading-relaxed text-slate-400">点击“轮询配置”设置同模型 ID 的供应商、顺序与开关。仅在输出前故障时切换；连接测试只检查所选 Provider。</p>
+       </div>
++      <div class="flex shrink-0 flex-wrap items-center gap-2">
++        <button type="button" @click="openPollingConfig()" class="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-medium text-slate-600 transition hover:bg-slate-50">
++          <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7h-9a5 5 0 0 0-5 5v1M4 17h9a5 5 0 0 0 5-5v-1M17 4l3 3-3 3M7 14l-3 3 3 3"/></svg>
++          轮询配置
++        </button>
+       <button type="button" @click="openProviderEditor()" class="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl bg-slate-800 px-4 text-xs font-medium text-white shadow-sm transition hover:bg-slate-900 active:scale-[.98]">
+         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+         新增 Provider
+       </button>
++      </div>
+     </div>
+ 
+     <div class="mt-4 flex flex-wrap items-center gap-3 border-y border-slate-100 py-3 text-xs text-slate-400">
+@@ -2516,6 +2524,39 @@
+   </form>
+ </div>
+ 
++<!-- LLM polling configuration: native dialog owns focus trapping and Escape. -->
++<dialog x-ref="pollingDialog" aria-labelledby="polling-config-title" @cancel="if (pollingSaveBusy) $event.preventDefault()" class="m-auto max-h-[92vh] w-[calc(100%-2rem)] max-w-2xl overflow-y-auto rounded-2xl border border-slate-200/60 bg-white p-0 text-slate-700 shadow-2xl">
++  <form @submit.prevent="savePollingConfig()">
++    <div class="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
++      <div><h3 id="polling-config-title" class="text-base font-semibold text-slate-700">LLM 轮询 · 故障转移</h3><p class="mt-2 text-xs leading-relaxed text-slate-400">同一模型 ID 在多个供应商间轮换；输出前发生余额不足、Key 失效、限流或服务异常时尝试下一家。</p></div>
++      <button type="button" @click="closePollingConfig()" aria-label="关闭轮询配置" class="shrink-0 rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"><svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
++    </div>
++    <div class="space-y-5 px-6 py-5">
++      <label class="flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-slate-200 px-4 py-3"><span><span class="block text-sm font-medium text-slate-700">启用轮询</span><span class="mt-1 block text-xs leading-relaxed text-slate-400">关闭后只使用 Worker 指定的 Provider，不切换供应商。</span></span><input type="checkbox" autofocus x-model="pollingForm.enabled" class="h-5 w-5 shrink-0 rounded border-slate-300 text-brand-500 focus:ring-brand-200"></label>
++      <div><h4 class="text-sm font-semibold text-slate-700">参与供应商与轮询顺序</h4><p class="mt-1 text-xs leading-relaxed text-slate-400">每个模型至少勾选 2 家才会轮询。顺序决定首次调用和故障转移顺序，后续请求轮换起点。</p></div>
++      <p x-show="!pollingForm.groups.length" class="rounded-xl border border-dashed border-slate-200 px-4 py-6 text-center text-xs text-slate-400">尚未配置模型，请先新增 Provider。</p>
++      <template x-for="group in pollingForm.groups" :key="group.model">
++        <fieldset class="rounded-xl border border-slate-200 p-4">
++          <legend class="max-w-full break-all px-1 font-mono text-xs font-medium text-slate-700" x-text="group.model"></legend>
++          <p class="mb-3 text-xs text-slate-400" x-text="group.providers.filter(p => p.enabled).length >= 2 ? '已形成同模型轮询池' : '不足 2 家参与，当前仅直连 Worker 指定的供应商'"></p>
++          <div class="space-y-2"><template x-for="(provider, index) in group.providers" :key="provider.name">
++            <div class="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
++              <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-3"><input type="checkbox" x-model="provider.enabled" :aria-label="group.model + '：参与轮询 ' + provider.name" class="h-4 w-4 shrink-0 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span class="min-w-0 break-all text-xs text-slate-600" x-text="provider.name"></span></label>
++              <button type="button" @click="movePollingProvider(group, index, -1)" :disabled="index === 0" :aria-label="'上移 ' + provider.name" class="h-8 w-8 shrink-0 rounded-lg text-slate-500 transition hover:bg-slate-200 disabled:opacity-30">↑</button>
++              <button type="button" @click="movePollingProvider(group, index, 1)" :disabled="index === group.providers.length - 1" :aria-label="'下移 ' + provider.name" class="h-8 w-8 shrink-0 rounded-lg text-slate-500 transition hover:bg-slate-200 disabled:opacity-30">↓</button>
++            </div>
++          </template></div>
++        </fieldset>
++      </template>
++      <p class="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-xs leading-relaxed text-slate-400">不跨模型 ID 兜底；请保持同 ID 的模型与能力一致。Worker 指定的供应商未勾选时仍保持直连。取消或已经输出内容的请求不会重放。</p>
++    </div>
++    <div class="sticky bottom-0 flex items-center justify-end gap-2 border-t border-slate-100 bg-white px-6 py-4">
++      <button type="button" @click="closePollingConfig()" :disabled="pollingSaveBusy" class="h-9 rounded-xl px-4 text-xs text-slate-500 transition hover:bg-slate-50 disabled:opacity-40">取消</button>
++      <button type="submit" :disabled="pollingSaveBusy" class="h-9 rounded-xl bg-slate-800 px-5 text-xs font-medium text-white transition hover:bg-slate-900 disabled:opacity-40" x-text="pollingSaveBusy ? '保存中…' : '保存并热加载'"></button>
++    </div>
++  </form>
++</dialog>
++
+ <!-- Provider editor -->
+ <div x-show="showProviderEditor" x-cloak class="fixed inset-0 z-50 flex items-center justify-center overlay px-4" @click.self="closeProviderEditor()">
+   <form @submit.prevent="saveProvider()" class="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-200/60 bg-white shadow-2xl" @click.stop>
+@@ -2764,6 +2805,8 @@ function redtraceApp() {
+     workerTestBusy: false,
+     workerTestResult: null,
+     workerForm: { name: '', provider: '', model: '', enabled: true, task_types: ['bootstrap', 'reason', 'explore'], priority: 0, max_running: 1 },
++    pollingSaveBusy: false,
++    pollingForm: { enabled: true, groups: [] },
+     showProviderEditor: false,
+     providerEditingName: '',
+     providerSaveBusy: false,
+@@ -3297,6 +3340,7 @@ function redtraceApp() {
+         execution: snapshot.execution || 'local',
+         runtime_max_workers: Number(snapshot.runtime_max_workers) || 1,
+         cli_config_home: snapshot.cli_config_home || '',
++        llm_polling: snapshot.llm_polling || { enabled: true, models: {} },
+         providers: (Array.isArray(snapshot.providers) ? snapshot.providers : []).map(
+           provider => ({
+             ...provider,
+@@ -3574,6 +3618,44 @@ function redtraceApp() {
+       return (this.workerConfig.providers || []).filter(provider => provider.referenced).length;
+     },
+ 
++    openPollingConfig() {
++      const polling = this.workerConfig.llm_polling || { enabled: true, models: {} };
++      const models = [...new Set((this.workerConfig.providers || []).flatMap(p => p.models.map(m => m.id)))];
++      this.pollingForm = { enabled: polling.enabled, groups: models.map(model => {
++        const available = this.workerConfig.providers.filter(p => p.models.some(m => m.id === model)).map(p => p.name);
++        const selected = Object.hasOwn(polling.models, model) ? polling.models[model] : undefined;
++        const order = [...new Set([...(selected || []), ...available])].filter(name => available.includes(name));
++        return { model, providers: order.map(name => ({ name, enabled: selected === undefined || selected.includes(name) })) };
++      }) };
++      this.$refs.pollingDialog.showModal();
++    },
++
++    closePollingConfig() {
++      if (!this.pollingSaveBusy) this.$refs.pollingDialog.close();
++    },
++
++    movePollingProvider(group, index, offset) {
++      const [provider] = group.providers.splice(index, 1);
++      group.providers.splice(index + offset, 0, provider);
++    },
++
++    async savePollingConfig() {
++      this.pollingSaveBusy = true;
++      try {
++        const snapshot = await this.api('PUT', '/worker-config/llm-polling', {
++          expected_revision: this.workerConfig.revision,
++          enabled: this.pollingForm.enabled,
++          models: Object.fromEntries(this.pollingForm.groups.map(group => [group.model, group.providers.filter(p => p.enabled).map(p => p.name)])),
++        });
++        this.applyWorkerSnapshot(snapshot);
++        this.$refs.pollingDialog.close();
++        this.showToast('轮询配置已保存并热加载');
++      } catch (e) {
++        this.showToast(e.message, 'error');
++        if (e.message.includes('reload before saving')) await this.loadWorkerConfig(true);
++      } finally { this.pollingSaveBusy = false; }
++    },
++
+     providerModelForm(model = {}) {
+       const efforts = model.reasoning_efforts;
+       const capability = efforts === false ? 'none'

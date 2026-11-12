@@ -1,0 +1,11 @@
+{
+  "command": "node",
+  "args": [
+    "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/E1-retention/smoke.mjs",
+    "/Users/lxy/Downloads/RedTrace"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "status": 1,
+  "stdout": "",
+  "stderr": "file:///Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/attachment/attachment-local/lib/index.js:199\n\t\tthrow new AttachmentError(\"Unsupported or malformed image data.\", \"INVALID_IMAGE\", { cause: error });\n\t\t      ^\n\nAttachmentError: Unsupported or malformed image data.\n    at detectImage (file:///Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/attachment/attachment-local/lib/index.js:199:9)\n    at async inspectMetadata (file:///Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/attachment/attachment-local/lib/index.js:302:19)\n    at async prepareImageFile (file:///Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/attachment/attachment-local/lib/index.js:330:19) {\n  code: 'INVALID_IMAGE',\n  [cause]: Error: vipspng: libpng read error\n      at Sharp.toBuffer (/Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/node_modules/.pnpm/sharp@0.35.5_@types+node@22.20.1/node_modules/sharp/dist/output.cjs:159:17)\n      at detectImage (file:///Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/attachment/attachment-local/lib/index.js:195:21)\n      at async inspectMetadata (file:///Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/attachment/attachment-local/lib/index.js:302:19)\n      at async prepareImageFile (file:///Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/attachment/attachment-local/lib/index.js:330:19)\n}\n\nNode.js v24.21.0\n"
+}

@@ -1,0 +1,11 @@
+{
+  "command": "/opt/homebrew/opt/node@24/bin/node",
+  "args": [
+    "node_modules/typescript/bin/tsc",
+    "--noEmit"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace/packages/redtrace-engine",
+  "status": 2,
+  "stdout": "src/audit-api.ts(30,446): error TS2339: Property 'commander' does not exist on type '{ total: number; }'.\n",
+  "stderr": ""
+}

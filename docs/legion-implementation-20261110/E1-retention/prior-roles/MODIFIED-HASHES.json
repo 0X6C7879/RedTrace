@@ -1,0 +1,12 @@
+{
+  "packages/redtrace-engine/src/graph-api.ts": "ffbfbe02cdac02f04d801d3cc5c2238d59a66c38247c87acbfe597d0b2fc07f5",
+  "packages/redtrace-engine/src/index.ts": "c66fb48eb1d81a99e4dd7b9cd96134211602f7ce192265cc45dd4f123d17773e",
+  "packages/redtrace-engine/src/legacy.ts": "6c369c84a494ad3512d6cc2ccb9077d971ee91c089cbfce720212e075f54709b",
+  "packages/redtrace-engine/src/runner.ts": "bcc6507faa90a969a00cc14bbe3ac736b48fa04a78992705997c5b5ea78f711b",
+  "packages/redtrace-engine/src/scheduler.ts": "2016ef294fca6bf1378ca58cbf977dff726c7ad33d809da703a763fcfb83a341",
+  "packages/redtrace-engine/src/store.ts": "cf2d1c347b05a5241001410a9fd46a78d7c5d3556515d75bfd60927178d2db8e",
+  "packages/redtrace-engine/src/types.ts": "d47daf6472b3fa4f1346837cefa9cebaabda111931744d44b1a681d6c12cb0fc",
+  "packages/redtrace-engine/src/legion-store.ts": "c240c5aa80e017944a4c26cd468f164dd8e792de930c9462abf65acb01606bd5",
+  "packages/redtrace-engine/src/project-evidence.ts": "7505e6222e74c62267f404c0b79f878e2d402ac721b2235491b2fbf2da5d5a34",
+  "packages/redtrace-engine/test/legion-state.test.ts": "a8b981ae9465f00594f9048a20e37975aa6c63057fadfd912790033eeb04c823"
+}

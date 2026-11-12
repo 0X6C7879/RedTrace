@@ -1,6 +1,6 @@
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 
-export type TaskType = 'reason' | 'explore' | 'bootstrap'
+export type TaskType = 'commander' | 'general' | 'soldier' | 'scout'
 export type ExecutionProfile = 'direct' | 'isolated'
 export type ReasoningPolicy = 'auto_max' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
@@ -13,9 +13,7 @@ export interface WorkerSpec {
   /** pi-ai provider name; resolved through the provider profiles in the snapshot. */
   provider: string
   model: string
-  bootstrap: boolean
-  reason: boolean
-  explore: boolean
+  roles: TaskType[]
   maxRunning: number
   priority: number
   maxTokens?: number
@@ -200,6 +198,8 @@ export interface SessionPersistence {
 }
 
 export interface SessionEvent {
+  /** Native DSH Session event time, in Unix milliseconds. */
+  time?: number
   seq?: number
   ts?: string
   type: string

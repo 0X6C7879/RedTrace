@@ -1,0 +1,10 @@
+{
+  "cmd": [
+    "node",
+    "--test",
+    "packages/redtrace-engine/test/legion-state.test.ts"
+  ],
+  "status": 0,
+  "stdout": "legion-test.stdout",
+  "stderr": "legion-test.stderr"
+}

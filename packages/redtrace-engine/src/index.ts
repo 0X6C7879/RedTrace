@@ -1,14 +1,19 @@
+import { HttpError } from './types.ts'
+import { Type } from 'typebox'
+import { LegionExperience } from './legion-experience.ts'
 import { createServer } from 'node:http'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { watch } from 'node:fs'
 import path from 'node:path'
 import { Store } from './store.ts'
+import { LegionStore } from './legion-store.ts'
+import { ProjectEvidence } from './project-evidence.ts'
 import { Configuration } from './config.ts'
 import { Scheduler } from './scheduler.ts'
 import type { RunTask, SelectWorker } from './scheduler.ts'
 import type { EngineConfig, Worker } from './types.ts'
 export type ProbeModel = (config: EngineConfig, worker: Worker, signal: AbortSignal) => Promise<void>
-import { Router, send } from './http.ts'
+import { Router, send, queryNumber, body } from './http.ts'
 import { graphRoutes } from './graph-api.ts'
 import { configRoutes } from './config-api.ts'
 import { auditRoutes } from './audit-api.ts'
@@ -18,7 +23,7 @@ import { verbRoutes } from './capability-verbs.ts'
 import { ProjectDeletion, deletionRoutes } from './deletion.ts'
 import { dshUpdateRoutes } from './dsh-update.ts'
 
-export { Store, Scheduler, Configuration, Router }
+export { Store, Scheduler, Configuration, Router, LegionStore, ProjectEvidence }
 export type * from './types.ts'
 export type { EvidenceChange, StepUpdate } from './store.ts'
 export type { TaskContext, RunTask } from './scheduler.ts'
@@ -30,12 +35,13 @@ export async function createEngine(options: { root: string; database?: string; c
   const managed = path.dirname(configuration.filename), staticRoot = path.join(root, 'static')
   configuration.initialize()
   // Reject an invalid configuration before the scheduler starts.
-  const config = configuration.resolve(configuration.read().raw)
+  const config = configuration.resolvedSnapshot().config
   const store = new Store(options.database ?? path.join(root, '.redtrace/engine.db'))
+  const legion = new LegionStore(store), evidence = new ProjectEvidence(store, configuration.workspaceRoot)
   const adapterGate = options.adapterAvailability?.()
   const runTask: RunTask = async context => {
     try {
-      const task = { ...context, operations, currentMaxSteps: () => configuration.resolve(configuration.read().raw).maxSteps }
+      const task = { ...context, operations, currentMaxSteps: () => configuration.resolvedSnapshot().config.maxSteps }
       if (options.runTask) return await options.runTask(task)
       const runner = await import('./runner.ts')
       if (task.run.backend === 'mock') return runner.runMock(task)
@@ -43,7 +49,19 @@ export async function createEngine(options: { root: string; database?: string; c
     } finally { operations.releaseRunLeases(context.run.id) }
   }
   const scheduler = new Scheduler(store,config,runTask,options.selectWorker,()=>!adapterGate || adapterGate('redtrace-critical-events')), router = new Router()
-  graphRoutes(router, store, () => configuration.resolve(configuration.read().raw).maxSteps)
+  const experience = new LegionExperience(store,configuration.workspaceRoot)
+  router.add('GET', '/v2/legion', () => ({...legion.board(),transfers:experience.transfers()}))
+  const text=Type.String({minLength:1}),refs=Type.Array(text,{minItems:1})
+  router.add('POST','/v2/legion/message',async c=>{const b=await body(c.req,Type.Object({projectId:text,receiver:text,type:Type.Union(['HELP','REPORT','MESSAGE'].map(v=>Type.Literal(v))),content:text}));return legion.message(b.projectId,'commander',b.receiver,b.type,b.content)})
+  router.add('POST','/v2/projects/:project/legion/park',async c=>{const b=await body(c.req,Type.Object({taskKey:text,reason:text,resumeCondition:text}));return legion.park(c.params.project,b.taskKey,b.reason,b.resumeCondition)})
+  router.add('POST','/v2/projects/:project/legion/reactivate',async c=>{const b=await body(c.req,Type.Object({taskKey:text,reason:text}));return legion.reactivate(c.params.project,b.taskKey,b.reason)})
+  router.add('POST','/v2/legion/experience',async c=>{const b=await body(c.req,Type.Object({projectId:text,family:text,title:text,body:text,factIds:refs}));return experience.capture(b.projectId,b)})
+  router.add('POST','/v2/legion/transfer',async c=>{const b=await body(c.req,Type.Object({sourceId:Type.Integer({minimum:1}),targetProject:text,taskKey:text,brief:text}));return experience.transfer(b.sourceId,b.targetProject,b.taskKey,b.brief)})
+  router.add('POST','/v2/legion/transfer/:id/confirm',async c=>{const b=await body(c.req,Type.Object({projectId:text,factIds:refs}));return experience.confirm(c.params.id,b.projectId,b.factIds)})
+  router.add('POST','/v2/legion/reassign',async c=>{const b=await body(c.req,Type.Object({projectId:text,runId:text,nextWorker:text,summary:text})),run=store.run(b.runId);if(run.projectId!==b.projectId||!run.stepId)throw new HttpError(403,'Run does not belong to Project');const step=store.node<import('./types.ts').Step>(b.projectId,run.stepId,'step');if(!configuration.resolvedSnapshot().config.workers.some(w=>w.name===b.nextWorker&&w.enabled&&w.roles?.includes(step.role??'soldier')))throw new HttpError(422,'Model route does not support the same role');return legion.requestHandoff(run.id,b.summary,b.nextWorker)})
+  router.add('GET','/v2/legion/experience',c=>experience.search(c.url.searchParams.get('query')??'',c.url.searchParams.get('family')??undefined))
+  graphRoutes(router, store, () => configuration.resolvedSnapshot().config.maxSteps)
+  router.add('GET', '/v2/projects/:project/evidence/:artifact', c => evidence.read(c.params.project, c.params.artifact, queryNumber(c.url, 'offset', 0), queryNumber(c.url, 'length', 7600, 1, 7600)))
   router.add('GET', '/health', () => ({ status: 'ok', engine: 'fgs', node: process.versions.node, schema: 2 }))
   configRoutes(router, configuration, options.probeModel)
   const dshUpdate = await dshUpdateRoutes(router, path.resolve(process.env.REDTRACE_SOURCE_ROOT || root), scheduler)
@@ -58,7 +76,7 @@ export async function createEngine(options: { root: string; database?: string; c
   deletionRoutes(router, deletion)
   const watcher = watch(path.dirname(configuration.filename), (_event, filename) => {
     if (filename && String(filename) !== path.basename(configuration.filename)) return
-    try { const value = configuration.read(); scheduler.update(configuration.resolve(value.raw)) } catch { console.error('Configuration reload failed; keeping the last valid configuration') }
+    try { scheduler.update(configuration.resolvedSnapshot().config) } catch { console.error('Configuration reload failed; keeping the last valid configuration') }
   })
   const handler = async (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
     if (await router.handle(req, res)) return
@@ -76,7 +94,7 @@ export async function createEngine(options: { root: string; database?: string; c
     send(res, { detail: 'Not Found' }, 404)
   }
   if (options.autoStart !== false) scheduler.start()
-  return { store, scheduler, configuration, capabilities, operations, deletion, router, handler, async close() { watcher.close(); await dshUpdate.close(); await scheduler.close(); await import('./http-tools.ts').then(({ closeHttpSessions }) => closeHttpSessions(store)); await operations.close(); store.close() } }
+  return { store, legion, evidence, scheduler, configuration, capabilities, operations, deletion, router, handler, async close() { watcher.close(); await dshUpdate.close(); await scheduler.close(); await import('./http-tools.ts').then(({ closeHttpSessions }) => closeHttpSessions(store)); await operations.close(); store.close() } }
 }
 export async function serveEngine(options: Parameters<typeof createEngine>[0] & { host?: string; port?: number }) {
   const engine = await createEngine(options)

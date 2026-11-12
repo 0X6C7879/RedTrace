@@ -1,0 +1,2 @@
+UI_READY {"api":"http://127.0.0.1:58432","work":"/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-legion-loop-LP6oQ7","projectId":"proj_001","commanderSessionId":"command-c7608d38-c384-4548-bc21-48cc15cae9f4"}
+LEGION_RUNTIME_SUPPORTED=true; roles=Commander,Scout,General,Soldier; specialist_workers=2; shared_fgs=true; commander_acceptance=true; native_message_admission=true; state_and_cursor_persisted=true; commander_native_resume=true; help_reply_admitted=true; model=local-protocol-fixture; commander_native_log_read=true

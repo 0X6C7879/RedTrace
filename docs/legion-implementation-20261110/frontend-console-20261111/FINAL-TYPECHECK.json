@@ -1,0 +1,12 @@
+{
+  "command": "/opt/homebrew/opt/node@24/bin/node",
+  "args": [
+    "node_modules/typescript/bin/tsc",
+    "--noEmit"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace/packages/redtrace-engine",
+  "status": 0,
+  "signal": null,
+  "stdout": "",
+  "stderr": ""
+}

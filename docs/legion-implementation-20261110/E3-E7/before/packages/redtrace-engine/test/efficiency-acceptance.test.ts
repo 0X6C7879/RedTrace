@@ -1,0 +1,216 @@
+import { DatabaseSync } from 'node:sqlite'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { Store } from '../src/store.ts'
+import { Operations } from '../src/operations.ts'
+import { criticalNotice, graphUpdate, launchContext, livePlan } from '../src/runner.ts'
+import { extractOutput } from '../src/result-summary.ts'
+import type { Worker, Fact } from '../src/types.ts'
+const worker: Worker = {name:'fixture',backend:'mock',provider:'mock',model:'',enabled:true,reason:false,explore:true,bootstrap:false,maxRunning:1,priority:0}
+function fixture() {
+ const store = new Store(':memory:'), project = store.createProject({title:'Fixture',origin:'http://127.0.0.1:8080',goal:'Verify local efficiency'}).project
+ const step = store.addStep(project.id,{description:'Inspect',sourceIds:['origin']}), run=store.claim(project.id,'execute',worker,step.id)
+ return {store,project,step,run}
+}
+test('repeated tool calls retain audit and recovery tracking without reminders or a ledger',()=>{
+ const {store,run}=fixture()
+ try {
+  for(const name of ['tsecbench_list','read_graph','bash']) for(let i=0;i<8;i++) {
+   const id=`${name}-${i}`
+   assert.equal(store.toolStarted(run.id,id,{name,arguments:{}}),undefined)
+   assert.deepEqual(store.run(run.id).pendingTools,[id])
+   store.toolEnded(run.id,id,{ok:true})
+  }
+  assert.deepEqual(store.run(run.id).pendingTools,[])
+  assert.equal(store.db.prepare("SELECT count(*) AS n FROM run_events WHERE run_id=? AND type='tool.started'").get(run.id)!.n,24)
+  assert.equal(store.db.prepare("SELECT name FROM sqlite_master WHERE name='attempt_ledger'").get(),undefined)
+ } finally {store.close()}
+})
+test('native and DSH audit records survive retirement of duplicate Trace indexes',()=>{
+ const {store,project,run}=fixture()
+ try {
+  for(let i=0;i<510;i++)store.runEvent(run.id,'tool.started',{name:'historymarker',arguments:{index:i,token:'secret'}})
+  const metadata=JSON.parse(String(store.db.prepare('SELECT data FROM audit_runs WHERE id=?').get(run.id)!.data))
+  store.audit(metadata,[{kind:'tool.completed',title:'dshmarker',event_uid:'dsh-unique',content:'fixture evidence'}])
+  assert.equal(store.db.prepare('SELECT count(*) AS count FROM run_events WHERE run_id=?').get(run.id)!.count,510)
+  const audit=store.db.prepare('SELECT data FROM audit_events WHERE project_id=?').all(project.id)
+  assert.ok(audit.some(row=>String(row.data).includes('fixture evidence')))
+  assert.match(JSON.stringify(audit),/secret/)
+  assert.equal(store.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'trace_%'").all().length,0)
+  for(let i=0;i<510;i++)store.addFact(project.id,`fixture ${i}`,{})
+  const update=graphUpdate(store,project.id,0,'different');assert.equal(update.relevant,false)
+  assert.equal(update.cursor,Number(store.db.prepare('SELECT MAX(id) AS id FROM events WHERE project_id=?').get(project.id)!.id))
+ } finally {store.close()}
+})
+test('runtime capability gain/loss and dependency invalidation are verified, not ordinary Facts',async()=>{
+ const {store,project}=fixture(), ops=new Operations(store,process.cwd())
+ try {
+  const parent=ops.create(project.id,{kind:'proxy',name:'parent',status:'available',metadata:{provider:'chisel'}}).resource
+  const child=ops.create(project.id,{kind:'proxy',name:'child',status:'available',metadata:{dependencies:[parent.id]}}).resource
+  const initial=store.project(project.id).criticalSeq??0
+  store.addFact(project.id,'Model claims a breakthrough',{});assert.equal(store.project(project.id).criticalSeq??0,initial)
+  ops.verifiedResource(parent.id,{metadata_json:JSON.stringify({verified_capabilities:['pivot.socks']})},'route.verified')
+  ops.verifiedResource(child.id,{metadata_json:JSON.stringify({verified_capabilities:['pivot.socks'],dependencies:[parent.id]})},'route.verified')
+  assert.equal(store.project(project.id).criticalSeq,initial+2)
+  ops.verifiedResource(parent.id,{metadata_json:ops.resource(parent.id).metadata_json},'route.verified');assert.equal(store.project(project.id).criticalSeq,initial+2)
+  ops.updateResource(parent.id,{status:'offline'})
+  assert.equal(ops.resource(child.id).status,'degraded')
+  assert.equal(JSON.parse(ops.resource(child.id).metadata_json).runtime_verified,false)
+  assert.equal(store.project(project.id).criticalSeq,initial+4)
+ } finally {await ops.close();store.close()}
+})
+test('cost buckets are disjoint tokens and timing residual never subtracts overlapping intervals twice',()=>{
+ const {store,run}=fixture()
+ try {
+  const current=store.run(run.id);Object.assign(current,{inputTokens:11,outputTokens:7,cacheReadTokens:3,cacheWriteTokens:2});store.saveRun(current)
+  store.metricStart(run.id,'m','model');store.metricEnd(run.id,'m');store.metricStart(run.id,'tool','tool');store.metricEnd(run.id,'tool')
+  const costs=store.runCosts(run.id);assert.equal(costs.totalTokens,23);assert.equal(costs.tokens.cacheRead,3);assert.ok(costs.waitOrUninstrumentedMs>=0)
+  assert.deepEqual(extractOutput('[1,2]'),{format:'json',type:'array',count:2,keys:['0','1'],parseError:null})
+  assert.match(extractOutput('{broken','application/json').parseError!,/SyntaxError/)
+  assert.deepEqual(extractOutput('80/tcp open http\nERROR failed').ports,[{port:80,protocol:'tcp',state:'open',service:'http'}])
+ } finally {store.close()}
+})
+test('critical planning acknowledges its start boundary only; failure, pause and new arrivals retain signals',()=>{
+ const {store,project}=fixture()
+ try {
+  const planner={...worker,name:'reason',reason:true}
+  store.recordCriticalSignal(project.id,'verified-one',{kind:'route.verified'})
+  const run=store.claim(project.id,'decide',planner)
+  assert.equal(criticalNotice(store.project(project.id),run,0),undefined)
+  store.recordCriticalSignal(project.id,'verified-two',{kind:'capability.lost'})
+  assert.match(criticalNotice(store.project(project.id),run,0)!,/关键状态/)
+  assert.equal(criticalNotice(store.project(project.id),run,2),undefined)
+  store.recordCriticalSignal(project.id,'verified-three',{kind:'route.verified'})
+  assert.match(criticalNotice(store.project(project.id),run,2)!,/criticalSeq=3/)
+  assert.equal(criticalNotice(store.project(project.id),run,3),undefined)
+  assert.equal(criticalNotice(store.project(project.id),run,0,false),undefined)
+  store.finishRun(run.id,'succeeded')
+  assert.equal(store.project(project.id).acknowledgedCriticalSeq,1)
+  assert.equal(store.project(project.id).criticalSeq,3)
+  const failed=store.claim(project.id,'decide',planner);store.finishRun(failed.id,'failed','fixture failure')
+  assert.equal(store.project(project.id).acknowledgedCriticalSeq,1)
+  const paused=store.claim(project.id,'decide',planner);store.finishRun(paused.id,'paused')
+  assert.equal(store.project(project.id).acknowledgedCriticalSeq,1)
+  const before=store.project(project.id).criticalSeq!
+  for(let i=0;i<300;i++)store.recordCriticalSignal(project.id,`new-${i}`,{kind:'route.verified'})
+  assert.equal(store.recordCriticalSignal(project.id,'verified-one',{kind:'route.verified'}),false)
+  assert.equal(store.project(project.id).criticalSeq,before+300)
+ } finally {store.close()}
+})
+
+import { graphTools } from '../src/runner.ts'
+import type {EngineConfig} from '../src/types.ts'
+test('large graph SQL pages and active Run query do not load full graph or historical checkpoints',async()=>{
+ const {store,project,run}=fixture()
+ try {
+  for(let i=0;i<600;i++)store.addFact(project.id,`item ${i}`,{})
+  for(let i=0;i<1000;i++){const old={...run,id:`historical-${i}`,status:'succeeded' as const,checkpoint:{payload:'unused history'}};store.saveRun(old)}
+  store.graph=()=>{throw new Error('full graph loading forbidden')}
+  store.runs=()=>{throw new Error('full historical Run loading forbidden')}
+  assert.deepEqual(store.runsByStatus('running').map(row=>row.id),[run.id])
+  const tools=graphTools({store,run,worker,config:{} as EngineConfig,signal:new AbortController().signal},()=>{})
+  const result=await tools.find(tool=>tool.name==='read_graph')!.execute('read',{kinds:['fact'],offset:500,limit:10}) as any
+  assert.equal(result.details.facts.length,10);assert.equal(result.details.nextOffsets.fact,510)
+  assert.deepEqual(result.details.steps,[])
+ } finally {store.close()}
+})
+
+test('Explore receives only live contract changes, not hints, evidence or critical broadcasts', () => {
+ const {store,project,step,run}=fixture()
+ const scan=()=>graphUpdate(store,project.id,cursor,step.id,run.id)
+ let cursor=graphUpdate(store,project.id,0,step.id,run.id).cursor
+ try {
+  store.updateStep(project.id,step.id,{priority:7})
+  assert.equal(scan().relevant,false);assert.equal(scan().planChanged,false)
+  cursor=scan().cursor
+  const other=store.addStep(project.id,{description:'Other',sourceIds:['origin']})
+  const hint=store.addInput(project.id,'hint','Other hint','human',other.id)
+  assert.equal(scan().relevant,false)
+  store.deleteInput(project.id,hint.id);assert.equal(scan().relevant,false)
+  cursor=scan().cursor
+  store.addInput(project.id,'hint','Project hint');assert.equal(scan().relevant,false)
+  cursor=scan().cursor
+  store.addFact(project.id,'Self evidence',{stepId:step.id});assert.equal(scan().relevant,false)
+  store.addFact(project.id,'Unreferenced evidence',{stepId:other.id});assert.equal(scan().relevant,false)
+  cursor=scan().cursor
+  store.recordCriticalSignal(project.id,'first',{kind:'route.verified'})
+  assert.equal(scan().criticalSeq,0);assert.equal(scan().wake,false)
+  cursor=scan().cursor
+  store.recordCriticalSignal(project.id,'second',{kind:'capability.lost'})
+  assert.equal(scan().criticalSeq,0)
+  assert.equal(store.recordCriticalSignal(project.id,'second',{kind:'capability.lost'}),false)
+  cursor=scan().cursor
+  store.updateStep(project.id,step.id,{description:'New {{unknown}} 契约',mode:'amend',expectedVersion:store.node(project.id,step.id).version})
+  assert.equal(scan().planChanged,true);assert.equal(scan().wake,true)
+  assert.match(livePlan(store,run.id),/New \{\{unknown\}\} 契约/)
+  store.updateStep(project.id,step.id,{status:'cancelled'})
+  assert.equal(scan().stopped,true);assert.equal(scan().planChanged,false);assert.equal(scan().relevant,false)
+  assert.equal(store.run(run.id).deliveredGraphCursor,run.deliveredGraphCursor)
+  assert.equal(store.project(project.id).acknowledgedCriticalSeq??0,0)
+ } finally {store.close()}
+})
+
+test('Explore launch has Scope but no hints; Reason launch includes bounded hints across all Steps', () => {
+ const store=new Store(':memory:')
+ const scope='Full {{unknown}} scope Unicode 中文 "quoted" '+ 'x'.repeat(12000)
+ const project=store.createProject({title:'Launch',origin:scope,goal:'Verify'}).project
+ const step=store.addStep(project.id,{description:'Inspect',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id)
+ try {
+  const other=store.addStep(project.id,{description:'Other',sourceIds:['origin']})
+  store.addInput(project.id,'hint','Unrelated','human',other.id)
+  for(let i=0;i<9;i++)store.addInput(project.id,'hint',`Hint ${i} {{unknown}} 中文`,'human',i%2?step.id:null)
+  const launch=launchContext(store,run.id), contract=JSON.parse(livePlan(store,run.id).split('：')[1]!)
+  assert.equal(launch.scope.description,scope);assert.equal(launch.hints,undefined)
+  assert.equal('step' in launch,false);assert.equal('goal' in launch,false)
+  assert.equal(contract.id,step.id);assert.equal(contract.goals[0].id,'goal')
+  assert.equal('createdAt' in contract,false);assert.equal('factIds' in contract,false)
+  const reason=store.claim(project.id,'decide',worker)
+  const planning=launchContext(store,reason.id)
+  assert.equal(planning.scope.description,scope);assert.equal(planning.goal!.id,'goal')
+  assert.equal('instruction' in planning,false);assert.equal(planning.hints!.items.length,8)
+  assert.equal(planning.hints!.unverified,true);assert.equal(planning.hints!.hasMore,true)
+  assert.equal(planning.hints!.read!.tool,'read_graph');assert.equal(planning.hints!.items[0]!.content,'Unrelated')
+ } finally {store.close()}
+})
+
+test('existing duplicate Trace tables are removed on reopen without deleting raw history',()=>{
+ const root=mkdtempSync(path.join(tmpdir(),'redtrace-trace-retire-')),filename=path.join(root,'engine.sqlite')
+ try {
+  let store=new Store(filename)
+  const project=store.createProject({title:'Historical',origin:'fixture',goal:'retain audit'}).project
+  const step=store.addStep(project.id,{description:'Inspect',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id)
+  store.runEvent(run.id,'tool.started',{name:'historical',arguments:{}})
+  store.close()
+  const db=new DatabaseSync(filename)
+  db.exec("CREATE VIRTUAL TABLE trace_fts USING fts5(text); CREATE VIRTUAL TABLE trace_audit_fts USING fts5(text); CREATE TABLE trace_cursors(project_id TEXT); CREATE TABLE attempt_ledger(signature TEXT); CREATE TABLE channel_versions(channel TEXT); INSERT INTO trace_fts VALUES ('duplicate')")
+  db.close()
+  store=new Store(filename)
+  try {
+   assert.equal(store.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'trace_%'").all().length,0)
+   assert.equal(store.db.prepare("SELECT name FROM sqlite_master WHERE name='attempt_ledger'").get(),undefined)
+   assert.equal(store.db.prepare("SELECT name FROM sqlite_master WHERE name='channel_versions'").get(),undefined)
+   assert.equal(store.db.prepare('SELECT count(*) AS n FROM run_events WHERE run_id=?').get(run.id)!.n,1)
+   assert.equal(store.db.prepare('SELECT count(*) AS n FROM audit_events WHERE project_id=?').get(project.id)!.n,1)
+   assert.equal(store.node<Fact>(project.id,'origin').description,'fixture')
+  } finally {store.close()}
+ } finally {rmSync(root,{recursive:true,force:true})}
+})
+
+test('Reason launch skips acknowledged hints but retains fresh human input',()=>{
+ const store=new Store(':memory:')
+ try {
+  const project=store.createProject({title:'Hints',origin:'Fixture',goal:'Inspect'}).project
+  for(let i=0;i<10;i++)store.addInput(project.id,'hint',`Old ${i}`,'human')
+  const old=store.claim(project.id,'decide',worker);store.finishRun(old.id,'succeeded')
+  store.addInput(project.id,'hint','Fresh human input','human')
+  const next=store.claim(project.id,'decide',worker)
+  assert.deepEqual(launchContext(store,next.id).hints!.items.map(h=>h.content),['Fresh human input'])
+  store.finishRun(next.id,'succeeded')
+  const quiet=store.claim(project.id,'decide',worker)
+  assert.equal(launchContext(store,quiet.id).hints,undefined)
+  assert.equal(store.nodes(project.id,['hint']).length,11)
+ } finally {store.close()}
+})

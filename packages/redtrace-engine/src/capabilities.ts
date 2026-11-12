@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, appendFileSync, unlinkSync, realpathSync, cpSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, appendFileSync, unlinkSync, realpathSync, cpSync, symlinkSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { parse } from 'yaml'
@@ -122,7 +122,16 @@ export class Capabilities {
     return { name, enabled: config.enabled ?? true, transport: common.transport ?? common.type ?? (common.url ? 'http' : 'stdio'), command: common.command ?? null, url: common.url ?? null, agents: ['dsh'], config }
   }
   servers() { return readdirSync(this.mcpDir).filter(n => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\.json$/.test(n)).sort().map(n => this.mcp(n.slice(0, -5))) }
+  private mcpCache?: { signature: string; configs: Record<string, any>[] }
   mcpConfigs() {
+    const signature = readdirSync(this.mcpDir).filter(n => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\.json$/.test(n)).sort().map(n => {
+      const state = statSync(path.join(this.mcpDir, n), { bigint: true }); return `${n}:${state.ino}:${state.size}:${state.mtimeNs}:${state.ctimeNs}`
+    }).join('|')
+    if (this.mcpCache?.signature === signature) return structuredClone(this.mcpCache.configs)
+    const configs = this.buildMcpConfigs()
+    this.mcpCache = { signature, configs }; return structuredClone(configs)
+  }
+  private buildMcpConfigs() {
     return this.servers().filter(s => s.enabled && s.name.toLowerCase() !== 'rea').map(s => {
       const config = { ...s.config, ...s.config.agents?.dsh, serverName: s.name }
       for (const key of ['enabled', 'agents', 'name']) delete config[key]

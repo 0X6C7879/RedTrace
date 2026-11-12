@@ -1,0 +1,12 @@
+{
+  "command": "/opt/homebrew/opt/node@24/bin/node",
+  "args": [
+    "--test",
+    "--test-reporter=tap",
+    "test/legion-cutover.test.ts"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace/packages/redtrace-engine",
+  "status": 0,
+  "stdout": "TAP version 13\n# Subtest: E7 native none Session deletion retains attachments/findings and exact hashes\nok 1 - E7 native none Session deletion retains attachments/findings and exact hashes\n  ---\n  duration_ms: 407.758708\n  type: 'test'\n  ...\n# Subtest: E7 native zstd Session deletion retains attachments/findings and exact hashes\nok 2 - E7 native zstd Session deletion retains attachments/findings and exact hashes\n  ---\n  duration_ms: 307.4985\n  type: 'test'\n  ...\n# Subtest: E7 CLI verifies backup reconstruction before reset and migrates configuration without losing credentials\nok 3 - E7 CLI verifies backup reconstruction before reset and migrates configuration without losing credentials\n  ---\n  duration_ms: 776.368291\n  type: 'test'\n  ...\n1..3\n# tests 3\n# suites 0\n# pass 3\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1597.672375\n",
+  "stderr": ""
+}

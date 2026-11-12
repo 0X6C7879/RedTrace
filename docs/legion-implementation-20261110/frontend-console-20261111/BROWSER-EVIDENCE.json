@@ -1,0 +1,13 @@
+{
+  "viewport390": {
+    "console": 311,
+    "consoleWidth": 311,
+    "page": 390,
+    "viewport": 390
+  },
+  "focusReturn": "更换同角色模型",
+  "evidenceBytes": "10872 / 10872",
+  "targetVerification": "目标已复验",
+  "messageServerError": "content must be a non-empty string",
+  "fixtureOnly": true
+}

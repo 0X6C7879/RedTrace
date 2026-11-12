@@ -10,7 +10,7 @@ import type { Json, MessageFactory, RuntimeOptions, RuntimeSnapshot, RuntimeTask
 export class RedTraceState {
   readonly tasks = new Map<string, RuntimeTask>()
   /** Task presets cleared for dispatch; the plugin manager toggles members live. */
-  readonly presets = new Set<TaskType>(['bootstrap', 'reason', 'explore'])
+  readonly presets = new Set<TaskType>(['commander','general','soldier','scout'])
   snapshot?: RuntimeSnapshot
   messages?: MessageFactory
   /** Signature of the currently mounted MCP configs; the domain plugin owns

@@ -1,0 +1,380 @@
+
+> @redtrace/engine@0.4.0 test
+> node --test test/*.test.ts
+
+✔ Reason receives the requested FGS planning role (1.423083ms)
+✔ Explore receives the requested evidence-led execution role (0.39375ms)
+✔ Bootstrap is opt-in, solves directly and keeps its confirmed Fact gate (6.865208ms)
+✔ new role prompts preserve the Bootstrap body byte for byte (1.408584ms)
+✔ Explore reports only actionable, verified facts (0.202833ms)
+✔ Reason only replans when new information changes the plan (0.090708ms)
+✔ ordinary Explore must explicitly submit a Fact before structured completion (8.212ms)
+✔ shared efficiency rules avoid full graph reads and conflicting benchmark work (0.184458ms)
+✔ shared challenge cleanup follows completion, Reason switching and timeout boundaries (1.679542ms)
+✔ compact benchmark Skill retains tool routes, scoring, lifecycle and business errors (0.357083ms)
+✔ Reason and Explore match the requested replacement byte for byte (0.125542ms)
+✔ WAL NORMAL and evidence merges preserve live execution contracts while explicit amendments still invalidate them (9.522ms)
+✔ configuration snapshot skips repeated reads/decryption and notices immediate atomic commits (51.708333ms)
+✔ Operations completion wakes waiting callers and cleans listeners on cancellation/timeout (29.55625ms)
+✔ all HTTP requests overlap across Workers sharing one Session; custom methods, redirects and explicit isolation work (170.492ms)
+✔ harness streams text and reasoning deltas without SQLite work (1.381667ms)
+✔ Skill entrypoints keep native submissions, unattended continuation and headless defaults (1.377459ms)
+✔ retired manual lifecycle controls are removed; Fact deletion keeps version and reference checks (20.910792ms)
+✔ container entry and healthcheck share a concrete IPv4 host (1.612667ms)
+✔ background refresh is single-flight without a foreground spinner (5.19625ms)
+✔ page changes discard old refresh results and retry the current page; errors unlock refresh (1.72275ms)
+✔ activation does not subscribe the page effect to refresh flags (1.86425ms)
+✔ a failed batch retains single-flight until all remaining requests settle (1.578542ms)
+✔ legacy summary avoids full graph/history reads and preserves all counts (8.458875ms)
+✔ legacy project matches latest Runs with one history pass (49.862791ms)
+✔ FGS refresh reads one graph and preserves Decide; legacy fallback is lazy (10.664042ms)
+✔ audit task list reuses each indexed project query and preserves Token totals (18.192083ms)
+✔ Worker probe and commit use one normalizer and retain the same defaults/explicit fields (1.422166ms)
+✔ unused bindings are removed without dropping Run validation or project/adapter guards (2.601792ms)
+✔ audit timeline shows paired tool names, full commands, and result text (3.878708ms)
+✔ completed tool without text output renders an explicit placeholder (0.374125ms)
+✔ standalone PTC completions display code and terminal arguments without a start row (0.8545ms)
+✔ legacy output envelopes unwrap but ordinary JSON and Skill presentation stay intact (0.596167ms)
+✔ native file metadata appears in the existing tool payload (0.375ms)
+✔ the bootstrap Step owns the first move and hands the project to Decide when it settles (29.055459ms)
+✔ Reason stays blocked when bootstrap returns without a Fact (7.718542ms)
+✔ Reason stays blocked when bootstrap fails (16.852208ms)
+✔ a project without bootstrap goes directly to Reason (7.454875ms)
+✔ the Bootstrap agent contract requires a Fact and uses Bootstrap limits (12.957084ms)
+✔ bootstrap Steps only ever reach bootstrap workers, whatever the priority (8.778083ms)
+✔ a bootstrap Step waits for a bootstrap worker instead of falling back or letting Decide plan (10.653959ms)
+✔ bootstrap-only workers never claim ordinary Steps (6.316ms)
+✔ worker capability flags survive configuration resolve and the settings snapshot (19.336291ms)
+✔ explicit authentication failure is visible, invalidates channel, and marks tool failure (19.471459ms)
+✔ direct sessions show unverified until explicit verification; other resource states unchanged (2.757375ms)
+✔ capabilities keep independent copies, nested entries, revisions and MCP configurations (681.316375ms)
+✔ REA is reserved for the per-Run reverse plugin rather than globally mounted twice (13.2195ms)
+✔ setEnabled relocates plugin-gated skills between roots without version churn (28.429917ms)
+✔ verb registry: channel reuse, selection rules, unattended execution without Step tool permissions (759.79075ms)
+✔ resource tools: agent registration with secrets becomes a visible, dispatchable channel (66.805917ms)
+✔ initialization copies seed configuration into the managed root and encrypts its secrets in place (50.870166ms)
+✔ worker mutations probe the live model before commit and retain the old snapshot contract (1054.286875ms)
+✔ removed bodies disappear from SQL, delta pages and Reason tools while evidence and current content survive (22.981875ms)
+ℹ FGS stored JSON bytes 25244 -> 1343; graph response bytes 25513 -> 1169; Fact rows 4 -> 2
+✔ Finding and achieved Goal block deletion until Reason repairs their evidence (3.122417ms)
+✔ merge defaults preserve target content and invalid content rolls back all reference changes (4.311042ms)
+✔ schema 2 migration redirects merge chains, cleans stale bodies and preserves event and Run boundaries (46.845167ms)
+✔ invalid merge chains and lost active dependencies roll back migration across projects (55.402625ms)
+✔ a merged chain ending in archived evidence can be removed when no active dependency remains (15.658208ms)
+✔ HTTP maintenance, current snapshots and delta endpoints never expose deleted source bodies (131.954541ms)
+✔ single-use deletion removes only project data and keeps durable shared resources (565.099958ms)
+✔ project ids reuse the smallest free number and deletion leaves no counter or session residue (131.904209ms)
+✔ shipped DSH composition executes Bootstrap, Reason and direct/isolated Explore; pauses and resumes natively (9712.253ms)
+ℹ INJECTION_METRICS {"kind":"local-protocol-fixture-not-real-token-usage","metrics":[{"role":"Bootstrap","requests":3,"calls":{"read_graph":0,"read_graph_delta":0,"sync_step":0},"firstSystemBytes":2636,"firstUserBytes":1933,"notices":0,"graphReads":0},{"role":"Reason","requests":30,"calls":{"read_graph":0,"read_graph_delta":4,"sync_step":0},"firstSystemBytes":5046,"firstUserBytes":751,"notices":1,"graphReads":3},{"role":"Explore","requests":42,"calls":{"read_graph":1,"read_graph_delta":0,"sync_step":1},"firstSystemBytes":7045,"firstUserBytes":1804,"notices":0,"graphReads":1}],"perConversation":[{"fixtureConversation":1,"role":"Bootstrap","stepId":"i001","requests":3,"notificationsEnteredRequests":0},{"fixtureConversation":2,"role":"Reason","requests":1,"notificationsEnteredRequests":0},{"fixtureConversation":3,"role":"Explore","stepId":"i002","requests":3,"notificationsEnteredRequests":0},{"fixtureConversation":4,"role":"Reason","requests":1,"notificationsEnteredRequests":0},{"fixtureConversation":5,"role":"Explore","stepId":"i003","requests":3,"notificationsEnteredRequests":0},{"fixtureConversation":6,"role":"Reason","requests":1,"notificationsEnteredRequests":0},{"fixtureConversation":7,"role":"Explore","stepId":"i004","requests":4,"notificationsEnteredRequests":0},{"fixtureConversation":8,"role":"Reason","requests":1,"notificationsEnteredRequests":0},{"fixtureConversation":9,"role":"Explore","stepId":"i005","requests":4,"notificationsEnteredRequests":0},{"fixtureConversation":10,"role":"Reason","requests":1,"notificationsEnteredRequests":0},{"fixtureConversation":11,"role":"Explore","stepId":"i006","requests":6,"notificationsEnteredRequests":0},{"fixtureConversation":12,"role":"Explore","stepId":"i007","requests":3,"notificationsEnteredRequests":0},{"fixtureConversation":13,"role":"Reason","requests":2,"notificationsEnteredRequests":1},{"fixtureConversation":14,"role":"Reason","requests":2,"notificationsEnteredRequests":0},{"fixtureConversation":15,"role":"Reason","requests":1,"notificationsEnteredRequests":0},{"fixtureConversation":16,"role":"Explore","stepId":"i008","requests":3,"notificationsEnteredRequests":0},{"fixtureConversation":17,"role":"Reason","requests":1,"notificationsEnteredRequests":0},{"fixtureConversation":18,"role":"Reason","requests":3,"notificationsEnteredRequests":0},{"fixtureConversation":19,"role":"Explore","stepId":"i001","requests":4,"notificationsEnteredRequests":0},{"fixtureConversation":20,"role":"Explore","stepId":"i002","requests":2,"notificationsEnteredRequests":0},{"fixtureConversation":21,"role":"Reason","requests":1,"notificationsEnteredRequests":0},{"fixtureConversation":22,"role":"Reason","requests":1,"notificationsEnteredRequests":0},{"fixtureConversation":23,"role":"Reason","requests":1,"notificationsEnteredRequests":0},{"fixtureConversation":24,"role":"Explore","stepId":"i001","requests":4,"notificationsEnteredRequests":0},{"fixtureConversation":25,"role":"Explore","stepId":"i002","requests":3,"notificationsEnteredRequests":0},{"fixtureConversation":26,"role":"Reason","requests":1,"notificationsEnteredRequests":0},{"fixtureConversation":27,"role":"Reason","requests":1,"notificationsEnteredRequests":0},{"fixtureConversation":28,"role":"Reason","requests":4,"notificationsEnteredRequests":0},{"fixtureConversation":29,"role":"Reason","requests":1,"notificationsEnteredRequests":0},{"fixtureConversation":30,"role":"Reason","requests":1,"notificationsEnteredRequests":0},{"fixtureConversation":31,"role":"Explore","stepId":"i003","requests":3,"notificationsEnteredRequests":0},{"fixtureConversation":32,"role":"Reason","requests":4,"notificationsEnteredRequests":0},{"fixtureConversation":33,"role":"Reason","requests":1,"notificationsEnteredRequests":0}]}
+✔ 10,000 changes skip ten native Explore listeners; only the affected Step is checked (1459.893875ms)
+✔ runtime source copying preserves portable relative symlinks (15.172709ms)
+✔ runtime preparation retains Vite required by upstream host build configurations (274.516875ms)
+✔ DSH update API protects active runs, rejects cross-origin calls and keeps scheduling paused until restart (1338.863625ms)
+✔ updater includes RC releases, detects source edits and leaves the runtime intact on failure (49.180625ms)
+✔ repeated tool calls retain audit and recovery tracking without reminders or a ledger (19.540541ms)
+✔ native and DSH audit records survive retirement of duplicate Trace indexes (103.729708ms)
+✔ runtime capability gain/loss and dependency invalidation are verified, not ordinary Facts (12.6705ms)
+✔ cost buckets are disjoint tokens and timing residual never subtracts overlapping intervals twice (2.657875ms)
+✔ critical planning acknowledges its start boundary only; failure, pause and new arrivals retain signals (38.545292ms)
+✔ large graph SQL pages and active Run query do not load full graph or historical checkpoints (167.301416ms)
+✔ Explore receives only live contract changes, not hints, evidence or critical broadcasts (5.21125ms)
+✔ Explore launch has Scope but no hints; Reason launch includes bounded hints across all Steps (3.042417ms)
+✔ existing duplicate Trace tables are removed on reopen without deleting raw history (9.538125ms)
+✔ Reason launch skips acknowledged hints but retains fresh human input (2.827375ms)
+✔ local SSH transport preserves remote exit/stdout/stderr/cwd and rejects failed authentication (137.393833ms)
+✔ file UI accepts SFTP JSON and legacy listings; editor explicitly requests overwrite (2.4315ms)
+✔ result contracts reject malformed adapters; unknown completion never proves success (0.864209ms)
+✔ HTTP 200 missing a result frame is a protocol error; raw output remains unknown (30.683375ms)
+✔ TCP output delayed by 850ms is collected through its completion boundary (861.8115ms)
+✔ leases serialize conflict domains and preserve monotonic fencing after release (10.348959ms)
+✔ risk remains audit metadata; missing or revoked authorizations do not gate dispatch (10.234292ms)
+✔ unsupported file actions reject before enqueue; worker claims and credentials stay private (11.761625ms)
+✔ unknown, failed, cancelled and large results retain bounded, retrievable evidence (11.653416ms)
+✔ migration snapshots legacy DB, keeps FGS schema 2 and never dispatches through a connection it cannot restore (45.128583ms)
+✔ beacon ingress mounts plugins, serializes tasks and rejects stale attempts (400.234458ms)
+✔ merge is atomic, versioned, evidence-preserving and reference-complete (12.191791ms)
+✔ Finding merge preserves producing actions, evidence, details and completed-goal references (3.827291ms)
+✔ delete refuses active references atomically, clears concluded references and retains producer Runs (3.832459ms)
+✔ live amendment preserves Run, requires sync and rejects old tool call trees after acknowledgement (2.490334ms)
+✔ replacement waits for stop confirmation, retains results and blocks unknown side effects (2.637375ms)
+✔ Subgoal amendments invalidate all unfinished descendant contracts without changing Root Goal (2.623959ms)
+✔ incremental pages cannot acknowledge unseen gaps; successful explicit acknowledgement avoids redundant planning (2.226416ms)
+✔ Finding-only wakes Reason; self-maintenance does not recursively wake and graph scans stay bounded (12.1915ms)
+✔ Reason owns maintenance tools, Explore only syncs its own contract and explicit delta reads do not imply processing (8.682875ms)
+✔ Reason has no reserved slot, waits at total/Worker capacity and wins the next available slot (14.839916ms)
+✔ pending Reason in another project precedes an earlier project Explore (3.644583ms)
+✔ a paused session is already quiescent and can be replaced without leaving an orphan paused lease (3.766041ms)
+✔ new Explore deltas start at claim, not at historical events; legacy deletion retains producing Steps (90.521917ms)
+✔ stopped contracts never ask to sync; unrelated evidence maintenance does not notify Explore (3.2465ms)
+✔ FGS keeps every output, typed relationship and cancelled-step provenance (16.178ms)
+✔ closing a goal cascades to descendants: no orphan open branches survive (3.58775ms)
+✔ reference boundaries and atomic failure preserve current evidence (3.201125ms)
+✔ evidence planning runs at Step capacity without relaxing add_step limits (11.05375ms)
+✔ legacy planning revision tracks its allowlist independently of paired wake eligibility (5.769458ms)
+✔ native canvas projection renders active Steps as virtual nodes, then swaps them for fact edges on completion (5.359625ms)
+✔ current graph polling clears removed node/edge selections and keeps surviving Step details (0.658541ms)
+✔ detail bindings tolerate a removed record while Alpine destroys the old node template (1.914875ms)
+✔ generic Explore endings preserve the fact-driven wake contract (6.262334ms)
+✔ missing TCP transport fails explicitly and persisted route metadata is not fresh verification (278.392875ms)
+✔ remote command has no implicit probe and explicit session probe remains available (97.893625ms)
+✔ HTTP Resource: optional session, shared cookies/restart, isolation, replay, concurrent batches and no Browser (700.905541ms)
+✔ HTTP graph compatibility and atomic conclude survive reopening the database (526.141584ms)
+✔ standalone mock closes the whole HTTP project without Python or DSH (89.621125ms)
+✔ single graph, atomic rollback, references and unique claims (7.141ms)
+✔ Fact plus Step completion wakes one serial decision while slower execution continues (21.679125ms)
+✔ Hint does not wake; Finding wakes independently of legacy planning revisions (6.444833ms)
+✔ finding and fact deletion are graph changes without a planning trigger (2.751125ms)
+✔ cancelled Execute does not trigger planning (1.419291ms)
+✔ unavailable planner does not block execution; pause resumes the same run (7.306417ms)
+✔ restart retains evidence and blocks unconfirmed external side effects (15.089917ms)
+✔ native audit keeps the conversation and drops lifecycle noise (2.029583ms)
+✔ tool tracking can skip the audit mirror for externally projected sessions (1.369125ms)
+✔ offline helper transport is network-capable; proxy configuration survives secret filtering (1965.9845ms)
+✖ offline CVE ranges, deduplicated real source paths, pagination and bounded PoC reads (fixtures) (4.120209ms)
+✖ model-facing CVE/component/version queries need no target evidence and never subscribe to Fact events (fixtures) (2.934584ms)
+✖ index corruption and missing data return explicit local diagnostics, without online repair (fixtures) (7.451125ms)
+✖ offline package export/import preserves callable CVE records and source hashes (fixtures) (3.134792ms)
+✔ local FTS search returns five source-hashed snippets and bounded source reads (362.01975ms)
+✔ local Nuclei templates expose CVE and fingerprint metadata with conservative matching (201.78675ms)
+✔ Nuclei legacy installer path is discovered and resource availability is returned (142.336083ms)
+✔ platform launchers use the native DSH host without Python (1.583625ms)
+✔ CI builds the native DSH runtime before Engine checks and tests (12.739708ms)
+✔ Campaign is a singleton control record, not a Project; acknowledgements cannot skip delivery (7.780916ms)
+✔ role metadata persists; General may create exactly two same-task squads in its delegated Goal (7.588334ms)
+✔ Park survives Run completion, prevents claim/spawn, and requires confirmed stop for reactivation (6.635292ms)
+✔ Scheduler wake does not claim a parked Step (28.407208ms)
+✔ handoff waits for old execution and creates a new Run on the same Step; resume is not handoff (6.373208ms)
+✔ unknown or pending tool results prevent automatic handoff/reactivation (6.065375ms)
+✔ HELP/REPORT remain durable messages, not confirmed Facts; foreign and closed actors are rejected (6.404958ms)
+✔ project evidence is readable with unchanged hash after producer Run/audit deletion (9.85725ms)
+✔ project evidence bounds reads, detects tampering, and rejects filesystem/credential escapes (7.504541ms)
+✔ project evidence directory symlink cannot publish outside Project (5.106125ms)
+✔ native project_evidence_read reads published evidence without producer lookup (8.8875ms)
+✔ only the native llm-pi-ai adapter probes all three protocols and projects admitted screenshots (614.401917ms)
+✔ same model rotates across providers, deduplicates entries and keeps single routes unchanged (1.405ms)
+✔ eligible failures switch before content, retaining billable usage and actual route audit (1.8685ms)
+✔ request errors, cancellation, partial text/reasoning/tools and plugin throws never replay (0.884958ms)
+✔ exhaustion attempts each same-model provider once and surfaces the last failure (0.18ms)
+✔ cross-provider calls strip opaque replay state without mutating frozen requests (0.164542ms)
+✔ concurrent requests rotate without serializing model calls (6.235542ms)
+✔ native adapter rotates endpoints, fails over on 401, probes only the selected endpoint and reloads cleanly (446.296125ms)
+✔ polling settings disable rotation, control initial order and exclude unselected suppliers (0.458083ms)
+✔ local SFTP transport handles binary, empty, Unicode, no-clobber, listing and hashes (233.324167ms)
+✔ native MCP discovers and invokes a real stdio server; disposal unregisters tools and closes its process (346.929625ms)
+✔ startup releases legacy Worker approval waits, not cancelled or human tasks (9.82375ms)
+✔ resource operations use real HTTP, keep global provenance and enforce existing ownership contracts (1674.576833ms)
+✔ model and audit retain credentials, flags, bodies and URL parameters verbatim (5.983583ms)
+✔ Explore receives knowledge tools and plugin disabling blocks previously exposed tools (5.255333ms)
+✔ SSH and Chisel route validation reaches an unlisted target through SOCKS, not just its listener (139.796542ms)
+﹣ managed local Chisel server/client forwards to an HTTP fixture and invalidates on upstream close (0.339791ms) # SKIP
+✔ LLM polling API persists settings, validates members and tracks provider edits without changing secrets (579.032084ms)
+✔ Reason-only tool, precise non-waking delivery, bounded queue and durable activation-scoped dedup (25.239125ms)
+✔ invalid, foreign, unready, closing, failed and completed targets report actual outcomes (6.559708ms)
+✔ notifications never cross concurrent Steps and obsolete pending or claimed notices are discarded (7.536375ms)
+✔ Hint wakes Reason, preserves busy continuous boundaries and is never Explore launch or broadcast input (34.752834ms)
+✔ all Fact/Finding lifecycle events, including own produced evidence, stay in FGS without Explore broadcast (9.282542ms)
+✔ canonical source reference rewrites do not invalidate execution contracts (5.201291ms)
+✔ plain FGS notices retain merged metadata and do not acknowledge unread changes (6.15575ms)
+✔ legacy queued envelopes still merge and discard after a contract change (4.094834ms)
+✔ plain notification metadata still rejects changed evidence sources (5.886792ms)
+✔ capacity and acknowledgement boundaries are explicit; Fact-less completion is still rejected (15.68425ms)
+✔ Execute recovery guard and evidence_read retain real-path containment and producer integrity (39.938292ms)
+✔ Resource APIs, task polling and routing stay Project-scoped; accepted large results remain complete (138.80025ms)
+✔ aborted runs survive their project being deleted mid-flight (92.639417ms)
+✔ schema 2 rejects an old engine database instead of migrating it implicitly (6.292291ms)
+✔ Step and Goal selection uses the project-kind index (1.419ms)
+✔ DSH shared notification scan drains more than 500 events without reading the graph (61.049167ms)
+✔ dispatch health and scheduling never load the full graph with 20,083 nodes (167.046209ms)
+✔ native shell captures output, cancels process trees and protects provider environment (426.845167ms)
+✔ authenticated secrets and revision conflicts preserve independent configuration copies (105.414ms)
+✔ shell retains stdout and stderr separately as well as the ordered full log (9.47475ms)
+✔ committed Step notices coalesce, rollbacks stay silent, and subscriptions are project scoped (161.387666ms)
+✔ Step scans use the scoped index and never parse unrelated FGS events (49.254125ms)
+✔ legacy task declarations are validated at compatibility boundaries but not stored in new Steps (9.045125ms)
+✔ legacy tool declarations do not revise a running contract; real replacements retain lifecycle checks (3.251375ms)
+✔ Reason schemas do not select tools and plugin management does not block planning goals (5.329375ms)
+✔ v2 and legacy HTTP contracts ignore valid legacy declarations and preserve input validation (117.27675ms)
+✔ legacy tool declarations do not rewrite Step contracts or restart unconfirmed work (21.319209ms)
+✔ retired terminal Resources stay readable with their persisted state but cannot be created or dispatched (17.141916ms)
+✔ Reason can only query TSecBench challenges and confirmed hints (80.370167ms)
+✔ Explore owns Fact publication; TSecBench lifecycle tools never publish Facts (144.591708ms)
+✔ Explore has native read-only list and preserves SDK business errors before target validation (22.04025ms)
+✔ TSecBench CLI preserves inherited proxy settings (213.000459ms)
+✔ TSecBench uses the configured Python even when python3 is absent from Worker PATH (40.816917ms)
+✔ 1: first launch plans once; reactivation alone does not plan again (11.536333ms)
+✔ 2: many Facts in one burst coalesce without waiting for an ending (8.871459ms)
+✔ 3: ending a Step without a new Fact cannot wake Decide (5.222875ms)
+✔ 4: Fact arrival wakes regardless of fact-first completion order (13.685042ms)
+✔ 5: Fact arrival wakes regardless of end-first completion order (15.132916ms)
+✔ 6: evidence wakes only its owning project (14.009292ms)
+✔ 7: Step capacity does not suppress evidence-driven planning (14.85625ms)
+✔ 8: Fact wakes independently of Execute succeeded (5.755334ms)
+✔ 9: Fact wakes independently of Execute failed (2.873083ms)
+✔ 10: Fact wakes independently of Execute paused (3.310208ms)
+✔ 11: Fact wakes independently of Execute cancelled (7.953541ms)
+✔ 12: Fact alone wakes while its Step remains running (6.609791ms)
+✔ 13: successful planning acknowledges its start boundary and preserves later events (12.174542ms)
+✔ 14: failed planning retains its boundary and obeys retryAfter (45.752958ms)
+✔ 15: failed first planning remains eligible for retry (2.961541ms)
+✔ critical verified events wake Decide at capacity, deduplicate, and do not relax Step limits (6.093333ms)
+✔ 16: disk recovery retains pending boundaries and retries interrupted planning (11.002625ms)
+✔ 17: stopped and completed projects preserve pending boundaries without planning (5.963875ms)
+✔ 18: deterministic planner fills free capacity with finite nonduplicate work (5.638042ms)
+✔ 19: no useful candidates permits an unsaturated plan without spinning (2.03325ms)
+✔ critical-event plugin gate restores ordinary wake semantics without discarding signals (2.455584ms)
+ℹ tests 218
+ℹ suites 0
+ℹ pass 213
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 16090.9505
+
+✖ failing tests:
+
+test at test/knowledge-offline.test.ts:39:1
+✖ offline CVE ranges, deduplicated real source paths, pagination and bounded PoC reads (fixtures) (4.120209ms)
+  Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+      at Object.spawnSync (node:internal/child_process:1160:20)
+      at spawnSync (node:child_process:928:24)
+      at execFileSync (node:child_process:971:15)
+      at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:40:13)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    path: '/Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    spawnargs: [ '/Users/lxy/Downloads/RedTrace/tools/knowledge/knowledge.py', 'build', '--root', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-rfN5eZ/data', '--nuclei', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-rfN5eZ/nuclei', '--exploitdb', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-rfN5eZ/edb', '--nvd', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-rfN5eZ/nvd', '--allow-partial' ],
+    error: Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+        at Object.spawnSync (node:internal/child_process:1160:20)
+        at spawnSync (node:child_process:928:24)
+        at execFileSync (node:child_process:971:15)
+        at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+        at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:40:13)
+        at Test.runInAsyncScope (node:async_hooks:227:14)
+        at Test.run (node:internal/test_runner/test:1402:25)
+        at Test.start (node:internal/test_runner/test:1262:17)
+        at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17),
+    status: null,
+    signal: null,
+    output: null,
+    pid: 0,
+    stdout: undefined,
+    stderr: undefined
+  }
+
+test at test/knowledge-offline.test.ts:63:1
+✖ model-facing CVE/component/version queries need no target evidence and never subscribe to Fact events (fixtures) (2.934584ms)
+  Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+      at Object.spawnSync (node:internal/child_process:1160:20)
+      at spawnSync (node:child_process:928:24)
+      at execFileSync (node:child_process:971:15)
+      at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:64:13)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12) {
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    path: '/Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    spawnargs: [ '/Users/lxy/Downloads/RedTrace/tools/knowledge/knowledge.py', 'build', '--root', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-XMbKib/data', '--nuclei', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-XMbKib/nuclei', '--exploitdb', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-XMbKib/edb', '--nvd', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-XMbKib/nvd', '--allow-partial' ],
+    error: Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+        at Object.spawnSync (node:internal/child_process:1160:20)
+        at spawnSync (node:child_process:928:24)
+        at execFileSync (node:child_process:971:15)
+        at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+        at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:64:13)
+        at Test.runInAsyncScope (node:async_hooks:227:14)
+        at Test.run (node:internal/test_runner/test:1402:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+        at Test.postRun (node:internal/test_runner/test:1542:19)
+        at Test.run (node:internal/test_runner/test:1467:12),
+    status: null,
+    signal: null,
+    output: null,
+    pid: 0,
+    stdout: undefined,
+    stderr: undefined
+  }
+
+test at test/knowledge-offline.test.ts:88:1
+✖ index corruption and missing data return explicit local diagnostics, without online repair (fixtures) (7.451125ms)
+  Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+      at Object.spawnSync (node:internal/child_process:1160:20)
+      at spawnSync (node:child_process:928:24)
+      at execFileSync (node:child_process:971:15)
+      at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:89:13)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12) {
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    path: '/Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    spawnargs: [ '/Users/lxy/Downloads/RedTrace/tools/knowledge/knowledge.py', 'build', '--root', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-lcc2ws/data', '--nuclei', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-lcc2ws/nuclei', '--exploitdb', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-lcc2ws/edb', '--nvd', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-lcc2ws/nvd', '--allow-partial' ],
+    error: Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+        at Object.spawnSync (node:internal/child_process:1160:20)
+        at spawnSync (node:child_process:928:24)
+        at execFileSync (node:child_process:971:15)
+        at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+        at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:89:13)
+        at Test.runInAsyncScope (node:async_hooks:227:14)
+        at Test.run (node:internal/test_runner/test:1402:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+        at Test.postRun (node:internal/test_runner/test:1542:19)
+        at Test.run (node:internal/test_runner/test:1467:12),
+    status: null,
+    signal: null,
+    output: null,
+    pid: 0,
+    stdout: undefined,
+    stderr: undefined
+  }
+
+test at test/knowledge-offline.test.ts:102:1
+✖ offline package export/import preserves callable CVE records and source hashes (fixtures) (3.134792ms)
+  Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+      at Object.spawnSync (node:internal/child_process:1160:20)
+      at spawnSync (node:child_process:928:24)
+      at execFileSync (node:child_process:971:15)
+      at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:103:13)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12) {
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    path: '/Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    spawnargs: [ '/Users/lxy/Downloads/RedTrace/tools/knowledge/knowledge.py', 'build', '--root', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-ntBm3i/data', '--nuclei', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-ntBm3i/nuclei', '--exploitdb', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-ntBm3i/edb', '--nvd', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-ntBm3i/nvd', '--allow-partial' ],
+    error: Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+        at Object.spawnSync (node:internal/child_process:1160:20)
+        at spawnSync (node:child_process:928:24)
+        at execFileSync (node:child_process:971:15)
+        at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+        at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:103:13)
+        at Test.runInAsyncScope (node:async_hooks:227:14)
+        at Test.run (node:internal/test_runner/test:1402:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+        at Test.postRun (node:internal/test_runner/test:1542:19)
+        at Test.run (node:internal/test_runner/test:1467:12),
+    status: null,
+    signal: null,
+    output: null,
+    pid: 0,
+    stdout: undefined,
+    stderr: undefined
+  }

@@ -1,0 +1,50 @@
+{
+  "baseline": {
+    "root": "/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-console-baseline-ltWzgT",
+    "command": [
+      "/opt/homebrew/opt/node@24/bin/node",
+      "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/frontend-console-20261111/console-probe.mjs",
+      "/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-console-baseline-ltWzgT"
+    ],
+    "status": 0,
+    "stdout": "{\"stoppedLabel\":\"stopped\",\"recipientControl\":\"raw-id\",\"browserPrompts\":true,\"eligibleRoutes\":null,\"unknownBlocksResume\":null}\n",
+    "stderr": ""
+  },
+  "modified": {
+    "root": "/Users/lxy/Downloads/RedTrace",
+    "command": [
+      "/opt/homebrew/opt/node@24/bin/node",
+      "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/frontend-console-20261111/console-probe.mjs",
+      "/Users/lxy/Downloads/RedTrace"
+    ],
+    "status": 0,
+    "stdout": "{\"stoppedLabel\":\"执行已停止\",\"recipientControl\":\"select\",\"browserPrompts\":false,\"eligibleRoutes\":[\"same\"],\"unknownBlocksResume\":true}\n",
+    "stderr": ""
+  },
+  "rollback": {
+    "root": "/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-legion-verified-8S0wK5/frontend-rollback",
+    "command": [
+      "/opt/homebrew/opt/node@24/bin/node",
+      "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/frontend-console-20261111/console-probe.mjs",
+      "/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-legion-verified-8S0wK5/frontend-rollback"
+    ],
+    "status": 0,
+    "stdout": "{\"stoppedLabel\":\"stopped\",\"recipientControl\":\"raw-id\",\"browserPrompts\":true,\"eligibleRoutes\":null,\"unknownBlocksResume\":null}\n",
+    "stderr": ""
+  },
+  "rollbackCommand": {
+    "command": [
+      "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/ROLLBACK.sh",
+      "/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-legion-verified-8S0wK5/frontend-rollback",
+      "--frontend"
+    ],
+    "status": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "restoredHashes": {
+    "static/index.html": "f3b4b3725c9166386d36b314ced6ceef80c9cc10c2873059a64f4cd4a869c3b0",
+    "packages/redtrace-engine/src/legion-store.ts": "25256f2b6b716e53faaa9428eb36d0f46d83b57b6f14fbdafab73d9b0f04036e",
+    "packages/redtrace-engine/src/config.ts": "dbe2ef19e18afa4482bf78275037b12c3b593cdae8ed5518330f57b1ffc09fe2"
+  }
+}

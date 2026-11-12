@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { createInterface } from 'node:readline'
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
@@ -47,28 +48,47 @@ export function knowledgeData(config: EngineConfig) {
   return { root, database: path.join(root, 'generations', value.generation, 'vuln.sqlite'), manifest: value }
 }
 
-async function nativeJson<T>(executable: string, args: string[], input: unknown, config: EngineConfig, signal?: AbortSignal): Promise<T> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) { reject(new Error('Knowledge operation cancelled')); return }
-    const env = toolEnvironment(config.commonEnv)
-    for (const key of Object.keys(env)) if (/key|token|secret|password|credential/i.test(key)) delete env[key]
-    const child = spawn(executable, args, { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
-    let stdout = '', stderr = '', failure: Error | undefined
-    const kill = (error: Error) => { failure = error; child.kill('SIGKILL') }
-    const abort = () => kill(new Error('Knowledge operation cancelled'))
-    const timer = setTimeout(() => kill(new Error('Offline knowledge helper timed out')), 30_000)
-    signal?.addEventListener('abort', abort, { once: true })
-    child.stdin.on('error', () => {}); child.stdin.end(JSON.stringify(input))
-    child.stdout.on('data', (data: Buffer) => { stdout += data.toString('utf8'); if (Buffer.byteLength(stdout) > 16 * 1024 * 1024) kill(new Error('Offline helper output exceeded 16 MiB')) })
-    child.stderr.on('data', (data: Buffer) => { stderr = (stderr + data.toString('utf8')).slice(-8192) })
-    child.on('error', error => { failure = error })
-    child.on('close', code => {
-      clearTimeout(timer); signal?.removeEventListener('abort', abort)
-      if (failure) reject(failure)
-      else if (code !== 0) reject(new Error(`Offline helper exit ${code}: ${stderr}`))
-      else { try { resolve(JSON.parse(stdout) as T) } catch { reject(new Error('Invalid offline helper JSON output')) } }
-    })
+type QueryServer = { child: ReturnType<typeof spawn>; queue: Promise<unknown>; request: (input: unknown, signal?: AbortSignal) => Promise<VulnerabilityPage>; idle?: NodeJS.Timeout }
+const queryServers = new Map<string, QueryServer>()
+function queryServer(database: string, config: EngineConfig): QueryServer {
+  const executable = python(config), env = toolEnvironment(config.commonEnv)
+  for (const name of Object.keys(env)) if (/key|token|secret|password|credential/i.test(name)) delete env[name]
+  const key = JSON.stringify([executable, database, hash(JSON.stringify(env))])
+  let server = queryServers.get(key)
+  if (server) return server
+  const child = spawn(executable, [path.join(installRoot, 'tools/knowledge/knowledge.py'), 'query-server', '--database', database], { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+  const reference = (method: 'ref' | 'unref') => {
+    for (const stream of [child, child.stdin, child.stdout, child.stderr]) (stream as unknown as { ref?: () => void; unref?: () => void })[method]?.()
+  }
+  let pending: { resolve: (page: VulnerabilityPage) => void; reject: (error: Error) => void } | undefined, stderr = ''
+  const fail = (error: Error) => { if (queryServers.get(key) === server) queryServers.delete(key); if (server?.idle) clearTimeout(server.idle); pending?.reject(error); pending = undefined; child.kill('SIGKILL') }
+  child.on('error', fail); child.on('close', code => fail(new Error(`Offline helper exited ${code}: ${stderr}`)))
+  child.stdin!.on('error', fail); child.stderr!.on('data', data => { stderr = (stderr + data.toString()).slice(-8192) })
+  let outputBytes = 0
+  child.stdout!.on('data', (chunk: Buffer) => { outputBytes += chunk.length; if (outputBytes > 16 * 1024 * 1024) fail(new Error('Offline helper output exceeded 16 MiB')) })
+  createInterface({ input: child.stdout! }).on('line', line => {
+    outputBytes = 0
+    const current = pending; pending = undefined
+    if (!current) return
+    try { const value = JSON.parse(line); if (value.error) current.reject(new Error(value.error)); else current.resolve(value.result) }
+    catch { current.reject(new Error('Invalid offline helper JSON output')) }
   })
+  server = { child, queue: Promise.resolve(), request(input, signal) {
+    const execute = () => new Promise<VulnerabilityPage>((resolve, reject) => {
+      if (signal?.aborted || child.killed || child.exitCode !== null) { reject(new Error('Knowledge operation cancelled or helper stopped')); return }
+      if (server!.idle) clearTimeout(server!.idle)
+      reference('ref')
+      const abort = () => fail(new Error('Knowledge operation cancelled'))
+      const timer = setTimeout(() => fail(new Error('Offline knowledge helper timed out')), 30_000)
+      const clean = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); server!.idle = setTimeout(() => { if (queryServers.get(key) === server) queryServers.delete(key); child.kill() }, 30_000); server!.idle.unref(); reference('unref') }
+      pending = { resolve: value => { clean(); resolve(value) }, reject: error => { clean(); reject(error) } }
+      signal?.addEventListener('abort', abort, { once: true })
+      child.stdin!.write(JSON.stringify(input) + '\n')
+    })
+    const result = server!.queue.then(execute); server!.queue = result.catch(() => {})
+    return result
+  } }
+  queryServers.set(key, server); return server
 }
 function python(config: EngineConfig) { return knowledgeEnvironment(config).REDTRACE_KNOWLEDGE_PYTHON ?? path.join(installRoot, '.redtrace/runtime/knowledge', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python') }
 
@@ -83,7 +103,7 @@ export async function vulnerabilitySearch(_evidenceRoot: string, context: TaskCo
   if (!cache) { cache = new Map(); caches.set(context.store, cache) }
   let result = cache.get(key)
   if (!result) {
-    result = verifyKnowledgeIndex(data.database).then(() => nativeJson<VulnerabilityPage>(python(context.config), [path.join(installRoot, 'tools/knowledge/knowledge.py'), 'query', '--database', data.database!], args, context.config, context.signal))
+    result = verifyKnowledgeIndex(data.database).then(() => queryServer(data.database!, context.config).request(args, context.signal))
       .then(value => {
         for (const item of value.results) item.id = item.candidateId.startsWith('CVE-') ? item.candidateId : item.sources.find(source => source.id)?.id
         return { ...value, ...location }

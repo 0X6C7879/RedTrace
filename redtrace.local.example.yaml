@@ -10,17 +10,10 @@ runtime:
   max_project_workers: 3
 
 tasks:
-  bootstrap:
-    timeout: 1800
-    conclude_timeout: 300
-  reason:
-    timeout: 300
-    conclude_timeout: 300
-    # Max new Intents proposed per single Reason call.
-    max_intents: 4
-  explore:
-    timeout: 1800
-    conclude_timeout: 300
+  commander: { timeout: 300, conclude_timeout: 30, max_intents: 4 }
+  general: { timeout: 1800, conclude_timeout: 300 }
+  soldier: { timeout: 1800, conclude_timeout: 300 }
+  scout: { timeout: 240, conclude_timeout: 30 }
 
 
 # Providers own the API protocol, endpoint, credential, and model list;
@@ -28,6 +21,8 @@ tasks:
 # concurrency, and priority. Each model entry carries its own capacities and
 # reasoning policy. Omitted reasoning means auto_max; custom gateways may
 # declare exact reasoning_efforts when the model catalog has no metadata.
+# Same exact model ID across Providers enables per-request round-robin and
+# pre-output failover. Use equivalent model capacities/reasoning capabilities.
 providers:
   deepseek:
     api: openai-completions
@@ -47,22 +42,29 @@ providers:
         max_tokens: 128000
         reasoning_efforts: false
 
+  # Optional: a second supplier for the same model (uncomment and fill its key).
+  # deepseek-backup:
+  #   api: openai-completions
+  #   base_url: https://backup.example.com/v1
+  #   api_key: replace-me
+  #   models:
+  #     - id: deepseek-chat
+  #       context_window: 1000000
+  #       max_tokens: 128000
+  #       reasoning_efforts: false
+
 workers:
-  - name: "local-reasoner"
+  - name: "local-commander"
     provider: "deepseek"
     model: "deepseek-reasoner"
-    bootstrap: false
-    reason: true
-    explore: false
+    roles: [commander]
     max_running: 1
     priority: 0
 
-  - name: "local-explorer"
+  - name: "local-workers"
     provider: "deepseek"
     model: "deepseek-chat"
-    bootstrap: false
-    reason: false
-    explore: true
+    roles: [general, soldier, scout]
     max_running: 2
     priority: 1
 

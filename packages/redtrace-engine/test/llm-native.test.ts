@@ -65,6 +65,12 @@ test('only the native llm-pi-ai adapter probes all three protocols and projects 
     const stored = await ctx.get('attachments').readImage(result.content[1].attachment); assert.ok(stored.data.byteLength > 0)
     for await (const _ of ctx.get('llm').stream({ provider: 'openai-completions', model: 'fixture', messages: [{ role: 'user', content: result.content }], signal: AbortSignal.timeout(5000) })) {}
     assert.ok(requests.at(-1).body.messages.some((m: any) => Array.isArray(m.content) && m.content.some((b: any) => b.type === 'image_url' && b.image_url.url.startsWith('data:image/'))))
+    // Reusing the same model ID rotates through independent protocol adapters.
+    for (let i = 0; i < 2; i++) {
+      const chunks = []; for await (const chunk of ctx.get('llm').stream({ provider: 'openai-completions', model: 'fixture', messages: [{ role: 'user', content: [{ type: 'text', text: 'OK' }] }], signal: AbortSignal.timeout(5000) })) chunks.push(chunk)
+      assert.equal(chunks.at(-1).reason.kind, 'stop')
+    }
+    assert.deepEqual(requests.slice(-2).map(r => new URL(r.url, 'http://fixture').pathname), ['/v1/responses', '/v1/messages'])
     await assert.rejects(admitToolImages(ctx.get('attachments'), { content: [{ type: 'image', data: 'not-image', mimeType: 'image/png' }] }))
     await assert.rejects(admitToolImages(undefined, { content: [{ type: 'image', data: png, mimeType: 'image/png' }] }), /attachment service/)
   } finally { await ctx.fiber.dispose(); model.closeAllConnections(); await new Promise<void>(resolve => model.close(() => resolve())); rmSync(root, { recursive: true, force: true }) }

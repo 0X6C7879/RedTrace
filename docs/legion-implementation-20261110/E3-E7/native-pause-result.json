@@ -1,0 +1,12 @@
+{
+  "command": "/opt/homebrew/opt/node@24/bin/node",
+  "args": [
+    "--test",
+    "--test-reporter=tap",
+    "test/dsh-loop.test.ts"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace/packages/redtrace-engine",
+  "status": 0,
+  "stdout": "TAP version 13\n# Subtest: native isolated Soldier pauses and resumes the SAME Session without replaying a confirmed side effect\nok 1 - native isolated Soldier pauses and resumes the SAME Session without replaying a confirmed side effect\n  ---\n  duration_ms: 1966.218666\n  type: 'test'\n  ...\n1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 2136.69725\n",
+  "stderr": ""
+}

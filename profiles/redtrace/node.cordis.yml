@@ -13,6 +13,10 @@
   name: '../../vendor/deepseek-harness/packages/llm/token-meter/lib/index.js'
 - id: compaction-basic
   name: '../../vendor/deepseek-harness/packages/compaction/compaction-basic/lib/index.js'
+  config:
+    thresholdRatio: 0.90
+    headroomTokens: 4096
+    maxTokens: 4096
 - id: compaction-tool-result-pruner
   name: '../../vendor/deepseek-harness/packages/compaction/compaction-tool-result-pruner/lib/index.js'
 - id: subprocess

@@ -1,0 +1,10 @@
+{
+  "command": "node",
+  "args": [
+    "packages/redtrace-engine/test/legion-runtime.fixture.mjs"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "status": 1,
+  "stdout": "",
+  "stderr": "[\n  [Object: null prototype] {\n    data: '{\"sessionId\":\"command-5e80954e-aa88-4ab3-b6c1-612ddb9d1eff\",\"status\":\"stopped\",\"state\":\"\",\"cursors\":{},\"error\":\"tools.restrict() names unknown global tools \\\\\"legion_message\\\\\", \\\\\"legion_inbox\\\\\", \\\\\"legion_wait\\\\\", \\\\\"legion_spawn\\\\\", \\\\\"legion_board\\\\\", \\\\\"legion_read_changes\\\\\", \\\\\"legion_read_node\\\\\", \\\\\"legion_accept\\\\\", \\\\\"legion_park\\\\\", \\\\\"legion_reactivate\\\\\", \\\\\"legion_finish\\\\\"; known global tools: c2_credential_create, c2_listener_create, c2_listener_kinds, c2_payload_build, c2_payload_external, c2_payload_oneliner, c2_profile_create, c2_session_create, c2_sessions, edit, read, read_image, webshell_register, webshell_test, write\"}'\n  }\n]\n==> first run: importing Skills and MCP configuration\nRedTrace ready at http://127.0.0.1:52789\n\nnode:internal/modules/run_main:107\n    triggerUncaughtException(\n    ^\n\nAssertionError [ERR_ASSERTION]: {\"detail\":\"Internal server error\"}\n==> first run: importing Skills and MCP configuration\nRedTrace ready at http://127.0.0.1:52789\n\n    at call (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-runtime.fixture.mjs:84:197)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-runtime.fixture.mjs:86:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n\nNode.js v24.21.0\n"
+}

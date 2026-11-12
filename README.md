@@ -8,14 +8,14 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 
 ## 核心能力
 
-- **任务级逆向插件**：`redtrace-reverse` 默认不装载；Reason 用 Step 的 `plugins` 声明，仅认领该 Step 的 Explore 可加载 REA 官方 Skill 与按需原生 MCP，不改变全局开关；管理员停用优先，撤销 Skill/工具并清理分析进程，保留已保存证据。部署、可选引擎边界和真实验收见 [REA 集成说明](docs/rea-integration.md)。
+- **原生逆向插件**：执行 Worker 按需加载 REA 官方 Skill 与原生 MCP；管理端停用会撤销活跃工具并清理分析进程，保留已保存证据。Commander 不获取分析工具。见 [REA 集成说明](docs/rea-integration.md)。
 
 - **Decide / Execute 闭环**：每个项目最多一个无私有会话的 Decide；多个 Execute 可并行推进 Step，任一事实提交都会立即唤醒下一轮规划。
 - **唯一 FGS 图**：`Fact` 保存有来源的事实，`Goal` 保存完成条件和子目标，`Step` 保存行动与状态，`Finding` 保存可交付成果。`Hint` 与 `Observation` 保持人工输入和中间记录语义。
-- **异构 Worker 协同（Worker 即路由）**：任意数量 Worker 各自声明 Provider、模型、任务资格（bootstrap/reason/explore）、并发与优先级。调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务——路由完全由 Worker 派生，而非按任务类型写死。
+- **异构 Worker 协同（Worker 即路由）**：任意数量 Worker 各自声明 Provider、模型、四角色资格（commander/general/soldier/scout）、并发与优先级。调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务——路由完全由 Worker 派生，而非按任务类型写死。
 - **Node 24 Agent 运行时**：DSH 原生 Agent Loop 是唯一真实模型执行器；`dsh-llm-pi-ai` 仅适配模型协议。FGS 调度器与 Cordis 插件保持单实例、原生生命周期。
 - **运行中知识同步**：证据图谱修订会通过 `agent.inject()` 增量送达正在运行的 Agent；共享 Resource 摘要随上下文注入，完整信息按需查询。
-- **上下文预算治理**：DSH 原生 Session Compaction、Tool Result Pruner 与 Spill 控制上下文压力，Graph 按需注入而不是无限堆进 Prompt；Explore / Bootstrap 超大工具结果完整落盘、按需取回；Reason 不挂载 Spill，文件默认全文读取，无应用层大小或路径限制。
+- **上下文与证据**：按 DSH 当前请求的原生 Token Meter 测量压力，85% 提醒保存 STATE，原生自动压缩后以新 Run/Session 接力；不使用累计 Token 代替压力。Worker 的 Spill/文件证据按哈希保留；Commander 只读项目级证据，不读取任意宿主路径。
 - **DSH 原生执行工具链**：Execute Worker 直接获得 DSH 原生能力——`web_search` / `web_fetch`、后台任务（`job_output` / `job_list` / `job_kill`，bash `run_in_background`）、持久 PTY 终端、`glob` / `grep`、工具超时与重复调用防护；LSP 代码导航与 `run_code` 程序化调用按需开启。全部在插件管理页热启停，仅对新会话生效，不自研重复 Skill/MCP。
 - **资源与操作面**：统一管理 WebShell、C2 Listener、Session、Payload、凭证、外部插件和操作结果；MSF、Sliver、Cobalt Strike 与自定义 C2 通过同一个 Adapter 合约接入。Resource 保留可变运行状态，不会隐式生成 Fact。
 - **可观测与可恢复**：任务、会话、工具事件、输出、心跳、超时、取消和资源操作均可审计，Token 用量按运行累计汇总；Server 或运行时重启后可以恢复未完成状态。
@@ -29,8 +29,10 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 flowchart LR
     U[用户 / Web / 旧 API / 插件] --> N[Node 请求处理器]
     N <--> DB[(SQLite<br/>FGS + Finding + Audit)]
-    DB --> D[单实例 Decide]
-    D --> S[待执行 Step]
+    DB --> D[全局 Commander]
+    D --> SC[Scout 分类]
+    SC --> G[General / Soldier Mission]
+    G --> S[待执行 Step]
     S --> E[DSH Native Agent Loop]
     E --> DB
     C[Cordis 宿主<br/>Web / 插件 / 外围能力] --> N
@@ -39,13 +41,13 @@ flowchart LR
 一次典型任务会经历：
 
 1. 用户创建 Project，提供 Origin、根 Goal 与可选 Hint。
-2. Decide 读取当前任务图，完成 Goal 或生成关联 Fact、Goal 与优先级的 Step；Bootstrap 只是首轮 Step 策略。
-3. 调度器按模型、资格与并发限制原子领取 Step；DSH Execute 在独立会话中执行。
-4. Execute 可持续提交 Fact 和 Finding；事务提交后直接唤醒 Decide 与界面，无需 HTTP 认领轮询。
-5. Stop 保存活动检查点；恢复沿用同一 Step 会话。崩溃后保留已提交事实，结果未知的外部操作不会自动重放。
-6. Goal 满足后项目完成；旧 Intent/Reason/Explore API 只投影到这张图，不维护第二套状态。
+2. 全局 Commander 读取 Board、STATE 和增量 FGS；未知题先由 Scout 分类，再分派 Soldier 或 General。Bootstrap 选项仅创建 Soldier 初始 Mission，不再启动独立 Agent。
+3. General 执行主线并最多委派两个同题专项小队。调度器按四角色资格、模型路线与既有全局/项目/Worker 配额原子领取 Step，DSH 在独立会话执行。
+4. Worker 通过 Fact/Finding 共享确认结论，HELP/REPORT 经原生收件箱实际交付；queued 不代表已入模。Commander 对证据验收，不把消息或 Step 结束当成果。
+5. Stop/同 Session 恢复、任务 Park 与新 Run 接力分别建模。只有原执行停止、工具结果明确后才能恢复或换模型；未知操作不自动重放。
+6. Commander 通过确认 Fact/Finding 验收 Goal；Family Transfer 只生成未验证 Hint，目标必须复验。没有独立 Reason 调度器或长期双模式。
 
-详细设计见 [技术架构与调度设计](docs/specs/dispatcher-design.md)。
+当前迁移状态、验收边界与四件交付物见 [Legion 实施记录](docs/legion-implementation-20261110/IMPLEMENTATION.md)。历史调度设计不再代表独立 Reason 的执行决策。
 
 ## 为什么选择 RedTrace
 
@@ -111,7 +113,19 @@ cp redtrace.local.example.yaml redtrace.yaml
 
 启动后只有一个 Node 进程：Cordis Web 服务直接调用 Node 请求处理器并提供 Web UI（默认监听 `127.0.0.1:8000`），没有 FastAPI 反代。`mock` Worker 走进程内确定性执行器，用于开发、持久化测试和性能对照。
 
-Worker 即路由：每个 Worker 独立声明 `provider`、`model`、`bootstrap/reason/explore` 资格、`max_running` 并发与 `priority`；调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务。Worker 修改后对新任务自动生效，无需重启——设置页与直改配置文件都走同一条热加载链路，任何配置变更都不要求重启进程。
+Worker 声明逻辑路由：每个 Worker 独立声明 `provider`、`model`、`roles: [commander, general, soldier, scout]` 中相应的角色资格、`max_running` 并发与 `priority`；调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务。Worker 修改后对新任务自动生效，无需重启——设置页与直改配置文件都走同一条热加载链路，任何配置变更都不要求重启进程。
+
+#### 同模型供应商轮询与故障切换
+
+参考 ARTEX 的供应商池和首输出前故障转移设计：在设置页新增多个 Provider，分别填写自己的协议、地址和密钥，并给它们添加**完全相同的模型 ID**，即可自动组成轮询池；不需要重复创建 Worker。不同模型 ID 不会混用，单供应商保持原行为。
+
+在**运行设置 → Provider 模型服务 → 轮询配置**中，可以开关轮询、按模型勾选供应商，并用上下箭头调整顺序；保存后通过原有配置热加载生效。只有一家参与时不轮询，关闭时始终使用 Worker 指定的 Provider。未勾选 Worker 指定的供应商时，该 Worker 保持直连。设置持久化在 `llm_polling.enabled` 和 `llm_polling.models.<模型 ID>`（供应商名称数组）中；旧配置默认保持开启和自动分组。
+
+每次模型请求轮换起点（手动设置顺序后首次从列表第一家开始，否则首次从 Worker 指定的 Provider 开始），故障时按配置顺序继续尝试同 ID 的其他 Provider，每个请求最多尝试每家一次。支持 OpenAI Completions、Responses 和 Anthropic Messages 混合供应商；同 ID 必须指向同一个模型，并配置兼容的上下文、输出上限和 reasoning 能力，请求参数不会为切换而降级。
+
+- 仅在尚未输出内容时，对鉴权/余额不足、404、408、429、5xx、网络及连接超时等供应商故障切换。400、上下文超限、调用取消，以及已经输出文本、思考或工具调用的流不会重放；全部失败时保留最后一家供应商的原始错误。
+- Worker 并发配额、任务会话和权限不变；没有全局锁、排队、额外退避或持久化熔断。故障供应商仍会在后续轮次被尝试，轮询游标在配置热加载/重启后重置。
+- 连接测试只检查选中的供应商，避免备用供应商掩盖错误配置。会话记录中的 `llm/polling` / `llm/polling-failed` 标记实际调用及切换失败；Worker/助手消息的 provider 仍表示逻辑路由，跨供应商的私有重放状态不复用，失败尝试已报告的 token 用量计入合计。
 
 Agent 继承启动用户的宿主机权限；isolated 执行 profile 可按 Intent 启用沙箱。请只在已隔离且获得授权的环境中使用。
 
@@ -134,7 +148,7 @@ REDTRACE_CONFIG_FILE=./redtrace.mock.example.yaml docker compose up --build
 
 ### Mock 模式
 
-Mock Worker 用于协议开发、调度回归和确定性端到端测试，不调用外部模型：
+Mock Worker 只执行显式 Soldier Mission，用于协议与调度回归；不会冒充 Commander 规划或验收，不调用外部模型：
 
 ```bash
 cp redtrace.mock.example.yaml redtrace.yaml
@@ -158,7 +172,7 @@ cp redtrace.mock.example.yaml redtrace.yaml
 | `providers` | API 协议（OpenAI/Anthropic 兼容）、endpoint、密钥与模型列表（context window、max tokens、reasoning 策略） |
 | `workers` | 模型路由、启用状态、任务资格、优先级和并发 |
 | `runtime` | 全局/项目并发限制 |
-| `tasks` | Bootstrap、Reason、Explore 的主阶段与收尾超时，及 Intent 上限 |
+| `tasks` | Commander、General、Soldier、Scout 的主阶段与收尾超时，及 Mission 上限 |
 | `common_env` | 传递给 Worker 的环境变量 |
 
 配置支持快照与热加载：新任务使用新配置，已经运行的任务继续使用启动时快照。Web 设置页可创建、复制、启停和测试 Worker；写入使用 revision 做乐观并发控制，API Key 不会在查询响应中回显。
@@ -187,9 +201,9 @@ Web 控制台的「设置 → DSH 运行时」提供检查更新和更新按钮�
 
 ### 共享资源与能力动词
 
-资源（WebShell、C2 Listener/Session/Payload、凭证、流量伪装 Profile、代理、文件）由引擎统一登记，人机共用。Web UI 的运维页提供全量管理与审批；Worker 侧通过工具访问：通用的 `resource_register` / `resource_list` / `resource_get`（`resource_register` 支持 secret 存储但不回显），以及 WebShell / C2 通道族的富表单工具（`webshell_register`、`c2_listener_create`、`c2_session_create`、`c2_credential_create`、`c2_profile_create`、payload 生成与 `c2_sessions`）。Explore 在任务中建立的通道、凭证与 payload 都会出现在对应运维页面上。
+资源（WebShell、C2 Listener/Session/Payload、凭证、流量伪装 Profile、代理、文件）由引擎统一登记，人机共用。Web UI 的运维页提供全量管理与审批；Worker 侧通过工具访问：通用的 `resource_register` / `resource_list` / `resource_get`（`resource_register` 支持 secret 存储但不回显），以及 WebShell / C2 通道族的富表单工具（`webshell_register`、`c2_listener_create`、`c2_session_create`、`c2_credential_create`、`c2_profile_create`、payload 生成与 `c2_sessions`）。执行 Worker 在任务中建立的通道、凭证与 payload 都会出现在对应运维页面上。
 
-Explore 自主使用已启用的能力工具，不由 Reason 的 Step `requires/plugins` 预先授权。派发器按当前 Project 资源选择通道（target 主机匹配或 `via` 显式指定），缺少验证缓存时复用轻量探测，不把未记录验证等同于工具不可用。真实连接、资源暂停、适配器支持和有状态通道串行仍须满足。`GET /capabilities/verbs` 提供管理视图；Worker 的 Resource、任务、结果与审计按 Project 隔离。自建 Browser 已删除，保留 Playwright request API 的独立 HTTP 工具，不引进 DSH 浏览器。
+执行 Worker 自主使用已启用的能力工具，不由 Commander 通过 Step `requires/plugins` 预先授权。派发器按当前 Project 资源选择通道（target 主机匹配或 `via` 显式指定），缺少验证缓存时复用轻量探测，不把未记录验证等同于工具不可用。真实连接、资源暂停、适配器支持和有状态通道串行仍须满足。`GET /capabilities/verbs` 提供管理视图；Worker 的 Resource、任务、结果与审计按 Project 隔离。自建 Browser 已删除，保留 Playwright request API 的独立 HTTP 工具，不引进 DSH 浏览器。
 
 MSF、Sliver、Cobalt Strike 与自定义 C2 通过同一个 Adapter 合约接入：RedTrace 轮询 `GET /sessions?framework=...`，向 `POST /execute` 发送会话动作，并向 `POST /payloads` 请求原生 Payload。Adapter 返回的会话自动进入全局 C2 会话页。
 
@@ -197,7 +211,7 @@ MSF、Sliver、Cobalt Strike 与自定义 C2 通过同一个 Adapter 合约接�
 
 | 路径 | 内容 |
 |---|---|
-| `packages/redtrace-engine/` | Node FGS 存储、Decide/Execute 调度、REST/SSE、配置、审计与外围能力 |
+| `packages/redtrace-engine/` | Node FGS 存储、Commander 与四角色调度、REST/SSE、配置、审计与外围能力 |
 | `packages/redtrace-dsh/` | 引擎宿主的 Cordis 适配插件包：插件管理、资源工具、执行工具链、审计投影与引擎调度器生命周期 |
 | `vendor/deepseek-harness/` | DSH/Cordis 运行时（vendored，通过设置页或 dsh:update 手动更新） |
 | `profiles/redtrace/` | Cordis 运行时组装配置（node 单入口） |

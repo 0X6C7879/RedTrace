@@ -35,7 +35,7 @@ function operationsPage() {
 }
 function fixture() {
   const store = new Store(':memory:')
-  const { project } = store.createProject({ title: 'Audit regression', origin: 'Local synthetic input', goal: 'Regression only', bootstrap: false })
+  const { project } = store.createProject({ title: 'Audit regression', origin: 'Local synthetic input', goal: 'Regression only', roles: ['soldier'] })
   return { store, project }
 }
 const body = (value: unknown) => Object.assign(Readable.from([Buffer.from(JSON.stringify(value))]), { headers: { 'content-type': 'application/json' } })
@@ -173,10 +173,9 @@ test('legacy project matches latest Runs with one history pass', () => {
   } finally { store.close() }
 })
 
-test('FGS refresh reads one graph and preserves Decide; legacy fallback is lazy', async () => {
+test('FGS refresh reads one graph and omits retired Reason; legacy fallback is lazy', async () => {
   const { store, project } = fixture()
   try {
-    store.claim(project.id, 'decide', { name: 'planner', backend: 'mock' })
     const router = routes(); graphRoutes(router, store)
     const page = app(); page.selectedProjectId = project.id; page.showToast = () => {}
     const urls: string[] = [], nativeGraph = store.graph.bind(store)
@@ -189,12 +188,12 @@ test('FGS refresh reads one graph and preserves Decide; legacy fallback is lazy'
     }
     await page.loadProject(project.id)
     assert.equal(reads, 1); assert.equal(urls.length, 2)
-    assert.equal(page.project.project.reason.worker, 'planner')
+    assert.equal(page.project.project.reason, undefined)
     urls.length = 0
     const api = page.api
     page.api = async (method: string, url: string) => { if (url.startsWith('/v2/')) { urls.push(url); throw new Error('FGS unavailable') }; return api(method, url) }
     await page.loadProject(project.id)
-    assert.equal(urls.length, 3); assert.equal(page.project.project.reason.worker, 'planner')
+    assert.equal(urls.length, 3); assert.equal(page.project.project.reason, undefined)
   } finally { store.close() }
 })
 
@@ -223,11 +222,10 @@ test('Worker probe and commit use one normalizer and retain the same defaults/ex
     commit(_expected: string, update: (value: any) => void) { update(raw); return this.snapshot() },
   }
   const router = routes(); configRoutes(router, configuration)
-  const value = { expected_revision: revision, name: 'mock', provider: 'mock', priority: 0, max_running: 2, enabled: false, bootstrap: false }
+  const value = { expected_revision: revision, name: 'mock', provider: 'mock', priority: 0, max_running: 2, enabled: false, roles: ['soldier'] }
   await router.handlers.get('POST /worker-config/workers')!({ req: body(value), signal: new AbortController().signal, res: { writeHead() {}, end() {} } })
   assert.deepEqual(raw.workers[0], snapshots[0])
-  assert.equal(raw.workers[0].enabled, false); assert.equal(raw.workers[0].bootstrap, false)
-  assert.equal(raw.workers[0].reason, true); assert.equal(raw.workers[0].explore, true)
+  assert.equal(raw.workers[0].enabled, false); assert.deepEqual(raw.workers[0].roles, ['soldier']); assert.equal(raw.workers[0].reason, undefined); assert.equal(raw.workers[0].explore, undefined)
 })
 
 test('unused bindings are removed without dropping Run validation or project/adapter guards', () => {
@@ -246,3 +244,5 @@ test('unused bindings are removed without dropping Run validation or project/ada
     assert.equal(unattended, true)
   } finally { store.close() }
 })
+
+test('FGS compatibility view distinguishes Park from pause and labels the Soldier initial Mission',async()=>{const page=app(),{store}=fixture();try{const p=store.createProject({title:'Initial',origin:'local',goal:'verify',bootstrap:true}).project;let intent=page.nativeProject(store.graph(p.id)).intents[0];assert.equal(intent.role,'soldier');assert.equal(page.openIntentNodeLabel(intent),'Soldier · 初始');const{LegionStore}=await import('../src/legion-store.ts');new LegionStore(store).park(p.id,'initial','blocked','new evidence');intent=page.nativeProject(store.graph(p.id)).intents[0];assert.equal(intent.state,'parked');assert.equal(page.openIntentNodeType(intent),'parked');assert.equal(page.openIntentNodeLabel(intent),'Park')}finally{store.close()}})

@@ -1,0 +1,12 @@
+{
+  "databaseSha256": "9fe862c02ecee9c18950c11f2180b032cbd9d10ce24a96c4e95b49ad51f2792c",
+  "configurationSha256": "5934194b24126538678761af96dc71f588f9adc4be8ce0f552214b1680f80eb5",
+  "credentialValuesSha256": "1af8c7f83307adf2b745bd2b819f1a52fae3acc1a388a0071f965eae63dfde44",
+  "projects": 0,
+  "nodes": [],
+  "runs": 0,
+  "auditRuns": 0,
+  "resourcesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "resourceCount": 0,
+  "tasks": []
+}

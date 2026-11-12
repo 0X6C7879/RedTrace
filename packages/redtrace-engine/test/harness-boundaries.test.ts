@@ -13,8 +13,6 @@ test('generic Explore endings preserve the fact-driven wake contract', () => {
   try {
     for (const status of ['failed', 'unknown'] as const) {
       const project = store.createProject({ title: status, origin: 'fixture', goal: 'recover' }).project
-      const planning = store.claim(project.id, 'decide', { name: 'fixture', backend: 'mock' })
-      store.finishRun(planning.id, 'succeeded')
       const step = store.addStep(project.id, { description: 'fixture', sourceIds: ['origin'] })
       const run = store.claim(project.id, 'execute', { name: 'fixture', backend: 'mock' }, step.id)
       store.finishRun(run.id, status, 'fixture failure')

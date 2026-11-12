@@ -1,0 +1,86 @@
+# Local deployment example. Workers run in the Node process on Windows/macOS/Linux.
+#
+# Usage:
+#   cp redtrace.local.example.yaml redtrace.yaml
+#   ./start-redtrace.sh --config redtrace.yaml
+
+runtime:
+  max_workers: 3
+  max_running_projects: 2
+  max_project_workers: 3
+
+tasks:
+  bootstrap:
+    timeout: 1800
+    conclude_timeout: 300
+  reason:
+    timeout: 300
+    conclude_timeout: 300
+    # Max new Intents proposed per single Reason call.
+    max_intents: 4
+  explore:
+    timeout: 1800
+    conclude_timeout: 300
+
+
+# Providers own the API protocol, endpoint, credential, and model list;
+# Workers reference them by name with their model, task eligibility,
+# concurrency, and priority. Each model entry carries its own capacities and
+# reasoning policy. Omitted reasoning means auto_max; custom gateways may
+# declare exact reasoning_efforts when the model catalog has no metadata.
+# Same exact model ID across Providers enables per-request round-robin and
+# pre-output failover. Use equivalent model capacities/reasoning capabilities.
+providers:
+  deepseek:
+    api: openai-completions
+    base_url: https://api.deepseek.com
+    api_key: replace-me
+    models:
+      - id: deepseek-reasoner
+        context_window: 1000000
+        max_tokens: 128000
+        reasoning: auto_max
+        reasoning_efforts:
+          "off":
+          high: high
+          max: max
+      - id: deepseek-chat
+        context_window: 1000000
+        max_tokens: 128000
+        reasoning_efforts: false
+
+  # Optional: a second supplier for the same model (uncomment and fill its key).
+  # deepseek-backup:
+  #   api: openai-completions
+  #   base_url: https://backup.example.com/v1
+  #   api_key: replace-me
+  #   models:
+  #     - id: deepseek-chat
+  #       context_window: 1000000
+  #       max_tokens: 128000
+  #       reasoning_efforts: false
+
+workers:
+  - name: "local-reasoner"
+    provider: "deepseek"
+    model: "deepseek-reasoner"
+    bootstrap: false
+    reason: true
+    explore: false
+    max_running: 1
+    priority: 0
+
+  - name: "local-explorer"
+    provider: "deepseek"
+    model: "deepseek-chat"
+    bootstrap: false
+    reason: false
+    explore: true
+    max_running: 2
+    priority: 1
+
+  # A wide-context model is a provider model entry, not a Worker override:
+  #   models:
+  #     - id: deepseek-chat-1m
+  #       context_window: 1000000
+  #       max_tokens: 128000

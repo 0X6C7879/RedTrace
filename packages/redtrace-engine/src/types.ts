@@ -1,6 +1,6 @@
 export type Activity = 'decide' | 'execute'
 export type ProjectStatus = 'active' | 'stopped' | 'completed' | 'deleting'
-export type StepStatus = 'pending' | 'running' | 'paused' | 'blocked' | 'done' | 'cancelled'
+export type StepStatus = 'pending' | 'running' | 'paused' | 'parked' | 'blocked' | 'done' | 'cancelled'
 export type RunStatus = 'running' | 'paused' | 'succeeded' | 'failed' | 'unknown' | 'cancelled'
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 
@@ -15,11 +15,18 @@ export interface Project {
   initialPlanningPending: boolean; planningRetryPending: boolean
   failureCount?: number; failureSignature?: string | null; circuitOpen?: boolean; contextRevision?: number
 }
-export interface Evidence { path?: string; runId?: string; toolCallId?: string; description: string }
+export type LegionRole = 'general' | 'soldier' | 'scout'
+export interface Evidence { path?: string; artifactId?: string; runId?: string; toolCallId?: string; description: string }
+export interface LegionAssignment {
+  role?: LegionRole; taskKey?: string; parentStepId?: string
+  parkReason?: string; resumeCondition?: string
+  predecessorRunId?: string; handoff?: string; handoffPending?: boolean; nextWorker?: string
+  handoffRequest?: { summary: string; nextWorker?: string }
+}
 export interface NodeBase { id: string; projectId: string; createdAt: string; creator: string; version?: number }
 export interface Fact extends NodeBase { kind: 'fact'; description: string; stepId: string | null; evidence: Evidence[]; producerStepIds?: string[] }
 export interface Goal extends NodeBase { kind: 'goal'; description: string; parentId: string | null; status: 'open' | 'achieved' | 'cancelled'; evidenceIds: string[] }
-export interface Step extends NodeBase {
+export interface Step extends NodeBase, LegionAssignment {
   kind: 'step'; description: string; goalId: string; sourceIds: string[]; factIds: string[]
   status: StepStatus; priority: number; worker: string | null; executionProfile: 'direct' | 'isolated'
   /** Legacy declarations; ignored by execution. */
@@ -46,11 +53,14 @@ export interface Run {
   inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number
   heartbeatAt?: string; trigger?: string
   provider?: string; model?: string; workspaceRoot?: string
+  contextPressure?: { source: 'dsh-token-meter'; tokens: number; capacity: number; ratio: number }
+  predecessorRunId?: string; handoff?: string
 }
 export interface Worker {
+  roles?: (LegionRole | 'commander')[]
   name: string; provider: string; model: string; enabled: boolean
   /** Capabilities from the worker configuration: Decide, ordinary Steps, bootstrap Steps. */
-  reason: boolean; explore: boolean; bootstrap: boolean
+  reason?: boolean; explore?: boolean; bootstrap?: boolean
   maxRunning: number; priority: number; backend: Run['backend']
 }
 export interface Provider {
@@ -58,7 +68,10 @@ export interface Provider {
   apiKey?: string; apiKeyEnv?: string
   models: { id: string; contextWindow: number; maxTokens: number; reasoning?: string; reasoningEfforts?: Record<string, string | null> | boolean | null; thinkingFormat?: string }[]
 }
+export interface LlmPolling { enabled: boolean; models: Record<string, string[]> }
 export interface EngineConfig {
+  llmPolling?: LlmPolling
+  taskLimits?: Record<string, {timeout:number;concludeTimeout:number}>
   workers: Worker[]; providers: Record<string, Provider>; maxWorkers: number; maxProjectWorkers: number
   maxRunningProjects: number; maxSteps: number | null; decideTimeout: number; executeTimeout: number
   concludeTimeout: number; bootstrapTimeout: number; bootstrapConcludeTimeout: number

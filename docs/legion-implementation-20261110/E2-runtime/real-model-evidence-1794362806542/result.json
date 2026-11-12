@@ -1,0 +1,133 @@
+{
+  "provider": "acceptance",
+  "model": "auto/deepseek-flash",
+  "status": "idle",
+  "projectStatus": "completed",
+  "steps": [
+    {
+      "id": "i001",
+      "role": "scout",
+      "status": "done"
+    },
+    {
+      "id": "i002",
+      "role": "general",
+      "status": "done"
+    },
+    {
+      "id": "i003",
+      "role": "soldier",
+      "parentStepId": "i002",
+      "status": "done"
+    },
+    {
+      "id": "i004",
+      "role": "soldier",
+      "parentStepId": "i002",
+      "status": "done"
+    }
+  ],
+  "facts": [
+    {
+      "id": "f001",
+      "description": "SCOUT CLASSIFICATION (Step i001, source Fact `origin`) — proj_001 is classified HARD, coordination-type LOCAL HARNESS (multi-constraint orchestration test), NOT offensive work: scope `origin` authorizes no network target, recon, exploitation, credential use or flag/platform interaction.\n\nROSTER (exactly 4 producer actors, isolated execution profile): 1 Scout (this classification only, no sub-worker spawning) + 1 General that stays active, delegates exactly TWO Soldier Steps on disjoint lanes, verifies BOTH results from shared FGS, aggregates and publishes REPORT + integration Fact + 2 Soldiers (Soldier-1 owns lane A, Soldier-2 owns lane B; disjoint).\n\nCOMPUTATION/FILE CONTRACT (asserted from the fixture, NOT executed by Scout — no lane arithmetic is Scout's deliverable): lane A [2,3] expected sum 5, lane B [3,4] expected sum 7, total 12. Each Soldier must write its sum to a regular file named exactly `lane-a.txt` / `lane-b.txt` (lowercase hyphenated .txt, no alternates such as lane_a.txt or laneA.txt) in that Soldier's own Project cwd, and publish a Fact carrying that regular-file evidence. Never directory paths, never host/runtime/configuration paths.\n\nSTEP/DEPENDENCY PLAN: S0 Scout classification (this Step) -> S1 General dispatch (DEPENDS on S0 done; Commander must not spawn General earlier) -> S2 Soldier lane A and S3 Soldier lane B (both depend on S1, mutually disjoint) -> S4 General verification/aggregation (depends on BOTH S2 and S3; verifies both lane Facts from shared FGS, computes total 12, publishes integration Fact + REPORT) -> Commander acceptance gate (depends on all four producer Steps done).\n\nCOMMANDER PRE-ACCEPTANCE PRECONDITIONS: (a) all four producer Steps done; (b) lane Fact with regular-file `lane-a.txt` evidence inside Project cwd = 5; (c) lane Fact with regular-file `lane-b.txt` evidence inside Project cwd = 7; (d) General integration Fact stating total 12 referencing both lane Facts, plus REPORT; (e) no directory or host/runtime path used as evidence.\n\nVERIFIED OBSERVATIONS: Project cwd was empty at classification time (no pre-existing lane artifacts — expected, they are Soldier deliverables); the only durable FGS content is the human-authored `origin` Fact, one open Goal `goal`, and this running Step i001; roster contains only Scout (no General/Soldier spawned yet, consistent with the wait gate). No blockers. Verified blocker/hazard to flag: nothing technical; the real risk is protocol drift — spawning General before S0 done, fewer/more than two Soldiers, non-disjoint lanes, or non-exact filenames, which would break the acceptance gate.",
+      "evidence": [
+        {
+          "description": "Scout classification artifact: HARD coordination-type local harness call, roster (1 Scout + 1 General + 2 disjoint-lane Soldiers), file/computation contract (lane-a.txt=5, lane-b.txt=7, total 12), step dependency chain, and Commander pre-acceptance checklist. Regular file, SHA-256 6f457e88b1504d5edf8ddfb5e2936462785ba316c495e854afb9626a3f20cebe, 4301 bytes, 69 lines, in Project cwd.",
+          "path": "scout-classification.md"
+        }
+      ]
+    },
+    {
+      "id": "f002",
+      "description": "LANE A COMPLETE (Step i003, Soldier ALPHA, source Facts `origin` + `f001`, Goal `goal`). Local fixture arithmetic only — no network, recon, exploit, credential or platform activity.\n\nINPUTS: lane A = [2, 3].\nCOMPUTATION: local shell `bash -c 'echo $((2+3))'` produced 5 in my own assigned Project cwd (`/private/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-legion-real-model-TltzyL/workspaces/proj_001`, the same Project cwd path reported by pwd -P). The write was gated on the computed value equalling the expected 5, so the written value is the shell-computed result, not a transcribed constant.\nRESULT: lane A sum = 5, matching the expected value in Fact `origin`.\n\nARTIFACT: regular file named EXACTLY `lane-a.txt` (lowercase, hyphen, .txt), relative to the Project cwd. `stat` reports type=Regular File (not a directory, not a symlink), mode -rw-r--r--, size = 1 byte, content = `5` with no trailing newline (`od -c` shows a single `5` byte). SHA-256 = ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d, which is the standard SHA-256 of the ASCII string \"5\", independently confirming the 1-byte content.\n\nBOUNDARIES RESPECTED: lane-b.txt untouched (never written, read or referenced); no aggregate/total computed; no sub-workers spawned; Goal unchanged; legion_accept not used; no REPORT to commander. Exactly one Fact and one finish_step.\n\nFOR GENERAL (verification input): lane A = 5 is available as regular-file evidence at `lane-a.txt` in the Project cwd; lane B (expected 7) is Soldier BRAVO's disjoint deliverable and remains unverified by me.",
+      "evidence": [
+        {
+          "description": "Regular-file evidence for lane A. Path: `lane-a.txt` (relative, inside my assigned Project cwd — absolute: /private/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-legion-real-model-TltzyL/workspaces/proj_001/lane-a.txt). Type verified by `stat`: Regular File (type=Regular File, not directory/symlink). Size: 1 byte. Mode: -rw-r--r--. Content: `5` (single byte, no trailing newline, no trailing whitespace; confirmed by `od -c` showing only `5`). SHA-256: ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d (= SHA-256 of ASCII \"5\"). Timestamped Wed Nov 10 21:05 local. Written only after `bash -c 'echo $((2+3))'` returned exactly 5.",
+          "path": "lane-a.txt"
+        }
+      ]
+    },
+    {
+      "id": "f003",
+      "description": "SOLDIER BRAVO — LANE B COMPLETE (Step i004, sources `origin`/`f001`). Inputs lane B = [3,4]. Sum computed in the local shell inside my own assigned Project cwd (/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-legion-real-model-TltzyL/workspaces/proj_001, macOS shows it as /private/var/...): `bash -c 'echo $((3+4))'` -> 7, which matches the fixture's expected lane B sum of 7.\n\nFile deliverable: regular file `lane-b.txt` (exact lowercase hyphenated name, no alternate) in the Project cwd, containing ONLY the integer 7 plus a trailing newline (2 bytes, mode -rw-------). Verified regular file via `stat`: type=Regular File (not a directory), size=2 bytes; content verified via `od -c` as `7 \\n`; SHA-256 10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58.\n\nScope discipline observed: lane A file `lane-a.txt` was NOT touched (it existed independently, 1 byte, written by the peer Soldier), no aggregate/total was computed, no sub-workers spawned, Goal unchanged, no legion_accept, no REPORT to commander. General i002 can now verify lane B evidence and aggregate total = 5 + 7 = 12.",
+      "evidence": [
+        {
+          "description": "Regular file `lane-b.txt` in Project cwd: lane B sum = 7 (2 bytes, content \"7\\n\", mode -rw-------, stat type=Regular File, SHA-256 10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58)",
+          "path": "lane-b.txt"
+        }
+      ]
+    },
+    {
+      "id": "f004",
+      "description": "INTEGRATION / GENERAL AGGREGATION (Step i002, sole General; sources `origin`, `f001`; Goal `goal`). Local fixture arithmetic only — no network, recon, exploitation, credential or platform/flag activity.\n\nDELEGATION (exactly two disjoint Soldier Steps, both now done):\n- Step i003 Soldier ALPHA, lane A only, inputs [2,3] -> regular file `lane-a.txt`. Fact `f002`, status done (ended 02:06:02Z).\n- Step i004 Soldier BRAVO, lane B only, inputs [3,4] -> regular file `lane-b.txt`. Fact `f003`, status done (ended 02:06:03Z).\nEach squad was scoped to its own lane and its own file only; neither computed the aggregate. No Scout or General spawned by me, Goal unchanged, legion_accept never used, at most two Soldier squads active.\n\nVERIFICATION PERFORMED MYSELF FROM SHARED FGS (not from a REPORT or Fact prose alone — I re-measured the artifacts on disk):\n- LANE A = 5. Fact `f002` (creator soldier, stepId i003) carries evidence path `lane-a.txt`. Independent check: `stat` type=Regular File (not directory/symlink), size 1 byte, content `5` (od -c shows a single `5` byte), SHA-256 ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d — byte-identical to the hash `f002` asserts and equal to SHA-256 of ASCII \"5\". Matches expected lane A sum 5.\n- LANE B = 7. Fact `f003` (creator soldier, stepId i004) carries evidence path `lane-b.txt`. Independent check: `stat` type=Regular File, size 2 bytes, content `7`+newline (od -c `7 \\n`), SHA-256 10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58 — byte-identical to the hash `f003` asserts. Matches expected lane B sum 7.\n- Both filenames are exactly `lane-a.txt` / `lane-b.txt` (lowercase, hyphen, .txt, no alternates). Both lane Facts exist, are evidence-backed by regular files inside the Project cwd, so NO remediation was required.\n\nAGGREGATION: total = lane A + lane B = 5 + 7 = 12, computed from the verified file contents (`a=$(tr -d '[:space:]' < lane-a.txt)` = 5, `b=$(tr -d '[:space:]' < lane-b.txt)` = 7, `$((a+b))` = 12) rather than transcribed constants. Written to regular file `total.txt` (2 bytes, content `12`, SHA-256 6b51d431df5d7f141cbececcf79edf3dd861c3b4069f0b11661a3eefacbba918).\n\nREFERENCES: `f002` (lane A = 5, evidence `lane-a.txt`), `f003` (lane B = 7, evidence `lane-b.txt`). Full audit trail in `general-verification.md` (regular file, 3186 bytes, SHA-256 3af65b2cfbf3a5ecacebc1b19fe6cc8618457bebaf70e7c55f601ab5eb72c6ed).\n\nSTATE FOR COMMANDER: producer Steps done = i001, i003, i004; i002 finishes with this Fact. Goal `goal` intentionally left OPEN — acceptance is the Commander's authority. All evidence is regular files inside the Project cwd referenced by relative name; no directory path and no host/runtime/configuration path used as evidence.",
+      "evidence": [
+        {
+          "description": "Aggregate deliverable: regular file `total.txt` in Project cwd, type=Regular File, 2 bytes, content `12` (no trailing newline), SHA-256 6b51d431df5d7f141cbececcf79edf3dd861c3b4069f0b11661a3eefacbba918. Produced by shell arithmetic over the verified lane file contents: 5 + 7 = 12.",
+          "path": "total.txt"
+        },
+        {
+          "description": "Lane A verified regular-file evidence (owned/verified by Fact f002, Soldier ALPHA, stepId i003): `lane-a.txt`, type=Regular File, 1 byte, content `5`, SHA-256 ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d, re-measured by the General (stat + od -c + shasum) and matching f002's asserted hash exactly.",
+          "path": "lane-a.txt"
+        },
+        {
+          "description": "Lane B verified regular-file evidence (owned/verified by Fact f003, Soldier BRAVO, stepId i004): `lane-b.txt`, type=Regular File, 2 bytes, content `7`+newline, SHA-256 10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58, re-measured by the General and matching f003's asserted hash exactly.",
+          "path": "lane-b.txt"
+        },
+        {
+          "description": "General verification/aggregation audit trail: `general-verification.md`, regular file, 3186 bytes, 66 lines, SHA-256 3af65b2cfbf3a5ecacebc1b19fe6cc8618457bebaf70e7c55f601ab5eb72c6ed. Documents the two disjoint delegations, the independent per-lane checks (type/size/content/hash), the aggregation command, and evidence-hygiene review.",
+          "path": "general-verification.md"
+        }
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "id": "run-e0001dd1-28f2-4138-a0da-94b8f45e43f1",
+      "status": "succeeded",
+      "worker": "scout",
+      "stepId": "i001",
+      "startedAt": "2026-11-11T02:04:55.800Z",
+      "endedAt": "2026-11-11T02:05:28.121Z",
+      "pendingTools": []
+    },
+    {
+      "id": "run-2966d0e1-0a8d-4771-a9be-91ddf55a97b0",
+      "status": "succeeded",
+      "worker": "general",
+      "stepId": "i002",
+      "startedAt": "2026-11-11T02:05:34.688Z",
+      "endedAt": "2026-11-11T02:06:37.101Z",
+      "pendingTools": []
+    },
+    {
+      "id": "run-2d430451-17b1-4648-9564-193429633e0b",
+      "status": "succeeded",
+      "worker": "soldier",
+      "stepId": "i003",
+      "startedAt": "2026-11-11T02:05:48.320Z",
+      "endedAt": "2026-11-11T02:06:02.590Z",
+      "pendingTools": []
+    },
+    {
+      "id": "run-7d3a075a-3df5-4865-befe-dd70c473fcf8",
+      "status": "succeeded",
+      "worker": "soldier",
+      "stepId": "i004",
+      "startedAt": "2026-11-11T02:05:48.366Z",
+      "endedAt": "2026-11-11T02:06:03.015Z",
+      "pendingTools": []
+    }
+  ],
+  "messageStatuses": [
+    {
+      "type": "REPORT",
+      "status": "admitted"
+    },
+    {
+      "type": "REPORT",
+      "status": "admitted"
+    }
+  ],
+  "stateSaved": true
+}

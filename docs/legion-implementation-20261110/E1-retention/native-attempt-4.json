@@ -1,0 +1,11 @@
+{
+  "command": "node",
+  "args": [
+    "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/E1-retention/smoke.mjs",
+    "/Users/lxy/Downloads/RedTrace"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "status": 0,
+  "stdout": "RETENTION_SUPPORTED=true; native_sessions=1; references=4; deleted_fixture_steps_runs_sessions=true; hashes_unchanged=true; dangling_active_refs=0; cleanupAllowed=false\n",
+  "stderr": ""
+}

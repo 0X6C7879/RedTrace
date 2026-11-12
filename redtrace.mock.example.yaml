@@ -5,20 +5,15 @@ runtime:
   max_project_workers: 4
 
 tasks:
-  bootstrap:
-    timeout: 9
-    conclude_timeout: 5
-  reason:
-    timeout: 5
-    conclude_timeout: 5
-    max_intents: 5
-  explore:
-    timeout: 9
-    conclude_timeout: 5
+  commander: { timeout: 300, conclude_timeout: 30, max_intents: 4 }
+  general: { timeout: 1800, conclude_timeout: 300 }
+  soldier: { timeout: 1800, conclude_timeout: 300 }
+  scout: { timeout: 240, conclude_timeout: 30 }
 
 workers:
   - name: "mock-observer-1"
     provider: "mock"
+    roles: [general, soldier, scout]
     max_running: 1
     priority: 0
 

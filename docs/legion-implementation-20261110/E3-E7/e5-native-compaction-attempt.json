@@ -1,0 +1,10 @@
+{
+  "command": "node",
+  "args": [
+    "packages/redtrace-engine/test/legion-context.fixture.mjs"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "status": 0,
+  "stdout": "NATIVE_CONTEXT_ACCEPTANCE=true; meter=dsh-token-meter; automatic_compaction=true; fresh_run=true; predecessor_and_summary_preserved=true\n",
+  "stderr": ""
+}

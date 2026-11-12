@@ -24,5 +24,5 @@ export function apply(ctx: RuntimeContext, config: { engineScheduler?: EngineSch
     throw new Error('redtrace-scheduler requires the RedTrace Node engine host')
   }
   scheduler.start()
-  ctx.effect(() => () => { void scheduler.close() }, 'redtrace engine scheduler')
+  ctx.effect(() => () => scheduler.close(), 'redtrace engine scheduler')
 }

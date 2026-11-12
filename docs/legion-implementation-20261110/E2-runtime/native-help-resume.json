@@ -1,0 +1,10 @@
+{
+  "command": "node",
+  "args": [
+    "packages/redtrace-engine/test/legion-runtime.fixture.mjs"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "status": 1,
+  "stdout": "",
+  "stderr": "[\n  [Object: null prototype] {\n    data: '{\"sessionId\":\"command-a4bb62df-ba88-4083-8333-bcd8aebb7242\",\"status\":\"idle\",\"state\":\"Fixture accepted: Scout classification -> General -> two specialist Soldiers -> shared FGS -> Commander verified Goal.\",\"cursors\":{\"proj_001\":{\"delivered\":19,\"acknowledged\":19}}}'\n  }\n]\n==> first run: importing Skills and MCP configuration\nRedTrace ready at http://127.0.0.1:53339\n\nnode:internal/modules/run_main:107\n    triggerUncaughtException(\n    ^\n\nAssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:\n\n  assert.ok(messages.some(m=>m.type==='HELP'&&m.status==='admitted'))\n\n    at file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-runtime.fixture.mjs:106:141\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5) {\n  generatedMessage: true,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n\nNode.js v24.21.0\n"
+}

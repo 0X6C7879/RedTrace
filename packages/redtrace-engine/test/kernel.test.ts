@@ -7,7 +7,7 @@ import { Store } from '../src/store.ts'
 import { Scheduler } from '../src/scheduler.ts'
 import type { EngineConfig } from '../src/types.ts'
 
-const worker = { name: 'mock', backend: 'mock' as const, provider: 'mock', model: '', enabled: true, reason: true, explore: true, bootstrap: true, maxRunning: 8, priority: 0 }
+const worker = { name: 'mock', backend: 'mock' as const, provider: 'mock', model: '', enabled: true, roles: ['soldier'] as import('../src/types.ts').LegionRole[], reason: true, explore: true, bootstrap: true, maxRunning: 8, priority: 0 }
 const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 8, maxProjectWorkers: 8, maxRunningProjects: 2, maxSteps: null, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: os.tmpdir() }
 const create = (s: Store) => s.createProject({ title: 'Task', origin: 'Known input', goal: 'Write verified output' }).project.id
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
@@ -33,49 +33,10 @@ test('single graph, atomic rollback, references and unique claims', async () => 
   } finally { s.close() }
 })
 
-test('Fact plus Step completion wakes one serial decision while slower execution continues', async () => {
-  const s = new Store(':memory:'), id = create(s)
-  let decideActive = 0, peak = 0, decisions = 0, release!: () => void
-  const slow = new Promise<void>(resolve => { release = resolve })
-  const scheduler = new Scheduler(s, config, async ({ run }) => {
-    if (run.activity === 'decide') {
-      peak = Math.max(peak, ++decideActive); decisions++
-      if (!s.graph(id).steps.length) {
-        s.addStep(id, { description: 'fast', sourceIds: ['origin'] })
-        s.addStep(id, { description: 'slow', sourceIds: ['origin'] })
-      }
-      await turn(); decideActive--
-    } else if (s.node(id, run.stepId!).id === 'i001') s.addFact(id, 'new evidence', { runId: run.id })
-    else await slow
-  })
-  try {
-    scheduler.start()
-    await until(() => decisions >= 2)
-    assert.equal(peak, 1)
-    assert.ok(scheduler.activeRuns.some(r => r.stepId === 'i002'))
-    const count = decisions
-    for (let i = 0; i < 8; i++) await turn()
-    assert.equal(decisions, count, 'Decide must not trigger itself')
-  } finally { release(); await scheduler.close(); s.close() }
-})
+test('Worker scheduling never creates an independent planner and keeps simultaneous Missions concurrent',async()=>{const s=new Store(':memory:'),id=create(s);s.addStep(id,{description:'fast',sourceIds:['origin']});s.addStep(id,{description:'slow',sourceIds:['origin']});let started=0,release!:()=>void;const wait=new Promise<void>(r=>release=r),scheduler=new Scheduler(s,config,async({run})=>{assert.equal(run.activity,'execute');started++;await wait;s.addFact(id,'Verified concurrent result',{runId:run.id})});try{scheduler.start();await until(()=>started===2);assert.equal(scheduler.activeRuns.length,2);assert.ok(s.runs(id).every(r=>r.activity==='execute'))}finally{release();await scheduler.close();s.close()}})
 
-test('Hint does not wake; Finding wakes independently of legacy planning revisions', async () => {
-  const s = new Store(':memory:'), id = create(s)
-  const fact = s.addFact(id, 'Verified evidence')
-  let decisions = 0
-  const scheduler = new Scheduler(s, config, async ({ run }) => { if (run.activity === 'decide') decisions++ })
-  try {
-    scheduler.start(); await until(() => decisions === 1)
-    const planning = s.project(id).planningRevision, hint = s.addInput(id, 'hint', 'Human context')
-    s.deleteInput(id, hint.id)
-    const finding = s.addFinding(id, { title: 'Deliverable', description: 'Verified output', factIds: [fact.id] })
-    assert.equal(finding.factIds[0], fact.id)
-    assert.equal(s.graph(id).findings.length, 1)
-    assert.equal(s.project(id).planningRevision, planning)
-    for (let i = 0; i < 8; i++) await turn()
-    assert.equal(decisions, 2)
-  } finally { await scheduler.close(); s.close() }
-})
+test('Hint and Finding changes remain graph events, never independent Worker planning jobs',async()=>{const s=new Store(':memory:'),id=create(s),fact=s.addFact(id,'Confirmed');let executions=0;const scheduler=new Scheduler(s,config,async()=>{executions++});try{scheduler.start();s.addInput(id,'hint','Unverified');s.addFinding(id,{title:'Deliverable',description:'Confirmed',factIds:[fact.id]});for(let i=0;i<8;i++)await turn();assert.equal(executions,0);assert.equal(s.runs(id).length,0)}finally{await scheduler.close();s.close()}})
+
 
 test('finding and fact deletion are graph changes without a planning trigger', () => {
   const s = new Store(':memory:')
@@ -136,7 +97,7 @@ test('restart retains evidence and blocks unconfirmed external side effects', ()
 test('native audit keeps the conversation and drops lifecycle noise', () => {
   const s = new Store(':memory:')
   try {
-    const id = create(s), run = s.claim(id, 'decide', worker)
+    const id = create(s), run = s.claim(id, 'execute', worker, s.addStep(id,{description:'Audit fixture',sourceIds:['origin']}).id)
     s.runEvent(run.id, 'system.prompt', { content: 'Decide prompt' })
     s.runEvent(run.id, 'message_start', { type: 'message_start' })
     s.runEvent(run.id, 'message_end', { type: 'message_end', message: { role: 'user', content: [{ type: 'text', text: 'Do the task' }] } })

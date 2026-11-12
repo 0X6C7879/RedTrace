@@ -1,3 +1,5 @@
+import{LegionStore}from'../src/legion-store.ts'
+import{legionTools}from'../src/legion-tools.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Store } from '../src/store.ts'
@@ -139,86 +141,16 @@ test('Subgoal amendments invalidate all unfinished descendant contracts without 
   } finally { s.close() }
 })
 
-test('incremental pages cannot acknowledge unseen gaps; successful explicit acknowledgement avoids redundant planning', () => {
-  const s = new Store(':memory:')
-  try {
-    const id = project(s), run = s.claim(id, 'decide', worker), cursor = run.deliveredGraphCursor!
-    s.addFact(id, 'First'); s.addFact(id, 'Second')
-    const before = s.project(id).acknowledgedEvidenceSeq
-    s.graphDelta(id, cursor + 2, 100, run.id)
-    assert.throws(() => s.acknowledgeEvidence(run.id, 2), /delivered/)
-    let page = s.graphDelta(id, cursor, 1, run.id)
-    while (page.hasMore) page = s.graphDelta(id, page.cursor, 1, run.id)
-    assert.equal(s.project(id).acknowledgedEvidenceSeq, before)
-    s.acknowledgeEvidence(run.id, 2); s.finishRun(run.id, 'succeeded')
-    assert.equal(s.project(id).acknowledgedEvidenceSeq, 2)
-  } finally { s.close() }
-})
+test('Commander incremental pages cannot acknowledge unseen gaps',()=>{const s=new Store(':memory:');try{const id=project(s),legion=new LegionStore(s);legion.claimCommand();const first=legion.readChanges(id);s.addFact(id,'First');s.addFact(id,'Second');assert.throws(()=>legion.finishCommand({[id]:first.cursor+2},'state'),/exceeds/);let page=legion.readChanges(id,first.cursor,1);while(page.hasMore)page=legion.readChanges(id,page.cursor,1);assert.equal(legion.campaign().cursors[id].acknowledged,0);legion.finishCommand({[id]:page.cursor},'processed');assert.equal(legion.campaign().cursors[id].acknowledged,page.cursor)}finally{s.close()}})
 
-test('Finding-only wakes Reason; self-maintenance does not recursively wake and graph scans stay bounded', async () => {
-  const s = new Store(':memory:'), id = project(s), a = produced(s, id, 'A')
-  const first = s.claim(id, 'decide', worker); s.finishRun(first.id, 'succeeded')
-  let decisions = 0
-  const scheduler = new Scheduler(s, { ...config, workers: [{ ...worker, explore: false }] }, async ({ run }) => { if (run.activity === 'decide') decisions++ })
-  try {
-    scheduler.start(); s.addFinding(id, { title: 'Finding', description: 'New deliverable', factIds: [a.fact.id] })
-    await until(() => decisions === 1 && scheduler.activeRuns.length === 0)
-    const unused = s.addFact(id, 'Unused')
-    await until(() => decisions === 2 && scheduler.activeRuns.length === 0)
-    s.manageEvidence(id, { operation: 'delete', id: unused.id, expectedVersion: unused.version!, reason: 'Unused' })
-    for (let i = 0; i < 10; i++) await turn()
-    assert.equal(decisions, 2)
-    s.graph = () => { throw new Error('Full graph read forbidden') }
-    assert.equal(graphUpdate(s, id, 0, a.step.id).relevant, false)
-    assert.ok(s.graphDelta(id, 0, 1).hasMore)
-    assert.ok(s.db.prepare("EXPLAIN QUERY PLAN SELECT data FROM nodes WHERE project_id=? AND kind='fact' AND COALESCE(json_extract(data,'$.deleted'),0)=0 LIMIT 1").all(id).some(r => String(r.detail).includes('nodes_active')))
-  } finally { await scheduler.close(); s.close() }
-})
+test('Finding and maintenance events reach Commander with bounded graph scans',()=>{const s=new Store(':memory:');try{const id=project(s),a=produced(s,id,'A'),legion=new LegionStore(s);legion.claimCommand();const first=legion.readChanges(id);s.addFinding(id,{title:'Finding',description:'New deliverable',factIds:[a.fact.id]});s.graph=()=>{throw Error('Full graph read forbidden')};let page=legion.readChanges(id,first.cursor,1),seen=false;do{seen ||= page.events.some(e=>e.type==='finding.added');if(!page.hasMore)break;page=legion.readChanges(id,page.cursor,1)}while(true);assert.ok(seen);assert.ok(s.db.prepare("EXPLAIN QUERY PLAN SELECT data FROM nodes WHERE project_id=? AND kind='fact' AND COALESCE(json_extract(data,'$.deleted'),0)=0 LIMIT 1").all(id).some(r=>String(r.detail).includes('nodes_active')))}finally{s.close()}})
 
-test('Reason owns maintenance tools, Explore only syncs its own contract and explicit delta reads do not imply processing', async () => {
-  const s = new Store(':memory:'), id = project(s), run = s.claim(id, 'decide', worker)
-  try {
-    const tools = graphTools({ store: s, run, worker, config, signal: new AbortController().signal }, () => {})
-    assert.ok(tools.some(t => t.name === 'manage_evidence')); assert.ok(!tools.some(t => t.name === 'sync_step'))
-    const fact = s.addFact(id, 'Evidence'), maintain = tools.find(t => t.name === 'manage_evidence')!
-    const conflict = await maintain.execute('fixture', { operation: 'delete', id: fact.id, expectedVersion: 999, reason: 'Fixture' })
-    assert.ok('isError' in conflict && conflict.isError); assert.match(JSON.stringify(conflict), /current/)
-    const step = s.addStep(id, { description: 'Execute', sourceIds: ['origin'] }), execute = s.claim(id, 'execute', worker, step.id)
-    const executeTools = graphTools({ store: s, run: execute, worker, config, signal: new AbortController().signal }, () => {})
-    assert.ok(executeTools.some(t => t.name === 'sync_step')); assert.ok(!executeTools.some(t => t.name === 'manage_evidence'))
-  } finally { s.close() }
-})
+test('Commander owns FGS maintenance while Worker can only sync its own contract',async()=>{const s=new Store(':memory:');try{const id=project(s),legion=new LegionStore(s);legion.claimCommand();const tools=legionTools(s,'commander',undefined,null,()=>{}),fact=s.addFact(id,'Evidence');await assert.rejects(tools.find(t=>t.name==='legion_manage_evidence')!.execute('conflict',{projectId:id,operation:'delete',id:fact.id,expectedVersion:999,reason:'fixture'}),/version/i);const step=s.addStep(id,{description:'execute',sourceIds:['origin']}),run=s.claim(id,'execute',worker,step.id),exec=graphTools({store:s,run,worker,config,signal:new AbortController().signal},()=>{});assert.ok(exec.some(t=>t.name==='sync_step'));assert.ok(!exec.some(t=>t.name==='legion_manage_evidence'));assert.ok(tools.some(t=>t.name==='legion_goal'));assert.ok(tools.some(t=>t.name==='legion_update_step'));await tools.find(t=>t.name==='legion_manage_evidence')!.execute('delete',{projectId:id,operation:'delete',id:fact.id,expectedVersion:fact.version,reason:'unused'});assert.throws(()=>s.node(id,fact.id),/not found/)}finally{s.close()}})
 
-test('Reason has no reserved slot, waits at total/Worker capacity and wins the next available slot', async () => {
-  const s = new Store(':memory:'), id = project(s)
-  const initial = s.claim(id, 'decide', worker); s.finishRun(initial.id, 'succeeded')
-  let release!: () => void, started = false, decisions = 0
-  const gate = new Promise<void>(r => { release = r })
-  const scheduler = new Scheduler(s, { ...config, maxWorkers: 1, maxProjectWorkers: 1, workers: [{ ...worker, maxRunning: 1 }] }, async ({ run }) => {
-    if (run.activity === 'decide') decisions++
-    else { started = true; await gate }
-  })
-  try {
-    const step = s.addStep(id, { description: 'Full slot', sourceIds: ['origin'] })
-    scheduler.start(); await until(() => started)
-    const run = s.latestRun(id, step.id)!
-    s.addFact(id, 'Immediate pending evidence', { runId: run.id })
-    for (let i = 0; i < 10; i++) await turn()
-    assert.equal(decisions, 0); assert.equal(scheduler.activeRuns.length, 1)
-    assert.ok(s.project(id).evidenceSeq! > s.project(id).acknowledgedEvidenceSeq!)
-    release(); await until(() => decisions === 1)
-    assert.ok(scheduler.activeRuns.length <= 1)
-  } finally { release(); await scheduler.close(); s.close() }
-})
+test('role scheduling honors total and Worker concurrency without an independent Reason slot',async()=>{const s=new Store(':memory:'),id=project(s);for(let i=0;i<4;i++)s.addStep(id,{description:'work '+i,sourceIds:['origin']});let release!:()=>void;const wait=new Promise<void>(r=>release=r),scheduler=new Scheduler(s,{...config,maxWorkers:2,workers:[{...worker,roles:['soldier'],maxRunning:2}]},async()=>wait);try{scheduler.start();await until(()=>scheduler.activeRuns.length===2);assert.equal(s.runs(id).length,2);assert.ok(s.runs(id).every(r=>r.activity==='execute'))}finally{release();await scheduler.close();s.close()}})
 
-test('pending Reason in another project precedes an earlier project Explore', async () => {
-  const s = new Store(':memory:'), a = project(s), b = project(s), order: string[] = []
-  for (const id of [a, b]) { const run = s.claim(id, 'decide', worker); s.finishRun(run.id, 'succeeded') }
-  s.addStep(a, { description: 'Earlier project Explore', sourceIds: ['origin'] }); s.addFact(b, 'Later project evidence')
-  const scheduler = new Scheduler(s, { ...config, maxWorkers: 1, workers: [{ ...worker, maxRunning: 1 }] }, async ({ run }) => { order.push(`${run.projectId}:${run.activity}`) })
-  try { scheduler.start(); await until(() => order.length === 2); assert.deepEqual(order, [`${b}:decide`, `${a}:execute`]) }
-  finally { await scheduler.close(); s.close() }
-})
+test('disabled role routes do not prevent another eligible Project from dispatching',async()=>{const s=new Store(':memory:'),a=project(s),b=project(s);s.addStep(a,{description:'Scout unavailable',sourceIds:['origin'],role:'scout',taskKey:'unavailable'});s.addStep(b,{description:'Soldier available',sourceIds:['origin'],role:'soldier',taskKey:'available'});let release!:()=>void;const wait=new Promise<void>(r=>release=r),scheduler=new Scheduler(s,{...config,workers:[{...worker,roles:['soldier']}]},async()=>wait);try{scheduler.start();await until(()=>scheduler.activeRuns.length===1);assert.equal(scheduler.activeRuns[0].projectId,b)}finally{release();await scheduler.close();s.close()}})
+
 
 test('a paused session is already quiescent and can be replaced without leaving an orphan paused lease', () => {
   const s = new Store(':memory:')

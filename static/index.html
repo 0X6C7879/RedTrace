@@ -18,6 +18,7 @@
 <script defer src="/static/operations.js?v=20261015-c2-auth-1"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
 <style>
+  dialog::backdrop { background: rgb(15 23 42 / 55%); }
   [x-cloak] { display: none !important; }
   .env-row-dragging {
     position: relative;
@@ -253,6 +254,7 @@
   }
 </script>
 <link rel="stylesheet" href="/static/redtrace-theme.css?v=20260916-detail-tab-1">
+  <link rel="stylesheet" href="/static/legion.css">
 </head>
 <body class="bg-slate-50 text-slate-800 h-screen overflow-hidden" :class="{ 'select-none cursor-col-resize': isResizingPanel }" x-data="redtraceApp()">
 <div class="app-shell flex h-full min-h-0" :class="{ 'app-shell-operations': appPage === 'webshell' || appPage === 'plugins' || appPage.startsWith('c2-') }">
@@ -296,6 +298,7 @@
           <button type="button" @click="setAppPage('c2-credentials')" class="app-subnav-item" :class="{ 'app-subnav-item-active': appPage === 'c2-credentials' }">凭证</button>
         </div>
       </div>
+      <button type="button" @click="setAppPage('legion')" aria-label="军团" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{'app-nav-item-active':appPage==='legion'}"><img src="/static/favicon.svg?v=20260727-logo3" alt="" class="h-4 w-4 shrink-0"><span>军团 · Legion</span></button>
       <button type="button" @click="setAppPage('plugins')" aria-label="插件" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'plugins' }">
         <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M8 3v4m8-4v4M5 9h14v4a7 7 0 0 1-14 0zM12 20v2"/></svg><span>插件</span>
       </button>
@@ -309,6 +312,463 @@
     </nav>
   </aside>
   <main class="min-w-0 flex-1 overflow-hidden">
+  <section x-show="appPage==='legion'" x-cloak class="legion-console" aria-labelledby="legion-title">
+    <div class="legion-content">
+      <header class="legion-heading">
+      <div>
+      <p class="legion-eyebrow">COMMAND CENTER</p>
+      <h1 id="legion-title">军团控制台</h1>
+      <p class="legion-muted">Commander 统筹 · Scout 分类 · General 委派 · Soldier 执行</p>
+      </div>
+      <button type="button" class="legion-button" @click="loadLegion()" :disabled="legionLoading" x-text="legionLoading?'更新中…':'刷新状态'">
+      </button>
+      </header>
+      <p class="legion-alert" role="alert" x-show="legionError" x-text="legionError">
+      </p>
+      <p class="legion-muted" x-show="!legion && legionLoading">正在读取军团状态…</p>
+      <template x-if="legion">
+      <div>
+        <section class="legion-card legion-overview" aria-label="执行总览">
+          <div class="legion-heading">
+      <div>
+      <span class="legion-badge" :data-state="legion.campaign.status" x-text="legion.campaign.status==='stopped'?'军团调度已停止':legionStatus(legion.campaign.status)">
+      </span>
+      <p class="legion-muted" x-text="legion.campaign.status==='stopped'?'军团调度已停止；控制台服务仍在线，项目和证据保留。各 Run 状态见下方。':'Commander 与任务执行状态分开记录；Park 只搁置指定题目。'">
+      </p>
+      </div>
+      <div class="legion-actions">
+      <button class="legion-button" @click="legionAction('/v2/legion/pause',{},'军团执行已停止；控制台仍在线')" :disabled="(legion.campaign.status==='stopped'&&!legion.projects.some(p=>p.runs.some(r=>r.status==='running')))||!!legionPending['/v2/legion/pause']" x-text="legionPending['/v2/legion/pause']?'正在停止…':'停止军团执行'">
+      </button>
+      <button class="legion-button legion-primary" @click="legionAction('/v2/legion/resume',{},'已完成恢复核验，请查看最新执行状态')" :disabled="!legion.projects.length||legion.campaign.status==='running'||!!legionPending['/v2/legion/resume']" x-text="legionPending['/v2/legion/resume']?'正在核验…':'核验并继续'">
+      </button>
+      </div>
+      </div>
+          <div class="legion-metrics">
+      <div>
+      <span>项目</span>
+      <strong x-text="legion.projects.length">
+      </strong>
+      </div>
+      <div>
+      <span>正在执行</span>
+      <strong x-text="legion.projects.reduce((n,p)=>n+p.runs.filter(r=>r.status==='running').length,0)">
+      </strong>
+      </div>
+      <div>
+      <span>阶段</span>
+      <strong x-text="legionPhase(legion.campaign.phase)">
+      </strong>
+      </div>
+      <div>
+      <span>截止时间</span>
+      <strong x-text="legion.campaign.deadline?new Date(legion.campaign.deadline).toLocaleString():'未设置'">
+      </strong>
+      </div>
+      </div>
+          <details class="legion-details">
+      <summary>时间与 Commander 连续性</summary>
+      <form class="legion-form legion-inline-form" @submit.prevent="setLegionDeadline()">
+      <label>军团截止时间（本机时区）<input type="datetime-local" x-model="legionDeadline" required>
+      </label>
+      <button class="legion-button" :disabled="!!legionPending['/v2/legion/deadline']">保存截止时间</button>
+      </form>
+      <p class="legion-muted" x-text="'时区：'+Intl.DateTimeFormat().resolvedOptions().timeZone+'。设置后以服务端截止时间为准。'">
+      </p>
+      <p class="legion-muted" x-text="legion.campaign.hasSession?'已有 Commander 会话，恢复需核验连续性。':'尚未物化 Commander 会话；不能据此认定已运行。'">
+      </p>
+      <code x-text="legion.campaign.sessionId">
+      </code>
+      <h3>已保存 STATE</h3>
+      <pre x-text="legion.campaign.state || '尚无已保存 STATE'">
+      </pre>
+      <details>
+      <summary>项目事件交付 / 确认游标</summary>
+      <pre x-text="JSON.stringify(legion.campaign.cursors||{},null,2)">
+      </pre>
+      </details>
+      </details>
+          <p class="legion-alert" role="alert" x-show="legion.campaign.error" x-text="legion.campaign.error">
+      </p>
+      <p class="legion-alert" role="status" x-show="legionNotice || legionErrors['/v2/legion/pause'] || legionErrors['/v2/legion/resume'] || legionErrors['/v2/legion/deadline']" x-text="legionNotice || legionErrors['/v2/legion/pause'] || legionErrors['/v2/legion/resume'] || legionErrors['/v2/legion/deadline']">
+      </p>
+        </section>
+        <nav class="legion-sections" aria-label="军团内容">
+      <button class="legion-button" :aria-pressed="legionPanel==='tasks'" @click="legionPanel='tasks'">项目与任务</button>
+      <button class="legion-button" :aria-pressed="legionPanel==='messages'" @click="legionPanel='messages'">消息协作</button>
+      <button class="legion-button" :aria-pressed="legionPanel==='knowledge'" @click="legionPanel='knowledge'">经验与复验</button>
+      </nav>
+        <section x-show="legionPanel==='tasks'" aria-label="项目与任务">
+          <div class="legion-card legion-empty" x-show="!legion.projects.length">
+      <h2>还没有项目</h2>
+      <p class="legion-muted">先在工作台创建项目和目标，再由四角色军团协作。这里不会凭空创建任务或启动模型。</p>
+      <button class="legion-button legion-primary" @click="setAppPage('workspace')">前往工作台</button>
+      </div>
+          <template x-for="p in legion.projects" :key="p.id">
+      <article class="legion-card">
+      <header class="legion-heading">
+      <div>
+      <h2 x-text="p.title">
+      </h2>
+      <p class="legion-muted">
+      <span x-text="legionStatus(p.status)">
+      </span> · <code x-text="p.id">
+      </code>
+      </p>
+      </div>
+      <button class="legion-button" @click="setAppPage('workspace');openProject(p.id)">查看项目图谱</button>
+      </header>
+            <p class="legion-muted" x-show="!p.steps.length">暂无 Mission。项目原始范围和目标保留在 FGS 图谱中。</p>
+            <template x-for="task in p.tactics||[]" :key="task.taskKey">
+      <section class="legion-task">
+      <div class="legion-heading">
+      <div>
+      <h3 x-text="legionTaskTitle(p,task.taskKey)">
+      </h3>
+      <p class="legion-muted">
+      <span x-text="legionTaskFinished(p,task.taskKey)&&!task.classification?'未分类':legionDifficulty(task.classification?.difficulty)">
+      </span> · 执行用时 <span x-text="Math.round(task.elapsedMs/60000)">
+      </span> 分钟 · <span x-text="legionTaskFinished(p,task.taskKey)?'任务已结束':legionRecommendation(task.recommendation)">
+      </span>
+      </p>
+      </div>
+      <div class="legion-actions">
+      <button class="legion-button" x-show="task.recommendation!=='parked'" :disabled="p.status!=='active'||!p.steps.some(s=>s.taskKey===task.taskKey&&!['done','cancelled'].includes(s.status))" @click="openLegionEditor('park',p,{taskKey:task.taskKey})">搁置题目 · Park</button>
+      <button class="legion-button" x-show="task.recommendation==='parked'" :disabled="!!legionResumeBlock(p,task.taskKey)" :title="legionResumeBlock(p,task.taskKey)" @click="openLegionEditor('resume',p,{taskKey:task.taskKey})">按证据恢复</button>
+      </div>
+      </div>
+      <p class="legion-muted" x-show="task.recommendation==='parked'" x-text="legionResumeBlock(p,task.taskKey)||'请提供满足恢复条件的新证据。'">
+      </p>
+      </section>
+      </template>
+            <div class="legion-table-wrap" x-show="p.steps.length">
+      <table class="legion-table">
+      <thead>
+      <tr>
+      <th>Mission / 任务关系</th>
+      <th>角色</th>
+      <th>状态 / 交接</th>
+      <th>成果</th>
+      </tr>
+      </thead>
+      <tbody>
+      <template x-for="s in p.steps" :key="s.id">
+      <tr>
+      <td>
+      <strong x-text="s.description||s.id">
+      </strong>
+      <small x-text="s.id+(s.parentStepId?' · 上级 '+s.parentStepId:'')">
+      </small>
+      </td>
+      <td x-text="legionRole(s.role)+(s.initialMission?' · 初始':'')">
+      </td>
+      <td>
+      <span class="legion-badge" :data-state="s.status" x-text="legionStatus(s.status)">
+      </span>
+      <p x-show="s.parkReason" x-text="'阻塞：'+s.parkReason">
+      </p>
+      <p x-show="s.resumeCondition" x-text="'恢复条件：'+s.resumeCondition">
+      </p>
+      <p x-show="s.handoffPending">正在交接，尚未确认旧执行停止</p>
+      </td>
+      <td x-text="(s.factIds||[]).length+' 条 Fact'">
+      </td>
+      </tr>
+      </template>
+      </tbody>
+      </table>
+      </div>
+            <template x-for="r in p.runs" :key="r.id">
+      <div class="legion-run">
+      <div class="legion-heading">
+      <div>
+      <strong x-text="legionRole(p.steps.find(s=>s.id===r.stepId)?.role)+' · '+r.worker">
+      </strong>
+      <span class="legion-badge" :data-state="r.status" x-text="legionStatus(r.status)">
+      </span>
+      <p class="legion-muted" x-text="(r.provider||'供应商未记录')+' / '+(r.model||'模型未记录')">
+      </p>
+      </div>
+      <button class="legion-button" :disabled="p.status!=='active'||!['running','paused'].includes(r.status)||!['running','paused'].includes(p.steps.find(s=>s.id===r.stepId)?.status)||!!r.pendingTools||!legionWorkers(p,r).length" @click="openLegionEditor('reassign',p,{runId:r.id})">更换同角色模型</button>
+      </div>
+      <p class="legion-muted" x-text="r.contextPressure?'当前上下文 '+Math.round(r.contextPressure.ratio*100)+'% · '+r.contextPressure.source:'当前上下文压力未知，不以累计 Token 代替。'">
+      </p>
+      <p class="legion-muted" x-show="r.pendingTools" x-text="r.pendingTools+' 项工具结果未确认；不能换人。'">
+      </p>
+      <p class="legion-alert" x-show="r.status==='unknown'">执行结果未知。先核验旧执行及工具结果，不能直接恢复或换人。</p>
+      <p class="legion-muted" x-show="!legionWorkers(p,r).length">没有其他已启用的同角色模型路线；可在设置中配置。</p>
+      </div>
+      </template>
+            <details class="legion-details">
+      <summary>平台实例（原始状态）</summary>
+      <pre x-text="JSON.stringify(p.instances||{},null,2)">
+      </pre>
+      </details>
+          </article>
+      </template>
+        </section>
+        <section x-show="legionPanel==='messages'" class="legion-card" aria-labelledby="legion-messages-title">
+      <h2 id="legion-messages-title">消息协作</h2>
+      <p class="legion-muted">向 Commander 或所选项目的执行会话发送消息。消息不会自动成为 Fact。</p>
+      <form class="legion-form" @submit.prevent="sendLegionMessage()">
+      <div class="legion-form-grid">
+      <label>项目<select x-model="legionMessage.projectId" @change="legionMessage.receiver='commander'" required>
+      <option value="">选择项目</option>
+      <template x-for="p in legion.projects" :key="p.id">
+      <option :value="p.id" x-text="p.title">
+      </option>
+      </template>
+      </select>
+      </label>
+      <label>接收者<select x-model="legionMessage.receiver" @change="legionNotice=''" :disabled="!legionMessage.projectId" required>
+      <option value="commander">Commander · 全局统筹</option>
+      <template x-for="r in legionRecipients(legionMessage.projectId)" :key="r.id">
+      <option :value="r.id" x-text="legionRunLabel(legionMessage.projectId,r)">
+      </option>
+      </template>
+      </select>
+      </label>
+      <label>消息类型<select x-model="legionMessage.type">
+      <option value="MESSAGE">MESSAGE · 指令 / 补充</option>
+      <option value="HELP">HELP · 请求帮助</option>
+      <option value="REPORT">REPORT · 汇报结果</option>
+      </select>
+      </label>
+      </div>
+      <label>内容<textarea x-model="legionMessage.content" required rows="3" placeholder="说明指令、阻塞或已确认的结果">
+      </textarea>
+      </label>
+      <button class="legion-button legion-primary" :disabled="!legionMessage.projectId||!!legionPending['/v2/legion/message']" x-text="legionPending['/v2/legion/message']?'正在保存…':'发送消息'">
+      </button>
+      </form>
+      <p class="legion-alert" role="alert" x-show="legionErrors['/v2/legion/message']" x-text="legionErrors['/v2/legion/message']"></p>
+      <p class="legion-muted">待交付 → 已排队 → 已入模。已排队不代表模型已读；交付不确定的消息不会自动重放。</p>
+      <p class="legion-empty" x-show="!legion.messages.length">暂无消息。</p>
+      <div class="legion-message-list">
+      <template x-for="m in legion.messages" :key="m.id">
+      <article class="legion-message">
+      <header>
+      <strong x-text="m.type">
+      </strong>
+      <span class="legion-badge" :data-state="m.status" x-text="m.status==='pending'?'待交付':legionStatus(m.status)">
+      </span>
+      <span x-text="legionProjectTitle(m.projectId)">
+      </span>
+      </header>
+      <p class="legion-muted" x-text="m.sender+' → '+m.receiver">
+      </p>
+      <p class="legion-message-content" x-text="m.content">
+      </p>
+      </article>
+      </template>
+      </div>
+      </section>
+        <section x-show="legionPanel==='knowledge'" class="legion-card" aria-labelledby="legion-knowledge-title">
+      <h2 id="legion-knowledge-title">经验与目标复验</h2>
+      <p class="legion-muted">来源经验只作为目标项目的 Hint。必须由目标题目的实际 Fact 完成复验。</p>
+      <form class="legion-form legion-inline-form" @submit.prevent="searchLegionExperience()">
+      <label>搜索经验<input x-model="legionQuery" required placeholder="产品、版本、家族或技术">
+      </label>
+      <button class="legion-button legion-primary" :disabled="legionSearching" x-text="legionSearching?'检索中…':'搜索经验'">
+      </button>
+      </form>
+      <p class="legion-muted" x-show="legionSearched&&!legionResults.length&&!legionSearching">没有匹配经验。可尝试产品名称或技术关键词。</p>
+      <template x-for="item in legionResults" :key="item.id">
+      <article class="legion-message">
+      <div class="legion-heading">
+      <div>
+      <h3 x-text="item.title">
+      </h3>
+      <p class="legion-muted" x-text="item.family+' · '+legionProjectTitle(item.projectId)">
+      </p>
+      </div>
+      <div class="legion-actions">
+      <button class="legion-button" @click="readLegionExperience(item)" :disabled="legionReading">阅读来源证据</button>
+      <button class="legion-button" @click="legionTransfer.sourceId=item.id;legionTransferSource=item">选为迁移来源</button>
+      </div>
+      </div>
+      <p x-text="item.snippet">
+      </p>
+      </article>
+      </template>
+          <section class="legion-preview" x-show="legionPreviewItem">
+      <h3 x-text="legionPreviewItem?.title">
+      </h3>
+      <p class="legion-muted" x-show="legionPreviewMeta" x-text="legionPreviewMeta?'已读取 '+legionPreviewMeta.bytes+' / '+legionPreviewMeta.totalBytes+' 字节 · SHA256 '+legionPreviewMeta.sha256:''">
+      </p>
+      <pre x-text="legionPreview">
+      </pre>
+      <button class="legion-button" x-show="legionPreviewMeta?.nextOffset!=null" @click="readLegionExperience(legionPreviewItem,true)" :disabled="legionReading">继续读取</button>
+      </section>
+          <details class="legion-details">
+      <summary>从已确认成果沉淀经验</summary>
+      <form class="legion-form" @submit.prevent="captureLegionExperience()">
+      <div class="legion-form-grid">
+      <label>来源项目<select x-model="legionCapture.projectId" @change="legionCapture.factIds=[];loadLegionFacts(legionCapture.projectId)" required>
+      <option value="">选择项目</option>
+      <template x-for="p in legion.projects" :key="p.id">
+      <option :value="p.id" x-text="p.title">
+      </option>
+      </template>
+      </select>
+      </label>
+      <label>产品家族<input x-model="legionCapture.family" required>
+      </label>
+      <label>经验标题<input x-model="legionCapture.title" required>
+      </label>
+      </div>
+      <fieldset>
+      <legend>来源 Fact（原始范围不作为经验证据）</legend>
+      <p class="legion-muted" x-show="!legionCapture.projectId">请先选择来源项目。</p>
+      <p role="alert" class="legion-alert" x-show="legionFactErrors[legionCapture.projectId]" x-text="legionFactErrors[legionCapture.projectId]">
+      </p>
+      <p class="legion-muted" x-show="legionFactLoading[legionCapture.projectId]">正在读取 Fact…</p>
+      <template x-for="f in legionFactOptions(legionCapture.projectId)" :key="f.id">
+      <label class="legion-check">
+      <input type="checkbox" :value="f.id" x-model="legionCapture.factIds">
+      <span x-text="f.description||f.id">
+      </span>
+      <code x-text="f.id">
+      </code>
+      </label>
+      </template>
+      <p class="legion-muted" x-show="legionCapture.projectId&&!legionFactLoading[legionCapture.projectId]&&!legionFactOptions(legionCapture.projectId).length">当前没有可用的来源 Fact。</p>
+      <button type="button" class="legion-button" x-show="legionCapture.projectId" @click="loadLegionFacts(legionCapture.projectId)">刷新证据</button>
+      </fieldset>
+      <label>方法、适用范围、版本与前置条件<textarea x-model="legionCapture.body" rows="4" required>
+      </textarea>
+      </label>
+      <button class="legion-button legion-primary" :disabled="!legionCapture.factIds.length||!!legionPending['/v2/legion/experience']">保存经验并索引</button>
+      </form>
+      <p class="legion-alert" role="alert" x-show="legionErrors['/v2/legion/experience']" x-text="legionErrors['/v2/legion/experience']"></p>
+      </details>
+          <details class="legion-details" :open="!!legionTransferSource">
+      <summary>将来源经验发送到目标项目</summary>
+      <p class="legion-muted" x-text="legionTransferSource?'已选来源：'+legionTransferSource.title:'先搜索经验并选择迁移来源。'">
+      </p>
+      <form class="legion-form" @submit.prevent="transferLegionExperience()">
+      <div class="legion-form-grid">
+      <label>目标项目<select x-model="legionTransfer.targetProject" @change="legionTransfer.taskKey=''" required>
+      <option value="">选择项目</option>
+      <template x-for="p in legion.projects" :key="p.id">
+      <option :value="p.id" x-text="p.title">
+      </option>
+      </template>
+      </select>
+      </label>
+      <label>目标题目<select x-model="legionTransfer.taskKey" required :disabled="!legionTransfer.targetProject">
+      <option value="">选择题目</option>
+      <template x-for="t in legionProject(legionTransfer.targetProject)?.tactics||[]" :key="t.taskKey">
+      <option :value="t.taskKey" x-text="legionTaskTitle(legionProject(legionTransfer.targetProject),t.taskKey)">
+      </option>
+      </template>
+      </select>
+      </label>
+      </div>
+      <label>已知差异和需要复验的条件<textarea x-model="legionTransfer.brief" rows="3" required>
+      </textarea>
+      </label>
+      <button class="legion-button legion-primary" :disabled="!legionTransferSource||!legionTransfer.taskKey||!!legionPending['/v2/legion/transfer']">发送未验证 Hint</button>
+      </form>
+      <p class="legion-alert" role="alert" x-show="legionErrors['/v2/legion/transfer']" x-text="legionErrors['/v2/legion/transfer']"></p>
+      </details>
+          <h3 class="legion-subheading">目标复验记录</h3>
+      <p class="legion-muted" x-show="!legion.transfers.length">暂无迁移记录。</p>
+      <template x-for="item in legion.transfers" :key="item.id">
+      <article class="legion-message">
+      <div class="legion-heading">
+      <div>
+      <h3 x-text="legionProjectTitle(item.sourceProjectId)+' → '+legionProjectTitle(item.targetProject)">
+      </h3>
+      <p class="legion-muted" x-text="legionTaskTitle(legionProject(item.targetProject),item.taskKey)">
+      </p>
+      <span class="legion-badge" :data-state="item.status" x-text="legionStatus(item.status)">
+      </span>
+      </div>
+      <button class="legion-button" x-show="item.status!=='target-verified'" @click="openLegionEditor('confirm',legionProject(item.targetProject),{taskKey:item.taskKey,transferId:item.id})">选择目标复验 Fact</button>
+      </div>
+      <p x-text="item.brief">
+      </p>
+      <p class="legion-muted" x-show="item.status==='target-verified'" x-text="'目标复验 Fact：'+(item.confirmedFactIds||[]).join(', ')">
+      </p>
+      </article>
+      </template>
+        </section>
+        <p class="legion-updated legion-muted" x-show="legionUpdatedAt" x-text="'状态快照更新于 '+new Date(legionUpdatedAt).toLocaleTimeString()+'；后台刷新沿用现有轮询。'">
+      </p>
+      </div>
+      </template>
+    </div>
+    <dialog x-ref="legionEditorDialog" class="legion-dialog" aria-labelledby="legion-editor-title" @cancel.prevent="closeLegionEditor()">
+      <form class="legion-form" @submit.prevent="submitLegionEditor()">
+      <header class="legion-heading">
+      <h2 id="legion-editor-title" x-text="({park:'搁置题目 · Park',resume:'按证据恢复题目',reassign:'更换同角色模型',confirm:'登记目标实际复验'})[legionEditor.kind]">
+      </h2>
+      <button type="button" class="legion-button" @click="closeLegionEditor()" aria-label="关闭操作表单">关闭</button>
+      </header>
+      <p class="legion-muted" x-text="legionProjectTitle(legionEditor.projectId)+' · '+legionTaskTitle(legionProject(legionEditor.projectId),legionEditor.taskKey)">
+      </p>
+      <template x-if="legionEditor.kind==='park'">
+      <div class="legion-form">
+      <p class="legion-muted">Park 只搁置此题；不等同于暂停 Run，也不会删除成果。实际执行是否停止需单独核验。</p>
+      <label>具体阻塞原因<textarea x-model="legionEditor.reason" required autofocus rows="3">
+      </textarea>
+      </label>
+      <label>恢复需要的新证据或条件<textarea x-model="legionEditor.resumeCondition" required rows="3">
+      </textarea>
+      </label>
+      </div>
+      </template>
+      <template x-if="legionEditor.kind==='resume'">
+      <label>满足恢复条件的依据<textarea x-model="legionEditor.reason" required autofocus rows="4" placeholder="说明旧执行已停止、未知结果已核验，以及新增的证据">
+      </textarea>
+      </label>
+      </template>
+      <template x-if="legionEditor.kind==='reassign'">
+      <div class="legion-form">
+      <p class="legion-muted">只列出已启用的同角色路线。提交后先交接并确认旧执行停止，不表示新模型已开始运行。</p>
+      <label>替代模型路线<select x-model="legionEditor.nextWorker" required>
+      <option value="">选择路线</option>
+      <template x-for="w in legionWorkers(legionProject(legionEditor.projectId),legionProject(legionEditor.projectId)?.runs.find(r=>r.id===legionEditor.runId))" :key="w.name">
+      <option :value="w.name" x-text="w.name+' · '+w.model">
+      </option>
+      </template>
+      </select>
+      </label>
+      <label>交接 STATE、证据、未决结果与下一步<textarea x-model="legionEditor.summary" required rows="5">
+      </textarea>
+      </label>
+      </div>
+      </template>
+      <template x-if="legionEditor.kind==='confirm'">
+      <fieldset>
+      <legend>仅可选择此目标题目实际产出的 Fact</legend>
+      <p class="legion-muted" x-show="legionFactLoading[legionEditor.projectId]">正在读取目标证据…</p>
+      <p class="legion-alert" role="alert" x-show="legionFactErrors[legionEditor.projectId]" x-text="legionFactErrors[legionEditor.projectId]">
+      </p>
+      <template x-for="f in legionFactOptions(legionEditor.projectId,legionEditor.taskKey)" :key="f.id">
+      <label class="legion-check">
+      <input type="checkbox" :value="f.id" x-model="legionEditor.factIds">
+      <span x-text="f.description||f.id">
+      </span>
+      <code x-text="f.id">
+      </code>
+      </label>
+      </template>
+      <p class="legion-muted" x-show="!legionFactLoading[legionEditor.projectId]&&!legionFactOptions(legionEditor.projectId,legionEditor.taskKey).length">没有符合此目标题目的复验 Fact。请先执行实际验证，不能使用来源成果代替。</p>
+      <button type="button" class="legion-button" @click="loadLegionFacts(legionEditor.projectId)">刷新目标证据</button>
+      </fieldset>
+      </template>
+      <p class="legion-alert" role="alert" x-show="legionEditorError" x-text="legionEditorError">
+      </p>
+      <footer class="legion-actions">
+      <button type="button" class="legion-button" @click="closeLegionEditor()">取消</button>
+      <button class="legion-button legion-primary" :disabled="legionEditorSaving||(legionEditor.kind==='confirm'&&!legionEditor.factIds.length)" x-text="legionEditorSaving?'正在提交…':({park:'保存阻塞与恢复条件',resume:'提交恢复依据',reassign:'提交交接请求',confirm:'登记目标复验'})[legionEditor.kind]">
+      </button>
+      </footer>
+      </form>
+      </dialog>
+  </section>
+
   <section x-show="appPage === 'workspace'" class="flex h-full min-h-0 flex-col overflow-hidden">
 
 <!-- ═══════════ PROJECT LIST VIEW ═══════════ -->
@@ -321,20 +781,9 @@
       <span class="font-semibold text-slate-700 tracking-tight">RedTrace</span>
     </div>
     <div class="flex shrink-0 items-center gap-2 text-[11px] text-slate-400 tabular-nums"
-      title="全部任务的 Token 消耗:Bootstrap / Reason / Explore / 总计">
+      title="全局累计用量：Commander / General / Soldier / Scout；不代表当前上下文压力">
       <span class="font-medium uppercase tracking-[0.12em] text-slate-400">Token</span>
-      <span class="flex items-center gap-1 provider-bootstrap" title="Bootstrap">
-        <span class="h-1.5 w-1.5 rounded-full provider-dot-bootstrap"></span>
-        <span class="font-semibold" x-text="formatTokens(globalUsage?.bootstrap)"></span>
-      </span>
-      <span class="flex items-center gap-1 provider-reason" title="Reason">
-        <span class="h-1.5 w-1.5 rounded-full provider-dot-reason"></span>
-        <span class="font-semibold" x-text="formatTokens(globalUsage?.reason)"></span>
-      </span>
-      <span class="flex items-center gap-1 provider-explore" title="Explore">
-        <span class="h-1.5 w-1.5 rounded-full provider-dot-explore"></span>
-        <span class="font-semibold" x-text="formatTokens(globalUsage?.explore)"></span>
-      </span>
+      <template x-for="role in ['commander','general','soldier','scout']" :key="role"><span class="flex items-center gap-1" :class="'provider-'+role" :title="role.charAt(0).toUpperCase()+role.slice(1)"><span class="h-1.5 w-1.5 rounded-full" :class="'provider-dot-'+role"></span><span x-text="formatTokens(globalUsage?.[role])"></span></span></template>
       <span class="flex items-center gap-1 font-semibold text-slate-600" title="总计">
         共 <span x-text="formatTokens(globalUsage?.total)"></span>
       </span>
@@ -361,9 +810,9 @@
         @click="stopAllActiveProjects()"
         :disabled="!hasActiveProjects() || isStoppingAllProjects"
         class="h-7 px-2.5 rounded-lg border border-amber-200 text-xs text-amber-700 hover:bg-amber-50 transition inline-flex items-center gap-1.5 shrink-0 disabled:cursor-not-allowed disabled:opacity-40"
-        title="停止全部运行中项目">
+        title="停止所有进行中的项目；不关闭控制台服务，也不等同于停止全局 Commander">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
-        <span x-text="isStoppingAllProjects ? 'Stopping…' : 'stop'"></span>
+        <span x-text="isStoppingAllProjects ? '正在停止…' : '停止全部项目'"></span>
       </button>
     </div>
     <div class="flex items-center gap-1.5">
@@ -391,7 +840,7 @@
             <span class="text-[11px] font-mono text-slate-400 tracking-wide" x-text="p.id"></span>
             <span class="px-1.5 py-0.5 rounded-full text-[9px] font-semibold uppercase tracking-[0.12em]"
               :class="projectStatusBadgeClass(p.status)"
-              x-text="p.status"></span>
+              x-text="projectStatusLabel(p.status)"></span>
           </div>
           <div class="mb-3 flex-1">
             <div class="title-action-trigger flex items-start gap-2">
@@ -405,12 +854,6 @@
               </button>
             </div>
             <div class="mt-2 flex flex-wrap items-center gap-1.5">
-              <template x-if="p.reason">
-                <div class="inline-flex items-center gap-1.5 rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] font-medium text-sky-700 reason-chip-running">
-                  <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 3v3"/><path d="M18.364 5.636 16.95 7.05"/><path d="M21 12h-3"/><path d="m18.364 18.364-1.414-1.414"/><path d="M12 21v-3"/><path d="m7.05 16.95-1.414 1.414"/><path d="M6 12H3"/><path d="M7.05 7.05 5.636 5.636"/><circle cx="12" cy="12" r="3.5"/></svg>
-                  <span x-text="reasonBadgeText(p.reason, true)"></span>
-                </div>
-              </template>
               <template x-if="p.working_intent_count > 0">
                 <div class="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-medium text-amber-700 intent-chip-running">
                   <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 6v6l4 2"/><circle cx="12" cy="12" r="8.5"/></svg>
@@ -464,7 +907,7 @@
                     : 'border-teal-200 text-teal-600 hover:bg-teal-50'">
                   <svg x-show="p.status === 'active'" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
                   <svg x-show="p.status === 'stopped'" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></svg>
-                  <span x-text="p.status === 'active' ? 'Stop' : 'Resume'"></span>
+                  <span x-text="p.status === 'active' ? '停止项目' : '恢复项目'"></span>
                 </button>
               </template>
               <template x-if="p.status === 'completed'">
@@ -505,23 +948,12 @@
       </button>
       <span class="px-1.5 py-0.5 rounded-full text-[9px] font-semibold uppercase tracking-[0.12em] shrink-0"
         :class="projectStatusBadgeClass(project.project.status)"
-        x-text="project.project.status"></span>
+        x-text="projectStatusLabel(project.project.status)"></span>
     </div>
     <div class="flex-1"></div>
     <div class="flex shrink-0 items-center gap-2.5 text-xs tabular-nums"
-      title="Token 用量:Bootstrap / Reason / Explore / 总计">
-      <span class="flex items-center gap-1 provider-bootstrap" title="Bootstrap">
-        <span class="h-1.5 w-1.5 rounded-full provider-dot-bootstrap"></span>
-        <span x-text="formatTokens(tokenUsage?.bootstrap)"></span>
-      </span>
-      <span class="flex items-center gap-1 provider-reason" title="Reason">
-        <span class="h-1.5 w-1.5 rounded-full provider-dot-reason"></span>
-        <span x-text="formatTokens(tokenUsage?.reason)"></span>
-      </span>
-      <span class="flex items-center gap-1 provider-explore" title="Explore">
-        <span class="h-1.5 w-1.5 rounded-full provider-dot-explore"></span>
-        <span x-text="formatTokens(tokenUsage?.explore)"></span>
-      </span>
+      title="此项目 General / Soldier / Scout 累计用量；不含全局 Commander，也不代表上下文压力">
+      <template x-for="role in ['general','soldier','scout']" :key="role"><span class="flex items-center gap-1" :class="'provider-'+role" :title="role.charAt(0).toUpperCase()+role.slice(1)"><span class="h-1.5 w-1.5 rounded-full" :class="'provider-dot-'+role"></span><span x-text="formatTokens(tokenUsage?.[role])"></span></span></template>
       <span class="font-medium text-slate-500" title="总计">
         共 <span x-text="formatTokens(tokenUsage?.total)"></span>
       </span>
@@ -571,7 +1003,7 @@
             : 'border-teal-200 text-teal-600 hover:bg-teal-50'">
           <svg x-show="project.project.status === 'active'" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
           <svg x-show="project.project.status === 'stopped'" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></svg>
-          <span x-text="project.project.status === 'active' ? 'Stop' : 'Resume'"></span>
+          <span x-text="project.project.status === 'active' ? '停止项目' : '恢复项目'"></span>
         </button>
       </template>
       <template x-if="!replay.active && project.project.status === 'completed'">
@@ -601,32 +1033,7 @@
         </button>
       </div>
 
-      <template x-if="project.project.reason">
-        <div class="absolute top-14 right-3 z-10 max-w-80">
-          <div class="reason-panel-running relative overflow-hidden rounded-2xl border border-sky-200/80 bg-white/92 px-3.5 py-3 shadow-lg shadow-sky-100/60 backdrop-blur">
-            <div class="flex items-start gap-3">
-              <span class="reason-beacon mt-1 shrink-0"></span>
-              <div class="min-w-0">
-                <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-500">Reason 运行中</div>
-                <div class="mt-0.5 text-sm font-semibold text-slate-700 truncate" x-text="project.project.reason.worker"></div>
-                <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
-                  <span x-show="project.project.reason.trigger" x-text="`触发 ${project.project.reason.trigger}`"></span>
-                  <span x-text="`心跳 ${formatTime(project.project.reason.last_heartbeat_at)}`"></span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </template>
 
-      <template x-if="project.project.reason">
-        <div class="reason-graph-scan z-[1]">
-          <span class="reason-graph-grid"></span>
-          <span class="reason-graph-ambient"></span>
-          <span class="reason-graph-scanline"></span>
-          <span class="reason-graph-sweep"></span>
-        </div>
-      </template>
 
       <div x-show="!fgs?.nodes" class="absolute top-3 right-3 z-10 flex flex-wrap justify-end gap-2">
         <div class="flex gap-1.5" x-show="projectIsActive()">
@@ -689,10 +1096,10 @@
       <div x-show="sideTab === 'steps'" class="flex-1 overflow-y-auto p-4 space-y-3">
         <select aria-label="按目标筛选执行" x-model="fgsStepFilter" class="w-full border rounded p-2 text-xs"><option value="">所有目标的执行</option><template x-for="goal in (fgs?.goals || [])" :key="goal.id"><option :value="goal.id" x-text="`${goal.id} · ${goal.description}`"></option></template></select>
         <section>
-          <div class="mb-2 flex items-center justify-between"><h3 class="text-[10px] font-semibold uppercase tracking-widest text-amber-600">Step</h3><div class="flex items-center gap-2"><span class="text-[10px] text-slate-400" x-text="fgs?.steps?.length || 0"></span><button type="button" x-show="!replay.active && project.project.status === 'active'" @click="createFgs('step')" class="rounded-md border border-amber-200 bg-white px-1.5 py-0.5 text-[10px] text-amber-700" aria-label="Add step">＋</button></div></div>
+          <div class="mb-2 flex items-center justify-between"><h3 class="text-[10px] font-semibold uppercase tracking-widest text-amber-600">Mission</h3><div class="flex items-center gap-2"><span class="text-[10px] text-slate-400" x-text="fgs?.steps?.length || 0"></span><button type="button" x-show="!replay.active && project.project.status === 'active'" @click="createFgs('step')" class="rounded-md border border-amber-200 bg-white px-1.5 py-0.5 text-[10px] text-amber-700" aria-label="新增 Soldier Mission">＋</button></div></div>
           <div class="space-y-2"><template x-for="step in fgsVisibleSteps()" :key="step.id"><button type="button" @click="selectFgsNode('step', step.id)" class="block w-full rounded-xl border border-amber-200 bg-white p-3 text-left shadow-sm transition" :class="fgsSelection?.type === 'step' && fgsSelection.id === step.id ? 'border-amber-400 ring-1 ring-amber-300' : 'hover:bg-amber-50/40'">
-            <div class="flex items-center justify-between gap-2"><span class="font-mono text-[10px] text-slate-400" x-text="step.id"></span><span class="text-[9px] uppercase text-amber-700" x-text="step.status"></span></div>
-            <p class="mt-1 text-xs leading-relaxed text-slate-700" x-text="step.description"></p><p class="mt-1 text-[10px] text-slate-400" x-text="step.executionProfile"></p>
+            <div class="flex items-center justify-between gap-2"><span class="font-mono text-[10px] text-slate-400" x-text="step.id"></span><span class="text-[9px] uppercase text-amber-700" x-text="legionStatus(step.status)"></span></div>
+            <p class="mt-1 text-xs leading-relaxed text-slate-700" x-text="step.description"></p><p class="mt-1 text-[10px] text-slate-400" x-text="legionRole(step.role)+' · '+(step.taskKey||'未标注题目')+' · '+step.executionProfile"></p>
           </button></template></div>
         </section>
       </div>
@@ -796,6 +1203,12 @@
                     </span>
                   </div>
                   <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Worker</span><span class="font-mono text-slate-600 text-right break-all" x-text="fgsSelectionRecord()?.worker || '未领取'"></span></div>
+                  <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">角色</span><span class="text-slate-600" x-text="legionRole(fgsSelectionRecord()?.role)+(fgsSelectionRecord()?.bootstrap?' · 初始 Mission':'')"></span></div>
+                  <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">题目标识</span><code x-text="fgsSelectionRecord()?.taskKey||'未标注'"></code></div>
+                  <div class="flex items-start justify-between gap-3" x-show="fgsSelectionRecord()?.parentStepId"><span class="text-slate-400 shrink-0">上级 Mission</span><button class="text-sky-500 underline" @click="fgsOpenReference(fgsSelectionRecord()?.parentStepId)" x-text="fgsSelectionRecord()?.parentStepId"></button></div>
+                  <p class="text-cyan-500" x-show="fgsSelectionRecord()?.parkReason" x-text="'Park 阻塞：'+fgsSelectionRecord()?.parkReason"></p><p class="text-slate-500" x-show="fgsSelectionRecord()?.resumeCondition" x-text="'恢复条件：'+fgsSelectionRecord()?.resumeCondition"></p>
+                  <p class="text-amber-500" x-show="fgsSelectionRecord()?.handoffPending">交接尚未确认旧执行停止；不能视为新模型已开始运行。</p><p class="text-slate-500" x-show="fgsSelectionRecord()?.predecessorRunId" x-text="'接力来源 Run：'+fgsSelectionRecord()?.predecessorRunId"></p>
+                  <details x-show="fgsSelectionRecord()?.handoff"><summary>已保存交接 STATE</summary><pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words" x-text="fgsSelectionRecord()?.handoff"></pre></details>
                   <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">执行配置</span><span class="text-slate-600 text-right break-words" x-text="fgsSelectionRecord()?.executionProfile"></span></div>
                   <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Creator</span><span class="text-slate-600 text-right break-all" x-text="fgsSelectionRecord()?.creator"></span></div>
                   <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">创建时间</span><span class="text-slate-600 text-right break-words" x-text="formatTime(fgsSelectionRecord()?.createdAt)"></span></div>
@@ -821,9 +1234,9 @@
                 </div>
               </template>
               <div class="flex flex-wrap gap-1.5" x-show="!replay.active && project.project.status === 'active'">
-                <button x-show="fgsSelection?.type === 'goal' && fgsSelectionRecord()?.status === 'open'" @click="setFgsStatus('achieved')" class="px-2.5 py-1 rounded-lg border border-teal-200 text-xs text-teal-600 hover:bg-teal-50 transition">Achieve</button>
+                <button x-show="fgsSelection?.type === 'goal' && fgsSelectionRecord()?.status === 'open'" @click="setFgsStatus('achieved')" class="px-2.5 py-1 rounded-lg border border-teal-200 text-xs text-teal-600 hover:bg-teal-50 transition">验收目标</button>
                 <button x-show="['goal', 'step'].includes(fgsSelection?.type) && fgsSelection?.id !== 'goal' && !['achieved', 'done', 'cancelled'].includes(fgsSelectionRecord()?.status)" @click="setFgsStatus('cancelled')" class="px-2.5 py-1 rounded-lg border border-slate-200 text-xs text-slate-500 hover:bg-slate-50 transition">Cancel</button>
-                <button x-show="fgsSelection?.type === 'step' && ['blocked', 'cancelled'].includes(fgsSelectionRecord()?.status)" @click="setFgsStatus('pending')" class="px-2.5 py-1 rounded-lg border border-amber-200 text-xs text-amber-700 hover:bg-amber-50 transition">重试</button>
+                <button x-show="fgsSelection?.type === 'step' && ['blocked', 'cancelled'].includes(fgsSelectionRecord()?.status)" @click="setFgsStatus('pending')" title="未知结果未核验时，服务端会拒绝重试" class="px-2.5 py-1 rounded-lg border border-amber-200 text-xs text-amber-700 hover:bg-amber-50 transition">核验后重试</button>
               </div>
               <template x-if="fgsSelection?.type === 'step'">
                 <div class="space-y-2">
@@ -834,7 +1247,7 @@
                   </div>
                   <div class="space-y-2" x-show="!replay.active">
                     <button @click="openIntentLog(fgsSelection?.id)" class="px-2.5 py-1 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50 transition">执行日志</button>
-                    <select x-show="fgsRuns.length" aria-label="执行会话" x-model="fgsRunId" @change="loadFgsRunLog()" class="w-full border rounded-lg px-2 py-1.5 text-xs"><template x-for="run in fgsRuns" :key="run.id"><option :value="run.id" x-text="`${run.worker} · ${run.status} · ${run.id}`"></option></template></select>
+                    <select x-show="fgsRuns.length" aria-label="执行会话" x-model="fgsRunId" @change="loadFgsRunLog()" class="w-full border rounded-lg px-2 py-1.5 text-xs"><template x-for="run in fgsRuns" :key="run.id"><option :value="run.id" x-text="`${run.worker} · ${legionStatus(run.status)} · ${run.id}`"></option></template></select>
                     <button x-show="fgsRunHasMore" @click="loadFgsRunLog(true)" class="text-xs text-sky-600 underline underline-offset-2">更早日志</button>
                     <template x-for="event in fgsRunEvents" :key="event.id"><article class="border-t border-slate-100 pt-2"><strong class="text-xs block mb-1" x-text="event.kind"></strong><pre class="whitespace-pre-wrap break-words font-mono text-[10px] text-slate-500" x-text="event.content || event.title || JSON.stringify(event.data || {})"></pre></article></template>
                   </div>
@@ -962,7 +1375,7 @@
                 <template x-if="selectedFactId() !== 'origin' && selectedFactId() !== 'goal' && selectedFactProducingIntent()">
                   <div class="pt-4 border-t border-slate-100 space-y-3">
                     <p class="text-[10px] font-semibold text-brand-500 uppercase tracking-widest">产出方</p>
-                    <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Intent</span><span class="font-mono text-slate-600 text-right break-all" x-text="selectedFactProducingIntent().id"></span></div>
+                    <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Mission</span><span class="font-mono text-slate-600 text-right break-all" x-text="selectedFactProducingIntent().id"></span></div>
                     <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">From</span><span class="font-mono text-slate-600 text-right break-all" x-text="factDisplayList(selectedFactProducingIntent().from)"></span></div>
                     <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Creator</span><span class="text-slate-600 text-right break-all" x-text="selectedFactProducingIntent().creator"></span></div>
                     <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Worker</span><span class="text-slate-600 text-right break-all" x-text="selectedFactProducingIntent().worker || '—'"></span></div>
@@ -988,6 +1401,7 @@
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">To</span><span class="font-mono text-slate-600 text-right break-all" x-text="selectedIntentRecord().to || '—'"></span></div>
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Creator</span><span class="text-slate-600 text-right break-all" x-text="selectedIntentRecord().creator"></span></div>
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">Worker</span><span class="text-slate-600 text-right break-all" x-text="selectedIntentRecord().worker || '—'"></span></div>
+                <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">角色</span><span class="text-slate-600" x-text="legionRole(selectedIntentRecord().role)"></span></div>
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">心跳</span><span class="text-slate-600 text-right break-words" x-text="selectedIntentRecord().last_heartbeat_at ? formatTime(selectedIntentRecord().last_heartbeat_at) : '—'"></span></div>
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">创建时间</span><span class="text-slate-600 text-right break-words" x-text="formatTime(selectedIntentRecord().created_at)"></span></div>
                 <template x-if="selectedIntentRecord().concluded_at">
@@ -1637,19 +2051,20 @@
   </div>
 </section>
 
-<section x-show="appPage === 'logs'" x-cloak class="h-full min-h-0 bg-white" x-data="auditPage()" x-effect="setActive(appPage === 'logs')">
-  <div class="audit-grid">
+<section x-show="appPage === 'logs'" x-cloak class="audit-console h-full min-h-0 bg-white" aria-label="运行日志" x-data="auditPage()" x-effect="setActive(appPage === 'logs')">
+  <div class="audit-grid" :class="{'audit-global':selectedScope==='commander'}">
     <aside class="flex min-h-0 flex-col border-r border-slate-200 bg-white">
       <div class="border-b border-slate-200 px-4 py-3">
         <div class="flex items-center justify-between">
-          <h1 class="text-sm font-semibold tracking-tight text-slate-800">任务</h1>
+          <h1 class="text-sm font-semibold tracking-tight text-slate-800">项目日志</h1>
           <span class="text-[10px] tabular-nums text-slate-400" x-text="tasks.length"></span>
         </div>
         <label class="mt-3 flex h-8 items-center gap-2 rounded-lg border border-slate-200 px-2.5 focus-within:border-brand-300 focus-within:ring-2 focus-within:ring-brand-50">
           <svg class="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
-          <input x-model="taskQuery" type="search" placeholder="搜索任务…" class="min-w-0 flex-1 border-0 bg-transparent p-0 text-xs text-slate-700 outline-none placeholder:text-slate-300">
+          <input x-model="taskQuery" type="search" placeholder="搜索项目…" aria-label="搜索日志项目" class="min-w-0 flex-1 border-0 bg-transparent p-0 text-xs text-slate-700 outline-none placeholder:text-slate-300">
         </label>
       </div>
+      <button type="button" @click="selectCommander()" class="audit-task-row px-4 py-3 text-left text-xs" :class="{'audit-task-row-active':selectedScope==='commander'}">Commander · 全局会话<br><small>原生 Session，只读分页</small></button>
       <div class="min-h-0 flex-1 overflow-y-auto py-2">
         <template x-for="task in filteredTasks()" :key="task.id">
           <button type="button" @click="selectTask(task.id)" class="audit-task-row flex w-full flex-col gap-1 px-4 py-3 text-left" :class="{ 'audit-task-row-active': selectedTaskId === task.id }">
@@ -1659,12 +2074,12 @@
             </div>
             <div class="flex items-center gap-1.5 text-[10px]">
               <span class="h-1.5 w-1.5 rounded-full" :class="task.running_count ? 'bg-indigo-500 audit-pulse' : task.status === 'completed' ? 'bg-emerald-500' : task.status === 'stopped' ? 'bg-amber-500' : 'bg-slate-300'"></span>
-              <span :class="task.running_count ? 'text-indigo-600' : 'text-slate-400'" x-text="task.running_count ? '进行中' : task.status"></span>
+              <span :class="task.running_count ? 'text-indigo-600' : 'text-slate-400'" x-text="task.running_count ? '有执行会话运行中' : runStatusLabel(task.status)"></span>
               <span class="ml-auto text-slate-300" x-text="`${task.run_count || 0} runs · ${formatTokens(task.token_total)}`"></span>
             </div>
           </button>
         </template>
-        <div x-show="initialized && filteredTasks().length === 0" class="px-4 py-10 text-center text-xs text-slate-400">暂无可审计任务</div>
+        <div x-show="initialized && filteredTasks().length === 0" class="px-4 py-10 text-center text-xs text-slate-400">暂无项目运行日志</div>
       </div>
     </aside>
 
@@ -1672,24 +2087,13 @@
       <header class="shrink-0 border-b border-slate-200 bg-white/90 px-5 py-3 backdrop-blur">
         <div class="flex min-w-0 items-center gap-3">
           <div class="min-w-0 flex-1">
-            <h2 class="truncate text-[15px] font-semibold tracking-tight text-slate-800" x-text="selectedTask()?.title || '审计日志'"></h2>
+            <h2 class="truncate text-[15px] font-semibold tracking-tight text-slate-800" x-text="selectedScope==='commander'?'Commander · 全局会话':(selectedTask()?.title || '项目运行日志')"></h2>
             <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-400">
-              <span class="font-mono" x-text="selectedTaskId"></span>
-              <span x-show="runs.length" x-text="`${runs.length} worker runs`"></span>
+              <span class="font-mono" x-text="selectedScope==='commander'?commanderCampaign?.sessionId:selectedTaskId"></span>
+              <span x-show="runs.length" x-text="`${runs.length} 个执行会话`"></span>
               <span class="flex items-center gap-2 tabular-nums"
-                title="该任务的 Token 消耗:Bootstrap / Reason / Explore / 总计">
-                <span class="flex items-center gap-1 provider-bootstrap" title="Bootstrap">
-                  <span class="h-1.5 w-1.5 rounded-full provider-dot-bootstrap"></span>
-                  <span x-text="formatTokens(taskUsage?.bootstrap)"></span>
-                </span>
-                <span class="flex items-center gap-1 provider-reason" title="Reason">
-                  <span class="h-1.5 w-1.5 rounded-full provider-dot-reason"></span>
-                  <span x-text="formatTokens(taskUsage?.reason)"></span>
-                </span>
-                <span class="flex items-center gap-1 provider-explore" title="Explore">
-                  <span class="h-1.5 w-1.5 rounded-full provider-dot-explore"></span>
-                  <span x-text="formatTokens(taskUsage?.explore)"></span>
-                </span>
+                x-show="selectedScope==='project'" title="此项目的 General / Soldier / Scout 用量；不含全局 Commander">
+                <template x-for="role in ['general','soldier','scout']" :key="role"><span class="flex items-center gap-1" :class="'provider-'+role" :title="role.charAt(0).toUpperCase()+role.slice(1)"><span class="h-1.5 w-1.5 rounded-full" :class="'provider-dot-'+role"></span><span x-text="formatTokens(taskUsage?.[role])"></span></span></template>
                 <span class="font-medium text-slate-500" title="总计">
                   共 <span x-text="formatTokens(taskUsage?.total)"></span>
                 </span>
@@ -1704,28 +2108,38 @@
           </label>
         </div>
         <div class="mt-3 flex flex-wrap items-center gap-2">
-          <template x-for="provider in ['all', 'bootstrap', 'reason', 'explore']" :key="provider">
-            <button type="button" @click="selectedProvider = provider" class="inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition" :class="selectedProvider === provider ? 'border-brand-300 bg-brand-50 text-brand-600' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'">
+          <template x-for="provider in (selectedScope==='commander'?['all','commander']:['all','general','soldier','scout'])" :key="provider">
+            <button type="button" @click="selectedProvider = provider" :aria-pressed="selectedProvider===provider" class="inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition" :class="selectedProvider === provider ? 'border-brand-300 bg-brand-50 text-brand-600' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'">
               <span x-show="provider !== 'all'" class="h-1.5 w-1.5 rounded-full" :class="providerDotClass(provider)"></span>
               <span x-text="provider === 'all' ? '全部' : providerLabel(provider)"></span>
             </button>
           </template>
-          <select x-show="workers().length > 1" x-model="selectedWorker" class="ml-auto h-7 rounded-lg border border-slate-200 bg-white px-2 text-[11px] text-slate-500 outline-none focus:border-brand-300">
+          <select aria-label="日志 Worker" x-show="workers().length > 1" x-model="selectedWorker" class="ml-auto h-7 rounded-lg border border-slate-200 bg-white px-2 text-[11px] text-slate-500 outline-none focus:border-brand-300">
             <option value="all">全部 Worker</option>
             <template x-for="worker in workers()" :key="worker"><option :value="worker" x-text="worker"></option></template>
           </select>
         </div>
+        <div class="audit-scope-controls">
+          <label>日志范围<select :value="selectedScope==='commander'?'commander':selectedTaskId" @change="$event.target.value==='commander'?selectCommander():selectTask($event.target.value)" aria-label="日志范围"><option value="commander">Commander · 全局会话</option><option value="" disabled>选择项目</option><template x-for="task in tasks" :key="task.id"><option :value="task.id" x-text="task.title"></option></template></select></label>
+          <label x-show="selectedScope==='project'&&runs.length">执行会话<select x-model="selectedRun" aria-label="筛选执行会话"><option value="all">全部执行会话</option><template x-for="run in runs" :key="run.id"><option :value="run.id" x-text="runChoice(run)"></option></template></select></label>
+          <button type="button" class="audit-refresh" @click="refreshAudit()" :disabled="loading" x-text="selectedScope==='commander'?'读取后续记录':'刷新日志'"></button>
+        </div>
+        <p class="audit-scope-note" x-show="selectedScope==='commander'">当前 Commander Session · 原生记录只读分页，不会启动或恢复执行。累计用量：<span x-text="commanderTokens()==null?'未记录':formatTokens(commanderTokens())"></span> Token。</p>
+        <p class="audit-scope-note" x-show="selectedScope==='project'">General / Soldier / Scout 项目日志；Soldier 初始 Mission 计入 Soldier。Commander 请切换全局会话。<span x-text="({connecting:'实时连接中',connected:'实时已连接',disconnected:'实时连接中断，显示已读取记录',idle:'实时连接未开启'})[streamState]"></span></p>
       </header>
-
+      <p x-show="error" x-text="error" role="alert" class="audit-error"></p>
       <div x-ref="auditTimeline" @scroll.passive="loadMoreOnScroll()" class="min-h-0 flex-1 overflow-y-auto px-5 py-5">
         <div x-show="loading" class="flex h-full items-center justify-center text-xs text-slate-400">正在载入审计上下文…</div>
-        <div x-show="!loading && selectedTaskId && events.length === 0" class="flex h-full flex-col items-center justify-center text-center">
+        <div x-show="!loading && !error && (selectedTaskId || selectedScope==='commander') && events.length === 0" class="flex h-full flex-col items-center justify-center text-center">
           <div class="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-400">
             <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M6 3.5h9l3 3V20.5H6z"/><path d="M15 3.5v4h4M9 11h6M9 15h6"/></svg>
           </div>
-          <p class="mt-3 text-sm font-medium text-slate-600">还没有 Worker 日志</p>
-          <p class="mt-1 max-w-xs text-xs leading-relaxed text-slate-400">下一次 Bootstrap、Reason 或 Explore 执行会实时出现在这里。</p>
+          <p class="mt-3 text-sm font-medium text-slate-600" x-text="selectedScope==='commander'?(commanderAvailable?'当前页没有可显示的会话记录':'尚未创建 Commander 会话'):'此项目暂无执行日志'"></p>
+          <p class="mt-1 max-w-xs text-xs leading-relaxed text-slate-400">项目执行记录通过原有实时连接更新；Commander 会话由上方按钮按页读取，不会伪造历史记录。</p>
         </div>
+        <button type="button" class="audit-refresh mb-3" x-show="selectedScope==='project'&&hasMoreEvents()" @click="loadMoreEvents()">读取更早日志</button>
+        <button type="button" class="audit-refresh mb-3" x-show="selectedScope==='commander'&&commanderHasMore" @click="loadCommanderLog()" :disabled="loading">继续读取原生事件</button>
+        <p class="audit-scope-note" x-show="events.length&&!visibleEvents().length">此角色或执行会话筛选暂无可显示记录。</p>
         <div class="mx-auto max-w-4xl space-y-4">
           <template x-for="event in visibleEvents()" :key="event.event_uid || event.id">
             <article x-show="eventVisible(event)" class="audit-event min-h-10">
@@ -1761,7 +2175,7 @@
                     <summary class="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs text-slate-600">
                       <svg class="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5 5L4 17v3h3l5.7-5.7a4 4 0 0 0 5-5l-2.4 2.4-3-3z"/></svg>
                       <span class="min-w-0 flex-1 truncate" x-text="toolTitle(event) || eventAction(event)"></span>
-                      <span class="text-[10px]" :class="event.error ? 'text-rose-500' : (event.kind.endsWith('completed') || event.kind === 'file.changed') ? 'text-emerald-500' : 'text-amber-500'" x-text="event.error ? '失败' : (event.kind.endsWith('completed') || event.kind === 'file.changed') ? '已完成' : '运行中'"></span>
+                      <span class="text-[10px]" :class="eventTone(event)" x-text="eventStatus(event)"></span>
                     </summary>
                     <pre class="max-h-56 overflow-auto border-t border-slate-100 bg-slate-50 px-3 py-2 text-[10px] leading-relaxed text-slate-600" x-text="eventPayload(event)"></pre>
                   </details>
@@ -1777,7 +2191,7 @@
                   <details class="audit-terminal overflow-hidden">
                     <summary class="flex cursor-pointer list-none items-center gap-2 px-3 py-2 font-mono text-[11px]">
                       <span class="text-emerald-400">$</span><span class="audit-command-text min-w-0 flex-1" x-text="eventCommand(event)"></span>
-                      <span class="text-[10px]" :class="event.error ? 'text-rose-500' : event.kind.endsWith('completed') ? 'text-emerald-500' : 'text-amber-500'" x-text="eventStatus(event)"></span>
+                      <span class="text-[10px]" :class="eventTone(event)" x-text="eventStatus(event)"></span>
                     </summary>
                     <pre x-show="event.content || event.kind.endsWith('completed')" class="max-h-64 overflow-auto whitespace-pre-wrap border-t border-white/10 px-3 py-2 text-[10px] leading-relaxed text-slate-300" x-text="eventPayload(event)"></pre>
                   </details>
@@ -1786,11 +2200,11 @@
                   <pre class="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-[11px] leading-relaxed text-rose-700" x-text="event.content"></pre>
                 </template>
                 <template x-if="event.kind === 'run.completed'">
-                  <div class="audit-run-complete flex items-center gap-2 rounded-lg border border-emerald-100 bg-emerald-50/60 px-3 py-2 text-[11px] text-emerald-700">
-                    <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span><span>Worker 运行已完成</span>
-                    <span class="ml-auto tabular-nums text-emerald-500" x-text="event.exit_code == null ? '' : `退出码 ${event.exit_code}`"></span>
+                  <div class="audit-run-complete flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-[11px]" :class="eventTone(event)">
+                    <strong x-text="'执行会话：'+eventStatus(event)"></strong><span x-text="event.run_id"></span><span x-show="event.exit_code!=null" x-text="'退出码 '+event.exit_code"></span><p class="w-full whitespace-pre-wrap" x-show="event.data?.error" x-text="event.data?.error"></p>
                   </div>
                 </template>
+                <template x-if="selectedScope==='project'&&retainedEvidence(event)"><div class="audit-retained"><p>当前只显示留存证据摘要；完整内容按项目范围有界读取。</p><button type="button" class="audit-refresh" @click="readRetainedEvidence(event)" :disabled="auditEvidence?.loading">读取完整留存证据</button><template x-if="auditEvidence?.key===eventKey(event)"><div><p class="audit-scope-note" x-text="auditEvidence.meta?'已读取 '+auditEvidence.meta.bytes+' / '+auditEvidence.meta.totalBytes+' 字节 · SHA256 '+auditEvidence.meta.sha256:''"></p><p class="audit-error" role="alert" x-show="auditEvidence.error" x-text="auditEvidence.error"></p><pre class="audit-code" x-text="auditEvidence.content"></pre><button type="button" class="audit-refresh" x-show="auditEvidence.meta?.nextOffset!=null" :disabled="auditEvidence.loading" @click="readRetainedEvidence(event,true)">继续读取证据</button></div></template></div></template>
               </div>
             </article>
           </template>
@@ -1798,7 +2212,7 @@
       </div>
     </section>
 
-    <aside class="audit-inspector flex min-h-0 flex-col border-l border-slate-200 bg-white">
+    <aside x-show="selectedScope==='project'" class="audit-inspector flex min-h-0 flex-col border-l border-slate-200 bg-white">
       <div class="flex h-[53px] shrink-0 items-center justify-between border-b border-slate-200 px-4">
         <div><h2 class="text-xs font-semibold text-slate-700">工作区文件</h2><p class="mt-0.5 text-[9px] uppercase tracking-[0.12em] text-slate-300" x-text="workspaceSource || 'unavailable'"></p></div>
         <button type="button" @click="loadWorkspace(workspacePath)" class="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-50 hover:text-slate-600" title="刷新工作区">
@@ -1810,6 +2224,7 @@
           <template x-for="crumb in workspaceCrumbs()" :key="crumb.path"><button type="button" @click="loadWorkspace(crumb.path)" class="whitespace-nowrap rounded px-1.5 py-1 hover:bg-slate-50 hover:text-slate-600" x-text="crumb.label"></button></template>
         </div>
         <div class="max-h-52 min-h-24 overflow-y-auto px-2 py-1.5">
+<p class="audit-error" x-show="workspaceError" x-text="workspaceError" role="alert"></p>
           <template x-for="entry in workspaceEntries" :key="entry.path">
             <button type="button" @click="openWorkspaceEntry(entry)" class="audit-file-row flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left">
               <svg x-show="entry.type === 'directory'" class="h-3.5 w-3.5 shrink-0 text-slate-400" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2h9v10h-17z"/></svg>
@@ -1817,7 +2232,7 @@
               <span class="min-w-0 flex-1 truncate text-[11px] text-slate-600" x-text="entry.name"></span><span x-show="entry.type !== 'directory'" class="text-[9px] text-slate-300" x-text="formatBytes(entry.size)"></span>
             </button>
           </template>
-          <p x-show="workspaceEntries.length === 0" class="px-2 py-8 text-center text-[10px] text-slate-300">工作区不可用或为空</p>
+          <p x-show="workspaceEntries.length === 0 && !workspaceError" class="px-2 py-8 text-center text-[10px] text-slate-300">工作区为空</p>
         </div>
       </div>
       <div class="flex min-h-0 flex-1 flex-col">
@@ -2115,21 +2530,24 @@
     </template>
   </div>
 </section>
-<section x-show="appPage === 'settings'" x-cloak class="h-full overflow-y-auto bg-white px-4 py-5 sm:px-8 sm:py-7">
+<section x-show="appPage === 'settings'" x-cloak class="runtime-settings h-full overflow-y-auto bg-white px-4 py-5 sm:px-8 sm:py-7">
   <div class="mx-auto max-w-5xl">
     <div class="flex flex-col items-start justify-between gap-4 sm:flex-row sm:gap-5">
       <div>
-        <h1 class="text-xl font-semibold tracking-tight text-slate-800">运行设置</h1>
+        <h1 class="text-xl font-semibold tracking-tight text-slate-800">运行设置</h1><p class="mt-2 text-xs text-slate-500">四角色模型路由与调度配置。配置资格不代表对应会话已启动。</p>
       </div>
       <span class="inline-flex h-8 shrink-0 items-center gap-2 rounded-full bg-teal-50 px-3 text-[11px] font-medium text-teal-700"><span class="h-1.5 w-1.5 rounded-full bg-teal-500"></span><span>配置热加载</span></span>
     </div>
+
+
+    <section class="runtime-role-summary" aria-label="四角色模型路线"><div class="runtime-role-heading"><h2>四角色模型路线</h2><button type="button" @click="loadWorkerConfig(true)" :disabled="workerConfigLoading">刷新配置状态</button></div><p class="runtime-config-error" role="alert" x-show="workerConfigError" x-text="workerConfigError"></p><div class="runtime-role-grid"><template x-for="role in ['commander','scout','general','soldier']" :key="role"><article><h3 x-text="workerTaskLabel(role)"></h3><p x-text="({commander:'全局统筹与验收',scout:'分类与前置调查',general:'同题协调与专项委派',soldier:'执行与证据产出，含初始 Mission'})[role]"></p><strong x-text="workerConfigLoading?'读取中…':(!workerConfig.revision?'未读取配置':workerRoleRoutes(role).length+' 条已启用路线')"></strong><span x-show="!!workerConfig.revision&&!workerConfigLoading&&!workerRoleRoutes(role).length&&!workerConfigError">未配置可用模型</span><small x-text="workerRoleRoutes(role).map(w=>w.name).join(' · ')"></small></article></template></div><p>Commander 共享全局和所选模型路线的并发名额；General / Soldier / Scout 还受单项目并发约束。角色并非四组独立并发池。</p></section>
 
     <section aria-label="DSH 更新" class="mt-6 rounded-2xl border border-slate-200/80 bg-white px-5 py-4 shadow-sm shadow-slate-100/60">
       <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div class="min-w-0">
           <h2 class="text-sm font-semibold text-slate-700">DSH 运行时</h2>
           <p class="mt-1 text-xs text-slate-500">当前运行 <span x-text="dshUpdate.runningVersion || '未安装'"></span><template x-if="dshUpdate.latest"><span> · 上游最新 <span x-text="dshUpdate.latest.version"></span></span></template></p>
-          <p class="mt-2 text-xs leading-5 text-slate-400">更新会暂停调度，完成后需要重启 RedTrace。请在 Worker 空闲时操作。</p>
+          <p class="mt-2 text-xs leading-5 text-slate-400">更新会暂停调度，完成后需要重启 RedTrace。请在 Commander 与所有执行会话空闲时操作。</p>
         </div>
         <div class="flex shrink-0 flex-wrap gap-2">
           <button type="button" @click="loadDshUpdate(true)" :disabled="dshChecking || dshUpdate.state === 'running'" class="h-9 rounded-xl border border-slate-200 px-4 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40" x-text="dshChecking ? '检查中…' : '检查更新'"></button>
@@ -2140,47 +2558,29 @@
       <p x-show="dshUpdate.restartRequired" class="mt-2 text-xs text-amber-700">新任务已暂停。请重启 RedTrace，启动后将使用 <span x-text="dshUpdate.installedVersion"></span>。</p>
     </section>
 
+    <p class="mt-4 text-sm text-slate-400" x-show="!workerConfig.revision">正在读取配置；读取成功前不会显示或提交默认草稿值。</p>
+    <fieldset class="runtime-config-controls" x-show="!!workerConfig.revision" :disabled="workerConfigLoading || !workerConfig.revision">
     <form @submit.prevent="saveRuntimeTasks()" @input="runtimeSettingsDirty = true" class="mt-6 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm shadow-slate-100/60">
       <div class="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 class="text-sm font-semibold text-slate-700">调度与任务</h2>
+          <h2 class="text-sm font-semibold text-slate-700">调度与 Mission</h2><p class="mt-2 text-xs text-slate-500">保存影响后续调度，不中断当前会话。换模型接力请到军团控制台提交交接；初始 Mission 使用 Soldier 配置。</p>
         </div>
         <button type="submit" :disabled="runtimeSettingsBusy || !runtimeSettingsDirty" class="h-9 shrink-0 rounded-xl bg-slate-800 px-4 text-xs font-medium text-white shadow-sm transition hover:bg-slate-900 active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-35" x-text="runtimeSettingsBusy ? '保存中…' : '保存并热加载'"></button>
       </div>
 
       <div class="px-5 py-5">
         <div class="grid gap-4 sm:grid-cols-4">
-          <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">最大 Worker 数</span><input x-model.number="runtimeTaskForm.runtime.max_workers" type="number" min="1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
+          <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">全局并发上限（含 Commander）</span><input x-model.number="runtimeTaskForm.runtime.max_workers" type="number" min="1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
           <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">最大运行项目</span><input x-model.number="runtimeTaskForm.runtime.max_running_projects" type="number" min="1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
-          <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">单项目最大 Worker</span><input x-model.number="runtimeTaskForm.runtime.max_project_workers" type="number" min="1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
-          <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">最大 Step</span><input x-model.number="runtimeTaskForm.tasks.reason.max_intents" type="number" min="1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
+          <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">单项目执行并发</span><input x-model.number="runtimeTaskForm.runtime.max_project_workers" type="number" min="1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
+          <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">每项目 Mission 上限（留空不限制）</span><input x-model.number="runtimeTaskForm.tasks.commander.max_intents" type="number" min="1" placeholder="不设上限" class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
         </div>
 
-        <div class="mt-5 grid gap-3 border-t border-slate-100 pt-5 lg:grid-cols-3">
-          <fieldset class="rounded-xl bg-slate-50/70 p-4">
-            <legend class="px-1 text-xs font-semibold text-slate-600">Bootstrap</legend>
-            <div class="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-              <label class="block"><span class="mb-1.5 block text-[10px] font-medium text-slate-400">任务超时（秒）</span><input x-model.number="runtimeTaskForm.tasks.bootstrap.timeout" type="number" min="1" required class="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
-              <label class="block"><span class="mb-1.5 block text-[10px] font-medium text-slate-400">Conclude 超时（秒）</span><input x-model.number="runtimeTaskForm.tasks.bootstrap.conclude_timeout" type="number" min="1" required class="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
-            </div>
-          </fieldset>
-          <fieldset class="rounded-xl bg-slate-50/70 p-4">
-            <legend class="px-1 text-xs font-semibold text-slate-600">Reason</legend>
-            <div class="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-              <label class="block"><span class="mb-1.5 block text-[10px] font-medium text-slate-400">任务超时（秒）</span><input x-model.number="runtimeTaskForm.tasks.reason.timeout" type="number" min="1" required class="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
-              <label class="block"><span class="mb-1.5 block text-[10px] font-medium text-slate-400">Conclude 超时（秒）</span><input x-model.number="runtimeTaskForm.tasks.reason.conclude_timeout" type="number" min="1" required class="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
-            </div>
-          </fieldset>
-          <fieldset class="rounded-xl bg-slate-50/70 p-4">
-            <legend class="px-1 text-xs font-semibold text-slate-600">Explore</legend>
-            <div class="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-              <label class="block"><span class="mb-1.5 block text-[10px] font-medium text-slate-400">任务超时（秒）</span><input x-model.number="runtimeTaskForm.tasks.explore.timeout" type="number" min="1" required class="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
-              <label class="block"><span class="mb-1.5 block text-[10px] font-medium text-slate-400">Conclude 超时（秒）</span><input x-model.number="runtimeTaskForm.tasks.explore.conclude_timeout" type="number" min="1" required class="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
-            </div>
-          </fieldset>
+        <div class="mt-5 grid gap-3 border-t border-slate-100 pt-5 lg:grid-cols-4">
+          <template x-for="role in ['commander','general','soldier','scout']" :key="role"><fieldset class="rounded-xl bg-slate-50/70 p-4"><legend class="px-1 text-xs font-semibold text-slate-600" x-text="workerTaskLabel(role)"></legend><label class="block text-xs">任务超时（秒）<input x-model.number="runtimeTaskForm.tasks[role].timeout" type="number" min="5" class="mt-2 h-9 w-full rounded border p-2"></label><label class="mt-2 block text-xs">收尾超时（秒）<input x-model.number="runtimeTaskForm.tasks[role].conclude_timeout" type="number" min="5" class="mt-2 h-9 w-full rounded border p-2"></label></fieldset></template>
         </div>
       </div>
-    </form>
+    <div x-show="runtimeSettingsError" class="runtime-config-error" role="alert"><p x-text="runtimeSettingsError"></p><button type="button" @click="reloadRuntimeTaskDraft()">载入服务器配置（放弃草稿）</button></div></form>
 
     <form @submit.prevent="saveCommonEnv()" @input="commonEnvDirty = true" class="mt-6 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm shadow-slate-100/60">
       <div class="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -2215,11 +2615,18 @@
     <div class="mt-8 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-end">
       <div>
         <h2 class="text-sm font-semibold text-slate-700">Provider 模型服务</h2>
+        <p class="mt-1 text-xs leading-relaxed text-slate-400">点击“轮询配置”设置同模型 ID 的供应商、顺序与开关。仅在输出前故障时切换；连接测试只检查所选 Provider。</p>
       </div>
+      <div class="flex shrink-0 flex-wrap items-center gap-2">
+        <button type="button" @click="openPollingConfig()" class="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-medium text-slate-600 transition hover:bg-slate-50">
+          <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7h-9a5 5 0 0 0-5 5v1M4 17h9a5 5 0 0 0 5-5v-1M17 4l3 3-3 3M7 14l-3 3 3 3"/></svg>
+          轮询配置
+        </button>
       <button type="button" @click="openProviderEditor()" class="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl bg-slate-800 px-4 text-xs font-medium text-white shadow-sm transition hover:bg-slate-900 active:scale-[.98]">
         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
         新增 Provider
       </button>
+      </div>
     </div>
 
     <div class="mt-4 flex flex-wrap items-center gap-3 border-y border-slate-100 py-3 text-xs text-slate-400">
@@ -2268,7 +2675,7 @@
 
     <div class="mt-8 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-end">
       <div>
-        <h2 class="text-sm font-semibold text-slate-700">Worker 模型</h2>
+        <h2 class="text-sm font-semibold text-slate-700">Worker 模型路线</h2><p class="mt-2 text-xs text-slate-500">一条路线可服务多个角色；只有启用且具备对应角色资格的路线可被调度。</p>
       </div>
       <button type="button" @click="openWorkerEditor()" class="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl bg-slate-800 px-4 text-xs font-medium text-white shadow-sm transition hover:bg-slate-900 active:scale-[.98]">
         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
@@ -2317,10 +2724,13 @@
         </article>
       </template>
     </div>
+    </fieldset>
   </div>
 </section>
   </main>
 </div>
+
+<dialog x-ref="fgsAcceptanceDialog" class="legion-dialog fgs-acceptance" aria-labelledby="fgs-acceptance-title"><form class="legion-form" @submit.prevent="submitFgsAcceptance()"><header class="legion-heading"><h2 id="fgs-acceptance-title">验收目标</h2><button type="button" class="legion-button" @click="$refs.fgsAcceptanceDialog.close()">取消</button></header><p x-text="fgsAcceptance.title"></p><p class="legion-muted">选择此项目已有的 Fact / Finding。服务器会校验目标版本和证据归属；不能把原始范围当作验收成果。</p><fieldset><legend>验收依据</legend><template x-for="item in fgsAcceptanceEvidence()" :key="item.id"><label class="legion-check"><input type="checkbox" :value="item.id" x-model="fgsAcceptance.evidenceIds"><span x-text="item.description||item.title||item.id"></span><code x-text="item.id"></code></label></template><p x-show="!fgsAcceptanceEvidence().length">没有可用成果，请先完成实际验证。</p></fieldset><p class="legion-alert" role="alert" x-show="fgsAcceptance.error" x-text="fgsAcceptance.error"></p><footer class="legion-actions"><button class="legion-button legion-primary" :disabled="fgsAcceptance.saving||!fgsAcceptance.evidenceIds.length" x-text="fgsAcceptance.saving?'正在验收…':'以所选成果验收'"></button></footer></form></dialog>
 
 <!-- New Project -->
 <div x-show="showNewProject" x-cloak class="fixed inset-0 z-50 flex items-center justify-center overlay" @click.self="showNewProject = false">
@@ -2332,7 +2742,7 @@
       <textarea x-model="newProject.goal" placeholder="目标 — 待达成" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-100 focus:border-brand-400 transition placeholder:text-slate-300"></textarea>
       <label class="flex items-center gap-2 px-1 text-sm text-slate-600">
         <input type="checkbox" x-model="newProject.bootstrap" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200">
-        <span>运行 bootstrap 探查</span>
+        <span>运行 Soldier 初始 Mission</span>
       </label>
       <div>
         <div class="flex items-center justify-between mb-2">
@@ -2356,10 +2766,11 @@
   </div>
 </div>
 
-<!-- Create Intent -->
+<!-- Create Mission -->
 <div x-show="showIntentModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center overlay" @click.self="showIntentModal = false">
   <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 border border-slate-200/60" @click.stop>
-    <h3 class="text-base font-semibold text-slate-700 mb-1">新建 Intent</h3>
+    <h3 class="text-base font-semibold text-slate-700 mb-1">新建 Mission</h3>
+    <p class="text-xs text-slate-400 mb-3">人工新增为 Soldier Mission；分类与专项委派由 Commander / General 协调。</p>
     <div class="mb-4">
       <label class="text-[11px] text-slate-400 mb-1 block font-medium">From facts</label>
       <div class="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 min-h-[42px] flex flex-wrap gap-1.5 items-center">
@@ -2392,7 +2803,7 @@
 <!-- Conclude -->
 <div x-show="showConcludeModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center overlay" @click.self="showConcludeModal = false">
   <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 border border-slate-200/60" @click.stop>
-    <h3 class="text-base font-semibold text-slate-700 mb-1">Conclude Intent</h3>
+    <h3 class="text-base font-semibold text-slate-700 mb-1">结束 Mission</h3>
     <p class="text-xs text-slate-400 mb-4 font-mono" x-text="concludeForm.intentId"></p>
     <div class="space-y-3">
       <textarea x-model="concludeForm.description" placeholder="发现了什么？（新 fact）" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-100 focus:border-brand-400 transition placeholder:text-slate-300"></textarea>
@@ -2504,7 +2915,7 @@
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">模型</span><select x-model="workerForm.model" x-effect="if (!workerModelOptions().includes(workerForm.model)) workerForm.model = workerModelOptions()[0] || ''" class="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><template x-for="model in workerModelOptions()" :key="model"><option :value="model" x-text="model"></option></template><template x-if="!workerModelOptions().length"><option value="" disabled>该 Provider 未配置模型</option></template></select></label>
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">优先级（小者优先）</span><input x-model.number="workerForm.priority" type="number" min="0" max="1000" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">最大并发数</span><input x-model.number="workerForm.max_running" type="number" min="1" :max="workerConfig.runtime_max_workers || 1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
-      <div class="sm:col-span-2"><span class="mb-2 block text-[11px] font-medium text-slate-500">任务资格</span><div class="flex flex-wrap gap-4"><template x-for="taskType in ['bootstrap','reason','explore']" :key="taskType"><label class="inline-flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" :value="taskType" x-model="workerForm.task_types" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span x-text="workerTaskLabel(taskType)"></span></label></template></div></div>
+      <div class="sm:col-span-2"><span class="mb-2 block text-[11px] font-medium text-slate-500">四角色资格</span><div class="flex flex-wrap gap-4"><template x-for="taskType in ['commander','general','soldier','scout']" :key="taskType"><label class="inline-flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" :value="taskType" x-model="workerForm.task_types" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span x-text="workerTaskLabel(taskType)"></span></label></template></div></div>
       <label class="inline-flex items-center gap-2 sm:col-span-2"><input type="checkbox" x-model="workerForm.enabled" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span class="text-xs text-slate-600">启用并允许接收新任务</span></label>
       <div x-show="workerTestResult" class="sm:col-span-2 rounded-xl px-3 py-2 text-xs" :class="workerTestResult?.ok ? 'bg-teal-50 text-teal-700' : 'bg-rose-50 text-rose-700'"><span x-text="workerTestResult?.detail"></span><span x-show="workerTestResult?.duration_ms != null" class="ml-2 opacity-70" x-text="`${workerTestResult?.duration_ms} ms`"></span></div>
     </div>
@@ -2515,6 +2926,39 @@
     </div>
   </form>
 </div>
+
+<!-- LLM polling configuration: native dialog owns focus trapping and Escape. -->
+<dialog x-ref="pollingDialog" aria-labelledby="polling-config-title" @cancel="if (pollingSaveBusy) $event.preventDefault()" class="m-auto max-h-[92vh] w-[calc(100%-2rem)] max-w-2xl overflow-y-auto rounded-2xl border border-slate-200/60 bg-white p-0 text-slate-700 shadow-2xl">
+  <form @submit.prevent="savePollingConfig()">
+    <div class="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
+      <div><h3 id="polling-config-title" class="text-base font-semibold text-slate-700">LLM 轮询 · 故障转移</h3><p class="mt-2 text-xs leading-relaxed text-slate-400">同一模型 ID 在多个供应商间轮换；输出前发生余额不足、Key 失效、限流或服务异常时尝试下一家。</p></div>
+      <button type="button" @click="closePollingConfig()" aria-label="关闭轮询配置" class="shrink-0 rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"><svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="space-y-5 px-6 py-5">
+      <label class="flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-slate-200 px-4 py-3"><span><span class="block text-sm font-medium text-slate-700">启用轮询</span><span class="mt-1 block text-xs leading-relaxed text-slate-400">关闭后只使用 Worker 指定的 Provider，不切换供应商。</span></span><input type="checkbox" autofocus x-model="pollingForm.enabled" class="h-5 w-5 shrink-0 rounded border-slate-300 text-brand-500 focus:ring-brand-200"></label>
+      <div><h4 class="text-sm font-semibold text-slate-700">参与供应商与轮询顺序</h4><p class="mt-1 text-xs leading-relaxed text-slate-400">每个模型至少勾选 2 家才会轮询。顺序决定首次调用和故障转移顺序，后续请求轮换起点。</p></div>
+      <p x-show="!pollingForm.groups.length" class="rounded-xl border border-dashed border-slate-200 px-4 py-6 text-center text-xs text-slate-400">尚未配置模型，请先新增 Provider。</p>
+      <template x-for="group in pollingForm.groups" :key="group.model">
+        <fieldset class="rounded-xl border border-slate-200 p-4">
+          <legend class="max-w-full break-all px-1 font-mono text-xs font-medium text-slate-700" x-text="group.model"></legend>
+          <p class="mb-3 text-xs text-slate-400" x-text="group.providers.filter(p => p.enabled).length >= 2 ? '已形成同模型轮询池' : '不足 2 家参与，当前仅直连 Worker 指定的供应商'"></p>
+          <div class="space-y-2"><template x-for="(provider, index) in group.providers" :key="provider.name">
+            <div class="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
+              <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-3"><input type="checkbox" x-model="provider.enabled" :aria-label="group.model + '：参与轮询 ' + provider.name" class="h-4 w-4 shrink-0 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span class="min-w-0 break-all text-xs text-slate-600" x-text="provider.name"></span></label>
+              <button type="button" @click="movePollingProvider(group, index, -1)" :disabled="index === 0" :aria-label="'上移 ' + provider.name" class="h-8 w-8 shrink-0 rounded-lg text-slate-500 transition hover:bg-slate-200 disabled:opacity-30">↑</button>
+              <button type="button" @click="movePollingProvider(group, index, 1)" :disabled="index === group.providers.length - 1" :aria-label="'下移 ' + provider.name" class="h-8 w-8 shrink-0 rounded-lg text-slate-500 transition hover:bg-slate-200 disabled:opacity-30">↓</button>
+            </div>
+          </template></div>
+        </fieldset>
+      </template>
+      <p class="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-xs leading-relaxed text-slate-400">不跨模型 ID 兜底；请保持同 ID 的模型与能力一致。Worker 指定的供应商未勾选时仍保持直连。取消或已经输出内容的请求不会重放。</p>
+    </div>
+    <div class="sticky bottom-0 flex items-center justify-end gap-2 border-t border-slate-100 bg-white px-6 py-4">
+      <button type="button" @click="closePollingConfig()" :disabled="pollingSaveBusy" class="h-9 rounded-xl px-4 text-xs text-slate-500 transition hover:bg-slate-50 disabled:opacity-40">取消</button>
+      <button type="submit" :disabled="pollingSaveBusy" class="h-9 rounded-xl bg-slate-800 px-5 text-xs font-medium text-white transition hover:bg-slate-900 disabled:opacity-40" x-text="pollingSaveBusy ? '保存中…' : '保存并热加载'"></button>
+    </div>
+  </form>
+</dialog>
 
 <!-- Provider editor -->
 <div x-show="showProviderEditor" x-cloak class="fixed inset-0 z-50 flex items-center justify-center overlay px-4" @click.self="closeProviderEditor()">
@@ -2700,12 +3144,20 @@ function redtraceApp() {
     dshStarting: false,
     dshPollTimer: null,
     ...window.redtraceFgsView,
+    legion: null, legionPanel:'tasks', legionQuery:'', legionResults:[], legionPreview:'', legionPreviewItem:null, legionPreviewMeta:null,
+    legionLoading:false, legionUpdatedAt:null, legionError:'', legionNotice:'', legionPending:{}, legionErrors:{}, legionDeadline:'',
+    legionSearching:false, legionSearched:false, legionReading:false, legionTransferSource:null,
+    legionFacts:{}, legionFactErrors:{}, legionFactLoading:{}, legionEditor:{kind:'',factIds:[]}, legionEditorError:'', legionEditorSaving:false,
+    legionMessage:{projectId:'',receiver:'commander',type:'MESSAGE',content:''},
+    legionCapture:{projectId:'',family:'',title:'',body:'',factIds:[]},
+    legionTransfer:{sourceId:null,targetProject:'',taskKey:'',brief:''},
     appPage: 'workspace',
     c2Expanded: false,
     view: 'list',
     projects: [],
     project: null,
     fgs: null,
+    fgsAcceptance: {projectId:'',goalId:'',version:null,title:'',evidence:[],evidenceIds:[],saving:false,error:''},
     fgsSelection: null,
     tokenUsage: null,
     globalUsage: null,
@@ -2744,14 +3196,17 @@ function redtraceApp() {
     renameForm: { projectId: '', originalTitle: '', title: '' },
     workerConfig: { revision: '', engine: 'legacy', execution: 'local', runtime_max_workers: 1, cli_config_home: '', workers: [] },
     workerConfigLoading: false,
+    workerConfigError: '',
     runtimeTaskForm: {
       runtime: { max_workers: 30, max_running_projects: 10, max_project_workers: 3 },
       tasks: {
-        bootstrap: { timeout: 300, conclude_timeout: 120 },
-        reason: { timeout: 300, conclude_timeout: 180, max_intents: 3 },
-        explore: { timeout: 900, conclude_timeout: 300 },
+        commander: { timeout: 300, conclude_timeout: 30, max_intents: 4 },
+        general: { timeout: 900, conclude_timeout: 30 },
+        soldier: { timeout: 900, conclude_timeout: 30 },
+        scout: { timeout: 240, conclude_timeout: 30 },
       },
     },
+    runtimeSettingsError: '',
     runtimeSettingsDirty: false,
     runtimeSettingsBusy: false,
     commonEnvForm: [],
@@ -2763,7 +3218,9 @@ function redtraceApp() {
     workerSaveBusy: false,
     workerTestBusy: false,
     workerTestResult: null,
-    workerForm: { name: '', provider: '', model: '', enabled: true, task_types: ['bootstrap', 'reason', 'explore'], priority: 0, max_running: 1 },
+    workerForm: { name: '', provider: '', model: '', enabled: true, task_types: ['commander', 'general', 'soldier', 'scout'], priority: 0, max_running: 1 },
+    pollingSaveBusy: false,
+    pollingForm: { enabled: true, groups: [] },
     showProviderEditor: false,
     providerEditingName: '',
     providerSaveBusy: false,
@@ -2792,6 +3249,143 @@ function redtraceApp() {
     shouldRestoreProjectListScroll: false,
     isStoppingAllProjects: false,
 
+
+    legionProject(id) { return this.legion?.projects.find(p => p.id === id); },
+    legionProjectTitle(id) { return this.legionProject(id)?.title || id || '未选择项目'; },
+    legionTaskTitle(project, key) { return project?.steps.find(s => s.taskKey === key && !s.parentStepId)?.description || project?.steps.find(s => s.taskKey === key)?.description || key || '—'; },
+    legionTaskFinished(project, key) { const steps = project.steps.filter(s => s.taskKey === key); return steps.length > 0 && steps.every(s => ['done', 'cancelled'].includes(s.status)); },
+    legionRole(role) { return ({ commander: 'Commander', general: 'General', soldier: 'Soldier', scout: 'Scout' })[role] || '未标注角色'; },
+    legionStatus(status) { return ({ idle: '待命', running: '执行中', stopped: '执行已停止', active: '进行中', pending: '待执行', paused: '执行暂停（非 Park）', parked: '已搁置 · Park', unknown: '结果待核验', done: '已完成', success: '成功', failed: '失败', cancelled: '已取消', queued: '已排队，未入模', admitted: '已入模', uncertain: '交付不确定', delivered: '已交付', acknowledged: '已确认', 'needs-reverification': '待目标复验', 'target-verified': '目标已复验' })[status] || status || '未知'; },
+    legionPhase(phase) { return ({ open: '未设时限', campaign: '推进中', endgame: '收尾', submission: '仅提交', ended: '已截止' })[phase] || phase || '—'; },
+    legionDifficulty(value) { return ({ easy: 'Scout：简单', medium: 'Scout：中等', hard: 'Scout：困难', unclear: 'Scout：尚不明确' })[value] || '待 Scout 分类'; },
+    legionRecommendation(value) { return ({ scout: '建议 Scout 分类', general: '建议 General 协调', park: '建议搁置', parked: '已搁置', tactical: '建议战术纠偏', 'second-angle': '建议第二视角' })[value] || value; },
+    legionRecipients(projectId) { return (this.legionProject(projectId)?.runs || []).filter(r => ['running', 'paused'].includes(r.status)); },
+    legionRunLabel(projectId, run) { const p = this.legionProject(projectId), step = p?.steps.find(s => s.id === run.stepId); return this.legionRole(step?.role) + ' · ' + (step?.description || run.worker) + ' · ' + this.legionStatus(run.status) + ' · ' + run.id; },
+    legionWorkers(project, run) { if (!project || !run)
+        return []; const role = project.steps.find(s => s.id === run.stepId)?.role || 'soldier'; return (this.workerConfig.workers || []).filter(w => w.enabled && w.name !== run.worker && w.roles?.includes(role)); },
+    legionResumeBlock(project, taskKey) { if (project.status !== 'active')
+        return '项目不在进行中'; const steps = project.steps.filter(s => s.taskKey === taskKey); if (steps.some(s => s.handoffPending))
+        return '交接尚未确认旧执行停止'; if (project.runs.some(r => steps.some(s => s.id === r.stepId) && ['running', 'paused', 'unknown'].includes(r.status)))
+        return '旧执行仍运行、暂停或结果未知，请先核验停止'; return ''; },
+    async loadLegion() { this.legionLoading = true; try {
+        this.legion = await this.api('GET', '/v2/legion');
+        this.legionUpdatedAt = Date.now();
+        this.legionError = '';
+    }
+    catch (error) {
+        this.legionError = '状态更新失败，显示的可能是旧快照：' + error.message;
+    }
+    finally {
+        this.legionLoading = false;
+    } },
+    async legionAction(path, body, message = '已保存') {
+        this.legionPending[path] = true;
+        this.legionErrors[path] = '';
+        this.legionEditorError = '';
+        this.legionNotice = '';
+        try {
+            const result = await this.api('POST', path, body);
+            await this.loadLegion();
+            if (result?.unresolved?.length) {
+                this.legionNotice = '恢复未全部完成，需核验：' + JSON.stringify(result.unresolved);
+                return false;
+            }
+            this.showToast(message);
+            return true;
+        }
+        catch (error) {
+            this.legionEditorError = error.message;
+            this.legionErrors[path] = error.message;
+            this.showToast(error.message, 'error');
+            return false;
+        }
+        finally {
+            this.legionPending[path] = false;
+        }
+    },
+    async setLegionDeadline() { const deadline = Date.parse(this.legionDeadline); if (!Number.isFinite(deadline) || deadline <= Date.now()) {
+        this.showToast('请选择本机时区的未来截止时间', 'error');
+        return;
+    } await this.legionAction('/v2/legion/deadline', { deadline }, '截止时间已保存'); },
+    openLegionEditor(kind, project, values = {}) { if (!project)
+        return; this.legionEditor = { kind, projectId: project.id, taskKey: '', runId: '', reason: '', resumeCondition: '', summary: '', nextWorker: '', factIds: [], ...values }; if (values.runId)
+        this.legionEditor.taskKey = project.steps.find(s => s.id === project.runs.find(r => r.id === values.runId)?.stepId)?.taskKey || ''; this.legionEditorError = ''; if (kind === 'confirm')
+        this.loadLegionFacts(project.id); this.$nextTick(() => this.$refs.legionEditorDialog.showModal()); },
+    closeLegionEditor() { this.$refs.legionEditorDialog.close(); },
+    async submitLegionEditor() { const e = this.legionEditor; let url, body, message; if (e.kind === 'park') {
+        url = '/v2/projects/' + encodeURIComponent(e.projectId) + '/legion/park';
+        body = { taskKey: e.taskKey, reason: e.reason, resumeCondition: e.resumeCondition };
+        message = '题目已搁置；请核验执行停止状态';
+    }
+    else if (e.kind === 'resume') {
+        url = '/v2/projects/' + encodeURIComponent(e.projectId) + '/legion/reactivate';
+        body = { taskKey: e.taskKey, reason: e.reason };
+        message = '题目已恢复为待执行';
+    }
+    else if (e.kind === 'reassign') {
+        url = '/v2/legion/reassign';
+        body = { projectId: e.projectId, runId: e.runId, nextWorker: e.nextWorker, summary: e.summary };
+        message = '交接请求已保存，等待旧执行停止确认';
+    }
+    else if (e.kind === 'confirm') {
+        url = '/v2/legion/transfer/' + encodeURIComponent(e.transferId) + '/confirm';
+        body = { projectId: e.projectId, factIds: [...e.factIds] };
+        message = '目标复验已登记';
+    }
+    else
+        return; this.legionEditorSaving = true; try {
+        if (await this.legionAction(url, body, message) && this.legionEditor === e)
+            this.closeLegionEditor();
+    }
+    finally {
+        this.legionEditorSaving = false;
+    } },
+    async sendLegionMessage() { if (await this.legionAction('/v2/legion/message', { ...this.legionMessage }, '消息已保存；实际交付请查看消息状态'))
+        this.legionMessage.content = ''; },
+    async searchLegionExperience() { this.legionSearching = true; this.legionSearched = false; try {
+        this.legionResults = await this.api('GET', '/v2/legion/experience?query=' + encodeURIComponent(this.legionQuery));
+        this.legionSearched = true;
+    }
+    catch (error) {
+        this.showToast(error.message, 'error');
+    }
+    finally {
+        this.legionSearching = false;
+    } },
+    async readLegionExperience(item, more = false) { this.legionReading = true; const offset = more ? this.legionPreviewMeta?.nextOffset : 0; if (!more) {
+        this.legionPreviewItem = item;
+        this.legionPreview = '';
+        this.legionPreviewMeta = null;
+    } try {
+        const page = await this.api('GET', '/v2/projects/' + encodeURIComponent(item.projectId) + '/evidence/' + encodeURIComponent(item.artifactId) + '?offset=' + offset);
+        if (this.legionPreviewItem?.id !== item.id)
+            return;
+        if (page.encoding === 'base64')
+            throw Error('此证据为二进制，不能作为文本预览');
+        this.legionPreview += page.content;
+        this.legionPreviewMeta = { ...page, bytes: page.offset + page.bytes };
+    }
+    catch (error) {
+        this.showToast(error.message, 'error');
+    }
+    finally {
+        this.legionReading = false;
+    } },
+    async loadLegionFacts(projectId) { if (!projectId)
+        return; this.legionFactLoading[projectId] = true; this.legionFactErrors[projectId] = ''; try {
+        this.legionFacts[projectId] = await this.api('GET', '/v2/projects/' + encodeURIComponent(projectId) + '/facts');
+    }
+    catch (error) {
+        this.legionFacts[projectId] = [];
+        this.legionFactErrors[projectId] = error.message;
+    }
+    finally {
+        this.legionFactLoading[projectId] = false;
+    } },
+    legionFactOptions(projectId, taskKey) { const p = this.legionProject(projectId); return (this.legionFacts[projectId] || []).filter(f => f.id !== 'origin' && (!taskKey || p?.steps.some(s => s.id === f.stepId && s.taskKey === taskKey))); },
+    async captureLegionExperience() { await this.legionAction('/v2/legion/experience', { ...this.legionCapture, factIds: [...this.legionCapture.factIds] }, '来源经验已保存并索引'); },
+    async transferLegionExperience() { await this.legionAction('/v2/legion/transfer', { ...this.legionTransfer, sourceId: Number(this.legionTransfer.sourceId) }, '已发送未验证 Hint；仍需目标题目实际复验'); },
+
     async init() {
       window.redtraceConfirm = (options) => this.requestDangerConfirm(options);
       this._panelResizeMove = (e) => this.onPanelResize(e);
@@ -2807,10 +3401,11 @@ function redtraceApp() {
 
     handleRoute() {
       const hash = location.hash || '#/';
-      const pageMatch = hash.match(/^#\/(logs|skills|mcp|webshell|plugins|c2-listeners|c2-sessions|c2-tasks|c2-payloads|c2-events|c2-profiles|c2-credentials|settings)$/);
+      const pageMatch = hash.match(/^#\/(legion|logs|skills|mcp|webshell|plugins|c2-listeners|c2-sessions|c2-tasks|c2-payloads|c2-events|c2-profiles|c2-credentials|settings)$/);
       if (pageMatch) {
         this.appPage = pageMatch[1];
         if (this.appPage === 'settings') this.loadWorkerConfig();
+        if (this.appPage === 'legion') { this.loadLegion(); this.loadWorkerConfig(); }
         return;
       }
       this.appPage = 'workspace';
@@ -2826,7 +3421,7 @@ function redtraceApp() {
     },
 
     setAppPage(page) {
-      if (!['workspace', 'skills', 'mcp', 'webshell', 'plugins', 'c2-listeners', 'c2-sessions', 'c2-tasks', 'c2-payloads', 'c2-events', 'c2-profiles', 'c2-credentials', 'logs', 'settings'].includes(page)) return;
+      if (!['legion', 'workspace', 'skills', 'mcp', 'webshell', 'plugins', 'c2-listeners', 'c2-sessions', 'c2-tasks', 'c2-payloads', 'c2-events', 'c2-profiles', 'c2-credentials', 'logs', 'settings'].includes(page)) return;
       this.appPage = page;
       const nextHash = page === 'workspace'
         ? (this.selectedProjectId && this.view === 'graph' ? `/projects/${this.selectedProjectId}` : '/')
@@ -2834,6 +3429,7 @@ function redtraceApp() {
       if (location.hash !== `#${nextHash}`) location.hash = nextHash;
       if (page === 'workspace' && this.view === 'list') this.loadProjects();
       if (page === 'settings') this.loadWorkerConfig();
+      if (page === 'legion') { this.loadLegion(); this.loadWorkerConfig(); }
     },
 
     async api(method, path, body) {
@@ -2909,6 +3505,7 @@ function redtraceApp() {
       return 'admin';
     },
 
+    projectStatusLabel(status) { return ({active:'进行中',stopped:'已停止',completed:'已完成'})[status] || status; },
     projectStatusBadgeClass(status) {
       const classes = {
         active: 'bg-teal-50 text-teal-600',
@@ -2918,22 +3515,15 @@ function redtraceApp() {
       return classes[status] || 'bg-slate-100 text-slate-500';
     },
 
-    reasonBadgeText(reason, compact = false) {
-      if (!reason) return '';
-      if (compact) return `Reason · ${reason.worker}`;
-      const trigger = reason.trigger ? ` (${reason.trigger})` : '';
-      return `Reasoning · ${reason.worker}${trigger}`;
-    },
 
     workingIntentBadgeText(count) {
-      return `Exploring · ${count}`;
+      return `执行中 · ${count}`;
     },
 
-    isBootstrapIntent(intent) {
+    isInitialMissionIntent(intent) {
       return Boolean(
         intent
-        && intent.description === 'bootstrap'
-        && intent.creator === 'dispatcher.bootstrap'
+        && intent.initial_mission === true
         && Array.isArray(intent.from)
         && intent.from.length === 1
         && intent.from[0] === 'origin'
@@ -2942,17 +3532,19 @@ function redtraceApp() {
     },
 
     openIntentNodeType(intent) {
-      if (this.isBootstrapIntent(intent)) return intent.worker ? 'bootstrap_running' : 'bootstrap_pending';
+      if (intent.state === 'parked') return 'parked';
+      if (this.isInitialMissionIntent(intent)) return intent.worker ? 'bootstrap_running' : 'bootstrap_pending';
       return intent.worker ? 'in_progress' : 'unclaimed';
     },
 
     openIntentNodeLabel(intent) {
-      if (this.isBootstrapIntent(intent)) return 'bootstrap';
+      if (intent.state === 'parked') return 'Park';
+      if (this.isInitialMissionIntent(intent)) return 'Soldier · 初始';
       return '?';
     },
 
     openIntentNodeSize(intent) {
-      if (this.isBootstrapIntent(intent)) return { width: 82, height: 30 };
+      if (this.isInitialMissionIntent(intent)) return { width: 110, height: 34 };
       const label = this.openIntentNodeLabel(intent);
       return { width: Math.min(132, Math.max(42, label.length * 6 + 18)), height: 28 };
     },
@@ -3254,6 +3846,7 @@ function redtraceApp() {
       this.loadDshUpdate();
       if (this.workerConfigLoading || (!force && this.workerConfig.revision)) return;
       this.workerConfigLoading = true;
+      this.workerConfigError = '';
       try {
         const snapshot = await this.api('GET', '/worker-config');
         if (!Array.isArray(snapshot.common_env)) {
@@ -3262,7 +3855,9 @@ function redtraceApp() {
             .map(([name, value]) => ({ name, value: String(value ?? '') }));
         }
         this.applyWorkerSnapshot(snapshot);
+        return snapshot;
       } catch(e) {
+        this.workerConfigError = e.message;
         this.showToast(e.message, 'error');
       } finally {
         this.workerConfigLoading = false;
@@ -3297,6 +3892,7 @@ function redtraceApp() {
         execution: snapshot.execution || 'local',
         runtime_max_workers: Number(snapshot.runtime_max_workers) || 1,
         cli_config_home: snapshot.cli_config_home || '',
+        llm_polling: snapshot.llm_polling || { enabled: true, models: {} },
         providers: (Array.isArray(snapshot.providers) ? snapshot.providers : []).map(
           provider => ({
             ...provider,
@@ -3332,26 +3928,13 @@ function redtraceApp() {
           max_running_projects: Number(value.runtime.max_running_projects),
           max_project_workers: Number(value.runtime.max_project_workers),
         },
-        tasks: {
-          bootstrap: {
-            timeout: Number(value.tasks.bootstrap.timeout),
-            conclude_timeout: Number(value.tasks.bootstrap.conclude_timeout),
-          },
-          reason: {
-            timeout: Number(value.tasks.reason.timeout),
-            conclude_timeout: Number(value.tasks.reason.conclude_timeout),
-            max_intents: Number(value.tasks.reason.max_intents),
-          },
-          explore: {
-            timeout: Number(value.tasks.explore.timeout),
-            conclude_timeout: Number(value.tasks.explore.conclude_timeout),
-          },
-        },
+        tasks: Object.fromEntries(['commander','general','soldier','scout'].map(role => [role,{ timeout:Number(value.tasks[role].timeout), conclude_timeout:Number(value.tasks[role].conclude_timeout), ...(role==='commander'&&value.tasks.commander.max_intents!=null&&value.tasks.commander.max_intents!==''?{max_intents:Number(value.tasks.commander.max_intents)}:{}) }])),
       };
     },
 
     async saveRuntimeTasks() {
       this.runtimeSettingsBusy = true;
+      this.runtimeSettingsError = '';
       try {
         const snapshot = await this.api('PUT', '/worker-config/runtime-tasks', this.runtimeTaskPayload());
         this.runtimeSettingsDirty = false;
@@ -3359,14 +3942,18 @@ function redtraceApp() {
         this.showToast('运行配置已保存；新任务将自动使用最新设置');
       } catch(e) {
         this.showToast(e.message, 'error');
-        if (e.message.includes('reload before saving')) {
-          this.runtimeSettingsDirty = false;
-          await this.loadWorkerConfig(true);
-        }
+        this.runtimeSettingsError = e.message.includes('reload before saving') ? '服务器配置已变更，未保存的草稿已保留。请载入最新配置后重新编辑。' : e.message;
       } finally {
         this.runtimeSettingsBusy = false;
       }
     },
+
+    async reloadRuntimeTaskDraft() {
+      if (this.runtimeSettingsDirty && !await this.requestDangerConfirm({title:'重新载入运行配置',subject:'调度与 Mission · 未保存草稿',description:'将放弃当前未保存的运行配置草稿；服务器配置和已有任务不受影响。',confirmLabel:'放弃草稿并载入'})) return;
+      const snapshot = await this.loadWorkerConfig(true);
+      if (snapshot) { this.runtimeSettingsDirty = false; this.applyWorkerSnapshot(snapshot); this.runtimeSettingsError = ''; }
+    },
+    workerRoleRoutes(role) { return (this.workerConfig.workers || []).filter(worker=>worker.enabled&&worker.roles?.includes(role)&&(role!=='commander'||worker.provider!=='mock')); },
 
     addCommonEnvRow() {
       this.commonEnvForm.push({
@@ -3541,7 +4128,7 @@ function redtraceApp() {
     },
 
     workerTaskLabel(taskType) {
-      return { bootstrap: 'Bootstrap', reason: 'Reason', explore: 'Explore' }[taskType] || taskType;
+      return { commander:'Commander', general:'General', soldier:'Soldier', scout:'Scout' }[taskType] || taskType;
     },
 
     providerApiLabel(api) {
@@ -3572,6 +4159,44 @@ function redtraceApp() {
 
     providerInUseCount() {
       return (this.workerConfig.providers || []).filter(provider => provider.referenced).length;
+    },
+
+    openPollingConfig() {
+      const polling = this.workerConfig.llm_polling || { enabled: true, models: {} };
+      const models = [...new Set((this.workerConfig.providers || []).flatMap(p => p.models.map(m => m.id)))];
+      this.pollingForm = { enabled: polling.enabled, groups: models.map(model => {
+        const available = this.workerConfig.providers.filter(p => p.models.some(m => m.id === model)).map(p => p.name);
+        const selected = Object.hasOwn(polling.models, model) ? polling.models[model] : undefined;
+        const order = [...new Set([...(selected || []), ...available])].filter(name => available.includes(name));
+        return { model, providers: order.map(name => ({ name, enabled: selected === undefined || selected.includes(name) })) };
+      }) };
+      this.$refs.pollingDialog.showModal();
+    },
+
+    closePollingConfig() {
+      if (!this.pollingSaveBusy) this.$refs.pollingDialog.close();
+    },
+
+    movePollingProvider(group, index, offset) {
+      const [provider] = group.providers.splice(index, 1);
+      group.providers.splice(index + offset, 0, provider);
+    },
+
+    async savePollingConfig() {
+      this.pollingSaveBusy = true;
+      try {
+        const snapshot = await this.api('PUT', '/worker-config/llm-polling', {
+          expected_revision: this.workerConfig.revision,
+          enabled: this.pollingForm.enabled,
+          models: Object.fromEntries(this.pollingForm.groups.map(group => [group.model, group.providers.filter(p => p.enabled).map(p => p.name)])),
+        });
+        this.applyWorkerSnapshot(snapshot);
+        this.$refs.pollingDialog.close();
+        this.showToast('轮询配置已保存并热加载');
+      } catch (e) {
+        this.showToast(e.message, 'error');
+        if (e.message.includes('reload before saving')) await this.loadWorkerConfig(true);
+      } finally { this.pollingSaveBusy = false; }
     },
 
     providerModelForm(model = {}) {
@@ -3715,7 +4340,7 @@ function redtraceApp() {
           provider,
           model: '',
           enabled: true,
-          task_types: ['bootstrap', 'reason', 'explore'],
+          task_types: ['commander', 'general', 'soldier', 'scout'],
           priority: 0,
           max_running: 1,
         };
@@ -3739,9 +4364,7 @@ function redtraceApp() {
         provider: this.workerForm.provider,
         model: this.workerForm.model || 'mock',
         enabled: !!this.workerForm.enabled,
-        bootstrap: this.workerForm.task_types.includes('bootstrap'),
-        reason: this.workerForm.task_types.includes('reason'),
-        explore: this.workerForm.task_types.includes('explore'),
+        roles: [...this.workerForm.task_types],
         priority: Number(this.workerForm.priority),
         max_running: Number(this.workerForm.max_running),
       };
@@ -3884,13 +4507,24 @@ function redtraceApp() {
         await this.loadProject(this.project.project.id); this.updateGraph(); this.selectFgsNode(type, created.id); this.showToast(`${type} 已创建`);
       } catch (e) { this.showToast(e.message, 'error'); }
     },
+    fgsAcceptanceEvidence() { return this.fgsAcceptance.evidence || []; },
+    async submitFgsAcceptance() {
+      const form=this.fgsAcceptance;form.saving=true;form.error='';
+      try {
+        await this.api('PATCH','/v2/projects/'+encodeURIComponent(form.projectId)+'/goals/'+encodeURIComponent(form.goalId),{status:'achieved',expectedVersion:form.version,evidenceIds:[...form.evidenceIds]});
+        this.$refs.fgsAcceptanceDialog.close();await this.loadProject(form.projectId);this.updateGraph();this.selectFgsNode('goal',form.goalId);this.showToast('目标已按所选本项目成果验收');
+      }catch(error){form.error=error.message}finally{form.saving=false}
+    },
+
     async setFgsStatus(status) {
       if (!this.fgsSelection || !['goal', 'step'].includes(this.fgsSelection.type)) return;
       try {
         const type = this.fgsSelection.type, kind = type === 'goal' ? 'goals' : 'steps', id = this.fgsSelection.id, payload = { status };
         if (type === 'goal' && status === 'achieved') {
-          const evidenceIds = (prompt('Evidence Fact / Finding IDs（逗号分隔）', this.fgs?.facts?.at(-1)?.id || 'origin') || '').split(',').map(v => v.trim()).filter(Boolean); if (!evidenceIds.length) return;
-          payload.evidenceIds = evidenceIds;
+          const goal = this.fgsSelectionRecord();
+          this.fgsAcceptance = {projectId:this.project.project.id,goalId:id,version:goal.version,title:goal.description,evidence:[...(this.fgs?.facts||[]).filter(f=>f.id!=='origin'),...(this.fgs?.findings||[])],evidenceIds:[],saving:false,error:''};
+          this.$nextTick(()=>this.$refs.fgsAcceptanceDialog.showModal());
+          return;
         }
         await this.api('PATCH', `/v2/projects/${encodeURIComponent(this.project.project.id)}/${kind}/${encodeURIComponent(id)}`, payload);
         await this.loadProject(this.project.project.id); this.updateGraph(); this.selectFgsNode(type, id); this.showToast(`${type} 已更新`);
@@ -3933,11 +4567,9 @@ function redtraceApp() {
       const projectSummary = this.projects.find(item => item.id === projectId);
       if (projectSummary) {
         projectSummary.status = updated.status;
-        projectSummary.reason = updated.reason;
       }
       if (this.selectedProjectId === projectId && this.project) {
         this.project.project.status = updated.status;
-        this.project.project.reason = updated.reason;
         if (!this.projectIsActive()) {
           this.showIntentModal = false;
           this.showConcludeModal = false;
@@ -3964,7 +4596,7 @@ function redtraceApp() {
         const successCount = results.filter(result => result.status === 'fulfilled').length;
         const failureCount = results.length - successCount;
         if (failureCount === 0) {
-          this.showToast(`已停止 ${successCount} 个运行中项目`);
+          this.showToast(`已停止 ${successCount} 个项目`);
         } else {
           this.showToast(`已停止 ${successCount} 个项目，${failureCount} 个失败`, 'error');
         }
@@ -4033,7 +4665,6 @@ function redtraceApp() {
 
     replayEventWeight(event) {
       const type = event?.type;
-      if (type === 'reason_started') return 1.6;
       if (type === 'intent_declared') return 1.05;
       if (type === 'intent_running') return 0.75;
       if (type === 'intent_concluded' || type === 'project_completed') return 1.6;
@@ -4073,7 +4704,6 @@ function redtraceApp() {
         project: {
           ...this.cloneData(sourceProject.project),
           status: 'active',
-          reason: null,
         },
         facts: [origin, goal].filter(Boolean).map(fact => this.cloneData(fact)),
         intents: [],
@@ -4092,23 +4722,6 @@ function redtraceApp() {
         }
 
         const sourceIntent = sourceIntents.get(event.intentId);
-        replayEvents.push({
-          id: `reason-started-${event.intentId}`,
-          type: 'reason_started',
-          timestamp: sourceIntent?.created_at || event.timestamp,
-          actor: sourceIntent?.creator || event.actor || 'reasoner',
-          title: sourceIntent?.description || event.title,
-          meta: [
-            sourceIntent?.id || event.intentId,
-            `from ${(sourceIntent?.from || event.sourceFactIds || []).join(', ')}`,
-          ],
-          targetType: 'reason',
-          targetId: sourceIntent?.id || event.intentId,
-          order: `${event.order}.reason`,
-          intentId: sourceIntent?.id || event.intentId,
-          producedFactId: null,
-          sourceFactIds: [...(sourceIntent?.from || event.sourceFactIds || [])],
-        });
         replayEvents.push(this.cloneData(event));
         if (!sourceIntent?.worker) continue;
         replayEvents.push({
@@ -4139,7 +4752,6 @@ function redtraceApp() {
 
       if (frames.length > 0) {
         frames[frames.length - 1].project.project.status = sourceProject.project.status;
-        frames[frames.length - 1].project.project.reason = this.cloneData(sourceProject.project.reason);
       }
       return frames;
     },
@@ -4164,19 +4776,9 @@ function redtraceApp() {
         return;
       }
 
-      if (event.type === 'reason_started') {
-        replayProject.project.reason = {
-          worker: event.actor || 'reasoner',
-          trigger: 'new_facts',
-          started_at: event.timestamp,
-          last_heartbeat_at: event.timestamp,
-        };
-        return;
-      }
 
       if (event.type === 'intent_declared') {
         if (!sourceIntent) return;
-        replayProject.project.reason = null;
         if (!replayProject.intents.some(intent => intent.id === sourceIntent.id)) {
           replayProject.intents.push({
             id: sourceIntent.id,
@@ -4235,7 +4837,6 @@ function redtraceApp() {
       this.replay.visibleEvents = this.replay.frames
         .slice(0, frameIndex + 1)
         .map(item => this.cloneData(item.event))
-        .filter(entry => entry.type !== 'reason_started')
         .map((entry, index, list) => ({ ...entry, isLast: index === list.length - 1 }));
       this._timelineEventsCacheProject = null;
       this._timelineEventsCache = [];
@@ -4448,7 +5049,9 @@ function redtraceApp() {
 
     startPolling() {
       this.pollTimer = setInterval(async () => {
-        if (!this.polling || this.appPage !== 'workspace') return;
+        if (!this.polling) return;
+        if (this.appPage === 'legion') { await this.loadLegion(); return; }
+        if (this.appPage !== 'workspace') return;
         if (this.selectedProjectId && this.view === 'graph') {
           await this.loadProject(this.selectedProjectId);
           this.updateGraph();
@@ -4497,7 +5100,7 @@ function redtraceApp() {
           for (const src of intent.from) {
             edges.push({ data: { id: `${intent.id}_${src}`, source: src, target: phId, intentId: intent.id, label: lbl, status: nodeType }});
           }
-          if (this.isBootstrapIntent(intent)) {
+          if (this.isInitialMissionIntent(intent)) {
             edges.push({ data: { id: `${intent.id}_goal`, source: phId, target: 'goal', intentId: intent.id, label: '', status: nodeType, edgeType: 'bootstrap_scope' }});
           }
         }
@@ -4695,9 +5298,9 @@ function redtraceApp() {
       this.cy.nodes('[nodeType="in_progress"], [nodeType="bootstrap_running"]').forEach(node => {
         if (node.scratch('_pulseActive')) return;
         node.scratch('_pulseActive', true);
-        const isBootstrap = node.data('nodeType') === 'bootstrap_running';
-        const minOpacity = isBootstrap ? 0.55 : 0.35;
-        const maxOpacity = isBootstrap ? 0.98 : 0.8;
+        const isInitialMission = node.data('nodeType') === 'bootstrap_running';
+        const minOpacity = isInitialMission ? 0.55 : 0.35;
+        const maxOpacity = isInitialMission ? 0.98 : 0.8;
         const pulseOut = () => {
           if (!node.inside()) {
             node.removeScratch('_pulseActive');
@@ -4717,15 +5320,15 @@ function redtraceApp() {
       this.cy.edges('[status="in_progress"], [status="bootstrap_running"]').forEach(edge => {
         if (edge.scratch('_flowActive')) return;
         edge.scratch('_flowActive', true);
-        const isBootstrap = edge.data('status') === 'bootstrap_running';
-        const dashOffset = isBootstrap ? -16 : -12;
+        const isInitialMission = edge.data('status') === 'bootstrap_running';
+        const dashOffset = isInitialMission ? -16 : -12;
         const flow = () => {
           if (!edge.inside() || !['in_progress', 'bootstrap_running'].includes(edge.data('status'))) {
             edge.removeScratch('_flowActive');
             return;
           }
           edge.animate({ style:{'line-dash-offset':dashOffset} }, {
-            duration:isBootstrap ? 620 : 700,
+            duration:isInitialMission ? 620 : 700,
             complete:() => {
               if (!edge.inside() || !['in_progress', 'bootstrap_running'].includes(edge.data('status'))) {
                 edge.removeScratch('_flowActive');
@@ -5042,7 +5645,7 @@ function redtraceApp() {
         nodeIds.add(sourceId);
         edgeIds.add(`${intent.id}_${sourceId}`);
       }
-      if (this.isBootstrapIntent(intent)) {
+      if (this.isInitialMissionIntent(intent)) {
         nodeIds.add('goal');
         edgeIds.add(`${intent.id}_goal`);
       }
@@ -5180,18 +5783,24 @@ function redtraceApp() {
 
     intentDotClass(i) {
       if (i.to) return 'bg-teal-400';
-      if (this.isBootstrapIntent(i)) return i.worker ? 'bg-orange-400' : 'bg-orange-200';
+      if (this.isInitialMissionIntent(i)) return i.worker ? 'bg-orange-400' : 'bg-orange-200';
       return i.worker ? 'bg-amber-400' : 'bg-slate-300';
     },
     intentStatusClass(i) {
+      if (i.state === 'parked') return 'text-cyan-400';
+      if (i.status === 'paused') return 'text-amber-500';
       if (i.to) return 'text-teal-600';
-      if (this.isBootstrapIntent(i)) return i.worker ? 'text-orange-600' : 'text-orange-400';
+      if (this.isInitialMissionIntent(i)) return i.worker ? 'text-orange-600' : 'text-orange-400';
       return i.worker ? 'text-amber-600' : 'text-slate-400';
     },
     intentStatusLabel(i) {
-      if (i.to) return 'Concluded';
-      if (this.isBootstrapIntent(i)) return i.worker ? 'Bootstrap 运行中' : 'Bootstrap 待认领';
-      return i.worker ? 'In Progress' : 'Unclaimed';
+      if (i.state === 'parked') return '已搁置 · Park';
+      if (i.status === 'paused') return '执行暂停（非 Park）';
+      if (i.to) return '已完成';
+      if (i.state === 'dropped') return '已取消';
+      if (i.state === 'blocked') return '受阻';
+      if (this.isInitialMissionIntent(i)) return i.worker ? 'Soldier 初始 Mission · 执行中' : 'Soldier 初始 Mission · 待执行';
+      return i.worker ? '执行中' : '待执行';
     },
 
     timelineEvents() {
@@ -5373,8 +5982,7 @@ function redtraceApp() {
       const labels = {
         project_created: 'Project',
         hint_added: 'Hint',
-        reason_started: 'Reason',
-        intent_declared: 'Intent',
+        intent_declared: 'Mission',
         intent_running: 'Execute',
         intent_concluded: 'Conclude',
         project_completed: 'Complete',
@@ -5386,7 +5994,6 @@ function redtraceApp() {
       const classes = {
         project_created: 'bg-slate-100 text-slate-600',
         hint_added: 'bg-amber-50 text-amber-700',
-        reason_started: 'bg-sky-50 text-sky-700',
         intent_declared: 'bg-violet-50 text-violet-700',
         intent_running: 'bg-amber-50 text-amber-700',
         intent_concluded: 'bg-teal-50 text-teal-700',
@@ -5396,7 +6003,7 @@ function redtraceApp() {
     },
 
     timelineEventIsInteractive(entry) {
-      return entry?.targetType === 'fact' || entry?.targetType === 'intent' || entry?.targetType === 'hints' || entry?.targetType === 'reason';
+      return entry?.targetType === 'fact' || entry?.targetType === 'intent' || entry?.targetType === 'hints';
     },
 
     timelineEventTriggersGraphFocus(entry) {
@@ -5407,7 +6014,6 @@ function redtraceApp() {
       const classes = {
         project_created: 'bg-slate-400',
         hint_added: 'bg-amber-400',
-        reason_started: 'bg-sky-400',
         intent_declared: 'bg-violet-400',
         intent_running: 'bg-amber-400',
         intent_concluded: 'bg-teal-400',
@@ -5609,7 +6215,7 @@ function redtraceApp() {
         this.showIntentModal = false;
         await this.loadProject(this.selectedProjectId);
         this.updateGraph();
-        this.showToast('Intent 已声明');
+        this.showToast('Mission 已声明');
       } catch(e) { this.showToast(e.message, 'error'); }
     },
 
@@ -5621,7 +6227,7 @@ function redtraceApp() {
         await this.api('PATCH', `/projects/${this.selectedProjectId}/intents/${intent.id}/execution-profile`, { execution_profile });
         await this.loadProject(this.selectedProjectId);
         this.updateGraph();
-        this.showToast(`Intent 隔离模式：${execution_profile}`);
+        this.showToast(`Mission 隔离模式：${execution_profile}`);
       } catch(e) { this.showToast(e.message, 'error'); }
     },
 
@@ -5630,17 +6236,17 @@ function redtraceApp() {
     async deleteSelectedIntent() {
       const intent = this.selectedDeletableIntentRecord();
       if (!intent || !await this.requestDangerConfirm({
-        title: '删除 Intent',
-        description: '删除后无法恢复；正在执行或已经产出 Fact 的 Intent 不允许删除。',
+        title: '删除 Mission',
+        description: '删除后无法恢复；正在执行或已经产出 Fact 的 Mission 不允许删除。',
         subject: `${intent.id} · ${intent.description}`,
-        confirmLabel: '删除 Intent',
+        confirmLabel: '删除 Mission',
       })) return;
       try {
         await this.api('DELETE', `/projects/${this.selectedProjectId}/intents/${encodeURIComponent(intent.id)}`);
         this.clearSelection();
         await this.loadProject(this.selectedProjectId);
         this.updateGraph();
-        this.showToast('Intent 已删除');
+        this.showToast('Mission 已删除');
       } catch(e) { this.showToast(e.message, 'error'); }
     },
 
@@ -5653,7 +6259,7 @@ function redtraceApp() {
         title: '释放图谱节点',
         description: '仅从工作台图谱移除此节点；对应的 WebShell、C2 或凭证资源仍会保留。',
         subject: `${this.factDisplayId(factId)} · ${fact?.description || '无描述'}`,
-        note: '若节点仍被下游 Intent 使用，将不会执行释放。',
+        note: '若节点仍被下游 Mission 使用，将不会执行释放。',
         confirmLabel: '释放节点',
       })) return;
       try {
@@ -5697,7 +6303,7 @@ function redtraceApp() {
         this.selectedNode = null;
         await this.loadProject(this.selectedProjectId);
         this.updateGraph();
-        this.showToast('Intent 已结束');
+        this.showToast('Mission 已结束');
       } catch(e) { this.showToast(e.message, 'error'); }
     },
 

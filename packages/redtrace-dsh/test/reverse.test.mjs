@@ -36,20 +36,21 @@ export async function session(ctx, available) {
   agent.session = ctx.get('sessions').create(undefined, { cwd })
   let refresh
   const scoped = await mountExecutionTools(scope.ctx, { cwd, sessionRoot: cwd, skillsDir: path.join(cwd, 'skills'),
-    task: { type: 'explore', executionProfile: 'direct' }, available,
+    task: { type: 'soldier', executionProfile: 'direct' }, available,
     onRefresh: fn => { refresh = fn } })
   let id = 0
   return { cwd, agent, scope, scoped, refresh: () => refresh(), schemas: () => ctx.tools.schemas(agent),
-    call: (name, args, signal = new AbortController().signal) => ctx.tools.execute({ name, arguments: args, agent, callId: `test-${++id}`, signal }),
+    call: (name, args, signal = new AbortController().signal) => ctx.tools.execute({ calls: [{ type: 'tool-call', name, arguments: JSON.stringify(args), id: `test-${++id}` }], agent, signal }).then(batch => batch.results[0].result),
     dispose: async () => { await scope.dispose(); await carrier.dispose() },
   }
 }
 
-test('Explore can lazily load native REA without Reason selection; management veto revokes live scopes', { timeout: 90000 }, async t => {
+test('Soldier can lazily load native REA without Commander tool selection; management veto revokes live scopes', { timeout: 90000 }, async t => {
   const root = mkdtempSync(path.join(tmpdir(), 'redtrace-step-rea-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const { Store } = await import(pathToFileURL(path.join(repoRoot, 'packages/redtrace-engine/src/store.ts')))
-  const { graphTools } = await import(pathToFileURL(path.join(repoRoot, 'packages/redtrace-engine/src/runner.ts')))
+  const { legionTools } = await import(pathToFileURL(path.join(repoRoot, 'packages/redtrace-engine/src/legion-tools.ts')))
+  const { LegionStore } = await import(pathToFileURL(path.join(repoRoot, 'packages/redtrace-engine/src/legion-store.ts')))
   const store = new Store(':memory:')
   t.after(() => store.close())
   const sessions = []
@@ -58,15 +59,13 @@ test('Explore can lazily load native REA without Reason selection; management ve
     () => Promise.all(sessions.map(s => s.refresh())))
   await manager.boot()
   const id = store.createProject({ title: 'Fixture', origin: 'Authorized fixture', goal: 'Analyze', bootstrap: false }).project.id
-  const worker = { name: 'Reason', backend: 'mock' }
-  const reason = store.claim(id, 'decide', worker)
-  const tools = graphTools({ store, run: reason, worker, config: { workspaceRoot: root, maxSteps: null }, signal: new AbortController().signal,
-    taskPluginAllowed: name => manager.taskPluginAllowed(name) }, () => {})
-  const result = await tools.find(t => t.name === 'add_step').execute('reason-create', { description: 'Reverse fixture', sourceIds: ['origin'], plugins: ['redtrace-reverse'] })
+  new LegionStore(store).claimCommand()
+  const tools=legionTools(store,'commander',undefined,null,()=>{})
+  const result=await tools.find(t=>t.name==='legion_spawn').execute('commander-create',{projectId:id,role:'soldier',taskKey:'reverse',description:'Reverse fixture',sourceIds:['origin']})
   const step = result.details
   const claimed = store.claim(id, 'execute', { name: 'Explore', backend: 'dsh' }, step.id)
   assert.equal(claimed.stepId, step.id)
-  assert.equal(manager.running('redtrace-reverse'), true, 'Default-on availability does not depend on Reason planning')
+  assert.equal(manager.running('redtrace-reverse'), true, 'Default-on availability does not depend on Commander planning')
   const ctx = await host()
   t.after(() => ctx.fiber.dispose())
   const selected = await session(ctx, name => manager.availableForTask(name, step.plugins))
@@ -89,13 +88,13 @@ test('Explore can lazily load native REA without Reason selection; management ve
   assert.equal(rea(selected.schemas()).length, 0)
   assert.equal(await hasSkill(selected), false)
   assert.equal((await selected.call('mcp__rea__binary_session', {})).isError, true)
-  await tools.find(t => t.name === 'add_step').execute('planning-remains-available', { description: 'Reverse again', sourceIds: ['origin'] })
+  await tools.find(t => t.name === 'legion_spawn').execute('planning-remains-available', {projectId:id,role:'soldier',taskKey:'reverse-again',description: 'Reverse again', sourceIds: ['origin'] })
   await manager.start('redtrace-reverse')
   assert.equal(await hasSkill(selected), true)
   assert.equal(rea(selected.schemas()).length, 0, 'fresh connection stays lazy')
   assert.equal(await hasSkill(unrelated), manager.running('redtrace-reverse'))
   assert.ok(ctx.tools.get(process.platform === 'win32' ? 'pwsh' : 'bash', selected.agent), 'unrelated native shell is retained')
-  assert.equal(tools.some(t => t.name.startsWith('mcp__rea__')), false, 'Reason never receives analysis schemas')
+  assert.equal(tools.some(t => t.name.startsWith('mcp__rea__')), false, 'Commander never receives analysis schemas')
 })
 
 test('official Skill is byte-identical to the pinned package, with complete local references', () => {

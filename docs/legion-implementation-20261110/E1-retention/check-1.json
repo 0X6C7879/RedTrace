@@ -1,0 +1,13 @@
+{
+  "command": "npm",
+  "args": [
+    "--prefix",
+    "/Users/lxy/Downloads/RedTrace/packages/redtrace-engine",
+    "run",
+    "check"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "status": 2,
+  "stdout": "\n> @redtrace/engine@0.4.0 check\n> tsc --noEmit\n\nsrc/project-evidence.ts(244,30): error TS2554: Expected 2-3 arguments, but got 1.\n",
+  "stderr": ""
+}

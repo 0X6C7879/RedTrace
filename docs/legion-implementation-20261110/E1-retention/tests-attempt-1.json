@@ -1,0 +1,26 @@
+[
+  {
+    "command": "node",
+    "args": [
+      "--test",
+      "packages/redtrace-engine/test/legion-state.test.ts"
+    ],
+    "cwd": "/Users/lxy/Downloads/RedTrace",
+    "status": 1,
+    "stdout": "✔ Campaign is a singleton control record, not a Project; acknowledgements cannot skip delivery (6.925583ms)\n✔ role metadata persists; General may create exactly two same-task squads in its delegated Goal (6.851625ms)\n✔ Park survives Run completion, prevents claim/spawn, and requires confirmed stop for reactivation (5.910333ms)\n✔ Scheduler wake does not claim a parked Step (27.306666ms)\n✔ handoff waits for old execution and creates a new Run on the same Step; resume is not handoff (6.705417ms)\n✔ unknown or pending tool results prevent automatic handoff/reactivation (5.431334ms)\n✔ HELP/REPORT remain durable messages, not confirmed Facts; foreign and closed actors are rejected (5.452333ms)\n✔ project evidence is readable with unchanged hash after producer Run/audit deletion (7.040167ms)\n✔ project evidence bounds reads, detects tampering, and rejects filesystem/credential escapes (6.127333ms)\n✔ project evidence directory symlink cannot publish outside Project (3.885584ms)\n✔ native project_evidence_read reads published evidence without producer lookup (8.070042ms)\n✔ evidence promotion is repeatable and reports missing sources without inventing proof (5.976833ms)\n✔ explicit tool result and referenced spill bytes survive promotion independently of Run audit (7.526958ms)\n✔ Campaign cursor, STATE and pending messages survive Store reopen (4.308667ms)\n✔ HTTP Step schema persists roles and Project artifact endpoint enforces bounded scoped reads (76.256667ms)\n✖ reset preflight retains nested Finding files, tools and Session attachments after fixture deletion (10.910375ms)\n✔ preflight reports running, paused, unknown and pending tools without stopping or deleting anything (6.174459ms)\n✖ missing or corrupt Finding/Session evidence stays explicit and never produces cleanup readiness (5.251459ms)\n✖ Session inventory failures, missing sessions, foreign workspace and concurrent changes block preflight (9.85525ms)\n✔ repeat promotion verifies spill children and detects loss even with an intact tool manifest (6.602208ms)\nℹ tests 20\nℹ suites 0\nℹ pass 17\nℹ fail 3\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 745.085375\n\n✖ failing tests:\n\ntest at packages/redtrace-engine/test/legion-state.test.ts:270:1\n✖ reset preflight retains nested Finding files, tools and Session attachments after fixture deletion (10.910375ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  3 !== 5\n  \n      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-state.test.ts:282:10)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 3,\n    expected: 5,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n\ntest at packages/redtrace-engine/test/legion-state.test.ts:319:1\n✖ missing or corrupt Finding/Session evidence stays explicit and never produces cleanup readiness (5.251459ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  4 !== 5\n  \n      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-state.test.ts:327:49)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 4,\n    expected: 5,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n\ntest at packages/redtrace-engine/test/legion-state.test.ts:333:1\n✖ Session inventory failures, missing sessions, foreign workspace and concurrent changes block preflight (9.85525ms)\n  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:\n  \n    assert.ok((await evidence.preflightReset(project.id, services)).blockers.some(b => /changed during/.test(b.reason)))\n  \n      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-state.test.ts:343:10)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: false,\n    expected: true,\n    operator: '==',\n    diff: 'simple'\n  }\n",
+    "stderr": ""
+  },
+  {
+    "command": "npm",
+    "args": [
+      "--prefix",
+      "/Users/lxy/Downloads/RedTrace/packages/redtrace-engine",
+      "run",
+      "check"
+    ],
+    "cwd": "/Users/lxy/Downloads/RedTrace",
+    "status": 0,
+    "stdout": "\n> @redtrace/engine@0.4.0 check\n> tsc --noEmit\n\n",
+    "stderr": ""
+  }
+]

@@ -1,4 +1,4 @@
-/** Reason-only full-file reads; Execute keeps the native bounded read tool. */
+/** Reason-only paged text reads; Execute keeps the native bounded read tool. */
 import { load } from './loader.js'
 
 export const name = 'redtrace-reason-read'
@@ -17,9 +17,9 @@ export async function apply(ctx: any): Promise<void> {
   if (!native) throw new Error('Reason requires the native read tool')
   ctx.tools.register({
     ...native,
-    description: 'Read a UTF-8 text file in full by default, with optional offset/limit and no path or output-size cap.',
+    description: 'Read UTF-8 text files up to 8 MiB; default 2000 lines. Use offset/limit to page.',
     parameters: { ...native.parameters, properties: { ...native.parameters.properties,
-      limit: { type: 'number', description: 'Optional number of lines to return. Omitted reads through end of file.' },
+      limit: { type: 'number', description: 'Optional number of lines to return. Defaults to 2000 lines.' },
     } },
     output: { ...native.output, render: (_args: unknown, value: ReadValue) => {
       const end = value.lines.at(-1)?.number ?? Math.max(0, value.offset - 1)
@@ -43,12 +43,14 @@ export async function apply(ctx: any): Promise<void> {
         throw new FsError(`cannot read "${target.displayPath}": not found`, 'FS_NOT_FOUND')
       }
       if (info.type !== 'file') throw new FsError(`cannot read "${target.displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE')
+      if (info.size !== undefined && info.size > 8 * 1024 * 1024) throw new Error('Reason read exceeds 8 MiB; ask Explore to extract a focused evidence file')
       const text = await ctx.fs.readText(target, exec.signal)
+      if (Buffer.byteLength(text) > 8 * 1024 * 1024 || text.includes('\0')) throw new Error('Reason read requires a UTF-8 text file up to 8 MiB')
       const lines: string[] = text ? text.split('\n') : []
       if (text.endsWith('\n')) lines.pop()
       const offset = args.offset ?? 1
       if (offset > lines.length && !(lines.length === 0 && offset === 1)) throw new FsError(`offset ${offset} is out of range for "${target.displayPath}" (${lines.length} lines)`, 'FS_NOT_FOUND')
-      const selected = lines.slice(offset - 1, args.limit === undefined ? undefined : offset - 1 + args.limit)
+      const selected = lines.slice(offset - 1, offset - 1 + (args.limit ?? 2000))
       exec.signal.throwIfAborted()
       ctx.emit('fs/observed', target, { kind: 'present', version: info.version }, exec)
       return { path: ctx.fs.processPath(target), offset, totalLines: lines.length,
@@ -57,6 +59,6 @@ export async function apply(ctx: any): Promise<void> {
     },
   })
   ctx.systemPrompt.section({ name: 'tool:read', order: ctx.systemPrompt.getSectionOrder('TOOL_READ'),
-    text: 'Use read to inspect UTF-8 text files. It returns the complete file by default, without path, line, character or byte caps. Use offset/limit only when you intentionally want a partial read.',
+    text: 'Use read to inspect UTF-8 text files. Files must be text up to 8 MiB. It returns 2000 lines by default. Use offset and limit to continue reading large files.',
   })
 }

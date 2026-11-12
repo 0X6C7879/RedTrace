@@ -255,23 +255,7 @@ const MANAGED: readonly ManagedEntry[] = [
   },
 ]
 
-const PRESETS: readonly PresetEntry[] = [
-  {
-    id: 'redtrace-bootstrap', label: 'Bootstrap 预设', category: 'preset', preset: 'bootstrap',
-    description: '初始图谱构建任务',
-    intro: '新项目的首次任务:梳理给定目标,产出初始知识图谱与第一批意图,为后续调度建立基线。',
-  },
-  {
-    id: 'redtrace-reason', label: 'Reason 预设', category: 'preset', preset: 'reason',
-    description: '意图规划与评估任务',
-    intro: '规划类任务:评估黑板修订,规划意图的拆分与排序,决定执行顺序。',
-  },
-  {
-    id: 'redtrace-explore', label: 'Explore 预设', category: 'preset', preset: 'explore',
-    description: '意图执行任务',
-    intro: '执行类任务:领取具体意图,调用工具完成侦察或分析,并通过契约工具提交结果与事实。',
-  },
-]
+const PRESETS: readonly PresetEntry[] = (['commander','general','soldier','scout'] as const).map(role => ({ id: 'redtrace-' + role, label: role + ' 预设', category: 'preset', preset: role, description: 'Legion ' + role + ' Mission', intro: role === 'commander' ? '全局规划、资源分配与证据验收；不直接操作目标。' : '共享 FGS 的独立 DSH 角色会话，保留原生工具与执行隔离。' }))
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,47}$/
 const SETTLE_TIMEOUT_SECONDS = 10

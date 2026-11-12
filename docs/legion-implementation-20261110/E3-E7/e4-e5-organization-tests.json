@@ -1,0 +1,11 @@
+{
+  "command": "node",
+  "args": [
+    "--test",
+    "packages/redtrace-engine/test/legion-organization.test.ts"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "status": 0,
+  "stdout": "✔ tactics use a union of actual Run intervals rather than double-counting simultaneous squads (12.30725ms)\n✔ classification requires same-task confirmed evidence and persists its verdict (6.53525ms)\n✔ submission and ended budget phases do not spawn new Missions (3.481291ms)\n✔ instance close rejects live, pending and unknown task execution, then uses the actual SDK process (74.799083ms)\n✔ requested handoff waits for every tool result and the next Run receives STATE and predecessor (6.835167ms)\n✔ Scheduler automatically launches a fresh Run only after old relay execution has settled (7.196625ms)\nℹ tests 6\nℹ suites 0\nℹ pass 6\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 627.477417\n",
+  "stderr": ""
+}

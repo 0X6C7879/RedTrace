@@ -11,17 +11,17 @@ import type { AgentTool } from './tool-types.ts'
 import type { TaskContext } from './scheduler.ts'
 
 type Session = { session?: string; challenge?: string; identity?: string }
-type RequestInput = { url: string; method?: string; headers?: Record<string, string>; body?: string }
-type Entry = { api: APIRequestContext; queue: Promise<void>; resourceId: string; stateFile: string }
+type RequestInput = { url: string; method?: string; headers?: Record<string, string>; body?: string; followRedirects?: boolean }
+type Entry = { api: APIRequestContext; pending: Set<Promise<unknown>>; saving?: Promise<void>; dirty: boolean; closed: boolean; resourceId: string; stateFile: string }
 const managers = new WeakMap<TaskContext['store'], Map<string, Entry>>()
 const openings = new WeakMap<TaskContext['store'], Promise<void>>()
 const sessionSchema = { session: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })), challenge: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })), identity: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })) }
-const requestSchema = Type.Object({ url: Type.String({ minLength: 8, maxLength: 4096 }), method: Type.Optional(Type.Union(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map(value => Type.Literal(value)))), headers: Type.Optional(Type.Record(Type.String(), Type.String({ maxLength: 4096 }))), body: Type.Optional(Type.String({ maxLength: 262144 })) })
+const requestSchema = Type.Object({ url: Type.String({ minLength: 8, maxLength: 4096 }), method: Type.Optional(Type.String({ pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$", maxLength: 64 })), headers: Type.Optional(Type.Record(Type.String(), Type.String({ maxLength: 4096 }))), body: Type.Optional(Type.String({ maxLength: 262144 })), followRedirects: Type.Optional(Type.Boolean()) })
 
 function safeUrl(value: string) {
   let url: URL
   try { url = new URL(value) } catch { throw new HttpError(422, 'A valid absolute URL is required') }
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new HttpError(422, 'Only credential-free HTTP(S) URLs are supported')
+  if (!['http:', 'https:'].includes(url.protocol)) throw new HttpError(422, 'Only HTTP(S) URLs are supported')
   return url
 }
 function sessions(context: TaskContext) {
@@ -45,7 +45,7 @@ async function entryFor(context: TaskContext, args: Session) {
       const stateFile = path.join(ops.outputRoot, 'http', 'sessions', `${resource.id}.json`)
       let state: Awaited<ReturnType<APIRequestContext['storageState']>> | undefined
       try { state = JSON.parse(await readFile(stateFile, 'utf8')) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-      entry = { resourceId: resource.id, stateFile, queue: Promise.resolve(), api: await request.newContext({ ...(state ? { storageState: state } : {}) }) }
+      entry = { resourceId: resource.id, stateFile, pending: new Set(), dirty: false, closed: false, api: await request.newContext({ ...(state ? { storageState: state } : {}) }) }
       sessions(context).set(resource.id, entry)
     }
     result = entry
@@ -54,28 +54,33 @@ async function entryFor(context: TaskContext, args: Session) {
   return result
 }
 async function persist(entry: Entry) {
-  const state = await entry.api.storageState()
-  await mkdir(path.dirname(entry.stateFile), { recursive: true, mode: 0o700 })
-  const temporary = `${entry.stateFile}.${randomUUID()}.tmp`
-  try { await writeFile(temporary, JSON.stringify(state), { mode: 0o600 }); await rename(temporary, entry.stateFile) }
-  finally { await rm(temporary, { force: true }) }
+  entry.dirty = true
+  if (!entry.saving) entry.saving = (async () => {
+    await mkdir(path.dirname(entry.stateFile), { recursive: true, mode: 0o700 })
+    while (entry.dirty) {
+      entry.dirty = false
+      const state = await entry.api.storageState(), temporary = `${entry.stateFile}.${randomUUID()}.tmp`
+      try { await writeFile(temporary, JSON.stringify(state), { mode: 0o600 }); await rename(temporary, entry.stateFile) }
+      finally { await rm(temporary, { force: true }) }
+    }
+  })().finally(() => { entry.saving = undefined })
+  await entry.saving
 }
 export async function disposeHttpResource(store: TaskContext['store'], id: string, destroy = false) {
   const entry = managers.get(store)?.get(id)
   if (!entry) return
+  entry.closed = true
+  await Promise.allSettled([...entry.pending])
+  if (entry.saving) await entry.saving
   if (!destroy) await persist(entry)
   managers.get(store)?.delete(id); await entry.api.dispose()
-  await entry.queue
   if (destroy) await rm(entry.stateFile, { force: true })
 }
 export async function closeHttpSessions(store: TaskContext['store'], projectId?: string, destroy = false) {
-  for (const [id, entry] of managers.get(store) ?? []) {
+  for (const [id] of managers.get(store) ?? []) {
     const resource = store.db.prepare('SELECT project_id FROM shared_resources WHERE id=?').get(id)
     if (projectId && resource?.project_id !== projectId) continue
-    await entry.queue
-    if (!destroy && resource) await persist(entry)
-    await entry.api.dispose(); managers.get(store)?.delete(id)
-    if (destroy) await rm(entry.stateFile, { force: true })
+    await disposeHttpResource(store, id, destroy || !resource)
   }
 }
 async function archive(context: TaskContext, record: unknown) {
@@ -97,7 +102,7 @@ function changedFields(left: Buffer, right: Buffer): string[] | null {
     return [...new Set([...before.keys(), ...after.keys()])].filter(key => before.get(key) !== after.get(key)).slice(0, 20)
   } catch { return null }
 }
-async function batch(context: TaskContext, entry: Entry, requests: RequestInput[], parallel = false) {
+async function batch(context: TaskContext, entry: Entry, requests: RequestInput[]) {
   const ops = context.operations!
   const send = async (item: RequestInput, index: number) => {
     if (context.signal.aborted) throw new Error('HTTP operation cancelled; no automatic replay')
@@ -107,7 +112,7 @@ async function batch(context: TaskContext, entry: Entry, requests: RequestInput[
     const started = Date.now(), requestId = `req-${randomUUID()}`
     let response
     try {
-      response = await entry.api.fetch(item.url, { method: item.method ?? 'GET', headers: item.headers, data: item.body, timeout: 20_000, maxRedirects: 0, maxRetries: 0 })
+      response = await entry.api.fetch(item.url, { method: item.method ?? 'GET', headers: item.headers, data: item.body, timeout: 20_000, maxRedirects: item.followRedirects ? 20 : 0, maxRetries: 0 })
       const body = await response.body(), headers = response.headers(), evidence = await archive(context, { request: item, response: { status: response.status(), headers, bodyBase64: body.toString('base64') } })
       const row = ops.ownedResource(context.run.projectId, entry.resourceId), metadata = JSON.parse(row.metadata_json)
       metadata.requests ??= {}
@@ -116,13 +121,10 @@ async function batch(context: TaskContext, entry: Entry, requests: RequestInput[
       return { index, request_id: requestId, method: item.method ?? 'GET', url: item.url, status: response.status(), location: headers.location ?? null, durationMs: Date.now() - started, responseBytes: body.length, responseSha256: createHash('sha256').update(body).digest('hex'), extraction: extractOutput(body.toString(), headers['content-type']), evidence, error: null }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error), evidence = await archive(context, { request: item, error: message, outcome: 'unknown; never automatically replay' })
-      const publicError = Object.entries(item.headers ?? {}).filter(([key]) => /authorization|cookie|token|key/i.test(key)).reduce((text, [, value]) => text.split(value).join('[REDACTED]'), message).slice(0, 500)
-      return { index, request_id: requestId, method: item.method ?? 'GET', url: item.url, status: null, location: null, durationMs: Date.now() - started, responseBytes: null, responseSha256: null, evidence, error: publicError }
+      return { index, request_id: requestId, method: item.method ?? 'GET', url: item.url, status: null, location: null, durationMs: Date.now() - started, responseBytes: null, responseSha256: null, evidence, error: message }
     } finally { await response?.dispose() }
   }
-  const results: Awaited<ReturnType<typeof send>>[] = []
-  if (parallel) for (let i = 0; i < requests.length; i += 4) results.push(...await Promise.all(requests.slice(i, i + 4).map((item, j) => send(item, i + j))))
-  else for (const [index, item] of requests.entries()) results.push(await send(item, index))
+  const results = await Promise.all(requests.map(send))
   const baseline = results.find(item => item.error === null)
   const baselineBody = baseline ? Buffer.from(JSON.parse(await readFile(baseline.evidence.file, 'utf8')).response.bodyBase64, 'base64') : undefined
   const displayed = []
@@ -137,8 +139,8 @@ async function batch(context: TaskContext, entry: Entry, requests: RequestInput[
 }
 export function httpTools(context: TaskContext): AgentTool[] {
   const tools = [
-    { name: 'http_batch', label: 'http_batch', description: 'Send explicit HTTP requests without a browser. Project Resource cookies persist across Steps and restart. Session is optional; return its Resource id for reuse. Serial by default; parallel uses bounded groups of four. Full evidence is archived, failures are not automatically replayed.', parameters: Type.Object({ ...sessionSchema, requests: Type.Array(requestSchema, { minItems: 1 }), parallel: Type.Optional(Type.Boolean()) }), execute: async (_id: string, args: Session & { requests: RequestInput[]; parallel?: boolean }, entry: Entry) => batch(context, entry, args.requests, args.parallel) },
-    { name: 'http_replay', label: 'http_replay', description: 'Explicitly replay an archived http_batch Request ID in its Project HTTP Resource. Uses the original method/body/headers and current cookies; supports query variants and explicit overrides. No hidden baseline request or automatic retry. Token names are not a permission gate.', parameters: Type.Object({ ...sessionSchema, request_id: Type.String({ minLength: 1, maxLength: 64 }), variants: Type.Array(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 128 }), value: Type.String({ maxLength: 4096 }) })), { minItems: 1 }), method: requestSchema.properties.method, body: requestSchema.properties.body, headers: requestSchema.properties.headers }), execute: async (_id: string, args: Session & { request_id: string; variants: { name: string; value: string }[][]; method?: string; body?: string; headers?: Record<string, string> }, entry: Entry) => {
+    { name: 'http_batch', label: 'http_batch', description: 'Send explicit HTTP requests without a browser. Project Resource cookies persist across Steps and restart. Session is optional; return its Resource id for reuse. All requests and Workers run concurrently in a shared Session by default; use a distinct session only for isolation. followRedirects is optional per request (default false). Full evidence is archived, failures are not automatically replayed.', parameters: Type.Object({ ...sessionSchema, requests: Type.Array(requestSchema, { minItems: 1 }), parallel: Type.Optional(Type.Boolean()) }), execute: async (_id: string, args: Session & { requests: RequestInput[]; parallel?: boolean }, entry: Entry) => batch(context, entry, args.requests) },
+    { name: 'http_replay', label: 'http_replay', description: 'Explicitly replay an archived http_batch Request ID in its Project HTTP Resource. Uses the original method/body/headers and current cookies; supports query variants and explicit overrides. No hidden baseline request or automatic retry. Token names are not a permission gate.', parameters: Type.Object({ ...sessionSchema, request_id: Type.String({ minLength: 1, maxLength: 64 }), variants: Type.Array(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 128 }), value: Type.String({ maxLength: 4096 }) })), { minItems: 1 }), method: requestSchema.properties.method, body: requestSchema.properties.body, headers: requestSchema.properties.headers, followRedirects: requestSchema.properties.followRedirects }), execute: async (_id: string, args: Session & { request_id: string; variants: { name: string; value: string }[][]; method?: string; body?: string; headers?: Record<string, string>; followRedirects?: boolean }, entry: Entry) => {
       const record = JSON.parse(context.operations!.ownedResource(context.run.projectId, entry.resourceId).metadata_json).requests[args.request_id]
       if (!record) throw new Error('HTTP Request ID not found in this Project Resource')
       const bytes = await readFile(record.file)
@@ -147,24 +149,27 @@ export function httpTools(context: TaskContext): AgentTool[] {
       const requests = args.variants.map(variant => {
         const url = safeUrl(captured.url)
         for (const field of variant) url.searchParams.set(field.name, field.value)
-        return { ...captured, url: url.href, ...(args.method ? { method: args.method } : {}), ...(args.body !== undefined ? { body: args.body } : {}), ...(args.headers ? { headers: args.headers } : {}) }
+        return { ...captured, url: url.href, ...(args.method ? { method: args.method } : {}), ...(args.body !== undefined ? { body: args.body } : {}), ...(args.headers ? { headers: args.headers } : {}), ...(args.followRedirects !== undefined ? { followRedirects: args.followRedirects } : {}) }
       })
       return { request_id: args.request_id, ...await batch(context, entry, requests) }
     } },
   ]
-  return tools.map(tool => ({ ...tool, executionMode: 'sequential', execute: async (_id: string, args: any) => {
+  return tools.map(tool => ({ ...tool, executionMode: 'parallel', execute: async (_id: string, args: any) => {
     if (!Check(tool.parameters, args)) throw new HttpError(422, 'Invalid HTTP tool arguments')
     if (context.signal.aborted) throw new Error('HTTP operation cancelled before launch')
     if ('requests' in args) for (const item of args.requests) safeUrl(item.url)
     const entry = await entryFor(context, args)
-    const work = entry.queue.then(async () => {
+    if (entry.closed || sessions(context).get(entry.resourceId) !== entry) throw new Error('HTTP session was closed before launch')
+    const work = (async () => {
       if (context.signal.aborted) throw new Error('HTTP operation cancelled before launch')
-      if (sessions(context).get(entry.resourceId) !== entry) throw new Error('HTTP session was closed or cancelled before this queued call; no request was executed')
-      const cancel = () => { sessions(context).delete(entry.resourceId); void entry.api.dispose() }
-      context.signal.addEventListener('abort', cancel, { once: true })
-      try { return await (tool.execute as (id: string, args: any, entry: Entry) => Promise<unknown>)(_id, args, entry) }
-      finally { context.signal.removeEventListener('abort', cancel); if (!context.signal.aborted && sessions(context).get(entry.resourceId) === entry) await persist(entry) }
-    })
-    entry.queue = work.then(() => {}, () => {}); return work
+      // A cancelled Worker must not dispose the Session used by its peers.
+      return await (tool.execute as (id: string, args: any, entry: Entry) => Promise<unknown>)(_id, args, entry)
+    })()
+    entry.pending.add(work)
+    try { return await work }
+    finally {
+      entry.pending.delete(work)
+      if (!entry.pending.size && !entry.closed && sessions(context).get(entry.resourceId) === entry) await persist(entry)
+    }
   } })) as unknown as AgentTool[]
 }

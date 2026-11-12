@@ -1,3 +1,4 @@
+import{LegionStore}from'../src/legion-store.ts'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -93,28 +94,8 @@ test('reference boundaries and atomic failure preserve current evidence', () => 
   } finally { s.close() }
 })
 
-test('evidence planning runs at Step capacity without relaxing add_step limits', async () => {
-  const s = new Store(':memory:'), id = create(s)
-  const reason = { ...worker, explore: false }
-  const config: EngineConfig = { workers: [reason], providers: {}, maxWorkers: 4, maxProjectWorkers: 4, maxRunningProjects: 2, maxSteps: 1, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: '.' }
-  const initial = s.claim(id, 'decide', worker); s.finishRun(initial.id, 'succeeded')
-  const step = s.addStep(id, { description: 'At capacity', sourceIds: ['origin'] }), run = s.claim(id, 'execute', worker, step.id)
-  const fact = s.addFact(id, 'Ready to evaluate', { runId: run.id }); s.finishRun(run.id, 'succeeded')
-  const pending = s.addStep(id, { description: 'Keeps capacity full', sourceIds: ['origin'] })
-  const revision = s.project(id).planningRevision
-  s.addFinding(id, { title: 'F', description: 'F', factIds: [fact.id] })
-  s.addInput(id, 'hint', 'hint'); s.addInput(id, 'observation', 'observation'); s.addGoal(id, 'Another result'); s.rename(id, 'Renamed')
-  assert.equal(s.project(id).planningRevision, revision)
-  assert.throws(() => s.addStep(id, { description: 'Overflow', sourceIds: ['origin'] }, config.maxSteps))
-  let decisions = 0
-  const scheduler = new Scheduler(s, config, async ({ run }) => { if (run.activity === 'decide') decisions++ })
-  try {
-    scheduler.start(); for (let i = 0; i < 20; i++) await turn(); assert.equal(decisions, 1)
-    s.updateStep(id, pending.id, { status: 'cancelled' })
-    for (let i = 0; i < 20 && !decisions; i++) await turn()
-    assert.equal(decisions, 1)
-  } finally { await scheduler.close(); s.close() }
-})
+test('Commander reads evidence at Step capacity without relaxing Mission limits',()=>{const s=new Store(':memory:');try{const id=create(s),legion=new LegionStore(s);legion.spawn(id,{role:'soldier',taskKey:'a',description:'at capacity',sourceIds:['origin']},1);const fact=s.addFact(id,'Ready to evaluate');s.addFinding(id,{title:'F',description:'F',factIds:[fact.id]});legion.claimCommand();assert.ok(legion.readChanges(id).events.some(e=>e.type==='finding.added'));assert.throws(()=>legion.spawn(id,{role:'soldier',taskKey:'b',description:'overflow',sourceIds:['origin']},1),/capacity|limit/i)}finally{s.close()}})
+
 
 test('legacy planning revision tracks its allowlist independently of paired wake eligibility', () => {
   const s = new Store(':memory:')
@@ -179,7 +160,9 @@ test('current graph polling clears removed node/edge selections and keeps surviv
 test('detail bindings tolerate a removed record while Alpine destroys the old node template', () => {
   const markup = readFileSync(new URL('../../../static/index.html', import.meta.url), 'utf8')
   const detail = markup.slice(markup.indexOf('<section data-testid="fgs-node-detail"'), markup.indexOf('<section data-testid="fgs-edge-detail"'))
-  const context = vm.createContext({ fgsSelection: null, fgsSelectionRecord: () => null, formatTime: () => '', factDisplayId: () => '', replay: { active: false }, project: { project: { status: 'active' } } })
+  const context = vm.createContext({ window: {}, fgsSelection: null, fgsSelectionRecord: () => null, formatTime: () => '', factDisplayId: () => '', replay: { active: false }, project: { project: { status: 'active' } } })
+  const appScript = [...markup.matchAll(/<script>([\s\S]*?)<\/script>/g)].find(item => item[1].includes('function redtraceApp()'))![1]
+  vm.runInContext(appScript, context); context.legionRole = vm.runInContext('redtraceApp().legionRole', context)
   const bindings = [...detail.matchAll(/x-(text|show|for)="([^"]*fgsSelectionRecord\(\)[^"]*)"/g)]
   assert.ok(bindings.length > 20)
   for (const [, kind, binding] of bindings) {

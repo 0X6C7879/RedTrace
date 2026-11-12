@@ -5,12 +5,15 @@ description: API security testing 接口安全测试：REST/GraphQL 面发现、
 
 # API 安全测试
 
-## RiftX Workflow
+## RedTrace Workflow
 
-1. **API 面发现靠浏览器的网络记录**：以正常用户在浏览器里走完全部功能，`requests` 自动记录所有 XHR/fetch——这是最真实的 API 清单（比 swagger 文档更接近实际部署）；`request_detail` 逐个看真实结构（方法、路径、头、体、token 形态）
-2. **文档端点用浏览器确认**：`/swagger` `/openapi.json` `/api-docs` `/graphql` `/graphiql`——命中即拿到全量接口定义（本身若未鉴权也是一个 finding，`confidence: likely`）
-3. **重放与篡改在 bash**：`cookies_export` 导出会话 → curl 重放修改（换方法/换路径/加字段/改 token）；GraphQL 在浏览器 `evaluate` 里发 query 最方便（页面上下文自带 token 与同源策略）
-4. **并行**：参数/端点 fuzz 交给 `spawn_subagent`，主会话手工做逻辑类测试（越权、mass assignment——交叉 `exploit-authz`）
+1. 读取当前 Step 的 FGS 契约及引用证据，复用同题已验证身份、Session、地址与已有成果。
+2. 用 `http_batch` 保存基线与变体请求；通过返回的 Session Resource 和 Request ID 调用 `http_replay`。请求默认并发；只有测试需要身份或状态隔离时才创建独立 Session。需要前序登录结果的请求，待登录完成后再发。
+3. 需要爬取、fuzz 或专用协议时，用 `bash` 运行现有 `curl`、`ffuf`、`sqlmap` 或本 Skill 脚本；真实浏览器交互使用 `playwright-skill` 的脚本和独立 BrowserContext，不假定存在浏览器专用工具。显式向命令传递已验证 Cookie/Authorization，不假定 HTTP Resource 会自动向外部工具导出会话。
+4. 同一 Step 内并发测试独立输入；跨题调度交给 Commander；仅 General 可通过 legion_spawn 委派同题小队，Soldier/Scout 不自行派生 Agent。复用下方 Payload、打法和 references，按实际反馈深入验证。
+5. 保存完整请求/响应、对照与实际影响到证据文件。确认关键结论后 `submit_fact({description,evidence:[{description,path}]})`；真实可交付漏洞再 `submit_finding({title,description,factIds})` 引用 Fact。线索不冒充已确认漏洞。
+6. 当前 Step 结束前至少提交一条真实证据支持的汇总 Fact；无突破则如实汇总验证范围、失败或阻塞，再 `finish_step({summary})`。普通局部观察先留在证据文件。
+
 
 ---
 
@@ -60,7 +63,7 @@ description: API security testing 接口安全测试：REST/GraphQL 面发现、
 - [ ] 对象级越权（交叉 exploit-authz 打法）
 - [ ] GraphQL：introspection/字段建议/mutation 越权
 - [ ] 限流验证
-- [ ] 每个确认点：`request_detail` 证据 + `record_finding`
+- [ ] 每个确认点：`http_batch` 归档的请求/响应文件 + `submit_fact` 后 `submit_finding`
 
 ---
 

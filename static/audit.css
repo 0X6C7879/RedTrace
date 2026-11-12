@@ -74,17 +74,19 @@
   border-radius: 9999px;
   box-shadow: 0 0 0 1px #cbd5e1;
 }
-.provider-bootstrap { color: #c2410c; }
-.provider-reason { color: #2563eb; }
-.provider-explore { color: #6d28d9; }
+.provider-commander { color: #2563eb; }
+.provider-general { color: #c2410c; }
+.provider-soldier { color: #6d28d9; }
+.provider-scout { color: #047857; }
 .provider-dsh { color: #475569; }
 .provider-claudecode { color: #c2410c; }
 .provider-codex { color: #047857; }
 .provider-pi { color: #6d28d9; }
 .provider-mock { color: #475569; }
-.provider-dot-bootstrap { background: #f97316; }
-.provider-dot-reason { background: #3b82f6; }
-.provider-dot-explore { background: #8b5cf6; }
+.provider-dot-commander { background: #3b82f6; }
+.provider-dot-general { background: #f97316; }
+.provider-dot-soldier { background: #8b5cf6; }
+.provider-dot-scout { background: #10b981; }
 .provider-dot-dsh { background: #64748b; }
 .provider-dot-claudecode { background: #f97316; }
 .provider-dot-codex { background: #10b981; }

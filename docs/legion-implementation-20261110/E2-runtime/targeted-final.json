@@ -1,0 +1,11 @@
+{
+  "command": "node",
+  "args": [
+    "--test",
+    "packages/redtrace-engine/test/legion-runtime.test.ts"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "status": 0,
+  "stdout": "✔ shipped DSH host executes four Legion roles, HELP reply, shared FGS acceptance and native Commander resume (2267.2485ms)\n✔ role tools retain General delegation boundaries and cannot turn messages into Facts (10.601292ms)\n✔ event wait wakes for durable messages and abort removes its listeners (4.373375ms)\n✔ native mailbox steers idle, injects running, and records admission separately from queueing (7.615958ms)\n✔ Commander completion holds the existing campaign claim until native flush/disposal (4.152125ms)\n✔ role/model routes survive configuration snapshots and reject unknown roles (48.073583ms)\n✔ a message queued while legion_wait is active wakes the tool even when mailbox runs first (4.038334ms)\n✔ uncertain native enqueue is retained and never automatically delivered twice (3.760708ms)\nℹ tests 8\nℹ suites 0\nℹ pass 8\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 2684.819083\n",
+  "stderr": ""
+}

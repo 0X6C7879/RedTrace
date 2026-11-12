@@ -1,0 +1,11 @@
+{
+  "command": "node",
+  "args": [
+    "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/E2-runtime/real-model-smoke.mjs",
+    "/Users/lxy/Downloads/RedTrace"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "status": 1,
+  "stdout": "",
+  "stderr": "file:///Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/E2-runtime/real-model-smoke.mjs:26\n  const call=async(route,body)=>{const r=await fetch(base+route,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});const v=await r.json();if(!r.ok)throw Error('HTTP '+r.status+': '+JSON.stringify(v));return v}\n                                                                                                                                                                                                     ^\n\nError: HTTP 500: {\"detail\":\"Internal server error\"}\n    at call (file:///Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/E2-runtime/real-model-smoke.mjs:26:198)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async file:///Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/E2-runtime/real-model-smoke.mjs:28:16\n\nNode.js v24.21.0\n"
+}

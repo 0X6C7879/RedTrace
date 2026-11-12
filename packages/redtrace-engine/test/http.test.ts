@@ -60,17 +60,5 @@ test('HTTP graph compatibility and atomic conclude survive reopening the databas
   } finally { await engine.close(); rmSync(root, { recursive: true, force: true }) }
 })
 
-test('standalone mock closes the whole HTTP project without Python or DSH', async () => {
-  const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-loop-')), config = new Configuration(root)
-  config.initialize(); config.commit(config.read().revision, raw => { raw.workers = [{ name: 'mock', provider: 'mock', max_running: 4 }] })
-  const engine = await serveEngine({ root, port: 0 })
-  try {
-    const address = engine.server.address() as { port: number }, url = `http://127.0.0.1:${address.port}`
-    const response = await fetch(`${url}/v2/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Mock', origin: 'Fixture', goal: 'Produce verified finding' }) })
-    const { project } = await response.json() as any
-    for (let i = 0; i < 200 && engine.store.project(project.id).status !== 'completed'; i++) await new Promise(resolve => setTimeout(resolve, 10))
-    const graph = engine.store.graph(project.id)
-    assert.equal(graph.project.status, 'completed'); assert.equal(graph.findings.length, 1)
-    assert.ok(engine.store.runs(project.id).every(r => r.status === 'succeeded'))
-  } finally { await engine.close(); rmSync(root, { recursive: true, force: true }) }
-})
+test('standalone mock executes an explicit Soldier Mission but never impersonates Commander acceptance',async()=>{const root=mkdtempSync(path.join(os.tmpdir(),'redtrace-loop-')),config=new Configuration(root);config.initialize();config.commit(config.read().revision,raw=>{raw.workers=[{name:'mock',provider:'mock',roles:['soldier'],max_running:4}]});const engine=await serveEngine({root,port:0});try{const p=engine.store.createProject({title:'Mock',origin:'Fixture',goal:'Verified output',bootstrap:true}).project;for(let i=0;i<200&&!engine.store.runs(p.id).some(r=>r.status==='succeeded');i++)await new Promise(r=>setTimeout(r,10));const graph=engine.store.graph(p.id);assert.equal(graph.project.status,'active');assert.equal(graph.steps[0].role,'soldier');assert.equal(graph.findings.length,1);assert.equal(graph.goals[0].status,'open');assert.ok(engine.store.runs(p.id).every(r=>r.activity==='execute'&&r.status==='succeeded'))}finally{await engine.close();rmSync(root,{recursive:true,force:true})}})
+

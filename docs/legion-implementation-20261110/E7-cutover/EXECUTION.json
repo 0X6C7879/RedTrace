@@ -1,0 +1,17 @@
+{
+  "command": "/opt/homebrew/opt/node@24/bin/node",
+  "args": [
+    "scripts/migrate-legion.mjs",
+    "--root",
+    "/Users/lxy/Downloads/RedTrace",
+    "--apply",
+    "--acceptance",
+    "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/E7-cutover/ACCEPTANCE.json",
+    "--backup",
+    "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/E7-cutover/runtime-backup-1794381373725"
+  ],
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "status": 0,
+  "stdout": "{\n  \"before\": {\n    \"steps\": 0,\n    \"runs\": 0,\n    \"auditRuns\": 0\n  },\n  \"after\": {\n    \"steps\": 0,\n    \"runs\": 0,\n    \"auditRuns\": 0\n  },\n  \"projects\": [],\n  \"agentSessionsPendingRemoval\": [],\n  \"agentSessions\": 0,\n  \"backup\": {\n    \"path\": \"/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/E7-cutover/runtime-backup-1794381373725/BACKUP.tar.gz\",\n    \"sha256\": \"a38f21cf88edf3d34b90552763497101a62deb669a896960b0282eef15f3f0a6\"\n  },\n  \"configurationMigrated\": true,\n  \"installedSkillsMigrated\": 18,\n  \"retainedArtifacts\": 0,\n  \"serviceStarted\": false\n}\n",
+  "stderr": ""
+}

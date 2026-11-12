@@ -1,0 +1,43 @@
+{
+  "target": "/Users/lxy/Downloads/RedTrace",
+  "roles": [
+    {
+      "role": "MODIFIED_FILE",
+      "path": "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/MODIFIED_FILE.tar.gz",
+      "bytes": 84565,
+      "sha256": "44efb7048e2d5da307cd3271df225f79e2469daf4b50a9086f69e5b7907bfe9c"
+    },
+    {
+      "role": "DIFF_FILE",
+      "path": "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/DIFF_FILE.patch",
+      "bytes": 142363,
+      "sha256": "547b917dce4ed6ad9a2e25018d00dea3dc52ba9f3f9ed31cab9d7bc201e20568"
+    },
+    {
+      "role": "VERIFICATION",
+      "path": "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/VERIFICATION.txt",
+      "bytes": 257172,
+      "sha256": "074d0983422203cdb19bc149398f98b9bc110928d64f2c0f1b8653f46be034ff"
+    },
+    {
+      "role": "ROLLBACK",
+      "path": "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/ROLLBACK.sh",
+      "bytes": 875,
+      "sha256": "3d89daefd48ba4bceb2d0a5aecd4a927b201cc8bd68e7d65a071d40d0dda7fcc"
+    }
+  ],
+  "archiveFilesVerified": 18,
+  "unrelatedDrift": [],
+  "proofPath": "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/E2-runtime/real-model-evidence-1794362806542/result.json",
+  "proofSha256": "7702869c75cafb330ad4af05f8b282f0226303f044d85229fcbb0127e7bffd11",
+  "proofChecks": {
+    "scoutBeforeGeneral": true,
+    "generalAfterBothSoldiers": true,
+    "soldiersOverlapped": true,
+    "allRunsSucceeded": true,
+    "goalAccepted": true
+  },
+  "baseline": "LEGION_RUNTIME_SUPPORTED=false\n",
+  "modified": "LEGION_RUNTIME_SUPPORTED=true; roles=Commander,Scout,General,Soldier; specialist_workers=2; shared_fgs=true; commander_acceptance=true; native_message_admission=true; state_and_cursor_persisted=true; commander_native_resume=true; help_reply_admitted=true; model=local-protocol-fixture\n",
+  "rollback": "LEGION_RUNTIME_SUPPORTED=false\n"
+}

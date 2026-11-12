@@ -1,4 +1,5 @@
-import { Store } from './store.ts'
+import { LegionStore } from './legion-store.ts'
+import { Store, ACTIVE_NODE_SQL } from './store.ts'
 import path from 'node:path'
 import { HttpError } from './types.ts'
 import type { EngineConfig, Goal, Run, RunStatus, Worker, Step } from './types.ts'
@@ -13,103 +14,53 @@ type Active = { run: Run; abort: AbortController; completion: Promise<void> }
 
 export class Scheduler {
   maintenance = false
+  private readonly legion: LegionStore
   private readonly store: Store
   private readonly execute: RunTask
   private config: EngineConfig
   private running = new Map<string, Active>()
   private scheduled = false
   private closed = true
-  private retryTimer?: ReturnType<typeof setTimeout>
   private cursor = 0
   private readonly changed = () => this.wake()
   private readonly selectWorker: SelectWorker
-  private readonly criticalEnabled: () => boolean
-  constructor(store: Store, config: EngineConfig, execute: RunTask, selectWorker: SelectWorker = worker => worker, criticalEnabled: () => boolean = () => true) { this.store = store; this.config = config; this.execute = execute; this.selectWorker = selectWorker; this.criticalEnabled = criticalEnabled }
-  start() {
-    if (!this.closed) return
-    this.closed = false; this.store.recover(); this.store.changes.on('change', this.changed); this.wake()
-  }
+  constructor(store: Store, config: EngineConfig, execute: RunTask, selectWorker: SelectWorker = worker => worker, _criticalEnabled: () => boolean = () => true) { this.store = store; this.legion = new LegionStore(store); this.config = config; this.execute = execute; this.selectWorker = selectWorker }
+  start() { if (!this.closed) return; this.closed = false; this.store.recover(); this.store.changes.on('change', this.changed); this.wake() }
   update(config: EngineConfig) { this.config = config; this.wake() }
   get activeRuns() { return this.store.runsByStatus('running') }
-  wake() {
-    if (this.closed || this.scheduled) return
-    this.scheduled = true
-    queueMicrotask(() => { this.scheduled = false; if (!this.closed) this.dispatch() })
-  }
-  private select(activity: Run['activity'], resume?: Run, step?: Step, active = this.activeRuns): Worker | undefined {
-    const count = (name: string) => active.filter(r => r.worker === name).length
-    return this.config.workers.map(w => this.selectWorker(w, activity, step)).filter((w): w is Worker => !!w && w.enabled && this.eligible(w, activity, step) && (!resume || (w.name === resume.worker && w.backend === resume.backend)) && count(w.name) < w.maxRunning)
-      .sort((a, b) => a.priority - b.priority || count(a.name) - count(b.name) || a.name.localeCompare(b.name))[0]
-  }
-  /** Decide needs a `reason` worker; an Execute run carries the Step it claims,
-   * so a bootstrap Step only ever reaches a `bootstrap` worker and an ordinary
-   * Step only ever reaches an `explore` worker. */
-  private eligible(worker: Worker, activity: Run['activity'], step?: Step): boolean {
-    if (activity === 'decide') return worker.reason
-    return step?.bootstrap ? worker.bootstrap : worker.explore
+  get commanderRunning() { return this.legion.campaign().status==='running' }
+  wake() { if (this.closed || this.scheduled) return; this.scheduled = true; queueMicrotask(() => { this.scheduled = false; if (!this.closed) this.dispatch() }) }
+  private select(resume: Run | undefined, step: Step, active: Run[]) {
+    const command=this.legion.campaign()
+    const count = (name: string) => active.filter(r => r.worker === name).length+(command.status==='running'&&command.workerName===name?1:0)
+    return this.config.workers.map(w => this.selectWorker(w, 'execute', step)).filter((w): w is Worker => !!w && w.enabled && (!step.nextWorker || w.name===step.nextWorker) && !!w.roles?.includes(step.role ?? 'soldier') && (!resume || w.name === resume.worker && w.backend === resume.backend) && count(w.name) < w.maxRunning)
+      .sort((a,b) => a.priority-b.priority || count(a.name)-count(b.name) || a.name.localeCompare(b.name))[0]
   }
   private dispatch() {
     if (this.maintenance) return
-    if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = undefined }
     for (const task of this.running.values()) {
       try {
-        const project = this.store.project(task.run.projectId)
-        const step = task.run.stepId ? this.store.node<Step>(task.run.projectId, task.run.stepId, 'step') : undefined
-        const goalOpen = !step || this.store.node<Goal>(task.run.projectId, step.goalId, 'goal').status === 'open'
-        if (this.store.run(task.run.id).status !== 'running' || (project.status !== 'active' && !(project.status === 'completed' && task.run.activity === 'decide')) || step?.status === 'cancelled' || !goalOpen) task.abort.abort('Project or Step stopped')
-      } catch (reason) { if (reason instanceof HttpError && reason.status === 404) task.abort.abort('Project deleted'); else throw reason }
+        const project = this.store.project(task.run.projectId), step = this.store.node<Step>(project.id, task.run.stepId!, 'step')
+        if (this.store.run(task.run.id).status !== 'running' || project.status !== 'active' || ['cancelled','parked'].includes(step.status) || this.store.node<Goal>(project.id,step.goalId,'goal').status !== 'open') task.abort.abort('Project or Step stopped')
+      } catch (error) { if (error instanceof HttpError && error.status===404) task.abort.abort('Project deleted'); else throw error }
     }
-    const activeRuns = this.activeRuns
-    const launch = (run: Run, worker: Worker) => { activeRuns.push(run); this.launch(run,worker) }
-    const projects = this.store.projects().filter(p => p.status === 'active')
-    if (!projects.length) return
-    let retryAt = Infinity, madeProgress = true
-    while (madeProgress && activeRuns.length < this.config.maxWorkers) {
-      madeProgress = false
-      for (const planningOnly of [true, false]) {
-        for (let i = 0; i < projects.length && activeRuns.length < this.config.maxWorkers; i++) {
-          const project = projects[(this.cursor + i) % projects.length]
-          const active = activeRuns
-          if (active.filter(r => r.projectId === project.id).length >= this.config.maxProjectWorkers) continue
-          if (!active.some(r => r.projectId === project.id) && new Set(active.map(r => r.projectId)).size >= this.config.maxRunningProjects) continue
-          const p = this.store.project(project.id)
-          if (p.status !== 'active') continue
-          const nodes = this.store.nodes<Step | Goal>(p.id, ['step', 'goal'])
-          const steps = nodes.filter((node): node is Step => node.kind === 'step')
-          const goals = new Map(nodes.filter(node => node.kind === 'goal').map(goal => [goal.id, goal]))
-          // Bootstrap is a strict project gate, not merely the first runnable
-          // Step. Reason may start only after that Step succeeded with a Fact.
-          // A failed/cancelled/empty Bootstrap remains visible for diagnosis and
-          // can be retried explicitly without planning from an uninitialized graph.
-          const bootstrap = steps.find(s => s.bootstrap)
-          const bootstrapComplete = !p.bootstrap || !!bootstrap && bootstrap.status === 'done' && bootstrap.factIds.length > 0
-          const pendingEvidence = (p.evidenceSeq ?? p.factSeq) > (p.acknowledgedEvidenceSeq ?? p.acknowledgedFactSeq)
-          const pendingCritical = this.criticalEnabled() && (p.criticalSeq ?? 0) > (p.acknowledgedCriticalSeq ?? 0)
-          const pendingHint = (p.hintSeq ?? 0) > (p.acknowledgedHintSeq ?? 0)
-          const needsDecide = bootstrapComplete && (p.initialPlanningPending || p.planningRetryPending || pendingEvidence || pendingCritical || pendingHint)
-            && !active.some(r => r.projectId === p.id && r.activity === 'decide')
-          if (planningOnly && needsDecide) {
-            if (p.retryAfter > Date.now()) retryAt = Math.min(retryAt, p.retryAfter)
-            else {
-              const worker = this.select('decide',undefined,undefined,activeRuns)
-              if (worker) { launch(this.store.claim(p.id, 'decide', worker), worker); madeProgress = true; continue }
-            }
-          }
-          if (planningOnly) continue
-          // An unavailable Decide never prevents existing execution work from starting.
-          const runnable = steps.filter(s => !s.replacementPending && ['pending', 'paused'].includes(s.status) && goals.get(s.goalId)?.status === 'open')
-            .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
-          for (const step of runnable) {
-            const paused = step.status === 'paused' ? this.store.runsByStatus('paused', p.id).find(r => r.stepId === step.id) : undefined
-            const worker = this.select('execute',paused,step,activeRuns)
-            if (!worker) continue
-            launch(this.store.claim(p.id, 'execute', worker, step.id), worker); madeProgress = true; break
-          }
+    const commandSlots=this.commanderRunning?1:0, active = this.activeRuns, projects = this.store.projects().filter(p=>p.status==='active')
+    let progress = true
+    while(progress && active.length+commandSlots < this.config.maxWorkers) {
+      progress = false
+      for(let i=0;i<projects.length && active.length+commandSlots<this.config.maxWorkers;i++) {
+        const project=projects[(this.cursor+i)%projects.length]
+        if(active.filter(r=>r.projectId===project.id).length>=this.config.maxProjectWorkers)continue
+        if(!active.some(r=>r.projectId===project.id)&&new Set(active.map(r=>r.projectId)).size>=this.config.maxRunningProjects)continue
+        const steps=this.store.nodes<Step>(project.id,['step']).filter(s=>!s.deleted&&!s.replacementPending&&['pending','paused'].includes(s.status)&&this.store.node<Goal>(project.id,s.goalId,'goal').status==='open').sort((a,b)=>b.priority-a.priority||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id))
+        for(const step of steps) {
+          const resume=step.status==='paused'?this.store.runsByStatus('paused',project.id).find(r=>r.stepId===step.id):undefined
+          const worker=this.select(resume,step,active);if(!worker)continue
+          const run=this.store.claim(project.id,'execute',worker,step.id);active.push(run);this.launch(run,worker);progress=true;break
         }
       }
-      this.cursor = (this.cursor + 1) % projects.length
+      if(projects.length)this.cursor=(this.cursor+1)%projects.length
     }
-    if (Number.isFinite(retryAt)) this.retryTimer = setTimeout(() => this.wake(), Math.max(1, retryAt - Date.now()))
   }
   private launch(run: Run, worker: Worker) {
     const abort = new AbortController(), config = structuredClone(this.config)
@@ -125,11 +76,12 @@ export class Scheduler {
         try {
           if (abort.signal.aborted) {
             const project = this.store.project(run.projectId)
-            status = (this.closed || project.status === 'stopped') && run.activity === 'execute' ? 'paused' : 'cancelled'
-            error = null
+            status = error ? 'unknown' : (this.closed || project.status === 'stopped') && run.activity === 'execute' ? 'paused' : 'cancelled'
             if (this.store.run(run.id).pendingTools.length) { status = 'unknown'; error = 'Activity stopped with an unconfirmed tool result; verify before retrying' }
           }
           this.store.finishRun(run.id, status, error)
+          const step = this.store.node<Step>(run.projectId, run.stepId!, 'step')
+          if (step.handoffPending && status==='cancelled' && this.store.project(run.projectId).status==='active') new LegionStore(this.store).completeHandoff(run.projectId,step.id)
           // Deleting a project mid-abort cascades its runs away; there is nothing left to finish.
         } catch (reason) { if (!(reason instanceof HttpError && reason.status === 404)) throw reason }
         finally { this.running.delete(run.id); this.wake() }
@@ -139,7 +91,6 @@ export class Scheduler {
   async close() {
     this.closed = true
     this.store.changes.off('change', this.changed)
-    if (this.retryTimer) clearTimeout(this.retryTimer)
     for (const task of this.running.values()) task.abort.abort('Engine shutting down')
     await Promise.all([...this.running.values()].map(t => t.completion))
   }

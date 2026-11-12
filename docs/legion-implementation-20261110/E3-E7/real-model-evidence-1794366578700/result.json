@@ -1,0 +1,137 @@
+{
+  "provider": "acceptance",
+  "model": "auto/deepseek-flash",
+  "status": "idle",
+  "projectStatus": "completed",
+  "steps": [
+    {
+      "id": "i001",
+      "role": "scout",
+      "status": "done"
+    },
+    {
+      "id": "i002",
+      "role": "general",
+      "status": "done"
+    },
+    {
+      "id": "i003",
+      "role": "soldier",
+      "parentStepId": "i002",
+      "status": "done"
+    },
+    {
+      "id": "i004",
+      "role": "soldier",
+      "parentStepId": "i002",
+      "status": "done"
+    }
+  ],
+  "facts": [
+    {
+      "id": "f001",
+      "description": "Scout classification verdict for taskKey=local-coordination: HARD, coordination-bound. Local fixture cwd /tmp/redtrace-legion-real-model-lbPL6R/workspaces/proj_001 was empty at recon (ls -la showed only . and ..; find -type f count = 0), so there is no source tree, service, version, stack, listener, endpoint or credential in scope — nothing to fingerprint and no obvious technical entry point. Difficulty comes only from orchestration constraints verified verbatim in Fact origin / Step i001: exactly one Scout, one General and exactly two disjoint-lane Soldiers (a third Soldier or a retried lane aborts acceptance); Commander must wait for the Scout Step to be done before dispatching General; Soldiers use exact relative filenames lane-a.txt / lane-b.txt and one local shell command to compute+write+cat/test, then submit_fact (real regular-file path), legion_message REPORT and finish_step as separate calls; General stays active, verifies both child Facts from shared FGS and integrates total 12; Commander accepts only after all four Steps are done. Evidence-path hygiene: regular files in Project cwd only, never a directory, never a Fact/Goal ID. No lane computation performed and no lane file written by Scout. Verified blockers are cross-actor ordering and protocol cardinality, not exploitation depth.",
+      "evidence": [
+        {
+          "artifactId": "artifact-293d6fcb5eb187ff4b82ec96a3fb83e3d5c32c38cc0294de07d97e7ccaa6ffd2",
+          "description": "Scout recon note: empty project cwd observations (0 regular files, no services/endpoints) plus the verified coordination constraints and the hard/coordination verdict for taskKey=local-coordination."
+        }
+      ]
+    },
+    {
+      "id": "f002",
+      "description": "Lane A complete (taskKey=local-coordination, Soldier A). Exactly one local shell command computed 2+3=5, wrote it to the exact relative filename lane-a.txt in the isolated project cwd, then cat returned 5 and `test \"$(cat lane-a.txt)\" = 5` passed (TEST_OK). No retries, no alternate filenames, no other files created; lane-b.txt untouched. Expected lane A sum 5 is confirmed with real regular-file evidence.",
+      "evidence": [
+        {
+          "artifactId": "artifact-f0b5c2c2211c8d67ed15e75e656c7862d086e9245420892a7de62cd9ec582a06",
+          "description": "lane-a.txt regular file containing 5, written and verified by one shell command"
+        }
+      ]
+    },
+    {
+      "id": "f003",
+      "description": "Lane B (Soldier B, taskKey=local-coordination, Step i002 child, isolated cwd): single local shell command `echo $((3+4)) > lane-b.txt; cat lane-b.txt; test \"$(cat lane-b.txt)\" = 7 && echo PASS` produced output \"7\" followed by \"PASS\" and exit code 0. Inputs are lane B = [3,4]; computed sum is 7, matching the expected value in Fact origin. Artifact is the regular file lane-b.txt at the exact required relative filename in the Project cwd; no alternate filenames, extra files, or retried attempts were created, and lane-a.txt was not touched. Only local arithmetic and file I/O were used — no network, exploit, flag/platform or credential activity. Lane B result is ready for General verification of both child Facts and integration into total 12.",
+      "evidence": [
+        {
+          "artifactId": "artifact-10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58",
+          "description": "lane-b.txt: regular file containing lane B sum 7, written and verified by the single shell command (cat=7, test PASS, exit 0)."
+        }
+      ]
+    },
+    {
+      "id": "f004",
+      "description": "General integration for taskKey=local-coordination: laneA=5, laneB=7, total=12 CONFIRMED. Exactly two isolated Soldier Steps were delegated with disjoint lanes (i003 lane A -> lane-a.txt, i004 lane B -> lane-b.txt), each single-attempt, both now status=done with no failures; no third Soldier and no lane retry. Verified both child Facts from shared FGS and independently re-read their retained evidence artifacts: f002 artifact content \"5\\n\" (2 bytes) for lane-a.txt, f003 artifact content \"7\\n\" (2 bytes) for lane-b.txt, matching expected sums. Integration recomputed from the real regular files in the Project cwd: a=5, b=7, total=12, written to total.txt and confirmed by test TOTAL_OK. No network, exploit, flag/platform or credential activity; all evidence paths are regular files in the Project cwd, never directories or Fact/Goal IDs.",
+      "evidence": [
+        {
+          "artifactId": "artifact-f0b5c2c2211c8d67ed15e75e656c7862d086e9245420892a7de62cd9ec582a06",
+          "description": "lane A regular file containing 5 (Soldier A, f002)"
+        },
+        {
+          "artifactId": "artifact-10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58",
+          "description": "lane B regular file containing 7 (Soldier B, f003)"
+        },
+        {
+          "artifactId": "artifact-a1fb50e6c86fae1679ef3351296fd6713411a08cf8dd1790a4fd05fae8688164",
+          "description": "integration result regular file containing total 12 (=5+7), verified TOTAL_OK"
+        }
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "id": "run-7d4ef1c5-4060-405d-87bf-1252bb84e727",
+      "status": "succeeded",
+      "worker": "scout",
+      "stepId": "i001",
+      "startedAt": "2026-11-11T03:08:10.929Z",
+      "endedAt": "2026-11-11T03:08:38.416Z",
+      "pendingTools": []
+    },
+    {
+      "id": "run-c1499b50-6717-46da-9e00-24296ee95e07",
+      "status": "succeeded",
+      "worker": "general",
+      "stepId": "i002",
+      "startedAt": "2026-11-11T03:08:45.235Z",
+      "endedAt": "2026-11-11T03:09:27.185Z",
+      "pendingTools": []
+    },
+    {
+      "id": "run-175f2578-ca01-44e8-b7a6-876db922f8a3",
+      "status": "succeeded",
+      "worker": "soldier",
+      "stepId": "i003",
+      "startedAt": "2026-11-11T03:08:54.027Z",
+      "endedAt": "2026-11-11T03:09:07.817Z",
+      "pendingTools": []
+    },
+    {
+      "id": "run-5f663c01-e4ce-49f4-8c74-e3b1d8141ff5",
+      "status": "succeeded",
+      "worker": "soldier",
+      "stepId": "i004",
+      "startedAt": "2026-11-11T03:08:54.075Z",
+      "endedAt": "2026-11-11T03:09:09.649Z",
+      "pendingTools": []
+    }
+  ],
+  "messageStatuses": [
+    {
+      "type": "REPORT",
+      "status": "admitted"
+    },
+    {
+      "type": "REPORT",
+      "status": "admitted"
+    },
+    {
+      "type": "REPORT",
+      "status": "admitted"
+    },
+    {
+      "type": "REPORT",
+      "status": "admitted"
+    }
+  ],
+  "stateSaved": true
+}

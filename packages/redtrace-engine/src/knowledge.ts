@@ -1,3 +1,4 @@
+import { Worker } from 'node:worker_threads'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
@@ -132,12 +133,12 @@ function collectWordlistCatalog(root: string, repository: string) {
   }), truncated: pending.length > 0 || visited >= 10_000 || scanned >= 80_000 }
 }
 
-function openIndex(root: string, filename: string, sources: string[], wordlists: string[], nucleiRoot: string) {
+export function openIndex(root: string, filename: string, sources: string[], wordlists: string[], nucleiRoot: string) {
   mkdirSync(path.dirname(filename), { recursive: true })
   const db = new DatabaseSync(filename)
   db.exec("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS index_state(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(id UNINDEXED,path UNINDEXED,body,tokenize='unicode61')")
   const state = db.prepare("SELECT value FROM index_state WHERE key='updated' ").get() as { value: string } | undefined
-  if (!state || Date.now() - Number(state.value) > 60_000) {
+  if (!state || Date.now() - Number(state.value) > 15 * 60_000) {
     const files: string[] = []
     const warnings: string[] = []
     for (const source of sources) if (collect(source, files)) warnings.push(`Source indexing limit reached; some files were not indexed: ${source}`)
@@ -164,6 +165,26 @@ function openIndex(root: string, filename: string, sources: string[], wordlists:
     } catch (error) { db.exec('ROLLBACK'); db.close(); throw error }
   }
   return db
+}
+
+const indexing = new Map<string, Promise<void>>()
+async function readyIndex(root: string, filename: string, sources: string[], wordlists: string[], nucleiRoot: string) {
+  let refresh = indexing.get(filename)
+  if (!refresh) {
+    mkdirSync(path.dirname(filename), { recursive: true })
+    const db = new DatabaseSync(filename)
+    let updated = 0
+    try { if (db.prepare("SELECT 1 FROM sqlite_master WHERE name='index_state'").get()) updated = Number(db.prepare("SELECT value FROM index_state WHERE key='updated'").get()?.value ?? 0) }
+    finally { db.close() }
+    if (Date.now() - updated <= 15 * 60_000) return new DatabaseSync(filename)
+    refresh = new Promise<void>((resolve, reject) => {
+      const worker = new Worker(new URL('./knowledge-index-worker.ts', import.meta.url), { workerData: [root, filename, sources, wordlists, nucleiRoot] })
+      worker.once('error', reject); worker.once('exit', code => code === 0 ? resolve() : reject(new Error(`Knowledge indexing worker exited ${code}`)))
+    }).finally(() => { indexing.delete(filename) })
+    indexing.set(filename, refresh)
+  }
+  await refresh
+  return new DatabaseSync(filename)
 }
 
 export function knowledgeTools(_evidenceRoot: string, context: TaskContext): AgentTool[] {
@@ -200,7 +221,7 @@ export function knowledgeTools(_evidenceRoot: string, context: TaskContext): Age
         const value = { ...vulnerabilities, resources, note: 'Candidates are unverified; no template or PoC was executed' }
         return { content: [{ type: 'text', text: JSON.stringify(value) }], details: value }
       }
-      const db = openIndex(repository, index, sources, wordlists, nucleiRoot)
+      const db = await readyIndex(repository, index, sources, wordlists, nucleiRoot)
       try {
       const expression = terms.map(term => `"${term.replaceAll('"', '""')}"`).join(' OR ')
       const rows = db.prepare('SELECT id,path,body,substr(body,max(1,instr(lower(body),lower(?))-160),360) AS snippet FROM docs WHERE docs MATCH ? ORDER BY bm25(docs),path LIMIT ? OFFSET ?').all(terms[0], expression, args.limit ?? 5, args.offset ?? 0) as { id: string; path: string; body: string; snippet: string }[]
@@ -220,7 +241,7 @@ export function knowledgeTools(_evidenceRoot: string, context: TaskContext): Age
         return { content: [{ type: 'text', text: JSON.stringify(details) }], details }
       }
       if (!args.id) throw new Error('Provide id or candidate_id')
-      const db = openIndex(repository, index, sources, wordlists, nucleiRoot)
+      const db = await readyIndex(repository, index, sources, wordlists, nucleiRoot)
       try {
         const source = await readVulnerability(context.config, args.id)
         const row = source ? { path: source.path, body: readFileSync(source.path, 'utf8') } : db.prepare('SELECT path,body FROM docs WHERE id=?').get(args.id) as { path: string; body: string } | undefined
@@ -246,7 +267,7 @@ export function knowledgeTools(_evidenceRoot: string, context: TaskContext): Age
     { name: 'knowledge_read', label: 'knowledge_read', description: 'Read at most 8 KiB of full NVD CVE details/configurations or a local source file. id accepts a CVE or the source hash from knowledge_search; offset/length paginate.', parameters: Type.Object({ id: Type.String({ minLength: 1, maxLength: 64, pattern: '^(?:CVE-[0-9]{4}-[0-9]{4,}|[a-f0-9]{64})$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 8192 })) }), executionMode: 'sequential', execute: async (_id: string, args: { id: string; offset?: number; length?: number }) => {
       const local = await readVulnerability(context.config, args.id, args.offset, args.length)
       if (local) return { content: [{ type: 'text', text: JSON.stringify(local) }], details: local }
-      const db = openIndex(repository, index, sources, wordlists, nucleiRoot)
+      const db = await readyIndex(repository, index, sources, wordlists, nucleiRoot)
       try {
         const row = db.prepare('SELECT path,body FROM docs WHERE id=?').get(args.id) as { path: string; body: string } | undefined
         if (!row) throw new Error('Knowledge entry not found; search again after rebuilding the local index')

@@ -5,7 +5,7 @@ description: "Linux local privilege escalation from a low-privilege shell to roo
 
 # /privesc-linux — Linux 本机提权
 
-> **scope：** 已有低权限 Linux foothold，打到 **`uid=0` root shell**。不做横移、数据外带、主机持久化、K8s RBAC/集群控制。▸ 拿到 root 后记 notes，候选只认 `~/.claude/skills/shared/modules.yaml`（`modules.py tail`），由操作者选。
+> **scope：** 已有低权限 Linux foothold，打到 **`uid=0` root shell**。不做横移、数据外带、主机持久化、K8s RBAC/集群控制。▸ 拿到 root 后记 notes，后续按当前 Step 目标和已有证据自动推进。
 
 本模块是红队攻击模块。`sudo -l` 能 GTFOBins 就立刻 root，不要停在“发现可 sudo find”。写 cron/改 unit 是手段，**`id` 显示 `uid=0` 才是成功**。
 
@@ -21,22 +21,12 @@ description: "Linux local privilege escalation from a low-privilege shell to roo
 
 ## 开局与收尾
 
-开局第一件事：Read `./notes.md`。没有则 `python ~/.claude/skills/bin/notes.py init`。只按已拿下/凭据继续。
-走到哪条链，才 Read **一份** `references/<file>.md`。禁止开局全读、禁止凭记忆写 payload。
-监听 / sudo / 输密码 / Permission denied：立刻停，说明等操作者做什么，等回报。不要假装已成功。
-收尾：
-1. 追加 `./notes.md`
-2. `python ~/.claude/skills/bin/modules.py tail <本模块名>`
-   Read 备用：`~/.claude/skills/shared/modules.yaml`
-   禁止 `./modules.yaml` 和 `python ../bin/...`
-3. 优先 `default_next`；`never_default` 不得当作默认（操作者点名除外）
-4. 名册外的名字不许建议
-5. 停。等操作者选 `/模块` 或 `/clear`
-`/edr-bypass` 半条链未完：打通后回本模块，不要 /clear。
-
+读取当前 Step 契约、引用的 Fact 与已有证据文件，只按已验证通道和凭据继续；按当前链路只加载必要 reference。
+监听、权限或认证失败时核对反馈与前置条件，尝试授权范围内的有效替代路径；不等待操作者选择模块，也不伪造成功。
+将关键命令、输出和可复用进展保存到工作目录证据文件；关键突破及时 `submit_fact`。当前目标仍有可执行路径时自动继续，跨题调度交给 Commander，同题协作交给 General。
+Step 结束前必须提交至少一条有真实证据的汇总 Fact；无突破则汇总已验证失败、限制和阻塞，再调用 `finish_step({summary})`。可交付成果通过 `submit_finding` 引用 Fact。
 
 ---
-
 ## 0. 成功条件与攻击强度
 
 ```text
@@ -287,6 +277,6 @@ ip a
 ```
 
 记 notes：原语、版本、是否改了 passwd/sudoers/unit、容器是否逃到 host。
-候选只按「开局与收尾」跑 `python ~/.claude/skills/bin/modules.py tail`。
+按「开局与收尾」提交真实 Fact 后继续当前目标。
 
 RESTORE：删 stage 目录、恢复 unit/cron/passwd、卸恶意 SUID、Copy Fail 后按 PoC 清理 page-cache 副作用。

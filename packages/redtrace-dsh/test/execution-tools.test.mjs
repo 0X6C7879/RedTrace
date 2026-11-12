@@ -19,7 +19,7 @@ import * as credentials from '../lib/credentials.js'
 import * as attachment from '../lib/attachment.js'
 import * as fileReferences from '../lib/file-references.js'
 import * as webshell from '../lib/webshell.js'
-import { executionEvidenceReadGuard, mountReasonTools } from '../../redtrace-engine/compat/cordis.mjs'
+import { executionEvidenceReadGuard } from '../../redtrace-engine/compat/cordis.mjs'
 import { Store } from '../../redtrace-engine/src/store.ts'
 import { createPlanGuard } from '../../redtrace-engine/src/plan-guard.ts'
 
@@ -72,7 +72,7 @@ async function mountSession(host, { executionProfile, available }) {
   await carrier.await()
   const key = { session: cwd }
   const scope = createScope(carrier.ctx, key)
-  const task = { type: 'explore', projectId: 'p1', worker: 'w', committed: false, executionProfile }
+  const task = { type: 'soldier', projectId: 'p1', worker: 'w', committed: false, executionProfile }
   let refresh
   await withTimeout(
     mountExecutionTools(scope.ctx, { task, cwd, sessionRoot: cwd, skillsDir: path.join(cwd, 'skills'), available, onRefresh: value => { refresh = value } }),
@@ -175,23 +175,23 @@ test('Spill is Execute-only, session-isolated, hot-reloadable and preserves evid
   const text = `HEAD\n${'tool output line\n'.repeat(20000)}TAIL\n`
   const sessions = []
   let callId = 0
-  for (const type of ['reason', 'explore', 'bootstrap']) {
+  for (const type of ['commander', 'general', 'soldier', 'scout']) {
     const carrier = host.plugin({ inject: ['tools', 'systemPrompt'], apply() {} }); await carrier.await()
     const agent = { options: {}, session: host.sessions.create(undefined, { meta: { cwd: root } }) }
     const scope = createScope(carrier.ctx, agent)
     let scoped = scope.ctx, refresh = async () => {}
     agent.ctx = scoped
-    if (type === 'reason') await mountReasonTools(scoped)
+    if (type === 'commander') scoped.tools.restrict({ allow: [] })
     else scoped = await mountExecutionTools(scoped, { task: { type, executionProfile: 'direct' }, cwd: root,
       sessionRoot: root, skillsDir: root, available: id => manager.availableForTask(id), onRefresh: value => { refresh = value } })
     agent.ctx = scoped
     scoped.tools.register({ name: 'fixture', description: 'Native retention fixture', parameters: {},
       output: { schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }, render: (_args, value) => [{ type: 'text', text: value.text }] },
       execute: async () => ({ text }) })
-    const call = (name, args) => host.tools.execute({ name, arguments: args, agent, callId: `spill-${++callId}`, signal: new AbortController().signal })
+    const call = (name, args) => host.tools.execute({ calls: [{ type: 'tool-call', name, arguments: JSON.stringify(args), id: `spill-${++callId}` }], agent, signal: new AbortController().signal }).then(batch => batch.results[0].result)
     const result = await call('fixture', {}), visible = result.content.map(block => block.text ?? '').join('')
     assert.equal(result.value.text, text)
-    if (type === 'reason') {
+    if (type === 'commander') {
       assert.equal(visible, text)
       assert.equal(scoped.get('spillStore'), undefined)
       assert.equal(existsSync(path.join(root, 'spill')), false)
@@ -203,7 +203,7 @@ test('Spill is Execute-only, session-isolated, hot-reloadable and preserves evid
       assert.ok(file.startsWith(sessionDir(path.join(root, 'spill'), String(agent.session.header.id))))
       const read = await call('read', { file_path: file, offset: 20002, limit: 1 })
       assert.equal(read.isError, false); assert.match(read.content[0].text, /TAIL/)
-      if (type === 'explore') {
+      if (type === 'soldier') {
         const store = new Store(':memory:')
         try {
           const project = store.createProject({ title: 'Spill recovery', origin: 'Local fixture', goal: 'Read existing evidence' }).project
@@ -221,19 +221,19 @@ test('Spill is Execute-only, session-isolated, hot-reloadable and preserves evid
     }
     sessions.push({ type, scoped, call, refresh })
   }
-  const [reason, explore, bootstrap] = sessions
-  assert.notEqual(explore.scoped.get('spillStore'), bootstrap.scoped.get('spillStore'))
+  const [commander, general, soldier, scout] = sessions
+  assert.notEqual(soldier.scoped.get('spillStore'), scout.scoped.get('spillStore'))
   await manager.stop('redtrace-spill'); await Promise.all(sessions.map(s => s.refresh()))
   for (const s of sessions) {
     assert.equal(s.scoped.get('spillStore'), undefined)
     assert.equal((await s.call('fixture', {})).content[0].text, text)
   }
   await manager.start('redtrace-spill'); await Promise.all(sessions.map(s => s.refresh()))
-  assert.equal((await reason.call('fixture', {})).content[0].text, text)
-  for (const s of [explore, bootstrap]) assert.match((await s.call('fixture', {})).content[0].text, /Full formatted result stored at:/)
-  bootstrap.scoped.get('spillStore').saveText = async () => { throw new Error('fixture storage unavailable') }
-  assert.equal((await bootstrap.call('fixture', {})).content[0].text, text)
-  assert.match((await explore.call('fixture', {})).content[0].text, /Full formatted result stored at:/)
+  assert.equal((await commander.call('fixture', {})).content[0].text, text)
+  for (const s of [general, soldier, scout]) assert.match((await s.call('fixture', {})).content[0].text, /Full formatted result stored at:/)
+  scout.scoped.get('spillStore').saveText = async () => { throw new Error('fixture storage unavailable') }
+  assert.equal((await scout.call('fixture', {})).content[0].text, text)
+  assert.match((await soldier.call('fixture', {})).content[0].text, /Full formatted result stored at:/)
 })
 
 test('host plugin tools disappear from an already mounted Execute session', async (t) => {
@@ -274,12 +274,12 @@ test('native Terminal retains state, isolates real Agents, and cleans up on clos
   async function worker(executionProfile = 'direct') {
     let refresh
     const handle = await host.agents.create({ sessionId: SessionId(randomUUID()), meta: { cwd },
-      setup: scoped => mountExecutionTools(scoped, { cwd, sessionRoot: cwd, skillsDir: cwd, task: { type: 'explore', executionProfile },
+      setup: scoped => mountExecutionTools(scoped, { cwd, sessionRoot: cwd, skillsDir: cwd, task: { type: 'soldier', executionProfile },
         available: id => enabled.has(id), onRefresh: value => { refresh = value } }).then(() => {}) })
     t.after(() => handle.dispose())
     let callId = 0
     return { ...handle, refresh: () => refresh(),
-      call: (name, args = {}) => host.tools.execute({ name, arguments: args, agent: handle.agent, callId: `terminal-${++callId}`, signal: new AbortController().signal }) }
+      call: (name, args = {}) => host.tools.execute({ calls: [{ type: 'tool-call', name, arguments: JSON.stringify(args), id: `terminal-${++callId}` }], agent: handle.agent, signal: new AbortController().signal }).then(batch => batch.results[0].result) }
   }
   const a = await worker(), b = await worker()
   const open = await a.call('terminal_open', { type: 'shell' })
@@ -370,13 +370,13 @@ test('native conclude submits a Fact and finishes directly while keeping externa
   const agent = { options: {}, session: host.sessions.create(undefined, { cwd: root }) }
   const scope = createScope(carrier.ctx, agent); agent.ctx = scope.ctx
   let refresh, closing = false, facts = 0, completed = false, externalCalls = 0
-  await mountExecutionTools(scope.ctx, { cwd: root, sessionRoot: root, skillsDir: root, task: { type: 'explore', executionProfile: 'direct' }, available: id => id === 'redtrace-ptc', onRefresh: value => { refresh = value } })
+  await mountExecutionTools(scope.ctx, { cwd: root, sessionRoot: root, skillsDir: root, task: { type: 'soldier', executionProfile: 'direct' }, available: id => id === 'redtrace-ptc', onRefresh: value => { refresh = value } })
   const jsonOutput = { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }
   scope.ctx.tools.register({ name: 'submit_fact', parameters: { type: 'object', additionalProperties: false }, output: jsonOutput, execute: () => ({ facts: ++facts }) })
   scope.ctx.tools.register({ name: 'finish_step', parameters: { type: 'object', additionalProperties: false }, output: jsonOutput, execute: () => { if (!facts) throw new Error('Explore must submit at least one Fact'); completed = true; return { saved: true } } })
   scope.ctx.tools.register({ name: 'external_effect', parameters: { type: 'object', additionalProperties: false }, output: jsonOutput, execute: () => ({ calls: ++externalCalls }) })
   scope.ctx.tools.guard(exec => closing && !['submit_fact', 'finish_step'].includes(exec.name) ? 'Execution timed out; only summarize and submit existing evidence' : undefined)
-  const execute = (name, args = {}) => host.tools.execute({ name, arguments: args, agent, callId: `conclude-${name}-${randomUUID()}`, signal: new AbortController().signal })
+  const execute = (name, args = {}) => host.tools.execute({ calls: [{ type: 'tool-call', name, arguments: JSON.stringify(args), id: `conclude-${name}-${randomUUID()}` }], agent, signal: new AbortController().signal }).then(batch => batch.results[0].result)
   closing = true
   await refresh()
   assert.equal(host.tools.get('run_code', agent), undefined)

@@ -74,6 +74,7 @@ window.redtraceFgsView = {
       { selector: 'node[fgs][nodeType="goal"], node[fgs][nodeType="subgoal"]', style: { 'background-color': '#321115', 'border-color': '#ff7a7d' } },
       { selector: 'node[fgs][nodeType="finding"]', style: { 'background-color': '#19122f', 'border-color': '#a783ff' } },
       { selector: 'node[fgs][nodeType="step"]', style: { shape: 'ellipse', 'background-color': '#2b1c08', 'border-color': '#ffb82e', color: '#ffe6ae', 'border-width': 2.5 } },
+      { selector: 'node[fgs][nodeType="step"][status="parked"]', style: { 'background-color': '#111c27', 'border-color': '#7ba8cf', 'border-style': 'dotted', 'border-width': 1.5, color: '#bbd5ec' } },
       { selector: 'node[fgs][nodeType="step"][status="pending"], node[fgs][nodeType="step"][status="paused"], node[fgs][nodeType="step"][status="blocked"]', style: { 'background-color': '#101722', 'border-color': '#c9a23f', 'border-style': 'dashed', 'border-width': 1.5, color: '#ffe6ae' } },
       { selector: 'node[fgs][status="achieved"]', style: { 'border-color': '#42df86' } },
       { selector: 'node[fgs][status="cancelled"]', style: { opacity: 0.6, 'border-style': 'dashed' } },
@@ -144,7 +145,7 @@ window.redtraceFgsView = {
   fgsVisibleSteps() { return (this.fgs?.steps || []).filter(s => !s.deleted && (!this.fgsStepFilter || s.goalId === this.fgsStepFilter)); },
   fgsOpenReference(id) { const n = this.fgs?.nodes.find(n => n.id === id); if (n) this.selectFgsNode(n.nodeType, id); else if ((this.fgs?.steps || []).some(s => s.id === id && !s.deleted)) this.selectFgsNode('step', id); },
   nativeProject(graph) {
-    return { project: { ...graph.project, reason: graph.reason ?? null, bootstrap_enabled: graph.project.bootstrap, created_at: graph.project.createdAt }, facts: [...graph.facts, ...graph.goals.filter(g => g.id === 'goal')], hints: graph.hints.map(h => ({ ...h, created_at: h.createdAt })),
-      intents: graph.steps.filter(s => !s.deleted).map(s => ({ ...s, from: s.sourceIds, to: s.status === 'done' ? s.resultGoalId || s.factIds.at(-1) || null : null, state: { pending: 'open', running: 'working', paused: 'open', blocked: 'blocked', done: 'concluded', cancelled: 'dropped' }[s.status], worker: s.status === 'paused' ? null : s.worker, execution_profile: s.executionProfile, created_at: s.createdAt, concluded_at: s.endedAt, failure_count: s.failureCount || 0, failure_signature: s.failure, retry_after: s.retryAfter, circuit_open: s.circuitOpen, attempt_count: s.attempts, cumulative_runtime_ms: s.runtimeMs || 0, fact_yield: s.factIds.length })) };
+    return { project: { ...graph.project, bootstrap_enabled: graph.project.bootstrap, created_at: graph.project.createdAt }, facts: [...graph.facts, ...graph.goals.filter(g => g.id === 'goal')], hints: graph.hints.map(h => ({ ...h, created_at: h.createdAt })),
+      intents: graph.steps.filter(s => !s.deleted).map(s => ({ ...s, from: s.sourceIds, to: s.status === 'done' ? s.resultGoalId || s.factIds.at(-1) || null : null, state: { pending: 'open', running: 'working', paused: 'open', parked: 'parked', blocked: 'blocked', done: 'concluded', cancelled: 'dropped' }[s.status], worker: s.status === 'paused' ? null : s.worker, role: s.role ?? 'soldier', initial_mission: !!s.bootstrap, execution_profile: s.executionProfile, created_at: s.createdAt, concluded_at: s.endedAt, failure_count: s.failureCount || 0, failure_signature: s.failure, retry_after: s.retryAfter, circuit_open: s.circuitOpen, attempt_count: s.attempts, cumulative_runtime_ms: s.runtimeMs || 0, fact_yield: s.factIds.length })) };
   },
 };

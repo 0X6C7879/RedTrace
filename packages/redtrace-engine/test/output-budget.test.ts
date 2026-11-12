@@ -1,18 +1,26 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { Store, redactSensitive } from '../src/store.ts'
+import { Store } from '../src/store.ts'
 import { graphTools, efficiencyToolAvailable } from '../src/runner.ts'
 import type { EngineConfig, Worker } from '../src/types.ts'
-test('result and audit redaction preserve output text while protecting structured credentials', () => {
- const original = { content: [{ type: 'text', text: '{"token":"test-secret","responseBody":"private","output":"hello"}' }], arguments: '{"password":"test-password"}' }
- const safe = redactSensitive(original) as typeof original
- assert.equal(JSON.parse(safe.content[0].text).token, '[REDACTED]')
- assert.equal(JSON.parse(safe.content[0].text).responseBody, '[REDACTED]')
- assert.equal(JSON.parse(safe.content[0].text).output, 'hello')
- assert.equal(JSON.parse(safe.arguments).password, '[REDACTED]')
- assert.equal(original.content[0].text.includes('test-secret'), true)
- assert.equal((redactSensitive({ text: 'native output\n' }) as { text: string }).text, 'native output\n')
+test('model and audit retain credentials, flags, bodies and URL parameters verbatim', async () => {
+ const store = new Store(':memory:')
+ const worker: Worker = { name:'fixture', backend:'mock', provider:'mock', model:'', enabled:true, reason:true, explore:true, bootstrap:false, maxRunning:1, priority:0 }
+ try {
+  const project = store.createProject({title:'Raw evidence',origin:'fixture',goal:'fixture',bootstrap:false}).project
+  const run = store.claim(project.id,'execute',worker,store.addStep(project.id,{description:'Legion read-only fixture',sourceIds:['origin'],role:'soldier',taskKey:'fixture'}).id)
+  const original = {token:'fixture-token',flag:'flag{fixture}',cookie:'session=fixture',responseBody:'raw-body',url:'https://fixture.invalid/?token=fixture'}
+  const fact = store.addFact(project.id,JSON.stringify(original),{creator:'human'})
+  const tools = graphTools({store,run,worker,config:{maxSteps:null} as EngineConfig,signal:new AbortController().signal},()=>{})
+  const result = await tools.find(tool=>tool.name==='read_graph')!.execute('read',{id:fact.id})
+  assert.ok(JSON.stringify(result.content).includes('fixture-token')); assert.ok(!JSON.stringify(result.content).includes('[REDACTED]'))
+  store.runEvent(run.id,'fixture',original)
+  assert.deepEqual(JSON.parse(String(store.db.prepare("SELECT data FROM run_events WHERE run_id=? AND type='fixture'").get(run.id)!.data)),original)
+  store.audit({id:run.id,project_id:project.id},[{kind:'tool.completed',content:JSON.stringify(original),arguments:JSON.stringify(original)}])
+  const event=JSON.parse(String(store.db.prepare('SELECT data FROM audit_events WHERE run_id=? ORDER BY id DESC LIMIT 1').get(run.id)!.data))
+  assert.deepEqual(JSON.parse(event.content),original); assert.deepEqual(JSON.parse(event.arguments),original)
+ } finally { store.close() }
 })
 test('Explore receives knowledge tools and plugin disabling blocks previously exposed tools', async () => {
  const store = new Store(':memory:')

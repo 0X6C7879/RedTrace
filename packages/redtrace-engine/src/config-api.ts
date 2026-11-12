@@ -8,12 +8,12 @@ import type { ProbeModel } from './index.ts'
 
 const text = Type.String({ minLength: 1 }), revision = Type.String({ minLength: 64, maxLength: 64, pattern: '^[a-f0-9]+$' })
 const positive = Type.Integer({ minimum: 1 }), policy = Type.Union(['auto_max', 'max', 'xhigh', 'high', 'medium', 'low', 'minimal', 'off'].map(v => Type.Literal(v)))
-const workerSchema = Type.Object({ expected_revision: revision, original_name: Type.Optional(Type.Union([text, Type.Null()])), name: text, provider: text, model: Type.Optional(text), enabled: Type.Optional(Type.Boolean()), bootstrap: Type.Optional(Type.Boolean()), reason: Type.Optional(Type.Boolean()), explore: Type.Optional(Type.Boolean()), priority: Type.Integer(), max_running: positive })
+const workerSchema = Type.Object({ expected_revision: revision, original_name: Type.Optional(Type.Union([text, Type.Null()])), name: text, provider: text, roles: Type.Optional(Type.Array(Type.Union(['commander','general','soldier','scout'].map(role => Type.Literal(role))), { uniqueItems: true })), model: Type.Optional(text), enabled: Type.Optional(Type.Boolean()), priority: Type.Integer(), max_running: positive })
 const providerSchema = Type.Object({ expected_revision: revision, name: text, api: Type.Optional(Type.Union(['openai-completions', 'openai-responses', 'anthropic-messages'].map(v => Type.Literal(v)))), base_url: text, api_key: Type.Optional(Type.Union([Type.String(), Type.Null()])), api_key_env: Type.Optional(Type.Union([Type.String(), Type.Null()])), models: Type.Array(Type.Object({ id: text, context_window: Type.Optional(positive), max_tokens: Type.Optional(positive), reasoning: Type.Optional(policy), reasoning_efforts: Type.Optional(Type.Union([Type.Record(Type.String(), Type.Union([Type.String(), Type.Null()])), Type.Boolean(), Type.Null()])), thinking_format: Type.Optional(Type.Union(['auto', 'deepseek', 'openai', 'none'].map(v => Type.Literal(v)))) }), { minItems: 1 }) })
 export function configRoutes(router: Router, configuration: Configuration, probeModel?: ProbeModel) {
   const checkRevision = (expected: string) => { if (configuration.read().revision !== expected) throw new HttpError(409, 'worker configuration changed; reload before saving') }
   const workerIndex = (raw: RawConfig, name: string) => { const i = raw.workers.findIndex(w => w.name === name); if (i < 0) throw new HttpError(400, 'Worker not found'); return i }
-  const workerValue = (b: any, previous?: RawConfig['workers'][number]) => ({ ...previous, name: b.name, provider: b.provider, model: b.model ?? 'mock', enabled: b.enabled ?? true, bootstrap: b.bootstrap ?? true, reason: b.reason ?? true, explore: b.explore ?? true, priority: b.priority, max_running: b.max_running })
+  const workerValue = (b: any, previous?: RawConfig['workers'][number]) => ({ ...previous, ...(b.roles !== undefined ? { roles: b.roles } : {}), name: b.name, provider: b.provider, model: b.model ?? 'mock', enabled: b.enabled ?? true, priority: b.priority, max_running: b.max_running })
   const testCache = new Map<string, { at: number; value: { ok: boolean; status: number | null; duration_ms: number; detail: string; cached: boolean } }>()
   const probeWorker = async (b: any, original: string | null, signal: AbortSignal) => {
     checkRevision(b.expected_revision)
@@ -34,9 +34,13 @@ export function configRoutes(router: Router, configuration: Configuration, probe
     testCache.set(key, { at: Date.now(), value: result }); return result
   }
   router.add('GET', '/worker-config', () => configuration.snapshot())
+  router.add('PUT', '/worker-config/llm-polling', async c => {
+    const b = await body(c.req, Type.Object({ expected_revision: revision, enabled: Type.Boolean(), models: Type.Record(Type.String(), Type.Array(text, { uniqueItems: true })) }))
+    return configuration.commit(b.expected_revision, raw => { raw.llm_polling = { enabled: b.enabled, models: b.models } })
+  })
   const task = Type.Object({ timeout: Type.Integer({ minimum: 5 }), conclude_timeout: Type.Integer({ minimum: 5 }) })
   router.add('PUT', '/worker-config/runtime-tasks', async c => {
-    const b = await body(c.req, Type.Object({ expected_revision: revision, runtime: Type.Object({ max_workers: positive, max_project_workers: positive, max_running_projects: positive }), tasks: Type.Object({ reason: Type.Object({ timeout: Type.Integer({ minimum: 5 }), conclude_timeout: Type.Integer({ minimum: 5 }), max_intents: Type.Optional(positive) }), explore: task, bootstrap: task }) }))
+    const b = await body(c.req, Type.Object({ expected_revision: revision, runtime: Type.Object({ max_workers: positive, max_project_workers: positive, max_running_projects: positive }), tasks: Type.Object({ commander: Type.Object({ timeout: Type.Integer({ minimum: 5 }), conclude_timeout: Type.Integer({ minimum: 5 }), max_intents: Type.Optional(positive) }), general: task, soldier: task, scout: task }) }))
     return configuration.commit(b.expected_revision, raw => { raw.runtime = { ...raw.runtime, ...b.runtime }; raw.tasks = b.tasks })
   })
   router.add('PUT', '/worker-config/common-env', async c => {
@@ -55,12 +59,15 @@ export function configRoutes(router: Router, configuration: Configuration, probe
         api_key_env: b.api_key_env ?? undefined, models: b.models.map(m => ({ id: m.id, context_window: m.context_window ?? 1000000, max_tokens: m.max_tokens ?? 128000, reasoning: m.reasoning ?? 'auto_max', reasoning_efforts: m.reasoning_efforts, thinking_format: m.thinking_format ?? 'auto' })) }
       if (method === 'PUT' && b.name !== c.params.provider) { delete raw.providers[c.params.provider]; for (const w of raw.workers) if (w.provider === c.params.provider) w.provider = b.name }
       raw.providers[b.name] = value
+      for (const [model, names] of Object.entries(raw.llm_polling?.models ?? {})) raw.llm_polling!.models![model] = names
+        .map(name => method === 'PUT' && name === c.params.provider ? b.name : name)
+        .filter(name => raw.providers![name]?.models.some(m => m.id === model))
     })
     if (method === 'POST') { c.res.statusCode = 201; const { send } = await import('./http.ts'); send(c.res, result, 201) } else return result
   })
   router.add('DELETE', '/worker-config/providers/:provider', c => {
     const expected = c.url.searchParams.get('expected_revision') ?? ''; if (!/^[a-f0-9]{64}$/.test(expected)) throw new HttpError(422, 'Invalid expected_revision')
-    return configuration.commit(expected, raw => { if (!raw.providers?.[c.params.provider]) throw new HttpError(400, 'Provider not found'); if (raw.workers.some(w => w.provider === c.params.provider)) throw new HttpError(409, 'Provider is referenced by workers'); delete raw.providers[c.params.provider] })
+    return configuration.commit(expected, raw => { if (!raw.providers?.[c.params.provider]) throw new HttpError(400, 'Provider not found'); if (raw.workers.some(w => w.provider === c.params.provider)) throw new HttpError(409, 'Provider is referenced by workers'); delete raw.providers[c.params.provider]; for (const names of Object.values(raw.llm_polling?.models ?? {})) { const i = names.indexOf(c.params.provider); if (i >= 0) names.splice(i, 1) } })
   })
   for (const method of ['POST', 'PUT']) router.add(method, `/worker-config/workers${method === 'PUT' ? '/:worker' : ''}`, async c => {
     const b = await body(c.req, workerSchema)

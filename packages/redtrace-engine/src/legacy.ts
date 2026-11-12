@@ -2,17 +2,14 @@ import { Store, ACTIVE_NODE_SQL } from './store.ts'
 import type { Project, Run, Step } from './types.ts'
 
 export function legacyIntent(step: Step, run?: Run) {
-  const state = { pending: 'open', running: 'working', paused: 'open', blocked: 'blocked', done: 'concluded', cancelled: 'dropped' }[step.status]
+  const state = { pending: 'open', running: 'working', paused: 'open', parked: 'parked', blocked: 'blocked', done: 'concluded', cancelled: 'dropped' }[step.status]
   return { id: step.id, from: step.sourceGoalId ? [step.sourceGoalId] : step.sourceIds, to: step.status === 'done' ? step.resultGoalId ?? step.factIds.at(-1) ?? null : null, description: step.description, creator: step.creator, worker: step.status === 'paused' ? null : step.worker,
-    execution_profile: step.executionProfile, last_heartbeat_at: run ? run.heartbeatAt ?? run.startedAt : null,
+    role: step.role ?? 'soldier', initial_mission: !!step.bootstrap, execution_profile: step.executionProfile, last_heartbeat_at: run ? run.heartbeatAt ?? run.startedAt : null,
     created_at: step.createdAt, concluded_at: step.endedAt, failure_count: step.failureCount ?? (step.failure ? 1 : 0), failure_signature: step.failure,
     retry_after: step.retryAfter ?? null, circuit_open: step.circuitOpen ?? false, state, attempt_count: step.attempts, cumulative_runtime_ms: step.runtimeMs ?? 0, fact_yield: step.factIds.length, last_progress_at: null }
 }
-export function legacyProjectInfo(p: Project, decide?: Run) {
-  return { id: p.id, title: p.title, status: p.status, bootstrap_enabled: p.bootstrap, created_at: p.createdAt,
-    reason: decide ? { worker: decide.worker, trigger: decide.trigger ?? `planning_revision:${decide.baseRevision}`, started_at: decide.startedAt, last_heartbeat_at: decide.heartbeatAt ?? decide.startedAt } : null,
-    reason_failure_count: p.failureCount ?? 0, reason_failure_signature: p.failureSignature ?? null, reason_retry_after: p.retryAfter ? p.retryAfter / 1000 : null, reason_circuit_open: p.circuitOpen ?? false,
-    planning_revision: p.planningRevision, reason_evaluated_revision: p.decidedRevision, reason_context_revision: p.contextRevision ?? 0 }
+export function legacyProjectInfo(p: Project, _historicalRun?: Run) {
+  return { id: p.id, title: p.title, status: p.status, initial_mission_enabled: p.bootstrap, bootstrap_enabled: p.bootstrap, created_at: p.createdAt, planning_revision: p.planningRevision }
 }
 export function legacyProject(store: Store, id: string) {
   const graph = store.graph(id), p = graph.project, runs = store.runs(id)

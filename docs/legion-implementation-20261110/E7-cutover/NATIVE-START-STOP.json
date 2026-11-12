@@ -1,0 +1,53 @@
+{
+  "nativeRoot": "/Users/lxy/Downloads/RedTrace",
+  "pid": 90007,
+  "port": 51094,
+  "ready": true,
+  "workers": [
+    {
+      "name": "local-flash",
+      "roles": [
+        "commander",
+        "general",
+        "soldier",
+        "scout"
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "id": "redtrace-commander",
+      "status": "running"
+    },
+    {
+      "id": "redtrace-general",
+      "status": "running"
+    },
+    {
+      "id": "redtrace-soldier",
+      "status": "running"
+    },
+    {
+      "id": "redtrace-scout",
+      "status": "running"
+    }
+  ],
+  "campaignStatus": "stopped",
+  "projects": 0,
+  "pauseStatus": 200,
+  "exitStatus": 0,
+  "stdout": "RedTrace ready at http://127.0.0.1:51094\n",
+  "stderr": "",
+  "processAfter": {
+    "command": "pgrep",
+    "args": [
+      "-fl",
+      "run-redtrace-node|redtrace-engine/src/cli"
+    ],
+    "cwd": "/Users/lxy/Downloads/RedTrace",
+    "status": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  "sessionEntries": []
+}

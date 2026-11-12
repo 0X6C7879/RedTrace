@@ -1,0 +1,10 @@
+{
+  "cmd": [
+    "node",
+    "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/smoke.mjs",
+    "/Users/lxy/Downloads/RedTrace"
+  ],
+  "status": 0,
+  "stdout": "LEGION_SUPPORTED=true; role=general; park=parked; reactivate=pending\n",
+  "stderr": ""
+}

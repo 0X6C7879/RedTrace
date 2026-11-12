@@ -1,0 +1,52 @@
+{
+  "BASELINE": {
+    "target": "/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-ui-before-63kDi3",
+    "commands": [
+      {
+        "command": [
+          "/opt/homebrew/opt/node@24/bin/node",
+          "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/frontend-console-20261111/console-probe.mjs",
+          "/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-ui-before-63kDi3"
+        ],
+        "status": 0,
+        "stdout": "{\"stoppedLabel\":\"stopped\",\"recipientControl\":\"raw-id\",\"browserPrompts\":true,\"eligibleRoutes\":null,\"unknownBlocksResume\":null}\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/opt/homebrew/opt/node@24/bin/node",
+          "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/frontend-console-20261111/audit-settings-probe.mjs",
+          "/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-ui-before-63kDi3"
+        ],
+        "status": 0,
+        "stdout": "{\"failedRunLabel\":\"已完成\",\"unknownToolLabel\":\"运行中\",\"filtersOtherRun\":false,\"nativeCommanderReader\":false,\"retainedEvidenceReader\":false,\"configurationDraftRetained\":false,\"nativeHistoricalTime\":false,\"nativeSystemPrompt\":false}\n",
+        "stderr": ""
+      }
+    ]
+  },
+  "MODIFIED": {
+    "target": "/Users/lxy/Downloads/RedTrace",
+    "commands": [
+      {
+        "command": [
+          "/opt/homebrew/opt/node@24/bin/node",
+          "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/frontend-console-20261111/console-probe.mjs",
+          "/Users/lxy/Downloads/RedTrace"
+        ],
+        "status": 0,
+        "stdout": "{\"stoppedLabel\":\"执行已停止\",\"recipientControl\":\"select\",\"browserPrompts\":false,\"eligibleRoutes\":[\"same\"],\"unknownBlocksResume\":true}\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/opt/homebrew/opt/node@24/bin/node",
+          "/Users/lxy/Downloads/RedTrace/docs/legion-implementation-20261110/frontend-console-20261111/audit-settings-probe.mjs",
+          "/Users/lxy/Downloads/RedTrace"
+        ],
+        "status": 0,
+        "stdout": "{\"failedRunLabel\":\"失败\",\"unknownToolLabel\":\"结果待核验\",\"filtersOtherRun\":true,\"nativeCommanderReader\":true,\"retainedEvidenceReader\":true,\"configurationDraftRetained\":true,\"nativeHistoricalTime\":true,\"nativeSystemPrompt\":true}\n",
+        "stderr": ""
+      }
+    ]
+  }
+}
