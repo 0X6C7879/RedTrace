@@ -1,0 +1,967 @@
+
+> @redtrace/engine@0.4.0 test
+> node --test test/*.test.ts
+
+✔ commander loads its native Mission and shared evidence/isolation doctrine (4.760875ms)
+✔ general loads its native Mission and shared evidence/isolation doctrine (4.827125ms)
+✔ soldier loads its native Mission and shared evidence/isolation doctrine (0.558ms)
+✔ scout loads its native Mission and shared evidence/isolation doctrine (0.284458ms)
+✔ Commander owns classification, escalation, instance lifecycle, acceptance and Family Transfer (0.519667ms)
+✔ Soldier initial Mission is not a separate role or planner (0.513208ms)
+✔ every Worker must explicitly publish confirmed evidence before structured completion (104.215583ms)
+✔ compact benchmark Skill retains tool routes, scoring, lifecycle and business errors (0.862541ms)
+✔ WAL NORMAL and evidence merges preserve live execution contracts while explicit amendments still invalidate them (68.638958ms)
+✔ configuration snapshot skips repeated reads/decryption and notices immediate atomic commits (506.017ms)
+✔ Operations completion wakes waiting callers and cleans listeners on cancellation/timeout (57.068541ms)
+✔ all HTTP requests overlap across Workers sharing one Session; custom methods, redirects and explicit isolation work (457.59275ms)
+✔ harness streams text and reasoning deltas without SQLite work (2.093458ms)
+✔ Skill entrypoints keep native submissions, unattended continuation and headless defaults (6.514542ms)
+✔ retired manual lifecycle controls are removed; Fact deletion keeps version and reference checks (46.075666ms)
+✔ container entry and healthcheck share a concrete IPv4 host (4.452625ms)
+✔ background refresh is single-flight without a foreground spinner (2.905625ms)
+✔ page changes discard old refresh results and retry the current page; errors unlock refresh (57.412459ms)
+✔ activation does not subscribe the page effect to refresh flags (0.879583ms)
+✔ a failed batch retains single-flight until all remaining requests settle (0.907ms)
+✔ legacy summary avoids full graph/history reads and preserves all counts (8.341125ms)
+✔ legacy project matches latest Runs with one history pass (345.241083ms)
+✔ FGS refresh reads one graph and omits retired Reason; legacy fallback is lazy (25.60975ms)
+✔ audit task list reuses each indexed project query and preserves Token totals (84.232375ms)
+✔ Worker probe and commit use one normalizer and retain the same defaults/explicit fields (17.808292ms)
+✔ unused bindings are removed without dropping Run validation or project/adapter guards (6.338167ms)
+✔ FGS compatibility view distinguishes Park from pause and labels the Soldier initial Mission (8.590416ms)
+✔ audit timeline shows paired tool names, full commands, and result text (2.131417ms)
+✔ completed tool without text output renders an explicit placeholder (0.1725ms)
+✔ standalone PTC completions display code and terminal arguments without a start row (104.479708ms)
+✔ legacy output envelopes unwrap but ordinary JSON and Skill presentation stay intact (0.875792ms)
+✔ native file metadata appears in the existing tool payload (0.178292ms)
+✔ initial Mission is a Soldier Step, not an independent Bootstrap agent (12.161917ms)
+✔ all new ordinary Steps carry a Soldier role and task identity (76.735583ms)
+✔ a Soldier initial Mission cannot succeed without confirmed evidence (123.8705ms)
+✔ configuration exposes only four-role capabilities and task types (205.959208ms)
+✔ explicit authentication failure is visible, invalidates channel, and marks tool failure (308.267125ms)
+✔ direct sessions show unverified until explicit verification; other resource states unchanged (17.458916ms)
+✖ capabilities keep independent copies, nested entries, revisions and MCP configurations (4.395917ms)
+✔ REA is reserved for the per-Run reverse plugin rather than globally mounted twice (57.180584ms)
+✔ setEnabled relocates plugin-gated skills between roots without version churn (136.427417ms)
+
+Interrupted while running:
+
+⚠ test/capability-verbs.test.ts (test/capability-verbs.test.ts:1:1)
+⚠ test/config-api.test.ts (test/config-api.test.ts:1:1)
+⚠ test/current-fgs.test.ts (test/current-fgs.test.ts:1:1)
+⚠ test/deletion.test.ts (test/deletion.test.ts:1:1)
+⚠ test/dsh-loop.test.ts (test/dsh-loop.test.ts:1:1)
+⚠ test/dsh-update.test.ts (test/dsh-update.test.ts:1:1)
+⚠ test/efficiency-acceptance.test.ts (test/efficiency-acceptance.test.ts:1:1)
+⚠ test/execution-safety.test.ts (test/execution-safety.test.ts:1:1)
+⚠ test/fgs-maintenance.test.ts (test/fgs-maintenance.test.ts:1:1)
+⚠ test/fgs.test.ts (test/fgs.test.ts:1:1)
+⚠ test/harness-boundaries.test.ts (test/harness-boundaries.test.ts:1:1)
+⚠ test/http-tools.test.ts (test/http-tools.test.ts:1:1)
+⚠ test/http.test.ts (test/http.test.ts:1:1)
+⚠ test/kernel.test.ts (test/kernel.test.ts:1:1)
+⚠ test/knowledge-network.test.ts (test/knowledge-network.test.ts:1:1)
+⚠ test/knowledge-offline.test.ts (test/knowledge-offline.test.ts:1:1)
+⚠ test/knowledge.test.ts (test/knowledge.test.ts:1:1)
+⚠ test/launcher.test.ts (test/launcher.test.ts:1:1)
+⚠ test/legion-console.test.ts (test/legion-console.test.ts:1:1)
+⚠ test/legion-cutover.test.ts (test/legion-cutover.test.ts:1:1)
+⚠ test/legion-experience.test.ts (test/legion-experience.test.ts:1:1)
+⚠ test/legion-organization.test.ts (test/legion-organization.test.ts:1:1)
+⚠ test/legion-runtime.test.ts (test/legion-runtime.test.ts:1:1)
+⚠ test/legion-state.test.ts (test/legion-state.test.ts:1:1)
+⚠ test/legion-todos.test.ts (test/legion-todos.test.ts:1:1)
+⚠ test/llm-native.test.ts (test/llm-native.test.ts:1:1)
+⚠ test/llm-polling.test.ts (test/llm-polling.test.ts:1:1)
+⚠ test/local-sftp.test.ts (test/local-sftp.test.ts:1:1)
+⚠ test/mcp-native.test.ts (test/mcp-native.test.ts:1:1)
+⚠ test/operations-unattended.test.ts (test/operations-unattended.test.ts:1:1)
+⚠ test/operations.test.ts (test/operations.test.ts:1:1)
+⚠ test/output-budget.test.ts (test/output-budget.test.ts:1:1)
+⚠ test/pivot-validation.test.ts (test/pivot-validation.test.ts:1:1)
+⚠ test/polling-config.test.ts (test/polling-config.test.ts:1:1)
+⚠ test/project-commanders.test.ts (test/project-commanders.test.ts:1:1)
+⚠ test/project-graph-api.test.ts (test/project-graph-api.test.ts:1:1)
+⚠ test/project-graph-migration.test.ts (test/project-graph-migration.test.ts:1:1)
+⚠ test/project-graphs.test.ts (test/project-graphs.test.ts:1:1)
+⚠ test/reason-notify.test.ts (test/reason-notify.test.ts:1:1)
+⚠ test/runtime-contract.test.ts (test/runtime-contract.test.ts:1:1)
+⚠ test/scheduler-deletion-race.test.ts (test/scheduler-deletion-race.test.ts:1:1)
+⚠ test/scheduler-hot-path.test.ts (test/scheduler-hot-path.test.ts:1:1)
+⚠ test/shell-config.test.ts (test/shell-config.test.ts:1:1)
+⚠ test/step-listener.test.ts (test/step-listener.test.ts:1:1)
+⚠ test/task-plugins.test.ts (test/task-plugins.test.ts:1:1)
+⚠ test/terminal-migration.test.ts (test/terminal-migration.test.ts:1:1)
+⚠ test/tsecbench-reason.test.ts (test/tsecbench-reason.test.ts:1:1)
+⚠ test/wake-contract.test.ts (test/wake-contract.test.ts:1:1)
+
+Interrupted while running:
+
+⚠ test/capability-verbs.test.ts (test/capability-verbs.test.ts:1:1)
+⚠ test/config-api.test.ts (test/config-api.test.ts:1:1)
+⚠ test/current-fgs.test.ts (test/current-fgs.test.ts:1:1)
+⚠ test/deletion.test.ts (test/deletion.test.ts:1:1)
+⚠ test/dsh-loop.test.ts (test/dsh-loop.test.ts:1:1)
+⚠ test/dsh-update.test.ts (test/dsh-update.test.ts:1:1)
+⚠ test/efficiency-acceptance.test.ts (test/efficiency-acceptance.test.ts:1:1)
+⚠ test/execution-safety.test.ts (test/execution-safety.test.ts:1:1)
+⚠ test/fgs-maintenance.test.ts (test/fgs-maintenance.test.ts:1:1)
+⚠ test/fgs.test.ts (test/fgs.test.ts:1:1)
+⚠ test/harness-boundaries.test.ts (test/harness-boundaries.test.ts:1:1)
+⚠ test/http-tools.test.ts (test/http-tools.test.ts:1:1)
+⚠ test/http.test.ts (test/http.test.ts:1:1)
+⚠ test/kernel.test.ts (test/kernel.test.ts:1:1)
+⚠ test/knowledge-network.test.ts (test/knowledge-network.test.ts:1:1)
+⚠ test/knowledge-offline.test.ts (test/knowledge-offline.test.ts:1:1)
+⚠ test/knowledge.test.ts (test/knowledge.test.ts:1:1)
+⚠ test/launcher.test.ts (test/launcher.test.ts:1:1)
+⚠ test/legion-console.test.ts (test/legion-console.test.ts:1:1)
+⚠ test/legion-cutover.test.ts (test/legion-cutover.test.ts:1:1)
+⚠ test/legion-experience.test.ts (test/legion-experience.test.ts:1:1)
+⚠ test/legion-organization.test.ts (test/legion-organization.test.ts:1:1)
+⚠ test/legion-runtime.test.ts (test/legion-runtime.test.ts:1:1)
+⚠ test/legion-state.test.ts (test/legion-state.test.ts:1:1)
+⚠ test/legion-todos.test.ts (test/legion-todos.test.ts:1:1)
+⚠ test/llm-native.test.ts (test/llm-native.test.ts:1:1)
+⚠ test/llm-polling.test.ts (test/llm-polling.test.ts:1:1)
+⚠ test/local-sftp.test.ts (test/local-sftp.test.ts:1:1)
+⚠ test/mcp-native.test.ts (test/mcp-native.test.ts:1:1)
+⚠ test/operations-unattended.test.ts (test/operations-unattended.test.ts:1:1)
+⚠ test/operations.test.ts (test/operations.test.ts:1:1)
+⚠ test/output-budget.test.ts (test/output-budget.test.ts:1:1)
+⚠ test/pivot-validation.test.ts (test/pivot-validation.test.ts:1:1)
+⚠ test/polling-config.test.ts (test/polling-config.test.ts:1:1)
+⚠ test/project-commanders.test.ts (test/project-commanders.test.ts:1:1)
+⚠ test/project-graph-api.test.ts (test/project-graph-api.test.ts:1:1)
+⚠ test/project-graph-migration.test.ts (test/project-graph-migration.test.ts:1:1)
+⚠ test/project-graphs.test.ts (test/project-graphs.test.ts:1:1)
+⚠ test/reason-notify.test.ts (test/reason-notify.test.ts:1:1)
+⚠ test/runtime-contract.test.ts (test/runtime-contract.test.ts:1:1)
+⚠ test/scheduler-deletion-race.test.ts (test/scheduler-deletion-race.test.ts:1:1)
+⚠ test/scheduler-hot-path.test.ts (test/scheduler-hot-path.test.ts:1:1)
+⚠ test/shell-config.test.ts (test/shell-config.test.ts:1:1)
+⚠ test/step-listener.test.ts (test/step-listener.test.ts:1:1)
+⚠ test/task-plugins.test.ts (test/task-plugins.test.ts:1:1)
+⚠ test/terminal-migration.test.ts (test/terminal-migration.test.ts:1:1)
+⚠ test/tsecbench-reason.test.ts (test/tsecbench-reason.test.ts:1:1)
+⚠ test/wake-contract.test.ts (test/wake-contract.test.ts:1:1)
+✖ verb registry: channel reuse, selection rules, unattended execution without Step tool permissions (8.77825ms)
+✖ resource tools: agent registration with secrets becomes a visible, dispatchable channel (6.797625ms)
+✔ initialization copies seed configuration into the managed root and encrypts its secrets in place (184.54ms)
+✖ worker mutations probe the live model before commit and retain the old snapshot contract (33.541041ms)
+✔ removed bodies disappear from SQL, delta pages and Worker read tools while evidence and current content survive (71.779334ms)
+ℹ FGS stored JSON bytes 26043 -> 1988; graph response bytes 26271 -> 1773; Fact rows 4 -> 2
+✔ Finding and achieved Goal block deletion until Reason repairs their evidence (31.062542ms)
+✔ merge defaults preserve target content and invalid content rolls back all reference changes (14.791417ms)
+✔ schema 2 migration redirects merge chains, cleans stale bodies and preserves event and Run boundaries (47.963292ms)
+✔ invalid merge chains and lost active dependencies roll back migration across projects (271.037167ms)
+✔ a merged chain ending in archived evidence can be removed when no active dependency remains (11.398542ms)
+✖ HTTP maintenance, current snapshots and delta endpoints never expose deleted source bodies (0.851625ms)
+✖ single-use deletion removes only project data and keeps durable shared resources (2.846792ms)
+✖ project ids reuse the smallest free number and deletion leaves no counter or session residue (0.885ms)
+✖ native isolated Soldier pauses and resumes the SAME Session without replaying a confirmed side effect (31877.807666ms)
+✔ runtime source copying preserves portable relative symlinks (96.465667ms)
+✔ runtime preparation retains Vite required by upstream host build configurations (502.886792ms)
+✖ DSH update API protects active runs, rejects cross-origin calls and keeps scheduling paused until restart (11.831041ms)
+✔ updater includes RC releases, detects source edits and leaves the runtime intact on failure (61.464541ms)
+✔ repeated tool calls retain audit and recovery tracking without reminders or a ledger (27.450666ms)
+✔ native and DSH audit records survive retirement of duplicate Trace indexes (232.268042ms)
+✔ runtime capability gain/loss and dependency invalidation are verified, not ordinary Facts (22.6105ms)
+✔ cost buckets are disjoint tokens and timing residual never subtracts overlapping intervals twice (7.321834ms)
+✔ Commander acknowledges only the delivered start boundary; later critical events remain unread (10.020125ms)
+✔ large graph SQL pages and active Run query do not load full graph or historical checkpoints (420.536417ms)
+✔ Explore receives only live contract changes, not hints, evidence or critical broadcasts (11.302625ms)
+✔ Worker launch preserves Scope, bounded relevant unverified Hints and the live contract (8.25075ms)
+✔ existing duplicate Trace tables are removed on reopen without deleting raw history (14.038792ms)
+✔ Commander cursor acknowledgement does not erase reusable target Hints (5.435875ms)
+✔ local SSH transport preserves remote exit/stdout/stderr/cwd and rejects failed authentication (106.362875ms)
+✔ file UI accepts SFTP JSON and legacy listings; editor explicitly requests overwrite (2.794583ms)
+✔ result contracts reject malformed adapters; unknown completion never proves success (0.732333ms)
+✔ HTTP 200 missing a result frame is a protocol error; raw output remains unknown (14.395916ms)
+✔ TCP output delayed by 850ms is collected through its completion boundary (920.994917ms)
+✔ leases serialize conflict domains and preserve monotonic fencing after release (7.056334ms)
+✔ risk remains audit metadata; missing or revoked authorizations do not gate dispatch (5.102083ms)
+✔ unsupported file actions reject before enqueue; worker claims and credentials stay private (5.164125ms)
+✔ unknown, failed, cancelled and large results retain bounded, retrievable evidence (8.045209ms)
+✔ migration snapshots legacy DB, keeps FGS schema 2 and never dispatches through a connection it cannot restore (21.134166ms)
+✖ beacon ingress mounts plugins, serializes tasks and rejects stale attempts (0.81075ms)
+✔ merge is atomic, versioned, evidence-preserving and reference-complete (15.665417ms)
+✔ Finding merge preserves producing actions, evidence, details and completed-goal references (6.205083ms)
+✔ delete refuses active references atomically, clears concluded references and retains producer Runs (4.845917ms)
+✔ live amendment preserves Run, requires sync and rejects old tool call trees after acknowledgement (4.180291ms)
+✔ replacement waits for stop confirmation, retains results and blocks unknown side effects (4.866916ms)
+✔ Subgoal amendments invalidate all unfinished descendant contracts without changing Root Goal (4.204916ms)
+✔ Commander incremental pages cannot acknowledge unseen gaps (3.686541ms)
+✔ Finding and maintenance events reach Commander with bounded graph scans (4.722208ms)
+✔ Commander owns FGS maintenance while Worker can only sync its own contract (8.967875ms)
+✔ role scheduling honors total and Worker concurrency without an independent Reason slot (24.370208ms)
+✔ disabled role routes do not prevent another eligible Project from dispatching (4.849125ms)
+✔ a paused session is already quiescent and can be replaced without leaving an orphan paused lease (3.598125ms)
+✔ new Explore deltas start at claim, not at historical events; legacy deletion retains producing Steps (125.16225ms)
+✔ stopped contracts never ask to sync; unrelated evidence maintenance does not notify Explore (8.253375ms)
+✔ FGS keeps every output, typed relationship and cancelled-step provenance (14.674583ms)
+✔ closing a goal cascades to descendants: no orphan open branches survive (16.779042ms)
+✔ reference boundaries and atomic failure preserve current evidence (11.299542ms)
+✔ Commander reads evidence at Step capacity without relaxing Mission limits (7.925667ms)
+✔ legacy planning revision tracks its allowlist independently of paired wake eligibility (13.734375ms)
+✔ native canvas projection renders active Steps as virtual nodes, then swaps them for fact edges on completion (13.3135ms)
+✔ current graph polling clears removed node/edge selections and keeps surviving Step details (3.090834ms)
+✖ detail bindings tolerate a removed record while Alpine destroys the old node template (11.760084ms)
+✔ generic Explore endings preserve the fact-driven wake contract (13.390125ms)
+✖ missing TCP transport fails explicitly and persisted route metadata is not fresh verification (0.9775ms)
+✖ remote command has no implicit probe and explicit session probe remains available (5.113958ms)
+✔ HTTP Resource: optional session, shared cookies/restart, isolation, replay, concurrent batches and no Browser (262.824375ms)
+✖ HTTP graph compatibility and atomic conclude survive reopening the database (1.116959ms)
+✖ standalone mock executes an explicit Soldier Mission but never impersonates Commander acceptance (51.014334ms)
+✔ single graph, atomic rollback, references and unique claims (17.098667ms)
+✔ Worker scheduling never creates an independent planner and keeps simultaneous Missions concurrent (22.216708ms)
+✔ Hint and Finding changes remain graph events, never independent Worker planning jobs (3.181542ms)
+✔ finding and fact deletion are graph changes without a planning trigger (2.900792ms)
+✔ cancelled Execute does not trigger planning (2.688834ms)
+✔ unavailable planner does not block execution; pause resumes the same run (7.675583ms)
+✔ restart retains evidence and blocks unconfirmed external side effects (12.773209ms)
+✔ native audit keeps the conversation and drops lifecycle noise (5.089792ms)
+✔ tool tracking can skip the audit mirror for externally projected sessions (2.757083ms)
+✔ offline helper transport is network-capable; proxy configuration survives secret filtering (1983.590542ms)
+✖ offline CVE ranges, deduplicated real source paths, pagination and bounded PoC reads (fixtures) (4.091959ms)
+✖ model-facing CVE/component/version queries need no target evidence and never subscribe to Fact events (fixtures) (4.123167ms)
+✖ index corruption and missing data return explicit local diagnostics, without online repair (fixtures) (2.558042ms)
+✖ offline package export/import preserves callable CVE records and source hashes (fixtures) (2.458583ms)
+✔ local FTS search returns five source-hashed snippets and bounded source reads (352.358542ms)
+✔ local Nuclei templates expose CVE and fingerprint metadata with conservative matching (181.750792ms)
+✔ Nuclei legacy installer path is discovered and resource availability is returned (174.811875ms)
+✔ platform launchers use the native DSH host without Python (1.77875ms)
+✔ CI builds the native DSH runtime before Engine checks and tests (6.540458ms)
+✔ Board exposes paused and unknown execution, with Mission descriptions, without terminal history (22.082167ms)
+✔ readable state distinguishes Park, paused, stopped and uncertain; forms do not request raw IDs (4.510125ms)
+✔ recipient and model choices follow project ownership, actual Run state and same-role enabled routes (1.130042ms)
+✔ resume cannot present paused or unknown executions as stopped; handoff and inactive projects stay explicit (3.104709ms)
+✔ Fact selectors exclude scope and unrelated task proof, preserving actual target Fact IDs (3.563208ms)
+✔ operation error preserves form and draft; successful target verification uses the selected real evidence (1.79825ms)
+✔ unresolved resume is not reported as success and a failed refresh retains a clearly marked old snapshot (0.888458ms)
+✔ evidence preview follows actual byte offsets and reports binary evidence rather than pretending it is text (0.963417ms)
+✔ messages preserve unsent content on error, clear it only after acceptance and never claim the model has read it (0.949583ms)
+✔ deep-linked Legion route loads model configuration as well as status (1.237917ms)
+✔ worker snapshot exposes effective four-role defaults without inventing an unlimited Mission cap (23.50325ms)
+✔ workspace Mission detail preserves Park and paused distinction instead of displaying stale Worker activity (0.7915ms)
+✔ audit completion cards use actual failed, paused, cancelled and unknown outcomes, never generic green success (1.519208ms)
+✔ Commander log UI consumes native offsets without creating a project Run or mixing global usage into project usage (1.060292ms)
+✔ project log partial failures are visible and slow old project reads cannot overwrite a newly selected project (1.044917ms)
+✔ retained audit evidence remains bounded, scoped, hash-labelled and explicitly reports read failures (0.860042ms)
+✔ settings keep the draft after revision conflict and explicit reload can be cancelled (0.905125ms)
+✔ Commander native read takes no write ownership, preserves paging and surfaces missing materialized sessions (189.263625ms)
+✔ native Run state notifications use the existing stream, remain truthful and do not duplicate durable audit rows (4.089208ms)
+✔ initial project loading cannot clear the loading state or selection of a user-selected Commander scope (13.714042ms)
+✔ human Goal acceptance selects a captured project evidence list, retains version checks and keeps rejected choices (22.44075ms)
+✔ Goal acceptance retains the captured Graph when the user switches task pages (1.037875ms)
+✔ TodoList is read-only in workspace project detail, not the Legion console (0.965792ms)
+✔ E7 native none Session deletion retains attachments/findings and exact hashes (697.107791ms)
+✔ E7 native zstd Session deletion retains attachments/findings and exact hashes (524.392291ms)
+✔ E7 CLI verifies backup reconstruction before reset and migrates configuration without losing credentials (1280.2805ms)
+✔ FTS5 source experience retains hash and Family Transfer stays an unverified target Hint until same-task proof (41.179666ms)
+✔ experience deletion updates FTS and cascades transfer provenance without blocking project deletion (24.284708ms)
+✔ native Fact tool rejects missing file paths and retains real file bytes immediately (531.054791ms)
+✔ tactics use a union of actual Run intervals rather than double-counting simultaneous squads (15.561333ms)
+✔ classification requires same-task confirmed evidence and persists its verdict (14.85825ms)
+✔ submission and ended budget phases do not spawn new Missions (7.371625ms)
+✔ instance close rejects live, pending and unknown task execution, then uses the actual SDK process (218.661458ms)
+✔ requested handoff waits for every tool result and the next Run receives STATE and predecessor (11.697792ms)
+✔ Scheduler automatically launches a fresh Run only after old relay execution has settled (14.2615ms)
+✔ an unconfirmed platform close retains the instance and reports the actual result (55.872417ms)
+✔ configured same-role model routes upgrade and downgrade via fresh Runs without changing capacity (36.176958ms)
+✔ Commander shares existing global capacity and releases it without reserving an extra slot (43.39275ms)
+✔ Commander shares existing route capacity and releases it without reserving an extra slot (31.7955ms)
+✖ shipped DSH host executes four Legion roles, HELP reply, shared FGS acceptance and native Commander resume (421.41475ms)
+✔ role tools retain General delegation boundaries and cannot turn messages into Facts (19.615875ms)
+✔ event wait wakes for durable messages and abort removes its listeners (7.76975ms)
+✔ native mailbox steers idle, injects running, and records admission separately from queueing (12.912833ms)
+✔ Commander completion holds the existing campaign claim until native flush/disposal (8.170125ms)
+✔ role/model routes survive configuration snapshots and reject unknown roles (80.589959ms)
+✔ a message queued while legion_wait is active wakes the tool even when mailbox runs first (8.351209ms)
+✔ uncertain native enqueue is retained and never automatically delivered twice (7.457375ms)
+✔ the first Commander board exposes existing Scope and Goal IDs even when creation delta has no node body (14.278625ms)
+✔ General squads inherit isolated execution and cannot weaken their parent profile (24.326292ms)
+✔ native current context meter triggers automatic compaction and a fresh Agent/Run with preserved summary (1083.626209ms)
+✔ Commander native automatic compaction rotates Session once and successor completes without recursive STATE growth (1114.237625ms)
+✔ native ownership recovery resumes only confirmed stopped Sessions and never replays unknown calls (525.938333ms)
+✔ Commander board details are lossless JSON at the native tool boundary (9.5495ms)
+✔ Commander wait returns a finish instruction rather than deadlocking its shared route (7.149375ms)
+✔ disabled Commander preset does not acquire the campaign or bypass native plugin availability (49.739ms)
+✔ Campaign is a singleton control record, not a Project; acknowledgements cannot skip delivery (13.786458ms)
+✔ role metadata persists; General may create exactly two same-task squads in its delegated Goal (18.743ms)
+✔ Park survives Run completion, prevents claim/spawn, and requires confirmed stop for reactivation (14.652083ms)
+✔ Scheduler wake does not claim a parked Step (34.266083ms)
+✔ handoff waits for old execution and creates a new Run on the same Step; resume is not handoff (18.658208ms)
+✔ unknown or pending tool results prevent automatic handoff/reactivation (30.80025ms)
+✔ HELP/REPORT remain durable messages, not confirmed Facts; foreign and closed actors are rejected (10.58075ms)
+✔ project evidence is readable with unchanged hash after producer Run/audit deletion (31.092667ms)
+✔ project evidence bounds reads, detects tampering, and rejects filesystem/credential escapes (10.24175ms)
+✔ project evidence directory symlink cannot publish outside Project (8.241334ms)
+✔ native project_evidence_read reads published evidence without producer lookup (13.64275ms)
+✔ evidence promotion is repeatable and reports missing sources without inventing proof (9.815125ms)
+✔ explicit tool result and referenced spill bytes survive promotion independently of Run audit (13.757666ms)
+✔ Campaign cursor, STATE and pending messages survive Store reopen (7.193541ms)
+✖ HTTP Step schema persists roles and Project artifact endpoint enforces bounded scoped reads (0.996875ms)
+✔ reset preflight retains nested Finding files, tools and Session attachments after fixture deletion (30.901083ms)
+✔ preflight reports running, paused, unknown and pending tools without stopping or deleting anything (12.447958ms)
+✔ missing or corrupt Finding/Session evidence stays explicit and never produces cleanup readiness (8.43825ms)
+✔ Session inventory failures, missing sessions, foreign workspace and concurrent changes block preflight (10.387834ms)
+✔ repeat promotion verifies spill children and detects loss even with an intact tool manifest (12.444417ms)
+✔ Finding attachments cannot import a foreign Session object through the shared DSH attachment store (10.705666ms)
+✔ preflight detects concurrent retained graph edits instead of certifying a stale scan (11.964375ms)
+✔ preflight rejects dangling retained graph edges and running Commander (15.268333ms)
+✔ preflight keeps HTTP/credential resources and blocks queued operations and live global-resource leases (18.207708ms)
+✔ binary evidence pages round-trip exact attachment bytes rather than lossy UTF-8 (17.103ms)
+✔ raw published evidence with tool provenance is not mistaken for a tool-result envelope (8.213583ms)
+✔ Commander reuses Graph memory across activations, isolated by Graph and Project; restart is empty (13.610459ms)
+✔ TodoStore owns snapshots rather than caller arrays (0.143167ms)
+✔ TodoWrite validates only the simple schema and existing Project/Graph boundary (3.9415ms)
+✔ Scout, General, Soldier and ordinary execution tools never register TodoWrite even if given a Store (16.752875ms)
+✔ both Commander modes get serial-chain doctrine without changing Worker missions (0.205792ms)
+✖ native DSH wake-ups retain TodoLists, wait for Facts after failure, and dispatch only the next serial stage (16041.401959ms)
+✖ project-detail HTTP snapshot reads current Graph TodoList from the Commander runtime without changing FGS (82.549625ms)
+✔ only the native llm-pi-ai adapter probes all three protocols and projects admitted screenshots (837.330333ms)
+✔ same model rotates across providers, deduplicates entries and keeps single routes unchanged (1.736333ms)
+✔ eligible failures switch before content, retaining billable usage and actual route audit (2.560542ms)
+✔ request errors, cancellation, partial text/reasoning/tools and plugin throws never replay (1.061125ms)
+✔ exhaustion attempts each same-model provider once and surfaces the last failure (0.414958ms)
+✔ cross-provider calls strip opaque replay state without mutating frozen requests (0.196041ms)
+✔ concurrent requests rotate without serializing model calls (3.395083ms)
+✔ native adapter rotates endpoints, fails over on 401, probes only the selected endpoint and reloads cleanly (430.161375ms)
+✔ polling settings disable rotation, control initial order and exclude unselected suppliers (3.899542ms)
+✔ local SFTP transport handles binary, empty, Unicode, no-clobber, listing and hashes (219.792542ms)
+✔ native MCP discovers and invokes a real stdio server; disposal unregisters tools and closes its process (316.202ms)
+✔ startup releases legacy Worker approval waits, not cancelled or human tasks (10.211042ms)
+✖ resource operations use real HTTP, keep global provenance and enforce existing ownership contracts (6.464625ms)
+✔ model and audit retain credentials, flags, bodies and URL parameters verbatim (23.058458ms)
+✔ Explore receives knowledge tools and plugin disabling blocks previously exposed tools (7.138875ms)
+✔ SSH and Chisel route validation reaches an unlisted target through SOCKS, not just its listener (92.355791ms)
+﹣ managed local Chisel server/client forwards to an HTTP fixture and invalidates on upstream close (0.175541ms) # SKIP
+✖ LLM polling API persists settings, validates members and tracks provider edits without changing secrets (0.943083ms)
+PROJECT_COMMANDERS_CONCURRENT=true; distinct_native_sessions=true; own_STATE=true; A_event_does_not_wake_B=true; global_slots=2; model=local-protocol-fixture
+✔ two real DSH Commander Sessions overlap and A events do not wake B (733.242833ms)
+✖ real API creates modes, three Graphs, scoped FGS, Commander hints and graph-filtered audit (0.936458ms)
+✖ schema-2 migration preserves IDs, references, Runs/audit and 1 Project Campaign history (67.567667ms)
+✖ schema-2 migration preserves IDs, references, Runs/audit and 2 Project Campaign history (47.701208ms)
+✖ migration failure rolls back graph registry, columns and Campaign rename atomically (34.982708ms)
+✔ Project Commanders have separate identity, STATE and delivered event boundaries (6.961084ms)
+✔ three Benchmark Graphs isolate nodes, references, Run, events and completion (13.120833ms)
+✔ General directly funds Soldier or General without Scout classification; scoped tools reject foreign Project (9.169291ms)
+✔ Benchmark classification, same-Graph squads and durable HELP/REPORT preserve existing role rules (9.871625ms)
+✔ three task Workers share Scheduler capacity concurrently and initial Hints stay graph-scoped (247.493208ms)
+✔ Commander yields its single Project slot and observes other Projects in global capacity (4.473208ms)
+✔ durable HELP is not Fact or execution-contract amendment (7.414917ms)
+✔ messages reject missing, foreign and stopped execution actors (3.410125ms)
+✔ concurrent Missions receive only explicitly addressed messages (3.641292ms)
+✔ queue admission and uncertainty stay distinct; admitted input never moves backwards (2.512542ms)
+✔ confirmed native unread input can be requeued; uncertain and admitted input cannot (2.447833ms)
+✔ raw messages retain content without turning delivery into acknowledgement (2.320291ms)
+✔ wait cancellation removes all event listeners and retains pending input (2.834875ms)
+✔ worker tools use durable messages and omit retired notify_explore (2.988584ms)
+✔ Commander respects Mission capacity and Worker cannot complete without confirmed Facts (13.747416ms)
+✔ Execute recovery guard and evidence_read retain real-path containment and producer integrity (14.327167ms)
+✖ Resource APIs, task polling and routing stay Project-scoped; accepted large results remain complete (0.778209ms)
+✔ aborted runs survive their project being deleted mid-flight (93.542917ms)
+✔ schema 2 rejects an old engine database instead of migrating it implicitly (6.902125ms)
+✔ Step and Goal selection uses the project-kind index (1.942916ms)
+✔ DSH shared notification scan drains more than 500 events without reading the graph (91.352834ms)
+✔ dispatch health and scheduling never load the full graph with 20,083 nodes (111.83825ms)
+✔ native shell captures output, cancels process trees and protects provider environment (417.868583ms)
+✔ authenticated secrets and revision conflicts preserve independent configuration copies (68.645ms)
+✔ shell retains stdout and stderr separately as well as the ordered full log (5.2065ms)
+✔ committed Step notices coalesce, rollbacks stay silent, and subscriptions are project scoped (188.769666ms)
+✔ Step scans use the scoped index and never parse unrelated FGS events (103.337583ms)
+✔ legacy task declarations are validated at compatibility boundaries but not stored in new Steps (10.354792ms)
+✔ legacy tool declarations do not revise a running contract; real replacements retain lifecycle checks (4.994959ms)
+✔ Commander Mission schemas do not select plugins and preserve native FGS routing (5.999583ms)
+✖ v2 and legacy HTTP contracts ignore valid legacy declarations and preserve input validation (0.713708ms)
+✔ legacy tool declarations do not rewrite Step contracts or restart unconfirmed work (17.103041ms)
+✔ retired terminal Resources stay readable with their persisted state but cannot be created or dispatched (7.308916ms)
+✔ Commander owns platform lifecycle and paid hints require explicit confirmation (139.58225ms)
+✔ Soldier keeps list/submission but cannot start or close shared instances; SDK submission never publishes a Fact (42.7205ms)
+✔ Explore has native read-only list and preserves SDK business errors before target validation (31.186416ms)
+✔ TSecBench CLI preserves inherited proxy settings (143.669208ms)
+✔ TSecBench uses the configured Python even when python3 is absent from Worker PATH (50.379959ms)
+✔ Commander is Project-owned, not an independent Decide Run (6.323292ms)
+✔ new deltas are per Project and only contiguous delivered cursors may be acknowledged (3.119666ms)
+✔ events arriving after the processed boundary remain pending for the next command cycle (2.878625ms)
+✔ reading deltas is not processing and stopped command retains its previous acknowledgement (2.024ms)
+✔ hint remains unverified but reaches Commander through graph delivery (2.354291ms)
+✔ observation remains unverified but reaches Commander through graph delivery (2.105208ms)
+✔ Findings and evidence edits reach Commander without recursively executing Worker planners (2.779333ms)
+✔ bounded pages cannot silently skip unread history (3.53725ms)
+ℹ tests 284
+ℹ suites 0
+ℹ pass 252
+ℹ fail 31
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 271723.510875
+
+✖ failing tests:
+
+test at test/capabilities.test.ts:10:1
+✖ capabilities keep independent copies, nested entries, revisions and MCP configurations (4.395917ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/capabilities.test.ts:13:24)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+
+test at test/capability-verbs.test.ts:12:1
+✖ verb registry: channel reuse, selection rules, unattended execution without Step tool permissions (8.77825ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/capability-verbs.test.ts:25:24)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at test/capability-verbs.test.ts:144:1
+✖ resource tools: agent registration with secrets becomes a visible, dispatchable channel (6.797625ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/capability-verbs.test.ts:157:24)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test/config-api.test.ts:23:1
+✖ worker mutations probe the live model before commit and retain the old snapshot contract (33.541041ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/config-api.test.ts:35:24)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test/current-fgs.test.ts:152:1
+✖ HTTP maintenance, current snapshots and delta endpoints never expose deleted source bodies (0.851625ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/current-fgs.test.ts:153:89)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test/deletion.test.ts:8:1
+✖ single-use deletion removes only project data and keeps durable shared resources (2.846792ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/deletion.test.ts:9:88)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+
+test at test/deletion.test.ts:34:1
+✖ project ids reuse the smallest free number and deletion leaves no counter or session residue (0.885ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/deletion.test.ts:35:91)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at test/dsh-loop.test.ts:11:1
+✖ native isolated Soldier pauses and resumes the SAME Session without replaying a confirmed side effect (31877.807666ms)
+  Error: Native fixture did not settle: file:///Users/lxy/Downloads/RedTrace/scripts/run-redtrace-node.mjs:11
+  if (major !== 24 || minor < 15) throw new Error('Node 24.15+ required')
+                                        ^
+  
+  Error: Node 24.15+ required
+      at file:///Users/lxy/Downloads/RedTrace/scripts/run-redtrace-node.mjs:11:39
+      at ModuleJob.run (node:internal/modules/esm/module_job:569:25)
+      at async node:internal/modules/esm/loader:650:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+  
+  Node.js v26.5.0
+  
+      at until (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/dsh-loop.test.ts:11:2834)
+      at async TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/dsh-loop.test.ts:11:2881)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at test/dsh-update.test.ts:55:1
+✖ DSH update API protects active runs, rejects cross-origin calls and keeps scheduling paused until restart (11.831041ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/dsh-update.test.ts:74:24)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test/execution-safety.test.ts:211:1
+✖ beacon ingress mounts plugins, serializes tasks and rejects stale attempts (0.81075ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/execution-safety.test.ts:213:24)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test/fgs.test.ts:160:1
+✖ detail bindings tolerate a removed record while Alpine destroys the old node template (11.760084ms)
+  AssertionError [ERR_ASSERTION]: Got unwanted exception: fgsDocumentLoaded && fgsSelection?.type === 'fact' && !fgsSelectionRecord()?.doc
+  Actual message: "fgsDocumentLoaded is not defined"
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/fgs.test.ts:170:12)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: evalmachine.<anonymous>:1
+    fgsDocumentLoaded && fgsSelection?.type === 'fact' && !fgsSelectionRecord()?.doc
+    ^
+    
+    ReferenceError: fgsDocumentLoaded is not defined
+        at evalmachine.<anonymous>:1:1
+        at Script.runInContext (node:vm:150:12)
+        at Object.runInContext (node:vm:302:6)
+        at file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/fgs.test.ts:170:34
+        at getActual (node:assert:580:5)
+        at strict.doesNotThrow (node:assert:748:32)
+        at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/fgs.test.ts:170:12)
+        at Test.runInAsyncScope (node:async_hooks:226:14)
+        at Test.run (node:internal/test_runner/test:1382:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:960:18),
+    expected: undefined,
+    operator: 'doesNotThrow',
+    diff: 'simple'
+  }
+
+test at test/harness-boundaries.test.ts:27:1
+✖ missing TCP transport fails explicitly and persisted route metadata is not fresh verification (0.9775ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/harness-boundaries.test.ts:28:71)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at test/harness-boundaries.test.ts:45:1
+✖ remote command has no implicit probe and explicit session probe remains available (5.113958ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/harness-boundaries.test.ts:54:24)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test/http.test.ts:8:1
+✖ HTTP graph compatibility and atomic conclude survive reopening the database (1.116959ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/http.test.ts:10:22)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+
+test at test/http.test.ts:63:1
+✖ standalone mock executes an explicit Soldier Mission but never impersonates Commander acceptance (51.014334ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/http.test.ts:63:370)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at test/knowledge-offline.test.ts:39:1
+✖ offline CVE ranges, deduplicated real source paths, pagination and bounded PoC reads (fixtures) (4.091959ms)
+  Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+      at Object.spawnSync (node:internal/child_process:1144:20)
+      at spawnSync (node:child_process:928:24)
+      at execFileSync (node:child_process:971:15)
+      at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:40:13)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    path: '/Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    spawnargs: [ '/Users/lxy/Downloads/RedTrace/tools/knowledge/knowledge.py', 'build', '--root', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-eSRXlE/data', '--nuclei', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-eSRXlE/nuclei', '--exploitdb', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-eSRXlE/edb', '--nvd', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-eSRXlE/nvd', '--allow-partial' ],
+    error: Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+        at Object.spawnSync (node:internal/child_process:1144:20)
+        at spawnSync (node:child_process:928:24)
+        at execFileSync (node:child_process:971:15)
+        at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+        at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:40:13)
+        at Test.runInAsyncScope (node:async_hooks:226:14)
+        at Test.run (node:internal/test_runner/test:1382:25)
+        at Test.start (node:internal/test_runner/test:1242:17)
+        at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17),
+    status: null,
+    signal: null,
+    output: null,
+    pid: 0,
+    stdout: undefined,
+    stderr: undefined
+  }
+
+test at test/knowledge-offline.test.ts:63:1
+✖ model-facing CVE/component/version queries need no target evidence and never subscribe to Fact events (fixtures) (4.123167ms)
+  Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+      at Object.spawnSync (node:internal/child_process:1144:20)
+      at spawnSync (node:child_process:928:24)
+      at execFileSync (node:child_process:971:15)
+      at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:64:13)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12) {
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    path: '/Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    spawnargs: [ '/Users/lxy/Downloads/RedTrace/tools/knowledge/knowledge.py', 'build', '--root', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-h78nUh/data', '--nuclei', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-h78nUh/nuclei', '--exploitdb', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-h78nUh/edb', '--nvd', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-h78nUh/nvd', '--allow-partial' ],
+    error: Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+        at Object.spawnSync (node:internal/child_process:1144:20)
+        at spawnSync (node:child_process:928:24)
+        at execFileSync (node:child_process:971:15)
+        at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+        at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:64:13)
+        at Test.runInAsyncScope (node:async_hooks:226:14)
+        at Test.run (node:internal/test_runner/test:1382:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+        at Test.postRun (node:internal/test_runner/test:1522:19)
+        at Test.run (node:internal/test_runner/test:1447:12),
+    status: null,
+    signal: null,
+    output: null,
+    pid: 0,
+    stdout: undefined,
+    stderr: undefined
+  }
+
+test at test/knowledge-offline.test.ts:88:1
+✖ index corruption and missing data return explicit local diagnostics, without online repair (fixtures) (2.558042ms)
+  Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+      at Object.spawnSync (node:internal/child_process:1144:20)
+      at spawnSync (node:child_process:928:24)
+      at execFileSync (node:child_process:971:15)
+      at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:89:13)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12) {
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    path: '/Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    spawnargs: [ '/Users/lxy/Downloads/RedTrace/tools/knowledge/knowledge.py', 'build', '--root', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-QER32x/data', '--nuclei', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-QER32x/nuclei', '--exploitdb', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-QER32x/edb', '--nvd', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-QER32x/nvd', '--allow-partial' ],
+    error: Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+        at Object.spawnSync (node:internal/child_process:1144:20)
+        at spawnSync (node:child_process:928:24)
+        at execFileSync (node:child_process:971:15)
+        at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+        at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:89:13)
+        at Test.runInAsyncScope (node:async_hooks:226:14)
+        at Test.run (node:internal/test_runner/test:1382:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+        at Test.postRun (node:internal/test_runner/test:1522:19)
+        at Test.run (node:internal/test_runner/test:1447:12),
+    status: null,
+    signal: null,
+    output: null,
+    pid: 0,
+    stdout: undefined,
+    stderr: undefined
+  }
+
+test at test/knowledge-offline.test.ts:102:1
+✖ offline package export/import preserves callable CVE records and source hashes (fixtures) (2.458583ms)
+  Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+      at Object.spawnSync (node:internal/child_process:1144:20)
+      at spawnSync (node:child_process:928:24)
+      at execFileSync (node:child_process:971:15)
+      at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:103:13)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12) {
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    path: '/Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python',
+    spawnargs: [ '/Users/lxy/Downloads/RedTrace/tools/knowledge/knowledge.py', 'build', '--root', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-vqtBFO/data', '--nuclei', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-vqtBFO/nuclei', '--exploitdb', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-vqtBFO/edb', '--nvd', '/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-offline-unit-vqtBFO/nvd', '--allow-partial' ],
+    error: Error: spawnSync /Users/lxy/Downloads/RedTrace/.redtrace/runtime/knowledge/bin/python ENOENT
+        at Object.spawnSync (node:internal/child_process:1144:20)
+        at spawnSync (node:child_process:928:24)
+        at execFileSync (node:child_process:971:15)
+        at fixture (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:30:3)
+        at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/knowledge-offline.test.ts:103:13)
+        at Test.runInAsyncScope (node:async_hooks:226:14)
+        at Test.run (node:internal/test_runner/test:1382:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+        at Test.postRun (node:internal/test_runner/test:1522:19)
+        at Test.run (node:internal/test_runner/test:1447:12),
+    status: null,
+    signal: null,
+    output: null,
+    pid: 0,
+    stdout: undefined,
+    stderr: undefined
+  }
+
+test at test/legion-runtime.test.ts:22:1
+✖ shipped DSH host executes four Legion roles, HELP reply, shared FGS acceptance and native Commander resume (421.41475ms)
+  Error: Command failed: /opt/homebrew/Cellar/node/26.5.0_1/bin/node /Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-runtime.fixture.mjs
+  file:///Users/lxy/Downloads/RedTrace/scripts/run-redtrace-node.mjs:11
+  if (major !== 24 || minor < 15) throw new Error('Node 24.15+ required')
+                                        ^
+  
+  Error: Node 24.15+ required
+      at file:///Users/lxy/Downloads/RedTrace/scripts/run-redtrace-node.mjs:11:39
+      at ModuleJob.run (node:internal/modules/esm/module_job:569:25)
+      at async node:internal/modules/esm/loader:650:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+  
+  Node.js v26.5.0
+  
+  file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-runtime.fixture.mjs:95
+    while (Date.now()<deadline) { try { if ((await fetch(api+'/runtime/config')).ok) break } catch {} if(ended)throw new Error(logs); await delay(50) }
+                                                                                                                     ^
+  
+  Error: file:///Users/lxy/Downloads/RedTrace/scripts/run-redtrace-node.mjs:11
+  if (major !== 24 || minor < 15) throw new Error('Node 24.15+ required')
+                                        ^
+  
+  Error: Node 24.15+ required
+      at file:///Users/lxy/Downloads/RedTrace/scripts/run-redtrace-node.mjs:11:39
+      at ModuleJob.run (node:internal/modules/esm/module_job:569:25)
+      at async node:internal/modules/esm/loader:650:26
+      at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+  
+  Node.js v26.5.0
+  
+      at file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-runtime.fixture.mjs:95:116
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+  
+  Node.js v26.5.0
+  
+      at genericNodeError (node:internal/errors:999:15)
+      at wrappedFn (node:internal/errors:544:14)
+      at ChildProcess.exithandler (node:child_process:417:12)
+      at ChildProcess.emit (node:events:509:20)
+      at maybeClose (node:internal/child_process:1125:16)
+      at ChildProcess._handle.onexit (node:internal/child_process:305:5) {
+    code: 1,
+    killed: false,
+    signal: null,
+    cmd: '/opt/homebrew/Cellar/node/26.5.0_1/bin/node /Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-runtime.fixture.mjs',
+    stdout: '',
+    stderr: "file:///Users/lxy/Downloads/RedTrace/scripts/run-redtrace-node.mjs:11\nif (major !== 24 || minor < 15) throw new Error('Node 24.15+ required')\n                                      ^\n\nError: Node 24.15+ required\n    at file:///Users/lxy/Downloads/RedTrace/scripts/run-redtrace-node.mjs:11:39\n    at ModuleJob.run (node:internal/modules/esm/module_job:569:25)\n    at async node:internal/modules/esm/loader:650:26\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n\nNode.js v26.5.0\n\nfile:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-runtime.fixture.mjs:95\n  while (Date.now()<deadline) { try { if ((await fetch(api+'/runtime/config')).ok) break } catch {} if(ended)throw new Error(logs); await delay(50) }\n                                                                                                                   ^\n\nError: file:///Users/lxy/Downloads/RedTrace/scripts/run-redtrace-node.mjs:11\nif (major !== 24 || minor < 15) throw new Error('Node 24.15+ required')\n                                      ^\n\nError: Node 24.15+ required\n    at file:///Users/lxy/Downloads/RedTrace/scripts/run-redtrace-node.mjs:11:39\n    at ModuleJob.run (node:internal/modules/esm/module_job:569:25)\n    at async node:internal/modules/esm/loader:650:26\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\n\nNode.js v26.5.0\n\n    at file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-runtime.fixture.mjs:95:116\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n\nNode.js v26.5.0\n"
+  }
+
+test at test/legion-state.test.ts:232:1
+✖ HTTP Step schema persists roles and Project artifact endpoint enforces bounded scoped reads (0.996875ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-state.test.ts:234:24)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test/legion-todos.test.ts:95:1
+✖ native DSH wake-ups retain TodoLists, wait for Facts after failure, and dispatch only the next serial stage (16041.401959ms)
+  Error: Command failed: /opt/homebrew/Cellar/node/26.5.0_1/bin/node /Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-todos.fixture.mjs
+  file:///Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/core/agent-loop/lib/index.js:938
+  					if (action?.kind !== "retry") throw new LlmError(finish.failure.message, finish.failure.code, finish.failure);
+  					                                    ^
+  
+  LlmError: 500 AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert(entry?.evidence.length)
+  
+      at ReactLoopAgent.step (file:///Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/core/agent-loop/lib/index.js:938:42)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async ReactLoopAgent.turn (file:///Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/core/agent-loop/lib/index.js:767:23)
+      at async ReactLoopAgent.kick (file:///Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/core/agent-loop/lib/index.js:653:11) {
+    code: 'SERVER',
+    failure: {
+      message: '500 AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:\n' +
+        '\n' +
+        '  assert(entry?.evidence.length)\n',
+      code: 'SERVER'
+    }
+  }
+  
+  Node.js v26.5.0
+  
+      at genericNodeError (node:internal/errors:999:15)
+      at wrappedFn (node:internal/errors:544:14)
+      at ChildProcess.exithandler (node:child_process:417:12)
+      at ChildProcess.emit (node:events:509:20)
+      at maybeClose (node:internal/child_process:1125:16)
+      at ChildProcess._handle.onexit (node:internal/child_process:305:5) {
+    code: 1,
+    killed: false,
+    signal: null,
+    cmd: '/opt/homebrew/Cellar/node/26.5.0_1/bin/node /Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-todos.fixture.mjs',
+    stdout: '',
+    stderr: `file:///Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/core/agent-loop/lib/index.js:938\n\t\t\t\t\tif (action?.kind !== "retry") throw new LlmError(finish.failure.message, finish.failure.code, finish.failure);\n\t\t\t\t\t                                    ^\n\nLlmError: 500 AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:\n\n  assert(entry?.evidence.length)\n\n    at ReactLoopAgent.step (file:///Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/core/agent-loop/lib/index.js:938:42)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async ReactLoopAgent.turn (file:///Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/core/agent-loop/lib/index.js:767:23)\n    at async ReactLoopAgent.kick (file:///Users/lxy/Downloads/RedTrace/vendor/deepseek-harness/packages/core/agent-loop/lib/index.js:653:11) {\n  code: 'SERVER',\n  failure: {\n    message: '500 AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:\\n' +\n      '\\n' +\n      '  assert(entry?.evidence.length)\\n',\n    code: 'SERVER'\n  }\n}\n\nNode.js v26.5.0\n`
+  }
+
+test at test/legion-todos.test.ts:105:1
+✖ project-detail HTTP snapshot reads current Graph TodoList from the Commander runtime without changing FGS (82.549625ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/legion-todos.test.ts:108:85)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test/operations.test.ts:13:1
+✖ resource operations use real HTTP, keep global provenance and enforce existing ownership contracts (6.464625ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/operations.test.ts:25:24)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at test/polling-config.test.ts:8:1
+✖ LLM polling API persists settings, validates members and tracks provider edits without changing secrets (0.943083ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/polling-config.test.ts:10:24)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+
+test at test/project-graph-api.test.ts:8:1
+✖ real API creates modes, three Graphs, scoped FGS, Commander hints and graph-filtered audit (0.936458ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/project-graph-api.test.ts:9:80)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+
+test at test/project-graph-migration.test.ts:12:26
+✖ schema-2 migration preserves IDs, references, Runs/audit and 1 Project Campaign history (67.567667ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'command-efc2dc8a-4d86-4c2e-b8f1-b9629828238f'
+  - 'legacy-session'
+  
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/project-graph-migration.test.ts:23:91)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'command-efc2dc8a-4d86-4c2e-b8f1-b9629828238f',
+    expected: 'legacy-session',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/project-graph-migration.test.ts:12:26
+✖ schema-2 migration preserves IDs, references, Runs/audit and 2 Project Campaign history (47.701208ms)
+  Error: no such table: campaign_archive
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/project-graph-migration.test.ts:24:49)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'ERR_SQLITE_ERROR',
+    errcode: 1,
+    errstr: 'SQL logic error'
+  }
+
+test at test/project-graph-migration.test.ts:29:1
+✖ migration failure rolls back graph registry, columns and Campaign rename atomically (34.982708ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + [Object: null prototype] {
+  +   '1': 1
+  + }
+  - undefined
+  
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/project-graph-migration.test.ts:34:67)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { '1': 1 },
+    expected: undefined,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/runtime-contract.test.ts:49:1
+✖ Resource APIs, task polling and routing stay Project-scoped; accepted large results remain complete (0.778209ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/runtime-contract.test.ts:50:86)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test/task-plugins.test.ts:57:1
+✖ v2 and legacy HTTP contracts ignore valid legacy declarations and preserve input validation (0.713708ms)
+  Error: RedTrace requires Node 24.15 or newer in the Node 24 LTS line
+      at createEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:33:41)
+      at serveEngine (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/index.ts:102:24)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/task-plugins.test.ts:59:24)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)

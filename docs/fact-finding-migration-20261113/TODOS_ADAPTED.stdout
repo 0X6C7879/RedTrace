@@ -1,0 +1,16 @@
+✔ Commander reuses Graph memory across activations, isolated by Graph and Project; restart is empty (59.721083ms)
+✔ TodoStore owns snapshots rather than caller arrays (0.156458ms)
+✔ TodoWrite validates only the simple schema and existing Project/Graph boundary (6.143375ms)
+✔ Scout, General, Soldier and ordinary execution tools never register TodoWrite even if given a Store (38.940875ms)
+✔ both Commander modes get serial-chain doctrine without changing Worker missions (0.236084ms)
+TODOS_NATIVE_DSH=true; wakes=5; fresh_session_memory=true; resumed_session_memory=true; failure_does_not_advance=true; Step_done_without_required_Fact_does_not_advance=true; Fact_advances_next_stage=true; no_duplicate_dispatch=true; independent_parallel=true; model=local-protocol-fixture
+✔ native DSH wake-ups retain TodoLists, wait for Facts after failure, and dispatch only the next serial stage (1070.476459ms)
+✔ project-detail HTTP snapshot reads current Graph TodoList from the Commander runtime without changing FGS (169.47625ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2037.352959

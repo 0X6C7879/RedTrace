@@ -1,18 +1,20 @@
 import type { Graph } from './types.ts'
+import { foldedFactIds } from './graph-content.ts'
 
 export type FgsNodeType = 'scope' | 'fact' | 'finding' | 'subgoal' | 'goal' | 'step'
-export interface FgsNode { id: string; nodeType: FgsNodeType; label: string; description: string; status?: string; worker?: string | null; activeSteps?: number }
+export interface FgsNode { id: string; nodeType: FgsNodeType; label: string; description: string; status?: string; worker?: string | null; activeSteps?: number; folded?: boolean; factCount?: number }
 export interface FgsEdge { id: string; source: string; target: string; relation: 'scope' | 'derived' | 'supports' | 'pursues' | 'evidence' | 'subgoal' | 'executes'; stepIds: string[] }
 const ACTIVE_STEP_STATUSES = ['pending', 'running', 'paused', 'blocked']
 
 /** A lossless projection of recorded relationships, not a second graph database. */
 export function projectFgs(graph: Graph) {
   const origin=graph.graph?.originId??'origin'
+  const folded = foldedFactIds(graph)
   const nodes: FgsNode[] = [
-    ...graph.facts.map(f => ({ id: f.id, nodeType: f.id === origin ? 'scope' as const : 'fact' as const, label: f.description, description: f.description })),
+    ...graph.facts.map(f => ({ id: f.id, nodeType: f.id === origin ? 'scope' as const : 'fact' as const, label: f.title, description: f.title, folded: folded.has(f.id) })),
     ...graph.goals.map(g => ({ id: g.id, nodeType: g.parentId ? 'subgoal' as const : 'goal' as const, label: g.description, description: g.description, status: g.status,
       activeSteps: graph.steps.filter(s => !s.deleted && s.goalId === g.id && ACTIVE_STEP_STATUSES.includes(s.status)).length })),
-    ...graph.findings.map(f => ({ id: f.id, nodeType: 'finding' as const, label: f.title, description: f.description })),
+    ...graph.findings.map(f => ({ id: f.id, nodeType: 'finding' as const, label: f.title, description: f.title, factCount: f.factIds.length })),
   ]
   const ids = new Set(nodes.map(n => n.id)), edges = new Map<string, FgsEdge>(), missing = new Set<string>()
   const add = (source: string, target: string, relation: FgsEdge['relation'], stepId?: string) => {

@@ -1,0 +1,28 @@
+{
+  "url": "http://127.0.0.1:61421/#/projects/proj_001/graphs/main-proj_001",
+  "browser": "Codex built-in IAB",
+  "pageTitle": "RedTrace",
+  "checks": {
+    "identity": true,
+    "notBlank": true,
+    "noOverlay": true,
+    "findingTitleOnly": true,
+    "factCount": 2,
+    "findingSummaryExpanded": true,
+    "linkedFactSummaries": true,
+    "factDocEvidenceOnDemand": true,
+    "independentMarkdownReport": true,
+    "downloadedOriginalArtifact": true,
+    "consoleErrors": 0
+  },
+  "warnings": [
+    "Existing bundled Tailwind browser build warns about production usage"
+  ],
+  "screenshots": [
+    "/Users/lxy/Downloads/RedTrace/docs/fact-finding-migration-20261113/UI_FINDING.png",
+    "/Users/lxy/Downloads/RedTrace/docs/fact-finding-migration-20261113/UI_REPORT.png"
+  ],
+  "download": "/Users/lxy/Downloads/RedTrace/docs/fact-finding-migration-20261113/REPORT_FIXTURE.md",
+  "mobileTested": false,
+  "fixtureOnly": true
+}

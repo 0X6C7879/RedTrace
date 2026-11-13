@@ -18,6 +18,8 @@ import { httpTools } from './http-tools.ts'
 import { Check } from 'typebox/value'
 import { HttpError } from './types.ts'
 import { evidenceChangeSchema, goalUpdateSchema, stepUpdateSchema } from './graph-contracts.ts'
+import { nodeContent } from './graph-content.ts'
+import { reporterTools } from './reporter.ts'
 
 const json = (value: unknown): Json => JSON.parse(JSON.stringify(value))
 const result = (value: unknown, terminate = false): AgentToolResult<unknown> => ({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value, ...(terminate ? { terminate: true } : {}) })
@@ -38,21 +40,22 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   const installRoot = config.workspaceRoot ? path.dirname(config.workspaceRoot) : undefined
   const step = run.stepId ? store.node<Step>(run.projectId, run.stepId, 'step') : undefined
   const kinds = ['fact', 'goal', 'step', 'finding', 'hint', 'observation'] as const
-  const readGraph = tool('read_graph', 'Read current project state or a current node by ID. Merged sources and deleted evidence no longer exist. SQL pagination is bounded. Hints and observations are unverified.', Type.Object({ id: Type.Optional(Type.String()), offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), kinds: Type.Optional(Type.Array(Type.Union(kinds.map(k => Type.Literal(k))), { uniqueItems: true })) }, { additionalProperties: false }), async args => {
-    if (args.id) return { ...store.node(run.projectId, args.id), planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id) }
+  const readGraph = tool('read_graph', 'Sapper graph/show/doc: without id read only titles, folding supporting Facts under Findings except active Step dependencies. With id read a summary and linked Fact summaries; detail=doc returns full document/evidence references for project_evidence_read. Hints and observations are unverified. SQL pagination is bounded.', Type.Object({ id: Type.Optional(Type.String()), detail: Type.Optional(Type.Union([Type.Literal('summary'), Type.Literal('doc')])), offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), kinds: Type.Optional(Type.Array(Type.Union(kinds.map(k => Type.Literal(k))), { uniqueItems: true })) }, { additionalProperties: false }), async args => {
+    if (args.id) return { ...store.readNode(run.projectId, args.id, args.detail), planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id) }
     const offset = args.offset ?? 0, limit = args.limit ?? 100, selected = new Set(args.kinds ?? kinds)
     const project = store.project(run.projectId), page: Record<string, unknown> = { project, graph:run.graphId?store.projectGraph(run.projectId,run.graphId):null, facts: [], goals: [], steps: [], findings: [], hints: [], observations: [] }, nextOffsets: Record<string, number | null> = {}
     for (const kind of kinds) {
       if (!selected.has(kind)) continue
-      page[kind === 'fact' ? 'facts' : kind === 'goal' ? 'goals' : kind === 'step' ? 'steps' : kind === 'finding' ? 'findings' : `${kind}s`] = store.nodes(run.projectId, [kind], { offset, limit })
-      const total = store.nodeCount(run.projectId, kind)
+      page[kind === 'fact' ? 'facts' : kind === 'goal' ? 'goals' : kind === 'step' ? 'steps' : kind === 'finding' ? 'findings' : `${kind}s`] = store.nodes(run.projectId, [kind], { offset, limit, context: true }).map(node => nodeContent(node))
+      const total = store.nodeCount(run.projectId, kind, true)
       nextOffsets[kind] = offset + limit < total ? offset + limit : null
     }
     const remaining = Object.values(nextOffsets).filter((value): value is number => value !== null)
     return { ...page, planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id), nextOffset: remaining.length ? Math.max(...remaining) : null, nextOffsets }
   })
   const refs = Type.Array(Type.String())
-  const tools: AgentTool[] = [readGraph, ...(step?.role ? legionTools(store, run.id, run.projectId, maxSteps(), finish, config) : [])]
+  const reporting = step?.role === 'reporter'
+  const tools: AgentTool[] = [readGraph, ...(!reporting && step?.role ? legionTools(store, run.id, run.projectId, maxSteps(), finish, config) : [])]
   tools.push(tool('project_evidence_read', 'Read hash-verified Project evidence independently of the producer Run or Session. Artifact IDs are Project-scoped. Binary pages return encoding=base64; decode content accordingly.', Type.Object({ artifact_id: Type.String({ pattern: '^artifact-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), args => new ProjectEvidence(store, config.workspaceRoot).read(run.projectId, args.artifact_id, args.offset, args.length)))
   tools.push(tool('read_graph_delta', 'Read a bounded page of change metadata and current surviving nodes. Merged/deleted IDs have no historical body. Continue with cursor until hasMore is false. Reading does not acknowledge processing.', Type.Object({ after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), args => ({ ...store.graphDelta(run.projectId, args.after ?? store.run(run.id).deliveredGraphCursor ?? 0, args.limit ?? 100, run.id), planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id) })))
   tools.push({ name: 'evidence_read', label: 'evidence_read', description: 'Read at most 7.6 KiB from a large tool result by byte offset, 1-based line, or keyword. Artifacts are scoped to this Project; pass run_id for another producer Run; request the next bounded slice when needed.', parameters: Type.Object({ run_id: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })), id: Type.String({ pattern: '^ev-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), line: Type.Optional(Type.Integer({ minimum: 1 })), query: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), executionMode: 'sequential', execute: async (_toolId: string, args: { run_id?: string; id: string; offset?: number; line?: number; query?: string; length?: number }) => {
@@ -84,7 +87,8 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     const content = `Evidence ${args.id} | byte ${offset}-${offset + chunk.length}/${bytes.length} | nextOffset=${nextOffset ?? 'none'}\n${chunk.toString('utf8')}`
     return { content: [{ type: 'text', text: content }], details: { id: args.id, offset, bytes: chunk.length, totalBytes: bytes.length, nextOffset } }
   } } as unknown as AgentTool)
-  {
+  tools.push(...reporterTools({ ...context, store }, finish).filter(t => reporting || t.name === 'read_execution'))
+  if (!reporting) {
 
     tools.push(tool('sync_step', 'Adopt the latest Step contract at a safe boundary. Read current planVersion first. Returns goals and active dependencies. Old call trees remain blocked; generate your next action from this contract.', Type.Object({ planVersion: Type.Integer({ minimum: 1 }) }), args => store.syncStep(run.id, args.planVersion)))
     tools.push(...httpTools(context))
@@ -97,8 +101,16 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
       )
     }
     tools.push(
-      tool('submit_fact', 'Publish a new decision-relevant, evidence-backed conclusion. An optional path MUST be an existing regular file in the Project cwd; file bytes are retained immediately. For graph/tool observations without a file, omit path and describe the observed result, never put a node ID in path. Consolidate related observations, not startup/status or duplicate Facts. Urgent goal proof, cross-Step prerequisites and real blockers must not wait.', Type.Object({ description: Type.String(), evidence: Type.Array(Type.Object({ description: Type.String(), path: Type.Optional(Type.String()) })) }), args => { const evidence = args.evidence.map(source => source.path ? { artifactId: new ProjectEvidence(store, config.workspaceRoot).promoteFile(run.projectId, {...source,runId:run.id},run.workspaceRoot).id, description: source.description } : source); return store.addFact(run.projectId, args.description, { runId: run.id, evidence, creator: worker.name }) }),
-      tool('submit_finding', 'Record a deliverable supported by confirmed facts. New Findings reach Commander through FGS deltas.', Type.Object({ title: Type.String(), description: Type.String(), type: Type.Optional(Type.String()), factIds: refs }), args => store.addFinding(run.projectId, { ...args, creator: worker.name, runId: run.id })),
+      tool('submit_fact', 'Publish an incremental confirmed Fact: short title, one-sentence description, optional detailed Markdown doc with exact commands/output, evidence and constraints. Existing file paths are preserved immediately; never put a node ID in path. Keep Artifact/Run/Tool Call provenance. Urgent goal proof, cross-Step prerequisites and real blockers must not wait.', Type.Object({ title: Type.String({ minLength: 1 }), description: Type.String(), doc: Type.Optional(Type.String()), evidence: Type.Array(Type.Object({ description: Type.String(), path: Type.Optional(Type.String()), artifactId: Type.Optional(Type.String()), runId: Type.Optional(Type.String()), toolCallId: Type.Optional(Type.String()) })) }), args => {
+        const storage = new ProjectEvidence(store, config.workspaceRoot)
+        const evidence = args.evidence.map(source => {
+          if (source.artifactId) storage.read(run.projectId, source.artifactId)
+          return source.path ? { ...source, artifactId: storage.promoteFile(run.projectId, { ...source, runId: run.id }, run.workspaceRoot).id, runId: run.id } : source
+        })
+        const doc = args.doc ? { artifactId: storage.publish(run.projectId, Buffer.from(args.doc), { description: args.title+' — doc', runId: run.id }).id, description: args.title+' — doc', runId: run.id } : undefined
+        return store.addFact(run.projectId, args.description, { title: args.title, doc, runId: run.id, evidence, creator: worker.name })
+      }),
+      tool('submit_finding', 'ARTEX report_finding: register only a vulnerability actually triggered and verified in this target, never version/CVE matches or guesses. title=name, type=vulnclass, description=summary; severity and affected assetIds plus supporting factIds. A separate Reporter Session writes the report; do not write it during Explore. New Findings reach Commander through FGS deltas.', Type.Object({ title: Type.String(), description: Type.String(), type: Type.String(), severity: Type.Union(['critical','high','medium','low'].map(v => Type.Literal(v))), assetIds: Type.Array(Type.String()), factIds: refs }), args => store.addFinding(run.projectId, { ...args, creator: worker.name, runId: run.id })),
       tool('finish_step', step?.bootstrap
         ? 'Finish this Soldier initial Mission only after publishing a confirmed Fact; Commander owns Goal acceptance.'
         : 'Finish this Step only after explicitly submitting at least one confirmed, evidence-backed Fact. Consolidate the result, including verified failures or blockers, then call finish_step; a text summary alone does not complete the Step.', Type.Object({ summary: Type.String() }), args => {
@@ -108,7 +120,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
         }, true),
     )
   }
-  if (run.activity === 'execute') tools.push(...knowledgeTools(evidenceRoot, context))
+  if (!reporting) tools.push(...knowledgeTools(evidenceRoot, context))
   return tools.map(t => ({ ...t, execute: async (...args) => {
     if (!Check(t.parameters, args[1])) throw new HttpError(422, 'Invalid tool arguments')
     if (!efficiencyToolAvailable(context, t.name)) throw new Error('Efficiency tool plugin is disabled')
@@ -129,7 +141,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
 export const activityPrompt = (_activity: 'decide' | 'execute', step?: Step) => legionMission(step?.role ?? 'soldier') + (step ? '\nAssigned Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'. Read and write only this Graph.' : '') + (step?.bootstrap ? '\nInitial Mission: establish evidence for the supplied Goal as a Soldier. Commander owns planning and acceptance.' : '')
 
 export function activityLimits(config: EngineConfig, activity: 'decide' | 'execute', step?: Step) {
-  return config.taskLimits?.[activity==='decide'?'commander':step?.role??'soldier'] ?? {timeout:config.executeTimeout,concludeTimeout:config.concludeTimeout}
+  return config.taskLimits?.[activity==='decide'?'commander':step?.role==='reporter'?'soldier':step?.role??'soldier'] ?? {timeout:config.executeTimeout,concludeTimeout:config.concludeTimeout}
 }
 
 const livePlans = new WeakMap<Store, Map<string, { revision: number; bound: number; text: string }>>()
@@ -159,6 +171,7 @@ export function launchContext(store: Store, runId: string, channels: unknown[] =
   const run = store.run(runId)
   if(run.graphId)store=store.forGraph(run.projectId,run.graphId)
   const origin = store.node<Fact>(run.projectId, 'origin', 'fact')
+  const step = run.stepId ? store.node<Step>(run.projectId, run.stepId, 'step') : undefined
   const includeHints = !!run.stepId
   const acknowledgedHintSeq = run.activity === 'decide' ? store.project(run.projectId).acknowledgedHintSeq ?? 0 : 0
   const hints = includeHints ? store.db.prepare(`SELECT n.data FROM nodes n JOIN events e
@@ -169,6 +182,7 @@ export function launchContext(store: Store, runId: string, channels: unknown[] =
     .all(run.projectId,run.graphId??null,run.graphId??null, acknowledgedHintSeq, run.activity === 'decide' ? 1 : 0, run.stepId).map(row => JSON.parse(String(row.data)) as Input) : []
   const goal = run.activity === 'decide' ? store.node<Goal>(run.projectId, 'goal', 'goal') : undefined
   return { projectId: run.projectId, graphId:run.graphId, ...(run.handoff ? {handoff:{confirmedState:run.handoff,predecessorRunId:run.predecessorRunId}} : {}), planningCapacity: store.planningCapacity(run.projectId, maxSteps), acknowledgementBoundary: store.acknowledgementBoundary(run.id), scope: { id: origin.id, description: origin.description },
+    ...(step?.role === 'reporter' ? { reportTrigger: { tool: 'submit_finding', finding_id: step.sourceIds[0], finding: store.readNode(run.projectId, step.sourceIds[0]) } } : {}),
     ...(goal ? { goal: { id: goal.id, description: goal.description, status: goal.status },
       evidenceSeq: run.planningEvidenceSeq ?? 0, hintSeq: run.planningHintSeq ?? 0, criticalSeq: run.planningCriticalSeq ?? 0, graphCursor: run.deliveredGraphCursor ?? 0,
       } : {}),
@@ -186,7 +200,8 @@ export function graphUpdate(store: Store, projectId: string, cursor: number, ste
   const project = store.project(projectId), run = runId ? store.run(runId) : undefined
   const latestCursor = stepId === null ? undefined : Number(store.db.prepare('SELECT MAX(id) AS id FROM events WHERE project_id=?').get(projectId)?.id ?? cursor)
   const step = run?.stepId ? store.node<Step>(projectId, run.stepId, 'step') : undefined
-  const stopped = project.status !== 'active' || !!run && (run.status !== 'running' || !!step && (step.status !== 'running' || store.node<Goal>(projectId, step.goalId, 'goal').status !== 'open'))
+   const reporting = step?.role === 'reporter'
+   const stopped = !(reporting ? ['active','completed'].includes(project.status) : project.status === 'active') || !!run && (run.status !== 'running' || !!step && (step.status !== 'running' || !reporting && store.node<Goal>(projectId, step.goalId, 'goal').status !== 'open'))
   const planVersion = step?.planVersion ?? 1, boundStepVersion = run?.boundStepVersion ?? 1
   const planChanged = !stopped && !!step && planVersion !== boundStepVersion
   let relevant = false, evidenceSeq = 0, hintSeq = 0, criticalSeq = 0, omitted = false
@@ -218,6 +233,7 @@ export function graphUpdate(store: Store, projectId: string, cursor: number, ste
 
 export async function runMock({ store, run, signal }: TaskContext) {
   if (signal.aborted) return
+  if (run.stepId && store.node<Step>(run.projectId, run.stepId, 'step').role === 'reporter') throw new HttpError(409, 'Reporter requires a DSH Session; mock mode does not fabricate vulnerability reports')
   const graph = store.graph(run.projectId)
   if (run.activity !== 'execute') throw new HttpError(410,'Independent Reason execution was removed')
   {

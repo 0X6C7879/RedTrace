@@ -1,0 +1,7 @@
+{
+  "command": "node /Users/lxy/Downloads/RedTrace/docs/fact-finding-migration-20261113/probe.mjs /Users/lxy/Downloads/RedTrace",
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "stdout": "{\"title\":\"Fixture title\",\"defaultContainsDescription\":false,\"supportingFactFolded\":true,\"summary\":\"Verified fixture summary\",\"rawFactRetained\":\"Verified fixture summary\",\"findingFacts\":1}\n",
+  "stderr": "",
+  "exit": 0
+}

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { CommanderTodos } from './legion-todos.ts'
 import { Store } from './store.ts'
 import { HttpError, now, requiredText } from './types.ts'
 import type { LegionRole, Step, Goal } from './types.ts'
@@ -18,6 +19,14 @@ export interface SpawnMission {
 export class LegionStore {
   readonly store: Store
   readonly projectId?: string
+  // The engine-owned LegionStore outlives individual Commander DSH activations.
+  private readonly todos = new Map<string, CommanderTodos>()
+  planningTodos(projectId: string): CommanderTodos {
+    const id = this.owner(projectId)
+    let todos = this.todos.get(id)
+    if (!todos) { todos = new CommanderTodos(); this.todos.set(id, todos) }
+    return todos
+  }
   constructor(store: Store, projectId?: string) {
     this.projectId = projectId ?? store.projectScope
     this.store = this.projectId ? store.forProject(this.projectId) : store

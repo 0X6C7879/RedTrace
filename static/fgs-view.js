@@ -8,7 +8,15 @@ window.redtraceFgsView = {
   fgsRunId: '',
   fgsRunEvents: [],
   fgsRunHasMore: false,
+  fgsNodeDetail: null,
+  fgsDocumentLoaded: false,
+  fgsArtifactPreview: null,
+  fgsShownFacts: [],
+  fgsShownGraph: '',
   clearMissingFgsSelection() {
+    if (this.fgsShownGraph !== this.fgs?.graph?.id) {
+      this.fgsShownGraph = this.fgs?.graph?.id; this.fgsShownFacts = []; this.fgsNodeDetail = null; this.fgsArtifactPreview = null; this.fgsDocumentLoaded = false;
+    }
     if (this.fgsSelection && !this.fgs?.[this.fgsSelection.type === 'fact' || this.fgsSelection.type === 'scope' ? 'facts' : this.fgsSelection.type === 'finding' ? 'findings' : this.fgsSelection.type === 'step' ? 'steps' : 'goals']?.some(n => n.id === this.fgsSelection.id)) {
       this.fgsSelection = null; this.fgsRuns = []; this.fgsRunId = ''; this.fgsRunEvents = []; this.fgsRunHasMore = false;
     }
@@ -37,10 +45,10 @@ window.redtraceFgsView = {
   },
   fgsBuildElements() {
     const selected = this.fgsFocusIds();
-    const nodes = this.fgs.nodes.filter(n => !selected || selected.has(n.id)).map(n => {
+    const nodes = this.fgs.nodes.filter(n => (!n.folded || this.fgsShownFacts.includes(n.id)) && (!selected || selected.has(n.id))).map(n => {
       const title = n.label.replace(/\s+/g, ' ').trim();
       const short = Array.from(title).slice(0, 32).join('') + (Array.from(title).length > 32 ? '…' : '');
-      const label = `${n.nodeType.toUpperCase()} · ${this.factDisplayId(n.id)}\n${short}${n.status ? '\n' + n.status + (n.worker ? ` · ${n.worker}` : '') + (n.activeSteps ? ` · ${n.activeSteps} Steps` : '') : ''}`;
+      const label = `${n.nodeType.toUpperCase()} · ${this.factDisplayId(n.id)}\n${short}${n.factCount !== undefined ? '\n'+n.factCount+' Facts' : ''}${n.status ? '\n' + n.status + (n.worker ? ` · ${n.worker}` : '') + (n.activeSteps ? ` · ${n.activeSteps} Steps` : '') : ''}`;
       return { data: { ...n, label, fgs: true, width: 180, height: n.status ? 92 : 76 } };
     });
     const ids = new Set(nodes.map(n => n.data.id));
@@ -114,9 +122,12 @@ window.redtraceFgsView = {
       node.addClass('focus'); node.connectedEdges().addClass('focus');
     }
   },
-  selectNativeFgsNode(type, id) {
+  async selectNativeFgsNode(type, id) {
+    const projectId = this.selectedProjectId, graphId = this.selectedGraphId;
     this.fgsRuns = []; this.fgsRunId = ''; this.fgsRunEvents = [];
     this.fgsSelection = { type: type === 'subgoal' ? 'goal' : type, id };
+    this.fgsNodeDetail = null; this.fgsDocumentLoaded = false; this.fgsArtifactPreview = null;
+    if (type === 'fact' && !this.fgsShownFacts.includes(id)) { this.fgsShownFacts.push(id); this.updateGraph(); }
     this.fgsEdgeSelection = null;
     this.fgsPanelOpen = true;
     this.sideTab = 'detail';
@@ -127,6 +138,60 @@ window.redtraceFgsView = {
       this.cy.zoom(Math.max(this.cy.zoom(), 0.8));
       this.cy.center(this.cy.getElementById(id));
     }
+    if (!this.replay.active && ['fact', 'scope', 'finding'].includes(type)) {
+      try {
+        const record = await this.api('GET', `/v2/projects/${this.selectedProjectId}/nodes/${id}`);
+        if (this.selectedProjectId === projectId && this.selectedGraphId === graphId && this.fgsSelection?.id === id) this.fgsNodeDetail = record;
+      } catch (e) { this.showToast(e.message, 'error'); }
+    }
+  },
+  async loadFgsDocument() {
+    const id = this.fgsSelection?.id, projectId = this.selectedProjectId, graphId = this.selectedGraphId;
+    if (!id || this.replay.active) return;
+    try {
+      const record = await this.api('GET', `/v2/projects/${this.selectedProjectId}/nodes/${id}?detail=doc`);
+      if (this.selectedProjectId === projectId && this.selectedGraphId === graphId && this.fgsSelection?.id === id) { this.fgsNodeDetail = record; this.fgsDocumentLoaded = true; }
+    } catch (e) { this.showToast(e.message, 'error'); }
+  },
+  async openFgsArtifact(reference) {
+    if (!reference?.artifactId || this.replay.active) return;
+    const projectId = this.selectedProjectId, graphId = this.selectedGraphId, id = this.fgsSelection?.id;
+    try {
+      const page = await this.api('GET', `/v2/projects/${this.selectedProjectId}/evidence/${reference.artifactId}`);
+      if (this.selectedProjectId === projectId && this.selectedGraphId === graphId && this.fgsSelection?.id === id) this.fgsArtifactPreview = { ...page, title: reference.description, parts: [page] };
+    } catch (e) { this.showToast(e.message, 'error'); }
+  },
+  async nextFgsArtifactPage() {
+    const prior = this.fgsArtifactPreview;
+    if (!prior || prior.nextOffset === null) return;
+    try {
+      const page = await this.api('GET', `/v2/projects/${this.selectedProjectId}/evidence/${prior.id}?offset=${prior.nextOffset}`);
+      if (this.fgsArtifactPreview === prior) this.fgsArtifactPreview = { ...page, title: prior.title, parts: [...prior.parts, page] };
+    } catch (e) { this.showToast(e.message, 'error'); }
+  },
+  async openFgsReport() {
+    const id = this.fgsSelection?.id;
+    await this.loadFgsDocument();
+    if (this.fgsSelection?.id === id) await this.openFgsArtifact(this.fgsNodeDetail?.report);
+  },
+  async requestFgsReport() {
+    try {
+      await this.api('POST', `/v2/projects/${this.selectedProjectId}/findings/${this.fgsSelection.id}/report`, {});
+      this.showToast('Reporter Mission 已登记；运行状态请查看关联 Step');
+    } catch (e) { this.showToast(e.message, 'error'); }
+  },
+  fgsArtifactBytes() {
+    const parts = (this.fgsArtifactPreview?.parts || []).map(p => p.encoding === 'base64' ? Uint8Array.from(atob(p.content), c => c.charCodeAt(0)) : new TextEncoder().encode(p.content));
+    const bytes = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let offset = 0; for (const part of parts) { bytes.set(part, offset); offset += part.length; }
+    return bytes;
+  },
+  fgsArtifactText() { return new TextDecoder().decode(this.fgsArtifactBytes()); },
+  downloadFgsArtifact() {
+    const preview = this.fgsArtifactPreview;
+    if (!preview || preview.nextOffset !== null) return;
+    const url = URL.createObjectURL(new Blob([this.fgsArtifactBytes()])), link = document.createElement('a');
+    link.href = url; link.download = (preview.title || preview.id).replace(/[/\\]/g, '_'); link.click(); URL.revokeObjectURL(url);
   },
   selectFgsEdge(edge) {
     this.fgsSelection = null;

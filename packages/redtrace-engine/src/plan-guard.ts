@@ -11,10 +11,12 @@ export function createPlanGuard(store: Store, runId: string) {
     settled(rootCallId: string) { roots.delete(rootCallId) },
     check(exec: { name: string; rootCallId: string }) {
       const run = store.run(runId)
-      if (run.status !== 'running' || store.project(run.projectId).status !== 'active') return 'Activity has stopped'
+      if (run.status !== 'running') return 'Activity has stopped'
       if (!run.stepId) return undefined
       const step = store.node<Step>(run.projectId, run.stepId, 'step')
-      if (step.status !== 'running' || store.node<Goal>(run.projectId, step.goalId, 'goal').status !== 'open') return 'Step or Goal has stopped'
+      const status = store.project(run.projectId).status
+      if (!(step.role === 'reporter' ? ['active','completed'].includes(status) : status === 'active')) return 'Activity has stopped'
+      if (step.status !== 'running' || step.role !== 'reporter' && store.node<Goal>(run.projectId, step.goalId, 'goal').status !== 'open') return 'Step or Goal has stopped'
       const version = roots.get(exec.rootCallId) ?? turnVersion
       roots.set(exec.rootCallId, version)
       if (!safe.has(exec.name) && (version !== (step.planVersion ?? 1) || (run.boundStepVersion ?? 1) !== (step.planVersion ?? 1))) return `Plan changed: read_graph({id:${JSON.stringify(step.id)}}), then sync_step({planVersion:${step.planVersion ?? 1}}). Old call trees cannot execute actions after synchronization.`

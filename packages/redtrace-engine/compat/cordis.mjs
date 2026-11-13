@@ -116,7 +116,7 @@ export async function apply(ctx, options) {
     adapterAvailability: () => pluginId => manager.running(pluginId),
     probeModel: (config, worker, signal) => probeModel(ctx, engine.configuration, config, worker, signal),
     selectWorker: (worker, activity, step) => {
-      const preset = step?.role ?? 'soldier'
+      const preset = step?.role === 'reporter' ? 'soldier' : step?.role ?? 'soldier'
       if (!state()?.presets.has(preset)) return undefined
       return worker
     },
@@ -199,9 +199,10 @@ export async function apply(ctx, options) {
     if (run.activity !== 'execute') throw new Error('Independent Reason execution was removed')
     if (!shared) throw new Error('Cordis domain service is unavailable')
     const step = run.stepId ? store.node(run.projectId, run.stepId, 'step') : undefined
+    const reporting = step?.role === 'reporter'
     const task = { usage: { inputTokens: run.inputTokens, outputTokens: run.outputTokens, cacheReadTokens: run.cacheReadTokens, cacheWriteTokens: run.cacheWriteTokens }, type: step?.role ?? 'soldier', projectId: run.projectId, intentId: run.stepId ?? undefined,
       worker: worker.name, sessionId: run.id, runId: run.id, committed: false, notificationEpoch: randomUUID(), server: options.server, startedAt: Date.now(), executionProfile: step?.executionProfile ?? 'direct' }
-    if (!shared.presets.has(task.type)) throw new Error(`Cordis task preset ${task.type} is disabled`)
+    if (!shared.presets.has(reporting ? 'soldier' : task.type)) throw new Error(`Cordis task preset ${task.type} is disabled`)
     const cwd = run.workspaceRoot ?? path.join(config.workspaceRoot, run.projectId); await mkdir(cwd, { recursive: true })
     let finished = false, concludeOnly = false, handle, legionMailbox
     let refreshLiveTools = () => {}
@@ -219,13 +220,14 @@ export async function apply(ctx, options) {
     const { sessionDir } = await load('vendor/deepseek-harness/packages/spill/spill-local/lib/index.js')
     const ownSpillRead = executionEvidenceReadGuard(sessionDir(path.join(runtime.sessionRoot, 'spill'), run.id), cwd)
     const setup = async scoped => {
-      if (run.activity === 'execute') {
+      if (!reporting) {
         // Skills mount DSH-natively from the full managed skills root; the
         // agent discovers and loads them through the skill tool on demand.
         scoped = await mountExecutionTools(scoped, { task, cwd, sessionRoot: runtime.sessionRoot, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.availableForTask(id),
           onRefresh: refresh => sessionRefresh.set(run.id, async () => { await refresh(); refreshLiveTools() }) })
       }
-      mountLegionContext(scoped,ctx,{store,legion:engine.legion,run,task,message})
+      if (reporting) scoped.tools.restrict({ allow: [] })
+      else mountLegionContext(scoped,ctx,{store,legion:engine.legion,run,task,message})
       mountActivityPrompt(scoped, run, step)
       const planGuard = run.activity === 'execute' ? createPlanGuard(store, run.id) : undefined
       if (planGuard) {
@@ -250,8 +252,8 @@ export async function apply(ctx, options) {
           if (result.terminate) execution.concludeTurn?.()
           return result
         } })
-      for (const t of [...tools.filter(t => !/^(?:knowledge_|http_)/.test(t.name)), ...(run.activity === 'execute' ? resourceTools(context, verbRuntime) : [])]) registerTool(t)
-      const liveVerbs = run.activity === 'execute' ? verbTools(context, verbRuntime, step) : []
+      for (const t of [...tools.filter(t => !/^(?:knowledge_|http_)/.test(t.name)), ...(!reporting ? resourceTools(context, verbRuntime) : [])]) registerTool(t)
+      const liveVerbs = !reporting ? verbTools(context, verbRuntime, step) : []
       const refreshEfficiencyTools = refreshToolRegistrations(tools.filter(t => /^(?:knowledge_|http_)/.test(t.name)), t => efficiencyToolAvailable(context, t.name), registerTool)
       const refreshVerbTools = refreshToolRegistrations(liveVerbs, t => verbToolAvailable(verbRuntime, t.name), registerTool)
       refreshLiveTools = () => {
@@ -310,14 +312,14 @@ export async function apply(ctx, options) {
       cursor = Math.max(cursor, pendingGraphNotice(handle.agent)?.update.cursor ?? 0)
       prompt(resume ? '继续' : JSON.stringify(launchContext(store, run.id,
         channelsFor(verbRuntime, [], 8, run.projectId), (context.currentMaxSteps ? context.currentMaxSteps() : config.maxSteps))))
-      if (step?.role) legionMailbox = attachLegionMailbox(ctx, engine.legion, { projectId: run.projectId, actor: run.id, sessionId: run.id, agent: handle.agent, message, closing: () => finished || signal.aborted })
+       if (!reporting && step?.role) legionMailbox = attachLegionMailbox(ctx, engine.legion, { projectId: run.projectId, actor: run.id, sessionId: run.id, agent: handle.agent, message, closing: () => finished || signal.aborted })
       // Changes committed during activation remain in the event log until this scan.
       steer(run.projectId)
       const limits = activityLimits(config, run.activity, step)
       await wait(limits.timeout)
       if (!finished && !task.committed && !signal.aborted) {
         task.concludeOnly = concludeOnly = true
-        prompt(run.activity === 'execute'
+        prompt(reporting ? '已进入超时收尾。只根据已读取的真实证据完成本漏洞报告，缺失内容明确标注未提供或未验证，调用 update_finding_report 保存；不得重新探测或伪造证据。' : run.activity === 'execute'
           ? '已进入超时收尾，必须调用 submit_fact 提交至少一条已有证据支持的汇总结论，再调用 finish_step。题目未解决时保留容器；没有成功成果时如实提交已验证的失败、限制或阻塞，禁止伪造事实。'
           : '仅处理已交付的证据并调用 finish_decide，不再执行外部操作。')
         await wait(limits.concludeTimeout)

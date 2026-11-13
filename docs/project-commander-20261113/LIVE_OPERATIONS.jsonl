@@ -1,0 +1,8 @@
+{"cmd":"kill -TERM 35164","cwd":"/Users/lxy/Downloads/RedTrace","stdout":"","stderr":"","status":0}
+{"event":"old_service_stopped_and_latest_source_started","oldPid":35164,"newPid":40127}
+{"request":"GET http://127.0.0.1:8000/health","status":200,"body":"{\"status\":\"ok\",\"engine\":\"fgs\",\"node\":\"24.21.0\",\"schema\":2}"}
+{"configurationHashesAfterFinalRestart":{".redtrace/redtrace.yaml":"e3896cfc9abf566305d2477bab53e6a483cbf490c2784753c952622b3ce05630",".redtrace/.redtrace-secrets/master.key":"45313ac5ff6a4c7a5bf671e3513959e629c07951e31fcd478d653ac1c3b40e0e",".redtrace/.redtrace-secrets/worker-config.enc":"a3797c920e4086405291a1c13ad9d6677bd9ee807e408ac28206b5f2d7f5ef16"},"equalsPreFinalRestart":true}
+{"cmd":"kill -TERM 40127","cwd":"/Users/lxy/Downloads/RedTrace","stdout":"","stderr":"","status":0}
+{"event":"release_source_started_after_confirmed_stop","pid":43156}
+{"cmd":"kill -TERM 43156","cwd":"/Users/lxy/Downloads/RedTrace","stdout":"","stderr":"","status":0}
+{"pid":44799,"request":"GET http://127.0.0.1:8000/health","status":200,"body":"{\"status\":\"ok\",\"engine\":\"fgs\",\"node\":\"24.21.0\",\"schema\":2}"}

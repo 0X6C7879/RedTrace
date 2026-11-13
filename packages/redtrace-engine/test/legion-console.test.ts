@@ -270,3 +270,24 @@ test('human Goal acceptance selects a captured project evidence list, retains ve
 })
 
 test('Goal acceptance retains the captured Graph when the user switches task pages',async()=>{const app=page();app.selectedProjectId='p';app.selectedGraphId='B';app.fgsAcceptance={projectId:'p',graphId:'A',goalId:'goal-A',version:1,evidenceIds:['fact-A']};let opened='';app.$refs={fgsAcceptanceDialog:{close(){}}};app.loadProject=async()=>{};app.updateGraph=()=>{};app.selectFgsNode=()=>{};app.openProject=async(_p:string,g:string)=>{opened=g};app.api=async(_method:string,url:string)=>{assert.equal(url,'/v2/projects/p/goals/goal-A?graphId=A')};await app.submitFgsAcceptance();assert.equal(app.fgsAcceptance.error,'');assert.equal(opened,'A')})
+
+
+test('TodoList is read-only in workspace project detail, not the Legion console',()=>{
+  const app=page()
+  assert.equal(app.todoCompleted([{status:'completed'},{status:'in_progress'},{status:'pending'}]),1)
+  assert.equal(app.todoCompleted([]),0)
+  assert.equal(app.todoCompleted(undefined),0)
+  assert.equal(app.todoStatus('pending'),'等待前置条件')
+  assert.equal(app.todoStatus('in_progress'),'推进中')
+  assert.equal(app.todoStatus('completed'),'已完成')
+  const layout=html.slice(html.indexOf('id="graphLayout"'))
+  assert.match(layout,/aria-label="查看阶段计划"/)
+  assert.match(layout,/aria-label="当前任务阶段计划"/)
+  assert.doesNotMatch(html.slice(html.indexOf('aria-labelledby="legion-title"'),html.indexOf('id="graphLayout"')),/aria-label="当前任务阶段计划"/)
+  const panel=html.slice(html.indexOf('class="fgs-todos'),html.indexOf('<!-- Detail -->'))
+  assert.match(panel,/x-text="todo.content"/)
+  assert.match(panel,/尚无阶段计划/)
+  assert.match(panel,/规划清单暂不可用/)
+  assert.match(panel,/不代表 Goal 验收/)
+  assert.doesNotMatch(panel,/x-model="todo|contenteditable|TodoWrite/)
+})

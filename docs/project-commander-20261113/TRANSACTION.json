@@ -1,0 +1,76 @@
+{
+  "target": "/Users/lxy/Downloads/RedTrace",
+  "scratch": "/tmp/redtrace-transaction-release-1XHIyH",
+  "archived": "/tmp/redtrace-modified-artifact-udW3fu",
+  "baselineDigest": "02111bc804da6b2e7f22ae2a0ff4b03f76f5949b8a3c101d9245dd835d9eef6a",
+  "restoredDigest": "02111bc804da6b2e7f22ae2a0ff4b03f76f5949b8a3c101d9245dd835d9eef6a",
+  "all52PreimagesRestored": true,
+  "all52ModifiedFilesReconstructed": true,
+  "goalReapplied": true,
+  "records": [
+    {
+      "label": "restore original copy",
+      "cmd": "/Users/lxy/Downloads/RedTrace/docs/project-commander-20261113/ROLLBACK.sh /tmp/redtrace-transaction-release-1XHIyH",
+      "cwd": "/Users/lxy/Downloads/RedTrace",
+      "stdout": "ROLLBACK: pristine baseline source restored; database not downgraded\n",
+      "stderr": "",
+      "status": 0
+    },
+    {
+      "label": "BASELINE",
+      "cmd": "node --input-type=module -e 'import {Store} from \"./packages/redtrace-engine/src/store.ts\";import{LegionStore}from\"./packages/redtrace-engine/src/legion-store.ts\";const s=new Store(\":memory:\");const a=s.createProject({title:\"A\",origin:\"scope\",goal:\"goal\",mode:\"general\"}).project,b=s.createProject({title:\"B\",origin:\"scope\",goal:\"goal\",mode:\"general\"}).project;const l=new LegionStore(s);console.log(JSON.stringify({mode:a.mode??null,independent:l.campaign(a.id).sessionId!==l.campaign(b.id).sessionId}));s.close()'",
+      "cwd": "/tmp/redtrace-transaction-release-1XHIyH",
+      "stdout": "{\"mode\":null,\"independent\":false}\n",
+      "stderr": "",
+      "status": 0
+    },
+    {
+      "label": "apply DIFF_FILE",
+      "cmd": "patch -p1 -i /Users/lxy/Downloads/RedTrace/docs/project-commander-20261113/DIFF_FILE.patch",
+      "cwd": "/tmp/redtrace-transaction-release-1XHIyH",
+      "stdout": "patching file README.md\npatching file 'docs/legion-implementation-20261110/IMPLEMENTATION.md'\npatching file 'docs/sapper-legion-migration-plan.md'\npatching file 'docs/specs/node-fgs-runtime.md'\npatching file 'docs/specs/server-protocol.md'\npatching file 'packages/redtrace-dsh/test/reason-read.test.mjs'\npatching file 'packages/redtrace-dsh/test/reverse.test.mjs'\npatching file 'packages/redtrace-engine/compat/cordis.mjs'\npatching file 'packages/redtrace-engine/compat/legion.mjs'\npatching file 'packages/redtrace-engine/src/audit-api.ts'\npatching file 'packages/redtrace-engine/src/benchmark.ts'\npatching file 'packages/redtrace-engine/src/deletion.ts'\npatching file 'packages/redtrace-engine/src/fgs.ts'\npatching file 'packages/redtrace-engine/src/graph-api.ts'\npatching file 'packages/redtrace-engine/src/index.ts'\npatching file 'packages/redtrace-engine/src/legacy.ts'\npatching file 'packages/redtrace-engine/src/legion-cutover.ts'\npatching file 'packages/redtrace-engine/src/legion-experience.ts'\npatching file 'packages/redtrace-engine/src/legion-missions.ts'\npatching file 'packages/redtrace-engine/src/legion-store.ts'\npatching file 'packages/redtrace-engine/src/legion-tools.ts'\npatching file 'packages/redtrace-engine/src/project-evidence.ts'\npatching file 'packages/redtrace-engine/src/runner.ts'\npatching file 'packages/redtrace-engine/src/scheduler.ts'\npatching file 'packages/redtrace-engine/src/store.ts'\npatching file 'packages/redtrace-engine/src/types.ts'\npatching file 'packages/redtrace-engine/test/audit-optimization.test.ts'\npatching file 'packages/redtrace-engine/test/deletion.test.ts'\npatching file 'packages/redtrace-engine/test/dsh-loop.test.ts'\npatching file 'packages/redtrace-engine/test/fgs-maintenance.test.ts'\npatching file 'packages/redtrace-engine/test/http.test.ts'\npatching file 'packages/redtrace-engine/test/legion-commander-context.fixture.mjs'\npatching file 'packages/redtrace-engine/test/legion-console.test.ts'\npatching file 'packages/redtrace-engine/test/legion-organization.test.ts'\npatching file 'packages/redtrace-engine/test/legion-runtime.fixture.mjs'\npatching file 'packages/redtrace-engine/test/legion-runtime.test.ts'\npatching file 'packages/redtrace-engine/test/legion-state.test.ts'\npatching file 'packages/redtrace-engine/test/runtime-contract.test.ts'\npatching file 'packages/redtrace-engine/test/scheduler-hot-path.test.ts'\npatching file 'packages/redtrace-engine/test/task-plugins.test.ts'\npatching file 'packages/redtrace-engine/test/tsecbench-reason.test.ts'\npatching file 'packages/redtrace-engine/test/wake-contract.test.ts'\npatching file 'static/audit.js'\npatching file 'static/fgs-view.js'\npatching file 'static/index.html'\npatching file 'packages/redtrace-engine/test/project-commanders.fixture.mjs'\npatching file 'packages/redtrace-engine/test/project-commanders.test.ts'\npatching file 'packages/redtrace-engine/test/project-graph-api.test.ts'\npatching file 'packages/redtrace-engine/test/project-graph-migration.test.ts'\npatching file 'packages/redtrace-engine/test/project-graphs.test.ts'\npatching file 'packages/redtrace-engine/test/project-ui.fixture.mjs'\npatching file 'docs/project-commander-20261113/GUIDE.md'\n",
+      "stderr": "",
+      "status": 0
+    },
+    {
+      "label": "MODIFIED",
+      "cmd": "node --input-type=module -e 'import {Store} from \"./packages/redtrace-engine/src/store.ts\";import{LegionStore}from\"./packages/redtrace-engine/src/legion-store.ts\";const s=new Store(\":memory:\");const a=s.createProject({title:\"A\",origin:\"scope\",goal:\"goal\",mode:\"general\"}).project,b=s.createProject({title:\"B\",origin:\"scope\",goal:\"goal\",mode:\"general\"}).project;const l=new LegionStore(s);console.log(JSON.stringify({mode:a.mode??null,independent:l.campaign(a.id).sessionId!==l.campaign(b.id).sessionId}));s.close()'",
+      "cwd": "/tmp/redtrace-transaction-release-1XHIyH",
+      "stdout": "{\"mode\":\"general\",\"independent\":true}\n",
+      "stderr": "",
+      "status": 0
+    },
+    {
+      "label": "execute ROLLBACK",
+      "cmd": "/Users/lxy/Downloads/RedTrace/docs/project-commander-20261113/ROLLBACK.sh /tmp/redtrace-transaction-release-1XHIyH",
+      "cwd": "/Users/lxy/Downloads/RedTrace",
+      "stdout": "ROLLBACK: pristine baseline source restored; database not downgraded\n",
+      "stderr": "",
+      "status": 0
+    },
+    {
+      "label": "ROLLBACK",
+      "cmd": "node --input-type=module -e 'import {Store} from \"./packages/redtrace-engine/src/store.ts\";import{LegionStore}from\"./packages/redtrace-engine/src/legion-store.ts\";const s=new Store(\":memory:\");const a=s.createProject({title:\"A\",origin:\"scope\",goal:\"goal\",mode:\"general\"}).project,b=s.createProject({title:\"B\",origin:\"scope\",goal:\"goal\",mode:\"general\"}).project;const l=new LegionStore(s);console.log(JSON.stringify({mode:a.mode??null,independent:l.campaign(a.id).sessionId!==l.campaign(b.id).sessionId}));s.close()'",
+      "cwd": "/tmp/redtrace-transaction-release-1XHIyH",
+      "stdout": "{\"mode\":null,\"independent\":false}\n",
+      "stderr": "",
+      "status": 0
+    },
+    {
+      "label": "reapply GOAL",
+      "cmd": "patch -p1 -i /Users/lxy/Downloads/RedTrace/docs/project-commander-20261113/DIFF_FILE.patch",
+      "cwd": "/tmp/redtrace-transaction-release-1XHIyH",
+      "stdout": "patching file README.md\npatching file 'docs/legion-implementation-20261110/IMPLEMENTATION.md'\npatching file 'docs/sapper-legion-migration-plan.md'\npatching file 'docs/specs/node-fgs-runtime.md'\npatching file 'docs/specs/server-protocol.md'\npatching file 'packages/redtrace-dsh/test/reason-read.test.mjs'\npatching file 'packages/redtrace-dsh/test/reverse.test.mjs'\npatching file 'packages/redtrace-engine/compat/cordis.mjs'\npatching file 'packages/redtrace-engine/compat/legion.mjs'\npatching file 'packages/redtrace-engine/src/audit-api.ts'\npatching file 'packages/redtrace-engine/src/benchmark.ts'\npatching file 'packages/redtrace-engine/src/deletion.ts'\npatching file 'packages/redtrace-engine/src/fgs.ts'\npatching file 'packages/redtrace-engine/src/graph-api.ts'\npatching file 'packages/redtrace-engine/src/index.ts'\npatching file 'packages/redtrace-engine/src/legacy.ts'\npatching file 'packages/redtrace-engine/src/legion-cutover.ts'\npatching file 'packages/redtrace-engine/src/legion-experience.ts'\npatching file 'packages/redtrace-engine/src/legion-missions.ts'\npatching file 'packages/redtrace-engine/src/legion-store.ts'\npatching file 'packages/redtrace-engine/src/legion-tools.ts'\npatching file 'packages/redtrace-engine/src/project-evidence.ts'\npatching file 'packages/redtrace-engine/src/runner.ts'\npatching file 'packages/redtrace-engine/src/scheduler.ts'\npatching file 'packages/redtrace-engine/src/store.ts'\npatching file 'packages/redtrace-engine/src/types.ts'\npatching file 'packages/redtrace-engine/test/audit-optimization.test.ts'\npatching file 'packages/redtrace-engine/test/deletion.test.ts'\npatching file 'packages/redtrace-engine/test/dsh-loop.test.ts'\npatching file 'packages/redtrace-engine/test/fgs-maintenance.test.ts'\npatching file 'packages/redtrace-engine/test/http.test.ts'\npatching file 'packages/redtrace-engine/test/legion-commander-context.fixture.mjs'\npatching file 'packages/redtrace-engine/test/legion-console.test.ts'\npatching file 'packages/redtrace-engine/test/legion-organization.test.ts'\npatching file 'packages/redtrace-engine/test/legion-runtime.fixture.mjs'\npatching file 'packages/redtrace-engine/test/legion-runtime.test.ts'\npatching file 'packages/redtrace-engine/test/legion-state.test.ts'\npatching file 'packages/redtrace-engine/test/runtime-contract.test.ts'\npatching file 'packages/redtrace-engine/test/scheduler-hot-path.test.ts'\npatching file 'packages/redtrace-engine/test/task-plugins.test.ts'\npatching file 'packages/redtrace-engine/test/tsecbench-reason.test.ts'\npatching file 'packages/redtrace-engine/test/wake-contract.test.ts'\npatching file 'static/audit.js'\npatching file 'static/fgs-view.js'\npatching file 'static/index.html'\npatching file 'packages/redtrace-engine/test/project-commanders.fixture.mjs'\npatching file 'packages/redtrace-engine/test/project-commanders.test.ts'\npatching file 'packages/redtrace-engine/test/project-graph-api.test.ts'\npatching file 'packages/redtrace-engine/test/project-graph-migration.test.ts'\npatching file 'packages/redtrace-engine/test/project-graphs.test.ts'\npatching file 'packages/redtrace-engine/test/project-ui.fixture.mjs'\npatching file 'docs/project-commander-20261113/GUIDE.md'\n",
+      "stderr": "",
+      "status": 0
+    },
+    {
+      "label": "reopen MODIFIED_FILE archive",
+      "cmd": "tar -xzf /Users/lxy/Downloads/RedTrace/docs/project-commander-20261113/MODIFIED_FILE.tar.gz -C /tmp/redtrace-modified-artifact-udW3fu",
+      "cwd": "/Users/lxy/Downloads/RedTrace",
+      "stdout": "",
+      "stderr": "",
+      "status": 0
+    }
+  ]
+}

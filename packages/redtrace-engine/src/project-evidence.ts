@@ -122,6 +122,10 @@ export class ProjectEvidence {
     for (const fact of this.store.nodes<Fact>(projectId, ['fact'])) {
       const evidence = [...fact.evidence], artifactIds: string[] = []
       let changed = false
+      if (fact.doc?.artifactId) {
+        try { this.verifyArtifact(projectId, fact.doc.artifactId); artifactIds.push(fact.doc.artifactId) }
+        catch (error) { unresolved.push({ factId: fact.id, evidenceIndex: -1, reason: 'Doc: '+(error instanceof Error ? error.message : String(error)) }) }
+      }
       for (let index = 0; index < evidence.length; index++) {
         const source = evidence[index]
         try {
@@ -146,7 +150,7 @@ export class ProjectEvidence {
   /** Preserve explicit references without turning arbitrary prose into evidence. */
   async promoteRetained(projectId: string, services: EvidenceSessionServices) {
     const facts = this.promoteFacts(projectId)
-    const unresolved: RetentionIssue[] = facts.unresolved.map(item => ({ owner: item.factId, pointer: '/evidence/' + item.evidenceIndex, reason: item.reason }))
+    const unresolved: RetentionIssue[] = facts.unresolved.map(item => ({ owner: item.factId, pointer: item.evidenceIndex === -1 ? '/doc' : '/evidence/' + item.evidenceIndex, reason: item.reason }))
     const references: RetainedReference[] = []
     let expectedRevision = this.store.project(projectId).revision
     const checkRevision = () => {
@@ -235,6 +239,7 @@ export class ProjectEvidence {
     } catch (error) { unresolved.push({ owner: 'sessions', pointer: '', reason: error instanceof Error ? error.message : String(error) }) }
     for (const finding of this.store.nodes<Finding>(projectId, ['finding'])) {
       const details = await visit(finding.details, finding.id, '/details') as Json
+      if (finding.report) await visit(finding.report, finding.id, '/report')
       checkRevision()
       if (JSON.stringify(details) !== JSON.stringify(finding.details)) this.store.transaction(() => {
         const current = this.store.node<Finding>(projectId, finding.id, 'finding')

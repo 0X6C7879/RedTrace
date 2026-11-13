@@ -1,0 +1,25 @@
+{
+  "target": "/Users/lxy/Downloads/RedTrace",
+  "roles": {
+    "MODIFIED_FILE": {
+      "path": "/Users/lxy/Downloads/RedTrace/docs/planner-todos-20261113/MODIFIED_FILE.tar.gz",
+      "sha256": "c0c15cecd0b5833e71f2e98a02b75073755fdfaa199df073fdf4087e71da2f37",
+      "bytes": 133559
+    },
+    "DIFF_FILE": {
+      "path": "/Users/lxy/Downloads/RedTrace/docs/planner-todos-20261113/DIFF_FILE.patch",
+      "sha256": "9d54ca4c6fb0f24cf62765d6e7d73c7dda320346bb6674baab66ec02f54538a5",
+      "bytes": 47991
+    },
+    "VERIFICATION": {
+      "path": "/Users/lxy/Downloads/RedTrace/docs/planner-todos-20261113/VERIFICATION.txt",
+      "sha256": "e12206c7f14b4b3397d8ccc6e10ed6ab9c7088309806f59ec19967f235b909ae",
+      "bytes": 565275
+    },
+    "ROLLBACK": {
+      "path": "/Users/lxy/Downloads/RedTrace/docs/planner-todos-20261113/ROLLBACK.sh",
+      "sha256": "5db3f30f4e7bc196b53522701fc77f6f44b9d4742edb57a2e9fe5ec95a724900",
+      "bytes": 323
+    }
+  }
+}

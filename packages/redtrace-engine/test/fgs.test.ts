@@ -160,7 +160,7 @@ test('current graph polling clears removed node/edge selections and keeps surviv
 test('detail bindings tolerate a removed record while Alpine destroys the old node template', () => {
   const markup = readFileSync(new URL('../../../static/index.html', import.meta.url), 'utf8')
   const detail = markup.slice(markup.indexOf('<section data-testid="fgs-node-detail"'), markup.indexOf('<section data-testid="fgs-edge-detail"'))
-  const context = vm.createContext({ window: {}, fgsSelection: null, fgsSelectionRecord: () => null, formatTime: () => '', factDisplayId: () => '', replay: { active: false }, project: { project: { status: 'active' } } })
+  const context = vm.createContext({ window: {}, fgsDocumentLoaded: false, fgsSelection: null, fgsSelectionRecord: () => null, formatTime: () => '', factDisplayId: () => '', replay: { active: false }, project: { project: { status: 'active' } } })
   const appScript = [...markup.matchAll(/<script>([\s\S]*?)<\/script>/g)].find(item => item[1].includes('function redtraceApp()'))![1]
   vm.runInContext(appScript, context); context.legionRole = vm.runInContext('redtraceApp().legionRole', context)
   const bindings = [...detail.matchAll(/x-(text|show|for)="([^"]*fgsSelectionRecord\(\)[^"]*)"/g)]

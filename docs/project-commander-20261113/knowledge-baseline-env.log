@@ -1,0 +1,12 @@
+✔ offline CVE ranges, deduplicated real source paths, pagination and bounded PoC reads (fixtures) (4174.6285ms)
+✔ model-facing CVE/component/version queries need no target evidence and never subscribe to Fact events (fixtures) (3748.424041ms)
+✔ index corruption and missing data return explicit local diagnostics, without online repair (fixtures) (666.816292ms)
+✔ offline package export/import preserves callable CVE records and source hashes (fixtures) (2043.271417ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 12448.486542

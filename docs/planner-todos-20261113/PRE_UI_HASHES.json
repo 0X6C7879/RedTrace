@@ -1,0 +1,7 @@
+{
+  "packages/redtrace-engine/src/index.ts": "10d835984856006aa7f8ea74cccb6a06c6c4fa5da6f2356373b06110409f16c1",
+  "static/index.html": "358fa4975933e76d3976ede23df24cac1036cd7b03f7786e3acdb69d07c4073a",
+  "static/legion.css": "8c25bed0b4525ea0125c45058f8c093cfc2e8b4de6db7c0204cacde4056ff56c",
+  "packages/redtrace-engine/test/legion-console.test.ts": "2fa041f373523301d6f1638bedea1c39598ce123ec6c01bcd1d9bbd71aecf62e",
+  "packages/redtrace-engine/src/graph-api.ts": "fe18d94ad5f2f96056761e8bbcca7e0d77df2c7bff0337549045951942154d0e"
+}

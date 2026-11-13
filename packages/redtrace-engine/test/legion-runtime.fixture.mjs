@@ -64,12 +64,12 @@ const model = createServer(async (req, res) => {
       else if (!g.steps.filter(s => s.parentStepId).every(s => s.status === 'done')) {
         if (last === 'read_graph_delta') { name = 'legion_wait'; args = { after: lastOutput(b).cursor } }
         else { name = 'read_graph_delta'; args = {} }
-      } else if (!calls.includes('submit_fact')) { name = 'submit_fact'; args = { description: 'General verified both specialist Facts in shared FGS', evidence: [{ description: 'Two completed specialist Steps with confirmed fixture Facts' }] } }
+      } else if (!calls.includes('submit_fact')) { name = 'submit_fact'; args = { title: 'General verified', description: 'General verified both specialist Facts in shared FGS', evidence: [{ description: 'Two completed specialist Steps with confirmed fixture Facts' }] } }
       else if (!calls.includes('legion_message')) { name = 'legion_message'; args = { receiver: 'commander', type: 'REPORT', content: 'General verified both specialist results; ready for Commander acceptance.' } }
       else { name = 'finish_step'; args = { summary: 'General shared-FGS integration complete' } }
     } else {
       assert.ok(!names.includes('legion_spawn'), 'Scout/Soldier cannot delegate')
-      if (!calls.includes('submit_fact')) { name = 'submit_fact'; args = { description: role === 'SCOUT' ? 'Scout verified local fixture category: hard coordination' : 'Soldier verified its assigned local fixture evidence', evidence: [{ description: 'Deterministic authorized local protocol fixture; not live-target proof' }] } }
+      if (!calls.includes('submit_fact')) { name = 'submit_fact'; args = { title: 'Fixture verified', description: role === 'SCOUT' ? 'Scout verified local fixture category: hard coordination' : 'Soldier verified its assigned local fixture evidence', evidence: [{ description: 'Deterministic authorized local protocol fixture; not live-target proof' }] } }
       else if (!calls.includes('legion_message')) { name = 'legion_message'; args = { receiver: 'commander', type: 'REPORT', content: role + ' completed its evidence-backed fixture mission.' } }
       else { name = 'finish_step'; args = { summary: role + ' fixture done' } }
     }

@@ -1,0 +1,7 @@
+patching file 'packages/redtrace-engine/compat/legion.mjs'
+patching file 'packages/redtrace-engine/src/legion-missions.ts'
+patching file 'packages/redtrace-engine/src/legion-store.ts'
+patching file 'packages/redtrace-engine/src/legion-tools.ts'
+patching file 'packages/redtrace-engine/src/legion-todos.ts'
+patching file 'packages/redtrace-engine/test/legion-todos.test.ts'
+patching file 'packages/redtrace-engine/test/legion-todos.fixture.mjs'

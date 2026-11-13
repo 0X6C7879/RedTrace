@@ -1,0 +1,16 @@
+{
+  "files": 52,
+  "originalDigest": "02111bc804da6b2e7f22ae2a0ff4b03f76f5949b8a3c101d9245dd835d9eef6a",
+  "restoredDigest": "02111bc804da6b2e7f22ae2a0ff4b03f76f5949b8a3c101d9245dd835d9eef6a",
+  "allSourceHashesMatched": true,
+  "baseline": "{\"mode\":null,\"independent\":false}\n",
+  "modified": "{\"mode\":\"general\",\"independent\":true}\n",
+  "rollback": "{\"mode\":null,\"independent\":false}\n",
+  "diffCheck": {
+    "cmd": "git diff --check",
+    "cwd": "/Users/lxy/Downloads/RedTrace",
+    "stdout": "",
+    "stderr": "",
+    "status": 0
+  }
+}

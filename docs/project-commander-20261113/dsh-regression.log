@@ -1,0 +1,108 @@
+
+> dsh:test
+> node --test packages/redtrace-dsh/test/*.test.mjs
+
+✔ applyCommonEnv publishes values and the allowlist, and drops removed names (0.633959ms)
+✔ applyCommonEnv with no common_env clears the allowlist (0.089667ms)
+✔ scrubbedParentEnv keeps allowlisted credential-shaped names and drops the rest (0.486042ms)
+✔ mcpSignature is key-order insensitive but content sensitive (97.388709ms)
+✔ does not duplicate a streamed assistant message (26.258417ms)
+✔ projects user messages but not plugin-owned context refreshes (0.181709ms)
+✔ projects streamed thinking and its durable copy (0.142708ms)
+✔ reasoning and text rows carry distinct durable ids (0.155958ms)
+✔ projects tool call arguments and result text (0.1505ms)
+✔ tool result without a matching call carries no title (0.091417ms)
+✔ projects nested PTC calls independently with self-contained completions (0.2715ms)
+✔ out-of-order PTC completions and legacy wrappers retain their own results (33.638084ms)
+✔ projects the system prompt from request headers, deduped per task (0.454208ms)
+✔ accumulateUsage sums disjoint provider buckets across assistant messages (0.179459ms)
+✔ accumulateUsage ignores events without provider usage (0.291917ms)
+✔ native persisted event times and separate system messages survive repeated historical projection (0.316458ms)
+✔ capability stacks mount into concurrent Execute scopes and expose their tools (1073.968708ms)
+✔ running Execute session gains and loses plugin tools without restarting (146.537875ms)
+✔ Spill is Execute-only, session-isolated, hot-reloadable and preserves evidence recovery (328.759958ms)
+✔ host plugin tools disappear from an already mounted Execute session (98.11625ms)
+✔ native Terminal retains state, isolates real Agents, and cleans up on close, disable and disposal (11624.752833ms)
+✔ host capability modules publish their DSH services (64.511042ms)
+✔ offline assets report existing environment overrides and never expose unrelated environment (2.045666ms)
+✔ native conclude submits a Fact and finishes directly while keeping external tools blocked (79.485625ms)
+✔ offline assets advertise skill resources only when present without inlining content (4.5285ms)
+✔ webshell plugin registers structured registration and the connectivity probe (3.119583ms)
+✔ webshell_register posts the full connection form with its secret (0.60625ms)
+✔ c2 plugin registers listener, session, credential, profile, payload and session tools (0.41775ms)
+✔ c2 listener creation posts the resource contract with worker provenance (0.369ms)
+✔ c2 session creation carries the connection material into the secret (0.537667ms)
+✔ staged runtime loads both DSH and adapter code without redirecting source assets (96.04425ms)
+✔ task plugin is default-on and autonomous; explicit stop veto persists (11.103709ms)
+✔ boot mounts enabled plugins in order; kernel entries are locked (3.233333ms)
+✔ removed PTC stays absent even when an older manifest enables it (2.166958ms)
+✔ efficiency features boot enabled by default and remain explicitly switchable (13.436042ms)
+✔ boot honors the manifest: disabled plugins stay unmounted (2.716459ms)
+✔ stop and start toggle fibers live and persist across restarts (4.691541ms)
+✔ plugin stop waits for running session refresh (2.1355ms)
+✔ stop rejects unknown ids (2.248458ms)
+✔ add validates id, module path, and plugin shape; uninstall removes files (13.338042ms)
+✔ module paths resolve inside a root with a trailing slash (3.354166ms)
+✔ HTTP API: list, add, start/stop, and unknown routes (322.691875ms)
+✔ reverse plugin is default-on, explicit stop persists and can be restarted (3.638833ms)
+✖ Commander reads only hash-verified Project evidence, not arbitrary host/secret paths (51.348333ms)
+✔ native Commander mounts no target filesystem tools and resumes a fresh compacted Session (3142.374875ms)
+✔ auto_max selects the highest exact-model effort regardless of catalog order (1.163708ms)
+✔ auto_max uses max when the exact route exposes it (0.371792ms)
+✔ auto_max preserves the provider default when no reasoning capability is known (0.095625ms)
+✔ an explicit effort is validated against the exact model capability (2.108208ms)
+✔ explicit off works for a model without reasoning metadata (0.180875ms)
+✖ Soldier can lazily load native REA without Commander tool selection; management veto revokes live scopes (1285.758459ms)
+✔ official Skill is byte-identical to the pinned package, with complete local references (9.187333ms)
+✔ reverse env defaults compact, preserves overrides and does not copy model credentials (0.292125ms)
+✔ native Skill loads real REA MCP only on demand, isolates Runs, bounds results and revokes live tools (13495.156375ms)
+ℹ {"initial":{"tools":14,"schemaBytes":17999},"activeTools":170,"compactSchemaBytes":254673,"statusPreviewBytes":2025}
+✔ compact and full native MCP input schemas retain identical validation semantics (16733.851333ms)
+ℹ {"checked":736,"fullBytes":436594,"compactBytes":254673,"maxCompactParametersBytes":11026}
+{"level":30,"time":1794539283290,"application":"rea","mode":"mcp","layer":"server","tool":"analyze_javascript_application","durationMs":3728.53,"status":"ok","msg":"MCP tool execution completed"}
+{"level":40,"time":1794539283362,"application":"rea","mode":"mcp","layer":"server","tool":"inspect_evm_interface","durationMs":0.94,"status":"error","msg":"MCP tool execution completed"}
+{"level":30,"time":1794539285468,"application":"rea","mode":"mcp","layer":"server","tool":"inspect_managed_artifact","durationMs":10.25,"status":"ok","msg":"MCP tool execution completed"}
+{"level":30,"time":1794539285512,"application":"rea","mode":"mcp","layer":"server","tool":"inspect_managed_members","durationMs":6.39,"status":"ok","msg":"MCP tool execution completed"}
+{"level":40,"time":1794539285550,"application":"rea","mode":"mcp","layer":"server","tool":"inspect_jeb_client","durationMs":19.66,"status":"error","msg":"MCP tool execution completed"}
+✔ real JavaScript/managed evidence and CLI, with structured EVM/optional-provider boundaries (9504.945416ms)
+﹣ real Ghidra ELF/PE decompilation, same-Run reuse, cancellation and process cleanup (0.156625ms) # SKIP
+✔ session query and identities stay absent for all roles, including an older manifest (685.773292ms)
+✔ channel plugin toggle updates live remote tool registrations (2.713833ms)
+ℹ tests 59
+ℹ suites 0
+ℹ pass 56
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 41588.659291
+
+✖ failing tests:
+
+test at packages/redtrace-dsh/test/reason-read.test.mjs:12:1
+✖ Commander reads only hash-verified Project evidence, not arbitrary host/secret paths (51.348333ms)
+  Error: Select a Project Commander
+      at LegionStore.owner (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/legion-store.ts:32:20)
+      at LegionStore.campaign (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/legion-store.ts:36:19)
+      at file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/legion-store.ts:86:29
+      at Store.transaction (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/store.ts:257:16)
+      at LegionStore.claimCommand (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/legion-store.ts:85:23)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-dsh/test/reason-read.test.mjs:12:641)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    status: 422,
+    details: undefined
+  }
+
+test at packages/redtrace-dsh/test/reverse.test.mjs:48:1
+✖ Soldier can lazily load native REA without Commander tool selection; management veto revokes live scopes (1285.758459ms)
+  Error: Commander requires its Project
+      at Object.execute (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/src/legion-tools.ts:22:30)
+      at TestContext.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-dsh/test/reverse.test.mjs:64:61)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    status: 422,
+    details: undefined
+  }

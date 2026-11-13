@@ -1,4 +1,5 @@
 import { Type } from 'typebox'
+import type { Todo } from './legion-todos.ts'
 import { Check } from 'typebox/value'
 import { Router, body, queryNumber, send } from './http.ts'
 import type { RequestContext } from './http.ts'
@@ -6,16 +7,20 @@ import { Store } from './store.ts'
 import { legacyIntent, legacyProject, legacyProjectInfo, legacySummary } from './legacy.ts'
 import { projectFgs, liveSteps } from './fgs.ts'
 import { HttpError } from './types.ts'
-import type { Step } from './types.ts'
+import type { Json, Step } from './types.ts'
 import { evidenceChangeSchema, goalUpdateSchema, stepUpdateSchema } from './graph-contracts.ts'
 import { taskPluginsSchema } from './task-plugins.ts'
+import { graphContent, nodeContent } from './graph-content.ts'
+import { ProjectEvidence } from './project-evidence.ts'
+import { mkdirSync } from 'node:fs'
+import path from 'node:path'
 
 const text = Type.String({ minLength: 1, pattern: '\\S' }), refs = Type.Array(text, { minItems: 1 })
 const profile = Type.Union([Type.Literal('direct'), Type.Literal('isolated')])
 const requires = Type.Array(Type.String(), { uniqueItems: true, maxItems: 16 })
 const stepSchema = Type.Object({ role: Type.Optional(Type.Union([Type.Literal('general'), Type.Literal('soldier'), Type.Literal('scout')])), taskKey: Type.Optional(text), parentStepId: Type.Optional(text), description: text, sourceIds: refs, goalId: Type.Optional(text), creator: Type.Optional(text), priority: Type.Optional(Type.Integer()), executionProfile: Type.Optional(profile), requires: Type.Optional(requires), plugins: Type.Optional(taskPluginsSchema) })
 
-export function graphRoutes(router: Router, store: Store, maxSteps: () => number | null = () => null) {
+export function graphRoutes(router: Router, store: Store, maxSteps: () => number | null = () => null, planningTodos?: (projectId: string, graphId: string) => Todo[], workspaceRoot?: string) {
   const view = (c:RequestContext) => {
     if(!c.params.project)return store
     const id=c.params.project, graphId=c.url.searchParams.get('graphId')
@@ -58,9 +63,13 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
     const graph = view(c).graph(p(c))
     const projection = projectFgs(graph), live = liveSteps(graph)
     // The live layer is a canvas-only virtual overlay; exports and tools keep the pure projection.
-    return { ...graph, ...projection, nodes: [...projection.nodes, ...live.nodes], edges: [...projection.edges, ...live.edges] }
+    return { ...graphContent(graph, false), ...projection, ...(planningTodos ? { planningTodos: planningTodos(p(c), graph.graph!.id) } : {}), nodes: [...projection.nodes, ...live.nodes], edges: [...projection.edges, ...live.edges] }
   })
-  router.add('GET', '/v2/projects/:project/nodes/:node', c => view(c).node(p(c), c.params.node))
+  router.add('GET', '/v2/projects/:project/nodes/:node', c => {
+    const detail = c.url.searchParams.get('detail') ?? 'summary'
+    if (detail !== 'summary' && detail !== 'doc') throw new HttpError(422, 'detail must be summary or doc')
+    return view(c).readNode(p(c), c.params.node, detail)
+  })
   router.add('GET', '/v2/projects/:project/runs', c => { view(c).project(p(c)); return view(c).runs(p(c)) })
   router.add('GET', '/v2/projects/:project/steps/:node/runs', c => { view(c).node(p(c), c.params.node, 'step'); return view(c).runs(p(c)).filter(r => r.stepId === c.params.node) })
   router.add('GET', '/v2/projects/:project/runs/:run/events', c => {
@@ -69,7 +78,7 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
       .all(p(c), c.params.run, queryNumber(c.url, 'before', Number.MAX_SAFE_INTEGER), queryNumber(c.url, 'limit', 100, 1, 500))
       .map(row => ({ ...JSON.parse(String(row.data)), id: Number(row.id) })).reverse()
   })
-  for (const kind of ['goals', 'steps', 'findings', 'facts', 'observations'] as const) router.add('GET', `/v2/projects/:project/${kind}`, c => { currentOnly(c); return view(c).nodes(p(c), [kind.slice(0, -1) as 'goal' | 'step' | 'finding' | 'fact' | 'observation'], c.url.searchParams.has('limit') ? { limit: queryNumber(c.url, 'limit', 100, 1, 100), offset: queryNumber(c.url, 'offset', 0) } : {}) })
+  for (const kind of ['goals', 'steps', 'findings', 'facts', 'observations'] as const) router.add('GET', `/v2/projects/:project/${kind}`, c => { currentOnly(c); return view(c).nodes(p(c), [kind.slice(0, -1) as 'goal' | 'step' | 'finding' | 'fact' | 'observation'], { context: true, ...(c.url.searchParams.has('limit') ? { limit: queryNumber(c.url, 'limit', 100, 1, 100), offset: queryNumber(c.url, 'offset', 0) } : {}) }).map(node => nodeContent(node)) })
   router.add('POST', '/v2/projects/:project/evidence/manage', async c => {
     const input = await body(c.req, Type.Record(Type.String(), Type.Unknown()))
     if (input.operation === 'archive' || input.operation === 'restore') throw new HttpError(422, 'FGS archive/restore has been removed; use merge/delete')
@@ -87,8 +96,23 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
   router.add('POST', '/v2/projects/:project/steps', async c => send(c.res, view(c).addStep(p(c), await body(c.req, stepSchema), maxSteps()), 201))
   router.add('PATCH', '/v2/projects/:project/steps/:node', async c => view(c).updateStep(p(c), c.params.node, await body(c.req, stepUpdateSchema)))
   router.add('DELETE', '/v2/projects/:project/steps/:node', c => view(c).updateStep(p(c), c.params.node, { status: 'cancelled' }))
-  router.add('POST', '/v2/projects/:project/facts', async c => { const b = await body(c.req, Type.Object({ description: text, creator: Type.Optional(text), evidence: Type.Array(Type.Object({ description: text, path: Type.Optional(text), artifactId: Type.Optional(text), runId: Type.Optional(text), toolCallId: Type.Optional(text) })) })); send(c.res, view(c).addFact(p(c), b.description, { creator: b.creator ?? 'human', evidence: b.evidence }), 201) })
-  router.add('POST', '/v2/projects/:project/findings', async c => send(c.res, view(c).addFinding(p(c), await body(c.req, Type.Object({ title: text, description: text, type: Type.Optional(text), factIds: refs, creator: Type.Optional(text) }))), 201))
+  router.add('POST', '/v2/projects/:project/facts', async c => {
+    const b = await body(c.req, Type.Object({ title: Type.Optional(text), description: text, doc: Type.Optional(text), creator: Type.Optional(text), evidence: Type.Array(Type.Object({ description: text, path: Type.Optional(text), artifactId: Type.Optional(text), runId: Type.Optional(text), toolCallId: Type.Optional(text) })) }))
+    let doc, evidence = b.evidence
+    if (b.doc || b.evidence.some(e => e.path || e.artifactId)) {
+      if (!workspaceRoot) throw new HttpError(503, 'Project workspace unavailable')
+      mkdirSync(path.join(workspaceRoot, p(c)), { recursive: true })
+      const storage = new ProjectEvidence(view(c), workspaceRoot)
+      evidence = b.evidence.map(source => {
+        if (source.artifactId) storage.read(p(c), source.artifactId)
+        return source.path ? { ...source, artifactId: storage.promoteFile(p(c), source).id } : source
+      })
+      if (b.doc) doc = { artifactId: storage.publish(p(c), Buffer.from(b.doc), { description: (b.title ?? 'Fact')+' — doc' }).id, description: (b.title ?? 'Fact')+' — doc' }
+    }
+    send(c.res, view(c).addFact(p(c), b.description, { title: b.title, doc, creator: b.creator ?? 'human', evidence }), 201)
+  })
+  router.add('POST', '/v2/projects/:project/findings', async c => send(c.res, view(c).addFinding(p(c), await body(c.req, Type.Object({ title: text, description: text, type: Type.Optional(text), severity: Type.Optional(Type.Union((['critical','high','medium','low'] as const).map(v=>Type.Literal(v)))), assetIds: Type.Optional(Type.Array(text)), details: Type.Optional(Type.Unsafe<Json>({})), factIds: refs, creator: Type.Optional(text) }))), 201))
+  router.add('POST', '/v2/projects/:project/findings/:node/report', c => view(c).requestFindingReport(p(c), c.params.node))
   router.add('POST', '/v2/projects/:project/observations', async c => { const b = await body(c.req, Type.Object({ content: text, creator: Type.Optional(text), stepId: Type.Optional(text) })); send(c.res, view(c).addInput(p(c), 'observation', b.content, b.creator, b.stepId), 201) })
   router.add('GET', '/v2/projects/:project/events', c => view(c).events(p(c), queryNumber(c.url, 'after', 0), queryNumber(c.url, 'limit', 100, 1, 500)))
   router.add('POST', '/projects/:project/intents', async c => {

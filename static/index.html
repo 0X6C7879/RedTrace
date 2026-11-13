@@ -616,7 +616,7 @@
       <template x-for="f in legionFactOptions(legionCapture.projectId)" :key="f.id">
       <label class="legion-check">
       <input type="checkbox" :value="f.id" x-model="legionCapture.factIds">
-      <span x-text="f.description||f.id">
+      <span x-text="f.title ?? f.description ?? f.id">
       </span>
       <code x-text="f.id">
       </code>
@@ -739,7 +739,7 @@
       <template x-for="f in legionFactOptions(legionEditor.projectId,legionEditor.taskKey)" :key="f.id">
       <label class="legion-check">
       <input type="checkbox" :value="f.id" x-model="legionEditor.factIds">
-      <span x-text="f.description||f.id">
+      <span x-text="f.title ?? f.description ?? f.id">
       </span>
       <code x-text="f.id">
       </code>
@@ -1019,6 +1019,7 @@
         <template x-if="fgs?.nodes"><div class="flex items-center gap-2">
           <select aria-label="聚焦目标" :value="fgsFocusGoal" @change="focusFgsGoal($event.target.value)" class="max-w-40 rounded border px-2 py-1 text-xs"><option value="">完整图</option><template x-for="goal in fgs.goals" :key="goal.id"><option :value="goal.id" x-text="`${goal.id} · ${goal.description.slice(0, 16)}`"></option></template></select>
           <button type="button" @click="fgsPanelOpen = !fgsPanelOpen" class="fgs-drawer-toggle rounded border px-2 py-1 text-xs" aria-label="切换图详情">详情 / 执行</button>
+          <button type="button" @click="sideTab='todos'; fgsPanelOpen=true" class="rounded border px-2 py-1 text-xs" aria-label="查看阶段计划">阶段计划 <span class="fgs-plan-count" x-show="fgs?.planningTodos?.length" x-text="todoCompleted(fgs?.planningTodos)+' / '+fgs?.planningTodos?.length"></span></button>
         </div></template>
         <button @click="fitGraph()" class="h-7 w-7 bg-white/90 backdrop-blur rounded-lg shadow-sm border border-slate-200/60 text-slate-500 hover:text-slate-700 hover:bg-white transition inline-flex items-center justify-center" title="适配" aria-label="适配">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
@@ -1070,8 +1071,9 @@
 
     <!-- Side panel -->
     <div class="fgs-side-panel border-l border-slate-200/60 bg-white flex flex-col overflow-hidden shrink-0 relative z-20" :style="{ width: sidePanelWidth + 'px', minWidth: sidePanelWidth + 'px', flexBasis: sidePanelWidth + 'px' }">
-      <div class="flex border-b border-slate-100 shrink-0">
+      <div class="fgs-panel-tabs flex border-b border-slate-100 shrink-0">
         <button x-show="fgs?.nodes" @click="sideTab = 'steps'; fgsPanelOpen = true" class="px-3 py-2.5 text-xs" :class="sideTab === 'steps' ? 'text-brand-600 border-b-2 border-brand-500' : 'text-slate-400'">执行</button>
+        <button x-show="fgs?.nodes" type="button" @click="sideTab = 'todos'; fgsPanelOpen = true" class="flex-1 px-3 py-2.5 text-xs" :aria-pressed="sideTab === 'todos'" :class="sideTab === 'todos' ? 'text-brand-600 border-b-2 border-brand-500' : 'text-slate-400'">计划</button>
         <button @click="sideTab = 'detail'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
           :class="sideTab === 'detail' ? 'text-brand-600 border-b-2 border-brand-500' : 'text-slate-400 hover:text-slate-600'">详情</button>
         <button @click="sideTab = 'hints'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
@@ -1084,6 +1086,33 @@
           :class="sideTab === 'log' ? 'text-brand-600 border-b-2 border-brand-500' : 'text-slate-400 hover:text-slate-600'">日志</button>
       </div>
 
+
+      <div x-show="sideTab === 'todos'" class="fgs-todos flex-1 overflow-y-auto" role="region" aria-label="当前任务阶段计划">
+        <header class="fgs-todo-heading">
+          <p class="fgs-todo-eyebrow">COMMANDER · TODO LIST</p>
+          <div class="fgs-todo-heading-row"><h3>阶段计划</h3><span class="fgs-todo-readonly">只读</span></div>
+          <p class="fgs-todo-context" x-text="fgs?.graph?.title || project.project.title"></p>
+        </header>
+        <template x-if="fgs?.planningTodos?.length">
+          <div>
+            <div class="fgs-todo-progress">
+              <div><span>规划进度</span><strong x-text="todoCompleted(fgs.planningTodos)+' / '+fgs.planningTodos.length+' 已完成'"></strong></div>
+              <progress aria-label="阶段计划完成进度" :value="todoCompleted(fgs.planningTodos)" :max="fgs.planningTodos.length"></progress>
+            </div>
+            <ol class="fgs-todo-list">
+              <template x-for="(todo, index) in fgs.planningTodos" :key="index">
+                <li class="fgs-todo-item" :data-state="todo.status">
+                  <span class="fgs-todo-number" aria-hidden="true" x-text="String(index+1).padStart(2,'0')"></span>
+                  <div><span class="fgs-todo-status" x-text="todoStatus(todo.status)"></span><p x-text="todo.content"></p></div>
+                </li>
+              </template>
+            </ol>
+          </div>
+        </template>
+        <div class="fgs-todo-empty" x-show="fgs?.planningTodos?.length === 0"><h4>尚无阶段计划</h4><p>简单任务无需待办；Commander 识别到多阶段依赖后，会在这里记录完整路线。</p></div>
+        <div class="fgs-todo-empty" x-show="!fgs?.planningTodos"><h4>规划清单暂不可用</h4><p>当前服务尚未提供清单，请确认后端已加载最新版本。</p></div>
+        <footer class="fgs-todo-note">由 Commander 维护，随当前任务状态刷新。规划进度不代表 Goal 验收；完成判定仍以 FGS 事实和证据为准。<br>清单保存在运行时内存中，进程重启后清空。</footer>
+      </div>
 
       <div x-show="sideTab === 'steps'" class="flex-1 overflow-y-auto p-4 space-y-3">
         <select aria-label="按目标筛选执行" x-model="fgsStepFilter" class="w-full border rounded p-2 text-xs"><option value="">所有目标的执行</option><template x-for="goal in (fgs?.goals || [])" :key="goal.id"><option :value="goal.id" x-text="`${goal.id} · ${goal.description}`"></option></template></select>
@@ -1131,7 +1160,7 @@
             </div>
             <div class="p-4 space-y-4">
               <div class="space-y-2">
-                <p x-show="fgsSelection?.type === 'finding'" class="text-sm text-violet-700 font-semibold leading-relaxed break-words" x-text="fgsSelectionRecord()?.title"></p>
+                <p x-show="['fact','scope','finding'].includes(fgsSelection?.type)" class="text-sm text-violet-700 font-semibold leading-relaxed break-words" x-text="fgsSelectionRecord()?.title"></p>
                 <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="fgsSelectionRecord()?.description"></p>
               </div>
               <template x-if="['fact', 'scope'].includes(fgsSelection?.type)">
@@ -1150,6 +1179,8 @@
                         <div>
                           <p class="text-slate-600 break-words" x-text="evidence.description"></p>
                           <p x-show="evidence.path" class="font-mono text-[10px] text-slate-400 break-all" x-text="evidence.path"></p>
+                          <button type="button" x-show="evidence.artifactId" @click="openFgsArtifact(evidence)" class="text-sky-600 underline break-all" x-text="evidence.artifactId"></button>
+                          <p class="font-mono text-[10px] text-slate-400 break-all" x-text="[evidence.runId, evidence.toolCallId].filter(Boolean).join(' / ')"></p>
                         </div>
                       </template>
                     </div>
@@ -1213,7 +1244,7 @@
                   <div class="flex items-start justify-between gap-3">
                     <span class="text-slate-400 shrink-0">关联 Fact</span>
                     <span class="flex flex-wrap justify-end gap-x-1.5 gap-y-1">
-                      <template x-for="fid in (fgsSelectionRecord()?.factIds || [])" :key="fid"><button type="button" class="font-mono text-sky-600 underline underline-offset-2 break-all text-right" @click="fgsOpenReference(fid)" x-text="factDisplayId(fid)"></button></template>
+                      <template x-for="fact in (fgsSelectionRecord()?.facts || [])" :key="fact.id"><div class="w-full text-left"><button type="button" class="font-mono text-sky-600 underline underline-offset-2 break-all" @click="fgsOpenReference(fact.id)" x-text="factDisplayId(fact.id)+' · '+fact.title"></button><p class="mt-1 text-slate-600 whitespace-pre-wrap break-words" x-text="fact.description"></p></div></template>
                     </span>
                   </div>
                   <div class="flex items-start justify-between gap-3">
@@ -1225,6 +1256,14 @@
                   <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">创建时间</span><span class="text-slate-600 text-right break-words" x-text="formatTime(fgsSelectionRecord()?.createdAt)"></span></div>
                 </div>
               </template>
+              <div class="space-y-2" x-show="['fact','scope','finding'].includes(fgsSelection?.type) && !replay.active">
+                <button type="button" @click="loadFgsDocument()" class="text-xs text-sky-600 underline">展开 Doc / Evidence 引用</button>
+                <button type="button" x-show="fgsSelectionRecord()?.doc" @click="openFgsArtifact(fgsSelectionRecord()?.doc)" class="text-xs text-sky-600 underline">读取完整 Fact Doc</button>
+                <button type="button" x-show="fgsSelection?.type === 'finding' && (fgsSelectionRecord()?.hasReport || fgsSelectionRecord()?.report)" @click="openFgsReport()" class="text-xs text-violet-600 underline">独立查看 Markdown 漏洞报告</button>
+                <button type="button" x-show="fgsSelection?.type === 'finding' && fgsSelectionRecord()?.severity && ['active','completed'].includes(project.project.status)" @click="requestFgsReport()" class="text-xs text-violet-600 underline">生成 / 更新报告</button>
+                <p x-show="fgsSelectionRecord()?.severity" class="text-xs text-violet-600" x-text="'Severity: '+fgsSelectionRecord()?.severity+' · Assets: '+(fgsSelectionRecord()?.assetIds || []).join(', ')"></p>
+                <p x-show="fgsDocumentLoaded && fgsSelection?.type === 'fact' && !fgsSelectionRecord()?.doc" class="text-xs text-slate-400">未提供独立 Doc；可查现有 Evidence 与产出 Step 执行记录。</p>
+              </div>
               <div class="flex flex-wrap gap-1.5" x-show="!replay.active && project.project.status === 'active'">
                 <button x-show="fgsSelection?.type === 'goal' && fgsSelectionRecord()?.status === 'open'" @click="setFgsStatus('achieved')" class="px-2.5 py-1 rounded-lg border border-teal-200 text-xs text-teal-600 hover:bg-teal-50 transition">验收目标</button>
                 <button x-show="['goal', 'step'].includes(fgsSelection?.type) && fgsSelection?.id !== 'goal' && !['achieved', 'done', 'cancelled'].includes(fgsSelectionRecord()?.status)" @click="setFgsStatus('cancelled')" class="px-2.5 py-1 rounded-lg border border-slate-200 text-xs text-slate-500 hover:bg-slate-50 transition">Cancel</button>
@@ -1312,7 +1351,7 @@
                   </div>
                 </div>
                 <div class="p-4 space-y-3">
-                  <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="fact.description"></p>
+                  <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="fact.title ?? fact.description"></p>
                   <div class="text-xs text-slate-400 space-y-1.5">
                     <template x-if="fact.id === 'origin'">
                       <p>项目范围</p>
@@ -1419,7 +1458,7 @@
         <section>
           <div class="mb-2 flex items-center justify-between"><h3 class="text-[10px] font-semibold uppercase tracking-widest text-violet-600">Finding</h3><div class="flex items-center gap-2"><span class="text-[10px] text-slate-400" x-text="fgs?.findings?.length || 0"></span><button type="button" x-show="!replay.active && project.project.status === 'active'" @click="createFgs('finding')" class="rounded-md border border-violet-200 bg-white px-1.5 py-0.5 text-[10px] text-violet-700" aria-label="Add finding">＋</button></div></div>
           <div class="space-y-2"><template x-for="finding in (fgs?.findings || [])" :key="finding.id"><button type="button" @click="selectFgsNode('finding', finding.id)" class="block w-full rounded-xl border border-violet-200 bg-white p-3 text-left shadow-sm transition" :class="fgsSelection?.type === 'finding' && fgsSelection.id === finding.id ? 'border-violet-400 ring-1 ring-violet-300' : 'hover:bg-violet-50/40'">
-            <div class="flex items-center justify-between gap-2"><span class="text-xs font-semibold text-violet-700" x-text="finding.title"></span><span class="font-mono text-[9px] text-slate-400" x-text="finding.id"></span></div><p class="mt-1 text-xs leading-relaxed text-slate-600" x-text="finding.description"></p>
+            <div class="flex items-center justify-between gap-2"><span class="text-xs font-semibold text-violet-700" x-text="finding.title"></span><span class="font-mono text-[9px] text-slate-400" x-text="finding.id"></span></div><p class="mt-1 text-xs text-slate-400" x-text="finding.factIds.length+' 个支撑 Fact'"></p>
           </button></template></div>
         </section>
 
@@ -3083,6 +3122,15 @@
   </section>
 </div>
 
+<div x-show="fgsArtifactPreview" x-cloak class="fixed inset-0 z-[60] flex items-center justify-center p-4 overlay" @click.self="fgsArtifactPreview=null" @keydown.escape.window="fgsArtifactPreview=null">
+  <section class="snapshot-modal w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden border shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="fgs-artifact-title">
+    <header class="flex items-center justify-between gap-4 border-b border-slate-700 px-5 py-4"><h2 id="fgs-artifact-title" class="text-sm text-slate-100" x-text="fgsArtifactPreview?.title"></h2><button type="button" @click="fgsArtifactPreview=null" class="text-slate-400" aria-label="关闭文档">关闭</button></header>
+    <p class="px-5 pt-3 text-[10px] font-mono text-slate-500 break-all" x-text="fgsArtifactPreview?.id"></p>
+    <pre class="p-5 overflow-auto whitespace-pre-wrap break-words text-xs text-slate-200" x-text="fgsArtifactText()"></pre>
+    <footer class="flex items-center justify-between gap-4 border-t border-slate-700 px-5 py-3"><span class="text-xs text-slate-500" x-text="fgsArtifactPreview ? '已读取 '+fgsArtifactBytes().length+' / '+fgsArtifactPreview.totalBytes+' bytes' : ''"></span><button type="button" x-show="fgsArtifactPreview?.nextOffset !== null" @click="nextFgsArtifactPage()" class="text-xs text-sky-400">继续读取下一页</button><button type="button" x-show="fgsArtifactPreview?.nextOffset === null" @click="downloadFgsArtifact()" class="text-xs text-sky-400">下载原始 Artifact</button></footer>
+  </section>
+</div>
+
 <!-- Toast -->
 <div x-show="toast.show" x-cloak
   x-transition:enter="transition ease-out duration-300"
@@ -3249,7 +3297,7 @@ function redtraceApp() {
     legionProjectTitle(id) { return this.legionProject(id)?.title || id || '未选择项目'; },
     legionTaskTitle(project, key) { return project?.steps.find(s => s.taskKey === key && !s.parentStepId)?.description || project?.steps.find(s => s.taskKey === key)?.description || key || '—'; },
     legionTaskFinished(project, key) { const steps = project.steps.filter(s => s.taskKey === key); return steps.length > 0 && steps.every(s => ['done', 'cancelled'].includes(s.status)); },
-    legionRole(role) { return ({ commander: 'Commander', general: 'General', soldier: 'Soldier', scout: 'Scout' })[role] || '未标注角色'; },
+    legionRole(role) { return ({ commander: 'Commander', general: 'General', soldier: 'Soldier', scout: 'Scout', reporter: 'Reporter' })[role] || '未标注角色'; },
     legionStatus(status) { return ({ idle: '待命', running: '执行中', stopped: '执行已停止', active: '进行中', pending: '待执行', paused: '执行暂停（非 Park）', parked: '已搁置 · Park', unknown: '结果待核验', done: '已完成', success: '成功', failed: '失败', cancelled: '已取消', queued: '已排队，未入模', admitted: '已入模', uncertain: '交付不确定', delivered: '已交付', acknowledged: '已确认', 'needs-reverification': '待目标复验', 'target-verified': '目标已复验' })[status] || status || '未知'; },
     legionPhase(phase) { return ({ open: '未设时限', campaign: '推进中', endgame: '收尾', submission: '仅提交', ended: '已截止' })[phase] || phase || '—'; },
     legionDifficulty(value) { return ({ easy: 'Scout：简单', medium: 'Scout：中等', hard: 'Scout：困难', unclear: 'Scout：尚不明确' })[value] || '待 Scout 分类'; },
@@ -4447,6 +4495,8 @@ function redtraceApp() {
       }
     },
 
+    todoCompleted(todos) { return (todos || []).filter(todo => todo.status === 'completed').length; },
+    todoStatus(status) { return ({pending:'等待前置条件',in_progress:'推进中',completed:'已完成'})[status] || status; },
     async loadProject(id) {
       const replay = this.replay, graphId=this.selectedGraphId;
       const results = await Promise.allSettled([
@@ -4476,6 +4526,7 @@ function redtraceApp() {
     },
     fgsSelectionRecord() {
       if (!this.fgsSelection || !this.fgs) return null;
+      if (this.fgsNodeDetail?.id === this.fgsSelection.id) return this.fgsNodeDetail;
       const source = this.fgsSelection.type === 'goal' ? this.fgs.goals : this.fgsSelection.type === 'step' ? this.fgs.steps : this.fgsSelection.type === 'finding' ? this.fgs.findings : this.fgs.facts;
       return source?.find(item => item.id === this.fgsSelection.id) || null;
     },
@@ -4496,7 +4547,10 @@ function redtraceApp() {
           const title = prompt('Finding 标题'); if (!title?.trim()) return;
           const description = prompt('Finding 内容'); if (!description?.trim()) return;
           const factIds = (prompt('Evidence Fact IDs（逗号分隔）', this.fgs?.facts?.at(-1)?.id || 'origin') || '').split(',').map(v => v.trim()).filter(Boolean); if (!factIds.length) return;
-          payload = { title: title.trim(), description: description.trim(), factIds, creator: 'human' };
+          const type = prompt('漏洞类别（vulnclass）'); if (!type?.trim()) return;
+          const severity = prompt('严重程度：critical / high / medium / low'); if (!severity?.trim()) return;
+          const assetIds = (prompt('受影响资产引用（逗号分隔，未提供可留空）') || '').split(',').map(v => v.trim()).filter(Boolean);
+          payload = { title: title.trim(), description: description.trim(), type: type.trim(), severity: severity.trim(), assetIds, factIds, creator: 'human' };
         }
         const created = await this.api('POST', `/v2/projects/${project}/${type === 'goal' ? 'goals' : type === 'step' ? 'steps' : 'findings'}`, payload);
         await this.loadProject(this.project.project.id); this.updateGraph(); this.selectFgsNode(type, created.id); this.showToast(`${type} 已创建`);
@@ -5372,7 +5426,7 @@ function redtraceApp() {
     summarizeFactLabel(fact) {
       if (fact.id === 'origin') return 'scope';
       if (fact.id === 'goal') return 'Goal';
-      const normalized = fact.description.replace(/\s+/g, ' ').trim();
+      const normalized = (fact.title ?? fact.description ?? fact.id).replace(/\s+/g, ' ').trim();
       const chars = Array.from(normalized);
       if (chars.length <= 24) return normalized || fact.id;
       return `${chars.slice(0, 24).join('')}…`;

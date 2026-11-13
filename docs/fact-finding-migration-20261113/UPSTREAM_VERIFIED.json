@@ -1,0 +1,23 @@
+{
+  "date": "2026-11-13 Asia/Shanghai",
+  "target": "/Users/lxy/Downloads/RedTrace",
+  "parentCommit": "eddd94b7d25c660f5eed9732fda156003fe7425a",
+  "upstream": [
+    {
+      "repository": "/Users/lxy/Downloads/sapper-v2",
+      "remote": "https://github.com/N1nEmAn/sapper-v2",
+      "commit": "7b75e6f1f5d5b4ae0c55878b0dd0994d9b08f1fb",
+      "license": "MIT",
+      "source": "templates/explore.md",
+      "bytesMatch": true
+    },
+    {
+      "repository": "/Users/lxy/Downloads/ARTEX",
+      "remote": "https://github.com/RuoJi6/ARTEX",
+      "commit": "73d5437c5a64559ed803bcd096d2a0a0014a1214",
+      "license": "AGPL-3.0",
+      "source": "agent/promptcatalog.go:ReporterDefaultPrompt",
+      "renderedStringMatch": true
+    }
+  ]
+}

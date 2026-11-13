@@ -1,0 +1,9 @@
+{
+  "command": "npm run check --prefix packages/redtrace-engine",
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "stdout": "\n> @redtrace/engine@0.4.0 check\n> tsc --noEmit\n\nsrc/reporter.ts(14,23): error TS18046: 'args' is of type 'unknown'.\nsrc/reporter.ts(14,51): error TS18046: 'args' is of type 'unknown'.\nsrc/reporter.ts(16,14): error TS18046: 'args' is of type 'unknown'.\nsrc/reporter.ts(20,123): error TS18046: 'args' is of type 'unknown'.\nsrc/reporter.ts(22,162): error TS18046: 'args' is of type 'unknown'.\nsrc/reporter.ts(30,38): error TS18046: 'args' is of type 'unknown'.\nsrc/reporter.ts(31,60): error TS18046: 'args' is of type 'unknown'.\nsrc/reporter.ts(33,82): error TS18046: 'args' is of type 'unknown'.\nsrc/reporter.ts(34,163): error TS18046: 'args' is of type 'unknown'.\ntest/current-fgs.test.ts(36,71): error TS2345: Argument of type 'unknown' is not assignable to parameter of type 'string'.\n",
+  "stderr": "",
+  "exit": 2,
+  "launcherError": "Error: Command failed: /bin/zsh -lc npm run check --prefix packages/redtrace-engine\n",
+  "captureNote": "Original capture helper used String(error) when literal stderr was empty; retained separately as launcherError."
+}

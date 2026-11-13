@@ -1,0 +1,7 @@
+{
+  "command": "/opt/homebrew/opt/node@24/bin/node --check static/fgs-view.js && /opt/homebrew/opt/node@24/bin/node --check static/audit.js && /opt/homebrew/opt/node@24/bin/node --check packages/redtrace-engine/compat/cordis.mjs && /opt/homebrew/opt/node@24/bin/node --check packages/redtrace-engine/compat/legion.mjs",
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "stdout": "",
+  "stderr": "",
+  "exit": 0
+}

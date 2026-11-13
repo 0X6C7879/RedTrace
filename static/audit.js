@@ -459,6 +459,7 @@ function auditPage() {
         general: 'General',
         soldier: 'Soldier',
         scout: 'Scout',
+        reporter: 'Reporter',
         dsh: 'DSH',
         mock: 'Mock',
       }[provider] || provider;

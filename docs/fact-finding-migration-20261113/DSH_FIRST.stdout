@@ -1,0 +1,78 @@
+
+> dsh:test
+> node --test packages/redtrace-dsh/test/*.test.mjs
+
+✔ applyCommonEnv publishes values and the allowlist, and drops removed names (1.633459ms)
+✔ applyCommonEnv with no common_env clears the allowlist (0.138375ms)
+✔ scrubbedParentEnv keeps allowlisted credential-shaped names and drops the rest (2.584209ms)
+✔ mcpSignature is key-order insensitive but content sensitive (190.103958ms)
+✔ does not duplicate a streamed assistant message (101.952042ms)
+✔ projects user messages but not plugin-owned context refreshes (0.235708ms)
+✔ projects streamed thinking and its durable copy (0.251167ms)
+✔ reasoning and text rows carry distinct durable ids (0.186083ms)
+✔ projects tool call arguments and result text (0.201208ms)
+✔ tool result without a matching call carries no title (0.120666ms)
+✔ projects nested PTC calls independently with self-contained completions (0.155417ms)
+✔ out-of-order PTC completions and legacy wrappers retain their own results (5.218083ms)
+✔ projects the system prompt from request headers, deduped per task (0.151083ms)
+✔ accumulateUsage sums disjoint provider buckets across assistant messages (0.156625ms)
+✔ accumulateUsage ignores events without provider usage (0.092291ms)
+✔ native persisted event times and separate system messages survive repeated historical projection (0.1135ms)
+✔ capability stacks mount into concurrent Execute scopes and expose their tools (1019.372416ms)
+✔ running Execute session gains and loses plugin tools without restarting (190.415041ms)
+✔ Spill is Execute-only, session-isolated, hot-reloadable and preserves evidence recovery (330.162541ms)
+✔ host plugin tools disappear from an already mounted Execute session (120.038917ms)
+✔ native Terminal retains state, isolates real Agents, and cleans up on close, disable and disposal (10745.813875ms)
+✔ host capability modules publish their DSH services (20.996875ms)
+✔ offline assets report existing environment overrides and never expose unrelated environment (0.729ms)
+✔ native conclude submits a Fact and finishes directly while keeping external tools blocked (23.112333ms)
+✔ offline assets advertise skill resources only when present without inlining content (1.073083ms)
+✔ webshell plugin registers structured registration and the connectivity probe (1.542042ms)
+✔ webshell_register posts the full connection form with its secret (0.723083ms)
+✔ c2 plugin registers listener, session, credential, profile, payload and session tools (0.703917ms)
+✔ c2 listener creation posts the resource contract with worker provenance (0.983542ms)
+✔ c2 session creation carries the connection material into the secret (0.579709ms)
+✔ staged runtime loads both DSH and adapter code without redirecting source assets (208.306458ms)
+✔ task plugin is default-on and autonomous; explicit stop veto persists (17.127833ms)
+✔ boot mounts enabled plugins in order; kernel entries are locked (2.839291ms)
+✔ removed PTC stays absent even when an older manifest enables it (3.13525ms)
+✔ efficiency features boot enabled by default and remain explicitly switchable (6.946458ms)
+✔ boot honors the manifest: disabled plugins stay unmounted (2.077958ms)
+✔ stop and start toggle fibers live and persist across restarts (4.2165ms)
+✔ plugin stop waits for running session refresh (3.23ms)
+✔ stop rejects unknown ids (1.775ms)
+✔ add validates id, module path, and plugin shape; uninstall removes files (10.515625ms)
+✔ module paths resolve inside a root with a trailing slash (2.596791ms)
+✔ HTTP API: list, add, start/stop, and unknown routes (310.409542ms)
+✔ reverse plugin is default-on, explicit stop persists and can be restarted (21.760291ms)
+✔ Commander reads only hash-verified Project evidence, not arbitrary host/secret paths (25.804209ms)
+✔ native Commander mounts no target filesystem tools and resumes a fresh compacted Session (3301.549834ms)
+✔ auto_max selects the highest exact-model effort regardless of catalog order (1.9625ms)
+✔ auto_max uses max when the exact route exposes it (0.162458ms)
+✔ auto_max preserves the provider default when no reasoning capability is known (0.090709ms)
+✔ an explicit effort is validated against the exact model capability (0.995458ms)
+✔ explicit off works for a model without reasoning metadata (0.183375ms)
+✔ Soldier can lazily load native REA without Commander tool selection; management veto revokes live scopes (7944.841958ms)
+✔ official Skill is byte-identical to the pinned package, with complete local references (6.420875ms)
+✔ reverse env defaults compact, preserves overrides and does not copy model credentials (0.134458ms)
+✔ native Skill loads real REA MCP only on demand, isolates Runs, bounds results and revokes live tools (4365.699709ms)
+ℹ {"initial":{"tools":14,"schemaBytes":17999},"activeTools":170,"compactSchemaBytes":254673,"statusPreviewBytes":2025}
+✔ compact and full native MCP input schemas retain identical validation semantics (5304.444959ms)
+ℹ {"checked":736,"fullBytes":436594,"compactBytes":254673,"maxCompactParametersBytes":11026}
+{"level":30,"time":1794556937877,"application":"rea","mode":"mcp","layer":"server","tool":"analyze_javascript_application","durationMs":2731.48,"status":"ok","msg":"MCP tool execution completed"}
+{"level":40,"time":1794556937903,"application":"rea","mode":"mcp","layer":"server","tool":"inspect_evm_interface","durationMs":0.8,"status":"error","msg":"MCP tool execution completed"}
+{"level":30,"time":1794556939173,"application":"rea","mode":"mcp","layer":"server","tool":"inspect_managed_artifact","durationMs":19.46,"status":"ok","msg":"MCP tool execution completed"}
+{"level":30,"time":1794556939249,"application":"rea","mode":"mcp","layer":"server","tool":"inspect_managed_members","durationMs":10.72,"status":"ok","msg":"MCP tool execution completed"}
+{"level":40,"time":1794556939320,"application":"rea","mode":"mcp","layer":"server","tool":"inspect_jeb_client","durationMs":42.79,"status":"error","msg":"MCP tool execution completed"}
+✔ real JavaScript/managed evidence and CLI, with structured EVM/optional-provider boundaries (6506.7005ms)
+﹣ real Ghidra ELF/PE decompilation, same-Run reuse, cancellation and process cleanup (0.157417ms) # SKIP
+✔ session query and identities stay absent for all roles, including an older manifest (705.264375ms)
+✔ channel plugin toggle updates live remote tool registrations (1.764625ms)
+ℹ tests 59
+ℹ suites 0
+ℹ pass 58
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 24714.441042

@@ -1,0 +1,10 @@
+ packages/redtrace-engine/compat/legion.mjs         |  5 ++--
+ packages/redtrace-engine/src/graph-api.ts          |  5 ++--
+ packages/redtrace-engine/src/index.ts              |  2 +-
+ packages/redtrace-engine/src/legion-missions.ts    |  3 +-
+ packages/redtrace-engine/src/legion-store.ts       |  9 ++++++
+ packages/redtrace-engine/src/legion-tools.ts       |  8 ++++-
+ .../redtrace-engine/test/legion-console.test.ts    | 21 +++++++++++++
+ static/index.html                                  | 33 ++++++++++++++++++++-
+ static/legion.css                                  | 34 ++++++++++++++++++++++
+ 9 files changed, 112 insertions(+), 8 deletions(-)

@@ -1,0 +1,7 @@
+{
+  "command": "/Users/lxy/Downloads/RedTrace/docs/fact-finding-migration-20261113/ROLLBACK.sh /tmp/redtrace-fact-finding-rollback-KOBddU",
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "stdout": "Restored baseline code bytes in /tmp/redtrace-fact-finding-rollback-KOBddU\n",
+  "stderr": "",
+  "exit": 0
+}

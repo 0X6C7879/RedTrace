@@ -1,0 +1,9 @@
+{
+  "label": "TODOS_ADAPTED",
+  "command": "/opt/homebrew/opt/node@24/bin/node --test packages/redtrace-engine/test/legion-todos.test.ts",
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "pid": 99718,
+  "stdout": "✔ Commander reuses Graph memory across activations, isolated by Graph and Project; restart is empty (59.721083ms)\n✔ TodoStore owns snapshots rather than caller arrays (0.156458ms)\n✔ TodoWrite validates only the simple schema and existing Project/Graph boundary (6.143375ms)\n✔ Scout, General, Soldier and ordinary execution tools never register TodoWrite even if given a Store (38.940875ms)\n✔ both Commander modes get serial-chain doctrine without changing Worker missions (0.236084ms)\nTODOS_NATIVE_DSH=true; wakes=5; fresh_session_memory=true; resumed_session_memory=true; failure_does_not_advance=true; Step_done_without_required_Fact_does_not_advance=true; Fact_advances_next_stage=true; no_duplicate_dispatch=true; independent_parallel=true; model=local-protocol-fixture\n✔ native DSH wake-ups retain TodoLists, wait for Facts after failure, and dispatch only the next serial stage (1070.476459ms)\n✔ project-detail HTTP snapshot reads current Graph TodoList from the Commander runtime without changing FGS (169.47625ms)\nℹ tests 7\nℹ suites 0\nℹ pass 7\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 2037.352959\n",
+  "stderr": "",
+  "exit": 0
+}

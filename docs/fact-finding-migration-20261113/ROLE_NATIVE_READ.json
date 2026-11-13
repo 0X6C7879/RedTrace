@@ -1,0 +1,7 @@
+{
+  "command": "tar -tzf /Users/lxy/Downloads/RedTrace/docs/fact-finding-migration-20261113/MODIFIED_FILE.tar.gz | wc -l; /bin/sh -n /Users/lxy/Downloads/RedTrace/docs/fact-finding-migration-20261113/ROLLBACK.sh; test -x /Users/lxy/Downloads/RedTrace/docs/fact-finding-migration-20261113/ROLLBACK.sh",
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "stdout": "     448\n",
+  "stderr": "",
+  "exit": 0
+}

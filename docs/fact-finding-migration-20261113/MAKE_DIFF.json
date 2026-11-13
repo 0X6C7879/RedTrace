@@ -1,0 +1,7 @@
+{
+  "command": "/opt/homebrew/bin/python3.13 /Users/lxy/Downloads/RedTrace/docs/fact-finding-migration-20261113/make-diff.py",
+  "cwd": "/Users/lxy/Downloads/RedTrace",
+  "stdout": "",
+  "stderr": "",
+  "exit": 0
+}

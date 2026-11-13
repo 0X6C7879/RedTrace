@@ -1,0 +1,65 @@
+{
+  "campaign": {
+    "projectId": "proj_001",
+    "sessionId": "command-d06afbcb-b393-457d-a02e-62f9f70da2f7",
+    "status": "idle",
+    "state": "",
+    "cursors": {},
+    "remainingMs": null,
+    "phase": "open"
+  },
+  "messages": [],
+  "projects": [
+    {
+      "id": "proj_001",
+      "title": "授权环境 · 多阶段验证",
+      "mode": "general",
+      "objective": "验证完整阶段路线",
+      "status": "active",
+      "revision": 1,
+      "campaign": {
+        "projectId": "proj_001",
+        "sessionId": "command-d06afbcb-b393-457d-a02e-62f9f70da2f7",
+        "status": "idle",
+        "state": "",
+        "cursors": {}
+      },
+      "graphs": [
+        {
+          "id": "main-proj_001",
+          "projectId": "proj_001",
+          "type": "main",
+          "taskKey": null,
+          "title": "授权环境 · 多阶段验证",
+          "status": "active",
+          "originId": "origin",
+          "goalId": "goal",
+          "createdAt": "2026-11-13T04:50:05.149Z",
+          "updatedAt": "2026-11-13T04:50:05.149Z",
+          "revision": 0,
+          "factSeq": 0,
+          "evidenceSeq": 0,
+          "hintSeq": 0,
+          "endedSeq": 0
+        }
+      ],
+      "decisions": [],
+      "runs": [],
+      "tactics": [],
+      "instances": {},
+      "scopeId": "origin",
+      "goals": [
+        {
+          "id": "goal",
+          "graphId": "main-proj_001",
+          "description": "验证完整阶段路线",
+          "status": "open",
+          "version": 1,
+          "evidenceIds": []
+        }
+      ],
+      "steps": []
+    }
+  ],
+  "transfers": []
+}

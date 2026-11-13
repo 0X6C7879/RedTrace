@@ -1,0 +1,49 @@
+{
+  "modified": [
+    "packages/redtrace-engine/compat/cordis.mjs",
+    "packages/redtrace-engine/compat/legion.mjs",
+    "packages/redtrace-engine/src/fgs.ts",
+    "packages/redtrace-engine/src/graph-api.ts",
+    "packages/redtrace-engine/src/index.ts",
+    "packages/redtrace-engine/src/legion-missions.ts",
+    "packages/redtrace-engine/src/legion-tools.ts",
+    "packages/redtrace-engine/src/plan-guard.ts",
+    "packages/redtrace-engine/src/project-evidence.ts",
+    "packages/redtrace-engine/src/runner.ts",
+    "packages/redtrace-engine/src/scheduler.ts",
+    "packages/redtrace-engine/src/store.ts",
+    "packages/redtrace-engine/src/types.ts",
+    "packages/redtrace-engine/test/dsh-loop.test.ts",
+    "packages/redtrace-engine/test/fgs.test.ts",
+    "packages/redtrace-engine/test/legion-experience.test.ts",
+    "packages/redtrace-engine/test/legion-runtime.fixture.mjs",
+    "packages/redtrace-engine/test/legion-todos.fixture.mjs",
+    "packages/redtrace-engine/test/runtime-contract.test.ts",
+    "packages/redtrace-engine/test/tsecbench-reason.test.ts",
+    "static/audit.js",
+    "static/fgs-view.js",
+    "static/index.html"
+  ],
+  "added": [
+    "packages/redtrace-engine/prompts/UPSTREAM.md",
+    "packages/redtrace-engine/prompts/artex-report-template.md",
+    "packages/redtrace-engine/prompts/reporter.md",
+    "packages/redtrace-engine/prompts/sapper-fact-layers.md",
+    "packages/redtrace-engine/prompts/upstream/ARTEX-LICENSE",
+    "packages/redtrace-engine/prompts/upstream/SAPPER-LICENSE",
+    "packages/redtrace-engine/prompts/upstream/artex-reporter.md",
+    "packages/redtrace-engine/prompts/upstream/sapper-explore.md",
+    "packages/redtrace-engine/src/graph-content.ts",
+    "packages/redtrace-engine/src/reporter.ts",
+    "packages/redtrace-engine/test/fact-finding.test.ts",
+    "packages/redtrace-engine/test/reporter-runtime.fixture.mjs",
+    "packages/redtrace-engine/test/reporter-runtime.test.ts"
+  ],
+  "untouchedInitialDirty": [
+    "packages/redtrace-engine/src/legion-store.ts",
+    "packages/redtrace-engine/test/legion-console.test.ts",
+    "static/legion.css",
+    "packages/redtrace-engine/src/legion-todos.ts",
+    "packages/redtrace-engine/test/legion-todos.test.ts"
+  ]
+}
