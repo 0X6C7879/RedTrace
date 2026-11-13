@@ -174,17 +174,18 @@ export async function apply(ctx, options) {
   try {
     await manager.boot(); registerPluginRoutes(ctx, manager)
     commanderController = createCommanderController(ctx, engine,()=>!!state()?.presets.has('commander'))
+    engine.deletion.stopRuntime=async id=>{await commanderController.stop(id);await engine.scheduler.stopProject(id)}
     if (manager.running('redtrace-scheduler')) commanderController.start()
     engine.router.add('GET', '/runtime/config', async () => { await refresh(); return state()?.snapshot ?? { revision: '', workers: [] } })
-    engine.router.add('GET', '/v2/legion/session/events', c => readCommanderLog(ctx, engine, queryNumber(c.url, 'offset', 0), queryNumber(c.url, 'limit', 100, 1, 500), c.signal))
-    engine.router.add('POST','/v2/legion/resume',()=>commanderController.resume())
-    engine.router.add('POST','/v2/legion/pause',async()=>{await commanderController.close();await engine.scheduler.close();engine.legion.saveCampaign({...engine.legion.campaign(),status:'stopped'});return engine.legion.board()})
-    engine.router.add('POST','/v2/legion/deadline',async c=>{const input=await body(c.req,Type.Object({deadline:Type.Integer({minimum:1})}));return engine.legion.setDeadline(input.deadline)})
+    engine.router.add('GET', '/v2/legion/session/events', c => readCommanderLog(ctx, engine, queryNumber(c.url, 'offset', 0), queryNumber(c.url, 'limit', 100, 1, 500), c.signal, c.url.searchParams.get('projectId')))
+    engine.router.add('POST','/v2/legion/resume',async c=>{const b=await body(c.req,Type.Object({projectId:Type.String({minLength:1})}));engine.store.project(b.projectId);return commanderController.resume(b.projectId)})
+    engine.router.add('POST','/v2/legion/pause',async c=>{const b=await body(c.req,Type.Object({projectId:Type.String({minLength:1})}));await commanderController.close(b.projectId);return new engine.legion.constructor(engine.store,b.projectId).board()})
+    engine.router.add('POST','/v2/legion/deadline',async c=>{const input=await body(c.req,Type.Object({projectId:Type.String({minLength:1}),deadline:Type.Integer({minimum:1})}));return engine.legion.setDeadline(input.deadline,input.projectId)})
     engine.router.add('POST', '/v2/legion/command', async c => {
-      const input = await body(c.req, Type.Object({ worker: Type.String({ minLength: 1 }) }))
+      const input = await body(c.req, Type.Object({projectId:Type.String({minLength:1}), worker: Type.String({ minLength: 1 }) }))
       const config = engine.configuration.resolvedSnapshot().config
       if(!state()?.presets.has('commander'))throw new Error('Commander preset is disabled')
-      return runCommander(ctx, engine, config.workers.find(worker => worker.name === input.worker), AbortSignal.timeout(config.decideTimeout * 1000))
+      return runCommander(ctx, engine, config.workers.find(worker => worker.name === input.worker), AbortSignal.timeout(config.decideTimeout * 1000),input.projectId)
     })
     watcher = watch(path.dirname(engine.configuration.filename), (_event, filename) => {
       if (!filename || String(filename) === path.basename(engine.configuration.filename)) void refresh().catch(error => ctx.logger.warn(error))
@@ -201,7 +202,7 @@ export async function apply(ctx, options) {
     const task = { usage: { inputTokens: run.inputTokens, outputTokens: run.outputTokens, cacheReadTokens: run.cacheReadTokens, cacheWriteTokens: run.cacheWriteTokens }, type: step?.role ?? 'soldier', projectId: run.projectId, intentId: run.stepId ?? undefined,
       worker: worker.name, sessionId: run.id, runId: run.id, committed: false, notificationEpoch: randomUUID(), server: options.server, startedAt: Date.now(), executionProfile: step?.executionProfile ?? 'direct' }
     if (!shared.presets.has(task.type)) throw new Error(`Cordis task preset ${task.type} is disabled`)
-    const cwd = path.join(config.workspaceRoot, run.projectId); await mkdir(cwd, { recursive: true })
+    const cwd = run.workspaceRoot ?? path.join(config.workspaceRoot, run.projectId); await mkdir(cwd, { recursive: true })
     let finished = false, concludeOnly = false, handle, legionMailbox
     let refreshLiveTools = () => {}
     const tools = graphTools(context, () => {
@@ -264,7 +265,7 @@ export async function apply(ctx, options) {
       if (String(session.id) !== run.id) return
       const data = event.data ?? {}
       if (event.type === 'assistant/chunk' && ['text-delta', 'reasoning-delta'].includes(data.chunk?.type)) {
-        for (const projected of eventProjection(task, event)) store.changes.emit('audit', run.projectId, { ...projected, project_id: run.projectId, run_id: run.id })
+        for (const projected of eventProjection(task, event)) store.changes.emit('audit', run.projectId, { ...projected, project_id: run.projectId, graph_id:run.graphId, run_id: run.id })
         return
       }
       if (event.type === 'step/start') store.metricStart(run.id, `model-${data.turn}-${data.step}`, 'model')

@@ -49,9 +49,9 @@ test('dispatch health and scheduling never load the full graph with 20,083 nodes
   const store = new Store(':memory:'), id = store.createProject({ title: 'Large', origin: 'Scope', goal: 'Goal' }).project.id
   const initial = store.claim(id,'execute',worker,store.addStep(id,{description:'Legion read-only fixture',sourceIds:['origin'],role:'soldier',taskKey:'fixture'}).id); store.finishRun(initial.id, 'succeeded')
   store.addStep(id, { description: 'Wait for shutdown', sourceIds: ['origin'] })
-  const insert = store.db.prepare('INSERT INTO nodes VALUES (?,?,?,?)')
+  const insert = store.db.prepare('INSERT INTO nodes(project_id,id,kind,data,graph_id) VALUES (?,?,?,?,?)')
   store.db.exec('BEGIN')
-  for (let i = 0; i < 20_080; i++) insert.run(id, `bulk-${i}`, 'fact', JSON.stringify({ id: `bulk-${i}`, projectId: id, kind: 'fact', description: 'bulk', stepId: null, evidence: [], creator: 'test', createdAt: '' }))
+  for (let i = 0; i < 20_080; i++) insert.run(id, `bulk-${i}`, 'fact', JSON.stringify({ id: `bulk-${i}`, projectId: id, kind: 'fact', description: 'bulk', stepId: null, evidence: [], creator: 'test', createdAt: '',graphId:'main-'+id }), 'main-'+id)
   store.db.exec('COMMIT')
   let graphCalls = 0
   const graph = store.graph.bind(store)

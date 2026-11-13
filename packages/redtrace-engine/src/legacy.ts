@@ -9,14 +9,14 @@ export function legacyIntent(step: Step, run?: Run) {
     retry_after: step.retryAfter ?? null, circuit_open: step.circuitOpen ?? false, state, attempt_count: step.attempts, cumulative_runtime_ms: step.runtimeMs ?? 0, fact_yield: step.factIds.length, last_progress_at: null }
 }
 export function legacyProjectInfo(p: Project, _historicalRun?: Run) {
-  return { id: p.id, title: p.title, status: p.status, initial_mission_enabled: p.bootstrap, bootstrap_enabled: p.bootstrap, created_at: p.createdAt, planning_revision: p.planningRevision }
+  return { id: p.id, mode:p.mode, title: p.title, status: p.status, initial_mission_enabled: p.bootstrap, bootstrap_enabled: p.bootstrap, created_at: p.createdAt, planning_revision: p.planningRevision }
 }
 export function legacyProject(store: Store, id: string) {
   const graph = store.graph(id), p = graph.project, runs = store.runs(id)
   const decide = runs.find(r => r.activity === 'decide' && r.status === 'running'), latest = new Map<string, Run>()
   for (const run of runs) if (run.stepId) latest.set(run.stepId, run)
   const project = legacyProjectInfo(p, decide)
-  return { project, facts: [...graph.facts.map(f => ({ id: f.id, description: f.description })), { id: 'goal', description: graph.goals.find(g => g.id === 'goal')!.description }],
+  return { project, facts: [...graph.facts.map(f => ({ id: f.id, description: f.description })), ...graph.goals.filter(g=>!g.parentId).map(g=>({id:g.id,description:g.description}))],
     intents: graph.steps.filter(s => !s.deleted).map(s => legacyIntent(s, latest.get(s.id))),
     hints: graph.hints.map(h => ({ id: h.id, content: h.content, creator: h.creator, created_at: h.createdAt })), blackboard_revision: p.revision }
 }

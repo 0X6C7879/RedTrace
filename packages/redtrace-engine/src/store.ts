@@ -3,8 +3,8 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { activeEvidence, HttpError, integer, now, requiredText } from './types.ts'
-import type { Activity, Evidence, Fact, Finding, Goal, Graph, GraphEvent, GraphNode, Input, Json, LegionAssignment, Project, Run, Step, Worker } from './types.ts'
+import { activeEvidence, HttpError, integer, now, requiredText, isScopeId } from './types.ts'
+import type { Activity, Evidence, Fact, Finding, Goal, Graph, GraphEvent, GraphNode, Input, Json, LegionAssignment, Project, ProjectGraph, Run, Step, Worker } from './types.ts'
 
 export const ACTIVE_NODE_SQL = "COALESCE(json_extract(data,'$.deleted'),0)=0"
 export interface StepUpdate { description?: string; sourceIds?: string[]; goalId?: string; priority?: number; status?: 'cancelled' | 'pending'; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; expectedVersion?: number; mode?: 'amend' | 'replace' }
@@ -58,6 +58,52 @@ export function conversationAuditEvents(event: Record<string, Json>): Record<str
 export class Store {
   readonly db: DatabaseSync
   readonly changes = new EventEmitter()
+  readonly projectScope?: string
+  readonly graphScope?: string
+  forProject(projectId: string): Store {
+    this.project(projectId)
+    const view = Object.create(this) as Store
+    Object.defineProperty(view, 'projectScope', { value: projectId })
+    view.transaction = fn => this.transaction(fn)
+    return view
+  }
+  forGraph(projectId: string, graphId: string): Store {
+    this.projectGraph(projectId, graphId)
+    const view = this.forProject(projectId)
+    Object.defineProperty(view, 'graphScope', { value: graphId })
+    return view
+  }
+  private graphFilter() { return this.graphScope ? " AND graph_id='" + this.graphScope.replaceAll("'", "''") + "'" : '' }
+  projectGraphs(projectId: string): ProjectGraph[] {
+    this.project(projectId)
+    return this.db.prepare('SELECT data FROM project_graphs WHERE project_id=? ORDER BY rowid').all(projectId).map(r => JSON.parse(String(r.data)))
+  }
+  projectGraph(projectId: string, graphId: string): ProjectGraph {
+    this.project(projectId)
+    const row = this.db.prepare('SELECT data FROM project_graphs WHERE project_id=? AND id=?').get(projectId, graphId)
+    if (!row) throw new HttpError(404, 'Graph not found in this Project')
+    return JSON.parse(String(row.data))
+  }
+  scopeFact(projectId:string): Fact {
+    this.project(projectId)
+    return JSON.parse(String(this.db.prepare("SELECT data FROM nodes WHERE project_id=? AND id='origin'").get(projectId)!.data))
+  }
+  private rootGoalId(projectId: string) { return this.graphScope ? this.projectGraph(projectId, this.graphScope).goalId : 'goal' }
+  private originId(projectId: string) { return this.graphScope ? this.projectGraph(projectId, this.graphScope).originId : 'origin' }
+  createGraph(projectId: string, input: {taskKey: string; title: string; origin: string; goal: string}): ProjectGraph {
+    return this.transaction(() => {
+      if (this.writable(projectId).mode !== 'benchmark') throw new HttpError(409, 'General has exactly one main Graph')
+      requiredText(input.taskKey, 'taskKey')
+      if (this.projectGraphs(projectId).some(g => g.taskKey === input.taskKey)) throw new HttpError(409, 'taskKey already has a Graph')
+      const id = 'graph-' + randomUUID(), createdAt = now()
+      const graph: ProjectGraph = {id, projectId, type:'benchmark_task', taskKey:input.taskKey, title:requiredText(input.title,'title'), status:'active', originId:'origin-'+id, goalId:'goal-'+id, createdAt, updatedAt:createdAt, revision:0, factSeq:0, evidenceSeq:0, hintSeq:0, endedSeq:0}
+      this.db.prepare('INSERT INTO project_graphs VALUES (?,?,?)').run(id, projectId, JSON.stringify(graph))
+      this.saveNode({id:graph.originId, graphId:id, projectId, kind:'fact', description:requiredText(input.origin,'origin'), creator:'commander', createdAt, stepId:null, evidence:[]})
+      this.saveNode({id:graph.goalId, graphId:id, projectId, kind:'goal', description:requiredText(input.goal,'goal'), creator:'commander', createdAt, parentId:null, status:'open', evidenceIds:[]})
+      this.event(projectId,'graph.created',this.node(projectId,graph.originId),{})
+      return this.projectGraph(projectId,id)
+    })
+  }
   private depth = 0
   private pending = new Set<string>()
   private pendingSteps = new Set<string>()
@@ -111,7 +157,39 @@ export class Store {
     // Counters of deleted projects would otherwise linger forever and are never read again.
     this.db.prepare('DELETE FROM counters WHERE scope NOT IN (SELECT id FROM projects)').run()
     try { this.migrateCurrentFgs() } catch (error) { this.db.close(); throw error }
+    this.migrateProjectGraphs()
     this.changes.setMaxListeners(0)
+  }
+  private migrateProjectGraphs() {
+    this.transaction(() => {
+      this.db.exec("CREATE TABLE IF NOT EXISTS project_graphs(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, data TEXT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS graphs_task ON project_graphs(project_id,json_extract(data,'$.taskKey'))")
+      for (const table of ['nodes','events','runs']) {
+        if (!this.db.prepare('PRAGMA table_info('+table+')').all().some(c => c.name === 'graph_id')) this.db.exec('ALTER TABLE '+table+' ADD COLUMN graph_id TEXT REFERENCES project_graphs(id)')
+        this.db.exec('CREATE INDEX IF NOT EXISTS '+table+'_graph ON '+table+'(project_id,graph_id)')
+      }
+      this.db.exec('CREATE TABLE IF NOT EXISTS legion_messages(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,sender TEXT NOT NULL,receiver TEXT NOT NULL,data TEXT NOT NULL,created_at TEXT NOT NULL)')
+      this.db.exec('CREATE TABLE IF NOT EXISTS project_campaigns(project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE, data TEXT NOT NULL)')
+      if (this.db.prepare('SELECT 1 FROM metadata WHERE key=?').get('project-graphs')) return
+      const legacyCampaign = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='campaign'").get() ? this.db.prepare('SELECT data FROM campaign WHERE id=1').get() : undefined
+      if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='campaign'").get()) this.db.exec('ALTER TABLE campaign RENAME TO campaign_archive')
+      const projects=this.projects()
+      for(const project of projects){
+        const saved=projects.length===1&&legacyCampaign ? JSON.parse(String(legacyCampaign.data)) : {sessionId:'command-'+randomUUID(),status:'idle',state:'',cursors:{}}
+        saved.projectId=project.id; saved.cursors=Object.fromEntries(Object.entries(saved.cursors??{}).filter(([id])=>id===project.id))
+        this.db.prepare('INSERT INTO project_campaigns VALUES (?,?)').run(project.id,JSON.stringify(saved))
+      }
+      for (const project of this.projects()) {
+        const id = 'main-' + project.id, createdAt = project.createdAt
+        const graph: ProjectGraph = {id, projectId:project.id, type:'main', taskKey:null, title:project.title, status:project.status==='completed'?'completed':'active', originId:'origin', goalId:'goal', createdAt, updatedAt:now(), revision:project.revision, factSeq:project.factSeq, evidenceSeq:project.evidenceSeq??project.factSeq, hintSeq:project.hintSeq??0, endedSeq:project.endedSeq}
+        this.db.prepare('INSERT INTO project_graphs VALUES (?,?,?)').run(id,project.id,JSON.stringify(graph))
+        project.mode='general'; this.saveProject(project)
+        for (const table of ['nodes','runs']) this.db.prepare('UPDATE '+table+" SET graph_id=?,data=json_set(data,'$.graphId',?) WHERE project_id=?").run(id,id,project.id)
+        this.db.prepare('UPDATE events SET graph_id=? WHERE project_id=?').run(id,project.id)
+      }
+      if(this.db.prepare('PRAGMA foreign_key_check').all().length)throw new Error('Graph migration foreign key validation failed')
+      this.db.prepare('INSERT INTO metadata VALUES (?,?)').run('project-graphs','1')
+      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS graphs_main ON project_graphs(project_id) WHERE json_extract(data,'$.type')='main'")
+    })
   }
   private migrateCurrentFgs() {
     if (this.db.prepare('SELECT value FROM metadata WHERE key=?').get('fgs-current-only')) return
@@ -131,7 +209,7 @@ export class Store {
             if (!next || seen.has(next) || !nodes.has(next)) throw new Error(`FGS migration ${project.id}/${id}: invalid merge chain`)
             seen.add(next); target = nodes.get(next)!
           }
-          if (target.kind !== source.kind || target.id === 'origin') throw new Error(`FGS migration ${project.id}/${id}: merge target must be evidence of the same kind`)
+          if (target.kind !== source.kind || isScopeId(target.id)) throw new Error(`FGS migration ${project.id}/${id}: merge target must be evidence of the same kind`)
           redirects.set(id, target.id)
         }
         for (const node of nodes.values()) {
@@ -214,6 +292,7 @@ export class Store {
     return `proj_${String(n).padStart(3, '0')}`
   }
   project(id: string): Project {
+    if (this.projectScope && id !== this.projectScope) throw new HttpError(403, 'Cannot access another Project')
     const row = this.db.prepare('SELECT data FROM projects WHERE id=?').get(id) as { data: string } | undefined
     if (!row) throw new HttpError(404, 'Project not found')
     const project = JSON.parse(row.data) as Project
@@ -223,7 +302,7 @@ export class Store {
     project.acknowledgedHintSeq ??= 0
     return project
   }
-  projects(): Project[] { return (this.db.prepare('SELECT data FROM projects ORDER BY id').all() as { data: string }[]).map(r => JSON.parse(r.data)) }
+  projects(): Project[] { return (this.db.prepare('SELECT data FROM projects ORDER BY id').all() as { data: string }[]).map(r => JSON.parse(r.data)).filter(p => !this.projectScope || p.id === this.projectScope) }
   setBenchmarkHosts(id: string, challenge: string, hosts?: string[]) {
     return this.transaction(() => {
       const project = this.writable(id)
@@ -236,9 +315,12 @@ export class Store {
   private saveProject(p: Project) { this.db.prepare('UPDATE projects SET data=? WHERE id=?').run(JSON.stringify(p), p.id) }
   node<T extends GraphNode = GraphNode>(projectId: string, id: string, kind?: T['kind']): T {
     this.project(projectId)
+    if (id === 'origin') id = this.originId(projectId)
+    if (id === 'goal') id = this.rootGoalId(projectId)
     const row = this.db.prepare('SELECT data FROM nodes WHERE project_id=? AND id=?').get(projectId, id) as { data: string } | undefined
     if (!row) throw new HttpError(404, 'Node not found')
     const value = { version: 1, ...JSON.parse(row.data) } as T
+    if (this.graphScope && value.graphId !== this.graphScope) throw new HttpError(404, 'Node belongs to another Graph')
     if (kind && value.kind !== kind) throw new HttpError(404, `${kind} not found`)
     return value
   }
@@ -247,24 +329,45 @@ export class Store {
     if (!kinds.length) return []
     const placeholders = kinds.map(() => '?').join(',')
     const offset = integer(page?.offset ?? 0, 'node offset'), limit = page?.limit === undefined ? undefined : integer(page.limit, 'node limit', 1)
-    const sql = `SELECT data FROM nodes WHERE project_id=? AND kind IN (${placeholders}) AND ${ACTIVE_NODE_SQL} ORDER BY rowid${limit === undefined ? '' : ' LIMIT ? OFFSET ?'}`
+    const sql = `SELECT data FROM nodes WHERE project_id=? AND kind IN (${placeholders}) AND ${ACTIVE_NODE_SQL}${this.graphFilter()} ORDER BY rowid${limit === undefined ? '' : ' LIMIT ? OFFSET ?'}`
     return (this.db.prepare(sql).all(...(limit === undefined ? [projectId, ...kinds] : [projectId, ...kinds, limit, offset])) as { data: string }[])
       .map(row => ({ version: 1, ...JSON.parse(row.data) }))
   }
   nodeCount(projectId: string, kind: GraphNode['kind']): number {
     this.project(projectId)
-    return Number((this.db.prepare(`SELECT COUNT(*) AS value FROM nodes WHERE project_id=? AND kind=? AND ${ACTIVE_NODE_SQL}`).get(projectId, kind) as { value: number }).value)
+    return Number((this.db.prepare(`SELECT COUNT(*) AS value FROM nodes WHERE project_id=? AND kind=? AND ${ACTIVE_NODE_SQL}${this.graphFilter()}`).get(projectId, kind) as { value: number }).value)
   }
   saveNode(node: GraphNode) {
+    if(this.graphScope){
+      const resolve=(id:string)=>id==='origin'?this.originId(node.projectId):id==='goal'?this.rootGoalId(node.projectId):id
+      if(node.kind==='step'){node.goalId=resolve(node.goalId);node.sourceIds=node.sourceIds.map(resolve)}
+      if(node.kind==='goal'&&node.parentId)node.parentId=resolve(node.parentId)
+    }
     const prior = this.db.prepare('SELECT data FROM nodes WHERE project_id=? AND id=?').get(node.projectId, node.id)
+    const previous = prior ? JSON.parse(String(prior.data)) as GraphNode : undefined
+    const refs = node.kind === 'step' ? [node.goalId, ...node.sourceIds, ...node.factIds, ...(node.parentStepId ? [node.parentStepId] : [])] : node.kind === 'goal' ? [...(node.parentId ? [node.parentId] : []), ...node.evidenceIds] : node.kind === 'finding' ? node.factIds : node.stepId ? [node.stepId] : []
+    const referenced = [...refs,...('producerStepIds' in node?node.producerStepIds??[]:[])].map(id => this.node(node.projectId,id))
+    const main = this.projectGraphs(node.projectId).find(g => g.type === 'main')
+    node.graphId ??= this.graphScope ?? referenced.find(n => n.graphId)?.graphId ?? main?.id ?? null
+    if (previous && previous.graphId !== node.graphId || this.graphScope && node.graphId !== this.graphScope) throw new HttpError(422,'Cannot move a node between Graphs')
+    for (const ref of referenced) if (ref.graphId !== node.graphId && ref.id !== 'origin') throw new HttpError(422,'Cross-Graph dependency')
+    if (!node.graphId && node.id !== 'origin') throw new HttpError(422,'graphId is required')
+    if (node.graphId) this.projectGraph(node.projectId,node.graphId)
+    if(node.kind==='fact')for(const evidence of node.evidence){
+      if(evidence.runId){const producer=this.db.prepare('SELECT project_id,graph_id FROM runs WHERE id=?').get(evidence.runId);if(producer&&(producer.project_id!==node.projectId||producer.graph_id!==node.graphId))throw new HttpError(422,'Cross-Graph evidence producer')}
+      if(evidence.artifactId&&this.db.prepare("SELECT 1 FROM sqlite_master WHERE name='project_artifact_graphs'").get()){
+        const known=this.db.prepare('SELECT 1 FROM project_artifact_graphs WHERE project_id=? AND artifact_id=?').get(node.projectId,evidence.artifactId)
+        if(known&&!this.db.prepare('SELECT 1 FROM project_artifact_graphs WHERE project_id=? AND graph_id=? AND artifact_id=?').get(node.projectId,node.graphId??null,evidence.artifactId))throw new HttpError(422,'Cross-Graph artifact reference')
+      }
+    }
     node.version = prior ? (JSON.parse(String(prior.data)).version ?? 1) + 1 : 1
-    this.db.prepare('INSERT INTO nodes VALUES (?,?,?,?) ON CONFLICT(project_id,id) DO UPDATE SET data=excluded.data')
-      .run(node.projectId, node.id, node.kind, JSON.stringify(node))
+    this.db.prepare('INSERT INTO nodes(project_id,id,kind,data,graph_id) VALUES (?,?,?,?,?) ON CONFLICT(project_id,id) DO UPDATE SET data=excluded.data')
+      .run(node.projectId, node.id, node.kind, JSON.stringify(node), node.graphId ?? null)
   }
   graph(id: string): Graph {
     const project = this.project(id)
-    const all: GraphNode[] = (this.db.prepare(`SELECT data FROM nodes WHERE project_id=? AND ${ACTIVE_NODE_SQL} ORDER BY rowid`).all(id) as { data: string }[]).map(r => JSON.parse(r.data))
-    return { project, facts: all.filter((n): n is Fact => n.kind === 'fact'), goals: all.filter((n): n is Goal => n.kind === 'goal'),
+    const all: GraphNode[] = (this.db.prepare(`SELECT data FROM nodes WHERE project_id=? AND ${ACTIVE_NODE_SQL}${this.graphFilter()} ORDER BY rowid`).all(id) as { data: string }[]).map(r => JSON.parse(r.data))
+    return { project, ...(this.graphScope ? {graph:this.projectGraph(id,this.graphScope)} : {}), facts: all.filter((n): n is Fact => n.kind === 'fact'), goals: all.filter((n): n is Goal => n.kind === 'goal'),
       steps: all.filter((n): n is Step => n.kind === 'step'), findings: all.filter((n): n is Finding => n.kind === 'finding'),
       hints: all.filter((n): n is Input => n.kind === 'hint' && !n.deleted), observations: all.filter((n): n is Input => n.kind === 'observation' && !n.deleted) }
   }
@@ -276,18 +379,29 @@ export class Store {
     if (type === 'hint.added' || type === 'hint.deleted') p.hintSeq = (p.hintSeq ?? 0) + 1
     if ((type === 'execute.succeeded' || type === 'execute.failed') && node?.kind === 'step' && node.status !== 'cancelled') p.endedSeq++
     this.saveProject(p)
-    this.db.prepare('INSERT INTO events(project_id,revision,type,node_id,data,created_at) VALUES (?,?,?,?,?,?)')
-      .run(id, p.revision, type, node?.id ?? null, JSON.stringify(graphEventPayload(node ? { ...graphEventPayload(payload), evidenceSeq: p.evidenceSeq, hintSeq: p.hintSeq ?? 0, version: node.version, ...('planVersion' in node ? { planVersion: node.planVersion } : {}) } : payload)), now())
+    const graphId = node?.graphId ?? this.graphScope ?? null
+    let eventRevision=p.revision, eventEvidenceSeq=p.evidenceSeq, eventHintSeq=p.hintSeq??0
+    if (graphId) {
+      const graph = this.projectGraph(id,graphId); graph.revision++; graph.updatedAt=now()
+      if(type==='fact.added') graph.factSeq++
+      if(type==='fact.added'||type==='finding.added') graph.evidenceSeq++
+      if(type==='hint.added'||type==='hint.deleted') graph.hintSeq++
+      if(type==='execute.succeeded'||type==='execute.failed') graph.endedSeq++
+      eventRevision=graph.revision;eventEvidenceSeq=graph.evidenceSeq;eventHintSeq=graph.hintSeq
+      this.db.prepare('UPDATE project_graphs SET data=? WHERE id=?').run(JSON.stringify(graph),graphId)
+    }
+    this.db.prepare('INSERT INTO events(project_id,revision,type,node_id,data,created_at,graph_id) VALUES (?,?,?,?,?,?,?)')
+      .run(id, eventRevision, type, node?.id ?? null, JSON.stringify(graphEventPayload(node ? { ...graphEventPayload(payload), evidenceSeq: eventEvidenceSeq, hintSeq: eventHintSeq, version: node.version, ...('planVersion' in node ? { planVersion: node.planVersion } : {}) } : payload)), now(), graphId)
     this.pending.add(id)
     if (node?.kind === 'step') this.pendingSteps.add(`step:${id}:${node.id}`)
   }
   events(projectId: string, after = 0, limit = 500, stepId?: string): GraphEvent[] {
     this.project(projectId)
     const rows = stepId === undefined
-      ? this.db.prepare('SELECT * FROM events WHERE project_id=? AND id>? ORDER BY id LIMIT ?').all(projectId, after, limit)
-      : this.db.prepare('SELECT * FROM events WHERE project_id=? AND node_id=? AND id>? ORDER BY id LIMIT ?').all(projectId, stepId, after, limit)
+      ? this.db.prepare('SELECT * FROM events WHERE project_id=? AND id>?'+this.graphFilter()+' ORDER BY id LIMIT ?').all(projectId, after, limit)
+      : this.db.prepare('SELECT * FROM events WHERE project_id=? AND node_id=? AND id>?'+this.graphFilter()+' ORDER BY id LIMIT ?').all(projectId, stepId, after, limit)
     return rows.map((row) => ({
-      id: Number(row.id), projectId, revision: Number(row.revision), type: String(row.type), nodeId: row.node_id as string | null,
+      id: Number(row.id), projectId, graphId: row.graph_id as string | null, revision: Number(row.revision), type: String(row.type), nodeId: row.node_id as string | null,
       payload: JSON.parse(String(row.data)), createdAt: String(row.created_at),
     }))
   }
@@ -302,7 +416,7 @@ export class Store {
     if (!Array.isArray(values) || (!allowEmpty && !values.length)) throw new HttpError(422, 'Fact references must be an array')
     const ids = values.map(v => requiredText(v, 'fact id'))
     if (new Set(ids).size !== ids.length) throw new HttpError(422, 'Duplicate fact references')
-    if (ids.includes('origin')) throw new HttpError(422, 'Scope is not a supporting Fact')
+    if (ids.some(isScopeId)) throw new HttpError(422, 'Scope is not a supporting Fact')
     for (const fid of ids) if (!activeEvidence(this.node<Fact>(id, fid, 'fact'))) throw new HttpError(404, 'Fact not found')
     return ids
   }
@@ -312,22 +426,28 @@ export class Store {
     if (new Set(ids).size !== ids.length) throw new HttpError(422, 'Duplicate evidence references')
     for (const ref of ids) {
       const node = this.node(id, ref)
-      if ((node.kind !== 'fact' && node.kind !== 'finding') || !activeEvidence(node) || (!allowScope && ref === 'origin')) throw new HttpError(422, 'Expected a confirmed Fact or Finding in this project')
+      if ((node.kind !== 'fact' && node.kind !== 'finding') || !activeEvidence(node) || (!allowScope && isScopeId(ref))) throw new HttpError(422, 'Expected a confirmed Fact or Finding in this project')
     }
     return ids
   }
-  createProject(input: { title: string; origin: string; goal: string; bootstrap?: boolean; hints?: {content: string; creator: string}[] }): Graph {
+  createProject(input: { title: string; origin: string; goal: string; mode?: Project['mode']; bootstrap?: boolean; hints?: {content: string; creator: string}[] }): Graph {
     return this.transaction(() => {
       const title = requiredText(input.title, 'title'), origin = requiredText(input.origin, 'origin'), goal = requiredText(input.goal, 'goal')
       const id = this.nextProjectId(), createdAt = now()
-      const p: Project = { id, title, status: 'active', bootstrap: input.bootstrap ?? false, createdAt, revision: 0, planningRevision: 0, decidedRevision: 0, retryAfter: 0,
+      if (input.mode !== undefined && !['general','benchmark'].includes(input.mode)) throw new HttpError(422,'Invalid Project mode')
+      const p: Project = { id, title, objective:goal, mode:input.mode ?? 'general', status: 'active', bootstrap: input.bootstrap ?? false, createdAt, revision: 0, planningRevision: 0, decidedRevision: 0, retryAfter: 0,
         factSeq: 0, endedSeq: 0, acknowledgedFactSeq: 0, acknowledgedEndedSeq: 0, evidenceSeq: 0, acknowledgedEvidenceSeq: 0, hintSeq: 0, acknowledgedHintSeq: 0, initialPlanningPending: true, planningRetryPending: false }
       this.db.prepare('INSERT INTO projects VALUES (?,?)').run(id, JSON.stringify(p))
+      this.db.prepare('INSERT INTO project_campaigns VALUES (?,?)').run(id,JSON.stringify({projectId:id,sessionId:'command-'+randomUUID(),status:'idle',state:'',cursors:{}}))
+      if (p.mode==='general') {
+        const graph: ProjectGraph = {id:'main-'+id, projectId:id, type:'main', taskKey:null, title, status:'active', originId:'origin', goalId:'goal', createdAt, updatedAt:createdAt, revision:0, factSeq:0, evidenceSeq:0, hintSeq:0, endedSeq:0}
+        this.db.prepare('INSERT INTO project_graphs VALUES (?,?,?)').run(graph.id,id,JSON.stringify(graph))
+      }
       this.saveNode({ id: 'origin', projectId: id, kind: 'fact', description: origin, creator: 'human', createdAt, stepId: null, evidence: [] })
-      this.saveNode({ id: 'goal', projectId: id, kind: 'goal', description: goal, creator: 'human', createdAt, parentId: null, status: 'open', evidenceIds: [] })
+      if(p.mode==='general') this.saveNode({ id: 'goal', projectId: id, kind: 'goal', description: goal, creator: 'human', createdAt, parentId: null, status: 'open', evidenceIds: [] })
       this.event(id, 'project.created', null, {})
-      for (const hint of input.hints ?? []) this.addInput(id, 'hint', hint.content, hint.creator)
-      if (p.bootstrap) this.addStep(id, { description: goal, sourceIds: ['origin'], goalId: 'goal', creator: 'commander', role: 'soldier', taskKey: 'initial', bootstrap: true })
+      for (const hint of input.hints ?? []) this.commanderInput(id,hint.content,hint.creator,p.mode==='general'?'main-'+id:undefined)
+      if (p.bootstrap && p.mode==='general') this.addStep(id, { description: goal, sourceIds: ['origin'], goalId: 'goal', creator: 'commander', role: 'soldier', taskKey: 'initial', bootstrap: true })
       return this.graph(id)
     })
   }
@@ -340,6 +460,17 @@ export class Store {
     })
   }
   markDeleting(id: string) { return this.transaction(() => { const p = this.project(id); p.status = 'deleting'; this.saveProject(p); this.event(id, 'project.deleting', null, p); return p }) }
+  commanderInput(projectId:string,content:string,creator:string,graphId?:string) {
+    return this.transaction(()=>{
+      this.hintWritable(projectId)
+      graphId ??= this.project(projectId).mode==='general'?this.projectGraphs(projectId)[0].id:undefined
+      const hint=graphId?this.forGraph(projectId,graphId).addInput(projectId,'hint',content,creator):null
+      const message={id:'msg-'+randomUUID(),projectId,graphId:graphId??null,sender:'commander',receiver:'commander',type:'MESSAGE',content:JSON.stringify({source:'user',creator,graphId:graphId??null,hintId:hint?.id??null,content:requiredText(content,'content')}),status:'pending',createdAt:now()}
+      this.db.prepare('INSERT INTO legion_messages VALUES (?,?,?,?,?,?)').run(message.id,projectId,message.sender,message.receiver,JSON.stringify(message),message.createdAt)
+      queueMicrotask(()=>this.changes.emit('legion-message',projectId,'commander'))
+      return { ...hint, message }
+    })
+  }
   addInput(id: string, kind: 'hint' | 'observation', content: string, creator = 'human', stepId: string | null = null): Input {
     return this.transaction(() => {
       this.hintWritable(id); if (stepId) this.node<Step>(id, stepId, 'step')
@@ -351,7 +482,7 @@ export class Store {
   addGoal(id: string, description: string, parentId = 'goal', creator = 'decide'): Goal {
     return this.transaction(() => {
       this.writable(id); const parent = this.node<Goal>(id, parentId, 'goal'); if (parent.status !== 'open') throw new HttpError(409, 'Parent goal is closed')
-      const node: Goal = { id: this.next(id, 'goal', 'g'), projectId: id, kind: 'goal', description: requiredText(description, 'description'), parentId, creator, status: 'open', evidenceIds: [], createdAt: now() }
+      const node: Goal = { id: this.next(id, 'goal', 'g'), projectId: id, kind: 'goal', description: requiredText(description, 'description'), parentId:parent.id, creator, status: 'open', evidenceIds: [], createdAt: now() }
       this.saveNode(node); this.event(id, 'goal.added', node, node); return node
     })
   }
@@ -361,7 +492,7 @@ export class Store {
       if (input.mode !== undefined && !['amend', 'replace'].includes(input.mode)) throw new HttpError(422, 'Invalid revision mode')
       this.checkVersion(goal, input.expectedVersion)
       const descriptionChanged = input.description !== undefined && input.description.trim() !== goal.description
-      if (descriptionChanged && goal.id === 'goal') throw new HttpError(409, 'Root goal description is immutable')
+      if (descriptionChanged && !goal.parentId) throw new HttpError(409, 'Root goal description is immutable')
       if (descriptionChanged) {
         const goals = this.nodes<Goal>(id, ['goal']), descendants = new Set([goal.id])
         for (const parent of descendants) for (const child of goals) if (child.parentId === parent) descendants.add(child.id)
@@ -427,7 +558,7 @@ export class Store {
       this.writable(id)
       const capacity = this.planningCapacity(id, maxSteps)
       if (capacity.remainingSteps === 0) throw new HttpError(409, 'Active Step limit reached', { code: 'STEP_LIMIT_REACHED', planningCapacity: capacity })
-      const goalId = input.goalId ?? 'goal'; if (this.node<Goal>(id, goalId, 'goal').status !== 'open') throw new HttpError(409, 'Goal is closed')
+      const goalId = this.node<Goal>(id,input.goalId ?? this.rootGoalId(id),'goal').id; if (this.node<Goal>(id, goalId, 'goal').status !== 'open') throw new HttpError(409, 'Goal is closed')
       const profile = input.executionProfile ?? 'direct'; if (!['direct', 'isolated'].includes(profile)) throw new HttpError(422, 'Invalid execution profile')
       if (input.role !== undefined && !['general', 'soldier', 'scout'].includes(input.role)) throw new HttpError(422, 'Invalid Legion role')
       if (input.role !== undefined || input.taskKey !== undefined || input.parentStepId !== undefined) requiredText(input.taskKey, 'taskKey')
@@ -436,7 +567,7 @@ export class Store {
         if (parent.taskKey !== input.taskKey) throw new HttpError(422, 'Parent Step belongs to another task')
       }
       const step: Step = { id: this.next(id, 'step', 'i'), projectId: id, kind: 'step', description: requiredText(input.description, 'description'),
-        sourceIds: this.evidenceIds(id, input.sourceIds, true), goalId, creator: input.creator ?? 'commander', priority: integer(input.priority ?? 0, 'priority', -2147483648),
+        sourceIds: this.evidenceIds(id, input.sourceIds.map(ref => ref==='origin'?this.originId(id):ref), true), goalId, creator: input.creator ?? 'commander', priority: integer(input.priority ?? 0, 'priority', -2147483648),
         status: 'pending', factIds: [], worker: null, executionProfile: profile, attempts: 0,
         endedAt: null, failure: null, createdAt: now(), bootstrap: input.bootstrap ?? false, planVersion: 1,
         role: input.role ?? 'soldier', taskKey: input.taskKey ?? goalId, ...(input.parentStepId ? { parentStepId: input.parentStepId } : {}) }
@@ -572,9 +703,10 @@ export class Store {
       if (input.operation === 'merge') {
         if (!activeEvidence(target)) throw new HttpError(409, 'Merge target must be active')
         const sources = input.sourceIds
-        if (!Array.isArray(sources) || !sources.length || new Set(sources).size !== sources.length || sources.includes(target.id) || sources.includes('origin')) throw new HttpError(422, 'Invalid merge sources')
+        if (!Array.isArray(sources) || !sources.length || new Set(sources).size !== sources.length || sources.includes(target.id) || sources.some(isScopeId)) throw new HttpError(422, 'Invalid merge sources')
         const nodes = sources.map(source => {
           const node = this.node<Fact | Finding>(id, source)
+          if(node.graphId!==target.graphId)throw new HttpError(422,'Cannot merge evidence across Graphs')
           if (node.kind !== target.kind || !activeEvidence(node)) throw new HttpError(422, 'Merge requires active evidence of the same kind and project')
           if (input.sourceVersions?.[source] === undefined) throw new HttpError(422, 'Every source requires an expected version')
           this.checkVersion(node, input.sourceVersions[source]); return node
@@ -674,7 +806,10 @@ export class Store {
   run(id: string): Run {
     const row = this.db.prepare('SELECT data FROM runs WHERE id=?').get(id) as { data: string } | undefined
     if (!row) throw new HttpError(404, 'Run not found')
-    return JSON.parse(row.data)
+    const run = JSON.parse(row.data) as Run
+    this.project(run.projectId)
+    if(this.graphScope && run.graphId!==this.graphScope) throw new HttpError(404,'Run belongs to another Graph')
+    return run
   }
   releaseFact(id: string, factId: string) {
     const fact = this.node<Fact>(id, factId, 'fact')
@@ -696,7 +831,7 @@ export class Store {
       }))]
       this.saveNode(step)
       const run = this.claim(id, 'execute', { name: worker, backend: 'dsh' }, step.id)
-      this.finishRun(run.id, 'succeeded'); const saved = this.node<Step>(id, step.id, 'step'); saved.resultGoalId = 'goal'; this.saveNode(saved)
+      this.finishRun(run.id, 'succeeded'); const saved = this.node<Step>(id, step.id, 'step'); saved.resultGoalId = this.rootGoalId(id); this.saveNode(saved)
       this.event(id, 'step.updated', saved, saved)
       this.updateGoal(id, 'goal', { status: 'achieved', evidenceIds }); return saved
     })
@@ -710,13 +845,17 @@ export class Store {
     })
   }
   runs(projectId?: string): Run[] {
-    const rows = projectId === undefined ? this.db.prepare('SELECT data FROM runs ORDER BY rowid').all() : this.db.prepare('SELECT data FROM runs WHERE project_id=? ORDER BY rowid').all(projectId)
+    projectId ??= this.projectScope
+    if(projectId) this.project(projectId)
+    const rows = projectId === undefined ? this.db.prepare('SELECT data FROM runs ORDER BY rowid').all() : this.db.prepare('SELECT data FROM runs WHERE project_id=?'+this.graphFilter()+' ORDER BY rowid').all(projectId)
     return rows.map(r => JSON.parse(String(r.data)))
   }
   runsByStatus(status: Run['status'], projectId?: string): Run[] {
+    projectId ??= this.projectScope
+    if(projectId) this.project(projectId)
     const rows = projectId === undefined
       ? this.db.prepare('SELECT data FROM runs WHERE status=? ORDER BY rowid').all(status)
-      : this.db.prepare('SELECT data FROM runs WHERE project_id=? AND status=? ORDER BY rowid').all(projectId, status)
+      : this.db.prepare('SELECT data FROM runs WHERE project_id=? AND status=?'+this.graphFilter()+' ORDER BY rowid').all(projectId, status)
     return rows.map(r => JSON.parse(String(r.data)))
   }
   latestRun(projectId: string, stepId: string): Run | undefined {
@@ -739,10 +878,13 @@ export class Store {
     })
   }
   saveRun(run: Run) {
-    this.db.prepare('INSERT INTO runs VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,data=excluded.data').run(run.id, run.projectId, run.stepId, run.activity, run.status, JSON.stringify(run))
+    this.project(run.projectId)
+    run.graphId ??= run.stepId ? this.node(run.projectId,run.stepId,'step').graphId : null
+    if(this.graphScope && run.graphId!==this.graphScope) throw new HttpError(422,'Cross-Graph Run')
+    this.db.prepare('INSERT INTO runs(id,project_id,step_id,activity,status,data,graph_id) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,data=excluded.data').run(run.id, run.projectId, run.stepId, run.activity, run.status, JSON.stringify(run),run.graphId??null)
     const step = run.stepId ? this.node<Step>(run.projectId, run.stepId, 'step') : undefined
     this.audit({ id: run.id, project_id: run.projectId, intent_id: run.stepId, task_type: step?.role ?? 'soldier', phase: run.activity,
-      worker: run.worker, provider: run.provider ?? run.backend, engine: run.backend, model: run.model ?? null, execution_profile: step?.executionProfile ?? 'direct', session_id: run.id,
+      graph_id:run.graphId??null, worker: run.worker, provider: run.provider ?? run.backend, engine: run.backend, model: run.model ?? null, execution_profile: step?.executionProfile ?? 'direct', session_id: run.id,
       workspace_kind: 'local', workspace_ref: '', workspace_root: run.workspaceRoot ?? '', status: run.status === 'succeeded' ? 'completed' : run.status,
       started_at: run.startedAt, ended_at: run.endedAt, error: run.error, exit_code: run.status === 'succeeded' ? 0 : null, timed_out: false, cancelled: run.status === 'cancelled',
       input_tokens: run.inputTokens, output_tokens: run.outputTokens, cache_read_tokens: run.cacheReadTokens, cache_write_tokens: run.cacheWriteTokens }, [])
@@ -753,7 +895,7 @@ export class Store {
       const row = this.db.prepare('SELECT project_id,data FROM audit_runs WHERE id=?').get(id)
       if (row && row.project_id !== projectId) throw new HttpError(409, 'Audit run belongs to another project')
       const saved = row ? JSON.parse(String(row.data)) : null
-      const result = { ...metadata }
+      const result:Record<string,Json> = { ...metadata, graph_id:metadata.graph_id??(this.db.prepare('SELECT graph_id FROM runs WHERE id=?').get(id)?.graph_id as string|null|undefined)??null }
       if (saved) {
         if (saved.status !== 'running' && metadata.status === 'running' && !(saved.status === 'paused' && this.db.prepare("SELECT 1 FROM runs WHERE id=? AND status='running'").get(id))) for (const key of ['status', 'ended_at', 'exit_code', 'timed_out', 'cancelled']) result[key] = saved[key] ?? null
         for (const key of ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens']) result[key] = Math.max(Number(saved[key]) || 0, Number(metadata[key]) || 0)
@@ -762,10 +904,10 @@ export class Store {
       this.db.prepare('INSERT INTO audit_runs VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(id, projectId, JSON.stringify(result))
       // Run rows are the durable state; publish transitions through the existing audit stream.
       if (saved?.status !== result.status && ['running','paused','completed','failed','unknown','cancelled'].includes(String(result.status))) {
-        this.pendingAudit.push({ projectId, data: { event_uid: 'run-state-' + randomUUID(), timestamp: now(), kind: result.status === 'running' ? 'run.started' : 'run.completed', run_id: id, project_id: projectId, task_type: result.task_type, worker: result.worker, status: result.status, error: result.error ?? null, exit_code: result.exit_code ?? null } })
+        this.pendingAudit.push({ projectId, data: { event_uid: 'run-state-' + randomUUID(), timestamp: now(), kind: result.status === 'running' ? 'run.started' : 'run.completed', run_id: id, project_id: projectId, graph_id:result.graph_id, task_type: result.task_type, worker: result.worker, status: result.status, error: result.error ?? null, exit_code: result.exit_code ?? null } })
       }
       for (const data of events) {
-        const event: { [key: string]: Json } = { ...data, project_id: projectId, run_id: id, task_type: data.task_type ?? metadata.task_type, worker: data.worker ?? metadata.worker, provider: data.provider ?? metadata.provider }
+        const event: { [key: string]: Json } = { ...data, graph_id:result.graph_id, project_id: projectId, run_id: id, task_type: data.task_type ?? metadata.task_type, worker: data.worker ?? metadata.worker, provider: data.provider ?? metadata.provider }
         if (!['assistant.delta', 'thinking.delta', 'thinking.completed'].includes(String(data.kind))) {
           const inserted = this.db.prepare('INSERT OR IGNORE INTO audit_events(event_uid,project_id,run_id,data) VALUES (?,?,?,?)').run(typeof event.event_uid === 'string' ? event.event_uid : null, projectId, id, JSON.stringify(event))
           if (inserted.changes) event.id = Number(inserted.lastInsertRowid)

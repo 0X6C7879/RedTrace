@@ -14,8 +14,8 @@ test('HTTP graph compatibility and atomic conclude survive reopening the databas
     return { status: response.status, data: response.status === 204 ? null : await response.json() as any }
   }
   try {
-    assert.equal((await request('/projects', 'POST', { title: '' })).status, 422)
-    const created = await request('/projects', 'POST', { title: 'Test', origin: 'Input', goal: 'Verified result' })
+    assert.equal((await request('/projects', 'POST', {mode:'general', title: '' })).status, 422)
+    const created = await request('/projects', 'POST', {mode:'general', title: 'Test', origin: 'Input', goal: 'Verified result' })
     assert.equal(created.status, 201); const id = created.data.project.id, base = `/projects/${id}`
     const step = await request(`${base}/intents`, 'POST', { from: ['origin'], description: 'Check input', creator: 'human' })
     assert.equal(step.status, 201)
@@ -53,7 +53,7 @@ test('HTTP graph compatibility and atomic conclude survive reopening the databas
     engine.store.runEvent(runs[0].id, 'assistant.message', { content: 'Traceable execution' })
     const logs = (await request(`/v2${base}/runs/${runs[0].id}/events`)).data
     assert.ok(logs.some((event: any) => JSON.stringify(event).includes('Traceable execution')))
-    const other = (await request('/v2/projects', 'POST', { title: 'Other', origin: 'Other scope', goal: 'Other goal' })).data.project.id
+    const other = (await request('/v2/projects', 'POST', { mode:'general', title: 'Other', origin: 'Other scope', goal: 'Other goal' })).data.project.id
     assert.equal((await request(`/v2/projects/${other}/runs/${runs[0].id}/events`)).status, 404)
     await engine.close(); engine = await serveEngine({ root, port: 0, autoStart: false })
     assert.deepEqual((await request(`/v2${base}/graph`)).data, graph)

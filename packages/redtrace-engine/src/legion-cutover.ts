@@ -17,12 +17,12 @@ export function resetLegionRuntime(store:Store,evidence:ProjectEvidence,plan:Awa
  if(!plan.dataReady||plan.projects.some(p=>!p.dataReady))throw new HttpError(409,'Evidence/runtime preflight has blockers')
  if(JSON.stringify(plan.projects.map(p=>p.projectId).sort())!==JSON.stringify(store.projects().map(p=>p.id).sort()))throw new HttpError(409,'Project inventory changed after preservation')
  const legion=new LegionStore(store)
- if(legion.campaign().status==='running'||store.runs().some(r=>['running','paused','unknown'].includes(r.status)||r.pendingTools.length))throw new HttpError(409,'Execution is not confirmed stopped')
+ if(legion.campaigns().some(c=>c.status==='running')||store.runs().some(r=>['running','paused','unknown'].includes(r.status)||r.pendingTools.length))throw new HttpError(409,'Execution is not confirmed stopped')
  const count=(table:string)=>Number(store.db.prepare('SELECT COUNT(*) AS n FROM '+table).get()!.n)
  const before={steps:Number(store.db.prepare("SELECT COUNT(*) AS n FROM nodes WHERE kind='step'").get()!.n),runs:count('runs'),auditRuns:count('audit_runs')}
  store.transaction(()=>{
   for(const p of plan.projects){if(store.project(p.projectId).revision!==p.observedRevision)throw new HttpError(409,'Project changed after preservation');for(const node of p.detachments)store.saveNode(node.after)}
-  for(const table of ['audit_runs','runs','legion_messages','legion_tasks','campaign','critical_keys','events'])store.db.exec('DELETE FROM '+table)
+  for(const table of ['audit_runs','runs','legion_messages','legion_tasks','critical_keys','events'])store.db.exec('DELETE FROM '+table)
   store.db.exec("DELETE FROM nodes WHERE kind='step'")
   const table=(name:string)=>!!store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)
   if(table('resource_leases'))store.db.exec('DELETE FROM resource_leases')
@@ -33,7 +33,7 @@ export function resetLegionRuntime(store:Store,evidence:ProjectEvidence,plan:Awa
    for(const node of store.nodes(project.id,['fact','finding','goal','hint','observation']))store.event(project.id,node.kind==='hint'?'hint.added':node.kind+'.retained',node,{})
    store.event(project.id,'project.legion_cutover',null,{backupSha256:backup.sha256})
   }
-  const campaign=legion.campaign();legion.saveCampaign({...campaign,hasSession:false,status:'stopped',state:'Runtime cleared after verified evidence preservation and backup. Projects remain stopped; explicit resume only.'})
+  for(const campaign of legion.campaigns())legion.saveCampaign({...campaign,hasSession:false,status:'stopped',state:'Runtime cleared after verified evidence preservation and backup. Projects remain stopped; explicit resume only.'})
   store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run('legion-cutover',JSON.stringify({at:now(),backupSha256:backup.sha256}))
  })
  for(const p of plan.projects)for(const row of store.db.prepare('SELECT id FROM project_artifacts WHERE project_id=?').all(p.projectId))evidence.read(p.projectId,String(row.id))

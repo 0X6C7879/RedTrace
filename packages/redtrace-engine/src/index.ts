@@ -50,9 +50,10 @@ export async function createEngine(options: { root: string; database?: string; c
   }
   const scheduler = new Scheduler(store,config,runTask,options.selectWorker,()=>!adapterGate || adapterGate('redtrace-critical-events')), router = new Router()
   const experience = new LegionExperience(store,configuration.workspaceRoot)
-  router.add('GET', '/v2/legion', () => ({...legion.board(),transfers:experience.transfers()}))
+  router.add('GET', '/v2/legion', c => {const id=c.url.searchParams.get('projectId');return id?{...new LegionStore(store,id).board(),transfers:experience.transfers(id)}:{projects:store.projects().map(p=>({id:p.id,title:p.title,mode:p.mode,status:p.status}))}})
+  router.add('GET','/v2/projects/:project/commander',c=>({...new LegionStore(store,c.params.project).board(),transfers:experience.transfers(c.params.project)}))
   const text=Type.String({minLength:1}),refs=Type.Array(text,{minItems:1})
-  router.add('POST','/v2/legion/message',async c=>{const b=await body(c.req,Type.Object({projectId:text,receiver:text,type:Type.Union(['HELP','REPORT','MESSAGE'].map(v=>Type.Literal(v))),content:text}));return legion.message(b.projectId,'commander',b.receiver,b.type,b.content)})
+  router.add('POST','/v2/legion/message',async c=>{const b=await body(c.req,Type.Object({projectId:text,receiver:Type.Literal('commander'),type:Type.Union(['HELP','REPORT','MESSAGE'].map(v=>Type.Literal(v))),content:text}));return legion.message(b.projectId,'commander',b.receiver,b.type,b.content)})
   router.add('POST','/v2/projects/:project/legion/park',async c=>{const b=await body(c.req,Type.Object({taskKey:text,reason:text,resumeCondition:text}));return legion.park(c.params.project,b.taskKey,b.reason,b.resumeCondition)})
   router.add('POST','/v2/projects/:project/legion/reactivate',async c=>{const b=await body(c.req,Type.Object({taskKey:text,reason:text}));return legion.reactivate(c.params.project,b.taskKey,b.reason)})
   router.add('POST','/v2/legion/experience',async c=>{const b=await body(c.req,Type.Object({projectId:text,family:text,title:text,body:text,factIds:refs}));return experience.capture(b.projectId,b)})
@@ -61,7 +62,7 @@ export async function createEngine(options: { root: string; database?: string; c
   router.add('POST','/v2/legion/reassign',async c=>{const b=await body(c.req,Type.Object({projectId:text,runId:text,nextWorker:text,summary:text})),run=store.run(b.runId);if(run.projectId!==b.projectId||!run.stepId)throw new HttpError(403,'Run does not belong to Project');const step=store.node<import('./types.ts').Step>(b.projectId,run.stepId,'step');if(!configuration.resolvedSnapshot().config.workers.some(w=>w.name===b.nextWorker&&w.enabled&&w.roles?.includes(step.role??'soldier')))throw new HttpError(422,'Model route does not support the same role');return legion.requestHandoff(run.id,b.summary,b.nextWorker)})
   router.add('GET','/v2/legion/experience',c=>experience.search(c.url.searchParams.get('query')??'',c.url.searchParams.get('family')??undefined))
   graphRoutes(router, store, () => configuration.resolvedSnapshot().config.maxSteps)
-  router.add('GET', '/v2/projects/:project/evidence/:artifact', c => evidence.read(c.params.project, c.params.artifact, queryNumber(c.url, 'offset', 0), queryNumber(c.url, 'length', 7600, 1, 7600)))
+  router.add('GET', '/v2/projects/:project/evidence/:artifact', c => new ProjectEvidence(c.url.searchParams.has('graphId')?store.forGraph(c.params.project,c.url.searchParams.get('graphId')!):store.forProject(c.params.project),configuration.workspaceRoot).read(c.params.project, c.params.artifact, queryNumber(c.url, 'offset', 0), queryNumber(c.url, 'length', 7600, 1, 7600)))
   router.add('GET', '/health', () => ({ status: 'ok', engine: 'fgs', node: process.versions.node, schema: 2 }))
   configRoutes(router, configuration, options.probeModel)
   const dshUpdate = await dshUpdateRoutes(router, path.resolve(process.env.REDTRACE_SOURCE_ROOT || root), scheduler)
@@ -73,6 +74,7 @@ export async function createEngine(options: { root: string; database?: string; c
   operationRoutes(router, operations)
   verbRoutes(router, operations, adapterGate)
   const deletion = new ProjectDeletion(store, operations, root, configuration.workspaceRoot)
+  deletion.stopRuntime=id=>scheduler.stopProject(id)
   deletionRoutes(router, deletion)
   const watcher = watch(path.dirname(configuration.filename), (_event, filename) => {
     if (filename && String(filename) !== path.basename(configuration.filename)) return

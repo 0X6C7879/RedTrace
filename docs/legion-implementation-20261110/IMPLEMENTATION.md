@@ -1,3 +1,7 @@
+# 当前状态更新（2026-11-13）
+
+Project Commander + Benchmark/General + Graph 隔离已替换下文 E2 的旧全局 Campaign。当前实现与使用说明以 [升级说明](../project-commander-20261113/GUIDE.md) 为准；下文保留 2026-11-10 起的历史执行证据，不再作为运行架构说明。
+
 # RedTrace → Sapper AI Legion：当前实施结果
 
 当前对象：/Users/lxy/Downloads/RedTrace
@@ -8,7 +12,7 @@
 
 - E0：沿用原始工作区基线，不以 Git HEAD 覆盖未提交修改；未主动更新 DSH vendor。
 - E1：Fact 文件/工具结果、Finding.details、原生明文/Zstd Session 附件保全与哈希读取；缺失引用明确阻断。文件型 submit_fact 现在立即保存实际文件字节，拒绝不存在路径，图节点 ID 不能冒充路径。原生删除 fixture 验证删除 Step/Run/Session 后附件和成果仍可读、哈希一致、活动引用已脱离。
-- E2：一个真实全局 Commander DSH Session；Scout 分类 → General 主线 + 最多两个同题 Soldier/Scout 专项小队 → 共享 FGS → Commander 证据验收；HELP/REPORT/MESSAGE 分开持久化 pending/queued/admitted/uncertain，idle 用原生 steer 唤醒。
+- E2 历史阶段：曾使用一个真实全局 Commander DSH Session；Scout 分类 → General 主线 + 最多两个同题 Soldier/Scout 专项小队 → 共享 FGS → Commander 证据验收；HELP/REPORT/MESSAGE 分开持久化 pending/queued/admitted/uncertain，idle 用原生 steer 唤醒。
 - E3：调度、配置、运行预设、界面和技能均改为 Commander/General/Soldier/Scout。独立 Decide/Reason 不能 claim 或执行；Bootstrap 仅为 Soldier 初始 Mission。历史类型/兼容字段只用于读旧数据，不构成双执行模式。Commander 接管 Goal/Step/证据维护与验收。
 - E4：Sapper 分类/升级阶梯、战术提示、真实任务用时区间并集、Park/恢复条件、截止时间、Endgame/最终提交阶段；Commander 通过原 SDK 管理实例/扣分提示。关闭前要求同题执行停止、未知工具结果已核验；closed 不明确时保留实例状态。Board 来自现有 FGS/Campaign。
 - E5：原生当前请求 Token Meter（不是累计使用量）、85% STATE 提醒、DSH 原生自动压缩、成功压缩后新 Run/Session 接力；避免把整个旧 STATE 递归嵌回新上下文。原生写所有权核验后恢复，未知操作不重放；配置内同角色模型升降级。Commander 与 Worker 共享既有全局及路线并发配额，容量不足时结束 Commander 周期释放既有槽位；未增加锁、队列或替代执行器。未创建过的清理后 Commander 与真正丢失的旧 Session 区分处理，实际首次恢复已验证。

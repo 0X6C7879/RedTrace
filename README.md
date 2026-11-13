@@ -1,6 +1,6 @@
 # RedTrace
 
-RedTrace 是一个面向授权安全研究、代码审计与复杂技术调查的本地 Agent 系统。Node 内核把目标、事实、待执行步骤和成果组织为唯一的 FGS 图，再把工作分配给声明了各自模型、资格与并发上限的 Worker。
+RedTrace 是一个面向授权安全研究、代码审计与复杂技术调查的本地 Agent 系统。Node 内核把目标、事实、待执行步骤和成果组织为 Graph 隔离的 FGS，再把工作分配给声明了各自模型、资格与并发上限的 Worker。
 
 RedTrace 关注的不是一次对话能否给出答案，而是一个长任务能否被并行推进、持续校正、失败恢复并完整审计。每次执行都有明确输入、结构化输出、运行记录和 Workspace；新的可靠结论会进入共享证据面，供正在运行的其他 Worker 在关键决策点增量获取。
 
@@ -10,8 +10,8 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 
 - **原生逆向插件**：执行 Worker 按需加载 REA 官方 Skill 与原生 MCP；管理端停用会撤销活跃工具并清理分析进程，保留已保存证据。Commander 不获取分析工具。见 [REA 集成说明](docs/rea-integration.md)。
 
-- **Decide / Execute 闭环**：每个项目最多一个无私有会话的 Decide；多个 Execute 可并行推进 Step，任一事实提交都会立即唤醒下一轮规划。
-- **唯一 FGS 图**：`Fact` 保存有来源的事实，`Goal` 保存完成条件和子目标，`Step` 保存行动与状态，`Finding` 保存可交付成果。`Hint` 与 `Observation` 保持人工输入和中间记录语义。
+- **Project Commander 闭环**：每个项目独立 Session / STATE / Board / 收件箱；多个 Commander 与 Worker 共享原有容量并发运行，按所属项目事件唤醒。
+- **双模式 FGS**：General 项目一张主图，Benchmark 每题一张独立图；`Fact` 保存有来源的事实，`Goal` 保存完成条件和子目标，`Step` 保存行动与状态，`Finding` 保存可交付成果。`Hint` 与 `Observation` 保持人工输入和中间记录语义。
 - **异构 Worker 协同（Worker 即路由）**：任意数量 Worker 各自声明 Provider、模型、四角色资格（commander/general/soldier/scout）、并发与优先级。调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务——路由完全由 Worker 派生，而非按任务类型写死。
 - **Node 24 Agent 运行时**：DSH 原生 Agent Loop 是唯一真实模型执行器；`dsh-llm-pi-ai` 仅适配模型协议。FGS 调度器与 Cordis 插件保持单实例、原生生命周期。
 - **运行中知识同步**：证据图谱修订会通过 `agent.inject()` 增量送达正在运行的 Agent；共享 Resource 摘要随上下文注入，完整信息按需查询。
@@ -29,9 +29,12 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 flowchart LR
     U[用户 / Web / 旧 API / 插件] --> N[Node 请求处理器]
     N <--> DB[(SQLite<br/>FGS + Finding + Audit)]
-    DB --> D[全局 Commander]
-    D --> SC[Scout 分类]
+    DB --> D[Project Commander × 每项目一个]
+    D --> B{Project 模式}
+    B -->|benchmark| SC[每题 Graph / Scout 分类]
+    B -->|general| M[唯一 Main Graph / 自主规划]
     SC --> G[General / Soldier Mission]
+    M --> G
     G --> S[待执行 Step]
     S --> E[DSH Native Agent Loop]
     E --> DB
@@ -40,14 +43,14 @@ flowchart LR
 
 一次典型任务会经历：
 
-1. 用户创建 Project，提供 Origin、根 Goal 与可选 Hint。
-2. 全局 Commander 读取 Board、STATE 和增量 FGS；未知题先由 Scout 分类，再分派 Soldier 或 General。Bootstrap 选项仅创建 Soldier 初始 Mission，不再启动独立 Agent。
-3. General 执行主线并最多委派两个同题专项小队。调度器按四角色资格、模型路线与既有全局/项目/Worker 配额原子领取 Step，DSH 在独立会话执行。
+1. 用户创建 Project，必须选择 benchmark 或 general，提供 Scope、任务目标与可选 Hint；创建后模式固定。
+2. 所属 Commander 读取自己的 Board、STATE 和增量。Benchmark 首页为控制台，SDK 发现每道题后创建独立 Graph，再 Scout 分类；General 首页直接显示主 FGS，可直接派 Soldier/General，Scout 按需使用。Bootstrap 只在 General 创建 Soldier 初始 Mission。
+3. General 执行主线并最多委派两个同题专项小队。调度器按四角色资格、模型路线与既有全局/项目/Worker 配额原子领取 Step，DSH 在独立 Run / Session / Agent Workspace 执行；历史 Workspace 不搬移。
 4. Worker 通过 Fact/Finding 共享确认结论，HELP/REPORT 经原生收件箱实际交付；queued 不代表已入模。Commander 对证据验收，不把消息或 Step 结束当成果。
 5. Stop/同 Session 恢复、任务 Park 与新 Run 接力分别建模。只有原执行停止、工具结果明确后才能恢复或换模型；未知操作不自动重放。
 6. Commander 通过确认 Fact/Finding 验收 Goal；Family Transfer 只生成未验证 Hint，目标必须复验。没有独立 Reason 调度器或长期双模式。
 
-当前迁移状态、验收边界与四件交付物见 [Legion 实施记录](docs/legion-implementation-20261110/IMPLEMENTATION.md)。历史调度设计不再代表独立 Reason 的执行决策。
+本次架构、数据迁移、API 和使用方法见 [Project Commander 升级说明](docs/project-commander-20261113/GUIDE.md)。历史迁移记录见 [Legion 实施记录](docs/legion-implementation-20261110/IMPLEMENTATION.md)。历史调度设计不再代表独立 Reason 的执行决策。
 
 ## 为什么选择 RedTrace
 

@@ -16,7 +16,7 @@ const { configRoutes } = await import(pathToFileURL(path.join(root, 'packages/re
 const { Operations } = await import(pathToFileURL(path.join(root, 'packages/redtrace-engine/src/operations.ts')).href)
 const routes = () => {
   const handlers = new Map<string, (context?: any) => any>()
-  return { handlers, add(method: string, url: string, handle: (context: any) => any) { handlers.set(`${method} ${url}`, handle) } }
+  return { handlers, add(method: string, url: string, handle: (context: any) => any) { handlers.set(`${method} ${url}`, c=>handle({...c,url:c?.url??new URL(url,'http://localhost')})) } }
 }
 function app() {
   const context = vm.createContext({ window: {}, console })

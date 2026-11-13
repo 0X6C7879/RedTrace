@@ -2,7 +2,7 @@ import { mkdir, readdir, realpath, stat, open } from 'node:fs/promises'
 import path from 'node:path'
 import { stringify } from 'yaml'
 import { queryNumber } from './http.ts'
-import type { Router } from './http.ts'
+import type { RequestContext, Router } from './http.ts'
 import { HttpError } from './types.ts'
 import type { Json } from './types.ts'
 import { conversationAuditEvents, type Store } from './store.ts'
@@ -21,32 +21,39 @@ export async function workspacePath(workspaces: string, projectId: string, relat
   catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(404, 'Workspace path not found') }
 }
 export function auditRoutes(router: Router, store: Store, workspaceRoot: string) {
-  const runs = (id?: string): Record<string, any>[] => (id ? store.db.prepare('SELECT data FROM audit_runs WHERE project_id=?').all(id) : store.db.prepare('SELECT data FROM audit_runs').all()).map(r => JSON.parse(String(r.data)))
+  const graphId=(c:RequestContext)=>{const id=c.url.searchParams.get('graphId');if(id)store.projectGraph(c.params.project,id);return id}
+  const runs = (id?: string, graph?:string|null): Record<string, any>[] => (id ? store.db.prepare('SELECT data FROM audit_runs WHERE project_id=?'+(graph?" AND json_extract(data,'$.graph_id')=?":'')).all(...(graph?[id,graph]:[id])) : store.db.prepare('SELECT data FROM audit_runs').all()).map(r => JSON.parse(String(r.data)))
   const usage = (values = runs()): Record<string, number> => {
     const value: Record<string, number> = { commander: 0, general: 0, soldier: 0, scout: 0 }
     for (const run of values) value[run.task_type] = (value[run.task_type] ?? 0) + ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens'].reduce((sum, key) => sum + Number(run[key] ?? 0), 0)
     return { ...value, total: Object.values(value).reduce((a, b) => a + b, 0) }
   }
-  router.add('GET', '/audit/usage', () => { const total=usage(); if(store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='campaign'").get()){const row=store.db.prepare('SELECT data FROM campaign WHERE id=1').get(), commander=row?JSON.parse(String(row.data)).usage:undefined;const tokens=commander?['inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens'].reduce((sum,key)=>sum+Number(commander[key]??0),0):0;total.commander+=tokens;total.total+=tokens}return total })
+  const commanderUsage=(total:Record<string,number>,projectId?:string)=>{
+    const rows=store.db.prepare('SELECT data FROM project_campaigns'+(projectId?' WHERE project_id=?':'')).all(...(projectId?[projectId]:[]))
+    for(const row of rows){const usage=JSON.parse(String(row.data)).usage;const tokens=usage?['inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens'].reduce((sum,key)=>sum+Number(usage[key]??0),0):0;total.commander+=tokens;total.total+=tokens}return total
+  }
+  router.add('GET','/audit/usage',()=>commanderUsage(usage()))
   router.add('GET', '/audit/tasks', () => store.projects().map(p => {
     const r = runs(p.id); return { id: p.id, title: p.title, status: p.status, created_at: p.createdAt, run_count: r.length, last_run_at: r.map(r => r.started_at).sort().at(-1) ?? null, running_count: r.filter(r => r.status === 'running').length, token_total: usage(r).total }
   }).sort((a, b) => String(b.last_run_at ?? b.created_at).localeCompare(String(a.last_run_at ?? a.created_at))))
-  router.add('GET', '/audit/tasks/:project/usage', c => { store.project(c.params.project); return usage(runs(c.params.project)) })
+  router.add('GET', '/audit/tasks/:project/usage', c => { store.project(c.params.project); return graphId(c)?usage(runs(c.params.project,graphId(c))):commanderUsage(usage(runs(c.params.project)),c.params.project) })
   router.add('GET', '/audit/tasks/:project/costs', c => {
     store.project(c.params.project)
     return store.runsByStatus('running',c.params.project).concat(['paused','succeeded','failed','unknown','cancelled'].flatMap(status=>store.runsByStatus(status as import('./types.ts').Run['status'],c.params.project))).map(run=>store.runCosts(run.id))
   })
-  router.add('GET', '/audit/tasks/:project/runs', c => { store.project(c.params.project); return runs(c.params.project).sort((a, b) => String(b.started_at).localeCompare(a.started_at)) })
+  router.add('GET', '/audit/tasks/:project/runs', c => { store.project(c.params.project); return runs(c.params.project,graphId(c)).sort((a, b) => String(b.started_at).localeCompare(a.started_at)) })
   router.add('GET', '/audit/tasks/:project/events', c => {
     store.project(c.params.project)
-    return store.db.prepare('SELECT id,data FROM audit_events WHERE project_id=? AND id<? ORDER BY id DESC LIMIT ?').all(c.params.project, queryNumber(c.url, 'before_id', Number.MAX_SAFE_INTEGER), queryNumber(c.url, 'limit', 200, 1, 500))
+    const graph=graphId(c),filter=graph?" AND run_id IN (SELECT id FROM audit_runs WHERE json_extract(data,'$.graph_id')=?)":''
+    return store.db.prepare('SELECT id,data FROM audit_events WHERE project_id=?'+filter+' AND id<? ORDER BY id DESC LIMIT ?').all(c.params.project,...(graph?[graph]:[]), queryNumber(c.url, 'before_id', Number.MAX_SAFE_INTEGER), queryNumber(c.url, 'limit', 200, 1, 500))
       .flatMap(r => conversationAuditEvents({ ...JSON.parse(String(r.data)), id: Number(r.id) })).sort((a, b) => String(a.timestamp ?? '').localeCompare(String(b.timestamp ?? '')) || Number(a.run_sequence ?? 0) - Number(b.run_sequence ?? 0) || Number(a.id) - Number(b.id))
   })
   router.add('GET', '/audit/tasks/:project/stream', async c => {
     store.project(c.params.project)
+    const graph=graphId(c)
     c.res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' }); c.res.write(': connected\n\n')
     await new Promise<void>(resolve => {
-      const emit = (id: string, event: Json) => { if (id === c.params.project && !c.res.write(`event: audit\ndata: ${JSON.stringify(event)}\n\n`)) c.res.destroy() }
+      const emit = (id: string, event: Json) => { if (id === c.params.project && (!graph||(event as Record<string,Json>).graph_id===graph) && !c.res.write(`event: audit\ndata: ${JSON.stringify(event)}\n\n`)) c.res.destroy() }
       const timer = setInterval(() => c.res.write(': ping\n\n'), 15000)
       const close = () => { clearInterval(timer); store.changes.off('audit', emit); c.signal.removeEventListener('abort', close); resolve() }
       store.changes.on('audit', emit); c.signal.addEventListener('abort', close, { once: true }); if (c.signal.aborted) close()
@@ -71,14 +78,18 @@ export function auditRoutes(router: Router, store: Store, workspaceRoot: string)
     } finally { await file.close() }
   })
   router.add('GET', '/projects/:project/export', c => {
-    const format = c.url.searchParams.get('format') ?? 'yaml', detail = legacyProject(store, c.params.project), graph = store.graph(c.params.project)
+    if(store.project(c.params.project).mode==='benchmark'&&!graphId(c)){
+      const graphs=store.projectGraphs(c.params.project).map(g=>{const state=store.forGraph(c.params.project,g.id).graph(c.params.project);return {...g,fgs:{...state,...projectFgs(state)}}})
+      c.res.writeHead(200,{'Content-Type':'text/plain; charset=utf-8'});c.res.end(stringify({project:store.project(c.params.project),graphs}));return
+    }
+    const format = c.url.searchParams.get('format') ?? 'yaml', view=graphId(c)?store.forGraph(c.params.project,graphId(c)!):store, detail = legacyProject(view, c.params.project), graph = view.graph(c.params.project)
     if (!['yaml', 'timeline'].includes(format)) throw new HttpError(400, 'Supported formats: yaml, timeline')
     const resources = (store.db.prepare('SELECT * FROM shared_resources WHERE project_id=? ORDER BY created_at').all(c.params.project) as any[]).map(row => {
       const metadata = JSON.parse(row.metadata_json), secret = JSON.parse(row.secret_json)
       return { id: row.id, kind: row.kind, name: row.name, status: row.status, target: row.target, summary: row.summary, metadata, ...(row.kind === 'credential_ref' ? { secret } : {}), worker: row.worker, intent: row.intent_id, fact: row.fact_id, parent: row.parent_resource_id, source_task: row.source_task_id, locked_by: row.locked_by ? `${row.locked_by_type}:${row.locked_by}` : null, worker_paused: !!row.worker_paused, created_at: row.created_at, updated_at: row.updated_at, last_seen_at: row.last_seen_at }
     })
     const tasks = (store.db.prepare('SELECT * FROM operation_tasks WHERE project_id=? ORDER BY created_at').all(c.params.project) as any[]).map(row => ({ id: row.id, resource: row.resource_id, intent: row.intent_id, fact: row.fact_id, action: row.action, actor: `${row.actor_type}:${row.actor}`, risk: row.risk, status: row.status, summary: row.output_summary, result_ref: row.result_ref, requires_approval: !!row.requires_approval, approved_by: row.approved_by, created_at: row.created_at, started_at: row.started_at, completed_at: row.completed_at }))
-    const data: any = { project: { title: detail.project.title, origin: detail.facts.find(f => f.id === 'origin')!.description, goal: detail.facts.find(f => f.id === 'goal')!.description, bootstrap_enabled: detail.project.bootstrap_enabled }, ...(detail.hints.length ? { hints: detail.hints } : {}), facts: detail.facts, ...(detail.intents.length ? { intents: detail.intents } : {}), goals: graph.goals, findings: graph.findings, ...(resources.length ? { shared_resources: resources } : {}), ...(tasks.length ? { operation_tasks: tasks } : {}) }
+    const data: any = { project: { title: detail.project.title, origin: graph.facts.find(f => f.id === (graph.graph?.originId??'origin'))!.description, goal: graph.goals.find(g => !g.parentId)!.description, bootstrap_enabled: detail.project.bootstrap_enabled }, ...(detail.hints.length ? { hints: detail.hints } : {}), facts: detail.facts, ...(detail.intents.length ? { intents: detail.intents } : {}), goals: graph.goals, findings: graph.findings, ...(resources.length ? { shared_resources: resources } : {}), ...(tasks.length ? { operation_tasks: tasks } : {}) }
     data.fgs = { ...graph, ...projectFgs(graph) }
     const output = format === 'yaml' ? stringify(data) : [
       `[${detail.project.created_at}] PROJECT CREATED\n  origin: ${data.project.origin}\n  goal: ${data.project.goal}`,

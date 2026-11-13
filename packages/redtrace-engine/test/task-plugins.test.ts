@@ -51,7 +51,7 @@ test('legacy tool declarations do not revise a running contract; real replacemen
   } finally { store.close() }
 })
 
-test('Commander Mission schemas do not select plugins and preserve native FGS routing',async()=>{const store=new Store(':memory:');try{const id=store.createProject({title:'Task',origin:'Scope',goal:'Analyze'}).project.id;new LegionStore(store).claimCommand();const tools=legionTools(store,'commander',undefined,null,()=>{}),spawn=tools.find(t=>t.name==='legion_spawn')!;const schema=JSON.parse(JSON.stringify(spawn.parameters)).properties;assert.equal(schema.plugins,undefined);assert.equal(schema.requires,undefined);const result=await spawn.execute('create',{projectId:id,role:'soldier',taskKey:'a',description:'Analyze fixture',sourceIds:['origin']});assert.equal((result.details as Step).plugins,undefined);assert.ok(!tools.some(t=>/mcp__rea__|reverse_tools|start_plugin/.test(t.name)))}finally{store.close()}})
+test('Commander Mission schemas do not select plugins and preserve native FGS routing',async()=>{const store=new Store(':memory:');try{const id=store.createProject({title:'Task',origin:'Scope',goal:'Analyze'}).project.id;new LegionStore(store).claimCommand();const tools=legionTools(store,'commander',store.projects()[0].id,null,()=>{}),spawn=tools.find(t=>t.name==='legion_spawn')!;const schema=JSON.parse(JSON.stringify(spawn.parameters)).properties;assert.equal(schema.plugins,undefined);assert.equal(schema.requires,undefined);const result=await spawn.execute('create',{projectId:id,role:'soldier',taskKey:'a',description:'Analyze fixture',sourceIds:['origin']});assert.equal((result.details as Step).plugins,undefined);assert.ok(!tools.some(t=>/mcp__rea__|reverse_tools|start_plugin/.test(t.name)))}finally{store.close()}})
 
 
 test('v2 and legacy HTTP contracts ignore valid legacy declarations and preserve input validation', async t => {
@@ -63,7 +63,7 @@ test('v2 and legacy HTTP contracts ignore valid legacy declarations and preserve
     const r = await fetch(`http://127.0.0.1:${port}${url}`, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) })
     return { status: r.status, data: await r.json() as Step & { project: { id: string } } }
   }
-  const project = await request('/v2/projects', 'POST', { title: 'Task', origin: 'Scope', goal: 'Analyze', bootstrap: false })
+  const project = await request('/v2/projects', 'POST', { mode:'general', title: 'Task', origin: 'Scope', goal: 'Analyze', bootstrap: false })
   const base = `/v2/projects/${project.data.project.id}/steps`
   const step = await request(base, 'POST', input)
   assert.equal(step.status, 201); assert.equal(step.data.plugins, undefined)

@@ -30,7 +30,8 @@ export function efficiencyToolAvailable(context: TaskContext, name: string) {
 }
 
 export function graphTools(context: TaskContext, finish: () => void): AgentTool[] {
-  const { store, run, worker, config, signal } = context
+  const { run, worker, config, signal } = context
+  const store = run.graphId ? context.store.forGraph(run.projectId,run.graphId) : context.store.forProject(run.projectId)
   if (run.activity !== 'execute') throw new HttpError(410, 'Independent Reason execution was replaced by Commander')
   const maxSteps = () => context.currentMaxSteps ? context.currentMaxSteps() : config.maxSteps ?? null
   const evidenceRoot = path.join(run.workspaceRoot ?? path.join(config.workspaceRoot ?? path.join(os.tmpdir(), 'redtrace-workspaces'), run.projectId), '.redtrace-output', 'evidence')
@@ -40,7 +41,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   const readGraph = tool('read_graph', 'Read current project state or a current node by ID. Merged sources and deleted evidence no longer exist. SQL pagination is bounded. Hints and observations are unverified.', Type.Object({ id: Type.Optional(Type.String()), offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), kinds: Type.Optional(Type.Array(Type.Union(kinds.map(k => Type.Literal(k))), { uniqueItems: true })) }, { additionalProperties: false }), async args => {
     if (args.id) return { ...store.node(run.projectId, args.id), planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id) }
     const offset = args.offset ?? 0, limit = args.limit ?? 100, selected = new Set(args.kinds ?? kinds)
-    const project = store.project(run.projectId), page: Record<string, unknown> = { project, facts: [], goals: [], steps: [], findings: [], hints: [], observations: [] }, nextOffsets: Record<string, number | null> = {}
+    const project = store.project(run.projectId), page: Record<string, unknown> = { project, graph:run.graphId?store.projectGraph(run.projectId,run.graphId):null, facts: [], goals: [], steps: [], findings: [], hints: [], observations: [] }, nextOffsets: Record<string, number | null> = {}
     for (const kind of kinds) {
       if (!selected.has(kind)) continue
       page[kind === 'fact' ? 'facts' : kind === 'goal' ? 'goals' : kind === 'step' ? 'steps' : kind === 'finding' ? 'findings' : `${kind}s`] = store.nodes(run.projectId, [kind], { offset, limit })
@@ -57,7 +58,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   tools.push({ name: 'evidence_read', label: 'evidence_read', description: 'Read at most 7.6 KiB from a large tool result by byte offset, 1-based line, or keyword. Artifacts are scoped to this Project; pass run_id for another producer Run; request the next bounded slice when needed.', parameters: Type.Object({ run_id: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })), id: Type.String({ pattern: '^ev-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), line: Type.Optional(Type.Integer({ minimum: 1 })), query: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), executionMode: 'sequential', execute: async (_toolId: string, args: { run_id?: string; id: string; offset?: number; line?: number; query?: string; length?: number }) => {
     if (!/^ev-[a-f0-9]{64}$/.test(args.id) || [args.offset, args.line, args.query].filter(value => value !== undefined).length > 1) throw new Error('Provide a valid evidence ID and only one read selector')
     const producer = store.run(args.run_id ?? run.id)
-    if (producer.projectId !== run.projectId) throw new Error('Evidence producer belongs to another Project')
+    if (producer.projectId !== run.projectId || producer.graphId !== run.graphId) throw new Error('Evidence producer belongs to another Project')
     const runRoot = path.join(evidenceRoot, producer.id), root = await realpath(runRoot), base = await realpath(evidenceRoot)
     const workspace = await realpath(run.workspaceRoot ?? path.dirname(path.dirname(evidenceRoot)))
     if (!base.startsWith(workspace + path.sep)) throw new Error('Evidence root escapes this Project')
@@ -87,7 +88,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
 
     tools.push(tool('sync_step', 'Adopt the latest Step contract at a safe boundary. Read current planVersion first. Returns goals and active dependencies. Old call trees remain blocked; generate your next action from this contract.', Type.Object({ planVersion: Type.Integer({ minimum: 1 }) }), args => store.syncStep(run.id, args.planVersion)))
     tools.push(...httpTools(context))
-    const benchmarkOrigin = store.node<Fact>(run.projectId, 'origin', 'fact').description
+    const benchmarkOrigin = store.scopeFact(run.projectId).description
     const benchmarkSkill = installRoot ? path.join(installRoot, '.redtrace', 'skills', 'tsecbench-api') : ''
     if (/(?:tsecbench|tsec[\s-]*benchmark)/i.test(benchmarkOrigin) && existsSync(path.join(benchmarkSkill, 'SKILL.md')) && existsSync(path.join(benchmarkSkill, 'scripts', 'tsecbench.py'))) {
       tools.push(
@@ -96,7 +97,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
       )
     }
     tools.push(
-      tool('submit_fact', 'Publish a new decision-relevant, evidence-backed conclusion. An optional path MUST be an existing regular file in the Project cwd; file bytes are retained immediately. For graph/tool observations without a file, omit path and describe the observed result, never put a node ID in path. Consolidate related observations, not startup/status or duplicate Facts. Urgent goal proof, cross-Step prerequisites and real blockers must not wait.', Type.Object({ description: Type.String(), evidence: Type.Array(Type.Object({ description: Type.String(), path: Type.Optional(Type.String()) })) }), args => { const evidence = args.evidence.map(source => source.path ? { artifactId: new ProjectEvidence(store, config.workspaceRoot).promoteFile(run.projectId, source).id, description: source.description } : source); return store.addFact(run.projectId, args.description, { runId: run.id, evidence, creator: worker.name }) }),
+      tool('submit_fact', 'Publish a new decision-relevant, evidence-backed conclusion. An optional path MUST be an existing regular file in the Project cwd; file bytes are retained immediately. For graph/tool observations without a file, omit path and describe the observed result, never put a node ID in path. Consolidate related observations, not startup/status or duplicate Facts. Urgent goal proof, cross-Step prerequisites and real blockers must not wait.', Type.Object({ description: Type.String(), evidence: Type.Array(Type.Object({ description: Type.String(), path: Type.Optional(Type.String()) })) }), args => { const evidence = args.evidence.map(source => source.path ? { artifactId: new ProjectEvidence(store, config.workspaceRoot).promoteFile(run.projectId, {...source,runId:run.id},run.workspaceRoot).id, description: source.description } : source); return store.addFact(run.projectId, args.description, { runId: run.id, evidence, creator: worker.name }) }),
       tool('submit_finding', 'Record a deliverable supported by confirmed facts. New Findings reach Commander through FGS deltas.', Type.Object({ title: Type.String(), description: Type.String(), type: Type.Optional(Type.String()), factIds: refs }), args => store.addFinding(run.projectId, { ...args, creator: worker.name, runId: run.id })),
       tool('finish_step', step?.bootstrap
         ? 'Finish this Soldier initial Mission only after publishing a confirmed Fact; Commander owns Goal acceptance.'
@@ -125,7 +126,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   } }))
 }
 
-export const activityPrompt = (_activity: 'decide' | 'execute', step?: Step) => legionMission(step?.role ?? 'soldier') + (step?.bootstrap ? '\nInitial Mission: establish evidence for the supplied Goal as a Soldier. Commander owns planning and acceptance.' : '')
+export const activityPrompt = (_activity: 'decide' | 'execute', step?: Step) => legionMission(step?.role ?? 'soldier') + (step ? '\nAssigned Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'. Read and write only this Graph.' : '') + (step?.bootstrap ? '\nInitial Mission: establish evidence for the supplied Goal as a Soldier. Commander owns planning and acceptance.' : '')
 
 export function activityLimits(config: EngineConfig, activity: 'decide' | 'execute', step?: Step) {
   return config.taskLimits?.[activity==='decide'?'commander':step?.role??'soldier'] ?? {timeout:config.executeTimeout,concludeTimeout:config.concludeTimeout}
@@ -155,17 +156,19 @@ export function livePlan(store: Store, runId: string) {
 }
 
 export function launchContext(store: Store, runId: string, channels: unknown[] = [], maxSteps: number | null = null) {
-  const run = store.run(runId), origin = store.node<Fact>(run.projectId, 'origin', 'fact')
+  const run = store.run(runId)
+  if(run.graphId)store=store.forGraph(run.projectId,run.graphId)
+  const origin = store.node<Fact>(run.projectId, 'origin', 'fact')
   const includeHints = !!run.stepId
   const acknowledgedHintSeq = run.activity === 'decide' ? store.project(run.projectId).acknowledgedHintSeq ?? 0 : 0
   const hints = includeHints ? store.db.prepare(`SELECT n.data FROM nodes n JOIN events e
     ON e.project_id=n.project_id AND e.node_id=n.id AND e.type='hint.added'
-    WHERE n.project_id=? AND n.kind='hint' AND COALESCE(json_extract(n.data,'$.deleted'),0)=0
+    WHERE n.project_id=? AND (? IS NULL OR n.graph_id=?) AND n.kind='hint' AND COALESCE(json_extract(n.data,'$.deleted'),0)=0
     AND COALESCE(json_extract(e.data,'$.hintSeq'),1)>?
     AND (?=1 OR json_extract(n.data,'$.stepId') IS NULL OR json_extract(n.data,'$.stepId')=?) ORDER BY n.rowid LIMIT 9`)
-    .all(run.projectId, acknowledgedHintSeq, run.activity === 'decide' ? 1 : 0, run.stepId).map(row => JSON.parse(String(row.data)) as Input) : []
+    .all(run.projectId,run.graphId??null,run.graphId??null, acknowledgedHintSeq, run.activity === 'decide' ? 1 : 0, run.stepId).map(row => JSON.parse(String(row.data)) as Input) : []
   const goal = run.activity === 'decide' ? store.node<Goal>(run.projectId, 'goal', 'goal') : undefined
-  return { projectId: run.projectId, ...(run.handoff ? {handoff:{confirmedState:run.handoff,predecessorRunId:run.predecessorRunId}} : {}), planningCapacity: store.planningCapacity(run.projectId, maxSteps), acknowledgementBoundary: store.acknowledgementBoundary(run.id), scope: { id: origin.id, description: origin.description },
+  return { projectId: run.projectId, graphId:run.graphId, ...(run.handoff ? {handoff:{confirmedState:run.handoff,predecessorRunId:run.predecessorRunId}} : {}), planningCapacity: store.planningCapacity(run.projectId, maxSteps), acknowledgementBoundary: store.acknowledgementBoundary(run.id), scope: { id: origin.id, description: origin.description },
     ...(goal ? { goal: { id: goal.id, description: goal.description, status: goal.status },
       evidenceSeq: run.planningEvidenceSeq ?? 0, hintSeq: run.planningHintSeq ?? 0, criticalSeq: run.planningCriticalSeq ?? 0, graphCursor: run.deliveredGraphCursor ?? 0,
       } : {}),

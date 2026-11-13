@@ -28,11 +28,11 @@ export class Scheduler {
   start() { if (!this.closed) return; this.closed = false; this.store.recover(); this.store.changes.on('change', this.changed); this.wake() }
   update(config: EngineConfig) { this.config = config; this.wake() }
   get activeRuns() { return this.store.runsByStatus('running') }
-  get commanderRunning() { return this.legion.campaign().status==='running' }
+  get commanderRunning() { return this.legion.campaigns().some(c=>c.status==='running') }
   wake() { if (this.closed || this.scheduled) return; this.scheduled = true; queueMicrotask(() => { this.scheduled = false; if (!this.closed) this.dispatch() }) }
   private select(resume: Run | undefined, step: Step, active: Run[]) {
-    const command=this.legion.campaign()
-    const count = (name: string) => active.filter(r => r.worker === name).length+(command.status==='running'&&command.workerName===name?1:0)
+    const commands=this.legion.campaigns().filter(c=>c.status==='running')
+    const count = (name: string) => active.filter(r => r.worker === name).length+commands.filter(c=>c.workerName===name).length
     return this.config.workers.map(w => this.selectWorker(w, 'execute', step)).filter((w): w is Worker => !!w && w.enabled && (!step.nextWorker || w.name===step.nextWorker) && !!w.roles?.includes(step.role ?? 'soldier') && (!resume || w.name === resume.worker && w.backend === resume.backend) && count(w.name) < w.maxRunning)
       .sort((a,b) => a.priority-b.priority || count(a.name)-count(b.name) || a.name.localeCompare(b.name))[0]
   }
@@ -44,14 +44,14 @@ export class Scheduler {
         if (this.store.run(task.run.id).status !== 'running' || project.status !== 'active' || ['cancelled','parked'].includes(step.status) || this.store.node<Goal>(project.id,step.goalId,'goal').status !== 'open') task.abort.abort('Project or Step stopped')
       } catch (error) { if (error instanceof HttpError && error.status===404) task.abort.abort('Project deleted'); else throw error }
     }
-    const commandSlots=this.commanderRunning?1:0, active = this.activeRuns, projects = this.store.projects().filter(p=>p.status==='active')
+    const commands=this.legion.campaigns().filter(c=>c.status==='running'), commandSlots=commands.length, active = this.activeRuns, projects = this.store.projects().filter(p=>p.status==='active')
     let progress = true
     while(progress && active.length+commandSlots < this.config.maxWorkers) {
       progress = false
       for(let i=0;i<projects.length && active.length+commandSlots<this.config.maxWorkers;i++) {
         const project=projects[(this.cursor+i)%projects.length]
-        if(active.filter(r=>r.projectId===project.id).length>=this.config.maxProjectWorkers)continue
-        if(!active.some(r=>r.projectId===project.id)&&new Set(active.map(r=>r.projectId)).size>=this.config.maxRunningProjects)continue
+        if(active.filter(r=>r.projectId===project.id).length+commands.filter(c=>c.projectId===project.id).length>=this.config.maxProjectWorkers)continue
+        if(!active.some(r=>r.projectId===project.id)&&!commands.some(c=>c.projectId===project.id)&&new Set([...active.map(r=>r.projectId),...commands.map(c=>c.projectId)]).size>=this.config.maxRunningProjects)continue
         const steps=this.store.nodes<Step>(project.id,['step']).filter(s=>!s.deleted&&!s.replacementPending&&['pending','paused'].includes(s.status)&&this.store.node<Goal>(project.id,s.goalId,'goal').status==='open').sort((a,b)=>b.priority-a.priority||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id))
         for(const step of steps) {
           const resume=step.status==='paused'?this.store.runsByStatus('paused',project.id).find(r=>r.stepId===step.id):undefined
@@ -64,13 +64,13 @@ export class Scheduler {
   }
   private launch(run: Run, worker: Worker) {
     const abort = new AbortController(), config = structuredClone(this.config)
-    run.provider = worker.provider; run.model = worker.model; run.workspaceRoot = path.join(config.workspaceRoot, run.projectId)
+    run.provider = worker.provider; run.model = worker.model; run.workspaceRoot ??= path.join(config.workspaceRoot, run.projectId, 'agents', run.graphId??'main',run.id)
     this.store.transaction(() => this.store.saveRun(run))
     const task: Active = { run, abort, completion: Promise.resolve() }
     this.running.set(run.id, task)
     task.completion = (async () => {
       let status: RunStatus = 'succeeded', error: string | null = null
-      try { await this.execute({ store: this.store, run, worker: structuredClone(worker), config, signal: abort.signal }) }
+      try { await this.execute({ store: run.graphId ? this.store.forGraph(run.projectId,run.graphId) : this.store.forProject(run.projectId), run, worker: structuredClone(worker), config, signal: abort.signal }) }
       catch (reason) { status = 'failed'; error = reason instanceof Error ? reason.message : String(reason) }
       finally {
         try {
@@ -87,6 +87,11 @@ export class Scheduler {
         finally { this.running.delete(run.id); this.wake() }
       }
     })()
+  }
+  async stopProject(projectId:string) {
+    const tasks=[...this.running.values()].filter(t=>t.run.projectId===projectId)
+    for(const task of tasks)task.abort.abort('Project stopped or deleted')
+    await Promise.all(tasks.map(t=>t.completion))
   }
   async close() {
     this.closed = true

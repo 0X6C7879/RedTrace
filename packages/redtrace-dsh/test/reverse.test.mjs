@@ -59,8 +59,8 @@ test('Soldier can lazily load native REA without Commander tool selection; manag
     () => Promise.all(sessions.map(s => s.refresh())))
   await manager.boot()
   const id = store.createProject({ title: 'Fixture', origin: 'Authorized fixture', goal: 'Analyze', bootstrap: false }).project.id
-  new LegionStore(store).claimCommand()
-  const tools=legionTools(store,'commander',undefined,null,()=>{})
+  new LegionStore(store,store.projects()[0].id).claimCommand()
+  const tools=legionTools(store,'commander',store.projects()[0].id,null,()=>{})
   const result=await tools.find(t=>t.name==='legion_spawn').execute('commander-create',{projectId:id,role:'soldier',taskKey:'reverse',description:'Reverse fixture',sourceIds:['origin']})
   const step = result.details
   const claimed = store.claim(id, 'execute', { name: 'Explore', backend: 'dsh' }, step.id)

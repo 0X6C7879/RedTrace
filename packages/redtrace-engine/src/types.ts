@@ -5,7 +5,7 @@ export type RunStatus = 'running' | 'paused' | 'succeeded' | 'failed' | 'unknown
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 
 export interface Project {
-  id: string; title: string; status: ProjectStatus; bootstrap: boolean; createdAt: string
+  id: string; title: string; mode: 'benchmark' | 'general'; objective?:string; status: ProjectStatus; bootstrap: boolean; createdAt: string
   revision: number; planningRevision: number; decidedRevision: number; retryAfter: number
   factSeq: number; endedSeq: number; acknowledgedFactSeq: number; acknowledgedEndedSeq: number
   evidenceSeq?: number; acknowledgedEvidenceSeq?: number
@@ -15,6 +15,11 @@ export interface Project {
   initialPlanningPending: boolean; planningRetryPending: boolean
   failureCount?: number; failureSignature?: string | null; circuitOpen?: boolean; contextRevision?: number
 }
+export interface ProjectGraph {
+  id: string; projectId: string; type: 'main' | 'benchmark_task'; taskKey: string | null; title: string
+  status: 'active' | 'completed'; originId: string; goalId: string; createdAt: string; updatedAt: string
+  revision: number; factSeq: number; evidenceSeq: number; hintSeq: number; endedSeq: number
+}
 export type LegionRole = 'general' | 'soldier' | 'scout'
 export interface Evidence { path?: string; artifactId?: string; runId?: string; toolCallId?: string; description: string }
 export interface LegionAssignment {
@@ -23,7 +28,7 @@ export interface LegionAssignment {
   predecessorRunId?: string; handoff?: string; handoffPending?: boolean; nextWorker?: string
   handoffRequest?: { summary: string; nextWorker?: string }
 }
-export interface NodeBase { id: string; projectId: string; createdAt: string; creator: string; version?: number }
+export interface NodeBase { graphId?: string | null; id: string; projectId: string; createdAt: string; creator: string; version?: number }
 export interface Fact extends NodeBase { kind: 'fact'; description: string; stepId: string | null; evidence: Evidence[]; producerStepIds?: string[] }
 export interface Goal extends NodeBase { kind: 'goal'; description: string; parentId: string | null; status: 'open' | 'achieved' | 'cancelled'; evidenceIds: string[] }
 export interface Step extends NodeBase, LegionAssignment {
@@ -39,9 +44,10 @@ export interface Step extends NodeBase, LegionAssignment {
 export interface Finding extends NodeBase { kind: 'finding'; title: string; description: string; type: string; factIds: string[]; details: Json; stepId?: string | null; producerStepIds?: string[] }
 export interface Input extends NodeBase { kind: 'hint' | 'observation'; content: string; stepId: string | null; deleted: boolean }
 export type GraphNode = Fact | Goal | Step | Finding | Input
-export interface Graph { project: Project; facts: Fact[]; goals: Goal[]; steps: Step[]; findings: Finding[]; hints: Input[]; observations: Input[] }
-export interface GraphEvent { id: number; projectId: string; revision: number; type: string; nodeId: string | null; payload: Json; createdAt: string }
+export interface Graph { graph?: ProjectGraph; project: Project; facts: Fact[]; goals: Goal[]; steps: Step[]; findings: Finding[]; hints: Input[]; observations: Input[] }
+export interface GraphEvent { graphId?: string | null; id: number; projectId: string; revision: number; type: string; nodeId: string | null; payload: Json; createdAt: string }
 export interface Run {
+  graphId?: string | null
   id: string; projectId: string; stepId: string | null; activity: Activity; worker: string
   backend: 'dsh' | 'mock'; status: RunStatus; startedAt: string; endedAt: string | null
   baseRevision: number; checkpoint: Json; pendingTools: string[]; error: string | null
@@ -93,4 +99,5 @@ export function integer(value: unknown, name: string, minimum = 0): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum) throw new HttpError(422, `${name} must be an integer >= ${minimum}`)
   return value
 }
+export const isScopeId = (id:string) => id==='origin'||id.startsWith('origin-graph-')
 export const now = () => new Date().toISOString()

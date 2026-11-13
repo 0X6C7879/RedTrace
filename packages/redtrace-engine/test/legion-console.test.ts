@@ -13,7 +13,7 @@ function page(){
   vm.runInContext(readFileSync(path.join(root,'static/fgs-view.js'),'utf8'),context)
   vm.runInContext([...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].find(m=>m[1].includes('function redtraceApp()'))![1],context)
   const app=vm.runInContext('redtraceApp()',context)
-  app.showToast=()=>{}
+  app.showToast=()=>{};app.legionProjectId='p';app.projects=[{id:'p',title:'Target'}]
   app.legion={campaign:{status:'stopped'},projects:[{id:'p',title:'Target',status:'active',steps:[{id:'s',description:'Verify arithmetic',role:'soldier',taskKey:'target',status:'parked'}],runs:[],tactics:[]}],messages:[],transfers:[]}
   return app
 }
@@ -168,8 +168,8 @@ test('audit completion cards use actual failed, paused, cancelled and unknown ou
 })
 
 test('Commander log UI consumes native offsets without creating a project Run or mixing global usage into project usage',async()=>{
-  const app=auditApp(),requests:string[]=[];let page=0
-  app.request=async(url:string)=>{requests.push(url);if(url==='/v2/legion')return{campaign:{sessionId:'command-a',usage:{inputTokens:7,outputTokens:3}}};return {sessionId:'command-a',available:true,events:[{event_uid:'event-'+(++page),kind:'assistant.message',content:'Native log '+page,task_type:'commander'}],nextOffset:page*100,hasMore:page===1}}
+  const app=auditApp(),requests:string[]=[];app.tasks=[{id:'p',title:'project'}];let page=0
+  app.request=async(url:string)=>{requests.push(url);if(url.endsWith('/commander'))return{campaign:{sessionId:'command-a',usage:{inputTokens:7,outputTokens:3}}};return {sessionId:'command-a',available:true,events:[{event_uid:'event-'+(++page),kind:'assistant.message',content:'Native log '+page,task_type:'commander'}],nextOffset:page*100,hasMore:page===1}}
   await app.selectCommander();await app.loadCommanderLog()
   assert.equal(app.selectedScope,'commander');assert.equal(app.selectedTaskId,'');assert.equal(app.runs.length,0);assert.equal(app.taskUsage,null)
   assert.equal(app.events.length,2);assert.match(requests.at(-1)!,/offset=100/);assert.equal(app.commanderTokens(),10)
@@ -233,12 +233,12 @@ test('initial project loading cannot clear the loading state or selection of a u
   const app=auditApp(),projectReads:Array<(v:any)=>void>=[];let finishLog!:(v:any)=>void
   app.request=async(url:string)=>{
     if(url==='/audit/tasks')return[{id:'p',title:'project'}]
-    if(url==='/v2/legion')return{campaign:{sessionId:'command-selected'}}
+    if(url.endsWith('/commander'))return{campaign:{sessionId:'command-selected'}}
     if(url.startsWith('/v2/legion/session/events'))return new Promise(resolve=>{finishLog=resolve})
     return new Promise(resolve=>projectReads.push(resolve))
   }
   const initial=app.initAudit();await new Promise<void>(resolve=>setImmediate(resolve))
-  assert.equal(projectReads.length,4)
+  assert.equal(projectReads.length,5)
   const selected=app.selectCommander();await new Promise<void>(resolve=>setImmediate(resolve))
   for(const resolve of projectReads)resolve([])
   await initial;assert.equal(app.selectedScope,'commander');assert.equal(app.loading,true)
@@ -262,9 +262,11 @@ test('human Goal acceptance selects a captured project evidence list, retains ve
     app.fgsAcceptance.evidenceIds=[f.id];app.loadProject=async()=>{};app.updateGraph=()=>{};app.selectFgsNode=()=>{}
     app.api=async(method:string,url:string,value:any)=>{
       assert.equal(method,'PATCH');assert.equal(url,'/v2/projects/'+p.id+'/goals/goal');assert.equal(value.expectedVersion,version)
-      return handlers.get('PATCH /v2/projects/:project/goals/:node')({params:{project:p.id,node:'goal'},req:Object.assign(Readable.from([Buffer.from(JSON.stringify(value))]),{headers:{'content-type':'application/json'}})})
+      return handlers.get('PATCH /v2/projects/:project/goals/:node')({url:new URL(url,'http://localhost'),params:{project:p.id,node:'goal'},req:Object.assign(Readable.from([Buffer.from(JSON.stringify(value))]),{headers:{'content-type':'application/json'}})})
     }
     await app.submitFgsAcceptance();assert.equal(store.node<any>(p.id,'goal').status,'achieved');assert.equal(closed,1)
     await app.submitFgsAcceptance();assert.ok(app.fgsAcceptance.error);assert.equal(app.fgsAcceptance.evidenceIds[0],f.id);assert.equal(closed,1)
   }finally{store.close()}
 })
+
+test('Goal acceptance retains the captured Graph when the user switches task pages',async()=>{const app=page();app.selectedProjectId='p';app.selectedGraphId='B';app.fgsAcceptance={projectId:'p',graphId:'A',goalId:'goal-A',version:1,evidenceIds:['fact-A']};let opened='';app.$refs={fgsAcceptanceDialog:{close(){}}};app.loadProject=async()=>{};app.updateGraph=()=>{};app.selectFgsNode=()=>{};app.openProject=async(_p:string,g:string)=>{opened=g};app.api=async(_method:string,url:string)=>{assert.equal(url,'/v2/projects/p/goals/goal-A?graphId=A')};await app.submitFgsAcceptance();assert.equal(app.fgsAcceptance.error,'');assert.equal(opened,'A')})

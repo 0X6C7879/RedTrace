@@ -94,22 +94,22 @@ try {
   const deadline = Date.now()+20000
   while (Date.now()<deadline) { try { if ((await fetch(api+'/runtime/config')).ok) break } catch {} if(ended)throw new Error(logs); await delay(50) }
   const call = async (route, body) => { const r=await fetch(api+route,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{}); const v=await r.json();assert.ok(r.ok,JSON.stringify(v)+'\n'+logs);return v }
-  const graph=await call('/v2/projects',{title:'Legion native protocol fixture',origin:'Only authorized local deterministic fixture, no real target',goal:'Verify four-role collaboration',bootstrap:false}); projectId=graph.project.id
+  const graph=await call('/v2/projects',{mode:'general',title:'Legion native protocol fixture',origin:'Only authorized local deterministic fixture, no real target',goal:'Verify four-role collaboration',bootstrap:false}); projectId=graph.project.id
   const acceptedDeadline=Date.now()+45000
-  while(Date.now()<acceptedDeadline){const board=await call('/v2/legion');if(board.campaign.status==='stopped')throw Error(JSON.stringify(board.campaign));if(board.projects[0]?.status==='completed'&&board.campaign.status==='idle')break;await delay(20)}
-  const result=(await call('/v2/legion')).campaign
+  while(Date.now()<acceptedDeadline){const board=await call('/v2/legion?projectId='+projectId);if(board.campaign.status==='stopped')throw Error(JSON.stringify(board.campaign));if(board.projects[0]?.status==='completed'&&board.campaign.status==='idle')break;await delay(20)}
+  const result=(await call('/v2/legion?projectId='+projectId)).campaign
   assert.equal(result.status,'idle');assert.ok(result.state.includes('Fixture accepted'))
   const g=await call('/v2/projects/'+projectId), runs=await call('/v2/projects/'+projectId+'/runs')
   assert.equal(g.project.status,'completed');assert.equal(g.steps.length,4);assert.ok(g.steps.every(s=>s.status==='done'));assert.ok(runs.every(r=>r.status==='succeeded')); for (const run of runs) assert.equal(run.worker, g.steps.find(s=>s.id===run.stepId).role)
   assert.deepEqual([...roles].sort(),['COMMANDER','GENERAL','SCOUT','SOLDIER'])
-  const resumed=await call('/v2/legion/command',{worker:'commander'});assert.equal(resumed.sessionId,result.sessionId);assert.equal(resumed.status,'idle');assert.equal((await call('/v2/projects/'+projectId)).steps.length,4)
+  const resumed=await call('/v2/legion/command',{projectId,worker:'commander'});assert.equal(resumed.sessionId,result.sessionId);assert.equal(resumed.status,'idle');assert.equal((await call('/v2/projects/'+projectId)).steps.length,4)
   const usage=await call('/audit/usage');assert.ok(usage.commander>0,'Global Commander usage must come from actual native assistant messages');assert.ok(usage.total>=usage.commander)
-  const logPage = await call('/v2/legion/session/events?offset=0&limit=100')
+  const logPage = await call('/v2/legion/session/events?projectId='+projectId+'&offset=0&limit=100')
   assert.equal(logPage.sessionId,result.sessionId);assert.equal(logPage.available,true);assert.ok(logPage.nextOffset<=100)
   assert.ok(logPage.events.some(event=>event.task_type==='commander'&&['tool.started','assistant.message','user.message'].includes(event.kind)))
-  const repeated=await call('/v2/legion/session/events?offset=0&limit=100');assert.deepEqual(repeated.events.map(e=>e.timestamp),logPage.events.map(e=>e.timestamp),'Historical Commander timestamps must not change when reread');assert.ok(logPage.events.some(e=>e.kind==='system.prompt'),'Current native system/message must be visible')
-  const nextPage=await call('/v2/legion/session/events?offset='+logPage.nextOffset+'&limit=100');assert.ok(nextPage.nextOffset>=logPage.nextOffset)
-  assert.equal((await fetch(api+'/v2/legion/session/events?limit=0')).status,422)
+  const repeated=await call('/v2/legion/session/events?projectId='+projectId+'&offset=0&limit=100');assert.deepEqual(repeated.events.map(e=>e.timestamp),logPage.events.map(e=>e.timestamp),'Historical Commander timestamps must not change when reread');assert.ok(logPage.events.some(e=>e.kind==='system.prompt'),'Current native system/message must be visible')
+  const nextPage=await call('/v2/legion/session/events?projectId='+projectId+'&offset='+logPage.nextOffset+'&limit=100');assert.ok(nextPage.nextOffset>=logPage.nextOffset)
+  assert.equal((await fetch(api+'/v2/legion/session/events?projectId='+projectId+'&limit=0')).status,422)
   if(process.argv[4]==='--hold') { console.log('UI_READY '+JSON.stringify({api,work,projectId,commanderSessionId:result.sessionId}));await new Promise(resolve=>process.once('SIGTERM',resolve)) }
   child.kill('SIGTERM'); await closed
   const { Store }=await import(pathToFileURL(root+'/packages/redtrace-engine/src/store.ts'));const store=new Store(work+'/.redtrace/engine.db')
@@ -117,11 +117,11 @@ try {
     const messages=store.db.prepare('SELECT data FROM legion_messages').all().map(row=>JSON.parse(row.data))
     assert.ok(messages.length>=4);assert.ok(messages.some(m=>m.status==='admitted'),'real native inbox admission was not recorded'); assert.ok(messages.some(m=>m.type==='HELP'&&m.status==='admitted')); assert.ok(messages.some(m=>m.content.includes('COMMANDER_TACTICAL_ACK')&&m.status==='admitted'))
     assert.equal(store.run(runs[0].id).pendingTools.length,0)
-    const campaign=JSON.parse(store.db.prepare('SELECT data FROM campaign WHERE id=1').get().data)
+    const campaign=JSON.parse(store.db.prepare('SELECT data FROM project_campaigns WHERE project_id=?').get(projectId).data)
     assert.ok(campaign.cursors[projectId].acknowledged>0)
     console.log('LEGION_RUNTIME_SUPPORTED=true; roles=Commander,Scout,General,Soldier; specialist_workers=2; shared_fgs=true; commander_acceptance=true; native_message_admission=true; state_and_cursor_persisted=true; commander_native_resume=true; help_reply_admitted=true; model=local-protocol-fixture; commander_native_log_read=true')
   } finally { store.close() }
 } catch (error) {
-  if (existsSync(work+'/.redtrace/engine.db')) { const { DatabaseSync }=await import('node:sqlite'); const db=new DatabaseSync(work+'/.redtrace/engine.db',{readOnly:true});try { console.error(db.prepare("SELECT data FROM campaign").all()) } finally {db.close()} }
+  if (existsSync(work+'/.redtrace/engine.db')) { const { DatabaseSync }=await import('node:sqlite'); const db=new DatabaseSync(work+'/.redtrace/engine.db',{readOnly:true});try { console.error(db.prepare("SELECT data FROM project_campaigns").all()) } finally {db.close()} }
   console.error(logs); throw error }
 finally { if(child&&!ended){child.kill('SIGKILL');await new Promise(resolve=>child.once('close',resolve))}for(const res of pending)res.destroy();await new Promise(resolve=>model.close(resolve));rmSync(work,{recursive:true,force:true}) }

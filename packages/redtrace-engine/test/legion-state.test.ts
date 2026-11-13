@@ -235,7 +235,7 @@ test('HTTP Step schema persists roles and Project artifact endpoint enforces bou
   t.after(async () => { await engine.close(); rmSync(root, { recursive: true, force: true }) })
   const address = engine.server.address() as import('node:net').AddressInfo
   const base = 'http://127.0.0.1:' + address.port
-  const created = await fetch(base + '/v2/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'fixture', origin: 'local fixture', goal: 'proof' }) })
+  const created = await fetch(base + '/v2/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode:'general', title: 'fixture', origin: 'local fixture', goal: 'proof' }) })
   assert.equal(created.status, 201)
   const project = (await created.json()).project
   const stepResponse = await fetch(base + '/v2/projects/' + project.id + '/steps', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(mission) })

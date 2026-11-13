@@ -29,9 +29,13 @@ export class LegionExperience {
   transfer(sourceId:number,targetProject:string,taskKey:string,brief:string){
     const source=this.store.db.prepare('SELECT * FROM legion_experience WHERE id=?').get(sourceId);if(!source)throw new HttpError(404,'Experience not found')
     this.store.project(targetProject);requiredText(taskKey,'taskKey');requiredText(brief,'brief')
-    const evidence=new ProjectEvidence(this.store,this.workspaceRoot);evidence.read(String(source.project_id),String(source.artifact_id))
+    const sourceView=Object.create(this.store) as Store
+    Object.defineProperties(sourceView,{projectScope:{value:String(source.project_id)},graphScope:{value:undefined}})
+    new ProjectEvidence(sourceView,this.workspaceRoot).read(String(source.project_id),String(source.artifact_id))
     const id='transfer-'+randomUUID(),content='[Family Transfer '+id+'] UNVERIFIED IN THIS TARGET. Source '+source.project_id+' / experience '+sourceId+' / family '+source.family+' / artifact '+source.artifact_id+'\n'+brief+'\nReverify target product/version and prerequisites before using this technique. Do not promote source claims into target Facts.'
-    const hint=this.store.addInput(targetProject,'hint',content,'commander')
+    const graph=this.store.projectGraphs(targetProject).find(g=>g.taskKey===taskKey)??this.store.projectGraphs(targetProject).find(g=>g.type==='main')
+    if(!graph)throw new HttpError(422,'Initialize the target task Graph before transfer')
+    const hint=this.store.forGraph(targetProject,graph.id).addInput(targetProject,'hint',content,'commander')
     const data={id,sourceProjectId:String(source.project_id),sourceFactIds:JSON.parse(String(source.fact_ids)),targetProject,taskKey,hintId:hint.id,brief,confirmedFactIds:[],status:'needs-reverification'}
     this.store.db.prepare('INSERT INTO legion_transfers VALUES (?,?,?,?,?)').run(id,sourceId,targetProject,taskKey,JSON.stringify(data));return data
   }

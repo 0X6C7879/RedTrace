@@ -40,7 +40,7 @@ test('project ids reuse the smallest free number and deletion leaves no counter 
   }
   const counterRows = (scope: string) => Number((engine.store.db.prepare('SELECT count(*) c FROM counters WHERE scope=?').get(scope) as { c: number }).c)
   const counterTotal = () => Number((engine.store.db.prepare('SELECT count(*) c FROM counters').get() as { c: number }).c)
-  const create = async () => (await call('/v2/projects', 'POST', { title: 'T', origin: 'o', goal: 'g' })).data.project.id as string
+  const create = async () => (await call('/v2/projects', 'POST', { mode:'general', title: 'T', origin: 'o', goal: 'g' })).data.project.id as string
   const remove = async (id: string) => {
     const token = (await call(`/projects/${id}/deletion/confirmation`, 'POST')).data.confirmationToken
     assert.equal((await call(`/projects/${id}`, 'DELETE', { confirmation_token: token, actor: 'human-ui' })).status, 202)

@@ -1,0 +1,5 @@
+import {serveEngine} from '../src/index.ts'
+import {mkdtempSync,symlinkSync,rmSync} from 'node:fs'
+import path from 'node:path'
+import os from 'node:os'
+const root=mkdtempSync(path.join(os.tmpdir(),'redtrace-ui-graphs-'));symlinkSync(path.resolve(import.meta.dirname,'../../../static'),root+'/static');const e=await serveEngine({root,port:0,autoStart:false});const p=e.store.createProject({mode:'benchmark',title:'Benchmark QA',origin:'authorized local fixtures',goal:'verify three isolated tasks'}).project;for(const taskKey of ['alpha','beta','gamma'])e.store.createGraph(p.id,{taskKey,title:taskKey,origin:'Local fixture '+taskKey,goal:'verify '+taskKey});const g=e.store.createProject({mode:'general',title:'General QA',origin:'local fixture',goal:'verify autonomous organization'}).project;console.log(JSON.stringify({port:e.server.address().port,projectId:p.id,generalId:g.id,graphs:e.store.projectGraphs(p.id)}));await new Promise(r=>process.once('SIGTERM',r));await e.close();rmSync(root,{recursive:true,force:true});

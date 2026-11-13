@@ -7,8 +7,9 @@ const ACTIVE_STEP_STATUSES = ['pending', 'running', 'paused', 'blocked']
 
 /** A lossless projection of recorded relationships, not a second graph database. */
 export function projectFgs(graph: Graph) {
+  const origin=graph.graph?.originId??'origin'
   const nodes: FgsNode[] = [
-    ...graph.facts.map(f => ({ id: f.id, nodeType: f.id === 'origin' ? 'scope' as const : 'fact' as const, label: f.description, description: f.description })),
+    ...graph.facts.map(f => ({ id: f.id, nodeType: f.id === origin ? 'scope' as const : 'fact' as const, label: f.description, description: f.description })),
     ...graph.goals.map(g => ({ id: g.id, nodeType: g.parentId ? 'subgoal' as const : 'goal' as const, label: g.description, description: g.description, status: g.status,
       activeSteps: graph.steps.filter(s => !s.deleted && s.goalId === g.id && ACTIVE_STEP_STATUSES.includes(s.status)).length })),
     ...graph.findings.map(f => ({ id: f.id, nodeType: 'finding' as const, label: f.title, description: f.description })),
@@ -23,14 +24,14 @@ export function projectFgs(graph: Graph) {
     edges.set(id, edge)
   }
   const root = graph.goals.find(g => !g.parentId)
-  if (root) add('origin', root.id, 'scope')
+  if (root) add(origin, root.id, 'scope')
   // Manual/imported facts have scope membership, never an invented producing Step.
-  for (const fact of graph.facts) if (fact.id !== 'origin' && !fact.stepId && !graph.steps.some(s => s.factIds.includes(fact.id))) add('origin', fact.id, 'scope')
+  for (const fact of graph.facts) if (fact.id !== origin && !fact.stepId && !graph.steps.some(s => s.factIds.includes(fact.id))) add(origin, fact.id, 'scope')
   for (const goal of graph.goals) {
     if (goal.parentId) {
       add(goal.id, goal.parentId, 'subgoal')
       // Every subgoal belongs to the project's scope; this is not evidence of success.
-      add('origin', goal.id, 'scope')
+      add(origin, goal.id, 'scope')
     }
     for (const fact of goal.evidenceIds) add(fact, goal.id, 'evidence')
   }

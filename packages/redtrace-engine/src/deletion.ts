@@ -12,6 +12,7 @@ const hash = (value: string) => createHash('sha256').update(value).digest()
 const projectId = (value: string) => { if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value)) throw new HttpError(400, 'Invalid project id'); return value }
 
 export class ProjectDeletion {
+  stopRuntime?: (projectId:string)=>Promise<void>
   private store: Store
   private operations: Operations
   private root: string
@@ -48,10 +49,13 @@ export class ProjectDeletion {
     projectId(id); const pending = this.status(id); if (!pending) { try { this.store.project(id) } catch { return true }; throw new HttpError(409, 'Project is not pending deletion') }
     if (!success) { this.fail(id, error || 'runtime cleanup failed'); return false }
     try {
+      await this.stopRuntime?.(id)
       await this.operations.cancelProject(id)
       await import('./http-tools.ts').then(({ closeHttpSessions }) => closeHttpSessions(this.store, id, true))
       for (const row of this.store.db.prepare("SELECT id FROM shared_resources WHERE project_id=? AND kind='http_session'").all(id)) rmSync(path.join(this.operations.outputRoot, 'http', 'sessions', `${row.id}.json`), { force: true })
       const sessions = new Set((this.store.db.prepare('SELECT data FROM audit_runs WHERE project_id=?').all(id) as { data: string }[]).map(row => String(JSON.parse(row.data).session_id ?? '')).filter(Boolean))
+      const campaignRow=this.store.db.prepare('SELECT data FROM project_campaigns WHERE project_id=?').get(id)
+      if(campaignRow){const campaign=JSON.parse(String(campaignRow.data));sessions.add(campaign.sessionId);if(campaign.previousSessionId)sessions.add(campaign.previousSessionId)}
       const sessionRoot = path.join(this.root, '.redtrace/sessions')
       if (existsSync(sessionRoot)) for (const project of readdirSync(sessionRoot, { withFileTypes: true }).filter(entry => entry.isDirectory())) {
         const directory = path.join(sessionRoot, project.name)

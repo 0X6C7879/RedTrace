@@ -6,31 +6,31 @@ RedTrace 的默认运行时是 TypeScript、Node 24.15+ 与内置 `node:sqlite`�
 
 ## 状态模型
 
-- `Fact`：有来源、可引用的当前事实，新增后唤醒 Decide。
+- `Fact`：有来源、可引用的当前事实，新增后唤醒所属 Commander。
 - `Goal`：根目标或子目标，保存完成状态和证据引用。
 - `Step`：唯一可领取的行动单元，关联来源 Scope / Fact / Finding、目标、优先级、Worker、执行适配器与检查点。保留当前有效产出引用，展示在执行面板。
-- `Finding`：面向交付的成果，引用支撑它的 Fact；可作为后续 Step 的来源或 Goal 的验收证据，新增后独立唤醒 Decide，不等待 Step 结束。
+- `Finding`：面向交付的成果，引用支撑它的 Fact；可作为后续 Step 的来源或 Goal 的验收证据，新增后独立唤醒所属 Commander，不等待 Step 结束。
 - `Hint` 与 `Observation`：人工输入和中间记录，不自动提升为 Fact。
 
-SQLite 短事务原子更新图、租约、运行归属、审计和事件序号。Decide 每个项目最多一个；它只读写任务图且不因自己创建 Step 再次触发。Execute 可并行运行，任一 Execute 提交 Fact 后即可启动新的 Decide。规划器不可用时，已经存在的 Step 继续派发。
+SQLite 短事务原子更新图、运行归属、审计和事件序号。每个 Project 独立 Commander Session / STATE / Board / 消息 / 游标；Graph 是任务边界，General 一张主图，Benchmark 每题一张图。Commander 与 Worker 共享既有全局、项目和路由容量并发执行，没有独立 Reason/Decide 执行器。
 
-Decide 首次启动后，由任一新增 Fact 或 Finding、既有运行时关键事件或失败重试驱动，不再要求证据与 Step 结束配对。Hint、Observation、普通 Goal/Step 编辑及 Reason 自身维护不递归触发。未完成 Step 的容量限制只阻止创建更多 Step，不阻止规划；总并发、项目并发和 Worker 上限不变，不预留 Reason 槽位，空位出现时先派发可运行的 Reason。持久化 evidenceSeq/acknowledgedEvidenceSeq 记录待办；成功默认只确认启动边界，finish_decide({throughEvidenceSeq}) 可明确确认连续增量中已实际处理的边界，失败不确认。
+Commander 按本项目事件和持久化消息唤醒，读 Board 摘要后按需读取 Graph 增量；legion_finish 仅确认已交付且处理过的 Project 游标。Worker 只读写所属 Graph；图页提示先进入 Commander。完整结构、API 与迁移说明见 [Project Commander 升级说明](../project-commander-20261113/GUIDE.md)。
 
 ## 实时维护接口
 
-FGS 是实时更新的当前工作状态，不是历史档案库。Reason 独占 `manage_evidence`，操作为 `merge | delete`，对 Fact/Finding 拥有完整维护权。合并保留目标 ID，原子重定向 Step.sourceIds/factIds、Goal.evidenceIds、Finding.factIds，去重汇总必要证据与生产 Step 关联，再物理删除来源节点。Reason 可提交最终 description，Finding 另支持 title/details；省略时保留目标值，不自动保存来源正文或 details 副本。删除被未完成 Step 的输入、有效 Finding 或已达成 Goal 引用的节点返回 409 与阻塞引用清单，Reason 先修复引用；成功后清除其他引用并物理删除证据，不连带删除生产 Step 或 Run。两种操作均不可恢复。节点变更使用 expectedVersion，合并要求每个来源的 sourceVersions；冲突返回当前节点，整个事务不产生部分修改。Scope 与 Root Goal 原始描述不可改写。不自动执行语义去重；Reason 必须确认目标、题目、环境和结论一致后才能合并，并保留后续决策必需的状态与证据。
+FGS 是实时更新的当前工作状态，不是历史档案库。Commander 独占 `manage_evidence`，操作为 `merge | delete`，对 Fact/Finding 拥有完整维护权。合并保留目标 ID，原子重定向 Step.sourceIds/factIds、Goal.evidenceIds、Finding.factIds，去重汇总必要证据与生产 Step 关联，再物理删除来源节点。Commander 可提交最终 description，Finding 另支持 title/details；省略时保留目标值，不自动保存来源正文或 details 副本。删除被未完成 Step 的输入、有效 Finding 或已达成 Goal 引用的节点返回 409 与阻塞引用清单，Commander 先修复引用；成功后清除其他引用并物理删除证据，不连带删除生产 Step 或 Run。两种操作均不可恢复。节点变更使用 expectedVersion，合并要求每个来源的 sourceVersions；冲突返回当前节点，整个事务不产生部分修改。Scope 与 Root Goal 原始描述不可改写。不自动执行语义去重；Commander 必须确认目标、题目、环境和结论一致后才能合并，并保留后续决策必需的状态与证据。
 
 `read_graph` 只读当前状态，已合并来源或删除节点按 ID 读取返回 404。`read_graph_delta({after,limit})` 最多返回 100 个轻量事件及当前仍存在的相关节点，不返回历史正文；已删除 ID 由事件表达。按 cursor 连续翻页，读取不代表已处理，跳过的增量不能用高水位确认。HTTP 同步提供 `POST /v2/projects/:id/evidence/manage`、`GET /v2/projects/:id/graph/delta` 和各节点列表的 limit/offset 参数。HTTP revision/includeInactive 参数及 archive/restore 请求返回 422，工具 schema 不再暴露历史选项。
 
-启动时在现有 schema 2 数据库内执行一次事务迁移，使用 metadata 标记完成：解析旧合并链并重定向引用，清理归档、合并、已删除 Fact/Finding 与历史字段，将 FGS 事件 payload 收敛为通知元数据。事件 ID、revision、证据/Hint 序号和确认边界保持不变，运行与审计记录继续保留。无效合并链或有效依赖丢失会回滚并报告具体节点，不猜测修复。Worker 空闲时停机升级，重启后生效；不清库，不生成历史备份，也不引入日志保留或证据文件回收策略。
+FGS 当前态整理在现有 schema 2 数据库内执行一次事务迁移，使用 metadata 标记完成：解析旧合并链并重定向引用，清理归档、合并、已删除 Fact/Finding 与历史字段，将 FGS 事件 payload 收敛为通知元数据。事件 ID、revision、证据/Hint 序号和确认边界保持不变，运行与审计记录继续保留。无效合并链或有效依赖丢失会回滚并报告具体节点，不猜测修复。Worker 空闲时停机升级，重启后生效；不清库，不自动生成历史图副本，也不引入日志保留或证据文件回收策略。
 
 `update_step` 支持描述、来源、目标及执行设置。未领取 Step 可直接改；运行中同目标同权限边界用 amend，变更目标、权限或环境必须 replace。Subgoal 描述变更传播到未结束的后代 Step。替代 Step 保存 replaces/replacedBy，等待旧 Run 确认停止后才变为 pending；旧结果保留、迟到写入被拒绝。unknown 结果保持阻塞；核实后可通过 `POST /v2/projects/:id/runs/:run/resolve` 提交具体 resolution。该接口是确认记录，不替操作者核实远端副作用。
 
-Explore 用 `sync_step({planVersion})` 接收当前 Step、祖先 Goal 和有效依赖。DSH 执行前 guard 同时检查 Run 与模型回合版本；rootCallId 调用树及嵌套工具调用继承原版本，旧批次即使执行了 sync_step 也不能继续外部动作，须下一回合生成新动作。已发出的命令不承诺追溯取消。纯证据提交和状态读取可保留已验证结果。
+Worker 用 `sync_step({planVersion})` 接收当前 Step、祖先 Goal 和有效依赖。DSH 执行前 guard 同时检查 Run 与模型回合版本；rootCallId 调用树及嵌套工具调用继承原版本，旧批次即使执行了 sync_step 也不能继续外部动作，须下一回合生成新动作。已发出的命令不承诺追溯取消。纯证据提交和状态读取可保留已验证结果。
 
 ## FGS 图投影
 
-画布永久节点只有 `scope / fact / finding / subgoal / goal`；内部保留 `origin` 标识并显示为 Scope。Goal 在创建时即以 open 状态出现，完成由引用证据的状态更新表达。Step 是持久化的执行记录，不占据永久画布节点；但未完成（pending / running / paused / blocked）的 Step 会作为仅供人工审核的虚拟临时节点叠加在画布端点上：黄色圆形、来源连虚线 `executes` 边、指向目标的 `pursues` 边，完成产出 Fact 后虚拟节点消失、由产出边接管，与旧版开放 Intent 的画布行为一致。该虚拟层由 `liveSteps` 在读取时计算，仅存在于 `/v2/projects/:id/graph` 响应中，不进入导出/快照文件，也不被 `read_graph` 等读图工具读到。
+画布永久节点只有 `scope / fact / finding / subgoal / goal`；General 保留原 `origin` 标识；Benchmark 使用注册表的 originId，均显示为 Scope。Goal 在创建时即以 open 状态出现，完成由引用证据的状态更新表达。Step 是持久化的执行记录，不占据永久画布节点；但未完成（pending / running / paused / blocked）的 Step 会作为仅供人工审核的虚拟临时节点叠加在画布端点上：黄色圆形、来源连虚线 `executes` 边、指向目标的 `pursues` 边，完成产出 Fact 后虚拟节点消失、由产出边接管，与旧版开放 Intent 的画布行为一致。该虚拟层由 `liveSteps` 在读取时计算，仅存在于 `/v2/projects/:id/graph` 响应中，不进入导出/快照文件，也不被 `read_graph` 等读图工具读到。
 
 `src/fgs.ts` 在读取时投影原始记录，不建立第二份图数据库：Scope 关联目标范围；Step 的每个来源连接其全部 Fact 产出；Fact 支撑 Finding；产出关联推进的 Goal；验收证据连接 Goal；Subgoal 指向父 Goal。目标归属与验收证据分开标记，Step 结束不会自动证明 Goal 达成。取消或失败的 Step 仍保留已提交产出的来源关系。边保留 Step ID，可进入执行面板查看来源、全部产出和各次运行日志。
 
@@ -42,7 +42,7 @@ Explore 用 `sync_step({planVersion})` 接收当前 Step、祖先 Goal 和有效
 
 ## DSH 原生能力插件
 
-凡是 DSH 原生提供的通用 Agent 能力,不再自研 Skill/MCP;RedTrace 只保留安全任务编排(FGS、Bootstrap/Reason/Explore、Intent 调度、Worker/Provider 路由、Fact/Finding/Step、共享 Resource、审计)。通用能力分两类进入插件管理页(`/__redtrace/plugins`,manifest 位于 `.redtrace/plugins.json`):
+凡是 DSH 原生提供的通用 Agent 能力,不再自研 Skill/MCP;RedTrace 只保留安全任务编排(FGS、Commander / General / Soldier / Scout、Intent 调度、Worker/Provider 路由、Fact/Finding/Step、共享 Resource、审计)。通用能力分两类进入插件管理页(`/__redtrace/plugins`,manifest 位于 `.redtrace/plugins.json`):
 
 **会话级能力栈**——`packages/redtrace-dsh/src/execution-tools.ts` 在每个 Execute 会话的 scoped 上下文里挂载,插件运行才挂载，启停对运行中的 Execute 会话生效。每个会话先 `isolate` 再挂载服务,并发 Execute 互不冲突,会话结束自动清理(后台任务、PTY、spill 文件句柄随会话销毁):
 
@@ -58,7 +58,7 @@ Explore 用 `sync_step({planVersion})` 接收当前 Step、祖先 Goal 和有效
 
 交互终端仅保留 DSH 原生实现：Linux/macOS 使用 bash，Windows 使用 pwsh；同一 Agent 内保留 cwd/env 与交互进程，所属 Agent 销毁或插件停止后由 DSH 清理，不跨 Step、Run 或重启恢复。旧版未完成 Step 的 `remote.terminal.*` 声明在启动时自动移除，其它依赖和历史记录保留；旧 terminal Resource 仅保留离线历史，不再新建。
 
-前六项默认开启;LSP 默认关闭,在插件页开启；PTC 已移除，所有工具均使用原生调用。direct 档案下 terminal 挂非受限 sandbox-policy(danger-full-access),isolated 档案继承 workspace-write。Reason/Decide 会话不挂执行工具链,能力栈同样仅限 Execute。
+前六项默认开启;LSP 默认关闭,在插件页开启；PTC 已移除，所有工具均使用原生调用。direct 档案下 terminal 挂非受限 sandbox-policy(danger-full-access),isolated 档案继承 workspace-write。Commander 会话不挂执行工具链,能力栈同样仅限 Execute。
 
 **宿主层服务插件**——由插件管理器作为子 Fiber 挂载、对全局生效,按服务生命周期管理:
 

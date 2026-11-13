@@ -33,9 +33,14 @@ export class ProjectEvidence {
   readonly workspaceRoot: string
   constructor(store: Store, workspaceRoot: string) {
     this.store = store; this.workspaceRoot = workspaceRoot
+    store.db.exec('CREATE TABLE IF NOT EXISTS project_artifact_graphs(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, graph_id TEXT NOT NULL REFERENCES project_graphs(id) ON DELETE CASCADE, artifact_id TEXT NOT NULL, PRIMARY KEY(project_id,graph_id,artifact_id));')
     store.db.exec('CREATE TABLE IF NOT EXISTS project_artifacts(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,' +
       'id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(project_id,id));' +
       'CREATE TABLE IF NOT EXISTS project_evidence_refs(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, owner TEXT NOT NULL, pointer TEXT NOT NULL, data TEXT NOT NULL, artifact_id TEXT NOT NULL, PRIMARY KEY(project_id,owner,pointer));')
+    if(!store.db.prepare('SELECT 1 FROM metadata WHERE key=?').get('artifact-graphs'))store.transaction(()=>{
+      store.db.exec("INSERT OR IGNORE INTO project_artifact_graphs SELECT a.project_id,g.id,a.id FROM project_artifacts a JOIN project_graphs g ON a.project_id=g.project_id WHERE json_extract(g.data,'$.type')='main'")
+      store.db.prepare('INSERT INTO metadata VALUES (?,?)').run('artifact-graphs','1')
+    })
   }
   private projectRoot(projectId: string) {
     this.store.project(projectId)
@@ -63,11 +68,15 @@ export class ProjectEvidence {
     if (digest(readFileSync(file)) !== sha256) throw new HttpError(409, 'Existing evidence artifact hash mismatch')
     const artifact: ProjectArtifact = { id, projectId, path: path.relative(root, file), sha256, bytes: bytes.byteLength, source: { ...source } }
     this.store.db.prepare('INSERT OR IGNORE INTO project_artifacts VALUES (?,?,?)').run(projectId, id, JSON.stringify(artifact))
+    const graphId=this.store.graphScope??this.store.projectGraphs(projectId).find(g=>g.type==='main')?.id
+    if(graphId)this.store.db.prepare('INSERT OR IGNORE INTO project_artifact_graphs VALUES (?,?,?)').run(projectId,graphId,id)
     return artifact
   }
-  promoteFile(projectId: string, evidence: Evidence) {
+  promoteFile(projectId: string, evidence: Evidence, cwd?:string) {
     if (!evidence.path) throw new HttpError(422, 'Evidence path is required')
-    const root = this.projectRoot(projectId), filename = this.contained(root, path.resolve(root, evidence.path))
+    const root = this.projectRoot(projectId), filename = this.contained(root, path.resolve(cwd??root, evidence.path))
+    if(cwd)this.contained(realpathSync(cwd),filename)
+    evidence={...evidence,path:path.relative(root,filename)}
     return this.publish(projectId, readFileSync(filename), evidence)
   }
   private promoteSource(projectId: string, source: Evidence): ProjectArtifact {
@@ -250,8 +259,8 @@ export class ProjectEvidence {
     if (!['stopped', 'completed'].includes(this.store.project(projectId).status)) block(projectId, 'Project scheduling is not stopped')
     for (const run of this.store.runs(projectId)) if (['running', 'paused', 'unknown'].includes(run.status) || run.pendingTools.length) block(run.id, 'Execution or tool outcome is not confirmed stopped')
     const table = (name: string) => !!this.store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)
-    if (table('campaign')) {
-      const row = this.store.db.prepare('SELECT data FROM campaign WHERE id=1').get()
+    if (table('project_campaigns')) {
+      const row = this.store.db.prepare('SELECT data FROM project_campaigns WHERE project_id=?').get(projectId)
       if (row && JSON.parse(String(row.data)).status === 'running') block('commander', 'Commander is running')
     }
     if (table('operation_tasks')) for (const row of this.store.db.prepare("SELECT id FROM operation_tasks WHERE project_id=? AND status NOT IN ('succeeded','failed','cancelled','rejected')").all(projectId)) block(String(row.id), 'Resource operation has not settled')
@@ -278,6 +287,7 @@ export class ProjectEvidence {
 
   artifact(projectId: string, id: string): ProjectArtifact {
     this.store.project(projectId)
+    if(this.store.graphScope&&!this.store.db.prepare('SELECT 1 FROM project_artifact_graphs WHERE project_id=? AND graph_id=? AND artifact_id=?').get(projectId,this.store.graphScope,id))throw new HttpError(404,'Artifact is not in this Graph')
     const row = this.store.db.prepare('SELECT data FROM project_artifacts WHERE project_id=? AND id=?').get(projectId, id)
     if (!row) throw new HttpError(404, 'Project evidence artifact not found')
     return JSON.parse(String(row.data))

@@ -1,3 +1,5 @@
+> 历史方案归档：当前 Project 级 Commander、双模式 Graph 隔离及使用方式见 [2026-11-13 升级说明](project-commander-20261113/GUIDE.md)。本文旧 Campaign/Reason 设计不再生效。
+
 # Sapper AI Legion → RedTrace 迁移计划
 
 日期：2026-11-10。状态：待实施；本次仅完成设计与源码核对，不代表功能已迁移或测试通过。

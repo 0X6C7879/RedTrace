@@ -1,3 +1,5 @@
+> 2026-11-13：创建 Project 必须提交 mode=benchmark|general。Benchmark FGS 读写接口须携带 graphId 查询参数，Commander 日志与生命周期须携带 projectId。当前接口详见 [Project Commander 升级说明](../project-commander-20261113/GUIDE.md)，下文旧字段只代表兼容 API，不代表独立 Reason 执行路径。
+
 # RedTrace 协作探索协议
 
 > 历史协议：本文的旧 Worker claim / heartbeat / release 生命周期已退役，不能作为当前 API 契约。当前任务由进程内 Scheduler 调度；手动界面保留声明 Step、取消/重试和带 expectedVersion / 引用校验的证据管理。当前架构见 [调度设计](dispatcher-design.md)。

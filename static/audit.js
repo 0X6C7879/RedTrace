@@ -6,7 +6,7 @@ function auditPage() {
     tasks: [],
     runs: [],
     events: [],
-    selectedTaskId: '',
+    selectedTaskId: '', commanderProjectId:'', auditGraphId:'', auditGraphs:[],
     selectedScope: 'project',
     selectedRun: 'all',
     commanderCampaign: null, commanderCursor: 0, commanderAvailable: false, commanderHasMore: false,
@@ -65,6 +65,7 @@ function auditPage() {
     },
 
     async request(path) {
+      if(this.auditGraphId&&path.startsWith('/audit/tasks/'+this.selectedTaskId+'/'))path+=(path.includes('?')?'&':'?')+'graphId='+encodeURIComponent(this.auditGraphId);
       const response = await fetch(path);
       const text = await response.text();
       let data = null;
@@ -95,6 +96,7 @@ function auditPage() {
       this.disconnectStream();
       this.loading = true;
       this.selectedScope = 'project';
+      if(this.selectedTaskId!==projectId)this.auditGraphId='';
       this.selectedTaskId = projectId;
       if (switching) { this.selectedRun = 'all'; this.selectedProvider = 'all'; this.selectedWorker = 'all'; }
       this.auditEvidence = null;
@@ -116,8 +118,10 @@ function auditPage() {
         this.request(`/audit/tasks/${encodeURIComponent(projectId)}/events?limit=500`),
         this.request(`/audit/tasks/${encodeURIComponent(projectId)}/usage`),
         this.loadWorkspace(''),
+        this.request('/v2/projects/'+encodeURIComponent(projectId)+'/graphs'),
       ]);
       if (this.selectedScope !== 'project' || this.selectedTaskId !== projectId) return;
+      if(results[4].status==='fulfilled')this.auditGraphs=results[4].value;
       if (results[0].status === 'fulfilled') this.runs = results[0].value;
       if (results[1].status === 'fulfilled') {
         this.events = results[1].value;
@@ -126,12 +130,14 @@ function auditPage() {
       }
       if (results[2].status === 'fulfilled') this.taskUsage = results[2].value;
       this.error = results.slice(0, 3).flatMap((result, index) => result.status === 'rejected' ? [(['运行记录', '会话日志', '用量'][index])+ '读取失败：' + result.reason.message] : []).join('；');
+      if(results[4].status==='rejected')this.error+=(this.error?'；':'')+'Graph 列表读取失败：'+results[4].reason.message;
       if (this.active) this.connectStream();
       this.$nextTick(() => this.scrollToBottom());
       this.loading = false;
     },
 
-    async selectCommander() {
+    async selectCommander(projectId=this.selectedTaskId||this.commanderProjectId||this.tasks[0]?.id) {
+      this.commanderProjectId=projectId;
       this.disconnectStream();
       this.selectedScope = 'commander'; this.selectedTaskId = ''; this.selectedRun = 'all';
       this.selectedProvider = 'all'; this.selectedWorker = 'all';
@@ -143,13 +149,13 @@ function auditPage() {
     async loadCommanderLog(reset = false) {
       this.loading = true; this.error = '';
       try {
-        const board = await this.request('/v2/legion');
+        const board = await this.request('/v2/projects/'+encodeURIComponent(this.commanderProjectId)+'/commander');
         if (this.selectedScope !== 'commander') return;
         if (reset || this.commanderCampaign?.sessionId !== board.campaign.sessionId) {
           this.commanderCursor = 0; this.events = []; this.reindexEvents();
         }
         this.commanderCampaign = board.campaign;
-        const page = await this.request('/v2/legion/session/events?offset=' + this.commanderCursor + '&limit=100');
+        const page = await this.request('/v2/legion/session/events?projectId='+encodeURIComponent(this.commanderProjectId)+'&offset=' + this.commanderCursor + '&limit=100');
         if (this.selectedScope !== 'commander') return;
         if (page.sessionId !== this.commanderCampaign.sessionId) throw Error('Commander 会话已切换，请刷新当前会话');
         for (const event of page.events) if (!this._eventKeys.has(this.eventKey(event))) { this.events.push(event); this.indexEvent(event); }
