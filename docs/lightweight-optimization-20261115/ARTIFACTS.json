@@ -1,0 +1,62 @@
+{
+  "target": "/Users/lxy/Downloads/RedTrace",
+  "roles": [
+    {
+      "role": "MODIFIED_FILE.tar.gz",
+      "path": "/tmp/redtrace-lightweight-zEhmvQ/MODIFIED_FILE.tar.gz",
+      "durablePath": "/Users/lxy/Downloads/RedTrace/docs/lightweight-optimization-20261115/artifacts/MODIFIED_FILE.tar.gz",
+      "bytes": 211909,
+      "sha256": "5b3940e2e280719318148cdcf81d746ae8e4b4e0371a865bbe8a2d1b898e959a",
+      "reopened": true
+    },
+    {
+      "role": "DIFF_FILE.patch",
+      "path": "/tmp/redtrace-lightweight-zEhmvQ/DIFF_FILE.patch",
+      "durablePath": "/Users/lxy/Downloads/RedTrace/docs/lightweight-optimization-20261115/artifacts/DIFF_FILE.patch",
+      "bytes": 140784,
+      "sha256": "229982e1a10bbe12b891f1989390156e585d1f8429d5bafe52a965f66ad2fe17",
+      "reopened": true
+    },
+    {
+      "role": "VERIFICATION.txt",
+      "path": "/tmp/redtrace-lightweight-zEhmvQ/VERIFICATION.txt",
+      "durablePath": "/Users/lxy/Downloads/RedTrace/docs/lightweight-optimization-20261115/artifacts/VERIFICATION.txt",
+      "bytes": 100043,
+      "sha256": "d0795f423c52e35f7e9ee1cb033ba604ecf3401b378f6b4f152f07af3b8db904",
+      "reopened": true
+    },
+    {
+      "role": "ROLLBACK.sh",
+      "path": "/tmp/redtrace-lightweight-zEhmvQ/ROLLBACK.sh",
+      "durablePath": "/Users/lxy/Downloads/RedTrace/docs/lightweight-optimization-20261115/artifacts/ROLLBACK.sh",
+      "bytes": 385,
+      "sha256": "1304eed5e5db1e3fdab59013b0dc3c561f9c45ca27e5c3de927e8290aeb6ce63",
+      "reopened": true
+    }
+  ],
+  "sourceStable": true,
+  "report": {
+    "path": "/Users/lxy/Downloads/RedTrace/docs/lightweight-optimization-20261115/REPORT.md",
+    "bytes": 9833,
+    "sha256": "7e93d4e8fc1732974f1578fed498fc5c87a6fa5be753045eeccf854da6ffd82c"
+  },
+  "baseline": {
+    "evidenceMutationAPI": "function",
+    "originalReadable": false
+  },
+  "modified": {
+    "evidenceMutationAPI": "undefined",
+    "originalReadable": true
+  },
+  "rollback": {
+    "evidenceMutationAPI": "function",
+    "originalReadable": false
+  },
+  "probeExitCodes": [
+    0,
+    0,
+    0
+  ],
+  "patchExact": true,
+  "rollbackHashesExact": true
+}
