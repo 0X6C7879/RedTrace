@@ -7,7 +7,7 @@ import { Capabilities } from '../src/capabilities.ts'
 import { serveEngine } from '../src/index.ts'
 
 const content = (text: string) => `---\nname: sample\ndescription: Test helper\n---\n${text}\n`
-test('capabilities keep independent copies, nested entries, revisions and MCP configurations', async () => {
+test('capabilities use the project root directly, nested entries, revisions and MCP configurations', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-capabilities-'))
   mkdirSync(path.join(root, 'skills/sample'), { recursive: true }); writeFileSync(path.join(root, 'skills/sample/SKILL.md'), content('original'))
   const engine = await serveEngine({ root, port: 0, autoStart: false })
@@ -19,7 +19,7 @@ test('capabilities keep independent copies, nested entries, revisions and MCP co
   try {
     const c = engine.capabilities, first = c.skill('sample')
     const second = c.write('sample', content('edited'), true, first.revision)
-    assert.equal(readFileSync(path.join(root, 'skills/sample/SKILL.md'), 'utf8'), content('original'))
+    assert.equal(readFileSync(path.join(root, 'skills/sample/SKILL.md'), 'utf8'), content('edited')); assert.equal(c.skillsDir, path.join(root, 'skills')); assert.equal(existsSync(path.join(root, '.redtrace/skills')), false)
     assert.throws(() => c.write('sample', content('stale'), true, first.revision), /revision conflict/)
     assert.equal(second.version, 2)
     mkdirSync(path.join(c.directory('sample'), 'modules/deep'), { recursive: true }); writeFileSync(path.join(c.directory('sample'), 'modules/deep/SKILL.md'), '---\nname: nested\ndescription: Nested helper\n---\nNested text')
@@ -31,7 +31,7 @@ test('capabilities keep independent copies, nested entries, revisions and MCP co
     assert.equal((await request('/capabilities/mcp/echo/enabled', 'PATCH', { enabled: false })).status, 200); assert.equal(c.mcpConfigs().length, 0)
     assert.equal((await request('/capabilities/mcp/echo', 'DELETE')).status, 204)
     assert.equal((await request('/capabilities/mcp', 'POST', { name: 'broken', config: {} })).status, 400)
-    const restored = new Capabilities(c.root); restored.initialize(root)
+    const restored = new Capabilities(c.root, root); restored.initialize(root)
     assert.equal(restored.skill('sample').version, 4)
   } finally { await engine.close(); rmSync(root, { recursive: true, force: true }) }
 })
@@ -55,7 +55,7 @@ test('setEnabled relocates plugin-gated skills between roots without version chu
     c.write('gated', '---\nname: gated\ndescription: Plugin gated\n---\nBody\n', true)
     const before = c.skill('gated')
     c.setEnabled('gated', false)
-    assert.ok(existsSync(path.join(root, 'disabled-skills/gated/SKILL.md')))
+    assert.ok(existsSync(path.join(root, 'skills/.disabled/gated/SKILL.md')))
     assert.ok(!existsSync(path.join(root, 'skills/gated')))
     assert.equal(c.skill('gated').enabled, false)
     assert.equal(c.skill('gated').version, before.version)
@@ -70,6 +70,6 @@ test('setEnabled relocates plugin-gated skills between roots without version chu
     c.setEnabled('gated', false)
     mkdirSync(path.join(root, 'skills/gated'), { recursive: true }); writeFileSync(path.join(root, 'skills/gated/SKILL.md'), '---\nname: gated\ndescription: Duplicate\n---\nDuplicate\n')
     c.setEnabled('gated', true)
-    assert.ok(existsSync(path.join(root, 'disabled-skills/gated/SKILL.md')))
+    assert.ok(existsSync(path.join(root, 'skills/.disabled/gated/SKILL.md')))
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

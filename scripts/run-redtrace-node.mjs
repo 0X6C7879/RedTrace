@@ -18,7 +18,7 @@ if (values.help) { console.log('RedTrace Node: --root DIR --host 127.0.0.1 --por
   const source = values['copy-config'] ?? values.config ?? path.join(root, 'redtrace.yaml')
   await mkdir(managed, { recursive: true }); config.initialize(path.resolve(root, source))
   try { await access(path.join(managed, 'capabilities-imported.json')) }
-  catch { console.error('==> first run: importing Skills and MCP configuration') }
+  catch { console.error('==> first run: using project skills/ and importing MCP configuration') }
   if (process.env.BRAVE_API_KEY) config.commit(config.read().revision, raw => { raw.common_env = { ...raw.common_env, BRAVE_API_KEY: process.env.BRAVE_API_KEY } })
   if (values.mock) config.commit(config.read().revision, raw => { raw.workers = [{ name: 'mock', provider: 'mock', max_running: 4 }] })
   process.env.REDTRACE_DSH_WEB_HOST = values.host; process.env.REDTRACE_DSH_WEB_PORT = values.port

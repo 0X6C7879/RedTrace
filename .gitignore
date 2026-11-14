@@ -95,3 +95,5 @@ static/index.baseline.html
 static/index.modified.html
 packages/redtrace-engine/test/*.baseline.test.ts
 docs/benchmark-workspace-ui-*/
+docs/benchmark-scheduling-*/
+docs/lightweight-optimization-*/artifacts/

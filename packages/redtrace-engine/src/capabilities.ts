@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, appendFileSync, unlinkSync, realpathSync, cpSync, symlinkSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, appendFileSync, unlinkSync, realpathSync, cpSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { parse } from 'yaml'
@@ -30,25 +30,16 @@ export class Capabilities {
   readonly skillsDir: string
   readonly disabledDir: string
   readonly mcpDir: string
-  constructor(root: string) {
-    this.root = path.resolve(root); this.skillsDir = path.join(this.root, 'skills'); this.disabledDir = path.join(this.root, 'disabled-skills'); this.mcpDir = path.join(this.root, 'mcp')
+  constructor(root: string, catalogRoot = root) {
+    this.root = path.resolve(root); this.skillsDir = path.join(catalogRoot, 'skills'); this.disabledDir = path.join(this.skillsDir, '.disabled'); this.mcpDir = path.join(this.root, 'mcp')
     for (const dir of [this.skillsDir, this.disabledDir, this.mcpDir]) mkdirSync(dir, { recursive: true })
   }
   initialize(source: string) {
     const marker = path.join(this.root, 'capabilities-imported.json')
     if (existsSync(marker)) return
-    const wsl = process.platform === 'linux' && Boolean(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP)
-    for (const name of ['skills', 'disabled-skills', 'mcp']) {
-      const from = path.join(source, name), to = path.join(this.root, name)
-      if (existsSync(from) && !readdirSync(to).length) {
-        cpSync(from, to, { recursive: true, dereference: true, filter: entry => !wsl || path.basename(entry) !== 'node_modules' })
-        if (wsl && name !== 'mcp') for (const skill of readdirSync(from)) {
-          const modules = path.join(from, skill, 'node_modules'), target = path.join(to, skill, 'node_modules')
-          if (existsSync(modules) && existsSync(path.dirname(target))) symlinkSync(modules, target, 'dir')
-        }
-      }
-    }
-    atomicWrite(marker, JSON.stringify({ source, importedAt: new Date().toISOString() }))
+    const from = path.join(source, 'mcp')
+    if (path.resolve(from) !== this.mcpDir && existsSync(from) && !readdirSync(this.mcpDir).length) cpSync(from, this.mcpDir, { recursive: true, dereference: true })
+    atomicWrite(marker, JSON.stringify({ source, skillsDir: this.skillsDir, importedAt: new Date().toISOString() }))
   }
   directory(name: string) {
     validName(name)
@@ -151,6 +142,13 @@ export function capabilityRoutes(router: Router, store: Capabilities) {
   router.add('GET', '/capabilities', () => { const skills = store.entries(), mcp = store.servers(); return { root: store.root, skillsDir: store.skillsDir, mcpDir: store.mcpDir, skills: { total: skills.length, enabled: skills.filter(s => s.enabled).length }, mcp: { total: mcp.length, enabled: mcp.filter(s => s.enabled).length }, agents: [{ id: 'dsh', skills: store.skillsDir, runtimeSnapshot: null, mcp: 'mcpConfigs (runtime config)' }] } })
   router.add('GET', '/capabilities/skill-entries', () => store.entries())
   router.add('GET', '/capabilities/skills/:name', c => store.skill(c.params.name))
+  router.add('GET', '/capabilities/skills/:name/files/:file*', c => {
+    const directory = store.directory(c.params.name), filename = c.params.file
+    if (!files(directory).includes(filename)) throw new HttpError(404, 'Skill file not found')
+    const bytes = readFileSync(path.join(directory, filename))
+    if (bytes.length > 256 * 1024) throw new HttpError(413, 'File is too large to preview')
+    return { path: filename, binary: bytes.includes(0), content: bytes.includes(0) ? '' : bytes.toString('utf8') }
+  })
   router.add('GET', '/capabilities/skills/:name/entries', c => store.entries(c.params.name).filter(s => s.nested))
   router.add('GET', '/capabilities/skills/:name/entries/:entry*', c => {
     const entry = store.entries(c.params.name).find(s => s.path === c.params.entry); if (!entry) throw new HttpError(404, 'Skill entry not found')
