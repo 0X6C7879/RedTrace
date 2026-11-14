@@ -185,7 +185,7 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
     customSkillDirs: [config.skillsDir],
   })
   await mount(scoped, `${VENDOR}/skill/tool-skill/lib/index.js`)
-  if (jobs) active.get('redtrace-jobs')!.push(await mount(scoped, `${VENDOR}/jobs/tool-jobs/lib/index.js`))
+  if (jobs) active.get('redtrace-jobs')!.push(await mount(scoped, `${VENDOR}/jobs/tool-jobs/lib/index.js`, { maxWaitTimeoutMs: 30_000 }))
 
   // Optional fibers belong to this Agent scope and can be changed mid-session.
   type Use = (scope: ScopedContext, module: string, options?: Record<string, any>) => Promise<void>
@@ -242,7 +242,7 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
       if (available('redtrace-jobs')) {
         await install('redtrace-jobs', async use => {
           await use(scoped, `${VENDOR}/jobs/jobs-local/lib/index.js`)
-          await use(scoped, `${VENDOR}/jobs/tool-jobs/lib/index.js`)
+          await use(scoped, `${VENDOR}/jobs/tool-jobs/lib/index.js`, { maxWaitTimeoutMs: 30_000 })
         })
         await setBackground(true)
       } else {

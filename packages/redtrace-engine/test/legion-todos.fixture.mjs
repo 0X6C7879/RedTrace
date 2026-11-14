@@ -24,23 +24,25 @@ const model=createServer(async(req,res)=>{
   let text='';for await(const b of req)text+=b
   const input=JSON.parse(text);requests++
   assert(input.tools.some(t=>t.function.name==='TodoWrite'))
-  const injected=input.messages.map(textOf).map(s=>{try{return JSON.parse(s)}catch{return null}}).filter(s=>s?.graphs).at(-1)
-  assert(injected,'each wake must inject current complete FGS and TodoLists')
-  assert.equal(injected.graphs.length,1)
-  const current=injected.graphs[0];assert.equal(current.graphId,graph.id)
-  for(const message of input.messages.filter(m=>m.role==='system'))assert(!textOf(message).includes('"todos":['),'mutable lists do not belong in the system prompt')
-  assert.deepEqual(current.todos,wake===1?[]:wake<=3?initial:[{content:'verify entry',status:'completed'},{content:'verify credentials',status:'in_progress'}])
-  const boundary=input.messages.findLastIndex(m=>{try{return !!JSON.parse(textOf(m)).graphs}catch{return false}})
+  const injected=input.messages.map(textOf).map(s=>{try{return JSON.parse(s)}catch{return null}}).filter(s=>s?.instruction?.includes('compact legion_board')).at(-1)
+  assert(injected,'each wake must carry compact instructions and cursors')
+  assert(!('graphs' in injected),'wake-up must not inject full FGS and TodoLists')
+  const current={todos:legion.planningTodos(project.id).list(graph.id),fgs:store.graph(project.id)}
+  const boundary=input.messages.findLastIndex(m=>{try{return !!JSON.parse(textOf(m)).instruction?.includes('compact legion_board')}catch{return false}})
   const calls=input.messages.slice(boundary+1).flatMap(m=>m.tool_calls??[]).map(c=>c.function.name)
+  for(const message of input.messages.filter(m=>m.role==='system'))assert(!textOf(message).includes('"todos":['),'mutable lists do not belong in the system prompt')
+  assert.deepEqual(current.todos,wake===1&&!calls.includes('TodoWrite')?[]:wake<3||wake===3&&!calls.includes('TodoWrite')?initial:[{content:'verify entry',status:'completed'},{content:'verify credentials',status:wake===5&&calls.includes('TodoWrite')?'completed':'in_progress'}])
    const entry=current.fgs.facts.find(f=>f.title==='ENTRY_VERIFIED')
    const credentials=current.fgs.facts.find(f=>f.title==='CREDENTIALS_VERIFIED')
   if(wake<3)assert(!entry)
-   if(wake>=3)assert(entry && !('evidence' in entry),'default FGS contains titles, not raw evidence')
+   if(wake>=3)assert(entry)
    const details=input.messages.slice(boundary+1).filter(m=>m.role==='tool').map(m=>{try{return JSON.parse(textOf(m))}catch{return null}}).filter(m=>m?.kind==='fact')
    const unread=[entry,credentials].filter(Boolean).find(f=>!details.some(d=>d.id===f.id))
    for(const detail of details)assert(detail.evidence.length)
   let name,args
-   if(unread){name='legion_read_node';args={projectId:project.id,id:unread.id,detail:'doc'}}
+   if(!calls.includes('legion_board')){name='legion_board';args={}}
+   else if(!calls.includes('legion_todos')){name='legion_todos';args={projectId:project.id,graphId:graph.id}}
+   else if(unread){name='legion_read_node';args={projectId:project.id,id:unread.id,detail:'doc'}}
    else if(!calls.includes('TodoWrite')){
    name='TodoWrite';args={projectId:project.id,graphId:graph.id,todos:wake<3?initial:[{content:'verify entry',status:'completed'},{content:'verify credentials',status:credentials?'completed':'in_progress'}]}
   }else if(wake===1&&calls.filter(n=>n==='legion_spawn').length<3){

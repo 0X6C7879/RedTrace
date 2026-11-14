@@ -115,12 +115,12 @@ test('uncertain native enqueue is retained and never automatically delivered twi
 })
 
 
-test('the first Commander board exposes existing Scope and Goal IDs even when creation delta has no node body', async t => {
+test('the first Commander board is compact and leaves FGS details on demand', async t => {
   const { store, legion, project } = fixture(t); legion.claimCommand()
   const tool = legionTools(store,'commander',store.projects()[0].id, null, () => {}).find(t => t.name === 'legion_board')!
   const board = (await tool.execute('board', {})).details as any
-  assert.equal(board.projects[0].scopeId, 'origin'); assert.equal(board.projects[0].goals[0].id, 'goal')
-  assert.equal(board.projects[0].goals[0].status, 'open'); assert.ok(board.projects[0].goals[0].description)
+  assert.equal(board.projectId, project.id); assert.ok(board.lines.length<=100)
+  assert.ok(!('projects' in board)); assert.ok(!JSON.stringify(board).includes('evidenceIds'))
 })
 
 

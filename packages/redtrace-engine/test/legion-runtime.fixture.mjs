@@ -36,7 +36,7 @@ const model = createServer(async (req, res) => {
     const admittedText = b.messages.filter(m=>m.role==='user').map(m=>JSON.stringify(m.content)).join('\n')
     let name, args
     if (role === 'COMMANDER') {
-      if(last==='legion_board')assert.ok(lastOutput(b).projects?.some(p=>p.id===projectId),'Native Commander must receive a lossless JSON board, not a tool output error')
+       if(last==='legion_board')assert.ok(lastOutput(b).projectId===projectId&&lastOutput(b).lines?.length<=100,'Native Commander must receive a compact JSON board, not a tool output error')
       assert.ok(!names.includes('bash') && !names.includes('submit_fact') && !names.includes('finish_decide'))
       if (!calls.includes('legion_board')) { name = 'legion_board'; args = {} }
       else if (!g.steps.some(s => s.description === 'fixture-scout')) { name = 'legion_spawn'; args = spawnMission('scout', 'fixture-scout') }

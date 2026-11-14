@@ -8,6 +8,7 @@ import { mkdir, realpath } from 'node:fs/promises'
 import { watch, realpathSync } from 'node:fs'
 import { createEngine } from '../src/index.ts'
 import { createPlanGuard } from '../src/plan-guard.ts'
+import { taskTodoOwner } from '../src/legion-todos.ts'
 import { efficiencyToolAvailable, graphTools, activityPrompt, activityLimits, graphUpdate, livePlan, launchContext, runMock } from '../src/runner.ts'
 import { verbTools, verbToolAvailable, channelsFor, resourceTools } from '../src/capability-verbs.ts'
 import { PluginManager, registerPluginRoutes } from '../../redtrace-dsh/lib/plugins.js'
@@ -44,8 +45,8 @@ export function executionEvidenceReadGuard(directory, cwd) {
 
 export { providerProfiles } from '../src/models.ts'
 
-export function mountActivityPrompt(scoped, run, step) {
-  scoped.systemPrompt.section({ name: 'redtrace:fgs', order: 0, text: () => activityPrompt(run.activity, step) })
+export function mountActivityPrompt(scoped, store, run, step) {
+  scoped.systemPrompt.section({ name: 'redtrace:fgs', order: 0, text: () => activityPrompt(run.activity, step, store.project(run.projectId).mode, !!step && taskTodoOwner(step)) })
 }
 
 export function refreshToolRegistrations(tools, enabled, register) {
@@ -228,7 +229,7 @@ export async function apply(ctx, options) {
       }
       if (reporting) scoped.tools.restrict({ allow: [] })
       else mountLegionContext(scoped,ctx,{store,legion:engine.legion,run,task,message})
-      mountActivityPrompt(scoped, run, step)
+      mountActivityPrompt(scoped, store, run, step)
       const planGuard = run.activity === 'execute' ? createPlanGuard(store, run.id) : undefined
       if (planGuard) {
         scoped.on('session/event', (session, event) => { if (String(session.id) === run.id && event.type === 'step/start') planGuard.beginTurn() })

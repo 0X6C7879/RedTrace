@@ -32,7 +32,7 @@ export async function createEngine(options: { root: string; database?: string; c
   const [major, minor] = process.versions.node.split('.').map(Number)
   if (major !== 24 || minor < 15) throw new Error('RedTrace requires Node 24.15 or newer in the Node 24 LTS line')
   const root = path.resolve(options.root), configuration = new Configuration(root, options.configuration)
-  const managed = path.dirname(configuration.filename), staticRoot = path.join(root, 'static')
+  const managed = path.dirname(configuration.filename), staticRoot = path.resolve(import.meta.dirname, '../../../static')
   configuration.initialize()
   // Reject an invalid configuration before the scheduler starts.
   const config = configuration.resolvedSnapshot().config

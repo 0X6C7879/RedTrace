@@ -30,6 +30,11 @@ const MOUNT_TIMEOUT_MS = 30_000
 // tests must assert the tool that actually mounts on the current host.
 const shellName = process.platform === 'win32' ? 'pwsh' : 'bash'
 
+test('both initial and hot-mounted jobs cap blocking reads at the native 30s default', () => {
+  const source=readFileSync(new URL('../src/execution-tools.ts',import.meta.url),'utf8')
+  assert.equal(source.match(/tool-jobs\/lib\/index\.js`, \{ maxWaitTimeoutMs: 30_000 \}/g)?.length,2)
+})
+
 function scratch(name) {
   return mkdtempSync(path.join(tmpdir(), `redtrace-exec-tools-${name}-`))
 }
