@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -12,10 +12,11 @@
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/vendor/cytoscape-dagre.js"></script>
 <script defer src="/static/audit.js?v=20261010-audit-output-1"></script>
-<script defer src="/static/capabilities.js?v=20260916-skill-classification-retired-1"></script>
+<script defer src="/static/capabilities.js?v=20261115-console-1"></script>
 <script defer src="/static/plugins.js?v=20260825-plugins-2"></script>
 <!-- Previous cache key: operations.js?v=20260810-performance-1 -->
 <script defer src="/static/operations.js?v=20261015-c2-auth-1"></script>
+<script defer src="/static/console.js?v=20261115-tool-dialog-1"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
 <style>
   dialog::backdrop { background: rgb(15 23 42 / 55%); }
@@ -258,6 +259,7 @@
 <style>
 .benchmark-project{border:0;background:transparent;padding:0;margin:0}.benchmark-task-section{margin-top:.5rem}.benchmark-task-heading{display:flex;align-items:end;justify-content:space-between;gap:1rem;flex-wrap:wrap}.benchmark-task-filters{display:flex;gap:.5rem}.benchmark-task-filters input,.benchmark-task-filters select{min-height:38px;border:1px solid var(--rt-border);border-radius:8px;background:var(--rt-surface);color:var(--rt-text);padding:.4rem .6rem}.benchmark-task-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.75rem;margin-top:1rem}.benchmark-task-card{min-width:0;aspect-ratio:1;border:1px solid var(--rt-border);border-radius:12px;background:var(--rt-surface-raised);display:flex;flex-direction:column;overflow:hidden}.benchmark-task-card[data-state="running"],.benchmark-task-card[data-state="scouting"]{border-color:var(--rt-cyan)}.benchmark-task-card[data-state="completed"]{border-color:var(--rt-green)}.benchmark-task-card[data-state="parked"]{border-color:var(--rt-amber)}.benchmark-task-open{display:flex;flex:1;min-height:0;flex-direction:column;align-items:flex-start;gap:.4rem;padding:.85rem;text-align:left;cursor:pointer}.benchmark-task-open:hover{background:var(--rt-surface-active)}.benchmark-task-open:active{transform:scale(.98)}.benchmark-task-open:focus-visible,.benchmark-task-actions button:focus-visible{outline:2px solid var(--rt-coral);outline-offset:-2px}.benchmark-task-key{font-size:.68rem;color:var(--rt-text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}.benchmark-task-open strong{font-size:.85rem;line-height:1.3;letter-spacing:-.01em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}.benchmark-task-open small{margin-top:auto;color:var(--rt-text-secondary);font-size:.7rem}.benchmark-task-actions{border-top:1px solid var(--rt-border-soft);padding:.3rem .55rem;display:flex;justify-content:flex-end}.benchmark-task-actions button{font-size:.7rem;color:var(--rt-text-secondary);padding:.2rem .35rem}.benchmark-task-actions button:disabled{opacity:.4}.legion-console .legion-overview{padding:1rem}.legion-console .legion-metrics{margin:.3rem 0;gap:.5rem}.legion-console .legion-metrics>div{padding:.3rem 0}@media(max-width:1200px){.benchmark-task-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}@media(max-width:950px){.benchmark-task-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:700px){.benchmark-task-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:440px){.benchmark-task-grid{grid-template-columns:1fr}.benchmark-task-card{aspect-ratio:auto;min-height:160px}.benchmark-task-filters{width:100%}.benchmark-task-filters input{min-width:0;flex:1}}@media(prefers-reduced-motion:reduce){.benchmark-task-open:active{transform:none}}
 </style>
+<link rel="stylesheet" href="/static/console.css?v=20261115-switch-2">
 </head>
 <body class="bg-slate-50 text-slate-800 h-screen overflow-hidden" :class="{ 'select-none cursor-col-resize': isResizingPanel }" x-data="redtraceApp()">
 <div class="app-shell flex h-full min-h-0" :class="{ 'app-shell-operations': appPage === 'webshell' || appPage === 'plugins' || appPage.startsWith('c2-') }">
@@ -268,19 +270,11 @@
       </div>
       <span class="font-semibold tracking-tight text-slate-700">RedTrace</span>
     </div>
-    <nav class="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2.5" aria-label="Primary navigation">
-      <button type="button" @click="setAppPage('workspace')" aria-label="工作台" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'workspace' }">
-        <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg><span>工作台</span>
-      </button>
-      <button type="button" @click="setAppPage('skills')" aria-label="Skills" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'skills' }">
-        <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="m13 2-8.5 10h6l-1 10L19.5 11h-6L13 2Z"/></svg><span>Skills</span>
-      </button>
-      <button type="button" @click="setAppPage('mcp')" aria-label="MCP" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'mcp' }">
-        <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="1.5"/><rect x="4" y="14" width="16" height="6" rx="1.5"/><path d="M8 7h.01M8 17h.01M12 10v4"/></svg><span>MCP</span>
-      </button>
-      <button type="button" @click="setAppPage('webshell')" aria-label="WebShell管理" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'webshell' }">
-        <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="m4 6 5 5-5 5M11 18h9"/></svg><span>WebShell管理</span>
-      </button>
+    <nav class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2.5" aria-label="Primary navigation"><p class="nav-group">功能</p>
+      <button type="button" @click="setAppPage('workspace')" aria-label="任务" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'workspace' }"><svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg><span>任务</span></button>
+      <button type="button" @click="setAppPage('findings')" aria-label="发现" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'findings' }"><svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M9 3h6M8 8h8v8a4 4 0 0 1-8 0zM4 10h4m8 0h4M4 16h4m8 0h4M9 5l-2-2m8 2 2-2"/></svg><span>发现</span></button>
+      <button type="button" @click="setAppPage('files')" aria-label="工作空间" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'files' }"><svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v11H3zM3 7V4h7l2 3"/></svg><span>工作空间</span></button>
+      <button type="button" @click="setAppPage('webshell')" aria-label="WebShell" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'webshell' }"><svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="m4 6 5 5-5 5M11 18h9"/></svg><span>WebShell</span></button>
       <div>
         <div class="app-nav-item flex h-10 w-full items-center rounded-xl text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage.startsWith('c2-') }">
           <button type="button" @click="setAppPage('c2-listeners')" aria-label="打开 C2" class="flex h-full min-w-0 flex-1 items-center gap-3 px-3 text-left">
@@ -301,16 +295,14 @@
           <button type="button" @click="setAppPage('c2-credentials')" class="app-subnav-item" :class="{ 'app-subnav-item-active': appPage === 'c2-credentials' }">凭证</button>
         </div>
       </div>
-      <button type="button" @click="setAppPage('plugins')" aria-label="插件" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'plugins' }">
-        <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M8 3v4m8-4v4M5 9h14v4a7 7 0 0 1-14 0zM12 20v2"/></svg><span>插件</span>
-      </button>
-      <button type="button" @click="setAppPage('logs')" aria-label="日志" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'logs' }">
-        <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M6 3.5h9l3 3V20.5H6z"/><path d="M15 3.5v4h4M9 11h6M9 15h6"/></svg><span>日志</span>
-      </button>
-      <div class="flex-1"></div>
-      <button type="button" @click="setAppPage('settings')" aria-label="设置" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'settings' }">
-        <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg><span>设置</span>
-      </button>
+<p class="nav-group">系统</p>
+      <button type="button" @click="setAppPage('llm')" aria-label="LLM" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'llm' }"><svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M12 3a4 4 0 0 0-7 3 4 4 0 0 0-2 7 4 4 0 0 0 5 7h4zM12 3a4 4 0 0 1 7 3 4 4 0 0 1 2 7 4 4 0 0 1-5 7h-4z"/></svg><span>LLM</span></button>
+      <button type="button" @click="setAppPage('skills')" aria-label="Skills" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'skills' }"><svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="m13 2-8 10h6l-1 10 9-11h-6z"/></svg><span>Skills</span></button>
+      <button type="button" @click="setAppPage('mcp')" aria-label="MCP" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'mcp' }"><svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M8 3v5m8-5v5M5 9h14v4a7 7 0 0 1-14 0zM12 20v2"/></svg><span>MCP</span></button>
+      <button type="button" @click="setAppPage('tools')" aria-label="工具" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'tools' }"><svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="m14 6-8 8-3 6 6-3 8-8M14 6l4-3 3 3-4 3"/></svg><span>工具</span></button>
+      <button type="button" @click="setAppPage('plugins')" aria-label="插件" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'plugins' }"><svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg><span>插件</span></button>
+      <button type="button" @click="setAppPage('logs')" aria-label="日志" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'logs' }"><svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6zM9 10h6M9 14h6"/></svg><span>日志</span></button>
+      <button type="button" @click="setAppPage('settings')" aria-label="设置" class="app-nav-item flex h-10 w-full items-center gap-3 rounded-xl px-3 text-[13px] font-medium" :class="{ 'app-nav-item-active': appPage === 'settings' }"><svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5 5l3 3m8 8 3 3M5 19l3-3M16 8l3-3M8 12a4 4 0 1 0 8 0 4 4 0 0 0-8 0"/></svg><span>设置</span></button>
     </nav>
   </aside>
   <main class="min-w-0 flex-1 overflow-hidden">
@@ -318,7 +310,7 @@
     <div class="legion-content">
       <header class="legion-heading">
       <div>
-      <button type="button" class="legion-button" @click="backToList()">← 工作台</button>
+      <button type="button" class="legion-button" @click="backToList()">← 任务</button>
       <p class="legion-eyebrow">PROJECT OVERVIEW</p>
       <h1 id="legion-title" x-text="legionProjectTitle(legionProjectId)"></h1>
       <p class="legion-muted">题目状态与 Commander 操作</p>
@@ -340,8 +332,8 @@
         <section x-show="legionPanel==='tasks'" aria-label="项目与任务">
           <div class="legion-card legion-empty" x-show="!legion.projects.length">
       <h2>还没有项目</h2>
-      <p class="legion-muted">先在工作台创建项目和目标，再由四角色军团协作。这里不会凭空创建任务或启动模型。</p>
-      <button class="legion-button legion-primary" @click="setAppPage('workspace')">前往工作台</button>
+      <p class="legion-muted">先在任务页创建项目和目标，再由四角色军团协作。这里不会凭空创建任务或启动模型。</p>
+      <button class="legion-button legion-primary" @click="setAppPage('workspace')">前往任务</button>
       </div>
           <template x-for="p in legion.projects.filter(p=>p.id===legionProjectId)" :key="p.id">
       <article class="legion-card" :class="{'benchmark-project':p.mode==='benchmark'}">
@@ -980,17 +972,15 @@
             class="px-3 py-1.5 bg-white/90 backdrop-blur border border-violet-200 text-violet-700 rounded-lg shadow-sm text-xs font-medium hover:bg-violet-50 transition disabled:opacity-30 disabled:cursor-not-allowed">
             <span x-text="selectedIntentExecutionProfileLabel()"></span>
           </button>
-          <button @click="releaseSelectedFact()" :disabled="!selectedReleasableFactId()"
-            class="px-3 py-1.5 bg-white/90 backdrop-blur border border-amber-200 text-amber-700 rounded-lg shadow-sm text-xs font-medium hover:bg-amber-50 transition disabled:opacity-30 disabled:cursor-not-allowed">释放证据</button>
           <button @click="selectedOpenIntentRecord() && openConclude(selectedOpenIntentRecord())" :disabled="!selectedOpenIntentRecord()"
             class="px-3 py-1.5 bg-white/90 backdrop-blur border border-teal-200 text-teal-600 rounded-lg shadow-sm text-xs font-medium hover:bg-teal-50 transition disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.25 3H7.5A2.25 2.25 0 0 0 5.25 5.25v13.5A2.25 2.25 0 0 0 7.5 21h9a2.25 2.25 0 0 0 2.25-2.25V8.25L14.25 3Z"/><path d="M14.25 3v5.25h4.5"/><path d="M9 13.5 10.875 15.375 15 11.25"/></svg>
             结论
           </button>
-          <button @click="deleteSelectedIntent()" :disabled="!selectedDeletableIntentRecord()"
+          <button @click="cancelSelectedIntent()" :disabled="!selectedCancellableIntentRecord()"
             class="px-3 py-1.5 bg-white/90 backdrop-blur border border-rose-200 text-rose-600 rounded-lg shadow-sm text-xs font-medium hover:bg-rose-50 transition disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4.5 7.5h15"/><path d="M9.75 11.25v4.5m4.5-4.5v4.5M6.75 7.5l.75 12h9l.75-12M9 7.5V4.875h6V7.5"/></svg>
-            删除
+            取消
           </button>
         </div>
       </div>
@@ -1209,7 +1199,7 @@
                   <div class="flex flex-wrap gap-1.5" x-show="!replay.active && projectIsActive()">
                     <button @click="selectedOpenIntentRecord() && openConclude(selectedOpenIntentRecord())" :disabled="!selectedOpenIntentRecord()" class="px-2.5 py-1 rounded-lg border border-teal-200 text-xs text-teal-600 hover:bg-teal-50 transition disabled:opacity-30 disabled:cursor-not-allowed">结论</button>
                     <button @click="toggleSelectedIntentExecutionProfile()" :disabled="!selectedEditableIntentProfileRecord()" class="px-2.5 py-1 rounded-lg border border-violet-200 text-xs text-violet-700 hover:bg-violet-50 transition disabled:opacity-30 disabled:cursor-not-allowed">隔离设置</button>
-                    <button @click="deleteSelectedIntent()" :disabled="!selectedDeletableIntentRecord()" class="px-2.5 py-1 rounded-lg border border-rose-200 text-xs text-rose-600 hover:bg-rose-50 transition disabled:opacity-30 disabled:cursor-not-allowed">删除</button>
+                    <button @click="cancelSelectedIntent()" :disabled="!selectedCancellableIntentRecord()" class="px-2.5 py-1 rounded-lg border border-rose-200 text-xs text-rose-600 hover:bg-rose-50 transition disabled:opacity-30 disabled:cursor-not-allowed">取消</button>
                   </div>
                   <div class="space-y-2" x-show="!replay.active">
                     <button @click="openIntentLog(fgsSelection?.id)" class="px-2.5 py-1 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50 transition">执行日志</button>
@@ -1417,11 +1407,6 @@
                   </div>
                   <div class="flex items-center gap-2 shrink-0">
                     <span class="text-amber-600/80 tabular-nums" x-text="formatTime(h.created_at)"></span>
-                    <button x-show="projectCanWriteHints()" type="button" @click="deleteHint(h)"
-                      class="rounded-md p-1 text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition"
-                      title="删除提示" aria-label="删除提示">
-                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4.5 7.5h15"/><path d="M9.75 11.25v4.5m4.5-4.5v4.5M6.75 7.5l.75 12h9l.75-12M9 7.5V4.875h6V7.5"/></svg>
-                    </button>
                   </div>
                 </div>
               </div>
@@ -2018,6 +2003,24 @@
   </div>
 </section>
 
+
+<section x-show="appPage === 'findings'" x-cloak class="console-page" x-data="findingsPage()" x-effect="setActive(appPage === 'findings')">
+ <div class="console-container">
+  <header class="console-heading"><div><h1>发现</h1><p>跨任务 Finding 汇总 · 沿用 FGS 证据</p></div><div class="console-actions"><div class="segmented"><button :aria-pressed="!grouped" @click="grouped=false">全部发现</button><button :aria-pressed="grouped" @click="grouped=true">按任务分组</button></div><button @click="load()" :disabled="loading" x-text="loading?'读取中…':'刷新'"></button></div></header>
+  <div class="finding-stats"><article><span>发现总数</span><strong x-text="items.length"></strong></article><template x-for="stat in stats" :key="stat.key"><button @click="severity=severity===stat.key?'':stat.key" :aria-pressed="severity===stat.key" :data-severity="stat.key"><span x-text="stat.label"></span><strong x-text="stat.count"></strong></button></template></div>
+  <div class="console-filters"><input x-model="query" placeholder="搜索名称、摘要、资产" aria-label="搜索发现"><select x-model="severity" aria-label="严重度"><option value="">全部严重度</option><template x-for="stat in stats" :key="stat.key"><option :value="stat.key" x-text="stat.label"></option></template></select><select x-model="status" aria-label="任务状态"><option value="">全部状态</option><option value="active">进行中</option><option value="stopped">已停止</option><option value="completed">已完成</option></select><select x-model="type" aria-label="漏洞类型"><option value="">全部类型</option><template x-for="value in types" :key="value"><option :value="value" x-text="value"></option></template></select><select x-model="task" aria-label="所属任务"><option value="">全部任务</option><template x-for="p in tasks" :key="p.id"><option :value="p.id" x-text="p.title"></option></template></select></div>
+  <p class="console-error" role="alert" x-show="error" x-text="error"></p><p class="console-empty" x-show="!loading&&!filtered.length">暂无匹配的发现。此处仅显示任务实际登记的 Finding。</p>
+  <template x-for="group in (grouped?groups:[{id:'all',items:filtered}])" :key="group.id"><article class="finding-group"><button class="finding-group-heading" x-show="grouped" @click="expanded[group.id]=!expanded[group.id]" :aria-expanded="!!expanded[group.id]"><span class="group-chevron" :class="{'is-open':expanded[group.id]}">›</span><div><strong x-text="group.title"></strong><small x-text="group.id+' · '+group.items.length+' 条发现'"></small></div><span class="status-badge" x-text="statusLabel(group.status)"></span><div class="group-severities"><template x-for="stat in stats" :key="stat.key"><span x-show="group.items.some(f=>f.severity===stat.key)" :data-severity="stat.key"><b x-text="stat.label"></b> <span x-text="group.items.filter(f=>f.severity===stat.key).length"></span></span></template></div></button>
+   <div x-show="!grouped||expanded[group.id]" class="console-table-wrap"><table class="console-table finding-table"><thead><tr><th>严重度</th><th>漏洞名称 / 摘要</th><th>资产</th><th>所属任务 / 图谱</th><th>证据</th><th>时间</th><th>操作</th></tr></thead><tbody><template x-for="f in group.items" :key="f.projectId+':'+f.id"><tr><td><span class="severity-badge" :data-severity="f.severity" x-text="severityLabel(f.severity)"></span></td><td><button class="finding-title" @click="select(f)" x-text="f.title"></button><p class="cell-summary" x-text="f.description"></p><small x-text="f.type"></small></td><td><template x-for="asset in f.assetIds||[]" :key="asset"><code class="asset-tag" x-text="asset"></code></template><span x-show="!f.assetIds?.length">—</span></td><td><span x-text="f.projectTitle"></span><small class="block" x-text="f.graphTitle"></small></td><td x-text="f.factIds.length+' 个 Fact'"></td><td><time x-text="new Date(f.createdAt).toLocaleString()"></time></td><td><button @click="select(f)">详情</button><button @click="openGraph(f)" aria-label="打开任务图谱">↗</button></td></tr></template></tbody></table></div>
+  </article></template><p class="console-note" x-text="'共 '+filtered.length+' 条 · 未合并或重写原始 Finding'"></p>
+ </div>
+ <dialog x-ref="findingDialog" class="console-dialog finding-dialog" aria-labelledby="finding-title"><header><div><h2 id="finding-title" x-text="selected?.title"></h2><small x-text="selected?.projectTitle+' / '+selected?.graphTitle"></small></div><button @click="$refs.findingDialog.close()" aria-label="关闭发现详情">关闭</button></header><p class="console-error" role="alert" x-show="error" x-text="error"></p><p x-show="!detail&&!error">正在读取完整证据…</p><template x-if="detail"><div><div class="finding-meta"><span class="severity-badge" :data-severity="detail.severity" x-text="severityLabel(detail.severity)"></span><code x-text="detail.type"></code><code x-text="detail.id"></code><span x-text="detail.creator"></span><time x-text="new Date(detail.createdAt).toLocaleString()"></time></div><div class="finding-meta"><template x-for="asset in detail.assetIds||[]" :key="asset"><code x-text="asset"></code></template></div><h3>摘要</h3><p class="finding-summary" x-text="detail.description"></p><h3>内容</h3><pre class="finding-content" x-text="content"></pre><details class="finding-evidence"><summary x-text="'关联证据 · '+detail.factIds.length+' 个 Fact'"></summary><div class="evidence-row" x-show="detail.report?.artifactId"><span>原始正文 Artifact</span><button @click="readEvidence(detail.report)" x-text="detail.report?.artifactId"></button></div><template x-for="fact in detail.facts||[]" :key="fact.id"><article><h4 x-text="fact.id+' · '+fact.title"></h4><p x-text="fact.description"></p><template x-for="ref in [...(fact.doc?[fact.doc]:[]),...(fact.evidence||[])]" :key="JSON.stringify(ref)"><div class="evidence-row"><span x-text="ref.description"></span><code x-text="ref.runId||fact.stepId||''"></code><code x-text="ref.toolCallId||''"></code><button x-show="ref.artifactId" @click="readEvidence(ref)" x-text="ref.artifactId"></button></div></template></article></template></details><template x-if="evidence"><div><p class="console-error" x-text="evidence.error"></p><pre class="file-content" x-text="evidence.content"></pre><button x-show="evidence.nextOffset!=null" @click="moreEvidence()">继续读取证据</button></div></template><footer><code x-text="'产出 Step: '+(detail.stepId||'未记录')"></code><button @click="openGraph()">打开原任务图谱 ↗</button></footer></div></template></dialog>
+</section>
+<section x-show="appPage === 'files'" x-cloak class="console-page files-page" x-data="filesPage()" x-effect="setActive(appPage === 'files')">
+ <header class="console-heading"><div><h1>工作空间</h1><p>浏览任务真实工作目录 · 文件预览与下载</p></div><select x-model="projectId" @change="changeProject()" aria-label="工作空间任务"><option value="">选择任务</option><template x-for="p in projects" :key="p.id"><option :value="p.id" x-text="p.title"></option></template></select><button @click="loadDirectory(path)" :disabled="!projectId||loading">刷新</button></header><p class="console-error" role="alert" x-show="error" x-text="error"></p><div class="files-layout"><aside class="file-tree" aria-label="工作目录树"><button class="tree-root" @click="loadDirectory('')" :disabled="!projectId" x-text="projectId||'尚无任务'"></button><template x-for="entry in rows" :key="entry.path"><button class="tree-entry" @click="select(entry)" :style="'padding-left:'+(12+entry.depth*16)+'px'" :aria-expanded="entry.type==='directory'?!!expanded[entry.path]:undefined" :title="entry.path"><span x-text="entry.type==='directory'?(expanded[entry.path]?'▾':'▸'):'·'"></span><span x-text="entry.display_name || entry.name"></span></button></template></aside><main class="file-browser"><nav class="file-breadcrumb"><button @click="loadDirectory('')" :disabled="!projectId">根目录</button><template x-for="(part,index) in path.split('/').filter(Boolean)" :key="index"><button @click="loadDirectory(path.split('/').slice(0,index+1).join('/'))" x-text="'/ '+part"></button></template><span class="ml-auto" x-text="preview?.path||''"></span><a x-show="preview" :href="downloadUrl" download>下载文件 ↓</a></nav><template x-if="preview"><div class="file-preview"><p x-text="preview.path+' · '+(preview.size==null?'可下载':size(preview.size))"></p><p x-show="preview.binary">二进制文件或超出预览上限，请下载查看。</p><pre x-show="!preview.binary" class="file-content" x-text="preview.content"></pre></div></template><div x-show="!preview" class="console-table-wrap"><table class="console-table"><thead><tr><th>名称</th><th>大小</th><th>修改时间</th><th></th></tr></thead><tbody><template x-for="entry in entries" :key="entry.path"><tr><td><button @click="select(entry)" x-text="(entry.type==='directory'?'▸ ':'')+(entry.display_name||entry.name)"></button><small x-show="entry.display_name" class="block text-[10px] text-slate-400" x-text="'历史目录：'+entry.name"></small></td><td x-text="entry.type==='directory'?'—':size(entry.size)"></td><td x-text="new Date(entry.modified_at*1000).toLocaleString()"></td><td><a x-show="entry.type==='file'" :href="'/audit/tasks/'+projectId+'/workspace/download?path='+encodeURIComponent(entry.path)" download aria-label="下载文件">↓</a></td></tr></template></tbody></table><p class="console-empty" x-show="!loading&&!entries.length" x-text="projectId?'目录为空':'创建任务后可浏览其真实工作空间'"></p></div></main></div>
+</section>
+<section x-show="appPage === 'tools'" x-cloak class="console-page" x-data="toolsPage()" x-effect="setActive(appPage === 'tools')"><div class="console-container"><header class="console-heading"><div><h1>工具</h1><p>DSH、RedTrace、插件、MCP 与已登记 CLI</p></div><button @click="load()" :disabled="loading" x-text="loading?'读取中…':'刷新注册与统计'"></button></header><p class="console-error" role="alert" x-show="error" x-text="error"></p><div class="tool-summary"><span><b x-text="data.tools.length"></b> 个工具</span><span><b x-text="data.stats.calls||0"></b> 次真实调用</span><span><b x-text="data.stats.failures||0"></b> 次失败</span></div><div class="console-filters"><input x-model="query" placeholder="搜索工具或描述" aria-label="搜索工具"><select x-model="source" aria-label="工具来源"><option value="">全部来源</option><template x-for="value in sources" :key="value"><option :value="value" x-text="value"></option></template></select><select x-model="status" aria-label="工具状态"><option value="">全部状态</option><option value="registered">已注册</option><option value="available">可用 CLI</option><option value="unavailable">PATH 不可用 CLI</option><option value="inactive">历史调用</option></select></div><p class="console-note" x-text="data.note"></p><div class="console-table-wrap"><table class="console-table tool-table"><thead><tr><th>工具</th><th>来源</th><th>状态</th><th>范围</th><th>调用 / 失败</th><th>最近调用</th></tr></thead><tbody><template x-for="tool in filtered" :key="tool.source+':'+tool.name"><tr><td><button class="finding-title" @click="open(tool)" x-text="tool.name"></button><p class="cell-summary" x-text="tool.description"></p></td><td x-text="tool.source"></td><td><span class="status-badge" x-text="label(tool.status)"></span></td><td class="cell-scopes" x-text="tool.scopes.join(', ')"></td><td x-text="tool.calls+' / '+tool.failures"></td><td x-text="tool.lastCalledAt?new Date(tool.lastCalledAt).toLocaleString():'—'"></td></tr></template></tbody></table></div><p class="console-empty" x-show="!loading&&!filtered.length">暂无匹配工具。会话工具仅在原生 Agent 实际注册时显示，不伪造未加载能力。</p><section x-ref="toolCalls" class="tool-calls"><header class="console-heading"><h2 x-text="selected?'调用记录 · '+selected:'调用记录'"></h2><button @click="selected=''">显示全部</button></header><template x-for="call in records.slice(0,200)" :key="call.runId+':'+call.callId"><details><summary><time x-text="call.timestamp?new Date(call.timestamp).toLocaleString():''"></time> <b x-text="call.name"></b> <span x-text="call.status"></span></summary><p><code x-text="call.projectId+' / '+call.runId+' / '+call.callId"></code></p><pre class="file-content" x-text="JSON.stringify(call.arguments,null,2)"></pre></details></template><p class="console-note" x-text="records.length?'共 '+records.length+' 次，显示最近 '+Math.min(records.length,200)+' 次':'没有已留存调用'"></p></section><dialog x-ref="toolDialog" class="console-dialog tool-dialog" aria-labelledby="tool-dialog-title" @click="if($event.target===$el)$el.close()"><template x-if="detail"><div><header><div><h2 id="tool-dialog-title" x-text="detail.name"></h2><small x-text="detail.source+' · '+label(detail.status)"></small></div><button @click="$refs.toolDialog.close()" aria-label="关闭工具详情">×</button></header><p class="console-error" role="alert" x-show="error" x-text="error"></p><p class="tool-saved" role="status" x-text="saved"></p><section><h3>绑定 Worker（包括 Commander）</h3><p class="console-note">开关决定是否允许调用，不额外授予原角色或插件未提供的工具。停用不取消正在执行的调用。</p><div class="tool-workers"><template x-for="worker in data.workers" :key="worker.name"><label><input type="checkbox" x-model="draft.workers" :value="worker.name" :disabled="!detail.manageable||saving"><span><b x-text="worker.name"></b><small x-text="worker.roles.join(' / ')+(worker.enabled?'':' · 路由已停用')"></small></span></label></template></div><p class="console-note" x-show="!data.workers.length">尚未配置 Worker。</p><label class="tool-global"><input type="checkbox" role="switch" aria-label="启用" x-model="draft.enabled" :disabled="!detail.manageable||saving"><span>启用</span></label><p class="console-note" x-show="!detail.manageable">CLI 或 PTC 传输记录不是独立模型能力；请管理对应 Shell 或实际被调用工具的开关。</p><p class="console-note">当前原生注册范围：<code x-text="detail.scopes.join(', ')"></code>。未加载会话不代表已停用；实际能力仍由原角色、插件和 MCP 状态决定。</p></section><section><h3>工具描述</h3><div class="tool-description" x-text="detail.description||'当前未加载工具定义，暂无描述。'"></div></section><section><h3>工具参数 <small>名称 / 类型 / 必填 / 描述 / 默认值（原生定义，只读）</small></h3><template x-for="parameter in parameters" :key="parameter.name"><article class="tool-parameter"><header><strong x-text="parameter.name"></strong><code x-text="parameterType(parameter)"></code><span x-show="parameter.required" class="severity-badge">必填</span></header><p x-text="parameter.description||'未提供描述'"></p><small>默认值</small><pre x-text="Object.prototype.hasOwnProperty.call(parameter,'default')?JSON.stringify(parameter.default,null,2):'Schema 未声明，以描述为准'"></pre></article></template><p class="console-note" x-show="!detail.parameters">当前没有已加载的原生参数 Schema；不根据历史调用猜测参数。</p><p class="console-note" x-show="detail.parameters&&!parameters.length">此工具无具名参数，完整定义见下方。</p><details x-show="detail.parameters"><summary>完整 JSON Schema</summary><pre class="file-content" x-text="JSON.stringify(detail.parameters,null,2)"></pre></details></section><footer><button @click="save()" :disabled="!detail.manageable||saving" x-text="saving?'保存中…':'保存'"></button><button @click="reset()" :disabled="!detail.manageable||saving">恢复默认绑定</button><button @click="$refs.toolDialog.close();$refs.toolCalls.scrollIntoView({block:'start'})">调用记录</button></footer></div></template></dialog></div></section>
+
 <section x-show="appPage === 'logs'" x-cloak class="audit-console h-full min-h-0 bg-white" aria-label="运行日志" x-data="auditPage()" @redtrace-commander-log.window="selectCommander($event.detail.projectId)" x-effect="setActive(appPage === 'logs')">
   <div class="audit-grid" :class="{'audit-global':selectedScope==='commander'}">
     <aside class="flex min-h-0 flex-col border-r border-slate-200 bg-white">
@@ -2216,11 +2219,11 @@
   </div>
 </section>
 
-<section x-show="appPage === 'skills'" x-cloak class="h-full min-h-0 bg-slate-50/60" x-data="skillsPage()" x-init="init()">
+<section x-show="appPage === 'skills'" x-cloak class="h-full min-h-0 bg-slate-50/60" x-data="skillsPage()" x-effect="setActive(appPage === 'skills')">
   <div class="flex h-full min-h-0 flex-col">
     <header class="flex h-[53px] shrink-0 items-center gap-3 border-b border-slate-200/70 bg-white/85 px-5 backdrop-blur-xl">
       <div class="min-w-0 flex-1">
-        <div class="flex items-center gap-2"><h1 class="text-[15px] font-semibold tracking-tight text-slate-800">Skills</h1><span class="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-700" x-text="`${enabledCount}/${items.length} 已启用`"></span></div>
+        <div class="flex items-center gap-2"><h1 class="text-[15px] font-semibold tracking-tight text-slate-800">Skills</h1><span class="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-700" x-text="`${enabledCount}/${items.filter(item=>!item.nested).length} 已启用`"></span></div>
         <p class="mt-0.5 truncate text-[10px] text-slate-400" x-text="status?.skillsDir || '加载共享目录…'"></p>
       </div>
       <button type="button" @click="load()" :disabled="loading" class="capability-press inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 hover:bg-slate-50 hover:text-slate-600 disabled:opacity-40" title="刷新">
@@ -2264,10 +2267,10 @@
           <template x-for="skill in filteredItems" :key="skill.key">
             <button type="button" @click="select(skill)" class="capability-press mb-1 flex w-full items-start gap-2.5 rounded-xl py-2.5 pr-3 text-left" :class="[selectedName === skill.key ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50', skill.nested ? 'pl-7' : 'pl-3']">
               <span class="mt-1 h-2 w-2 shrink-0 rounded-full" :class="skill.nested ? 'bg-sky-400' : (skill.enabled ? 'bg-teal-500 shadow-[0_0_0_3px_rgba(20,184,166,.10)]' : 'bg-slate-300')"></span>
-              <span class="min-w-0 flex-1"><span class="flex items-center gap-1.5"><span class="min-w-0 flex-1 truncate text-xs font-semibold" x-text="skill.name"></span><span x-show="skill.nested" class="rounded bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600">包内</span><span x-show="!skill.nested" class="rounded px-1.5 py-0.5 text-[9px] font-medium" :class="skill.trust === 'trusted' ? 'bg-teal-50 text-teal-600' : (skill.trust === 'retired' ? 'bg-slate-100 text-slate-400' : 'bg-amber-50 text-amber-600')" x-text="skill.trust || 'trusted'"></span></span><span class="mt-1 block line-clamp-2 text-[10px] leading-relaxed text-slate-400" x-text="skill.description || skill.path || '暂无描述'"></span></span>
+              <span class="min-w-0 flex-1"><span class="flex items-center gap-1.5"><span class="min-w-0 flex-1 truncate text-xs font-semibold" x-text="skill.name"></span><span x-show="skill.nested" class="rounded bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600">包内文档</span><span x-show="!skill.nested" class="rounded px-1.5 py-0.5 text-[9px] font-medium" :class="skill.trust === 'trusted' ? 'bg-teal-50 text-teal-600' : (skill.trust === 'retired' ? 'bg-slate-100 text-slate-400' : 'bg-amber-50 text-amber-600')" x-text="skill.trust || 'trusted'"></span></span><span class="mt-1 block line-clamp-2 text-[10px] leading-relaxed text-slate-400" x-text="skill.description || skill.path || '暂无描述'"></span></span>
             </button>
           </template>
-          <div x-show="!loading && filteredItems.length === 0" class="px-4 py-12 text-center text-xs leading-relaxed text-slate-400">没有匹配的 Skill。<br>创建一个即可被三个 agent 原生发现。</div>
+          <div x-show="!loading && filteredItems.length === 0" class="px-4 py-12 text-center text-xs leading-relaxed text-slate-400">没有匹配的 Skill。<br>根目录 Skills 由 DSH 原生加载。</div>
         </div>
       </aside>
       <main class="min-w-0 flex-1 overflow-hidden bg-white">
@@ -2286,9 +2289,6 @@
           </div>
           <div x-show="!isNew && !draft.nested" class="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/70 px-5 py-2 text-[10px] text-slate-500">
             <span class="rounded-md px-2 py-1 font-semibold" :class="draft.trust === 'trusted' ? 'bg-teal-50 text-teal-700' : (draft.trust === 'retired' ? 'bg-slate-200 text-slate-500' : 'bg-amber-50 text-amber-700')" x-text="draft.trust || 'trusted'"></span>
-            <span x-text="`${draft.successfulReuses || 0} 次独立复用`"></span>
-            <span>·</span>
-            <span x-text="`${draft.failureCount || 0} 次失败`"></span>
             <span x-show="draft.provisionalTask" class="max-w-56 truncate font-mono text-amber-600" :title="draft.provisionalTask" x-text="`来源 ${draft.provisionalTask}`"></span>
             <div class="ml-auto flex items-center gap-1.5">
               <select x-model="rollbackVersion" class="h-7 rounded-lg border border-slate-200 bg-white px-2 text-[10px] text-slate-500 outline-none" aria-label="选择回滚版本">
@@ -2298,16 +2298,17 @@
               <button type="button" @click="rollback()" :disabled="!rollbackVersion || saving" class="capability-press h-7 rounded-lg border border-slate-200 bg-white px-2.5 font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-40">回滚</button>
             </div>
           </div>
-          <div class="min-h-0 flex-1 p-4">
-            <textarea x-model="draft.content" :readonly="draft.nested" spellcheck="false" class="capability-editor h-full w-full resize-none rounded-xl border border-slate-200 bg-slate-950 p-4 font-mono text-[12px] leading-6 text-slate-200 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50" aria-label="SKILL.md"></textarea>
-          </div>
+          <div class="skill-usage"><details><summary x-text="skillCalls.length+' 次真实 skill 调用 · 点击查看记录'"></summary><ul><template x-for="call in skillCalls" :key="call.runId+':'+call.callId"><li><span x-text="new Date(call.timestamp).toLocaleString()+' · '+call.projectId+' · '+call.runId+' · '+call.status"></span><code x-text="call.callId"></code></li></template></ul><p x-show="!skillCalls.length">没有已留存的原生 skill 调用；文件浏览不计入调用统计。</p></details></div>
+          <div class="min-h-0 flex-1 flex"><aside x-show="!isNew &amp;&amp; !draft.nested" class="skill-files" aria-label="Skill 文件树"><template x-for="entry in fileTree" :key="entry.path"><button @click="entry.directory ? (folders[entry.path]=folders[entry.path]===false) : selectFile(entry.path)" :aria-pressed="filePath===entry.path" :style="'padding-left:'+(10+entry.depth*12)+'px'" :title="entry.path" x-text="(entry.directory?(folders[entry.path]===false?'▸ ':'▾ '):'· ')+entry.name"></button></template></aside><div class="min-h-0 min-w-0 flex-1 p-4"><textarea x-show="filePath!=='SKILL.md'" :value="fileContent" readonly spellcheck="false" class="capability-editor h-full w-full resize-none rounded-xl border p-4 font-mono text-[12px] leading-6" aria-label="Skill 文件内容"></textarea>
+            <textarea x-show="filePath==='SKILL.md'" x-model="draft.content" :readonly="draft.nested" spellcheck="false" class="capability-editor h-full w-full resize-none rounded-xl border border-slate-200 bg-slate-950 p-4 font-mono text-[12px] leading-6 text-slate-200 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50" aria-label="SKILL.md"></textarea>
+          </div></div>
           <div class="flex h-9 shrink-0 items-center border-t border-slate-100 px-5 text-[10px] text-slate-400"><span :class="{ 'text-red-500': messageType === 'error', 'text-teal-600': messageType === 'success' }" x-text="message"></span></div>
         </div></template>
       </main>
     </div>
   </div>
 </section>
-<section x-show="appPage === 'mcp'" x-cloak class="h-full min-h-0 bg-slate-50/60" x-data="mcpPage()" x-init="init()">
+<section x-show="appPage === 'mcp'" x-cloak class="h-full min-h-0 bg-slate-50/60" x-data="mcpPage()" x-effect="setActive(appPage === 'mcp')">
   <div class="flex h-full min-h-0 flex-col">
     <header class="flex h-[53px] shrink-0 items-center gap-3 border-b border-slate-200/70 bg-white/85 px-5 backdrop-blur-xl">
       <div class="min-w-0 flex-1"><div class="flex items-center gap-2"><h1 class="text-[15px] font-semibold tracking-tight text-slate-800">MCP</h1><span class="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700" x-text="`${enabledCount}/${items.length} 已启用`"></span></div><p class="mt-0.5 truncate text-[10px] text-slate-400" x-text="status?.mcpDir || '加载共享目录…'"></p></div>
@@ -2321,10 +2322,10 @@
           <template x-for="server in filteredItems" :key="server.name">
             <button type="button" @click="select(server.name)" class="capability-press mb-1 flex w-full items-start gap-2.5 rounded-xl px-3 py-2.5 text-left" :class="selectedName === server.name ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50'">
               <span class="mt-1 h-2 w-2 shrink-0 rounded-full" :class="server.enabled ? 'bg-sky-500 shadow-[0_0_0_3px_rgba(14,165,233,.10)]' : 'bg-slate-300'"></span>
-              <span class="min-w-0 flex-1"><span class="flex items-center gap-2"><span class="truncate text-xs font-semibold" x-text="server.name"></span><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-slate-400" x-text="server.transport"></span></span><span class="mt-1 block truncate font-mono text-[9px] text-slate-400" x-text="server.command || server.url || '未配置端点'"></span></span>
+              <span class="min-w-0 flex-1"><span class="flex items-center gap-2"><span class="truncate text-xs font-semibold" x-text="server.name"></span><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-slate-400" x-text="server.transport"></span></span><span class="block text-[10px] text-slate-500" x-text="connection(server.name)"></span><span class="mt-1 block truncate font-mono text-[9px] text-slate-400" x-text="server.command || server.url || '未配置端点'"></span></span>
             </button>
           </template>
-          <div x-show="!loading && filteredItems.length === 0" class="px-4 py-12 text-center text-xs leading-relaxed text-slate-400">暂无 MCP server。<br>添加后会在下一个 agent 任务中生效。</div>
+          <div x-show="!loading && filteredItems.length === 0" class="px-4 py-12 text-center text-xs leading-relaxed text-slate-400">暂无 MCP server。<br>添加后使用现有 DSH 运行时建立连接。</div>
         </div>
       </aside>
       <main class="min-w-0 flex-1 overflow-hidden bg-white">
@@ -2337,7 +2338,7 @@
             <button x-show="!isNew && !deleteArmed" @click="armDelete()" class="capability-press h-8 rounded-lg px-3 text-xs text-red-500 hover:bg-red-50">删除</button>
             <button @click="save()" :disabled="saving || !draft.name || !draft.raw" class="capability-press h-8 rounded-lg bg-brand-500 px-4 text-xs font-medium text-white shadow-sm shadow-brand-100 hover:bg-brand-600 disabled:opacity-40" x-text="saving ? '保存中…' : '保存'"></button>
           </div>
-          <div class="min-h-0 flex-1 p-4"><textarea x-model="draft.raw" spellcheck="false" class="capability-editor h-full w-full resize-none rounded-xl border border-slate-200 bg-slate-950 p-4 font-mono text-[12px] leading-6 text-slate-200 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50" aria-label="MCP JSON"></textarea></div>
+          <div class="mcp-runtime" x-show="!isNew"><p x-text="'运行时连接：'+connection(draft.name)"></p><p x-text="live.mcp.find(s=>s.name===draft.name)?.lastError||''"></p><p x-text="serverTools(draft.name).length+' 个已注册工具'"></p><template x-for="tool in serverTools(draft.name)" :key="tool.name"><code x-text="tool.name+' · '+tool.calls+' 次调用'"></code></template></div><div class="min-h-0 flex-1 p-4"><textarea x-model="draft.raw" spellcheck="false" class="capability-editor h-full w-full resize-none rounded-xl border border-slate-200 bg-slate-950 p-4 font-mono text-[12px] leading-6 text-slate-200 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50" aria-label="MCP JSON"></textarea></div>
           <div class="flex h-9 shrink-0 items-center border-t border-slate-100 px-5 text-[10px] text-slate-400"><span :class="{ 'text-red-500': messageType === 'error', 'text-teal-600': messageType === 'success' }" x-text="message"></span></div>
         </div></template>
       </main>
@@ -2499,6 +2500,68 @@
     </template>
   </div>
 </section>
+<section x-show="appPage === 'llm'" x-cloak class="console-page runtime-settings"><div class="console-container"><p class="console-error" role="alert" x-show="workerConfigError" x-text="workerConfigError"></p>    <div class="console-heading llm-heading">
+      <div>
+        <h1>LLM</h1>
+        <p class="mt-1 text-xs leading-relaxed text-slate-400">模型服务与轮询配置。复用现有 Worker 模型路线，连接测试仅检查所选供应商。</p>
+      </div>
+      <div class="flex shrink-0 flex-wrap items-center gap-2">
+        <button type="button" @click="openPollingConfig()" class="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-medium text-slate-600 transition hover:bg-slate-50">
+          <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7h-9a5 5 0 0 0-5 5v1M4 17h9a5 5 0 0 0 5-5v-1M17 4l3 3-3 3M7 14l-3 3 3 3"/></svg>
+          轮询配置
+        </button>
+      <button type="button" @click="openProviderEditor()" class="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl bg-slate-800 px-4 text-xs font-medium text-white shadow-sm transition hover:bg-slate-900 active:scale-[.98]">
+        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        新增 Provider
+      </button>
+      </div>
+    </div>
+
+    <div class="mt-4 flex flex-wrap items-center gap-3 border-y border-slate-100 py-3 text-xs text-slate-400">
+      <span x-text="`${(workerConfig.providers || []).length} 个 Provider`"></span><span>·</span>
+      <span x-text="`${providerInUseCount()} 个被 Worker 引用`"></span>
+      <span class="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-600">密钥保存于密钥库</span>
+    </div>
+
+    <div x-show="!workerConfigLoading && !(workerConfig.providers || []).length" class="mt-8 rounded-2xl border border-dashed border-slate-200 px-6 py-14 text-center">
+      <div class="text-sm font-medium text-slate-600">尚未配置 Provider</div>
+      <p class="mt-1 text-xs text-slate-400">添加后即可在 Worker 中引用。</p>
+    </div>
+
+    <div class="provider-grid mt-5 grid gap-3">
+      <template x-for="provider in workerConfig.providers || []" :key="provider.name">
+        <article @dblclick="openProviderEditor(provider)" class="provider-card rounded-2xl border border-slate-200/80 bg-white px-5 py-4 shadow-sm shadow-slate-100/60">
+          <div class="grid grid-cols-[40px_minmax(0,1fr)] items-start gap-4 sm:flex">
+            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-[10px] font-semibold text-slate-600" x-text="providerApiBadge(provider.api)"></div>
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-2">
+                <h2 class="truncate text-sm font-semibold text-slate-700" x-text="provider.name"></h2>
+                <span class="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500" x-text="providerApiLabel(provider.api)"></span>
+                <span class="rounded-md px-2 py-0.5 text-[10px] font-medium" :class="provider.api_key_configured ? 'bg-teal-50 text-teal-600' : provider.api_key_env ? 'bg-sky-50 text-sky-600' : 'bg-rose-50 text-rose-500'" x-text="provider.api_key_configured ? '密钥已配置' : provider.api_key_env ? `环境变量 ${provider.api_key_env}` : '未配置密钥'"></span>
+              </div>
+              <div class="mt-2 flex flex-wrap gap-x-5 gap-y-1.5 text-[11px] text-slate-400">
+                <span class="min-w-0 truncate font-mono" x-text="provider.base_url"></span>
+              </div>
+              <p class="mt-2 text-xs" role="status" x-show="providerTests[provider.name]" x-text="providerTests[provider.name]"></p><div class="mt-2 flex flex-wrap gap-1.5">
+                <template x-for="model in provider.models || []" :key="model.id">
+                  <span class="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-1.5 py-0.5 text-[10px]">
+                    <span class="font-mono text-slate-600" x-text="model.id"></span>
+                    <span class="text-slate-400" x-text="`${formatTokenCount(model.context_window)} · ${formatTokenCount(model.max_tokens)}`"></span>
+                  </span>
+                </template>
+                <template x-if="provider.referenced === false"><span class="rounded-md border border-dashed border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-400">未被 Worker 引用</span></template>
+              </div>
+            </div>
+            <div class="col-span-2 flex shrink-0 flex-wrap items-center justify-end gap-1 border-t border-slate-100 pt-3 sm:border-0 sm:pt-0">
+              <button type="button" @click="testProvider(provider)" :disabled="providerTesting === provider.name" class="h-8 rounded-lg px-2.5 text-xs" x-text="providerTesting === provider.name ? '测试中…' : '连接测试'"></button><button type="button" @click="manageProviderRoutes(provider)" class="h-8 rounded-lg px-2.5 text-xs" x-text="workerConfig.workers.some(w=>w.provider===provider.name &amp;&amp; w.enabled)?'管理启用路线':'启用路线'"></button><button type="button" @click="openProviderEditor(provider)" class="h-8 rounded-lg px-2.5 text-xs text-slate-500 transition hover:bg-slate-100">编辑</button>
+              <button type="button" @click="deleteProvider(provider)" class="h-8 rounded-lg px-2.5 text-xs text-rose-500 transition hover:bg-rose-50">删除</button>
+            </div>
+          </div>
+        </article>
+      </template>
+    </div>
+
+<p class="console-note">供应商通过原有 Worker 模型路线启用；轮询顺序和开关复用现有模型路由，不影响运行中的会话。</p></div></section>
 <section x-show="appPage === 'settings'" x-cloak class="runtime-settings h-full overflow-y-auto bg-white px-4 py-5 sm:px-8 sm:py-7">
   <div class="mx-auto max-w-5xl">
     <div class="flex flex-col items-start justify-between gap-4 sm:flex-row sm:gap-5">
@@ -2580,67 +2643,6 @@
         <p class="mt-3 text-[10px] leading-relaxed text-slate-400">变量值按原文保存到 redtrace.yaml。可拖动手柄调整顺序；删除或改名会影响之后启动的 Worker 任务，不中断正在运行的任务。</p>
       </div>
     </form>
-
-    <div class="mt-8 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-end">
-      <div>
-        <h2 class="text-sm font-semibold text-slate-700">Provider 模型服务</h2>
-        <p class="mt-1 text-xs leading-relaxed text-slate-400">点击“轮询配置”设置同模型 ID 的供应商、顺序与开关。仅在输出前故障时切换；连接测试只检查所选 Provider。</p>
-      </div>
-      <div class="flex shrink-0 flex-wrap items-center gap-2">
-        <button type="button" @click="openPollingConfig()" class="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-medium text-slate-600 transition hover:bg-slate-50">
-          <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7h-9a5 5 0 0 0-5 5v1M4 17h9a5 5 0 0 0 5-5v-1M17 4l3 3-3 3M7 14l-3 3 3 3"/></svg>
-          轮询配置
-        </button>
-      <button type="button" @click="openProviderEditor()" class="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl bg-slate-800 px-4 text-xs font-medium text-white shadow-sm transition hover:bg-slate-900 active:scale-[.98]">
-        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-        新增 Provider
-      </button>
-      </div>
-    </div>
-
-    <div class="mt-4 flex flex-wrap items-center gap-3 border-y border-slate-100 py-3 text-xs text-slate-400">
-      <span x-text="`${(workerConfig.providers || []).length} 个 Provider`"></span><span>·</span>
-      <span x-text="`${providerInUseCount()} 个被 Worker 引用`"></span>
-      <span class="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-600">密钥保存于密钥库</span>
-    </div>
-
-    <div x-show="!workerConfigLoading && !(workerConfig.providers || []).length" class="mt-8 rounded-2xl border border-dashed border-slate-200 px-6 py-14 text-center">
-      <div class="text-sm font-medium text-slate-600">尚未配置 Provider</div>
-      <p class="mt-1 text-xs text-slate-400">添加后即可在 Worker 中引用。</p>
-    </div>
-
-    <div class="mt-5 grid gap-3">
-      <template x-for="provider in workerConfig.providers || []" :key="provider.name">
-        <article class="rounded-2xl border border-slate-200/80 bg-white px-5 py-4 shadow-sm shadow-slate-100/60">
-          <div class="grid grid-cols-[40px_minmax(0,1fr)] items-start gap-4 sm:flex">
-            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-[10px] font-semibold text-slate-600" x-text="providerApiBadge(provider.api)"></div>
-            <div class="min-w-0 flex-1">
-              <div class="flex flex-wrap items-center gap-2">
-                <h2 class="truncate text-sm font-semibold text-slate-700" x-text="provider.name"></h2>
-                <span class="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500" x-text="providerApiLabel(provider.api)"></span>
-                <span class="rounded-md px-2 py-0.5 text-[10px] font-medium" :class="provider.api_key_configured ? 'bg-teal-50 text-teal-600' : provider.api_key_env ? 'bg-sky-50 text-sky-600' : 'bg-rose-50 text-rose-500'" x-text="provider.api_key_configured ? '密钥已配置' : provider.api_key_env ? `环境变量 ${provider.api_key_env}` : '未配置密钥'"></span>
-              </div>
-              <div class="mt-2 flex flex-wrap gap-x-5 gap-y-1.5 text-[11px] text-slate-400">
-                <span class="min-w-0 truncate font-mono" x-text="provider.base_url"></span>
-              </div>
-              <div class="mt-2 flex flex-wrap gap-1.5">
-                <template x-for="model in provider.models || []" :key="model.id">
-                  <span class="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-1.5 py-0.5 text-[10px]">
-                    <span class="font-mono text-slate-600" x-text="model.id"></span>
-                    <span class="text-slate-400" x-text="`${formatTokenCount(model.context_window)} · ${formatTokenCount(model.max_tokens)}`"></span>
-                  </span>
-                </template>
-                <template x-if="provider.referenced === false"><span class="rounded-md border border-dashed border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-400">未被 Worker 引用</span></template>
-              </div>
-            </div>
-            <div class="col-span-2 flex shrink-0 flex-wrap items-center justify-end gap-1 border-t border-slate-100 pt-3 sm:border-0 sm:pt-0">
-              <button type="button" @click="openProviderEditor(provider)" class="h-8 rounded-lg px-2.5 text-xs text-slate-500 transition hover:bg-slate-100">编辑</button>
-              <button type="button" @click="deleteProvider(provider)" class="h-8 rounded-lg px-2.5 text-xs text-rose-500 transition hover:bg-rose-50">删除</button>
-            </div>
-          </div>
-        </article>
-      </template>
-    </div>
 
     <div class="mt-8 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-end">
       <div>
@@ -2897,6 +2899,7 @@
   </form>
 </div>
 
+<dialog x-ref="providerRoutesDialog" class="console-dialog" aria-labelledby="provider-routes-title"><header><h2 id="provider-routes-title" x-text="providerRouteName+' · 模型路线'"></h2><button @click="$refs.providerRoutesDialog.close()">关闭</button></header><p>直接使用原有 Worker 的启停与连接测试，不创建第二套启用状态。</p><template x-for="worker in workerConfig.workers.filter(w=>w.provider===providerRouteName)" :key="worker.name"><div class="route-row"><span x-text="worker.name+' · '+worker.model"></span><button @click="toggleWorker(worker)" :disabled="workerActionBusy===worker.name" x-text="worker.enabled?'停用':'启用'"></button></div></template><button @click="$refs.providerRoutesDialog.close();openWorkerEditor();workerForm.provider=providerRouteName">新增模型路线</button></dialog>
 <!-- LLM polling configuration: native dialog owns focus trapping and Escape. -->
 <dialog x-ref="pollingDialog" aria-labelledby="polling-config-title" @cancel="if (pollingSaveBusy) $event.preventDefault()" class="m-auto max-h-[92vh] w-[calc(100%-2rem)] max-w-2xl overflow-y-auto rounded-2xl border border-slate-200/60 bg-white p-0 text-slate-700 shadow-2xl">
   <form @submit.prevent="savePollingConfig()">
@@ -3201,6 +3204,7 @@ function redtraceApp() {
     pollingSaveBusy: false,
     pollingForm: { enabled: true, groups: [] },
     showProviderEditor: false,
+    providerTesting: '', providerTests: {},
     providerEditingName: '',
     providerSaveBusy: false,
     reasoningLevelOptions: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
@@ -3385,10 +3389,10 @@ function redtraceApp() {
 
     handleRoute() {
       const hash = location.hash || '#/';
-      const pageMatch = hash.match(/^#\/(logs|skills|mcp|webshell|plugins|c2-listeners|c2-sessions|c2-tasks|c2-payloads|c2-events|c2-profiles|c2-credentials|settings)$/);
+      const pageMatch = hash.match(/^#\/(findings|files|llm|tools|logs|skills|mcp|webshell|plugins|c2-listeners|c2-sessions|c2-tasks|c2-payloads|c2-events|c2-profiles|c2-credentials|settings)$/);
       if (pageMatch) {
         this.appPage = pageMatch[1];
-        if (this.appPage === 'settings') this.loadWorkerConfig();
+        if (['settings','llm'].includes(this.appPage)) this.loadWorkerConfig();
         return;
       }
       this.appPage = 'workspace';
@@ -3398,14 +3402,14 @@ function redtraceApp() {
     },
 
     setAppPage(page) {
-      if (!['workspace', 'skills', 'mcp', 'webshell', 'plugins', 'c2-listeners', 'c2-sessions', 'c2-tasks', 'c2-payloads', 'c2-events', 'c2-profiles', 'c2-credentials', 'logs', 'settings'].includes(page)) return;
+      if (!['workspace', 'findings', 'files', 'llm', 'tools', 'skills', 'mcp', 'webshell', 'plugins', 'c2-listeners', 'c2-sessions', 'c2-tasks', 'c2-payloads', 'c2-events', 'c2-profiles', 'c2-credentials', 'logs', 'settings'].includes(page)) return;
       this.appPage = page;
       const nextHash = page === 'workspace'
         ? (this.selectedProjectId && this.view === 'graph' ? `/projects/${this.selectedProjectId}` : '/')
         : `/${page}`;
       if (location.hash !== `#${nextHash}`) location.hash = nextHash;
       if (page === 'workspace' && this.view === 'list') this.loadProjects();
-      if (page === 'settings') this.loadWorkerConfig();
+      if (['settings','llm'].includes(page)) this.loadWorkerConfig();
     },
 
     async api(method, path, body) {
@@ -4108,6 +4112,12 @@ function redtraceApp() {
       return { commander:'Commander', general:'General', soldier:'Soldier', scout:'Scout' }[taskType] || taskType;
     },
 
+    async testProvider(provider) {
+      this.providerTesting=provider.name;this.providerTests[provider.name]='';
+      try { const result=await this.api('POST','/worker-config/providers/'+encodeURIComponent(provider.name)+'/test',{expected_revision:this.workerConfig.revision,model:provider.models[0].id});this.providerTests[provider.name]='连接成功 · '+result.duration_ms+' ms'+(result.cached?'（缓存结果）':''); } catch(error) {this.providerTests[provider.name]=error.message;} finally {this.providerTesting='';}
+    },
+    manageProviderRoutes(provider) { this.providerRouteName=provider.name;this.$refs.providerRoutesDialog.showModal(); },
+    providerRouteName: '',
     providerApiLabel(api) {
       return {
         'openai-completions': 'OpenAI Completions',
@@ -5753,9 +5763,9 @@ function redtraceApp() {
       return intent;
     },
 
-    selectedDeletableIntentRecord() {
+    selectedCancellableIntentRecord() {
       const intent = this.selectedIntentRecord();
-      if (this.fgs?.nodes && (!intent || intent.factIds.length || !['pending', 'paused', 'blocked'].includes(intent.status))) return null;
+      if (this.fgs?.nodes && (!intent || !['pending', 'paused', 'blocked'].includes(intent.status))) return null;
       return intent && this.projectIsActive() && !intent.to && !intent.concluded_at && !intent.worker ? intent : null;
     },
 
@@ -5771,10 +5781,6 @@ function redtraceApp() {
     },
 
 
-    selectedReleasableFactId() {
-      const factId = this.selectedFactId();
-      return !this.replay.active && this.projectIsActive() && this.selectedFacts.length === 1 && !['origin', 'goal'].includes(factId) && this.selectedFactRecord()?.kind === 'fact' ? factId : null;
-    },
 
 
     factDisplayId(factId) {
@@ -6241,43 +6247,25 @@ function redtraceApp() {
 
 
 
-    async deleteSelectedIntent() {
-      const intent = this.selectedDeletableIntentRecord();
+    async cancelSelectedIntent() {
+      const intent = this.selectedCancellableIntentRecord();
       if (!intent || !await this.requestDangerConfirm({
-        title: '删除 Mission',
-        description: '删除后无法恢复；正在执行或已经产出 Fact 的 Mission 不允许删除。',
+        title: '取消 Mission',
+        description: '取消此 Mission，保留节点、历史和已提交证据。',
+        note: '取消不会删除节点，后续可核验结果并重新规划。',
         subject: `${intent.id} · ${intent.description}`,
-        confirmLabel: '删除 Mission',
+        confirmLabel: '取消 Mission',
       })) return;
       try {
-        await this.api('DELETE', `/projects/${this.selectedProjectId}/intents/${encodeURIComponent(intent.id)}`);
+        await this.api('PATCH', `/v2/projects/${encodeURIComponent(this.selectedProjectId)}/steps/${encodeURIComponent(intent.id)}` + (this.selectedGraphId ? '?graphId=' + encodeURIComponent(this.selectedGraphId) : ''), { status: 'cancelled', expectedVersion: intent.version });
         this.clearSelection();
         await this.loadProject(this.selectedProjectId);
         this.updateGraph();
-        this.showToast('Mission 已删除');
+        this.showToast('Mission 已取消');
       } catch(e) { this.showToast(e.message, 'error'); }
     },
 
 
-    async releaseSelectedFact() {
-      const factId = this.selectedReleasableFactId();
-      const fact = this.selectedFactRecord(), version = fact?.version ?? 1;
-      if (!factId || !Number.isSafeInteger(version) || version < 1 || !await this.requestDangerConfirm({
-        tone: 'warning',
-        title: '释放图谱节点',
-        description: '仅从工作台图谱移除此节点；对应的 WebShell、C2 或凭证资源仍会保留。',
-        subject: `${this.factDisplayId(factId)} · ${fact?.description || '无描述'}`,
-        note: '若节点仍被下游 Mission 使用，将不会执行释放。',
-        confirmLabel: '释放节点',
-      })) return;
-      try {
-        await this.api('POST', `/v2/projects/${encodeURIComponent(this.selectedProjectId)}/evidence/manage`, { operation: 'delete', id: factId, expectedVersion: version, reason: 'Human released graph evidence' });
-        this.clearSelection();
-        await this.loadProject(this.selectedProjectId);
-        this.updateGraph();
-        this.showToast('节点已释放；对应资源仍保留');
-      } catch(e) { this.showToast(e.message, 'error'); }
-    },
 
     requestDangerConfirm(options = {}) {
       if (this._dangerConfirmResolve) this._dangerConfirmResolve(false);
@@ -6353,22 +6341,6 @@ function redtraceApp() {
       } catch(e) { this.showToast(e.message, 'error'); }
     },
 
-    async deleteHint(hint) {
-      if (!this.projectCanWriteHints() || !await this.requestDangerConfirm({
-        title: '删除提示',
-        description: '删除后无法恢复。',
-        subject: hint.content,
-        confirmLabel: '删除提示',
-      })) return;
-      try {
-        await this.api('DELETE', `/projects/${this.selectedProjectId}/hints/${encodeURIComponent(hint.id)}`);
-        this.selectedTimelineEntryId = null;
-        await this.loadProjects();
-        await this.loadProject(this.selectedProjectId);
-        this.sideTab = 'hints';
-        this.showToast('Hint 已删除');
-      } catch(e) { this.showToast(e.message, 'error'); }
-    },
 
   };
 }

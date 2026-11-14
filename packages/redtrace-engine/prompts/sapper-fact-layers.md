@@ -1,11 +1,9 @@
-Each node has THREE documentation layers — use them correctly:
-- **`title`** (REQUIRED) — a short (2–10 字) human-readable label in the SAME language as the goal (中文 goal → 中文 title). Concrete: "端口已扫", "弱口令确认", "RCE已验证", "flag已提交". Never paste the description into it.
-- **`description`** (REQUIRED) — a ONE-sentence gist / summary of the confirmed result, WITH the key evidence inline (host:port, CVE id, credential). Read on demand with `read_graph({id})`; the RedTrace default graph displays only titles.
-- **`doc`** (OPTIONAL, recommended) — detailed markdown: the exact commands you ran and their output, request/response evidence, artifact paths (pcap, dumps, shells), constraints, gotchas. The next agent reads it via `read_graph({id, detail:"doc"})`, then `project_evidence_read` for its doc Artifact. Put the long evidence here, NOT in description.
+FGS layers: title → description → doc/evidence. Read only what is needed; preserve technical meaning.
+- Origin: exact scope/requirements. Goal/SubGoal: outcome, acceptance and prerequisites. Step: action, input Fact IDs, expected evidence; preserve stage order/dependencies.
+- title: readable conclusion in the Goal's language, not the summary copied. Keep precise identifiers in description.
+- description: latest incremental fact / incremental confirmed result, with decision-relevant host:port, version, credential, constraints or failure. No recap or forced length limit.
+- doc/evidence: exact commands, Payload, HTTP headers/status/differences, outputs, stack traces and reproduction details. Preserve paths, credentials, Flags and Artifact/Run/Tool Call provenance. Long raw evidence stays here, not in indexes.
+- Append-only nodes: correct errors with a new Fact citing the old ID, contradiction, evidence and current conclusion. Never delete nodes or merge Fact/Finding. Retain history; do not use corrected claims as prerequisites. Step failure/cancellation/replanning and Goal status updates remain.
 
-- The `description` should be the latest incremental fact, not a replay of the
-  whole engagement.
-
-
-RedTrace interface: submit_fact({title, description, doc, evidence}); doc Markdown is saved as a Project Artifact, not another raw-file store. read_graph() is the title index; read_graph({id}) expands a summary (including supporting Fact summaries for a Finding); read_graph({id,detail:"doc"}) exposes retained Doc/Evidence references. Then read Artifact bytes with project_evidence_read; page until nextOffset is null. Original Fact and Evidence nodes are retained.
-Confirmed vulnerabilities use submit_finding({title, type, severity, description, assetIds, factIds}): title=name, type=vulnclass, description=summary. Only actually triggered, evidence-backed vulnerabilities; never version/CVE matching or speculation. The independent Reporter writes the report, not Explore.
+submit_fact({title,description,doc,evidence}) stores doc Markdown as a Project Artifact. read_graph() gives title indexes; supporting Facts fold under Findings except active Step dependencies. read_graph({id}) gives summaries and supporting Fact summaries; detail:"doc" exposes Doc/Evidence references. project_evidence_read reads bytes; page until nextOffset=null. Prefer read_graph_delta and relevant IDs over rereading known history.
+submit_finding({title,type,severity,description,assetIds,factIds}): actually triggered, evidence-backed vulnerabilities only, never version/CVE matches or speculation. Reporter writes reports separately. Original evidence stays retained.

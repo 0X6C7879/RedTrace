@@ -1,3 +1,4 @@
+import { Capabilities } from '../src/capabilities.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -15,7 +16,7 @@ import type { TaskContext } from '../src/scheduler.ts'
 import type { EngineConfig, Worker, Step } from '../src/types.ts'
 
 const worker: Worker = {name:'audit-fixture',backend:'mock',provider:'mock',model:'',enabled:true,reason:true,explore:true,bootstrap:false,maxRunning:8,priority:0}
-test('WAL NORMAL and evidence merges preserve live execution contracts while explicit amendments still invalidate them', () => {
+test('WAL NORMAL and incremental evidence preserve live execution contracts while explicit amendments still invalidate them', () => {
  const root=mkdtempSync(path.join(os.tmpdir(),'redtrace-merge-')),store=new Store(path.join(root,'engine.db'))
  try {
   assert.equal(store.db.prepare('PRAGMA synchronous').get()!.synchronous,1)
@@ -24,9 +25,9 @@ test('WAL NORMAL and evidence merges preserve live execution contracts while exp
   const step=store.addStep(project.id,{description:'fixture',sourceIds:[b.id]}),run=store.claim(project.id,'execute',worker,step.id),guard=createPlanGuard(store,run.id)
   const before=livePlan(store,run.id)
   assert.equal(livePlan(store,run.id),before)
-  store.manageEvidence(project.id,{operation:'merge',id:a.id,expectedVersion:a.version!,sourceIds:[b.id],sourceVersions:{[b.id]:b.version!},reason:'equivalent'})
+  store.addFact(project.id,'Correction to '+a.id+'; independently observed proof')
   assert.equal(store.node<Step>(project.id,step.id).planVersion,1);assert.equal(guard.check({name:'bash',rootCallId:'same-turn'}),undefined)
-  assert.ok(livePlan(store,run.id).includes(a.id));assert.ok(!livePlan(store,run.id).includes(b.id))
+  assert.ok(livePlan(store,run.id).includes(b.id));assert.equal(livePlan(store,run.id),before)
   const current=store.node(project.id,step.id)
   store.updateStep(project.id,step.id,{description:'new contract',expectedVersion:current.version,mode:'amend'})
   assert.match(guard.check({name:'bash',rootCallId:'old'})!,/Plan changed/)
@@ -121,7 +122,7 @@ test('Skill entrypoints keep native submissions, unattended continuation and hea
   assert.doesNotMatch(skill,/submit_sub_agent_output|record_finding|spawn_subagent|cookies_export|browser navigate|~\/\.claude\/skills\/(?:bin|shared)|等操作者选/)
   assert.match(skill,/submit_fact/);assert.match(skill,/finish_step/)
  }
- const benchmark=readFileSync(new URL('tsecbench-api/SKILL.md',root),'utf8')
+ const benchmark=readFileSync(new Capabilities(path.resolve(import.meta.dirname,'../../../.redtrace'),path.resolve(import.meta.dirname,'../../..')).directory('tsecbench-api')+'/SKILL.md','utf8')
  assert.doesNotMatch(benchmark,/活跃实例最多|取提示使用 CLI/);assert.match(benchmark,/由 Commander 决策/)
  const playwright=readFileSync(new URL('playwright-skill/SKILL.md',root),'utf8')
  assert.doesNotMatch(playwright,/headless: false|visible browser by default/)

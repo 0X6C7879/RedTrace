@@ -9,6 +9,10 @@ export function foldedFactIds(graph: Graph) {
   return covered
 }
 export function nodeContent(node: GraphNode, detail: 'title' | 'summary' | 'doc' = 'title'): Record<string, unknown> & { id: string; kind: GraphNode['kind'] } {
+  if (node.kind === 'step' && detail === 'title') {
+    const { handoff, failure, ...index } = node
+    return { ...index, hasHandoff: !!handoff, hasFailure: !!failure }
+  }
   if (node.kind !== 'fact' && node.kind !== 'finding') return { ...node }
   const { description, ...rest } = node
   const index: Record<string, unknown> = { ...rest }

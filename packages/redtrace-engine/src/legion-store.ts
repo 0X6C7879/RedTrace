@@ -7,7 +7,7 @@ import type { LegionRole, Step, Goal } from './types.ts'
 export interface CommandCursor { delivered: number; acknowledged: number }
 export interface Campaign {
   projectId: string; sessionId: string; status: 'idle' | 'running' | 'stopped'; state: string
-  hasSession?: boolean; workerName?: string; usage?: {inputTokens:number;outputTokens:number;cacheReadTokens:number;cacheWriteTokens:number}; error?: string; endgame?: string; startedAt?: number; deadline?: number; pendingTools?: string[]; nextWorker?: string; previousSessionId?: string
+  nextInspectionAt?: number; restarts?: number; failureCode?: string; nativeCompactionSummary?: string; hasSession?: boolean; workerName?: string; usage?: {inputTokens:number;outputTokens:number;cacheReadTokens:number;cacheWriteTokens:number}; error?: string; endgame?: string; startedAt?: number; deadline?: number; pendingTools?: string[]; nextWorker?: string; previousSessionId?: string
   cursors: Record<string, CommandCursor>
 }
 export interface SpawnMission {
@@ -61,12 +61,17 @@ export class LegionStore {
     if(!Number.isFinite(deadline)||deadline<=Date.now())throw new HttpError(422,'Deadline must be a future epoch in milliseconds')
     const c=this.campaign(projectId);c.startedAt=Date.now();c.deadline=deadline;this.saveCampaign(c);this.store.changes.emit('legion-budget',c.projectId);return this.budget(Date.now(),c.projectId)
   }
-  classify(projectId:string,taskKey:string,difficulty:'easy'|'medium'|'hard'|'unclear',factIds:string[]) {
+  classify(projectId:string,taskKey:string,difficulty:'easy'|'medium'|'hard'|'unclear',factIds:string[],family?:string,sourceTaskKey?:string) {
     this.active(projectId);requiredText(taskKey,'taskKey')
     if(!['easy','medium','hard','unclear'].includes(difficulty)||!factIds.length)throw new HttpError(422,'Classification requires a verdict and confirmed target evidence')
-    for(const id of factIds){const fact=this.store.node(projectId,id,'fact');if(id==='origin'||!('stepId'in fact)||!fact.stepId||this.store.node<Step>(projectId,fact.stepId,'step').taskKey!==taskKey||this.store.node<Step>(projectId,fact.stepId,'step').role!=='scout'||this.store.node<Step>(projectId,fact.stepId,'step').status!=='done')throw new HttpError(422,'Classification evidence must come from this completed Scout task')}
+    const source=sourceTaskKey?this.tactics(projectId).find(t=>t.taskKey===sourceTaskKey):undefined
+    if(sourceTaskKey&&(!family||sourceTaskKey===taskKey||source?.classification?.family!==family||!source.classification.difficulty||source.classification.difficulty==='unclear'))throw new HttpError(422,'Scout reuse requires a classified sibling with the same explicit family')
+    for(const id of factIds){const fact=this.store.node(projectId,id,'fact');if(id==='origin'||!('stepId'in fact)||!fact.stepId||this.store.node<Step>(projectId,fact.stepId,'step').taskKey!==(sourceTaskKey??taskKey)||!sourceTaskKey&&this.store.node<Step>(projectId,fact.stepId,'step').role!=='scout'||this.store.node<Step>(projectId,fact.stepId,'step').status!=='done')throw new HttpError(422,'Classification evidence must come from this completed Scout task')}
     const row=this.store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(projectId,taskKey)
-    const data={...(row?JSON.parse(String(row.data)):{}),difficulty,factIds,classifiedAt:now()};this.store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?) ON CONFLICT(project_id,task_key) DO UPDATE SET data=excluded.data').run(projectId,taskKey,JSON.stringify(data));this.store.event(projectId,'legion.classified',null,{taskKey,difficulty});return data
+    const graph=sourceTaskKey?this.store.projectGraphs(projectId).find(g=>g.taskKey===taskKey):undefined
+    if(sourceTaskKey&&!graph)throw new HttpError(422,'Initialize the target task Graph before Scout reuse')
+    const hint=graph?this.store.forGraph(projectId,graph.id).addInput(projectId,'hint','[Family Scout reuse] '+family+'; sibling='+sourceTaskKey+'; source Facts='+factIds.join(',')+'. UNVERIFIED IN THIS TARGET: read the sibling evidence, verify target product/version and family differences before exploiting.','commander'):undefined
+    const data={...(row?JSON.parse(String(row.data)):{}),difficulty,factIds:sourceTaskKey?[]:factIds,...(family?{family}:{}),...(sourceTaskKey?{sourceTaskKey,sourceFactIds:factIds,hintId:hint!.id}:{}),classifiedAt:now()};this.store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?) ON CONFLICT(project_id,task_key) DO UPDATE SET data=excluded.data').run(projectId,taskKey,JSON.stringify(data));this.store.event(projectId,'legion.classified',null,{taskKey,difficulty});return data
   }
   tactics(projectId:string,at=Date.now()) {
     const tasks=new Set([...this.store.projectGraphs(projectId).filter(g=>g.taskKey).map(g=>g.taskKey!),...this.store.nodes<Step>(projectId,['step']).filter(s=>!s.deleted).map(s=>s.taskKey??s.goalId)])
@@ -81,26 +86,22 @@ export class LegionStore {
       const graph=this.store.projectGraphs(projectId).find(g=>g.taskKey===taskKey),lastEvidenceAt=evidence.get(graph?.id??steps[0]?.graphId??'')
       const running=taskRuns.filter(r=>r.status==='running'),stalledMinutes=running.length?Math.max(0,(at-Math.max(Math.min(...taskRuns.map(r=>Date.parse(r.startedAt))),Date.parse(lastEvidenceAt??'1970-01-01'),Date.parse(activeAt)))/60000):0
       const achieved=graph&&this.store.node<Goal>(projectId,graph.goalId,'goal').status==='achieved'
-      const hasGeneral=steps.some(s=>s.role==='general')
+      const live=steps.filter(s=>['pending','running','paused'].includes(s.status)),general=live.find(s=>s.role==='general'),hasGeneral=!!general
+      const generalRuns=taskRuns.filter(r=>r.stepId===general?.id),generalMinutes=generalRuns.length?(at-Math.min(...generalRuns.map(r=>Date.parse(r.startedAt))))/60000:0
       const needsScout=!classification?.difficulty||classification.difficulty==='unclear'
-      const recommendation=achieved?'achieved':steps.some(s=>s.status==='parked')?'parked':needsScout?running.length&&stalledMinutes>=10?'second-angle':running.length&&stalledMinutes>=5?'tactical':'scout':classification.difficulty==='hard'&&!hasGeneral?'general':!running.length?'dispatch':stalledMinutes>=45?'park':hasGeneral?'working':stalledMinutes>=20?'general':stalledMinutes>=10?'second-angle':stalledMinutes>=5?'tactical':'working'
-      return{taskKey,elapsedMs,stalledMinutes,lastEvidenceAt,classification,recommendation:this.store.project(projectId).mode==='general'?(steps.some(s=>s.status==='parked')?'parked':'autonomous'):recommendation,stepIds:steps.map(s=>s.id),facts:steps.flatMap(s=>s.factIds),generals:steps.filter(s=>s.role==='general').length}
+      const recommendation=achieved?'achieved':steps.some(s=>s.status==='parked')?'parked':needsScout?running.length&&stalledMinutes>=10?'second-angle':running.length&&stalledMinutes>=5?'tactical':'scout':classification.difficulty==='hard'&&!hasGeneral?'general':!running.length?'dispatch':hasGeneral&&stalledMinutes>=30&&(generalMinutes>=25||stalledMinutes>=45)?'park':hasGeneral?'working':stalledMinutes>=20?'general':stalledMinutes>=10?'second-angle':stalledMinutes>=5?'tactical':'working'
+      return{taskKey,elapsedMs,stalledMinutes,lastEvidenceAt,classification,recommendation:this.store.project(projectId).mode==='general'?(steps.some(s=>s.status==='parked')?'parked':'autonomous'):recommendation,stepIds:steps.map(s=>s.id),facts:steps.flatMap(s=>s.factIds),generals:live.filter(s=>s.role==='general').length}
     })
   }
-  watchdog(projectId:string) {
-    if(this.store.project(projectId).mode!=='benchmark')return
-    for(const task of this.tactics(projectId)) {
-      if(!['tactical','second-angle','general','park'].includes(task.recommendation))continue
-      this.store.transaction(()=>{
-        const row=this.store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(projectId,task.taskKey)
-        const data=row?JSON.parse(String(row.data)):{}
-        const notice=task.recommendation+':'+(task.lastEvidenceAt??'none')
-        if(data.watchdogNotice===notice)return
-        data.watchdogNotice=notice
-        this.store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?) ON CONFLICT(project_id,task_key) DO UPDATE SET data=excluded.data').run(projectId,task.taskKey,JSON.stringify(data))
-        this.store.event(projectId,'legion.watchdog',null,{taskKey:task.taskKey,recommendation:task.recommendation,stalledMinutes:task.stalledMinutes})
-      })
-    }
+  /** Refresh durable handover data without replacing Commander-authored notes or copying FGS. */
+  checkpointState(projectId:string,reason:string) {
+    const c=this.campaign(projectId)
+    let notes=c.state
+    if(notes.startsWith('{')){try{const saved=JSON.parse(notes);if(saved.source==='commander-checkpoint')notes=saved.notes}catch{ /* Commander STATE may be plain text. */ }}
+    const board=new LegionStore(this.store,projectId).boardSummary()
+    c.state=JSON.stringify({source:'commander-checkpoint',reason,notes,cursors:c.cursors,board:board.lines,allocation:this.store.nodes<Step>(projectId,['step']).filter(s=>!s.deleted).map(s=>({stepId:s.id,taskKey:s.taskKey,role:s.role,status:s.status,worker:s.worker,nextWorker:s.nextWorker,parkReason:s.parkReason,resumeCondition:s.resumeCondition,handoff:s.handoff,failure:s.failure})),tasks:this.tactics(projectId),graphs:this.store.projectGraphs(projectId).map(g=>({id:g.id,taskKey:g.taskKey,originId:g.originId,goalId:g.goalId}))})
+    this.saveCampaign(c)
+    return c.state
   }
   assertInstanceClose(projectId:string,taskKey:string,exceptRun?:string) {
     this.store.project(projectId);const ids=new Set(this.steps(projectId,taskKey).map(s=>s.id))
@@ -115,9 +116,40 @@ export class LegionStore {
     const store = this.store
     return { campaign: this.projectId || store.projects().length===1 ? { ...this.campaign(), ...this.budget() } : null, messages:this.store.db.prepare('SELECT data FROM legion_messages'+(this.projectId?' WHERE project_id=?':'')+' ORDER BY created_at DESC LIMIT 100').all(...(this.projectId?[this.projectId]:[])).map(r=>JSON.parse(String(r.data))), projects: store.projects().map(p => ({ id:p.id,title:p.title,mode:p.mode,objective:p.objective,status:p.status,revision:p.revision,campaign:this.campaign(p.id),graphs:store.projectGraphs(p.id),decisions:store.db.prepare("SELECT e.id,e.type,e.node_id,e.graph_id,e.created_at,json_extract(n.data,'$.description') AS description FROM events e LEFT JOIN nodes n ON n.project_id=e.project_id AND n.id=e.node_id WHERE e.project_id=? AND (e.type LIKE 'legion.%' OR e.type IN ('step.added','step.parked','step.reactivated','step.handoff_requested','step.handoff_ready','goal.updated','execute.started')) ORDER BY e.id DESC LIMIT 20").all(p.id).map(e=>({id:Number(e.id),type:String(e.type),nodeId:e.node_id,graphId:e.graph_id,createdAt:String(e.created_at),description:e.description})),runs:(['running','paused','unknown'] as const).flatMap(status=>store.runsByStatus(status,p.id)).map(r=>({id:r.id,graphId:r.graphId,stepId:r.stepId,status:r.status,worker:r.worker,provider:r.provider,model:r.model,contextPressure:r.contextPressure,inputTokens:r.inputTokens,outputTokens:r.outputTokens,cacheReadTokens:r.cacheReadTokens,cacheWriteTokens:r.cacheWriteTokens,pendingTools:r.pendingTools.length})),tactics:this.tactics(p.id),instances:p.benchmarkHosts??{},platform:Object.fromEntries(this.store.db.prepare('SELECT task_key,data FROM legion_tasks WHERE project_id=?').all(p.id).map(r=>{const d=JSON.parse(String(r.data));return[String(r.task_key),{confirmed:d.platformCompleted===true,submitted:!!d.submissionAttemptedAt,accepted:d.submissionAccepted===true}]})),scopeId:'origin', goals:store.nodes<Goal>(p.id,['goal']).map(g=>({id:g.id,graphId:g.graphId,description:g.description,status:g.status,version:g.version,evidenceIds:g.evidenceIds})), steps:store.nodes<Step>(p.id,['step']).map(s=>({id:s.id,graphId:s.graphId,description:s.description,taskKey:s.taskKey,role:s.role,status:s.status,parentStepId:s.parentStepId,parkReason:s.parkReason,resumeCondition:s.resumeCondition,handoffPending:s.handoffPending,predecessorRunId:s.predecessorRunId,goalId:s.goalId,factIds:s.factIds,initialMission:s.bootstrap})) })) }
   }
-  boardSummary() {
+  inspectionDelay(projectId:string) {
+    return this.tactics(projectId).some(task=>!['achieved','parked'].includes(task.recommendation))?60_000:90_000
+  }
+  /** All task outcomes, not a Commander Goal mutation, decide the campaign result. */
+  completeBenchmark(projectId:string) {
+    if(this.store.project(projectId).mode!=='benchmark'||this.store.project(projectId).status!=='active')return false
+    const graphs=this.store.projectGraphs(projectId).filter(g=>g.type==='benchmark_task')
+    const records=new Map<string,any>(this.store.db.prepare('SELECT task_key,data FROM legion_tasks WHERE project_id=?').all(projectId).map(r=>[String(r.task_key),JSON.parse(String(r.data))]))
+    const keys=new Set([...graphs.map(g=>g.taskKey!),...[...records].filter(([,v])=>v.eligible!==false).map(([key])=>key)])
+    if(!keys.size||[...keys].some(key=>{
+      const record=records.get(key),graph=graphs.find(g=>g.taskKey===key)
+      return record?.platformCompleted!==true&&(!graph||record?.platformCompleted===false||this.store.node<Goal>(projectId,graph.goalId,'goal').status!=='achieved')
+    }))return false
+    this.store.transaction(()=>{
+      this.checkpointState(projectId,'all-tasks-completed')
+      const p=this.store.project(projectId);p.status='completed';this.store.db.prepare('UPDATE projects SET data=? WHERE id=?').run(JSON.stringify(p),projectId)
+      const c=this.campaign(projectId);c.status='stopped';c.endgame='all tasks completed';delete c.nextInspectionAt;this.saveCampaign(c)
+      this.store.event(projectId,'project.completed',null,{reason:'all Benchmark tasks completed'})
+    })
+    return true
+  }
+  /** Scheduling metadata only: no FGS node bodies enter Commander context. */
+  readCommandChanges(projectId:string,after?:number,limit=100) {
+    return this.store.transaction(()=>{
+      const c=this.campaign(projectId),cursor=c.cursors[projectId]??{delivered:0,acknowledged:0},start=after??cursor.acknowledged
+      if(!Number.isSafeInteger(start)||start<0||start>cursor.delivered)throw new HttpError(422,'Cannot skip undelivered project events')
+      const events=this.store.events(projectId,start,limit),through=events.at(-1)?.id??start,graphs=this.store.projectGraphs(projectId)
+      cursor.delivered=Math.max(cursor.delivered,through);c.cursors[projectId]=cursor;this.saveCampaign(c)
+      return{events:events.map(e=>({id:e.id,type:e.type,taskKey:graphs.find(g=>g.id===e.graphId)?.taskKey??(e.payload as Record<string,unknown>).taskKey??null,createdAt:e.createdAt})),cursor:through,hasMore:this.store.events(projectId,through,1).length>0}
+    })
+  }
+  boardSummary(taskKey?:string) {
     const id=this.owner(),project=this.store.project(id),campaign=this.campaign(id),budget=this.budget(Date.now(),id)
-    const graphs=this.store.projectGraphs(id).filter(g=>project.mode==='general'||g.type==='benchmark_task')
+    const graphs=this.store.projectGraphs(id).filter(g=>(project.mode==='general'||g.type==='benchmark_task')&&(!taskKey||g.taskKey===taskKey))
     const steps=this.store.nodes<Step>(id,['step']).filter(s=>!s.deleted),runs=this.store.runs(id).filter(r=>['running','paused','unknown'].includes(r.status))
     const goals=this.store.nodes<Goal>(id,['goal']),tactics=this.tactics(id)
     const messages=this.messages(id,'commander').filter(m=>m.status!=='admitted').sort((a,b)=>(a.type==='HELP'?0:1)-(b.type==='HELP'?0:1))
@@ -129,7 +161,7 @@ export class LegionStore {
       return{g,own,live,goal,tactic,priority}
     }).sort((a,b)=>a.priority-b.priority||a.g.taskKey!.localeCompare(b.g.taskKey!))
     const capacity=Math.max(0,99-lines.length)
-    for(const task of tasks.slice(0,capacity))lines.push(`${task.g.taskKey} graph=${task.g.id} origin=${task.g.originId} goal=${task.g.goalId} ${task.goal?.status==='achieved'?'goal-achieved':task.own.some(s=>s.status==='parked')?'parked':task.live.length?'active':'pending'} submitted=${!!task.tactic?.classification?.submissionAttemptedAt} platform=${task.tactic?.classification?.platformCompleted===true?'confirmed':'unconfirmed'}; runs=${task.live.map(r=>r.id+':'+r.status).join(',')||'-'}; evidence=${task.tactic?.lastEvidenceAt??'-'}; next=${task.tactic?.recommendation??'scout'}`)
+    for(const task of tasks.slice(0,capacity))lines.push(`${task.g.taskKey} ${project.mode==='general'?'graph='+task.g.id+' origin='+task.g.originId+' goal='+task.g.goalId+' ':''}${task.goal?.status==='achieved'?'goal-achieved':task.own.some(s=>s.status==='parked')?'parked':task.live.length?'active':'pending'} submitted=${!!task.tactic?.classification?.submissionAttemptedAt} platform=${task.tactic?.classification?.platformCompleted===true?'confirmed':'unconfirmed'}; runs=${task.live.map(r=>r.id+':'+r.status).join(',')||'-'}; difficulty=${task.tactic?.classification?.difficulty??'unknown'} family=${task.tactic?.classification?.family??'-'}; workers=${task.own.filter(s=>!['done','cancelled'].includes(s.status)).map(s=>s.id+':'+s.role+':'+s.status+':'+s.description.slice(0,100)).join('|')||'-'}; stalled=${Math.floor(task.tactic?.stalledMinutes??0)}m; evidence=${task.tactic?.lastEvidenceAt??'-'}; next=${task.tactic?.recommendation??'scout'}`)
     if(tasks.length>capacity)lines.push(`omitted=${tasks.length-capacity}; query a task Graph on demand`)
     return{projectId:id,sessionId:campaign.sessionId,cursors:campaign.cursors,budget,lines:lines.slice(0,100)}
   }
@@ -153,7 +185,7 @@ export class LegionStore {
       return { ...result, acknowledgementBoundary: { ...cursor } }
     })
   }
-  finishCommand(processed: Record<string, number>, state: string, release = true, projectId?:string) {
+  finishCommand(processed: Record<string, number>, state: string | undefined, release = true, projectId?:string) {
     return this.store.transaction(() => {
       const campaign = this.campaign()
       if (campaign.status !== 'running') throw new HttpError(409, 'Commander is not running')
@@ -164,7 +196,7 @@ export class LegionStore {
         if (!cursor || !Number.isSafeInteger(through) || through < cursor.acknowledged || through > cursor.delivered) throw new HttpError(422, 'Acknowledgement exceeds delivered project events')
         cursor.acknowledged = through
       }
-      campaign.state = requiredText(state, 'state'); campaign.status = release ? 'idle' : 'running'; this.saveCampaign(campaign)
+      if(state!==undefined)campaign.state = requiredText(state, 'state'); campaign.status = release ? 'idle' : 'running'; this.saveCampaign(campaign)
       return campaign
     })
   }
@@ -186,14 +218,14 @@ export class LegionStore {
         const active=this.steps(projectId,mission.taskKey).filter(s=>['pending','running','paused'].includes(s.status))
         if(active.some(s=>s.role===mission.role&&s.description===mission.description))throw new HttpError(409,'Assign a different angle from the active Worker')
         if(mission.role==='scout'){
-          if(active.some(s=>s.role==='scout')&&task?.recommendation!=='second-angle')throw new HttpError(409,'Scout already active; add another only after no-progress review')
+          if(active.filter(s=>s.role==='scout').length>=2||active.some(s=>s.role==='scout')&&task?.recommendation!=='second-angle')throw new HttpError(409,'Scout already active; add another only after no-progress review')
         }else{
           const difficulty=task?.classification?.difficulty
           if(!difficulty||difficulty==='unclear')throw new HttpError(409,'Record a clear completed Scout classification before funding execution')
           if(mission.role==='soldier'){
             if(difficulty==='hard'&&!active.some(s=>s.role==='general'))throw new HttpError(409,'Hard verdict requires a General first')
             if(active.some(s=>s.role==='general'))throw new HttpError(409,'General owns its same-task specialist squads')
-            if(active.some(s=>s.role==='soldier')&&task?.recommendation!=='second-angle')throw new HttpError(409,'Another Soldier requires a second-angle no-progress review')
+            if(active.filter(s=>s.role==='soldier').length>=2||active.some(s=>s.role==='soldier')&&task?.recommendation!=='second-angle')throw new HttpError(409,'Another Soldier requires a second-angle no-progress review')
           }
           if(mission.role==='general'&&difficulty!=='hard'&&task?.recommendation!=='general')throw new HttpError(409,'General requires hard verdict or evidence-based escalation')
           if(mission.role==='general'&&active.some(s=>s.role==='general'))throw new HttpError(409,'General already active on this task')

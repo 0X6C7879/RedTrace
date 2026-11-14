@@ -17,7 +17,6 @@ import { knowledgeTools } from './knowledge.ts'
 import { httpTools } from './http-tools.ts'
 import { Check } from 'typebox/value'
 import { HttpError } from './types.ts'
-import { evidenceChangeSchema, goalUpdateSchema, stepUpdateSchema } from './graph-contracts.ts'
 import { nodeContent } from './graph-content.ts'
 import { reporterTools } from './reporter.ts'
 
@@ -57,7 +56,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   const reporting = step?.role === 'reporter'
   const tools: AgentTool[] = [readGraph, ...(!reporting && step?.role ? legionTools(store, run.id, run.projectId, maxSteps(), finish, config) : [])]
   tools.push(tool('project_evidence_read', 'Read hash-verified Project evidence independently of the producer Run or Session. Artifact IDs are Project-scoped. Binary pages return encoding=base64; decode content accordingly.', Type.Object({ artifact_id: Type.String({ pattern: '^artifact-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), args => new ProjectEvidence(store, config.workspaceRoot).read(run.projectId, args.artifact_id, args.offset, args.length)))
-  tools.push(tool('read_graph_delta', 'Read a bounded page of change metadata and current surviving nodes. Merged/deleted IDs have no historical body. Continue with cursor until hasMore is false. Reading does not acknowledge processing.', Type.Object({ after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), args => ({ ...store.graphDelta(run.projectId, args.after ?? store.run(run.id).deliveredGraphCursor ?? 0, args.limit ?? 100, run.id), planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id) })))
+  tools.push(tool('read_graph_delta', 'Read a bounded page of change metadata and current node titles. Historical Facts remain readable by ID. Continue with cursor until hasMore is false. Reading does not acknowledge processing.', Type.Object({ after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), args => ({ ...store.graphDelta(run.projectId, args.after ?? store.run(run.id).deliveredGraphCursor ?? 0, args.limit ?? 100, run.id), planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id) })))
   tools.push({ name: 'evidence_read', label: 'evidence_read', description: 'Read at most 7.6 KiB from a large tool result by byte offset, 1-based line, or keyword. Artifacts are scoped to this Project; pass run_id for another producer Run; request the next bounded slice when needed.', parameters: Type.Object({ run_id: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })), id: Type.String({ pattern: '^ev-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), line: Type.Optional(Type.Integer({ minimum: 1 })), query: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), executionMode: 'sequential', execute: async (_toolId: string, args: { run_id?: string; id: string; offset?: number; line?: number; query?: string; length?: number }) => {
     if (!/^ev-[a-f0-9]{64}$/.test(args.id) || [args.offset, args.line, args.query].filter(value => value !== undefined).length > 1) throw new Error('Provide a valid evidence ID and only one read selector')
     const producer = store.run(args.run_id ?? run.id)
@@ -93,7 +92,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     tools.push(tool('sync_step', 'Adopt the latest Step contract at a safe boundary. Read current planVersion first. Returns goals and active dependencies. Old call trees remain blocked; generate your next action from this contract.', Type.Object({ planVersion: Type.Integer({ minimum: 1 }) }), args => store.syncStep(run.id, args.planVersion)))
     tools.push(...httpTools(context))
     const benchmarkOrigin = store.scopeFact(run.projectId).description
-    const benchmarkSkill = installRoot ? path.join(installRoot, '.redtrace', 'skills', 'tsecbench-api') : ''
+    const benchmarkSkill = installRoot ? path.join(installRoot, 'skills', 'tsecbench-api') : ''
     if (/(?:tsecbench|tsec[\s-]*benchmark)/i.test(benchmarkOrigin) && existsSync(path.join(benchmarkSkill, 'SKILL.md')) && existsSync(path.join(benchmarkSkill, 'scripts', 'tsecbench.py'))) {
       tools.push(
         tool('tsecbench_list', 'Read challenge descriptions, progress and container state; no lifecycle operation.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['list'], abort)),
@@ -113,9 +112,10 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
       tool('submit_finding', 'ARTEX report_finding: register only a vulnerability actually triggered and verified in this target, never version/CVE matches or guesses. title=name, type=vulnclass, description=summary; severity and affected assetIds plus supporting factIds. A separate Reporter Session writes the report; do not write it during Explore. New Findings reach Commander through FGS deltas.', Type.Object({ title: Type.String(), description: Type.String(), type: Type.String(), severity: Type.Union(['critical','high','medium','low'].map(v => Type.Literal(v))), assetIds: Type.Array(Type.String()), factIds: refs }), args => store.addFinding(run.projectId, { ...args, creator: worker.name, runId: run.id })),
       tool('finish_step', step?.bootstrap
         ? 'Finish this Soldier initial Mission only after publishing a confirmed Fact; Commander owns Goal acceptance.'
-        : 'Finish this Step only after explicitly submitting at least one confirmed, evidence-backed Fact. Consolidate the result, including verified failures or blockers, then call finish_step; a text summary alone does not complete the Step.', Type.Object({ summary: Type.String() }), args => {
+        : 'Finish this Step only after explicitly submitting at least one confirmed, evidence-backed Fact. Consolidate the result, including verified failures or blockers, then call finish_step; a text summary alone does not complete the Step.', Type.Object({ summary: Type.String(),...(store.project(run.projectId).mode==='benchmark'&&step?.role==='scout'?{difficulty:Type.Union(['easy','medium','hard','unclear'].map(v=>Type.Literal(v))),family:Type.Optional(Type.String({minLength:1}))}:{}) }), args => {
           const current = store.node<Step>(run.projectId, run.stepId!, 'step')
           if (!current.factIds.length) throw new Error('Legion Worker must submit at least one Fact before finishing')
+          if(store.project(run.projectId).mode==='benchmark'&&current.role==='scout'){current.scoutVerdict={difficulty:args.difficulty as 'easy'|'medium'|'hard'|'unclear',...(args.family?{family:args.family as string}:{})};store.saveNode(current)}
           store.runEvent(run.id, 'step.summary', json(args)); finish(); return { saved: true }
         }, true),
     )

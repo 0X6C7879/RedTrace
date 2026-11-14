@@ -209,7 +209,7 @@ const MANAGED: readonly ManagedEntry[] = [
     id: 'redtrace-spill', label: '大结果落盘', category: 'feature',
     modulePath: 'vendor/deepseek-harness/packages/spill/spill-policy/lib/index.js',
     description: '超大工具结果落盘预览',
-    intro: 'DSH 原生 Spill:仅 Explore / Bootstrap 的工具结果按官方 12500 token 预算保留头尾预览,完整输出写入会话文件并附原生取回指引。Reason 不挂载 Spill,文件默认完整读取。',
+    intro: 'General / Soldier / Scout 使用 DSH 原生 Spill：先保存原文，仅折叠连续完全相同的行并标注次数；不改 Payload、错误或独有线索。保留 12500 token 预算与原文回读指引，读取原文不再次去重。Commander 不挂载执行工具。',
   },
   {
     id: 'redtrace-tool-timeout', label: '工具超时', category: 'feature',

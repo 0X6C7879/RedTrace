@@ -201,7 +201,6 @@ export function knowledgeTools(_evidenceRoot: string, context: TaskContext): Age
   const resources = [
     directory('project-skills', 'REDTRACE_SKILLS_DIR', ['skills']),
     directory('agent-skills', 'REDTRACE_AGENT_SKILLS_DIR', ['.agents/skills']),
-    directory('private-skills', 'REDTRACE_PRIVATE_SKILLS_DIR', ['.redtrace/skills']),
     directory('vulhub', 'REDTRACE_VULHUB_DIR', ['tools/poc/vulhub', 'tools/vulhub', 'tools/poc/Vulhub']),
     directory('vulhub-skills', 'REDTRACE_VULHUB_SKILLS_DIR', ['tools/poc/vulhub/.claude/skills']),
     directory('payloads-all-the-things', 'REDTRACE_PAYLOADS_DIR', ['tools/payloads/PayloadsAllTheThings', 'tools/payloads/payloads-all-the-things'], 'PayloadsAllTheThings'),

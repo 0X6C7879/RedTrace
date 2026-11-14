@@ -37,7 +37,7 @@ test('same model rotates across providers, deduplicates entries and keeps single
 })
 
 test('eligible failures switch before content, retaining billable usage and actual route audit', async () => {
-  for (const [code, status] of [['AUTH', 401], ['QUOTA_EXCEEDED', 402], ['AUTH', 403], ['PI_AI_ERROR', 404], ['TIMEOUT', 408], ['RATE_LIMIT', 429], ['SERVER', 503], ['TRANSPORT', undefined], ['MISSING_CREDENTIAL', undefined], ['EMPTY_RESPONSE', undefined]] as const) {
+  for (const [code, status] of [['AUTH', 401], ['QUOTA_EXCEEDED', 402], ['AUTH', 403], ['PI_AI_ERROR', 404], ['TIMEOUT', 408], ['SERVER', 503], ['TRANSPORT', undefined], ['MISSING_CREDENTIAL', undefined], ['EMPTY_RESPONSE', undefined]] as const) {
     const f = fixture({ a: [{ type: 'usage', usage: { inputTokens: 2, outputTokens: 0, totalTokens: 2 } }, finish(code, status)], b: [success[0], { type: 'usage', usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 } }, success[1]] })
     const result = await collect(f.llm.stream(request({ sessionId: 'fixture' })))
     assert.deepEqual(f.calls.map(c => c.provider), ['a', 'b'])
@@ -49,7 +49,7 @@ test('eligible failures switch before content, retaining billable usage and actu
 })
 
 test('request errors, cancellation, partial text/reasoning/tools and plugin throws never replay', async () => {
-  for (const [code, status] of [['INVALID_REQUEST', 400], ['INVALID_REQUEST', 413], ['CONTEXT_WINDOW_EXCEEDED', undefined], ['UNSUPPORTED_CONTENT', undefined], ['ABORTED', undefined]] as const) {
+  for (const [code, status] of [['RATE_LIMIT', 429], ['INVALID_REQUEST', 400], ['INVALID_REQUEST', 413], ['CONTEXT_WINDOW_EXCEEDED', undefined], ['UNSUPPORTED_CONTENT', undefined], ['ABORTED', undefined]] as const) {
     const f = fixture({ a: [finish(code, status)] })
     await collect(f.llm.stream(request()))
     assert.equal(f.calls.length, 1)

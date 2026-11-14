@@ -28,3 +28,20 @@ console.log(JSON.stringify({jsonrpc:'2.0',id:q.id,result}));});`)
     assert.throws(() => process.kill(pid, 0), (error: any) => error.code === 'ESRCH')
   } finally { await ctx.fiber.dispose(); rmSync(root, { recursive: true, force: true }) }
 })
+
+
+test('console MCP status observes native Fiber state and a real disable unregisters its tools',async()=>{
+  const root=mkdtempSync(path.join(os.tmpdir(),'redtrace-console-mcp-')),file=path.join(root,'server.mjs')
+  writeFileSync(file, "import {createInterface} from 'node:readline';createInterface({input:process.stdin}).on('line',line=>{const q=JSON.parse(line);if(q.id===undefined)return;const result=q.method==='initialize'?{protocolVersion:q.params.protocolVersion,capabilities:{tools:{}},serverInfo:{name:'fixture',version:'1'}}:q.method==='tools/list'?{tools:[{name:'echo',inputSchema:{type:'object',properties:{}}}]}:{};console.log(JSON.stringify({jsonrpc:'2.0',id:q.id,result}))});")
+  const {Context}=await load('vendor/deepseek-harness/vendor/cordis/lib/index.js'),ctx=new Context()
+  try{
+    for(const module of ['vendor/deepseek-harness/packages/session/session-projection/lib/index.js','vendor/deepseek-harness/packages/subprocess/subprocess-local/lib/index.js','packages/redtrace-dsh/lib/core.js'])await mount(ctx,module)
+    const domain=await mount(ctx,'packages/redtrace-dsh/lib/domain.js',{server:'http://127.0.0.1',root,sessionRoot:root+'/sessions',skillsDir:root+'/skills',workspacesDir:root+'/workspaces',mcpConfigs:[{serverName:'console',transport:'stdio',command:process.execPath,args:[file],failOnStartupError:true}]})
+    const {state}=await load('packages/redtrace-dsh/lib/state.js')
+    assert.equal(state().mcpStatuses()[0].state,'connected');assert.equal(state().mcpStatuses()[0].toolCount,1)
+    assert.ok(ctx.get('tools').get('mcp__console__echo'))
+    await state().remountMcp([])
+    assert.deepEqual(state().mcpStatuses(),[]);assert.equal(ctx.get('tools').get('mcp__console__echo'),undefined)
+    await domain.dispose()
+  }finally{await ctx.fiber.dispose();rmSync(root,{recursive:true,force:true})}
+})

@@ -32,14 +32,12 @@ test('Watchdog escalates only after confirmed evidence stops advancing', t => {
   const run=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},step.id)
   run.startedAt=new Date(Date.now()-25*60000).toISOString();store.saveRun(run)
   assert.equal(legion.tactics(p.id)[0].recommendation,'general')
-  legion.watchdog(p.id);legion.watchdog(p.id)
-  assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM events WHERE type='legion.watchdog'").get()!.n,1)
+  assert.equal(typeof (legion as any).watchdog,'undefined','Watchdog must not own strategy')
   store.setStatus(p.id,'stopped');store.setStatus(p.id,'active')
   assert.equal(legion.tactics(p.id)[0].recommendation,'working','paused project time must not count as evidence stagnation')
   store.forGraph(p.id,graph.id).addFact(p.id,'new evidence',{evidence:[{description:'verified fixture'}]})
   assert.equal(legion.tactics(p.id)[0].recommendation,'working')
-  legion.watchdog(p.id)
-  assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM events WHERE type='legion.watchdog'").get()!.n,1)
+
 })
 
 test('Manual Benchmark adapter needs neither instance nor submission API', async t => {
@@ -54,7 +52,7 @@ test('Manual Benchmark adapter needs neither instance nor submission API', async
 
 test('TPCTF adapter discovers scored tasks through its existing CLI without taking instance ownership', async () => {
   const work=mkdtempSync(path.join(os.tmpdir(),'redtrace-tpctf-adapter-'))
-  const script=path.join(work,'.redtrace/skills/tpctf-api/scripts/tpctf.py')
+  const script=path.join(work,'skills/tpctf-api/scripts/tpctf.py')
   mkdirSync(path.dirname(script),{recursive:true})
   writeFileSync(script,'import json\nprint(json.dumps({"items":[{"id":"challenge-1","title":"Fixture","scoring":"scored","my_team_fully_solved":False}]}))\n')
   const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'fixture',origin:'TPCTF authorized fixture',goal:'verify'}).project
@@ -82,4 +80,87 @@ test('TodoList survives database reopen and static UI follows source code, not d
     try { const response=await fetch('http://127.0.0.1:'+(engine.server.address() as any).port+'/');assert.equal(response.status,200);assert.match(await response.text(),/内部目标达成/) }
     finally { await engine.close() }
   } finally { rmSync(work,{recursive:true,force:true}) }
+})
+
+
+test('escalation uses evidence age, gives a General mid-chain time, and never duplicates a second angle', t => {
+  const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'ladder',origin:'local',goal:'verify'}).project,legion=new LegionStore(store,p.id)
+  t.after(()=>store.close())
+  const graph=store.createGraph(p.id,{taskKey:'T',title:'fixture',origin:'local',goal:'verify'})
+  store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?)').run(p.id,'T',JSON.stringify({difficulty:'medium'}))
+  const mission={role:'soldier' as const,taskKey:'T',description:'first angle',sourceIds:[graph.originId]},first=legion.spawn(p.id,mission),run=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},first.id),at=Date.now()
+  const age=(minutes:number)=>{run.startedAt=new Date(at-minutes*60000).toISOString();store.saveRun(run)}
+  for(const [minutes,recommendation] of [[6,'tactical'],[10,'second-angle'],[19,'second-angle'],[20,'general'],[29,'general']] as const){age(minutes);assert.equal(legion.tactics(p.id,at)[0].recommendation,recommendation)}
+  age(15);legion.spawn(p.id,{...mission,description:'second angle'})
+  assert.throws(()=>legion.spawn(p.id,{...mission,description:'third angle'}),/second-angle/)
+  age(30);const general=legion.spawn(p.id,{...mission,role:'general',description:'upgrade'}),g=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},general.id)
+  g.startedAt=new Date(at-10*60000).toISOString();store.saveRun(g)
+  assert.equal(legion.tactics(p.id,at)[0].recommendation,'working','a newly upgraded General is not parked at minute 30')
+  age(45);assert.equal(legion.tactics(p.id,at)[0].recommendation,'park')
+  store.forGraph(p.id,graph.id).addFact(p.id,'confirmed chain progress',{runId:g.id})
+  assert.equal(legion.tactics(p.id,at)[0].recommendation,'working')
+  legion.park(p.id,'T','blocked chain','new confirmed intel');store.finishRun(run.id,'cancelled');store.finishRun(g.id,'cancelled')
+  assert.equal(legion.reactivate(p.id,'T','new confirmed intel').length,3)
+})
+
+test('explicit family evidence skips only duplicate Scout and remains unverified in the new target', t => {
+  const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'family',origin:'manual local',goal:'verify'}).project,legion=new LegionStore(store,p.id)
+  t.after(()=>store.close())
+  const a=store.createGraph(p.id,{taskKey:'unrelated-name-a',title:'source',origin:'local',goal:'verify'}),b=store.createGraph(p.id,{taskKey:'unrelated-name-b',title:'target',origin:'local',goal:'verify'})
+  const scout=legion.spawn(p.id,{role:'scout',taskKey:a.taskKey!,description:'classify',sourceIds:[a.originId]}),run=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},scout.id),fact=store.forGraph(p.id,a.id).addFact(p.id,'verified product and version',{runId:run.id})
+  store.finishRun(run.id,'succeeded');legion.classify(p.id,a.taskKey!,'medium',[fact.id],'product-v1')
+  assert.throws(()=>legion.classify(p.id,b.taskKey!,'medium',[fact.id],'wrong-family',a.taskKey!),/same explicit family/)
+  const reused=legion.classify(p.id,b.taskKey!,'medium',[fact.id],'product-v1',a.taskKey!)
+  assert.deepEqual(reused.factIds,[]);assert.equal(store.forGraph(p.id,b.id).nodes(p.id,['fact']).length,1)
+  assert.match((store.node(p.id,reused.hintId,'hint') as any).content,/UNVERIFIED IN THIS TARGET/)
+  assert.equal(legion.spawn(p.id,{role:'soldier',taskKey:b.taskKey!,description:'read sibling, verify target differences',sourceIds:[b.originId]}).role,'soldier')
+  assert.equal(store.forGraph(p.id,b.id).nodes(p.id,['step']).filter((s:any)=>s.role==='scout').length,0)
+})
+
+test('80% context and major decisions checkpoint full STATE without recursive growth', async t => {
+  const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'STATE',origin:'local',goal:'verify'}).project,legion=new LegionStore(store,p.id)
+  t.after(()=>store.close());legion.claimCommand();legion.saveState(p.id,'commander','allocation; parked blocker; intel; queue; exact next move')
+  const graph=store.createGraph(p.id,{taskKey:'T',title:'fixture',origin:'local',goal:'verify'}),{legionTools}=await import('../src/legion-tools.ts')
+  const tool=legionTools(store,'commander',p.id,null,()=>{}).find(t=>t.name==='legion_spawn')!
+  await tool.execute('spawn',{role:'scout',taskKey:'T',mission:'classify'})
+  assert.equal(JSON.parse(legion.campaign().state).reason,'legion_spawn')
+  const {mountLegionContext}=await import(new URL('../compat/legion-context.mjs',import.meta.url).href),listeners=new Map<string,any[]>(),messages:string[]=[]
+  const scoped={on(name:string,fn:any){listeners.set(name,[...(listeners.get(name)??[]),fn])}},ctx={get(name:string){return name==='tokenMeter'?{measure(){return{totalTokens:80}}}:{resolveModelInfo(){return{context:{contextWindow:100}}}}}}
+  mountLegionContext(scoped,ctx,{store:store.forProject(p.id),legion,message:(s:string)=>s})
+  await listeners.get('agent/request')![0]({agent:{status:'running',inject:(m:string)=>messages.push(m)}},()=>{})
+  for(const f of listeners.get('session/event')!)await f({}, {type:'request/header',data:{header:{config:{}}}})
+  const state=JSON.parse(legion.campaign().state);assert.equal(state.reason,'context-80-percent');assert.match(state.notes,/exact next move/);assert.equal(state.tasks.length,1);assert.equal(messages.length,1)
+  legion.checkpointState(p.id,'repeat');assert.equal(JSON.parse(legion.campaign().state).notes,state.notes)
+  const waiting=await legionTools(store,'commander',p.id,null,()=>{}).find(t=>t.name==='legion_wait')!.execute('wait',{})
+  assert.equal((waiting.details as any).sleepSeconds,60)
+})
+
+test('Benchmark Worker mailbox still wakes immediately',async t=>{
+  const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'mailbox',origin:'local',goal:'verify'}).project,legion=new LegionStore(store,p.id)
+  t.after(()=>store.close());const{attachLegionMailbox}=await import(new URL('../compat/legion.mjs',import.meta.url).href)
+  let steers=0;const ctx={on(){return()=>{}}},agent={status:'idle',steer(){steers++},inject(){steers++}},message=(text:string,source:any)=>({text,source})
+  const g=store.createGraph(p.id,{taskKey:'T',title:'worker',origin:'local',goal:'verify'}),step=store.forGraph(p.id,g.id).addStep(p.id,{role:'soldier',taskKey:'T',description:'work',sourceIds:[g.originId]}),run=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},step.id)
+  const worker=attachLegionMailbox(ctx,legion,{projectId:p.id,actor:run.id,sessionId:run.id,agent,message});legion.message(p.id,'commander',run.id,'MESSAGE','act now');assert.equal(steers,1);worker()
+})
+
+test('Scheduler Watchdog resumes native Session at most three times and never replays unknown or permanent failures',async t=>{
+  const{Scheduler}=await import('../src/scheduler.ts'),store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'recovery',origin:'local',goal:'verify'}).project
+  t.after(()=>store.close());new LegionStore(store)
+  const g=store.createGraph(p.id,{taskKey:'T',title:'fixture',origin:'local',goal:'verify'}),step=store.forGraph(p.id,g.id).addStep(p.id,{role:'soldier',taskKey:'T',description:'native work',sourceIds:[g.originId]})
+  let attempts=0;const ids:string[]=[]
+  const scheduler=new Scheduler(store,{workers:[{name:'fixture',backend:'mock',enabled:true,roles:['soldier'],maxRunning:1,priority:0}],maxWorkers:1,maxProjectWorkers:1,maxRunningProjects:1,workspaceRoot:'/unused'} as any,async({run})=>{attempts++;ids.push(run.id);const saved=store.run(run.id);saved.failureCode='TRANSPORT';saved.checkpoint={sessionId:run.id};store.saveRun(saved);throw Error('native transport died')})
+  const settle=async()=>{for(let i=0;i<10;i++)await new Promise(r=>setImmediate(r))}
+  try{scheduler.start();await settle();assert.equal(attempts,1)
+    for(let i=0;i<4;i++){scheduler.watchdog();await settle()}
+    assert.equal(attempts,4);assert.equal(new Set(ids).size,1);assert.equal((store.node(p.id,step.id,'step') as any).failureCount,3)
+    for(const code of ['AUTH','QUOTA_EXCEEDED','INVALID_REQUEST','CONTEXT_WINDOW_EXCEEDED','ABORTED']){const r=store.run(ids[0]);const s=store.node(p.id,step.id,'step') as any;s.failureCount=0;store.saveNode(s);r.failureCode=code;store.saveRun(r);scheduler.watchdog();await settle();assert.equal(attempts,4)}
+    const r=store.run(ids[0]);r.failureCode='TRANSPORT';r.pendingTools=['unknown-side-effect'];store.saveRun(r);scheduler.watchdog();await settle();assert.equal(attempts,4);assert.equal((store.node(p.id,step.id,'step') as any).status,'blocked')
+  }finally{await scheduler.close()}
+})
+
+
+test('native Commander patrol clock, per-Project concurrency, General events and 15-second bounded recovery', {timeout:90000},async()=>{
+  const {execFile}=await import('node:child_process'),{promisify}=await import('node:util')
+  const result=await promisify(execFile)(process.execPath,[new URL('./benchmark-controller.fixture.mjs',import.meta.url).pathname],{maxBuffer:2*1024*1024})
+  assert.match(result.stdout,/BENCHMARK_PATROL=true/);assert.match(result.stdout,/waiting_capacity_released=true/);assert.match(result.stdout,/native_restart_cap=3/)
 })

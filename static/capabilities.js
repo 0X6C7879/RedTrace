@@ -17,6 +17,7 @@ window.skillsPage = function skillsPage() {
     items: [],
     query: '',
     verbs: null,
+    usage: { calls: [] }, folders: {}, filePath: 'SKILL.md', fileContent: '', active: false,
     selectedName: '',
     draft: null,
     versions: [],
@@ -32,7 +33,7 @@ window.skillsPage = function skillsPage() {
     get enabledCount() {
       // Nested entries inherit enabled from their root package, so one
       // count over the unified list already covers in-package Skills.
-      return this.items.filter((item) => item.enabled).length;
+      return this.items.filter((item) => !item.nested && item.enabled).length;
     },
 
     get filteredItems() {
@@ -43,9 +44,8 @@ window.skillsPage = function skillsPage() {
       );
     },
 
-    async init() {
-      await this.load();
-    },
+    async init() {},
+    async setActive(active) { if (active === this.active) return; this.active = active; if (active) await this.load(); },
 
     async load() {
       this.loading = true;
@@ -56,7 +56,7 @@ window.skillsPage = function skillsPage() {
         const [statusResult, entriesResult, verbsResult] = await Promise.allSettled([
           capabilityRequest('GET', '/capabilities'),
           capabilityRequest('GET', '/capabilities/skill-entries'),
-          capabilityRequest('GET', '/capabilities/verbs'),
+          capabilityRequest('GET', '/console/tools'),
         ]);
         if (statusResult.status === 'fulfilled') {
           this.status = statusResult.value;
@@ -64,7 +64,7 @@ window.skillsPage = function skillsPage() {
         if (entriesResult.status === 'fulfilled') {
           this.items = entriesResult.value;
         }
-        if (verbsResult.status === 'fulfilled') this.verbs = verbsResult.value;
+        if (verbsResult.status === 'fulfilled') this.usage = verbsResult.value;
         const failures = [statusResult, entriesResult, verbsResult]
           .filter((result) => result.status === 'rejected')
           .map((result) => result.reason?.message || String(result.reason));
@@ -85,7 +85,12 @@ window.skillsPage = function skillsPage() {
       }
     },
 
+    get fileTree() {const entries=[],seen=new Set();for(const file of [...(this.draft?.files||[])].sort()){const parts=file.split('/');for(let i=1;i<parts.length;i++){const dir=parts.slice(0,i).join('/');if(!seen.has(dir)){seen.add(dir);entries.push({path:dir,name:parts[i-1],depth:i-1,directory:true})}}entries.push({path:file,name:parts.at(-1),depth:parts.length-1,directory:false})}return entries.filter(entry=>entry.path.split('/').slice(0,-1).every((_,i)=>this.folders[entry.path.split('/').slice(0,i+1).join('/')]!==false));},
+    get skillCalls() { const selected=this.items.find(item=>item.key===this.selectedName);const name=selected?.nested?null:selected?.name;return this.usage.calls.filter(call=>call.name==='skill' && call.arguments?.name===name); },
+    get previewContent() { return this.filePath==='SKILL.md'?this.draft?.content||'':this.fileContent; },
+    async selectFile(file) {this.filePath=file;if(file==='SKILL.md')return;try{const data=await capabilityRequest('GET','/capabilities/skills/'+encodeURIComponent(this.draft.name)+'/files/'+file.split('/').map(encodeURIComponent).join('/'));if(this.filePath===file)this.fileContent=data.binary?'二进制文件，不支持文本预览':data.content;}catch(e){this.setMessage(e.message,'error')}},
     async select(item) {
+      this.filePath='SKILL.md';this.fileContent='';this.folders={};
       this.isNew = false;
       this.deleteArmed = false;
       this.selectedName = item.key || item.name;
@@ -104,7 +109,7 @@ window.skillsPage = function skillsPage() {
           this.versions = [];
           return;
         }
-        const name = item.name;
+        const name = item.parent || item.name;
         const [draft, versions] = await Promise.all([
           capabilityRequest('GET', `/capabilities/skills/${encodeURIComponent(name)}`),
           capabilityRequest('GET', `/capabilities/skills/${encodeURIComponent(name)}/versions`),
@@ -117,6 +122,7 @@ window.skillsPage = function skillsPage() {
     },
 
     createNew() {
+      this.filePath = 'SKILL.md'; this.fileContent = ''; this.folders = {};
       this.isNew = true;
       this.selectedName = '';
       this.deleteArmed = false;
@@ -215,6 +221,7 @@ window.skillsPage = function skillsPage() {
 window.mcpPage = function mcpPage() {
   return {
     status: null,
+    live: {tools:[],mcp:[]}, active: false,
     items: [],
     query: '',
     selectedName: '',
@@ -241,19 +248,19 @@ window.mcpPage = function mcpPage() {
       );
     },
 
-    async init() {
-      await this.load();
-    },
+    async init() {},
+    async setActive(active) {if(active===this.active)return;this.active=active;if(active)await this.load();},
 
     async load() {
       this.loading = true;
       this.setMessage('');
       try {
-        const [status, items] = await Promise.all([
+        const [status, items, live] = await Promise.all([
           capabilityRequest('GET', '/capabilities'),
           capabilityRequest('GET', '/capabilities/mcp'),
+          capabilityRequest('GET', '/console/tools'),
         ]);
-        this.status = status;
+        this.status = status; this.live = live;
         this.items = items;
         if (this.selectedName && items.some((item) => item.name === this.selectedName)) {
           await this.select(this.selectedName);
@@ -268,6 +275,8 @@ window.mcpPage = function mcpPage() {
       }
     },
 
+    connection(name) {const state=this.live.mcp.find(server=>server.name===name)?.state;if(state)return ({connected:'已连接',connecting:'连接中',reconnecting:'重连中',failed:'连接失败',closed:'已关闭','waiting-credentials':'等待凭证'})[state]||state;const item=this.items.find(s=>s.name===name);return item?(item.enabled?'未挂载':'已停用'):'读取中…';},
+    serverTools(name) {return this.live.tools.filter(tool=>tool.name.startsWith('mcp__'+name+'__'));},
     async select(name) {
       this.isNew = false;
       this.deleteArmed = false;
@@ -326,7 +335,7 @@ window.mcpPage = function mcpPage() {
           enabled: saved.enabled,
           raw: JSON.stringify(saved.config, null, 2),
         };
-        this.setMessage('已保存，将在下一个任务中使用新配置。', 'success');
+        this.setMessage('已保存，并按原生运行时刷新连接。', 'success');
         await this.refreshList();
       } catch (error) {
         this.setMessage(error instanceof SyntaxError ? `JSON 语法错误：${error.message}` : error.message, 'error');
@@ -336,7 +345,7 @@ window.mcpPage = function mcpPage() {
     },
 
     async refreshList() {
-      this.items = await capabilityRequest('GET', '/capabilities/mcp');
+      const [items,live] = await Promise.all([capabilityRequest('GET','/capabilities/mcp'),capabilityRequest('GET','/console/tools')]); this.items=items; this.live=live;
     },
 
     armDelete() {

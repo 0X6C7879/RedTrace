@@ -42,7 +42,7 @@ const model = createServer(async (req, res) => {
       } else { name = 'finish_step'; args = { summary: 'Verified loopback baseline/proof; structured Finding handed to independent Reporter' } }
     } else {
       for (const forbidden of ['bash','read','write','edit','submit_fact','submit_finding','legion_spawn','http_request']) assert.ok(!names.includes(forbidden), 'Reporter unexpectedly has '+forbidden)
-      for (const section of ['## 概述','## 复现步骤','## PoC','## 修复建议']) assert.ok(system.includes(section))
+      for (const section of ['## 摘要','## 内容']) assert.ok(system.includes(section))
       findingId = graph.findings[0].id
       const detail = toolOutputs.find(o => o.call?.function.name === 'read_graph')?.value
       const listed = toolOutputs.find(o => o.call?.function.name === 'read_execution' && !JSON.parse(o.call.function.arguments).run_id)?.value
@@ -58,7 +58,7 @@ const model = createServer(async (req, res) => {
         const baseline = read.map(o => o.value.content).find(s => s.startsWith('HTTP/1.1 401')), proof = read.map(o => o.value.content).find(s => s.startsWith('HTTP/1.1 200'))
         assert.ok(baseline && proof); assert.match(proof, /FIXTURE_ONLY_NOT_A_SECRET/)
         assert.ok(trace.events.some(e => e.kind === 'tool.completed' && e.title === 'bash'))
-        const report = `## 概述\n本地故意脆弱测试夹具的 debug 参数绕过认证，仅为回归测试，不代表真实目标。\n\n## 影响与危害\nLow：仅证明本地夹具的虚拟标记泄露；其他影响未验证。\n\n## 受影响范围\n${target}/private，仅本次本地 fixture。\n\n## 复现步骤\n### 步骤 1：发送基线请求\n操作/输入：curl -sS -i '${target}/private'。预期/实际：401，需要登录。来源 ${artifacts[1].artifactId}。\n\n### 步骤 2：发送已验证 debug 请求\n操作/输入：curl -sS -i '${target}/private?debug=1'。预期仍需认证；实际 200 并出现虚拟标记。来源 ${artifacts[3].artifactId}。\n\n## 证据\n原始基线响应：\n\`\`\`http\n${baseline}\`\`\`\n原始漏洞证明响应：\n\`\`\`http\n${proof}\`\`\`\nProducer Run: ${listed.runs.find(r => r.intent_id === detail.stepId).id}；原始 bash 执行记录已读取。\n\n## PoC\n复现步骤即为 PoC。\n\`\`\`sh\ncurl -sS -i '${target}/private'\ncurl -sS -i '${target}/private?debug=1'\n\`\`\`\n\n## 根因分析\n已观察到 debug 请求跳过认证；服务端源码未提供给 Reporter，具体实现根因未验证。\n\n## 修复建议\n在所有分支执行统一认证检查，删除调试绕过入口；增加基线及 debug 请求的未登录回归测试。\n`
+        const report = `## 摘要\n本地故意脆弱测试夹具的 debug 参数绕过认证，仅用于回归。\n\n## 内容\n1. 执行 curl -sS -i '${target}/private'，实际返回 401。证据 ${artifacts[1].artifactId}。\n2. 执行 curl -sS -i '${target}/private?debug=1'，实际返回 200 和虚拟标记。证据 ${artifacts[3].artifactId}。\n原始基线响应：\n${baseline}\n原始利用响应：\n${proof}\nProducer Run: ${listed.runs.find(r => r.intent_id === detail.stepId).id}。\n`
         name = 'update_finding_report'; args = { finding_id: findingId, expectedVersion: detail.version, report }
       }
       reportCalls.push(name)
@@ -99,7 +99,7 @@ try {
     if (process.env.REPORTER_FIXTURE_READY) writeFileSync(process.env.REPORTER_FIXTURE_READY, JSON.stringify({ api, work, projectId, findingId }))
     await new Promise(r => process.once('SIGTERM', r))
   }
-  console.log('REPORTER_RUNTIME_OK=true; sessions=2; real_loopback_baseline=401; real_loopback_proof=200; facts=2; finding=1; original_audit_read=true; retained_evidence_read=true; artex_sections=8; report_artifact_linked=true; raw_facts_preserved=true; model=local-protocol-fixture; live_model=false')
+  console.log('REPORTER_RUNTIME_OK=true; sessions=2; real_loopback_baseline=401; real_loopback_proof=200; facts=2; finding=1; original_audit_read=true; retained_evidence_read=true; body_sections=2; report_artifact_linked=true; raw_facts_preserved=true; model=local-protocol-fixture; live_model=false')
 } catch (error) { console.error(logs); throw error }
 finally {
   if (child && !ended) { child.kill('SIGTERM'); await new Promise(r => child.once('close', r)) }

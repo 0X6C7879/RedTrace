@@ -177,7 +177,8 @@ test('Spill is Execute-only, session-isolated, hot-reloadable and preserves evid
   const manager = new PluginManager(host, { sessionRoot: root, pluginsManifest: path.join(root, 'plugins.json') }, root)
   await manager.start('redtrace-spill')
   assert.equal(host.get('spillStore'), undefined, 'no global Spill service')
-  const text = `HEAD\n${'tool output line\n'.repeat(20000)}TAIL\n`
+  const clue = 'HTTP/1.1 403\nX-Clue: fixture-cookie; token=fixture\nPayload: %00../secret\nError: fixture stack at /target/probe:7\nflag{fixture_middle}\n'
+  const text = `HEAD\n${'tool output line\n'.repeat(10000)}${clue}${'tool output line\n'.repeat(10000)}TAIL\n`
   const sessions = []
   let callId = 0
   for (const type of ['commander', 'general', 'soldier', 'scout']) {
@@ -202,11 +203,14 @@ test('Spill is Execute-only, session-isolated, hot-reloadable and preserves evid
       assert.equal(existsSync(path.join(root, 'spill')), false)
     } else {
       assert.ok(visible.startsWith('HEAD\n')); assert.match(visible, /TAIL/)
+      assert.ok(visible.includes(clue), 'unique middle attack clues must remain visible')
+      assert.match(visible, /previous line repeated 9999 more times/)
+      assert.ok(visible.length < 1500)
       assert.doesNotMatch(visible, /evidenceId|evidence_read/)
       const file = visible.match(/Full formatted result stored at: (.*?)\. Use read/s)?.[1]
       assert.ok(file); assert.equal(readFileSync(file, 'utf8'), text)
       assert.ok(file.startsWith(sessionDir(path.join(root, 'spill'), String(agent.session.header.id))))
-      const read = await call('read', { file_path: file, offset: 20002, limit: 1 })
+      const read = await call('read', { file_path: file, offset: 20007, limit: 1 })
       assert.equal(read.isError, false); assert.match(read.content[0].text, /TAIL/)
       if (type === 'soldier') {
         const store = new Store(':memory:')

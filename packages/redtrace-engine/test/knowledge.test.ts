@@ -11,7 +11,7 @@ import type { EngineConfig, Worker } from '../src/types.ts'
 const worker: Worker = { name: 'knowledge-test', backend: 'mock', provider: 'mock', model: '', enabled: true, reason: false, explore: true, bootstrap: false, maxRunning: 1, priority: 0 }
 
 test('local FTS search returns five source-hashed snippets and bounded source reads', async () => {
-  const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-knowledge-')), source = path.join(root, 'skills', 'web'), privateSkill = path.join(root, '.redtrace', 'skills', 'api'), wordlist = path.join(root, 'tools', 'wordlists', 'SecLists', 'Discovery', 'Web-Content')
+  const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-knowledge-')), source = path.join(root, 'skills', 'web'), privateSkill = path.join(root, 'skills', 'api'), wordlist = path.join(root, 'tools', 'wordlists', 'SecLists', 'Discovery', 'Web-Content')
   mkdirSync(source, { recursive: true }); mkdirSync(path.join(root, 'skills', 'writeup'), { recursive: true })
   mkdirSync(privateSkill, { recursive: true }); mkdirSync(wordlist, { recursive: true })
   const body = '# CSRF\nUse a hidden CSRF token in the form and verify its lifetime.\n'
@@ -36,7 +36,7 @@ test('local FTS search returns five source-hashed snippets and bounded source re
     assert.equal((slice as { details: { text: string } }).details.text, '# CSRF\nUse a')
     assert.equal((await match.execute('unknown-protocol', { id: csrf.id, protocol: 'http' }) as any).details.status, 'unknown')
     const skill = await search.execute('search', { query: 'session refresh' })
-    assert.match(JSON.stringify(skill), /\.redtrace\/skills\/api\/SKILL\.md/)
+    assert.match(JSON.stringify(skill), /skills\/api\/SKILL\.md/)
     const catalog = await search.execute('search', { query: 'Web-Content' })
     assert.match(JSON.stringify(catalog), /tools\/wordlists\/SecLists\/Discovery\/Web-Content \(catalog\)/)
     const secret = await search.execute('search', { query: 'privateword canary' })

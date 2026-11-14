@@ -156,12 +156,12 @@ test('Fact Doc and Reporter evidence retain existing cross-Graph boundaries', as
   assert.equal(right.node<Finding>(p.id, finding.id).report, undefined)
 })
 
-test('runtime prompt preserves ARTEX report sections and adapts only the data interfaces', () => {
-  const original = readFileSync(new URL('../prompts/upstream/artex-reporter.md', import.meta.url), 'utf8'), runtime = legionMission('reporter')
-  for (const heading of ['## 概述','## 影响与危害','## 受影响范围','## 复现步骤','## 证据','## PoC','## 根因分析','## 修复建议','### 步骤 1：准备环境']) assert.ok(original.includes(heading) && runtime.includes(heading))
-  assert.ok(runtime.includes(original.slice(original.indexOf('━━ 纪律'), original.lastIndexOf('\n'))))
+test('runtime prompt keeps only summary/method with existing evidence interfaces', () => {
+  const runtime = legionMission('reporter')
+  for (const heading of ['## 摘要','## 内容']) assert.ok(runtime.includes(heading))
+  assert.doesNotMatch(runtime, /## (影响与危害|根因分析|修复建议)/)
   assert.match(runtime, /project_evidence_read/); assert.match(runtime, /read_execution/); assert.match(runtime, /expectedVersion/)
-  assert.match(legionMission('soldier'), /latest incremental fact/)
+  assert.match(legionMission('soldier'), /incremental confirmed result/)
   const markup = readFileSync(new URL('../../../static/index.html', import.meta.url), 'utf8')
   assert.ok(markup.includes('<p class="mt-1 text-slate-600 whitespace-pre-wrap break-words" x-text="fact.description">'))
   assert.ok(markup.includes("reporter: 'Reporter'"))

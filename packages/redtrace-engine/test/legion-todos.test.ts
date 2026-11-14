@@ -89,13 +89,13 @@ test('Benchmark General owns task subgoals while Commander keeps global allocati
   const goal=(await create.execute('stage',{description:'verify stage'})).details as {id:string}
   assert.equal(store.node(p.id,goal.id,'goal').graphId,graphs[0].id)
   assert(general.some(t=>t.name==='legion_update_goal'))
-  assert(!tools(graphs[1],'soldier').some(t=>['legion_goal','legion_update_goal','TodoWrite'].includes(t.name)))
+  const soldier=tools(graphs[1],'soldier');assert(soldier.some(t=>t.name==='legion_goal'));assert(!soldier.some(t=>t.name==='TodoWrite'))
 })
 
 test('Only Benchmark General prompt owns task planning while General mode Commander remains unchanged',()=>{
   const command=legionMission('commander','benchmark')
   assert(!command.includes('TodoWrite'))
-  assert(command.includes('do not maintain task TodoLists'))
+  assert(command.includes('You never modify FGS'))
   const prompt=legionMission('general','benchmark');assert(prompt.includes('TodoWrite({todos})'));assert(prompt.includes('verified FGS Facts'))
   for(const role of ['soldier','scout'] as const)assert(!legionMission(role,'benchmark').includes('TodoWrite'))
   const general=legionMission('commander','general')

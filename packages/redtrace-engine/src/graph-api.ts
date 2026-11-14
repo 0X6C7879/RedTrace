@@ -1,6 +1,5 @@
 import { Type } from 'typebox'
 import type { Todo } from './legion-todos.ts'
-import { Check } from 'typebox/value'
 import { Router, body, queryNumber, send } from './http.ts'
 import type { RequestContext } from './http.ts'
 import { Store } from './store.ts'
@@ -8,7 +7,7 @@ import { legacyIntent, legacyProject, legacyProjectInfo, legacySummary } from '.
 import { projectFgs, liveSteps } from './fgs.ts'
 import { HttpError } from './types.ts'
 import type { Json, Step } from './types.ts'
-import { evidenceChangeSchema, goalUpdateSchema, stepUpdateSchema } from './graph-contracts.ts'
+import { goalUpdateSchema, stepUpdateSchema } from './graph-contracts.ts'
 import { taskPluginsSchema } from './task-plugins.ts'
 import { graphContent, nodeContent } from './graph-content.ts'
 import { ProjectEvidence } from './project-evidence.ts'
@@ -54,7 +53,6 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
       const b=await body(c.req,Type.Object({content:text,creator:text}))
       send(c.res,store.commanderInput(p(c),b.content,b.creator,c.url.searchParams.get('graphId')??undefined),201)
     })
-    router.add('DELETE', `${prefix}/projects/:project/hints/:node`, c => { view(c).deleteInput(p(c), c.params.node); send(c.res, null, 204) })
   }
   router.add('GET','/v2/projects/:project/graphs',c=>store.projectGraphs(p(c)))
   router.add('POST','/v2/projects/:project/graphs',async c=>send(c.res,store.createGraph(p(c),await body(c.req,Type.Object({taskKey:text,title:text,origin:text,goal:text}))),201))
@@ -79,12 +77,6 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
       .map(row => ({ ...JSON.parse(String(row.data)), id: Number(row.id) })).reverse()
   })
   for (const kind of ['goals', 'steps', 'findings', 'facts', 'observations'] as const) router.add('GET', `/v2/projects/:project/${kind}`, c => { currentOnly(c); return view(c).nodes(p(c), [kind.slice(0, -1) as 'goal' | 'step' | 'finding' | 'fact' | 'observation'], { context: true, ...(c.url.searchParams.has('limit') ? { limit: queryNumber(c.url, 'limit', 100, 1, 100), offset: queryNumber(c.url, 'offset', 0) } : {}) }).map(node => nodeContent(node)) })
-  router.add('POST', '/v2/projects/:project/evidence/manage', async c => {
-    const input = await body(c.req, Type.Record(Type.String(), Type.Unknown()))
-    if (input.operation === 'archive' || input.operation === 'restore') throw new HttpError(422, 'FGS archive/restore has been removed; use merge/delete')
-    if (!Check(evidenceChangeSchema, input)) throw new HttpError(422, 'Invalid request fields')
-    return view(c).manageEvidence(p(c), input)
-  })
   router.add('GET', '/v2/projects/:project/graph/delta', c => view(c).graphDelta(p(c), queryNumber(c.url, 'after', 0), queryNumber(c.url, 'limit', 100, 1, 100)))
   router.add('POST', '/v2/projects/:project/runs/:run/resolve', async c => {
     if (view(c).run(c.params.run).projectId !== p(c)) throw new HttpError(404, 'Run not found')
@@ -92,10 +84,8 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
   })
   router.add('POST', '/v2/projects/:project/goals', async c => { const b = await body(c.req, Type.Object({ description: text, parentId: Type.Optional(text), creator: Type.Optional(text) })); send(c.res, view(c).addGoal(p(c), b.description, b.parentId, b.creator), 201) })
   router.add('PATCH', '/v2/projects/:project/goals/:node', async c => view(c).updateGoal(p(c), c.params.node, await body(c.req, goalUpdateSchema)))
-  router.add('DELETE', '/v2/projects/:project/goals/:node', c => view(c).updateGoal(p(c), c.params.node, { status: 'cancelled' }))
   router.add('POST', '/v2/projects/:project/steps', async c => send(c.res, view(c).addStep(p(c), await body(c.req, stepSchema), maxSteps()), 201))
   router.add('PATCH', '/v2/projects/:project/steps/:node', async c => view(c).updateStep(p(c), c.params.node, await body(c.req, stepUpdateSchema)))
-  router.add('DELETE', '/v2/projects/:project/steps/:node', c => view(c).updateStep(p(c), c.params.node, { status: 'cancelled' }))
   router.add('POST', '/v2/projects/:project/facts', async c => {
     const b = await body(c.req, Type.Object({ title: Type.Optional(text), description: text, doc: Type.Optional(text), creator: Type.Optional(text), evidence: Type.Array(Type.Object({ description: text, path: Type.Optional(text), artifactId: Type.Optional(text), runId: Type.Optional(text), toolCallId: Type.Optional(text) })) }))
     let doc, evidence = b.evidence
@@ -129,7 +119,6 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
     view(c).updateStep(p(c), c.params.node, { executionProfile: (await body(c.req, Type.Object({ execution_profile: profile }))).execution_profile })
     return intent(p(c), c.params.node)
   })
-  router.add('DELETE', '/projects/:project/intents/:node', c => { requireActive(p(c)); view(c).deleteStep(p(c), c.params.node); send(c.res, null, 204) })
   router.add('POST', '/projects/:project/intents/:node/conclude', async c => {
     const b = await body(c.req, Type.Object({ worker: text, description: text, complete_description: Type.Optional(Type.Union([text, Type.Null()])) })); requireActive(p(c))
     return view(c).transaction(() => {

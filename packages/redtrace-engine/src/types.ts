@@ -37,6 +37,7 @@ export interface Step extends NodeBase, LegionAssignment {
   /** Legacy declarations; ignored by execution. */
   requires?: string[]; attempts: number; endedAt: string | null; failure: string | null
   plugins?: string[]
+  scoutVerdict?: {difficulty:'easy'|'medium'|'hard'|'unclear';family?:string}
   bootstrap: boolean; deleted?: boolean; resultGoalId?: string; sourceGoalId?: string
   failureCount?: number; retryAfter?: number | null; circuitOpen?: boolean; runtimeMs?: number
   planVersion?: number; replaces?: string; replacedBy?: string; replacementPending?: boolean
@@ -57,7 +58,7 @@ export interface Run {
   planningHintSeq?: number; processedHintSeq?: number; deliveredHintSeq?: number
   deliveredGraphCursor?: number
   inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number
-  heartbeatAt?: string; trigger?: string
+  failureCode?: string; heartbeatAt?: string; trigger?: string
   provider?: string; model?: string; workspaceRoot?: string
   contextPressure?: { source: 'dsh-token-meter'; tokens: number; capacity: number; ratio: number }
   predecessorRunId?: string; handoff?: string

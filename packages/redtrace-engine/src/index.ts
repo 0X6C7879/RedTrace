@@ -21,14 +21,16 @@ import { Capabilities, capabilityRoutes } from './capabilities.ts'
 import { Operations, operationRoutes } from './operations.ts'
 import { verbRoutes } from './capability-verbs.ts'
 import { ProjectDeletion, deletionRoutes } from './deletion.ts'
+import { consoleRoutes } from './console-api.ts'
+import type { RuntimeCatalog, ToolCall } from './console-api.ts'
 import { dshUpdateRoutes } from './dsh-update.ts'
 
 export { Store, Scheduler, Configuration, Router, LegionStore, ProjectEvidence }
 export type * from './types.ts'
-export type { EvidenceChange, StepUpdate } from './store.ts'
+export type { StepUpdate } from './store.ts'
 export type { TaskContext, RunTask } from './scheduler.ts'
 
-export async function createEngine(options: { root: string; database?: string; configuration?: string; runTask?: RunTask; selectWorker?: SelectWorker; autoStart?: boolean; probeModel?: ProbeModel; adapterAvailability?: () => (adapter: string) => boolean }) {
+export async function createEngine(options: { root: string; database?: string; configuration?: string; runTask?: RunTask; selectWorker?: SelectWorker; autoStart?: boolean; probeModel?: ProbeModel; runtimeCatalog?: () => RuntimeCatalog | Promise<RuntimeCatalog>; commanderCalls?: () => Promise<ToolCall[]>; adapterAvailability?: () => (adapter: string) => boolean }) {
   const [major, minor] = process.versions.node.split('.').map(Number)
   if (major !== 24 || minor < 15) throw new Error('RedTrace requires Node 24.15 or newer in the Node 24 LTS line')
   const root = path.resolve(options.root), configuration = new Configuration(root, options.configuration)
@@ -67,9 +69,10 @@ export async function createEngine(options: { root: string; database?: string; c
   configRoutes(router, configuration, options.probeModel)
   const dshUpdate = await dshUpdateRoutes(router, path.resolve(process.env.REDTRACE_SOURCE_ROOT || root), scheduler)
   auditRoutes(router, store, configuration.workspaceRoot)
-  const capabilities = new Capabilities(managed)
+  const capabilities = new Capabilities(managed, root)
   capabilities.initialize(root)
   capabilityRoutes(router, capabilities)
+  consoleRoutes(router, store, root, configuration, options.runtimeCatalog, options.commanderCalls)
   const operations = new Operations(store, root, adapterGate)
   operationRoutes(router, operations)
   verbRoutes(router, operations, adapterGate)

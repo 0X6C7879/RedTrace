@@ -8,7 +8,7 @@ import type { EngineConfig, Provider, Worker } from './types.ts'
 type RawModel = { id: string; context_window: number; max_tokens: number; reasoning?: string; reasoning_efforts?: Record<string, string | null> | boolean | null; thinking_format?: string }
 type RawProvider = { api: Provider['api']; base_url: string; api_key?: string; api_key_env?: string; models: RawModel[] }
 type RawWorker = { roles?: Worker['roles']; name: string; provider: string; model?: string; enabled?: boolean; bootstrap?: boolean; reason?: boolean; explore?: boolean; max_running?: number; priority?: number; backend?: Worker['backend'] | 'pi' }
-export interface RawConfig { providers?: Record<string, RawProvider>; workers: RawWorker[]; runtime?: Record<string, unknown>; tasks?: Record<string, { timeout: number; conclude_timeout: number; max_intents?: number }>; common_env?: Record<string, string>; llm_polling?: { enabled?: boolean; models?: Record<string, string[]> }; [key: string]: unknown }
+export interface RawConfig { providers?: Record<string, RawProvider>; workers: RawWorker[]; tool_settings?: Record<string, { enabled: boolean; workers?: string[] }>; runtime?: Record<string, unknown>; tasks?: Record<string, { timeout: number; conclude_timeout: number; max_intents?: number }>; common_env?: Record<string, string>; llm_polling?: { enabled?: boolean; models?: Record<string, string[]> }; [key: string]: unknown }
 const secretPattern = /^\$\{REDTRACE_SECRET:([a-f0-9]{32})\}$/
 const sensitiveEnvironment = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD)$/
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')

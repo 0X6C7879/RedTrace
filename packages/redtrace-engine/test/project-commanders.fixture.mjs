@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import {createServer} from 'node:http'
-import {mkdtempSync,rmSync} from 'node:fs'
+import {mkdtempSync,rmSync,mkdirSync,realpathSync} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {Configuration} from '../src/config.ts'
@@ -16,6 +16,9 @@ const requests=new Map(),first=new Set(),responses=new Set();let release;const b
 const model=createServer(async(req,res)=>{
  responses.add(res);res.on('close',()=>responses.delete(res))
  try{let text='';for await(const b of req)text+=b;const input=JSON.parse(text),all=JSON.stringify(input.messages),projectId=all.match(/Assigned Project=(proj_\d+)/)?.[1];assert(projectId)
+ const system=input.messages.map(m=>typeof m.content==='string'?m.content:(m.content??[]).map(b=>b.text??'').join('')).join('\n')
+ const shown=system.match(/Current working directory: ("[^"]+")/)
+ assert(shown);assert.equal(realpathSync(JSON.parse(shown[1])),realpathSync(path.join(configuration.workspaceRoot,projectId)))
  requests.set(projectId,(requests.get(projectId)??0)+1)
  const boundary=input.messages.findLastIndex(m=>(m.tool_calls??[]).some(c=>c.function.name==='legion_finish'))
  const calls=input.messages.slice(boundary+1).flatMap(m=>m.tool_calls??[]).map(c=>c.function.name)
@@ -33,12 +36,20 @@ try{
  for(const file of ['vendor/deepseek-harness/packages/session/session-projection/lib/index.js','packages/redtrace-dsh/lib/core.js']){const module=await load(file);await ctx.plugin(module.default??module).await()}
  const persist=await load('vendor/deepseek-harness/packages/session/session-persistence-jsonl/lib/index.js');await ctx.plugin(persist,{root:work+'/sessions'}).await()
  const llm=await import('../compat/llm.mjs');await ctx.plugin(llm,{providers:providerProfiles(configuration.resolvedSnapshot().config).providers,credentialSource:{root:work,filename:configuration.filename,revision:configuration.read().revision}}).await()
+ const {SessionId}=await load('vendor/deepseek-harness/packages/core/session/lib/index.js')
+ const old=legion.campaign(projects[0].id),legacy=path.join(configuration.workspaceRoot,projects[0].id,'commander',old.sessionId)
+ mkdirSync(legacy,{recursive:true})
+ const seed=await ctx.get('agents').create({sessionId:SessionId(old.sessionId),meta:{cwd:legacy},agentOptions:{provider:'fixture',model:'fixture'},setup:scoped=>{scoped.tools.restrict({allow:[]})}})
+ await ctx.get('sessions').flush(seed.agent.session);await seed.dispose();legion.saveCampaign({...old,hasSession:true})
  controller=createCommanderController(ctx,{store,legion,configuration,scheduler:{maintenance:false,wake(){}}});controller.start()
  const until=async predicate=>{const deadline=Date.now()+12000;while(!predicate()){if(Date.now()>deadline)throw Error('Concurrent Commander fixture did not settle '+JSON.stringify(legion.campaigns()));await new Promise(r=>setTimeout(r,10))}}
  await until(()=>legion.campaigns().every(c=>c.status==='idle'&&c.state.includes(c.projectId)))
+ const recorded=await ctx.get('sessionPersistence').open(SessionId(old.sessionId),'read')
+ try{assert((await recorded.read(0,1000)).events.some(e=>e.type==='working-directory/change'&&realpathSync(e.data.cwd)===realpathSync(path.join(configuration.workspaceRoot,projects[0].id))))}finally{await recorded.close()}
+ assert.equal(legion.campaign(projects[0].id).sessionId,old.sessionId)
  assert(overlap);assert.notEqual(legion.campaign(projects[0].id).sessionId,legion.campaign(projects[1].id).sessionId)
  const before=requests.get(projects[1].id);store.addInput(projects[0].id,'hint','A-only event')
  await until(()=>legion.campaign(projects[0].id).cursors[projects[0].id]?.acknowledged===Number(store.db.prepare('SELECT MAX(id) AS n FROM events WHERE project_id=?').get(projects[0].id).n))
  assert.equal(requests.get(projects[1].id),before,'A event must not wake B')
- console.log('PROJECT_COMMANDERS_CONCURRENT=true; distinct_native_sessions=true; own_STATE=true; A_event_does_not_wake_B=true; global_slots=2; model=local-protocol-fixture')
+ console.log('PROJECT_COMMANDERS_CONCURRENT=true; distinct_native_sessions=true; own_STATE=true; A_event_does_not_wake_B=true; global_slots=2; commander_cwd=task_root; legacy_session_resumed=true; model=local-protocol-fixture')
 }finally{await controller?.close();await ctx?.fiber.dispose();store.close();for(const res of responses)res.destroy();await new Promise(r=>model.close(r));rmSync(work,{recursive:true,force:true})}

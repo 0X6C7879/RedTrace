@@ -1,5 +1,7 @@
 import { mkdir, readdir, realpath, stat, open } from 'node:fs/promises'
 import path from 'node:path'
+import { createReadStream } from 'node:fs'
+import { pipeline } from 'node:stream/promises'
 import { stringify } from 'yaml'
 import { queryNumber } from './http.ts'
 import type { RequestContext, Router } from './http.ts'
@@ -62,9 +64,19 @@ export function auditRoutes(router: Router, store: Store, workspaceRoot: string)
   router.add('GET', '/audit/tasks/:project/workspace', async c => {
     store.project(c.params.project); const relative = c.url.searchParams.get('path') ?? '', { root, target } = await workspacePath(workspaceRoot, c.params.project, relative)
     if (!(await stat(target)).isDirectory()) throw new HttpError(404, 'Directory not found')
-    const entries = await Promise.all((await readdir(target, { withFileTypes: true })).filter(d => !d.isSymbolicLink()).map(async d => { const name = path.join(target, d.name), info = await stat(name); return { name: d.name, path: path.relative(root, name).replaceAll('\\', '/'), type: d.isDirectory() ? 'directory' : 'file', size: info.size, modified_at: info.mtimeMs / 1000 } }))
+    const questionNames = path.relative(root, target) === 'agents' ? new Map(store.projectGraphs(c.params.project).map(g => [g.id, g.title])) : null
+    const entries = await Promise.all((await readdir(target, { withFileTypes: true })).filter(d => !d.isSymbolicLink()).map(async d => { const name = path.join(target, d.name), info = await stat(name); return { name: d.name, display_name: d.isDirectory() ? questionNames?.get(d.name) : undefined, path: path.relative(root, name).replaceAll('\\', '/'), type: d.isDirectory() ? 'directory' : 'file', size: info.size, modified_at: info.mtimeMs / 1000 } }))
     entries.sort((a, b) => Number(a.type !== 'directory') - Number(b.type !== 'directory') || a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
-    return { path: relative, source: 'local', entries: entries.slice(0, 500) }
+    const offset = queryNumber(c.url, 'offset', 0), end = offset + 500
+    return { path: relative, source: 'local', entries: entries.slice(offset, end), total: entries.length, nextOffset: end < entries.length ? end : null }
+  })
+  router.add('GET', '/audit/tasks/:project/workspace/download', async c => {
+    store.project(c.params.project)
+    const relative = c.url.searchParams.get('path'); if (!relative) throw new HttpError(422, 'path required')
+    const { target } = await workspacePath(workspaceRoot, c.params.project, relative)
+    if (!(await stat(target)).isFile()) throw new HttpError(404, 'File not found')
+    c.res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': "attachment; filename*=UTF-8''" + encodeURIComponent(path.basename(target)) })
+    await pipeline(createReadStream(target), c.res)
   })
   router.add('GET', '/audit/tasks/:project/workspace/file', async c => {
     store.project(c.params.project); const relative = c.url.searchParams.get('path'); if (!relative) throw new HttpError(422, 'path required')

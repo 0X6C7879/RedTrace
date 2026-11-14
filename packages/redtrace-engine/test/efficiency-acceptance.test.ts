@@ -106,7 +106,7 @@ test('Explore receives only live contract changes, not hints, evidence or critic
   const other=store.addStep(project.id,{description:'Other',sourceIds:['origin']})
   const hint=store.addInput(project.id,'hint','Other hint','human',other.id)
   assert.equal(scan().relevant,false)
-  store.deleteInput(project.id,hint.id);assert.equal(scan().relevant,false)
+  store.addInput(project.id,'hint','Correction to '+hint.id+': latest instruction');assert.equal(scan().relevant,false)
   cursor=scan().cursor
   store.addInput(project.id,'hint','Project hint');assert.equal(scan().relevant,false)
   cursor=scan().cursor

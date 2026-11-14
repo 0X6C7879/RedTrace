@@ -29,6 +29,8 @@ export async function apply(ctx, config) {
 function canFailover(reason, signal) {
   if (signal?.aborted || reason.kind !== 'error') return false
   const failure = reason.failure
+  // Sapper: transient throttling belongs to DSH retry, not credential rotation.
+  if (failure.code === 'RATE_LIMIT') return false
   if (['INVALID_REQUEST', 'CONTEXT_WINDOW_EXCEEDED', 'ABORTED'].includes(failure.code)) return false
   const status = failure.status ?? Number(failure.message.match(/\b([45]\d{2})\b/)?.[1])
   if (status) return [401, 402, 403, 404, 408, 429].includes(status) || status >= 500

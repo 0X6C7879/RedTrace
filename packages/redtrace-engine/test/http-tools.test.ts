@@ -16,6 +16,7 @@ test('HTTP Resource: optional session, shared cookies/restart, isolation, replay
   const seen: string[] = []
   const server = createServer((req, res) => {
     seen.push(req.url!)
+    if (req.url === '/clues') { res.writeHead(403, { 'X-Clue': 'fixture-header', 'Set-Cookie': 'secret=fixture; Path=/' }); res.end('Payload: %00../secret\nError: at /target/probe:7\nflag{fixture_middle}'); return }
     if (req.url === '/broken') { req.socket.destroy(); return }
     if (req.url === '/set') res.setHeader('Set-Cookie', 'identity=fixture; Path=/')
     let body = '';req.on('data', chunk => body += chunk)
@@ -36,6 +37,13 @@ test('HTTP Resource: optional session, shared cookies/restart, isolation, replay
     const graph = graphTools(first, () => {})
     assert.ok(graph.some(t => t.name === 'http_batch'))
     assert.equal(graph.some(t => ['web_open','web_snapshot','web_act','web_network'].includes(t.name)), false)
+    const clues: any = await batch.execute('clues', { requests: [{ url: url + '/clues' }] })
+    assert.equal(clues.results[0].status, 403)
+    assert.equal(clues.results[0].headers['x-clue'], 'fixture-header')
+    assert.match(clues.results[0].headers['set-cookie'], /secret=fixture/)
+    assert.match(clues.results[0].body, /flag\{fixture_middle\}/)
+    assert.equal(Buffer.from(read(clues.results[0]).response.bodyBase64, 'base64').toString(), clues.results[0].body)
+    await closeHttpSessions(store, project.id, true)
     const initial: any = await batch.execute('set', { requests: [{ url: url + '/set' }] })
     const afterLogin: any = await batch.execute('after-login', { requests: [{ url }] })
     assert.ok(snapshotJsonValue(initial)); assert.match(initial.session, /^http_/)

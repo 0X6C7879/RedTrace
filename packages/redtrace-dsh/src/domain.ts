@@ -63,6 +63,9 @@ export async function apply(ctx: RuntimeContext, config: RuntimeConfig = {}): Pr
     SessionId: session.SessionId,
   }
   const mcpFibers: CordisFiber[] = []
+  let serverNames = (config.mcpConfigs ?? []).map(mcp => String(mcp.serverName))
+  const { connectionStatusOf } = await load(MCP_CLIENT)
+  shared.mcpStatuses = () => mcpFibers.map((fiber, index) => ({ name: serverNames[index], ...(connectionStatusOf(fiber)?.current() ?? { state: 'connecting' }) }))
   for (const mcp of config.mcpConfigs ?? []) {
     mcpFibers.push(await mount(ctx, MCP_CLIENT, mcp as Record<string, Json>))
   }
@@ -72,9 +75,11 @@ export async function apply(ctx: RuntimeContext, config: RuntimeConfig = {}): Pr
     for (const fiber of mcpFibers.splice(0)) {
       await fiber.dispose().catch(error => { ctx.logger?.warn(error) })
     }
+    serverNames = []
     for (const mcp of configs) {
       try {
         mcpFibers.push(await mount(ctx, MCP_CLIENT, mcp))
+        serverNames.push(String(mcp.serverName))
       } catch (error) {
         // A broken MCP config must not take down the scheduler tick; the
         // domain keeps running with the remaining mounts.

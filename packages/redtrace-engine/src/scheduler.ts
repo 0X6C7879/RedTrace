@@ -64,7 +64,12 @@ export class Scheduler {
   }
   private launch(run: Run, worker: Worker) {
     const abort = new AbortController(), config = structuredClone(this.config)
-    run.provider = worker.provider; run.model = worker.model; run.workspaceRoot ??= path.join(config.workspaceRoot, run.projectId, 'agents', run.graphId??'main',run.id)
+    run.provider = worker.provider; run.model = worker.model
+    if (run.workspaceRoot == null) {
+      const title = run.graphId ? this.store.projectGraph(run.projectId, run.graphId).title : this.store.project(run.projectId).title
+      const directory = title.replace(/[<>:"\/\\|?*\u0000-\u001f]/g, '_').replace(/^\.+$|[. ]+$/g, '_')
+      run.workspaceRoot = path.join(config.workspaceRoot, run.projectId, 'agents', directory, run.id)
+    }
     this.store.transaction(() => this.store.saveRun(run))
     const task: Active = { run, abort, completion: Promise.resolve() }
     this.running.set(run.id, task)
@@ -79,14 +84,33 @@ export class Scheduler {
             status = error ? 'unknown' : (this.closed || project.status === 'stopped') && run.activity === 'execute' ? 'paused' : 'cancelled'
             if (this.store.run(run.id).pendingTools.length) { status = 'unknown'; error = 'Activity stopped with an unconfirmed tool result; verify before retrying' }
           }
-          this.store.finishRun(run.id, status, error)
+          const completed=this.store.finishRun(run.id, status, error)
           const step = this.store.node<Step>(run.projectId, run.stepId!, 'step')
+          if(completed.status==='succeeded'&&step.role==='scout'&&step.scoutVerdict)this.legion.classify(run.projectId,step.taskKey!,step.scoutVerdict.difficulty,step.factIds,step.scoutVerdict.family)
           if (step.handoffPending && status==='cancelled' && this.store.project(run.projectId).status==='active') new LegionStore(this.store).completeHandoff(run.projectId,step.id)
+          if(this.store.project(run.projectId).mode==='benchmark')this.legion.completeBenchmark(run.projectId)
           // Deleting a project mid-abort cascades its runs away; there is nothing left to finish.
         } catch (reason) { if (!(reason instanceof HttpError && reason.status === 404)) throw reason }
         finally { this.running.delete(run.id); this.wake() }
       }
     })()
+  }
+  /** Sapper's dead-worker recovery, bounded per native Session; strategy stays with Commander. */
+  watchdog() {
+    if(this.closed||this.maintenance)return
+    for(const run of this.store.runsByStatus('failed')) {
+      if(this.running.has(run.id)||!run.stepId||run.pendingTools.length||this.store.project(run.projectId).mode!=='benchmark'||this.store.project(run.projectId).status!=='active')continue
+      if(!['PROCESS_EXIT','UNKNOWN','SERVER','TIMEOUT','TRANSPORT','STREAM_CLOSED','EMPTY_RESPONSE','RATE_LIMIT'].includes(run.failureCode??''))continue
+      const step=this.store.node<Step>(run.projectId,run.stepId,'step')
+      if((step.failureCount??0)>=3||step.status!=='blocked'||this.store.latestRun(run.projectId,step.id)?.id!==run.id||this.legion.budget(Date.now(),run.projectId).phase==='ended')continue
+      this.store.transaction(()=>{
+        step.failureCount=(step.failureCount??0)+1;run.status='paused';run.endedAt=null;run.error=null;delete run.failureCode
+        step.status='paused';step.failure=null;step.endedAt=null
+        this.store.saveRun(run);this.store.saveNode(step)
+        this.store.event(run.projectId,'legion.worker_restarted',step,{runId:run.id,restarts:step.failureCount})
+      })
+    }
+    this.wake()
   }
   async stopProject(projectId:string) {
     const tasks=[...this.running.values()].filter(t=>t.run.projectId===projectId)

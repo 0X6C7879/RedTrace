@@ -45,7 +45,7 @@ test('HTTP graph compatibility and atomic conclude survive reopening the databas
     assert.equal((await request(`/v2${base}/facts?includeInactive=false`)).status, 422)
     for (const operation of ['archive', 'restore']) {
       const old = await request(`/v2${base}/evidence/manage`, 'POST', { operation, id: concluded.data.fact.id, expectedVersion: 1, reason: 'Old client' })
-      assert.equal(old.status, 422); assert.match(old.data.detail, /archive\/restore has been removed/)
+      assert.ok([404,405].includes(old.status))
     }
     assert.equal((await request(`/v2${base}/graph?revision=999999`)).status, 422)
     const runs = (await request(`/v2${base}/steps/${step.data.id}/runs`)).data

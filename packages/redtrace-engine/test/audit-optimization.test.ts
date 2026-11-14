@@ -40,40 +40,35 @@ function fixture() {
 }
 const body = (value: unknown) => Object.assign(Readable.from([Buffer.from(JSON.stringify(value))]), { headers: { 'content-type': 'application/json' } })
 
-test('retired manual lifecycle controls are removed; Fact deletion keeps version and reference checks', async () => {
+test('FGS exposes cancellation only, never evidence or Hint deletion', () => {
   const html = source('static/index.html')
-  assert.doesNotMatch(html, /sendHeartbeatForSelectedIntent|releaseSelectedIntent|releaseSelectedGraphNode|createIntent\(true\)|\/blackboard\/facts\//)
-  const { store, project } = fixture()
+  assert.doesNotMatch(html, /releaseSelectedFact|deleteHint|deleteSelectedIntent|evidence\/manage/)
+  const page = app()
+  assert.equal(typeof page.cancelSelectedIntent, 'function')
+  const {store} = fixture()
   try {
-    const page = app(), fact = store.addFact(project.id, 'Independent evidence', { creator: 'human' })
-    page.project = page.nativeProject(store.graph(project.id)); page.selectedProjectId = project.id
-    page.selectedNode = { type: 'fact', id: fact.id }; page.selectedFacts = [fact.id]
-    page.requestDangerConfirm = async () => true; page.clearSelection = () => {}; page.loadProject = async () => {}; page.updateGraph = () => {}
-    const messages: string[] = []; page.showToast = (message: string) => messages.push(message)
     const router = routes(); graphRoutes(router, store)
-    const handler = router.handlers.get('POST /v2/projects/:project/evidence/manage')!
-    page.api = async (method: string, url: string, value: any) => {
-      assert.equal(method, 'POST'); assert.equal(url, `/v2/projects/${project.id}/evidence/manage`)
-      assert.equal(value.expectedVersion, fact.version)
-      return handler({ req: body(value), params: { project: project.id } })
-    }
-    await page.releaseSelectedFact()
-    assert.throws(() => store.node(project.id, fact.id), /not found/i)
-    assert.equal(messages.length, 1)
-    const unversioned = store.addFact(project.id, 'Legacy unversioned evidence', { creator: 'human' })
-    delete unversioned.version
-    store.db.prepare('UPDATE nodes SET data=? WHERE project_id=? AND id=?').run(JSON.stringify(unversioned), project.id, unversioned.id)
-    page.project = page.nativeProject(store.graph(project.id)); page.selectedNode = { type: 'fact', id: unversioned.id }; page.selectedFacts = [unversioned.id]
-    page.api = async (_method: string, _url: string, value: any) => { assert.equal(value.expectedVersion, 1); return handler({ req: body(value), params: { project: project.id } }) }
-    await page.releaseSelectedFact()
-    assert.throws(() => store.node(project.id, unversioned.id), /not found/i)
-    const referenced = store.addFact(project.id, 'Referenced evidence', { creator: 'human' })
-    store.addStep(project.id, { description: 'Still needs evidence', sourceIds: [referenced.id] })
-    const c = (expectedVersion: number, id = referenced.id) => ({ req: body({ operation: 'delete', id, expectedVersion, reason: 'Local fixture' }), params: { project: project.id } })
-    await assert.rejects(handler(c(999)), (error: any) => error.status === 409)
-    await assert.rejects(handler(c(referenced.version)), (error: any) => error.status === 409 && /references/.test(error.message))
-    await assert.rejects(handler(c(1, 'origin')), (error: any) => error.status === 422)
+    assert.ok(![...router.handlers.keys()].some(key => key.startsWith('DELETE ')))
+    assert.ok(router.handlers.has('PATCH /v2/projects/:project/steps/:node'))
   } finally { store.close() }
+})
+
+test('front-end cancellation changes status without deleting the Mission or its evidence', async () => {
+  const {store,project}=fixture()
+  try {
+    const step=store.addStep(project.id,{description:'Retained Mission',sourceIds:['origin']})
+    const page=app();page.project=page.nativeProject(store.graph(project.id));page.selectedProjectId=project.id
+    page.selectedNode={type:'intent',id:step.id};page.selectedIntentRecord=()=>page.project.intents.find((s:any)=>s.id===step.id)
+    page.requestDangerConfirm=async()=>true;page.clearSelection=()=>{};page.loadProject=async()=>{};page.updateGraph=()=>{};page.showToast=()=>{}
+    const router=routes();graphRoutes(router,store)
+    page.api=async(method:string,url:string,value:any)=>{
+      assert.equal(method,'PATCH');assert.equal(value.status,'cancelled');assert.equal(value.expectedVersion,step.version)
+      return router.handlers.get('PATCH /v2/projects/:project/steps/:node')!({req:body(value),params:{project:project.id,node:step.id}})
+    }
+    await page.cancelSelectedIntent()
+    assert.equal(store.node(project.id,step.id,'step').status,'cancelled')
+    assert.deepEqual(store.node(project.id,step.id,'step').sourceIds,['origin'])
+  } finally {store.close()}
 })
 
 test('container entry and healthcheck share a concrete IPv4 host', async () => {

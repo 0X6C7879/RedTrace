@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, symlinkSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdtempSync, symlinkSync, rmSync, existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { pathToFileURL } from 'node:url'
@@ -12,6 +12,7 @@ const dependencyRoot = process.argv[3] ?? root
 const { Configuration } = await import(pathToFileURL(root + '/packages/redtrace-engine/src/config.ts'))
 const work = mkdtempSync(path.join(os.tmpdir(), 'redtrace-legion-loop-'))
 symlinkSync(path.join(dependencyRoot, 'static'), path.join(work, 'static'))
+mkdirSync(work+'/skills/console-native',{recursive:true});writeFileSync(work+'/skills/console-native/SKILL.md','---\nname: console-native\ndescription: Local native catalog test\n---\nroot-catalog-native-proof\n')
 let api, projectId, child, logs = '', ended = false
 const requests = [], roles = new Set(), pending = new Set()
 const lastOutput = b => {
@@ -69,7 +70,9 @@ const model = createServer(async (req, res) => {
       else { name = 'finish_step'; args = { summary: 'General shared-FGS integration complete' } }
     } else {
       assert.ok(!names.includes('legion_spawn'), 'Scout/Soldier cannot delegate')
-      if (!calls.includes('submit_fact')) { name = 'submit_fact'; args = { title: 'Fixture verified', description: role === 'SCOUT' ? 'Scout verified local fixture category: hard coordination' : 'Soldier verified its assigned local fixture evidence', evidence: [{ description: 'Deterministic authorized local protocol fixture; not live-target proof' }] } }
+      if (last==='skill') assert.ok(JSON.stringify(b.messages.filter(m=>m.role==='tool').at(-1)).includes('root-catalog-native-proof'),'Native skill output: '+JSON.stringify(b.messages.filter(m=>m.role==='tool').at(-1)))
+      if (role==='SOLDIER' && !calls.includes('skill')) {name='skill';args={name:'console-native'}}
+      else if (!calls.includes('submit_fact')) { name = 'submit_fact'; args = { title: 'Fixture verified', description: role === 'SCOUT' ? 'Scout verified local fixture category: hard coordination' : 'Soldier verified its assigned local fixture evidence', evidence: [{ description: 'Deterministic authorized local protocol fixture; not live-target proof' }] } }
       else if (!calls.includes('legion_message')) { name = 'legion_message'; args = { receiver: 'commander', type: 'REPORT', content: role + ' completed its evidence-backed fixture mission.' } }
       else { name = 'finish_step'; args = { summary: role + ' fixture done' } }
     }
@@ -97,6 +100,10 @@ try {
   const graph=await call('/v2/projects',{mode:'general',title:'Legion native protocol fixture',origin:'Only authorized local deterministic fixture, no real target',goal:'Verify four-role collaboration',bootstrap:false}); projectId=graph.project.id
   const acceptedDeadline=Date.now()+45000
   while(Date.now()<acceptedDeadline){const board=await call('/v2/legion?projectId='+projectId);if(board.campaign.status==='stopped')throw Error(JSON.stringify(board.campaign));if(board.projects[0]?.status==='completed'&&board.campaign.status==='idle')break;await delay(20)}
+  const inventory=await call('/console/tools')
+  assert.ok(inventory.tools.some(t=>t.name==='legion_board'&&t.scopes.some(scope=>scope!=='global')),'Commander tools come from the actual native Agent registry')
+  assert.ok(inventory.calls.filter(call=>call.name==='skill'&&call.arguments.name==='console-native').length>=2,'Native skill audit: '+JSON.stringify(inventory.calls.filter(call=>call.name==='skill')))
+  assert.ok(inventory.calls.some(call=>call.name==='legion_board'&&call.projectId===projectId),'Commander stats come from its persisted native log')
   const result=(await call('/v2/legion?projectId='+projectId)).campaign
   assert.equal(result.status,'idle');assert.ok(result.state.includes('Fixture accepted'))
   const g=await call('/v2/projects/'+projectId), runs=await call('/v2/projects/'+projectId+'/runs')

@@ -33,6 +33,13 @@ export function configRoutes(router: Router, configuration: Configuration, probe
     const result = { ok: true, status: worker.backend === 'mock' ? null : 200, duration_ms: Date.now() - start, detail: worker.backend === 'mock' ? 'mock worker needs no connection' : 'Connection successful', cached: false }
     testCache.set(key, { at: Date.now(), value: result }); return result
   }
+  router.add('POST', '/worker-config/providers/:provider/test', async c => {
+    const b = await body(c.req, Type.Object({ expected_revision: revision, model: text }))
+    const { raw } = configuration.read()
+    if (!raw.providers?.[c.params.provider]) throw new HttpError(404, 'Provider not found')
+    const worker = raw.workers.find(w => w.provider === c.params.provider)
+    return probeWorker({ ...worker, name: worker?.name ?? '__provider_probe', provider: c.params.provider, model: b.model, enabled: true, priority: worker?.priority ?? 0, max_running: worker?.max_running ?? 1, expected_revision: b.expected_revision }, worker?.name ?? null, c.signal)
+  })
   router.add('GET', '/worker-config', () => configuration.snapshot())
   router.add('PUT', '/worker-config/llm-polling', async c => {
     const b = await body(c.req, Type.Object({ expected_revision: revision, enabled: Type.Boolean(), models: Type.Record(Type.String(), Type.Array(text, { uniqueItems: true })) }))

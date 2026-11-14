@@ -28,7 +28,7 @@ test('single graph, atomic rollback, references and unique claims', async () => 
     s.finishRun(run.id, 'succeeded')
     assert.equal(s.graph(id).steps[0].status, 'done')
     assert.throws(() => s.addFact(id, 'late stale write', { runId: run.id }))
-    assert.throws(() => s.deleteStep(id, step.id))
+    assert.equal('deleteStep' in s, false)
     assert.equal(s.graph(id).facts.filter(f => f.id === 'goal').length, 0)
   } finally { s.close() }
 })
@@ -38,14 +38,16 @@ test('Worker scheduling never creates an independent planner and keeps simultane
 test('Hint and Finding changes remain graph events, never independent Worker planning jobs',async()=>{const s=new Store(':memory:'),id=create(s),fact=s.addFact(id,'Confirmed');let executions=0;const scheduler=new Scheduler(s,config,async()=>{executions++});try{scheduler.start();s.addInput(id,'hint','Unverified');s.addFinding(id,{title:'Deliverable',description:'Confirmed',factIds:[fact.id]});for(let i=0;i<8;i++)await turn();assert.equal(executions,0);assert.equal(s.runs(id).length,0)}finally{await scheduler.close();s.close()}})
 
 
-test('finding and fact deletion are graph changes without a planning trigger', () => {
+test('finding and correction Facts are graph changes without a planning trigger', () => {
   const s = new Store(':memory:')
   try {
     const id = create(s), fact = s.addFact(id, 'Temporary evidence'), retained = s.addFact(id, 'Retained evidence')
     const planning = s.project(id).planningRevision
-    s.releaseFact(id, fact.id)
+    s.addFact(id, 'Correction to '+fact.id+': retained updated evidence')
+    const afterCorrection = s.project(id).planningRevision
     s.addFinding(id, { title: 'Deliverable', description: 'Verified output', factIds: [retained.id] })
-    assert.equal(s.project(id).planningRevision, planning)
+    assert.equal(s.project(id).planningRevision, afterCorrection)
+    assert.ok(afterCorrection > planning)
   } finally { s.close() }
 })
 

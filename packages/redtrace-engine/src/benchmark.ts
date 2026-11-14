@@ -16,7 +16,7 @@ export function benchmarkAdapter(store:Store,projectId:string) {
   return {kind:tsec?'tsecbench':/(?:tpctf|ctfy)/i.test(description)?'tpctf':'manual',instanceApi:tsec,submissionApi:tsec}
 }
 async function tpctfQuery(config:EngineConfig,args:string[],signal?:AbortSignal) {
-  const script=path.join(path.dirname(config.workspaceRoot),'.redtrace','skills','tpctf-api','scripts','tpctf.py')
+  const script=path.join(path.dirname(config.workspaceRoot),'skills','tpctf-api','scripts','tpctf.py')
   let stdout:string
   try { stdout=(await execFileAsync(process.env.REDTRACE_BENCHMARK_PYTHON||'python3',[script,...args],{cwd:path.dirname(script),env:toolEnvironment(config.commonEnv),signal,timeout:45_000,maxBuffer:2*1024*1024})).stdout }
   catch(error) { const output=(error as {stdout?:string}).stdout;if(!output)throw error;stdout=output }
@@ -31,7 +31,7 @@ export function recordBenchmarkSubmission(store:Store,projectId:string,taskKey:s
   store.event(projectId,'legion.submission',null,{taskKey,accepted:data.submissionAccepted})
 }
 export async function tsecbenchQuery(config: EngineConfig, args: string[], signal?: AbortSignal) {
-  const script = path.join(path.dirname(config.workspaceRoot), '.redtrace', 'skills', 'tsecbench-api', 'scripts', 'tsecbench.py')
+  const script = path.join(path.dirname(config.workspaceRoot), 'skills', 'tsecbench-api', 'scripts', 'tsecbench.py')
   try {
     const { stdout } = await execFileAsync(process.env.REDTRACE_BENCHMARK_PYTHON || 'python3', [script, ...args], {
       cwd: path.dirname(script), env: toolEnvironment(config.commonEnv), signal, timeout: 45_000, maxBuffer: 2 * 1024 * 1024,
@@ -60,7 +60,7 @@ export async function discoverBenchmarkTasks(store:Store,config:EngineConfig,pro
         const taskKey=challenge.id
         if(typeof taskKey!=='string'||!taskKey)throw new HttpError(502,'Challenge is missing id')
         const row=store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(projectId,taskKey)
-        const data={...(row?JSON.parse(String(row.data)):{}),platformCompleted:challenge.my_team_fully_solved===true}
+        const data={...(row?JSON.parse(String(row.data)):{}),platformCompleted:challenge.my_team_fully_solved===true,eligible:!challenge.my_team_authored&&challenge.scoring==='scored'&&!challenge.closed}
         store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?) ON CONFLICT(project_id,task_key) DO UPDATE SET data=excluded.data').run(projectId,taskKey,JSON.stringify(data))
         if(store.project(projectId).mode!=='benchmark'||challenge.my_team_fully_solved||challenge.closed||challenge.my_team_authored||challenge.scoring!=='scored'||store.projectGraphs(projectId).some(g=>g.taskKey===taskKey))continue
         store.createGraph(projectId,{taskKey,title:challenge.title??taskKey,origin:store.scopeFact(projectId).description+'\nPlatform task: '+JSON.stringify(challenge),goal:(store.project(projectId).objective??'Complete the authorized task')+' · '+taskKey})

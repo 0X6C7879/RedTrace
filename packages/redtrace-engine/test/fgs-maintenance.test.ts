@@ -20,70 +20,19 @@ function produced(s: Store, id: string, description: string) {
   s.finishRun(run.id, 'succeeded'); return { step, run, fact }
 }
 
-test('merge is atomic, versioned, evidence-preserving and reference-complete', () => {
+test('destructive evidence and Step APIs are absent; corrections preserve history and references', () => {
   const s = new Store(':memory:')
   try {
-    const id = project(s), a = produced(s, id, 'proof A'), b = produced(s, id, 'proof B')
-    const finding = s.addFinding(id, { title: 'Deliverable', description: 'Proof', factIds: [a.fact.id, b.fact.id] })
-    const goal = s.addGoal(id, 'Completed subgoal'); s.updateGoal(id, goal.id, { status: 'achieved', evidenceIds: [b.fact.id] })
-    const next = s.addStep(id, { description: 'Follow latest', sourceIds: [a.fact.id, b.fact.id] })
-    const before = s.project(id), change = { operation: 'merge' as const, id: a.fact.id, expectedVersion: a.fact.version!, sourceIds: [b.fact.id], sourceVersions: { [b.fact.id]: 999 }, reason: 'Confirmed equivalent in this fixture' }
-    assert.throws(() => s.manageEvidence(id, change), (e: any) => e.status === 409 && e.details.current.id === b.fact.id)
-    assert.equal(s.project(id).revision, before.revision)
-    const merged = s.manageEvidence(id, { ...change, sourceVersions: { [b.fact.id]: b.fact.version! }, description: 'Consolidated proof' }) as Fact
-    assert.equal(merged.description, 'Consolidated proof')
-    assert.equal(merged.evidence.length, 2)
-    assert.deepEqual(new Set(merged.producerStepIds), new Set([a.step.id, b.step.id]))
-    assert.deepEqual(s.node<Step>(id, next.id).sourceIds, [a.fact.id])
-    assert.deepEqual(s.node<Finding>(id, finding.id).factIds, [a.fact.id])
-    assert.deepEqual(s.node<Goal>(id, goal.id).evidenceIds, [a.fact.id])
-    assert.deepEqual(s.node<Step>(id, b.step.id).factIds, [a.fact.id])
-    assert.throws(() => s.node(id, b.fact.id), (e: any) => e.status === 404)
-    assert.equal(s.graph(id).facts.length, 2)
-    assert.equal(s.db.prepare('SELECT COUNT(*) AS count FROM nodes WHERE project_id=? AND kind=?').get(id, 'fact')!.count, 2)
-    assert.equal(s.project(id).evidenceSeq, before.evidenceSeq)
-    assert.equal(projectFgs(s.graph(id)).missingReferences.length, 0)
-    assert.throws(() => s.manageEvidence(id, { ...change, id: b.fact.id }), /not found/)
-    assert.throws(() => s.manageEvidence(id, { ...change, sourceIds: [a.fact.id], expectedVersion: merged.version! }), /sources/)
-    assert.throws(() => s.manageEvidence(id, { ...change, sourceIds: [finding.id], sourceVersions: { [finding.id]: finding.version! }, expectedVersion: merged.version! }), /same kind/)
-  } finally { s.close() }
-})
-
-test('Finding merge preserves producing actions, evidence, details and completed-goal references', () => {
-  const s = new Store(':memory:')
-  try {
-    const id = project(s), a = produced(s, id, 'A'), b = produced(s, id, 'B')
-    const one = s.addFinding(id, { title: 'Same result', description: 'A', factIds: [a.fact.id], details: { source: 'A' } })
-    const two = s.addFinding(id, { title: 'Same result', description: 'B', factIds: [b.fact.id], details: { source: 'B' } })
-    const goal = s.addGoal(id, 'Subgoal'); s.updateGoal(id, goal.id, { status: 'achieved', evidenceIds: [two.id] })
-    const merged = s.manageEvidence(id, { operation: 'merge', id: one.id, expectedVersion: one.version!, sourceIds: [two.id], sourceVersions: { [two.id]: two.version! }, reason: 'Same deliverable', title: 'Unified result', description: 'Final proof', details: { proof: 'AB' } }) as Finding
-    assert.deepEqual(new Set(merged.factIds), new Set([a.fact.id, b.fact.id]))
-    assert.throws(() => s.node(id, two.id), /not found/)
-    assert.equal(merged.title, 'Unified result'); assert.equal(merged.description, 'Final proof')
-    assert.deepEqual(merged.details, { proof: 'AB' })
-    assert.ok(!('sourceDetails' in merged))
-    assert.deepEqual(s.node<Goal>(id, goal.id).evidenceIds, [one.id])
-  } finally { s.close() }
-})
-
-test('delete refuses active references atomically, clears concluded references and retains producer Runs', () => {
-  const s = new Store(':memory:')
-  try {
-    const id = project(s), a = produced(s, id, 'A'), step = s.addStep(id, { description: 'Dependent', sourceIds: [a.fact.id] })
-    const change = { operation: 'delete' as const, id: a.fact.id, expectedVersion: a.fact.version!, reason: 'No longer useful' }, revision = s.project(id).revision
-    assert.throws(() => s.manageEvidence(id, change), (e: any) => e.details.blockers.some((n: any) => n.id === step.id))
-    assert.equal(s.project(id).revision, revision)
+    const id = project(s), a = produced(s, id, 'Initial observation')
+    const step = s.addStep(id, { description: 'Dependent', sourceIds: [a.fact.id] })
+    const corrected = s.addFact(id, 'Correction to '+a.fact.id+': independently verified result', { evidence: [{ description: 'New literal proof' }] })
+    for (const name of ['manageEvidence', 'releaseFact', 'deleteStep', 'deleteInput']) assert.equal(name in s, false)
     s.updateStep(id, step.id, { status: 'cancelled' })
-    assert.deepEqual(s.manageEvidence(id, change), { id: a.fact.id, deleted: true })
-    assert.equal(s.nodeCount(id, 'fact'), 1)
-    assert.deepEqual(s.node<Step>(id, step.id).sourceIds, [])
-    assert.deepEqual(s.node<Step>(id, a.step.id).factIds, [])
-    assert.equal(s.run(a.run.id).status, 'succeeded')
-    assert.throws(() => s.node(id, a.fact.id), (e: any) => e.status === 404)
-    assert.equal(projectFgs(s.graph(id)).missingReferences.length, 0)
-    assert.throws(() => s.addStep(id, { description: 'Invalid', sourceIds: [a.fact.id] }), /not found/)
-    assert.throws(() => s.manageEvidence(id, { ...change, id: 'origin', expectedVersion: 1 }), /Scope/)
-    assert.throws(() => s.updateGoal(id, 'goal', { description: 'Different authorization' }), /immutable/)
+    assert.equal(s.node(id, a.fact.id).id, a.fact.id)
+    assert.deepEqual(s.node<Step>(id, step.id).sourceIds, [a.fact.id])
+    assert.equal(s.nodeCount(id, 'fact'), 3)
+    assert.equal(s.node(id, corrected.id).id, corrected.id)
+    assert.deepEqual(projectFgs(s.graph(id)).missingReferences, [])
   } finally { s.close() }
 })
 
@@ -145,7 +94,7 @@ test('Commander incremental pages cannot acknowledge unseen gaps',()=>{const s=n
 
 test('Finding and maintenance events reach Commander with bounded graph scans',()=>{const s=new Store(':memory:');try{const id=project(s),a=produced(s,id,'A'),legion=new LegionStore(s);legion.claimCommand();const first=legion.readChanges(id);s.addFinding(id,{title:'Finding',description:'New deliverable',factIds:[a.fact.id]});s.graph=()=>{throw Error('Full graph read forbidden')};let page=legion.readChanges(id,first.cursor,1),seen=false;do{seen ||= page.events.some(e=>e.type==='finding.added');if(!page.hasMore)break;page=legion.readChanges(id,page.cursor,1)}while(true);assert.ok(seen);assert.ok(s.db.prepare("EXPLAIN QUERY PLAN SELECT data FROM nodes WHERE project_id=? AND kind='fact' AND COALESCE(json_extract(data,'$.deleted'),0)=0 LIMIT 1").all(id).some(r=>String(r.detail).includes('nodes_active')))}finally{s.close()}})
 
-test('Commander owns FGS maintenance while Worker can only sync its own contract',async()=>{const s=new Store(':memory:');try{const id=project(s),legion=new LegionStore(s);legion.claimCommand();const tools=legionTools(s,'commander',s.projects()[0].id,null,()=>{}),fact=s.addFact(id,'Evidence');await assert.rejects(tools.find(t=>t.name==='legion_manage_evidence')!.execute('conflict',{projectId:id,operation:'delete',id:fact.id,expectedVersion:999,reason:'fixture'}),/version/i);const step=s.addStep(id,{description:'execute',sourceIds:['origin']}),run=s.claim(id,'execute',worker,step.id),exec=graphTools({store:s,run,worker,config,signal:new AbortController().signal},()=>{});assert.ok(exec.some(t=>t.name==='sync_step'));assert.ok(!exec.some(t=>t.name==='legion_manage_evidence'));assert.ok(tools.some(t=>t.name==='legion_goal'));assert.ok(tools.some(t=>t.name==='legion_update_step'));await tools.find(t=>t.name==='legion_manage_evidence')!.execute('delete',{projectId:id,operation:'delete',id:fact.id,expectedVersion:fact.version,reason:'unused'});assert.throws(()=>s.node(id,fact.id),/not found/)}finally{s.close()}})
+test('Commander and task owners can update plans but never delete or merge evidence',()=>{const s=new Store(':memory:');try{const id=project(s);new LegionStore(s).claimCommand();const tools=legionTools(s,'commander',id,null,()=>{});const step=s.addStep(id,{description:'execute',sourceIds:['origin']}),run=s.claim(id,'execute',worker,step.id),exec=graphTools({store:s,run,worker,config,signal:new AbortController().signal},()=>{});assert.ok(exec.some(t=>t.name==='sync_step'));for(const set of [tools,exec])assert.ok(!set.some(t=>t.name==='legion_manage_evidence'));assert.ok(tools.some(t=>t.name==='legion_goal'));assert.ok(tools.some(t=>t.name==='legion_update_step'))}finally{s.close()}})
 
 test('role scheduling honors total and Worker concurrency without an independent Reason slot',async()=>{const s=new Store(':memory:'),id=project(s);for(let i=0;i<4;i++)s.addStep(id,{description:'work '+i,sourceIds:['origin']});let release!:()=>void;const wait=new Promise<void>(r=>release=r),scheduler=new Scheduler(s,{...config,maxWorkers:2,workers:[{...worker,roles:['soldier'],maxRunning:2}]},async()=>wait);try{scheduler.start();await until(()=>scheduler.activeRuns.length===2);assert.equal(s.runs(id).length,2);assert.ok(s.runs(id).every(r=>r.activity==='execute'))}finally{release();await scheduler.close();s.close()}})
 
@@ -163,7 +112,7 @@ test('a paused session is already quiescent and can be replaced without leaving 
   } finally { s.close() }
 })
 
-test('new Explore deltas start at claim, not at historical events; legacy deletion retains producing Steps', () => {
+test('new Explore deltas start at claim; producing Steps and Facts remain', () => {
   const s = new Store(':memory:')
   try {
     const id = project(s)
@@ -171,10 +120,10 @@ test('new Explore deltas start at claim, not at historical events; legacy deleti
     const step = s.addStep(id, { description: 'Fresh Explore', sourceIds: ['origin'] }), run = s.claim(id, 'execute', worker, step.id)
     const page = s.graphDelta(id, run.deliveredGraphCursor, 100, run.id)
     assert.equal(page.events.length, 1); assert.equal(page.events[0].type, 'execute.started'); assert.equal(page.hasMore, false)
-    const fact = s.addFact(id, 'Legacy deletion fixture', { runId: run.id }); s.finishRun(run.id, 'succeeded'); s.releaseFact(id, fact.id)
+    const fact = s.addFact(id, 'Retained evidence fixture', { runId: run.id }); s.finishRun(run.id, 'succeeded')
     assert.equal(s.graph(id).steps.length, 1)
-    assert.deepEqual(s.graph(id).steps[0].factIds, [])
-    assert.throws(() => s.node(id, fact.id), /not found/)
+    assert.deepEqual(s.graph(id).steps[0].factIds, [fact.id])
+    assert.equal(s.node(id, fact.id).id, fact.id)
   } finally { s.close() }
 })
 
@@ -184,7 +133,7 @@ test('stopped contracts never ask to sync; unrelated evidence maintenance does n
   const unrelated=s.addFact(id,'Unrelated evidence')
   const step=s.addStep(id,{description:'Current',sourceIds:['origin']}),run=s.claim(id,'execute',worker,step.id)
   let cursor=run.deliveredGraphCursor!
-  s.manageEvidence(id,{operation:'delete',id:unrelated.id,expectedVersion:unrelated.version!,reason:'Unreferenced'})
+  s.addFact(id,'Correction to '+unrelated.id+': new observed evidence')
   const update=graphUpdate(s,id,cursor,step.id,run.id)
   assert.equal(update.relevant,false);cursor=update.cursor
   s.updateStep(id,step.id,{description:'Replacement',mode:'replace',expectedVersion:s.node(id,step.id).version})

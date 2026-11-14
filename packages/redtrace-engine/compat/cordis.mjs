@@ -1,3 +1,4 @@
+import { runtimeCatalog, commanderCalls, mountToolSettings } from './console.mjs'
 import { mountLegionContext } from './legion-context.mjs'
 import { Type } from 'typebox'
 import { body, queryNumber } from '../src/http.ts'
@@ -111,7 +112,7 @@ export async function apply(ctx, options) {
   const { createUserMessage, HarnessError } = await load('vendor/deepseek-harness/packages/llm/llm/lib/index.js')
   const { SessionId } = await load('vendor/deepseek-harness/packages/core/session/lib/index.js')
   let commanderController
-  const engine = await createEngine({ root, database: options.database, configuration: options.configuration, autoStart: false,
+  const engine = await createEngine({ root, database: options.database, configuration: options.configuration, autoStart: false, runtimeCatalog: async () => { await refresh(); return runtimeCatalog(ctx) }, commanderCalls: () => commanderCalls(ctx, engine),
     // The gate is created before the manager exists; it only dereferences it
     // when a request or dispatch actually asks, long after boot settles.
     adapterAvailability: () => pluginId => manager.running(pluginId),
@@ -125,7 +126,7 @@ export async function apply(ctx, options) {
       const context = { ...input, featureAvailable: id => manager.availableForTask(id) }
       return context.run.backend === 'mock' ? runMock(context) : executeDsh(context)
     } })
-  const runtime = { runtime: true, root, server: options.server, sessionRoot: path.join(managed, 'sessions'), skillsDir: path.join(managed, 'skills'), workspacesDir: engine.configuration.workspaceRoot,
+  const runtime = { runtime: true, root, server: options.server, sessionRoot: path.join(managed, 'sessions'), skillsDir: engine.capabilities.skillsDir, workspacesDir: engine.configuration.workspaceRoot,
     pluginsManifest: path.join(managed, 'plugins.json'), engineScheduler: { start() { engine.scheduler.start(); commanderController?.start() }, async close() { await commanderController?.close(); await engine.scheduler.close() } } }
   // The repo-local security-asset map (wordlists / payloads / PoC references /
   // target-upload tunnel binaries) as stable env names every worker can use.
@@ -174,6 +175,7 @@ export async function apply(ctx, options) {
   })
   try {
     await manager.boot(); registerPluginRoutes(ctx, manager)
+    mountToolSettings(ctx, engine)
     commanderController = createCommanderController(ctx, engine,()=>!!state()?.presets.has('commander'))
     engine.deletion.stopRuntime=async id=>{await commanderController.stop(id);await engine.scheduler.stopProject(id)}
     if (manager.running('redtrace-scheduler')) commanderController.start()
@@ -222,13 +224,16 @@ export async function apply(ctx, options) {
     const ownSpillRead = executionEvidenceReadGuard(sessionDir(path.join(runtime.sessionRoot, 'spill'), run.id), cwd)
     const setup = async scoped => {
       if (!reporting) {
-        // Skills mount DSH-natively from the full managed skills root; the
+        // Skills mount DSH-natively from the project root skills catalog; the
         // agent discovers and loads them through the skill tool on demand.
         scoped = await mountExecutionTools(scoped, { task, cwd, sessionRoot: runtime.sessionRoot, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.availableForTask(id),
           onRefresh: refresh => sessionRefresh.set(run.id, async () => { await refresh(); refreshLiveTools() }) })
       }
       if (reporting) scoped.tools.restrict({ allow: [] })
-      else mountLegionContext(scoped,ctx,{store,legion:engine.legion,run,task,message})
+      else {
+        mountLegionContext(scoped,ctx,{store,legion:engine.legion,run,task,message})
+        scoped.on('agent/error',({error})=>{task.failure=error;const current=store.run(run.id);current.failureCode=error?.code??'PROCESS_EXIT';store.saveRun(current)})
+      }
       mountActivityPrompt(scoped, store, run, step)
       const planGuard = run.activity === 'execute' ? createPlanGuard(store, run.id) : undefined
       if (planGuard) {
@@ -318,6 +323,7 @@ export async function apply(ctx, options) {
       steer(run.projectId)
       const limits = activityLimits(config, run.activity, step)
       await wait(limits.timeout)
+      if(task.failure&&!signal.aborted)throw task.failure
       if (!finished && !task.committed && !signal.aborted) {
         task.concludeOnly = concludeOnly = true
         prompt(reporting ? '已进入超时收尾。只根据已读取的真实证据完成本漏洞报告，缺失内容明确标注未提供或未验证，调用 update_finding_report 保存；不得重新探测或伪造证据。' : run.activity === 'execute'

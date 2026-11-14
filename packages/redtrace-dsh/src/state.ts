@@ -16,6 +16,7 @@ export class RedTraceState {
   /** Signature of the currently mounted MCP configs; the domain plugin owns
    * the fibers and swaps them when a refreshed snapshot carries new configs. */
   mcpSignature = ''
+  mcpStatuses?: () => Array<{ name: string; state: string; toolCount?: number; lastError?: string }>
   remountMcp?: (configs: Array<Record<string, Json>>) => Promise<void>
   constructor(readonly config: RuntimeOptions) {}
 }

@@ -118,7 +118,7 @@ async function batch(context: TaskContext, entry: Entry, requests: RequestInput[
       metadata.requests ??= {}
       metadata.requests[requestId] = { file: evidence.file, sha256: evidence.sha256, run_id: context.run.id }
       ops.updateResource(entry.resourceId, { metadata_json: JSON.stringify(metadata) })
-      return { index, request_id: requestId, method: item.method ?? 'GET', url: item.url, status: response.status(), location: headers.location ?? null, durationMs: Date.now() - started, responseBytes: body.length, responseSha256: createHash('sha256').update(body).digest('hex'), extraction: extractOutput(body.toString(), headers['content-type']), evidence, error: null }
+      return { index, request_id: requestId, method: item.method ?? 'GET', url: item.url, status: response.status(), headers, location: headers.location ?? null, durationMs: Date.now() - started, responseBytes: body.length, responseSha256: createHash('sha256').update(body).digest('hex'), extraction: extractOutput(body.toString(), headers['content-type']), body: body.toString(), evidence, error: null }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error), evidence = await archive(context, { request: item, error: message, outcome: 'unknown; never automatically replay' })
       return { index, request_id: requestId, method: item.method ?? 'GET', url: item.url, status: null, location: null, durationMs: Date.now() - started, responseBytes: null, responseSha256: null, evidence, error: message }
