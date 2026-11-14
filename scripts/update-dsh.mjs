@@ -137,7 +137,7 @@ export async function updateDsh({ root = repository, source, release = undefined
     console.log('Preparing runtime and applying RedTrace patches')
     await prepareRuntime(source, candidate)
     await cp(path.join(root, 'packages/redtrace-dsh'), path.join(stage, 'packages/redtrace-dsh'), { recursive: true, filter: filename => !['lib', 'node_modules'].includes(path.basename(filename)) })
-    await cp(path.join(root, 'packages/redtrace-engine'), path.join(stage, 'packages/redtrace-engine'), { recursive: true, filter: filename => !['node_modules', 'test'].includes(path.basename(filename)) })
+    await cp(path.join(root, 'packages/redtrace-engine'), path.join(stage, 'packages/redtrace-engine'), { recursive: true, filter: filename => !['node_modules'].includes(path.basename(filename)) })
     await symlink(path.join(root, 'packages/redtrace-engine/node_modules'), path.join(stage, 'packages/redtrace-engine/node_modules'), 'junction')
     const pnpm = args => run(process.execPath, [path.join(root, 'scripts/dsh-pnpm.mjs'), ...args], candidate, { REDTRACE_DSH_ROOT: candidate })
     console.log('Installing dependencies')
