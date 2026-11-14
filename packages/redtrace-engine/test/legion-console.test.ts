@@ -9,7 +9,7 @@ import {LegionStore} from '../src/legion-store.ts'
 const root=path.resolve(import.meta.dirname,'../../..')
 const html=readFileSync(path.join(root,'static/index.html'),'utf8')
 function page(){
-  const context=vm.createContext({window:{},console,location:{hash:'#/legion'}})
+  const context=vm.createContext({window:{},console,location:{hash:'#/projects/p/commander'}})
   vm.runInContext(readFileSync(path.join(root,'static/fgs-view.js'),'utf8'),context)
   vm.runInContext([...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].find(m=>m[1].includes('function redtraceApp()'))![1],context)
   const app=vm.runInContext('redtraceApp()',context)
@@ -117,10 +117,25 @@ test('messages preserve unsent content on error, clear it only after acceptance 
   assert.equal(app.legionMessage.content,'');assert.match(toasts.at(-1)!,/保存.*实际交付/)
 })
 
-test('deep-linked Legion route loads model configuration as well as status',()=>{
+test('benchmark deep link opens workspace overview and loads Commander status',async()=>{
   const app=page();let board=0,workers=0
   app.loadLegion=()=>board++;app.loadWorkerConfig=()=>workers++;app.handleRoute()
+  await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(app.appPage,'workspace');assert.equal(app.view,'benchmark')
   assert.equal(board,1);assert.equal(workers,1)
+  assert.doesNotMatch(html,/aria-label=\"军团\"/)
+})
+
+test('benchmark cards exclude the main graph and show runs from each task Step',async()=>{
+  const app=page(),calls:string[]=[]
+  const graphs=[{id:'main',type:'main',title:'Main',taskKey:'main'},{id:'g1',type:'benchmark_task',title:'Task',taskKey:'task'}]
+  assert.equal(app.filteredTaskGraphs({graphs,steps:[]}).length,1)
+  app.selectedProjectId='p';app.selectedGraphId='g1';app.fgs={steps:[{id:'s1'},{id:'s2'}]}
+  app.api=async(_method:string,url:string)=>{calls.push(url);return url.includes('/s1/')?[{id:'r1',worker:'one'}]:[{id:'r2',worker:'two'}]}
+  app.loadFgsRunLog=async()=>{calls.push('events:'+app.fgsRunId)}
+  await app.loadGraphWorkerRuns()
+  assert.deepEqual(Array.from(app.graphWorkerRuns,(r:any)=>r.id),['r2','r1'])
+  assert.equal(app.fgsRunId,'r2');assert.equal(calls.at(-1),'events:r2')
 })
 
 
