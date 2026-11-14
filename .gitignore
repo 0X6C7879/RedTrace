@@ -89,3 +89,9 @@ vendor/deepseek-harness/native/system/packages/*/bin/
 
 # 本地实验脚本/记录，不入库
 experiments/
+
+# 补丁/回滚校验的临时产物（不入库）
+static/index.baseline.html
+static/index.modified.html
+packages/redtrace-engine/test/*.baseline.test.ts
+docs/benchmark-workspace-ui-*/
