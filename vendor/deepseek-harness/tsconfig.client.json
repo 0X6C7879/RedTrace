@@ -63,6 +63,9 @@
       "path": "./packages/client/ui-settings-account"
     },
     {
+      "path": "./packages/client/ui-account-notifications"
+    },
+    {
       "path": "./packages/host/webserver"
     },
     {
@@ -201,7 +204,7 @@
       "path": "./packages/client/ui-subagent"
     },
     {
-      "path": "./packages/experimental/client-ui-agent-team"
+      "path": "./packages/client/ui-agent-team"
     },
     {
       "path": "./packages/experimental/client-ui-stats"
@@ -280,6 +283,9 @@
     },
     {
       "path": "./packages/client/ui-trajectory/tsconfig.client.json"
+    },
+    {
+      "path": "./packages/experimental/deepseek-chat-import/tsconfig.client.json"
     },
     {
       "path": "./packages/session-query/session-log-export/tsconfig.client.json"

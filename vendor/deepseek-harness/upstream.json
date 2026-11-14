@@ -1,6 +1,6 @@
 {
-  "version": "0.2.2-alpha.3",
-  "tag": "dsh-v0.2.2-alpha.3",
-  "url": "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-alpha.3",
-  "digest": "abaef1202b010507b368e86e5a6a7ca5d3de5376834a994b381015a8dfcfac8f"
+  "version": "0.2.2-rc.3",
+  "tag": "dsh-v0.2.2-rc.3",
+  "url": "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3",
+  "digest": "765dddc88f90f04d2fb8e601dfcd1a2b40d3cf7d497c4f966de9b97730e61be7"
 }

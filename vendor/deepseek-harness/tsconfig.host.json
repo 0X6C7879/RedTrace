@@ -157,13 +157,10 @@
       "path": "./packages/client/ui-settings-general/tsconfig.host.json"
     },
     {
-      "path": "./packages/document/office-to-pdf"
+      "path": "./packages/document/office-kit"
     },
     {
-      "path": "./packages/api/account-controller"
-    },
-    {
-      "path": "./packages/credentials/deepseek-account-platform"
+      "path": "./packages/document/tool-office"
     },
     {
       "path": "./packages/credentials/deepseek-account"
@@ -205,6 +202,9 @@
       "path": "./packages/util/brand"
     },
     {
+      "path": "./packages/util/error"
+    },
+    {
       "path": "./packages/util/package-manifest"
     },
     {
@@ -224,6 +224,9 @@
     },
     {
       "path": "./packages/util/native-command"
+    },
+    {
+      "path": "./packages/util/ripgrep"
     },
     {
       "path": "./packages/util/home-paths"
@@ -368,6 +371,9 @@
     },
     {
       "path": "./packages/session-query/session-query-sqlite"
+    },
+    {
+      "path": "./packages/experimental/deepseek-chat-import/tsconfig.host.json"
     },
     {
       "path": "./packages/session-query/session-log-export/tsconfig.host.json"
@@ -601,6 +607,9 @@
       "path": "./packages/experimental/tool-terminal"
     },
     {
+      "path": "./packages/experimental/terminal-panel"
+    },
+    {
       "path": "./packages/ptc-runtime/ptc-runtime"
     },
     {
@@ -707,12 +716,6 @@
     },
     {
       "path": "./packages/web/web"
-    },
-    {
-      "path": "./packages/web/web-search-exa"
-    },
-    {
-      "path": "./packages/web/web-search-perplexity"
     },
     {
       "path": "./packages/web/web-search-deepseek"
@@ -841,10 +844,7 @@
       "path": "./packages/jobs/tool-jobs"
     },
     {
-      "path": "./packages/experimental/agent-team"
-    },
-    {
-      "path": "./packages/experimental/agent-team-profile"
+      "path": "./packages/team/agent-team"
     },
     {
       "path": "./packages/experimental/inspector-profile"
@@ -853,10 +853,10 @@
       "path": "./packages/experimental/liveshare-protocol/tsconfig.host.json"
     },
     {
-      "path": "./packages/experimental/liveshare/tsconfig.host.json"
+      "path": "./packages/team/tool-agent-team"
     },
     {
-      "path": "./packages/experimental/tool-agent-team"
+      "path": "./packages/experimental/liveshare/tsconfig.host.json"
     },
     {
       "path": "./packages/workflow/workflow"
@@ -911,6 +911,9 @@
     },
     {
       "path": "./packages/mcp/mcp-client"
+    },
+    {
+      "path": "./packages/mcp/mcp-manager"
     },
     {
       "path": "./packages/mcp/mcp-resources"
