@@ -26,7 +26,8 @@ const model=createServer(async(req,res)=>{
   assert(input.tools.some(t=>t.function.name==='TodoWrite'))
   const injected=input.messages.map(textOf).map(s=>{try{return JSON.parse(s)}catch{return null}}).filter(s=>s?.instruction?.includes('compact legion_board')).at(-1)
   assert(injected,'each wake must carry compact instructions and cursors')
-  assert(!('graphs' in injected),'wake-up must not inject full FGS and TodoLists')
+  assert(!('graphs' in injected),'wake-up must not inject full FGS')
+  assert.deepEqual(injected.planningTodos,wake===1?[]:wake<=3?initial:[{content:'verify entry',status:'completed'},{content:'verify credentials',status:'in_progress'}],'every wake inherits the current task plan, including a fresh native session')
   const current={todos:legion.planningTodos(project.id).list(graph.id),fgs:store.graph(project.id)}
   const boundary=input.messages.findLastIndex(m=>{try{return !!JSON.parse(textOf(m)).instruction?.includes('compact legion_board')}catch{return false}})
   const calls=input.messages.slice(boundary+1).flatMap(m=>m.tool_calls??[]).map(c=>c.function.name)
@@ -91,5 +92,5 @@ try{
  store.addFact(project.id,'CREDENTIALS_VERIFIED',{evidence:[{description:'local deterministic fixture: credentials=verified'}]})
  await cycle();assert.deepEqual(todos().map(t=>t.status),['completed','completed'])
  assert.equal(store.node(project.id,graph.goalId).status,'open','Todo completion never accepts a Goal')
- console.log('TODOS_NATIVE_DSH=true; wakes=5; fresh_session_memory=true; resumed_session_memory=true; failure_does_not_advance=true; Step_done_without_required_Fact_does_not_advance=true; Fact_advances_next_stage=true; no_duplicate_dispatch=true; independent_parallel=true; model=local-protocol-fixture')
+ console.log('TODOS_NATIVE_DSH=true; wakes=5; fresh_session_memory=true; resumed_session_memory=true; failure_does_not_advance=true; Step_done_without_required_Fact_does_not_advance=true; Fact_advances_next_stage=true; no_duplicate_dispatch=true; independent_parallel=true; todo_snapshot_each_wake=true; model=local-protocol-fixture')
 }finally{await ctx?.fiber.dispose();store.close();model.closeAllConnections();await new Promise(r=>model.close(r));rmSync(work,{recursive:true,force:true})}

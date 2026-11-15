@@ -1,7 +1,0 @@
-{
-  "command": "tar -xzf /Users/lxy/Downloads/RedTrace/docs/fact-finding-migration-20261113/MODIFIED_FILE.tar.gz -C /tmp/redtrace-fact-finding-rollback-KOBddU",
-  "cwd": "/Users/lxy/Downloads/RedTrace",
-  "stdout": "",
-  "stderr": "",
-  "exit": 0
-}

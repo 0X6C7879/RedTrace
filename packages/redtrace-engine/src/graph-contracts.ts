@@ -14,3 +14,5 @@ export const goalUpdateSchema = Type.Object({ description: Type.Optional(text),
   status: Type.Optional(Type.Union([Type.Literal('open'), Type.Literal('achieved'), Type.Literal('cancelled')])),
   evidenceIds: Type.Optional(Type.Array(text, { uniqueItems: true })), expectedVersion: version, mode,
 })
+
+export const specialistSchema=Type.Object({name:Type.String({minLength:1}),responsibilities:Type.String({minLength:1}),capabilities:Type.Array(Type.String({minLength:1})),scope:Type.String({minLength:1})},{additionalProperties:false})

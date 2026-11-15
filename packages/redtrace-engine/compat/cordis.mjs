@@ -2,6 +2,7 @@ import { runtimeCatalog, commanderCalls, mountToolSettings } from './console.mjs
 import { mountLegionContext } from './legion-context.mjs'
 import { Type } from 'typebox'
 import { body, queryNumber } from '../src/http.ts'
+import { mountGlobalChat } from './chat.mjs'
 import { attachLegionMailbox, runCommander, createCommanderController, readCommanderLog } from './legion.mjs'
 import {createHash, randomUUID} from 'node:crypto'
 import path from 'node:path'
@@ -47,7 +48,7 @@ export function executionEvidenceReadGuard(directory, cwd) {
 export { providerProfiles } from '../src/models.ts'
 
 export function mountActivityPrompt(scoped, store, run, step) {
-  scoped.systemPrompt.section({ name: 'redtrace:fgs', order: 0, text: () => activityPrompt(run.activity, step, store.project(run.projectId).mode, !!step && taskTodoOwner(step)) })
+  scoped.systemPrompt.section({ name: 'redtrace:fgs', order: 0, text: () => activityPrompt(run.activity, step, store.project(run.projectId).mode, !!step && taskTodoOwner(step,store)) })
 }
 
 export function refreshToolRegistrations(tools, enabled, register) {
@@ -111,8 +112,8 @@ export async function apply(ctx, options) {
   const root = path.resolve(options.root), managed = path.dirname(options.configuration)
   const { createUserMessage, HarnessError } = await load('vendor/deepseek-harness/packages/llm/llm/lib/index.js')
   const { SessionId } = await load('vendor/deepseek-harness/packages/core/session/lib/index.js')
-  let commanderController
-  const engine = await createEngine({ root, database: options.database, configuration: options.configuration, autoStart: false, runtimeCatalog: async () => { await refresh(); return runtimeCatalog(ctx) }, commanderCalls: () => commanderCalls(ctx, engine),
+  let commanderController, closeGlobalChat
+  const engine = await createEngine({ root, database: options.database, configuration: options.configuration, autoStart: false, runtimeCatalog: async () => { await refresh(); return runtimeCatalog(ctx) }, commanderCalls: () => commanderCalls(ctx, engine), commanderEvents: (offset,limit,signal,projectId,sessionId) => readCommanderLog(ctx,engine,offset,limit,signal,projectId,sessionId),
     // The gate is created before the manager exists; it only dereferences it
     // when a request or dispatch actually asks, long after boot settles.
     adapterAvailability: () => pluginId => manager.running(pluginId),
@@ -176,11 +177,12 @@ export async function apply(ctx, options) {
   try {
     await manager.boot(); registerPluginRoutes(ctx, manager)
     mountToolSettings(ctx, engine)
+    closeGlobalChat = mountGlobalChat(ctx,engine,refresh)
     commanderController = createCommanderController(ctx, engine,()=>!!state()?.presets.has('commander'))
-    engine.deletion.stopRuntime=async id=>{await commanderController.stop(id);await engine.scheduler.stopProject(id)}
+    engine.commanderController=commanderController
+    engine.deletion.stopRuntime=async id=>{await engine.chats.stopProject?.(id);await commanderController.stop(id);await engine.scheduler.stopProject(id)}
     if (manager.running('redtrace-scheduler')) commanderController.start()
     engine.router.add('GET', '/runtime/config', async () => { await refresh(); return state()?.snapshot ?? { revision: '', workers: [] } })
-    engine.router.add('GET', '/v2/legion/session/events', c => readCommanderLog(ctx, engine, queryNumber(c.url, 'offset', 0), queryNumber(c.url, 'limit', 100, 1, 500), c.signal, c.url.searchParams.get('projectId')))
     engine.router.add('POST','/v2/legion/resume',async c=>{const b=await body(c.req,Type.Object({projectId:Type.String({minLength:1})}));engine.store.project(b.projectId);return commanderController.resume(b.projectId)})
     engine.router.add('POST','/v2/legion/pause',async c=>{const b=await body(c.req,Type.Object({projectId:Type.String({minLength:1})}));await commanderController.close(b.projectId);return new engine.legion.constructor(engine.store,b.projectId).board()})
     engine.router.add('POST','/v2/legion/deadline',async c=>{const input=await body(c.req,Type.Object({projectId:Type.String({minLength:1}),deadline:Type.Integer({minimum:1})}));return engine.legion.setDeadline(input.deadline,input.projectId)})
@@ -193,7 +195,7 @@ export async function apply(ctx, options) {
     watcher = watch(path.dirname(engine.configuration.filename), (_event, filename) => {
       if (!filename || String(filename) === path.basename(engine.configuration.filename)) void refresh().catch(error => ctx.logger.warn(error))
     })
-    ctx.effect(() => async () => { watcher.close(); await commanderController?.close(); await engine.close() })
+    ctx.effect(() => async () => { watcher.close(); await closeGlobalChat?.(); await commanderController?.close(); await engine.close() })
   } catch (error) { watcher?.close(); await engine.close(); throw error }
 
   async function executeDsh(context) {
@@ -316,7 +318,7 @@ export async function apply(ctx, options) {
       signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) { cancel(); return }
       store.checkpoint(run.id, { sessionId: run.id })
       cursor = Math.max(cursor, pendingGraphNotice(handle.agent)?.update.cursor ?? 0)
-      prompt(resume ? '继续' : JSON.stringify(launchContext(store, run.id,
+      prompt(resume ? JSON.stringify({continue:true,...(step && store.project(run.projectId).mode==='benchmark' && taskTodoOwner(step,store) ? {planningTodos:engine.legion.planningTodos(run.projectId).list(step.graphId)} : {})}) : JSON.stringify(launchContext(store, run.id,
         channelsFor(verbRuntime, [], 8, run.projectId), (context.currentMaxSteps ? context.currentMaxSteps() : config.maxSteps))))
        if (!reporting && step?.role) legionMailbox = attachLegionMailbox(ctx, engine.legion, { projectId: run.projectId, actor: run.id, sessionId: run.id, agent: handle.agent, message, closing: () => finished || signal.aborted })
       // Changes committed during activation remain in the event log until this scan.

@@ -6,6 +6,8 @@ import { readFile, realpath, stat } from 'node:fs/promises'
 import { watch } from 'node:fs'
 import path from 'node:path'
 import { Store } from './store.ts'
+import { workbenchRoutes, projectWorkbench } from './workbench.ts'
+import { ChatStore, chatRoutes, conversationWorkers, configuredConversationModels } from './chat.ts'
 import { LegionStore } from './legion-store.ts'
 import { ProjectEvidence } from './project-evidence.ts'
 import { Configuration } from './config.ts'
@@ -30,7 +32,7 @@ export type * from './types.ts'
 export type { StepUpdate } from './store.ts'
 export type { TaskContext, RunTask } from './scheduler.ts'
 
-export async function createEngine(options: { root: string; database?: string; configuration?: string; runTask?: RunTask; selectWorker?: SelectWorker; autoStart?: boolean; probeModel?: ProbeModel; runtimeCatalog?: () => RuntimeCatalog | Promise<RuntimeCatalog>; commanderCalls?: () => Promise<ToolCall[]>; adapterAvailability?: () => (adapter: string) => boolean }) {
+export async function createEngine(options: { root: string; database?: string; configuration?: string; runTask?: RunTask; selectWorker?: SelectWorker; autoStart?: boolean; probeModel?: ProbeModel; runtimeCatalog?: () => RuntimeCatalog | Promise<RuntimeCatalog>; commanderCalls?: () => Promise<ToolCall[]>; commanderEvents?: (offset:number,limit:number,signal:AbortSignal,projectId?:string,sessionId?:string)=>Promise<unknown>; adapterAvailability?: () => (adapter: string) => boolean }) {
   const [major, minor] = process.versions.node.split('.').map(Number)
   if (major !== 24 || minor < 15) throw new Error('RedTrace requires Node 24.15 or newer in the Node 24 LTS line')
   const root = path.resolve(options.root), configuration = new Configuration(root, options.configuration)
@@ -53,9 +55,23 @@ export async function createEngine(options: { root: string; database?: string; c
   const scheduler = new Scheduler(store,config,runTask,options.selectWorker,()=>!adapterGate || adapterGate('redtrace-critical-events')), router = new Router()
   const experience = new LegionExperience(store,configuration.workspaceRoot)
   router.add('GET', '/v2/legion', c => {const id=c.url.searchParams.get('projectId');return id?{...new LegionStore(store,id).board(),transfers:experience.transfers(id)}:{projects:store.projects().map(p=>({id:p.id,title:p.title,mode:p.mode,status:p.status}))}})
-  router.add('GET','/v2/projects/:project/commander',c=>({...new LegionStore(store,c.params.project).board(),transfers:experience.transfers(c.params.project)}))
+  router.add('GET','/v2/projects/:project/commander',c=>({...new LegionStore(store,c.params.project).board(),workbench:{...projectWorkbench(store,legion,c.params.project),input:chats.entry(c.params.project),...(store.project(c.params.project).mode==='general'?{chief:chats.chief(c.params.project)}:{})},transfers:experience.transfers(c.params.project)}))
+  router.add('GET','/v2/legion/session/events',c=>{const id=c.url.searchParams.get('projectId')??undefined,campaign=legion.campaign(id);if(options.commanderEvents)return options.commanderEvents(queryNumber(c.url,'offset',0),queryNumber(c.url,'limit',100,1,500),c.signal,id,c.url.searchParams.get('sessionId')??undefined);if(campaign.hasSession)throw new HttpError(503,'Commander history requires the DSH host');return {sessionId:campaign.sessionId,available:false,events:[],nextOffset:0,hasMore:false}})
+  workbenchRoutes(router,store,legion)
+  const chats=new ChatStore(store);chatRoutes(router,chats,()=>configuration.resolvedSnapshot().config)
   const text=Type.String({minLength:1}),refs=Type.Array(text,{minItems:1})
-  router.add('POST','/v2/legion/message',async c=>{const b=await body(c.req,Type.Object({projectId:text,receiver:Type.Literal('commander'),type:Type.Union(['HELP','REPORT','MESSAGE'].map(v=>Type.Literal(v))),content:text}));return legion.message(b.projectId,'commander',b.receiver,b.type,b.content)})
+  router.add('POST','/v2/legion/message',async c=>{
+    const b=await body(c.req,Type.Object({projectId:text,receiver:Type.Literal('commander'),type:Type.Union(['HELP','REPORT','MESSAGE'].map(v=>Type.Literal(v))),content:Type.String(),worker:Type.Optional(Type.Union([text,Type.Null()])),reasoning:Type.Optional(Type.Union([text,Type.Null()])),attachmentIds:Type.Optional(Type.Array(text,{uniqueItems:true}))}))
+    const uploads=chats.owned(chats.entry(b.projectId).id,b.attachmentIds??[])
+    if(!b.content.trim()&&!uploads.length)throw new HttpError(422,'Message or attachment required')
+    const config=configuration.resolvedSnapshot().config
+    if(b.worker&&!conversationWorkers(config).some(w=>w.name===b.worker))throw new HttpError(422,'Select an enabled DSH Commander model route')
+    if(b.reasoning){const route=b.worker??legion.campaign(b.projectId).nextWorker,choices=chats.models?await chats.models():configuredConversationModels(config);if(!route||!choices.find(w=>w.name===route)?.reasoningEfforts.includes(b.reasoning))throw new HttpError(422,'Selected model does not support this reasoning effort')}
+    return store.transaction(()=>{
+      if(b.worker!==undefined||b.reasoning!==undefined){const campaign=legion.campaign(b.projectId);if(b.worker!==undefined)campaign.nextWorker=b.worker??undefined;if(b.reasoning!==undefined)campaign.reasoning=b.reasoning??undefined;legion.saveCampaign(campaign)}
+      return store.commanderInput(b.projectId,b.content||'用户上传了附件','human',undefined,uploads.map(u=>({type:u.type,attachment:u.attachment})))
+    })
+  })
   router.add('POST','/v2/projects/:project/legion/park',async c=>{const b=await body(c.req,Type.Object({taskKey:text,reason:text,resumeCondition:text}));return legion.park(c.params.project,b.taskKey,b.reason,b.resumeCondition)})
   router.add('POST','/v2/projects/:project/legion/reactivate',async c=>{const b=await body(c.req,Type.Object({taskKey:text,reason:text}));return legion.reactivate(c.params.project,b.taskKey,b.reason)})
   router.add('POST','/v2/legion/experience',async c=>{const b=await body(c.req,Type.Object({projectId:text,family:text,title:text,body:text,factIds:refs}));return experience.capture(b.projectId,b)})
@@ -99,7 +115,7 @@ export async function createEngine(options: { root: string; database?: string; c
     send(res, { detail: 'Not Found' }, 404)
   }
   if (options.autoStart !== false) scheduler.start()
-  return { store, legion, evidence, scheduler, configuration, capabilities, operations, deletion, router, handler, async close() { watcher.close(); await dshUpdate.close(); await scheduler.close(); await import('./http-tools.ts').then(({ closeHttpSessions }) => closeHttpSessions(store)); await operations.close(); store.close() } }
+  return { store, legion, chats, evidence, scheduler, configuration, capabilities, operations, deletion, router, handler, async close() { watcher.close(); await dshUpdate.close(); await scheduler.close(); await import('./http-tools.ts').then(({ closeHttpSessions }) => closeHttpSessions(store)); await operations.close(); store.close() } }
 }
 export async function serveEngine(options: Parameters<typeof createEngine>[0] & { host?: string; port?: number }) {
   const engine = await createEngine(options)

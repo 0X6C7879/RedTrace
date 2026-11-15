@@ -122,35 +122,27 @@
 .provider-dot-soldier { background:var(--rt-violet)!important; }
 .provider-dot-scout { background:var(--rt-green)!important; }
 
-/* Project detail planning: read-only Commander memory, separate from FGS acceptance. */
-.fgs-todos { padding:1.25rem 1rem; color:var(--rt-text); font:400 .8rem/1.65 system-ui,-apple-system,sans-serif; }
-.fgs-todo-eyebrow { margin:0 0 .5rem; color:var(--rt-text-muted); font-size:.6rem; font-weight:600; letter-spacing:.1em; }
-.fgs-todo-heading-row { display:flex; align-items:center; justify-content:space-between; gap:.75rem; }
-.fgs-todo-heading h3 { font-size:1.05rem; line-height:1.3; letter-spacing:-.02em; font-weight:650; }
-.fgs-todo-readonly { padding:.1rem .45rem; border:1px solid var(--rt-border); border-radius:5px; color:var(--rt-text-secondary); font-size:.65rem; }
-.fgs-todo-context { margin-top:.5rem; color:var(--rt-text-secondary); overflow-wrap:anywhere; }
-.fgs-todo-progress { margin:1.25rem 0; }
-.fgs-todo-progress>div { display:flex; justify-content:space-between; flex-wrap:wrap; gap:.35rem; font-size:.7rem; color:var(--rt-text-secondary); }
-.fgs-todo-progress strong { color:var(--rt-text); font-weight:600; font-variant-numeric:tabular-nums; }
-.fgs-todo-progress progress { display:block; width:100%; height:.3rem; margin-top:.65rem; border:0; border-radius:1rem; overflow:hidden; background:var(--rt-border-soft); accent-color:var(--rt-cyan); }
-.fgs-todo-progress progress::-webkit-progress-bar { background:var(--rt-border-soft); }
-.fgs-todo-progress progress::-webkit-progress-value { background:var(--rt-cyan); border-radius:1rem; }
-.fgs-todo-progress progress::-moz-progress-bar { background:var(--rt-cyan); }
-.fgs-todo-list { list-style:none; padding:0; margin:0; display:grid; gap:.65rem; }
-.fgs-todo-item { display:flex; align-items:flex-start; gap:.75rem; padding:.9rem .8rem; border:1px solid var(--rt-border-soft); border-radius:10px; background:var(--rt-bg-soft); }
-.fgs-todo-number { flex-shrink:0; color:var(--rt-text-muted); font-size:.7rem; font-variant-numeric:tabular-nums; padding-top:.1rem; }
-.fgs-todo-item>div { min-width:0; }
-.fgs-todo-item p { margin:.25rem 0 0; white-space:pre-wrap; overflow-wrap:anywhere; }
-.fgs-todo-status { font-size:.65rem; font-weight:600; letter-spacing:.02em; color:var(--rt-text-secondary); }
-.fgs-todo-item[data-state="in_progress"] { border-color:var(--rt-cyan); background:var(--rt-cyan-soft); }
-.fgs-todo-item[data-state="in_progress"] .fgs-todo-status { color:var(--rt-cyan); }
-.fgs-todo-item[data-state="completed"] .fgs-todo-status { color:var(--rt-green); }
-.fgs-todo-item[data-state="completed"] p { color:var(--rt-text-secondary); }
-.fgs-todo-empty { margin:1.25rem 0; padding:1.1rem; border:1px dashed var(--rt-border); border-radius:10px; }
-.fgs-todo-empty h4 { font-weight:600; margin-bottom:.4rem; }
-.fgs-todo-empty p,.fgs-todo-note { color:var(--rt-text-secondary); font-size:.7rem; line-height:1.8; overflow-wrap:anywhere; }
-.fgs-todo-note { margin-top:1.25rem; padding-top:1rem; border-top:1px solid var(--rt-border-soft); }
-@media(prefers-contrast:more) { .fgs-todo-item,.fgs-todo-readonly,.fgs-todo-empty{border-color:var(--rt-text-secondary);} }
+/* One compact planning surface in conversations and FGS; never a second planner. */
+.rt-todo-bar { flex-shrink:0; padding:.35rem 1.25rem; border-top:1px solid var(--rt-border-soft); }
+.rt-todo { position:relative; width:fit-content; color:var(--rt-text-secondary); font:400 .75rem/1.5 system-ui,-apple-system,sans-serif; }
+.rt-todo>summary { display:flex; align-items:center; gap:.2rem; width:fit-content; cursor:pointer; list-style:none; padding:.2rem .3rem; border-radius:.3rem; user-select:none; }
+.rt-todo>summary::-webkit-details-marker { display:none; }
+.rt-todo>summary svg { width:.8rem; height:.8rem; }
+.rt-todo>summary:hover,.rt-todo[open]>summary { color:var(--rt-text); background:var(--rt-surface-raised); }
+.rt-todo>summary:active { background:var(--rt-border); }
+.rt-todo>summary:focus-visible,.rt-todo-panel:focus-visible { outline:2px solid var(--rt-cyan); outline-offset:2px; }
+.rt-todo-panel { position:absolute; top:calc(100% + .35rem); left:0; z-index:60; width:20rem; max-height:20rem; overflow:auto; overscroll-behavior:contain; padding:.5rem; border:1px solid var(--rt-border); border-radius:.6rem; background:var(--rt-surface); box-shadow:0 8px 24px #0005; }
+.rt-todo-up .rt-todo-panel { top:auto; bottom:calc(100% + .35rem); }
+.rt-todo-heading { margin:0; padding:0 .25rem .25rem; color:var(--rt-text-muted); font-size:.6875rem; font-weight:500; }
+.rt-todo-list { display:grid; gap:.125rem; list-style:none; padding:0; margin:0; }
+.rt-todo-list li { display:flex; align-items:flex-start; gap:.375rem; padding:0 .25rem; }
+.rt-todo-list li>span:first-child { flex-shrink:0; }
+.rt-todo-list li>span:last-child { min-width:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.rt-todo-list li[data-state="in_progress"]>span:first-child { color:var(--rt-cyan); }
+.rt-todo-list li[data-state="completed"] { color:var(--rt-text-muted); text-decoration:line-through; }
+.rt-todo-empty { padding:.25rem; color:var(--rt-text-muted); }
+.rt-todo-note { display:block; margin-top:.5rem; padding:0 .25rem; color:var(--rt-text-muted); font-size:.625rem; }
+@media(prefers-contrast:more) { .rt-todo-panel { border-color:var(--rt-text); } }
 
 .fgs-panel-tabs>button { flex:1 1 0; min-width:0; padding-inline:.35rem; white-space:nowrap; }
 

@@ -9,7 +9,7 @@ import {LegionStore} from '../src/legion-store.ts'
 const root=path.resolve(import.meta.dirname,'../../..')
 const html=readFileSync(path.join(root,'static/index.html'),'utf8')
 function page(){
-  const context=vm.createContext({window:{},console,location:{hash:'#/projects/p/commander'}})
+  const context=vm.createContext({window:{},console,localStorage:{getItem(){return null},setItem(){}},location:{hash:'#/projects/p/commander'}})
   vm.runInContext(readFileSync(path.join(root,'static/fgs-view.js'),'utf8'),context)
   vm.runInContext([...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].find(m=>m[1].includes('function redtraceApp()'))![1],context)
   const app=vm.runInContext('redtraceApp()',context)
@@ -131,7 +131,7 @@ test('benchmark cards exclude the main graph and show runs from each task Step',
   const graphs=[{id:'main',type:'main',title:'Main',taskKey:'main'},{id:'g1',type:'benchmark_task',title:'Task',taskKey:'task'}]
   assert.equal(app.filteredTaskGraphs({graphs,steps:[]}).length,1)
   app.selectedProjectId='p';app.selectedGraphId='g1';app.fgs={steps:[{id:'s1'},{id:'s2'}]}
-  app.api=async(_method:string,url:string)=>{calls.push(url);return url.includes('/s1/')?[{id:'r1',worker:'one'}]:[{id:'r2',worker:'two'}]}
+  app.api=async(_method:string,url:string)=>{calls.push(url);return {workers:[{id:'r1',worker:'one',graphId:'g1'},{id:'r2',worker:'two',graphId:'g1'},{id:'foreign',worker:'other',graphId:'g2'}]}}
   app.loadFgsRunLog=async()=>{calls.push('events:'+app.fgsRunId)}
   await app.loadGraphWorkerRuns()
   assert.deepEqual(Array.from(app.graphWorkerRuns,(r:any)=>r.id),['r2','r1'])
@@ -287,22 +287,12 @@ test('human Goal acceptance selects a captured project evidence list, retains ve
 test('Goal acceptance retains the captured Graph when the user switches task pages',async()=>{const app=page();app.selectedProjectId='p';app.selectedGraphId='B';app.fgsAcceptance={projectId:'p',graphId:'A',goalId:'goal-A',version:1,evidenceIds:['fact-A']};let opened='';app.$refs={fgsAcceptanceDialog:{close(){}}};app.loadProject=async()=>{};app.updateGraph=()=>{};app.selectFgsNode=()=>{};app.openProject=async(_p:string,g:string)=>{opened=g};app.api=async(_method:string,url:string)=>{assert.equal(url,'/v2/projects/p/goals/goal-A?graphId=A')};await app.submitFgsAcceptance();assert.equal(app.fgsAcceptance.error,'');assert.equal(opened,'A')})
 
 
-test('TodoList is read-only in workspace project detail, not the Legion console',()=>{
-  const app=page()
-  assert.equal(app.todoCompleted([{status:'completed'},{status:'in_progress'},{status:'pending'}]),1)
-  assert.equal(app.todoCompleted([]),0)
-  assert.equal(app.todoCompleted(undefined),0)
-  assert.equal(app.todoStatus('pending'),'等待前置条件')
-  assert.equal(app.todoStatus('in_progress'),'推进中')
-  assert.equal(app.todoStatus('completed'),'已完成')
-  const layout=html.slice(html.indexOf('id="graphLayout"'))
-  assert.match(layout,/aria-label="查看阶段计划"/)
-  assert.match(layout,/aria-label="当前任务阶段计划"/)
-  assert.doesNotMatch(html.slice(html.indexOf('aria-labelledby="legion-title"'),html.indexOf('id="graphLayout"')),/aria-label="当前任务阶段计划"/)
-  const panel=html.slice(html.indexOf('class="fgs-todos'),html.indexOf('<!-- Detail -->'))
-  assert.match(panel,/x-text="todo.content"/)
-  assert.match(panel,/尚无阶段计划/)
-  assert.match(panel,/规划清单暂不可用/)
-  assert.match(panel,/不代表 Goal 验收/)
-  assert.doesNotMatch(panel,/x-model="todo|contenteditable|TodoWrite/)
+test('FGS Todo stays read-only in a compact anchored popover, not a full detail tab',()=>{
+  const app=page();assert.equal(app.todoCompleted([{status:'completed'},{status:'in_progress'}]),1);
+  assert.equal(app.todoStatus('pending'),'等待前置条件');assert.equal(app.todoStatus('in_progress'),'推进中');assert.equal(app.todoStatus('completed'),'已完成');
+  const layout=html.slice(html.indexOf('id="graphLayout"'));
+  assert.match(layout,/aria-label="查看阶段计划"/);assert.match(layout,/aria-label="当前任务阶段计划"/);
+  const popover=layout.slice(layout.indexOf('<details class="rt-todo"'),layout.indexOf('</details>')+10);
+  assert.match(popover,/x-text="todo.content"/);assert.match(popover,/暂无待办/);assert.match(popover,/不代表 Goal 验收/);
+  assert.doesNotMatch(popover,/x-model="todo|contenteditable|TodoWrite/);assert.doesNotMatch(layout,/sideTab === 'todos'/);
 })

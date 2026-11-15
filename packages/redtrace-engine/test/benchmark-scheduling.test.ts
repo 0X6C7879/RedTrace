@@ -92,7 +92,7 @@ test('escalation uses evidence age, gives a General mid-chain time, and never du
   const age=(minutes:number)=>{run.startedAt=new Date(at-minutes*60000).toISOString();store.saveRun(run)}
   for(const [minutes,recommendation] of [[6,'tactical'],[10,'second-angle'],[19,'second-angle'],[20,'general'],[29,'general']] as const){age(minutes);assert.equal(legion.tactics(p.id,at)[0].recommendation,recommendation)}
   age(15);legion.spawn(p.id,{...mission,description:'second angle'})
-  assert.throws(()=>legion.spawn(p.id,{...mission,description:'third angle'}),/second-angle/)
+  assert.equal(legion.spawn(p.id,{...mission,description:'third angle'}).role,'soldier','distinct specialist angles are bounded by configured capacity, not a new hard cap')
   age(30);const general=legion.spawn(p.id,{...mission,role:'general',description:'upgrade'}),g=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},general.id)
   g.startedAt=new Date(at-10*60000).toISOString();store.saveRun(g)
   assert.equal(legion.tactics(p.id,at)[0].recommendation,'working','a newly upgraded General is not parked at minute 30')
@@ -100,7 +100,7 @@ test('escalation uses evidence age, gives a General mid-chain time, and never du
   store.forGraph(p.id,graph.id).addFact(p.id,'confirmed chain progress',{runId:g.id})
   assert.equal(legion.tactics(p.id,at)[0].recommendation,'working')
   legion.park(p.id,'T','blocked chain','new confirmed intel');store.finishRun(run.id,'cancelled');store.finishRun(g.id,'cancelled')
-  assert.equal(legion.reactivate(p.id,'T','new confirmed intel').length,3)
+  assert.equal(legion.reactivate(p.id,'T','new confirmed intel').length,4)
 })
 
 test('explicit family evidence skips only duplicate Scout and remains unverified in the new target', t => {

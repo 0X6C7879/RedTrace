@@ -122,6 +122,7 @@ export class Store {
     }
     const importCriticalKeys=!this.db.prepare("SELECT 1 FROM sqlite_master WHERE name='critical_keys'").get()
     this.db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
+      CREATE TABLE IF NOT EXISTS global_chats(id TEXT PRIMARY KEY,data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS nodes(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -157,8 +158,19 @@ export class Store {
     // Counters of deleted projects would otherwise linger forever and are never read again.
     this.db.prepare('DELETE FROM counters WHERE scope NOT IN (SELECT id FROM projects)').run()
     this.migrateProjectGraphs()
+    if(!this.db.prepare('PRAGMA table_info(global_chats)').all().some(c=>c.name==='project_id'))this.db.exec('ALTER TABLE global_chats ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE CASCADE')
     this.migrateFactTitles()
+    this.migrateGeneralScouts()
     this.changes.setMaxListeners(0)
+  }
+  private migrateGeneralScouts() {
+    this.transaction(()=>{
+      for(const row of this.db.prepare("SELECT n.data FROM nodes n JOIN projects p ON p.id=n.project_id WHERE n.kind='step' AND json_extract(p.data,'$.mode')='general' AND json_extract(n.data,'$.role')='scout'").all()) {
+        const step=JSON.parse(String(row.data)) as Step
+        step.role='soldier';this.saveNode(step)
+        this.event(step.projectId,'legion.role_migrated',step,{reason:'General Scout removed; existing mission continues as Soldier, native history preserved'})
+      }
+    })
   }
   private migrateFactTitles() {
     if (this.db.prepare('SELECT 1 FROM metadata WHERE key=?').get('fact-titles')) return
@@ -420,12 +432,12 @@ export class Store {
     })
   }
   markDeleting(id: string) { return this.transaction(() => { const p = this.project(id); p.status = 'deleting'; this.saveProject(p); this.event(id, 'project.deleting', null, p); return p }) }
-  commanderInput(projectId:string,content:string,creator:string,graphId?:string) {
+  commanderInput(projectId:string,content:string,creator:string,graphId?:string,attachments:Json[]=[]) {
     return this.transaction(()=>{
       this.hintWritable(projectId)
       graphId ??= this.project(projectId).mode==='general'?this.projectGraphs(projectId)[0].id:undefined
       const hint=graphId?this.forGraph(projectId,graphId).addInput(projectId,'hint',content,creator):null
-      const message={id:'msg-'+randomUUID(),projectId,graphId:graphId??null,sender:'commander',receiver:'commander',type:'MESSAGE',content:JSON.stringify({source:'user',creator,graphId:graphId??null,hintId:hint?.id??null,content:requiredText(content,'content')}),status:'pending',createdAt:now()}
+      const message={id:'msg-'+randomUUID(),projectId,graphId:graphId??null,sender:creator,receiver:'commander',type:'MESSAGE',attachments,content:JSON.stringify({source:'user',creator,graphId:graphId??null,hintId:hint?.id??null,content:requiredText(content,'content')}),status:'pending',createdAt:now()}
       this.db.prepare('INSERT INTO legion_messages VALUES (?,?,?,?,?,?)').run(message.id,projectId,message.sender,message.receiver,JSON.stringify(message),message.createdAt)
       queueMicrotask(()=>this.changes.emit('legion-message',projectId,'commander'))
       return { ...hint, message }
@@ -513,13 +525,14 @@ export class Store {
     const run = this.run(runId)
     return { throughEvidenceSeq: run.deliveredEvidenceSeq ?? run.planningEvidenceSeq ?? 0, throughHintSeq: run.deliveredHintSeq ?? run.planningHintSeq ?? 0 }
   }
-  addStep(id: string, input: { description: string; sourceIds: string[]; goalId?: string; creator?: string; priority?: number; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; bootstrap?: boolean } & Pick<LegionAssignment, 'role' | 'taskKey' | 'parentStepId'>, maxSteps: number | null = null): Step {
+  addStep(id: string, input: { description: string; sourceIds: string[]; goalId?: string; creator?: string; priority?: number; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; bootstrap?: boolean } & Pick<LegionAssignment, 'role' | 'taskKey' | 'parentStepId' | 'specialist'>, maxSteps: number | null = null): Step {
     return this.transaction(() => {
       if (input.role === 'reporter') this.project(id); else this.writable(id)
       const capacity = this.planningCapacity(id, maxSteps)
       if (capacity.remainingSteps === 0) throw new HttpError(409, 'Active Step limit reached', { code: 'STEP_LIMIT_REACHED', planningCapacity: capacity })
       const goalId = this.node<Goal>(id,input.goalId ?? this.rootGoalId(id),'goal').id; if (input.role !== 'reporter' && this.node<Goal>(id, goalId, 'goal').status !== 'open') throw new HttpError(409, 'Goal is closed')
       const profile = input.executionProfile ?? 'direct'; if (!['direct', 'isolated'].includes(profile)) throw new HttpError(422, 'Invalid execution profile')
+      if (input.role === 'scout' && this.project(id).mode === 'general') throw new HttpError(422, 'General mode has no Scout; Commander owns planning')
       if (input.role !== undefined && !['general', 'soldier', 'scout', 'reporter'].includes(input.role)) throw new HttpError(422, 'Invalid Legion role')
       if (input.role !== undefined || input.taskKey !== undefined || input.parentStepId !== undefined) requiredText(input.taskKey, 'taskKey')
       if (input.parentStepId) {
@@ -530,6 +543,7 @@ export class Store {
         sourceIds: this.evidenceIds(id, input.sourceIds.map(ref => ref==='origin'?this.originId(id):ref), true), goalId, creator: input.creator ?? 'commander', priority: integer(input.priority ?? 0, 'priority', -2147483648),
         status: 'pending', factIds: [], worker: null, executionProfile: profile, attempts: 0,
         endedAt: null, failure: null, createdAt: now(), bootstrap: input.bootstrap ?? false, planVersion: 1,
+        ...(input.specialist ? { specialist: { name: requiredText(input.specialist.name, 'specialist.name'), responsibilities: requiredText(input.specialist.responsibilities, 'specialist.responsibilities'), capabilities: input.specialist.capabilities.map(c => requiredText(c, 'capability')), scope: requiredText(input.specialist.scope, 'specialist.scope') } } : {}),
         role: input.role ?? 'soldier', taskKey: input.taskKey ?? goalId, ...(input.parentStepId ? { parentStepId: input.parentStepId } : {}) }
       this.saveNode(step); this.event(id, 'step.added', step, step); return step
     })
@@ -562,7 +576,7 @@ export class Store {
       if (definition && step.attempts && input.mode === 'replace') {
         if (step.bootstrap) throw new HttpError(409, 'Bootstrap cannot be replaced by a planning edit')
         if (input.status !== undefined) throw new HttpError(422, 'Replacement cannot include status')
-        const replacement = this.addStep(id, { description: next.description, sourceIds: next.sourceIds, goalId: next.goalId, priority: next.priority, executionProfile: next.executionProfile, creator: step.creator })
+        const replacement = this.addStep(id, { description: next.description, sourceIds: next.sourceIds, goalId: next.goalId, priority: next.priority, executionProfile: next.executionProfile, creator: step.creator, role:step.role, taskKey:step.taskKey, parentStepId:step.parentStepId, specialist:step.specialist })
         replacement.replaces = step.id; replacement.replacementPending = true; replacement.status = 'blocked'
         step.status = 'cancelled'; step.replacedBy = replacement.id; step.endedAt = now()
         this.saveNode(step); this.event(id, 'step.updated', step, step)
@@ -668,7 +682,7 @@ export class Store {
       const evidence = options.evidence ?? []
       if (!Array.isArray(evidence) || evidence.some(e => !e || typeof e.description !== 'string' || !e.description.trim())) throw new HttpError(422, 'Invalid evidence')
       const fact: Fact = { id: this.next(id, 'fact', 'f'), projectId: id, kind: 'fact', title: options.title === undefined ? factTitle(description) : requiredText(options.title, 'title'), description, ...(options.doc ? { doc: options.doc } : {}),
-        stepId: step?.id ?? null, creator: options.creator ?? 'execute', evidence, createdAt: now() }
+        stepId: step?.id ?? null, ...(options.runId?{producerRunId:options.runId}:{}),creator: options.creator ?? 'execute', evidence, createdAt: now() }
       this.saveNode(fact)
       if (step) { step.factIds.push(fact.id); this.saveNode(step) }
       this.event(id, 'fact.added', fact, fact); return fact
@@ -686,7 +700,7 @@ export class Store {
       if (input.severity !== undefined && !['critical', 'high', 'medium', 'low'].includes(input.severity)) throw new HttpError(422, 'Invalid severity')
       if (input.severity) requiredText(input.type, 'type / vulnclass')
       const node: Finding = { id: this.next(id, 'finding', 'finding_'), projectId: id, kind: 'finding', title: requiredText(input.title, 'title'),
-        description: requiredText(input.description, 'description'), type: input.type ?? 'finding', factIds: this.factIds(id, input.factIds, false), details: input.details ?? null, creator: input.creator ?? 'execute', stepId, createdAt: now() }
+        description: requiredText(input.description, 'description'), type: input.type ?? 'finding', factIds: this.factIds(id, input.factIds, false), details: input.details ?? null, ...(input.runId?{producerRunId:input.runId}:{}),creator: input.creator ?? 'execute', stepId, createdAt: now() }
       if (input.severity) node.severity = input.severity
       if (input.assetIds !== undefined) node.assetIds = input.assetIds
       this.saveNode(node); this.event(id, 'finding.added', node, node)

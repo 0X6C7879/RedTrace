@@ -13,6 +13,7 @@ import type { EngineConfig, Fact, Json, Step, Project, Run, Goal, Input } from '
 import { ProjectEvidence } from './project-evidence.ts'
 import { legionTools } from './legion-tools.ts'
 import { legionMission } from './legion-missions.ts'
+import { CommanderTodos, taskTodoOwner } from './legion-todos.ts'
 import { knowledgeTools } from './knowledge.ts'
 import { httpTools } from './http-tools.ts'
 import { Check } from 'typebox/value'
@@ -138,7 +139,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   } }))
 }
 
-export const activityPrompt = (_activity: 'decide' | 'execute', step?: Step, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => legionMission(step?.role ?? 'soldier', mode, planner) + (step ? '\nAssigned Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'. Read and write only this Graph.' : '') + (step?.bootstrap && mode==='general' ? '\nInitial Mission: establish evidence for the supplied Goal as a Soldier. Commander owns planning and acceptance.' : '')
+export const activityPrompt = (_activity: 'decide' | 'execute', step?: Step, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => legionMission(step?.role ?? 'soldier', mode, planner) + (step ? '\nAssigned Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'. Read and write only this Graph.' : '') + (step?.specialist ? '\nSpecialist assignment (within existing authorized Scope): '+JSON.stringify(step.specialist) : '') + (step?.bootstrap && mode==='general' ? '\nInitial Mission: establish evidence for the supplied Goal as a Soldier. Commander owns planning and acceptance.' : '')
 
 export function activityLimits(config: EngineConfig, activity: 'decide' | 'execute', step?: Step) {
   return config.taskLimits?.[activity==='decide'?'commander':step?.role==='reporter'?'soldier':step?.role??'soldier'] ?? {timeout:config.executeTimeout,concludeTimeout:config.concludeTimeout}
@@ -182,6 +183,7 @@ export function launchContext(store: Store, runId: string, channels: unknown[] =
     .all(run.projectId,run.graphId??null,run.graphId??null, acknowledgedHintSeq, run.activity === 'decide' ? 1 : 0, run.stepId).map(row => JSON.parse(String(row.data)) as Input) : []
   const goal = run.activity === 'decide' ? store.node<Goal>(run.projectId, 'goal', 'goal') : undefined
   return { projectId: run.projectId, graphId:run.graphId, ...(run.handoff ? {handoff:{confirmedState:run.handoff,predecessorRunId:run.predecessorRunId}} : {}), planningCapacity: store.planningCapacity(run.projectId, maxSteps), acknowledgementBoundary: store.acknowledgementBoundary(run.id), scope: { id: origin.id, description: origin.description },
+    ...(step && store.project(run.projectId).mode==='benchmark' && taskTodoOwner(step,store) ? {planningTodos:new CommanderTodos(store,run.projectId).list(step.graphId!)} : {}),
     ...(step?.role === 'reporter' ? { reportTrigger: { tool: 'submit_finding', finding_id: step.sourceIds[0], finding: store.readNode(run.projectId, step.sourceIds[0]) } } : {}),
     ...(goal ? { goal: { id: goal.id, description: goal.description, status: goal.status },
       evidenceSeq: run.planningEvidenceSeq ?? 0, hintSeq: run.planningHintSeq ?? 0, criticalSeq: run.planningCriticalSeq ?? 0, graphCursor: run.deliveredGraphCursor ?? 0,

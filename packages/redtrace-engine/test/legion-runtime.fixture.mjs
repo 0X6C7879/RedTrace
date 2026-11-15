@@ -40,9 +40,8 @@ const model = createServer(async (req, res) => {
        if(last==='legion_board')assert.ok(lastOutput(b).projectId===projectId&&lastOutput(b).lines?.length<=100,'Native Commander must receive a compact JSON board, not a tool output error')
       assert.ok(!names.includes('bash') && !names.includes('submit_fact') && !names.includes('finish_decide'))
       if (!calls.includes('legion_board')) { name = 'legion_board'; args = {} }
-      else if (!g.steps.some(s => s.description === 'fixture-scout')) { name = 'legion_spawn'; args = spawnMission('scout', 'fixture-scout') }
-      else if (g.steps.find(s => s.description === 'fixture-scout').status === 'done' && !calls.includes('legion_classify')) {name='legion_classify';args={projectId,taskKey:'fixture-a',difficulty:'hard',factIds:[g.facts.find(f=>f.id!=='origin').id]}}
-      else if (g.steps.find(s => s.description === 'fixture-scout').status === 'done' && !g.steps.some(s => s.role === 'general')) { name = 'legion_spawn'; args = spawnMission('general', 'fixture-general') }
+      else if (!g.steps.some(s => s.description === 'fixture-recon')) { name = 'legion_spawn'; args = spawnMission('soldier', 'fixture-recon') }
+      else if (g.steps.find(s => s.description === 'fixture-recon').status === 'done' && !g.steps.some(s => s.role === 'general')) { name = 'legion_spawn'; args = spawnMission('general', 'fixture-general') }
       else if (g.steps.some(s => s.role === 'general' && s.status === 'running') && admittedText.includes('General needs') && !calls.includes('legion_message')) {
         if (last === 'legion_roster') { const general = lastOutput(b).find?.(a=>a.role==='general'); if(general){name='legion_message';args={projectId,receiver:general.runId,type:'MESSAGE',content:'COMMANDER_TACTICAL_ACK: verify both specialist Facts before reporting.'}}else{name='legion_read_changes';args={projectId}} }
         else {name='legion_roster';args={projectId}}
@@ -52,7 +51,7 @@ const model = createServer(async (req, res) => {
         assert.ok(g.steps.filter(s => s.parentStepId).every(s => s.status === 'done'))
         name = 'legion_accept'; args = { projectId, goalId: 'goal', expectedVersion: g.goals.find(n => n.id === 'goal').version, evidenceIds: g.facts.filter(f => f.id !== 'origin').map(f => f.id) }
       }
-      else if (g.project.status === 'completed' && last === 'legion_read_changes') { name = 'legion_finish'; args = { processed: { [projectId]: lastOutput(b).cursor }, state: 'Fixture accepted: Scout classification -> General -> two specialist Soldiers -> shared FGS -> Commander verified Goal.' } }
+      else if (g.project.status === 'completed' && last === 'legion_read_changes') { name = 'legion_finish'; args = { processed: { [projectId]: lastOutput(b).cursor }, state: 'Fixture accepted: Soldier recon -> General -> two specialist Soldiers -> shared FGS -> Commander verified Goal.' } }
       else if (last === 'legion_read_changes' && g.project.status !== 'completed') { name = 'legion_wait'; args = { projectId, after: lastOutput(b).cursor } }
       else { name = 'legion_read_changes'; args = { projectId } }
     } else if (role === 'GENERAL') {
@@ -108,7 +107,7 @@ try {
   assert.equal(result.status,'idle');assert.ok(result.state.includes('Fixture accepted'))
   const g=await call('/v2/projects/'+projectId), runs=await call('/v2/projects/'+projectId+'/runs')
   assert.equal(g.project.status,'completed');assert.equal(g.steps.length,4);assert.ok(g.steps.every(s=>s.status==='done'));assert.ok(runs.every(r=>r.status==='succeeded')); for (const run of runs) assert.equal(run.worker, g.steps.find(s=>s.id===run.stepId).role)
-  assert.deepEqual([...roles].sort(),['COMMANDER','GENERAL','SCOUT','SOLDIER'])
+  assert.deepEqual([...roles].sort(),['COMMANDER','GENERAL','SOLDIER'])
   const resumed=await call('/v2/legion/command',{projectId,worker:'commander'});assert.equal(resumed.sessionId,result.sessionId);assert.equal(resumed.status,'idle');assert.equal((await call('/v2/projects/'+projectId)).steps.length,4)
   const usage=await call('/audit/usage');assert.ok(usage.commander>0,'Global Commander usage must come from actual native assistant messages');assert.ok(usage.total>=usage.commander)
   const logPage = await call('/v2/legion/session/events?projectId='+projectId+'&offset=0&limit=100')
@@ -126,7 +125,7 @@ try {
     assert.equal(store.run(runs[0].id).pendingTools.length,0)
     const campaign=JSON.parse(store.db.prepare('SELECT data FROM project_campaigns WHERE project_id=?').get(projectId).data)
     assert.ok(campaign.cursors[projectId].acknowledged>0)
-    console.log('LEGION_RUNTIME_SUPPORTED=true; roles=Commander,Scout,General,Soldier; specialist_workers=2; shared_fgs=true; commander_acceptance=true; native_message_admission=true; state_and_cursor_persisted=true; commander_native_resume=true; help_reply_admitted=true; model=local-protocol-fixture; commander_native_log_read=true')
+    console.log('LEGION_RUNTIME_SUPPORTED=true; roles=Commander,General,Soldier; specialist_workers=2; shared_fgs=true; commander_acceptance=true; native_message_admission=true; state_and_cursor_persisted=true; commander_native_resume=true; help_reply_admitted=true; model=local-protocol-fixture; commander_native_log_read=true')
   } finally { store.close() }
 } catch (error) {
   if (existsSync(work+'/.redtrace/engine.db')) { const { DatabaseSync }=await import('node:sqlite'); const db=new DatabaseSync(work+'/.redtrace/engine.db',{readOnly:true});try { console.error(db.prepare("SELECT data FROM project_campaigns").all()) } finally {db.close()} }

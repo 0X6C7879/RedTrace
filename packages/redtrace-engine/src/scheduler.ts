@@ -1,3 +1,4 @@
+import { chatSlots } from './chat.ts'
 import { LegionStore } from './legion-store.ts'
 import { Store, ACTIVE_NODE_SQL } from './store.ts'
 import path from 'node:path'
@@ -31,7 +32,7 @@ export class Scheduler {
   get commanderRunning() { return this.legion.campaigns().some(c=>c.status==='running') }
   wake() { if (this.closed || this.scheduled) return; this.scheduled = true; queueMicrotask(() => { this.scheduled = false; if (!this.closed) this.dispatch() }) }
   private select(resume: Run | undefined, step: Step, active: Run[]) {
-    const commands=this.legion.campaigns().filter(c=>c.status==='running')
+    const commands=[...this.legion.campaigns().filter(c=>c.status==='running'),...chatSlots(this.store)]
     const count = (name: string) => active.filter(r => r.worker === name).length+commands.filter(c=>c.workerName===name).length
     return this.config.workers.map(w => this.selectWorker(w, 'execute', step)).filter((w): w is Worker => !!w && w.enabled && (!step.nextWorker || w.name===step.nextWorker) && !!w.roles?.includes(step.role === 'reporter' ? 'soldier' : step.role ?? 'soldier') && (!resume || w.name === resume.worker && w.backend === resume.backend) && count(w.name) < w.maxRunning)
       .sort((a,b) => a.priority-b.priority || count(a.name)-count(b.name) || a.name.localeCompare(b.name))[0]
@@ -44,14 +45,14 @@ export class Scheduler {
         if (this.store.run(task.run.id).status !== 'running' || !(step.role === 'reporter' ? ['active','completed'].includes(project.status) : project.status === 'active') || ['cancelled','parked'].includes(step.status) || step.role !== 'reporter' && this.store.node<Goal>(project.id,step.goalId,'goal').status !== 'open') task.abort.abort('Project or Step stopped')
       } catch (error) { if (error instanceof HttpError && error.status===404) task.abort.abort('Project deleted'); else throw error }
     }
-    const commands=this.legion.campaigns().filter(c=>c.status==='running'), commandSlots=commands.length, active = this.activeRuns, projects = this.store.projects().filter(p=>['active','completed'].includes(p.status))
+    const commands=[...this.legion.campaigns().filter(c=>c.status==='running'),...chatSlots(this.store)], commandSlots=commands.length, active = this.activeRuns, projects = this.store.projects().filter(p=>['active','completed'].includes(p.status))
     let progress = true
     while(progress && active.length+commandSlots < this.config.maxWorkers) {
       progress = false
       for(let i=0;i<projects.length && active.length+commandSlots<this.config.maxWorkers;i++) {
         const project=projects[(this.cursor+i)%projects.length]
         if(active.filter(r=>r.projectId===project.id).length+commands.filter(c=>c.projectId===project.id).length>=this.config.maxProjectWorkers)continue
-        if(!active.some(r=>r.projectId===project.id)&&!commands.some(c=>c.projectId===project.id)&&new Set([...active.map(r=>r.projectId),...commands.map(c=>c.projectId)]).size>=this.config.maxRunningProjects)continue
+        if(!active.some(r=>r.projectId===project.id)&&!commands.some(c=>c.projectId===project.id)&&new Set([...active.map(r=>r.projectId),...commands.filter(c=>c.projectId).map(c=>c.projectId)]).size>=this.config.maxRunningProjects)continue
         const steps=this.store.nodes<Step>(project.id,['step']).filter(s=>!s.deleted&&!s.replacementPending&&['pending','paused'].includes(s.status)&&(s.role==='reporter'||project.status==='active'&&this.store.node<Goal>(project.id,s.goalId,'goal').status==='open')).sort((a,b)=>b.priority-a.priority||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id))
         for(const step of steps) {
           const resume=step.status==='paused'?this.store.runsByStatus('paused',project.id).find(r=>r.stepId===step.id):undefined
@@ -99,7 +100,7 @@ export class Scheduler {
   watchdog() {
     if(this.closed||this.maintenance)return
     for(const run of this.store.runsByStatus('failed')) {
-      if(this.running.has(run.id)||!run.stepId||run.pendingTools.length||this.store.project(run.projectId).mode!=='benchmark'||this.store.project(run.projectId).status!=='active')continue
+      if(this.running.has(run.id)||!run.stepId||run.pendingTools.length||this.store.project(run.projectId).status!=='active')continue
       if(!['PROCESS_EXIT','UNKNOWN','SERVER','TIMEOUT','TRANSPORT','STREAM_CLOSED','EMPTY_RESPONSE','RATE_LIMIT'].includes(run.failureCode??''))continue
       const step=this.store.node<Step>(run.projectId,run.stepId,'step')
       if((step.failureCount??0)>=3||step.status!=='blocked'||this.store.latestRun(run.projectId,step.id)?.id!==run.id||this.legion.budget(Date.now(),run.projectId).phase==='ended')continue

@@ -45,7 +45,7 @@ test('role metadata persists; General may create exactly two same-task squads in
   const goal = store.addGoal(project.id, 'delegated goal')
   const parent = legion.spawn(project.id, { ...mission, goalId: goal.id })
   const run = store.claim(project.id, 'execute', worker, parent.id)
-  const chore = { ...mission, parentRunId: run.id, role: 'scout' as const }
+  const chore = { ...mission, parentRunId: run.id, role: 'soldier' as const }
   assert.equal(legion.spawn(project.id, chore).parentStepId, parent.id)
   assert.throws(() => legion.spawn(project.id, { ...chore, taskKey: 'other' }), /same-task/)
   assert.throws(() => legion.spawn(project.id, { ...chore, goalId: 'goal' }), /escapes/)

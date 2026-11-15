@@ -43,7 +43,7 @@ test('General directly funds Soldier or General without Scout classification; sc
 
 test('Benchmark classification, same-Graph squads and durable HELP/REPORT preserve existing role rules',()=>{
  const s=new Store(':memory:');try{const p=create(s,'Benchmark roles','benchmark'),l=new LegionStore(s,p.id),graphs=['easy','hard'].map(taskKey=>s.createGraph(p.id,{taskKey,title:taskKey,origin:'local',goal:'verify'}))
- assert.throws(()=>l.spawn(p.id,{role:'soldier',taskKey:'easy',description:'premature',sourceIds:[graphs[0].originId]}),/Scout classification/)
+ const first=l.spawn(p.id,{role:'soldier',taskKey:'easy',description:'initial independent exploration',sourceIds:[graphs[0].originId]});assert.equal(first.role,'soldier');s.updateStep(p.id,first.id,{status:'cancelled'})
  const facts=graphs.map((g,i)=>{const step=l.spawn(p.id,{role:'scout',taskKey:g.taskKey!,description:'observe',sourceIds:[g.originId]}),run=s.claim(p.id,'execute',worker,step.id),fact=s.addFact(p.id,'observed',{runId:run.id});s.finishRun(run.id,'succeeded');l.classify(p.id,g.taskKey!,i?'hard':'easy',[fact.id]);return fact})
  const soldier=l.spawn(p.id,{role:'soldier',taskKey:'easy',description:'solve easy',sourceIds:[facts[0].id]}),general=l.spawn(p.id,{role:'general',taskKey:'hard',description:'solve hard',sourceIds:[facts[1].id]}),a=s.claim(p.id,'execute',worker,soldier.id),b=s.claim(p.id,'execute',worker,general.id)
  const squads=['soldier','scout'].map(role=>l.spawn(p.id,{role:role as 'soldier'|'scout',taskKey:'hard',description:'specialist',sourceIds:[facts[1].id],parentRunId:b.id}))

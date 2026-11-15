@@ -13,11 +13,12 @@ test('single-use deletion removes only project data and keeps durable shared res
     return { status: response.status, data: response.status === 204 ? null : await response.json() as any }
   }
   try {
-    const { project } = engine.store.createProject({ title: 'Delete', origin: 'input', goal: 'goal' }), workspace = path.join(engine.configuration.workspaceRoot, project.id)
+    const { project } = engine.store.createProject({ mode:'general',title: 'Delete', origin: 'input', goal: 'goal' }), workspace = path.join(engine.configuration.workspaceRoot, project.id)
     mkdirSync(workspace, { recursive: true }); writeFileSync(path.join(workspace, 'evidence.txt'), 'private')
     const session = 'run_delete_fixture', sessionDir = path.join(root, '.redtrace/sessions/project-fixture', session)
     mkdirSync(sessionDir, { recursive: true }); writeFileSync(path.join(sessionDir, 'session.jsonl'), '{}')
     engine.store.db.prepare('INSERT INTO audit_runs(id,project_id,data) VALUES (?,?,?)').run(session, project.id, JSON.stringify({ id: session, session_id: session }))
+    const chief=engine.chats.chief(project.id),chiefDir=path.join(root,'.redtrace/sessions/project-fixture',chief.sessionId);mkdirSync(chiefDir,{recursive:true});writeFileSync(path.join(chiefDir,'session.jsonl'),'{}');const global=engine.chats.create('keep global'),globalDir=path.join(root,'.redtrace/sessions/project-fixture',global.sessionId);mkdirSync(globalDir,{recursive:true});writeFileSync(path.join(globalDir,'session.jsonl'),'{}')
     const durable = engine.operations.create(project.id, { kind: 'webshell', name: 'keep', actor: 'human' }).resource.id
     const disposable = engine.operations.create(project.id, { kind: 'file', name: 'drop', actor: 'human' }).resource.id
     assert.equal((await call(`/projects/${project.id}`, 'DELETE')).status, 403)
@@ -25,7 +26,7 @@ test('single-use deletion removes only project data and keeps durable shared res
     assert.equal((await call(`/projects/${project.id}`, 'DELETE', { confirmation_token: token, actor: 'human-ui' })).status, 202)
     assert.equal((await call(`/projects/${project.id}`, 'DELETE', { confirmation_token: token, actor: 'human-ui' })).status, 403)
     for (let i = 0; i < 100 && (await call(`/projects/${project.id}`)).status !== 404; i++) await new Promise(r => setTimeout(r, 10))
-    assert.equal((await call(`/projects/${project.id}`)).status, 404); assert.equal(existsSync(workspace), false); assert.equal(existsSync(sessionDir), false)
+    assert.equal((await call(`/projects/${project.id}`)).status, 404); assert.equal(existsSync(workspace), false); assert.equal(existsSync(sessionDir), false);assert.equal(existsSync(chiefDir),false);assert.equal(existsSync(globalDir),true);assert.throws(()=>engine.chats.get(chief.id),/not found/);assert.equal(engine.chats.get(global.id).id,global.id)
     assert.equal(engine.operations.resource(durable).project_id, null)
     assert.throws(() => engine.operations.resource(disposable), /not found/i)
   } finally { await engine.close(); rmSync(root, { recursive: true, force: true }) }

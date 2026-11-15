@@ -6,7 +6,7 @@ import { Store } from '../src/store.ts'
 import { LegionStore } from '../src/legion-store.ts'
 import { CommanderTodos } from '../src/legion-todos.ts'
 import { legionTools } from '../src/legion-tools.ts'
-import { graphTools } from '../src/runner.ts'
+import { graphTools, launchContext } from '../src/runner.ts'
 import { legionMission } from '../src/legion-missions.ts'
 import type { EngineConfig } from '../src/types.ts'
 
@@ -67,10 +67,10 @@ test('Benchmark TodoWrite accepts only items and binds writes to the assigned Gr
   assert.deepEqual(legion.planningTodos(p.id).list(graphs[1].id),[])
 })
 
-test('Benchmark Commander, Scout and Soldier have no TodoList tools; General mode retains Commander ownership',t=>{
+test('Benchmark Commander and Scout have no TodoList tools; Soldier planner and General Commander own their lists',t=>{
   const {store,p,tools}=fixture(t)
   assert(!legionTools(store,'commander',p.id,null,()=>{},undefined,new LegionStore(store).planningTodos(p.id)).some(t=>['TodoWrite','legion_todos'].includes(t.name)))
-  for(const role of ['scout','soldier'] as const)assert(!tools(undefined,role).some(t=>['TodoWrite','legion_todos'].includes(t.name)))
+  for(const role of ['scout'] as const)assert(!tools(undefined,role).some(t=>['TodoWrite','legion_todos'].includes(t.name)))
   const q=store.createProject({mode:'general',title:'roles',origin:'local',goal:'verify'}).project,l=new LegionStore(store,q.id)
   l.claimCommand(q.id)
   assert(legionTools(store,'commander',q.id,null,()=>{},undefined,l.planningTodos(q.id)).some(t=>t.name==='TodoWrite'))
@@ -89,7 +89,7 @@ test('Benchmark General owns task subgoals while Commander keeps global allocati
   const goal=(await create.execute('stage',{description:'verify stage'})).details as {id:string}
   assert.equal(store.node(p.id,goal.id,'goal').graphId,graphs[0].id)
   assert(general.some(t=>t.name==='legion_update_goal'))
-  const soldier=tools(graphs[1],'soldier');assert(soldier.some(t=>t.name==='legion_goal'));assert(!soldier.some(t=>t.name==='TodoWrite'))
+  const soldier=tools(graphs[1],'soldier');assert(soldier.some(t=>t.name==='legion_goal'));assert(soldier.some(t=>t.name==='TodoWrite'))
 })
 
 test('Only Benchmark General prompt owns task planning while General mode Commander remains unchanged',()=>{
@@ -97,7 +97,7 @@ test('Only Benchmark General prompt owns task planning while General mode Comman
   assert(!command.includes('TodoWrite'))
   assert(command.includes('You never modify FGS'))
   const prompt=legionMission('general','benchmark');assert(prompt.includes('TodoWrite({todos})'));assert(prompt.includes('verified FGS Facts'))
-  for(const role of ['soldier','scout'] as const)assert(!legionMission(role,'benchmark').includes('TodoWrite'))
+  assert(legionMission('soldier','benchmark').includes('TodoWrite'));assert(!legionMission('scout','benchmark').includes('TodoWrite'))
   const general=legionMission('commander','general')
   for(const text of ['TodoWrite','full route once','actual prerequisite Fact IDs','Independent directions'])assert(general.includes(text),text)
   for(const role of ['scout','general','soldier'] as const)assert(!legionMission(role,'general').includes('TodoWrite'))
@@ -143,3 +143,14 @@ test('project-detail HTTP snapshot reads current task Graph TodoList without cha
     assert(!('planningTodos' in (await request('/v2/projects/'+p.id+'/graph/delta?graphId='+graphs[0].id)).body))
   }finally{await engine.close();rmSync(work,{recursive:true,force:true})}
 })
+
+
+test('Benchmark launch and General reinforcement inherit only their assigned task planning memory',async t=>{
+ const {store,p,graphs,legion}=fixture(t);legion.planningTodos(p.id).replace(graphs[0].id,plan);
+ const spawn=(graph:any,role:'soldier'|'general'|'scout',description:string)=>{const step=legion.spawn(p.id,{graphId:graph.id,taskKey:graph.taskKey,role,description,sourceIds:[graph.originId]});return store.claim(p.id,'execute',worker,step.id)};
+ const first=spawn(graphs[0],'soldier','initial task planner');assert.deepEqual(launchContext(store,first.id).planningTodos,plan);
+ const other=spawn(graphs[1],'soldier','another task planner');assert.deepEqual(launchContext(store,other.id).planningTodos,[]);
+ const reinforcement=spawn(graphs[0],'general','new strategy reinforcement');assert.deepEqual(launchContext(store,reinforcement.id).planningTodos,plan);assert(!('planningTodos' in launchContext(store,first.id)));
+ const scout=spawn(graphs[0],'scout','recon only');assert(!('planningTodos' in launchContext(store,scout.id)));
+ const general=legionMission('general','benchmark');for(const rule of ['planningTodos','never duplicate covered work','independent directions remain parallel','one item per real stage'])assert(general.includes(rule));
+});

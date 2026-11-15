@@ -22,14 +22,16 @@ export interface ProjectGraph {
 }
 export type LegionRole = 'general' | 'soldier' | 'scout' | 'reporter'
 export interface Evidence { path?: string; artifactId?: string; runId?: string; toolCallId?: string; description: string }
+export interface Specialist { name: string; responsibilities: string; capabilities: string[]; scope: string }
 export interface LegionAssignment {
+  specialist?: Specialist
   role?: LegionRole; taskKey?: string; parentStepId?: string
   parkReason?: string; resumeCondition?: string
   predecessorRunId?: string; handoff?: string; handoffPending?: boolean; nextWorker?: string
   handoffRequest?: { summary: string; nextWorker?: string }
 }
 export interface NodeBase { graphId?: string | null; id: string; projectId: string; createdAt: string; creator: string; version?: number }
-export interface Fact extends NodeBase { kind: 'fact'; title: string; description: string; doc?: Evidence; stepId: string | null; evidence: Evidence[]; producerStepIds?: string[] }
+export interface Fact extends NodeBase { producerRunId?:string; kind: 'fact'; title: string; description: string; doc?: Evidence; stepId: string | null; evidence: Evidence[]; producerStepIds?: string[] }
 export interface Goal extends NodeBase { kind: 'goal'; description: string; parentId: string | null; status: 'open' | 'achieved' | 'cancelled'; evidenceIds: string[] }
 export interface Step extends NodeBase, LegionAssignment {
   kind: 'step'; description: string; goalId: string; sourceIds: string[]; factIds: string[]
@@ -42,7 +44,7 @@ export interface Step extends NodeBase, LegionAssignment {
   failureCount?: number; retryAfter?: number | null; circuitOpen?: boolean; runtimeMs?: number
   planVersion?: number; replaces?: string; replacedBy?: string; replacementPending?: boolean
 }
-export interface Finding extends NodeBase { kind: 'finding'; title: string; description: string; type: string; factIds: string[]; details: Json; severity?: 'critical' | 'high' | 'medium' | 'low'; assetIds?: string[]; report?: Evidence; stepId?: string | null; producerStepIds?: string[] }
+export interface Finding extends NodeBase { producerRunId?:string; kind: 'finding'; title: string; description: string; type: string; factIds: string[]; details: Json; severity?: 'critical' | 'high' | 'medium' | 'low'; assetIds?: string[]; report?: Evidence; stepId?: string | null; producerStepIds?: string[] }
 export interface Input extends NodeBase { kind: 'hint' | 'observation'; content: string; stepId: string | null; deleted: boolean }
 export type GraphNode = Fact | Goal | Step | Finding | Input
 export interface Graph { graph?: ProjectGraph; project: Project; facts: Fact[]; goals: Goal[]; steps: Step[]; findings: Finding[]; hints: Input[]; observations: Input[] }

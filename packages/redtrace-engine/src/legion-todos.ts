@@ -25,6 +25,10 @@ export class CommanderTodos {
   }
 }
 
-export function taskTodoOwner(step: Step): boolean {
-  return !!step.graphId && !step.parentStepId && step.role === 'general'
+export function taskTodoOwner(step: Step, store?: Store): boolean {
+  if (!step.graphId || step.parentStepId || !['general','soldier'].includes(step.role ?? '')) return false
+  if (!store) return true
+  const candidates=store.nodes<Step>(step.projectId,['step']).filter(s=>s.graphId===step.graphId&&!s.parentStepId&&!s.deleted&&['pending','running','paused'].includes(s.status)&&['general','soldier'].includes(s.role??''))
+  const planner=candidates.find(s=>s.role==='general')??candidates[0]
+  return planner?.id===step.id
 }

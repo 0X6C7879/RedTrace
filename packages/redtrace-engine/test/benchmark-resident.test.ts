@@ -14,7 +14,7 @@ test('Benchmark registers compact global tools directly, with no FGS or redundan
  const{store,p,legion}=fixture(t);legion.claimCommand();const tools=legionTools(store,'commander',p.id,null,()=>{},config)
  const forbidden=['legion_graph','legion_hint','legion_read_node','legion_goal','legion_update_goal','legion_update_step','legion_manage_evidence','legion_accept','legion_classify','legion_confirm_transfer','legion_evidence_read','legion_experience_capture','legion_finish','TodoWrite','legion_todos','submit_fact','submit_finding']
  for(const name of forbidden)assert(!tools.some(t=>t.name===name),name)
- assert.equal(tools.length,18)
+ assert.equal(tools.length,20)
  for(const tool of tools){const schema=JSON.parse(JSON.stringify(tool.parameters));assert.equal(schema.additionalProperties,false);assert(!schema.properties.projectId);assert(!schema.properties.graphId)}
  assert(Buffer.byteLength(JSON.stringify(tools.map(t=>({name:t.name,description:t.description,parameters:t.parameters}))))<10500)
  assert(Buffer.byteLength(legionMission('commander','benchmark'))<4000)
