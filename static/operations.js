@@ -126,14 +126,14 @@ function operationsPage() {
 
     pageDescription() {
       return {
-        webshell: '所有任务共享连接；保留来源项目、Intent 与 Worker 标记',
-        'c2-listeners': '全局 reverse / bind / Beacon / 外部 C2 Listener，独立于 Worker 生命周期',
-        'c2-sessions': '所有任务共享 reverse、bind、SSH、WinRM、PsExec、WMI 与 Beacon 会话',
-        'c2-tasks': '跨 Worker 的异步任务队列、审批、取消与结果引用',
-        'c2-payloads': 'Worker、生成器与人工上传的载荷统一留存、共享和下载',
-        'c2-events': '统一查看 C2 Session、任务和人工接管事件',
+        webshell: '跨任务共享连接，保留来源记录',
+        'c2-listeners': '共享 Listener，独立于 Worker 生命周期',
+        'c2-sessions': '跨任务共享会话',
+        'c2-tasks': '任务、审批与执行结果',
+        'c2-payloads': '共享载荷与下载',
+        'c2-events': '会话与任务事件',
         'c2-profiles': '配置 User-Agent、Beacon URI、Jitter 和响应头',
-        'c2-credentials': '集中保存主机、Web、数据库、云与 Active Directory 凭证',
+        'c2-credentials': '共享凭证',
       }[this.pageMode] || '';
     },
 

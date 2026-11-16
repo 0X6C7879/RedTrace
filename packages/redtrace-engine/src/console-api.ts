@@ -64,6 +64,6 @@ export function consoleRoutes(router: Router, store: Store, configuration: Confi
     })
     return { tools, revision, roleGroups: MODE_ROLES, runs: live.runs ?? [], mcp: live.mcp,
       schemaCounts: Object.fromEntries(['DSH','RedTrace','MCP'].map(source=>[source,tools.filter(t=>t.source===source).length])),
-      note: '仅列真实注册工厂提供的 Schema（停用保留）；CLI、Skill 和历史调用不进入目录。固定角色绑定不授予角色外能力，下一模型步骤和新调用生效，不取消进行中的调用。调用统计仅在打开统计窗口后查询。' }
+      note: '仅显示已注册工具。启停与角色绑定对新调用生效。' }
   })
 }

@@ -8,13 +8,13 @@ import {serveEngine} from '../src/index.ts'
 const root=path.resolve(import.meta.dirname,'../../..'),html=readFileSync(root+'/static/index.html','utf8')
 function ui(){const c=vm.createContext({window:{},localStorage:{setItem(){}},console});for(const name of ['audit','workbench','console'])vm.runInContext(readFileSync(root+'/static/'+name+'.js','utf8'),c);return c}
 
-test('all conversation ingresses preserve system prompts and native context without synthetic system actors',()=>{
+test('operator logs preserve system prompts; user-facing global and Chief chats hide native context',()=>{
  const c=ui(),a={...c.window.redtraceWorkbench,workbench:{workers:[{id:'r',label:'Reporter1',role:'reporter'}],conversations:[{id:'g',graphId:'g'}]},legion:{messages:[]},conversationId:'g'}
  a.conversationEvents=[{event_uid:'s',kind:'system.prompt',run_id:'r',content:'prompt',timestamp:'1'},{event_uid:'c',kind:'user.message',run_id:'r',content:'mission',timestamp:'2'}];a.conversationGraphEvents=[{id:1,type:'graph.created'}]
  const rows=a.conversationRows();assert.equal(rows.length,2);assert.equal(rows[0].kind,'system.prompt');assert.equal(rows[0].actor,'Reporter1');assert.equal(rows[0].task_type,'reporter');assert.equal(rows[1].kind,'session.context')
  a.conversationId='commander';a.commanderHistory=[{kind:'system.prompt',content:'command prompt'},{kind:'user.message',content:'native context'}];assert.equal(a.conversationRows()[0].kind,'system.prompt');assert.equal(a.conversationRows()[1].kind,'session.context')
- a.conversationId='chief';a.chiefEvents=[{kind:'system.prompt',content:'chief prompt'}];assert.equal(a.conversationRows()[0].kind,'system.prompt')
- a.chatEvents=[{kind:'system.prompt',content:'global prompt'}];assert.equal(a.globalChatRows()[0].kind,'system.prompt')
+ a.conversationId='chief';a.chiefEvents=[{kind:'system.prompt',content:'chief prompt'}];assert.equal(a.conversationRows().length,0)
+ a.chatEvents=[{kind:'system.prompt',content:'global prompt'}];assert.equal(a.globalChatRows().length,0)
 })
 test('conversation and graph timelines share audit pairing, skill, shell, MCP and thinking rendering',()=>{
  const c=ui(),a=c.runtimeLog(),events=[{id:1,run_id:'r',task_type:'reporter',kind:'tool.started',call_id:'shell',title:'bash',arguments:{command:'printf proof'}},{id:2,run_id:'r',task_type:'reporter',kind:'tool.completed',call_id:'shell',content:'proof'},{id:3,run_id:'r',task_type:'reporter',kind:'tool.started',call_id:'skill',title:'skill',arguments:{name:'sample'}},{id:4,run_id:'r',task_type:'reporter',kind:'tool.started',title:'mcp__example__read'},{id:5,run_id:'r',task_type:'reporter',kind:'thinking.message',content:'reasoning'},{id:6,run_id:'r',task_type:'reporter',kind:'system.prompt',content:'prompt'}]
@@ -67,3 +67,24 @@ test('pasted images retain the existing upload request, pending attachment and s
  await a.pasteImages({clipboardData:{files:[image]},preventDefault(){}},'workbench');assert.equal(requests[0].url,'/v2/chats/input-fixture/attachments');assert.equal(requests[0].options.method,'POST');assert.equal(requests[0].options.body,image);assert.equal(requests[0].options.headers['Content-Type'],'image/png');assert.equal(a.pendingFiles('workbench')[0].id,'u');assert.equal(a.workbenchCommand,'keep draft');assert(!a.uploadingIds['input-fixture'])
  c.fetch=async()=>({ok:false,json:async()=>({detail:'image rejected'})});await a.pasteImages({clipboardData:{files:[image]},preventDefault(){}},'workbench');assert.equal(a.inputErrors['input-fixture'],'image rejected');assert.equal(a.pendingFiles('workbench').length,1);assert(!a.uploadingIds['input-fixture'])
 })
+
+test('native conversation streaming grows one bubble, replaces deltas, decodes split UTF-8 and rejects truncated replies',async()=>{
+ const c=ui();c.TextDecoder=TextDecoder;const a={...c.window.redtraceWorkbench,liveChatEvents:{},chatId:'g',chatEvents:[]},encoder=new TextEncoder();let finish!:()=>void;
+ const rows=[{event_uid:'s',kind:'system.prompt',content:'private prompt'},{event_uid:'u',kind:'user.message',source:{kind:'user'},content:'hello'},{event_uid:'c',kind:'user.message',source:{kind:'runtime-context'},content:'context'},{event_uid:'d1',kind:'assistant.delta',content:'你'},{event_uid:'d2',kind:'assistant.delta',content:'好'}];
+ const bytes=encoder.encode(rows.map(e=>JSON.stringify(e)+'\n').join(''));
+ c.fetch=async(_url:string,options:any)=>{assert.equal(options.headers.Accept,'application/x-ndjson');return new Response(new ReadableStream({async start(controller){for(let i=0;i<bytes.length;i+=7)controller.enqueue(bytes.slice(i,i+7));await new Promise<void>(r=>finish=r);controller.enqueue(encoder.encode(JSON.stringify({event_uid:'full',kind:'assistant.message',content:'你好'})+'\n'+JSON.stringify({kind:'chat.completed'})+'\n'));controller.close()}}))};
+ const pending=a.streamChat('g',{content:'hello'});await new Promise(r=>setImmediate(r));const live=a.globalChatRows();assert.equal(live.length,2);assert.equal(live[1].content,'你好');assert.equal(live[1].kind,'assistant.delta');finish();await pending;assert.equal(a.globalChatRows().length,2);assert.equal(a.globalChatRows()[1].kind,'assistant.message');a.chatEvents=[{event_uid:'full',kind:'assistant.message',content:'你好'}];assert.equal(a.globalChatRows().filter((e:any)=>e.kind==='assistant.message').length,1);
+ c.fetch=async()=>new Response('{"kind":"assistant.delta","content":"partial"}\n');await assert.rejects(a.streamChat('other',{}),/中断/);assert.equal(a.liveChatEvents.other[0].content,'partial');
+});
+
+test('conversation deletion uses the shared dialog; cancellation leaves all conversation state untouched',async()=>{
+ const c=ui();let opened=0,closed=0,removed=0;const a={...c.window.redtraceWorkbench,$refs:{chatDeleteDialog:{showModal(){opened++},close(){closed++}}},chats:[{id:'a',title:'A'},{id:'b',title:'B'}],chatId:'a',chatEvents:[{content:'old'}],chatDraft:'draft',uploadsByChat:{a:[],b:[{id:'keep'}]},pendingUploads:{a:[]},inputErrors:{a:[]},api:async()=>{removed++},selectChat:async()=>{}};c.localStorage.removeItem=()=>{};
+ a.requestChatDeletion(a.chats[0]);assert.equal(opened,1);assert.equal(removed,0);assert.equal(a.chatEvents.length,1);assert.equal(a.chatDraft,'draft');await a.deleteChat();assert.equal(removed,1);assert.equal(closed,1);assert.equal(a.chatEvents.length,0);assert.equal(a.chatDraft,'');assert.equal(a.uploadsByChat.a,undefined);assert.equal(a.uploadsByChat.b[0].id,'keep');assert.equal(a.chatDeleting,false);assert(html.includes('aria-labelledby="chat-delete-title"'));assert(!sourceHasNativeConfirm());
+ function sourceHasNativeConfirm(){return readFileSync(root+'/static/workbench.js','utf8').includes('confirm(')}
+});
+
+test('runtime settings expose both patrol intervals and submit them through the existing revisioned save',()=>{
+ const c=ui();
+ for(const field of ['inspection_interval','idle_inspection_interval']){assert(html.includes('runtimeTaskForm.tasks.commander.'+field));assert(html.includes(field+':Number(value.tasks.commander.'+field+')'))}
+ const css=readFileSync(root+'/static/console.css','utf8');assert(css.includes('grid-template-rows:1fr auto'));assert(css.includes('grid-column:1/-1;align-self:end'));assert(css.includes('.runtime-settings .runtime-task-grid{grid-template-columns:repeat(3,minmax(0,1fr))'));
+});

@@ -147,3 +147,12 @@ body .wb-message pre { font-size: .8125rem; line-height: 1.7; color: var(--rt-te
 .wb-messages .audit-event[data-side=right] .runtime-event-heading{justify-content:flex-end}
 
 .provider-planner{color:var(--rt-coral)}.provider-dot-planner{background:var(--rt-coral)}.provider-worker{color:var(--rt-violet)}.provider-dot-worker{background:var(--rt-violet)}
+
+.wb-project-header{min-height:3rem;padding:.5rem 1rem}
+.wb-project-header>div:first-child{display:flex;align-items:center;gap:.75rem}
+.wb-project-header>div:first-child small{letter-spacing:.04em}
+.wb-session-row{position:relative;display:flex;align-items:stretch;min-width:0}
+.wb-session-row .wb-session{padding-right:2.5rem}
+.wb-session-delete{position:absolute;right:.25rem;top:.5rem;display:grid;place-items:center;width:2rem;height:2rem;border-radius:.375rem;color:var(--rt-text-muted)}
+.wb-session-delete:hover{color:var(--rt-danger);background:var(--rt-surface-raised)}
+.wb-session-delete:disabled{opacity:.35;cursor:default}

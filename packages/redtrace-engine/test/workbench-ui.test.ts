@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import vm from 'node:vm'
 import {readFileSync} from 'node:fs'
 const source=readFileSync(new URL('../../../static/workbench.js',import.meta.url),'utf8'),html=readFileSync(new URL('../../../static/index.html',import.meta.url),'utf8')
-function app(){const context=vm.createContext({window:{},localStorage:{getItem(){return null},setItem(){}},console});vm.runInContext(source,context);return {...context.window.redtraceWorkbench,conversationModels:[],legionProjectId:'p',legionPanel:'commander',legion:{messages:[]},api:async()=>({}),showToast(){},legionStatus:(s:string)=>s}}
+function app(){const context=vm.createContext({window:{},localStorage:{getItem(){return null},setItem(){}},console});vm.runInContext(source,context);return {...context.window.redtraceWorkbench,streamChat(id:string,payload:any){return this.api('POST','/v2/chats/'+id+'/messages',payload)},conversationModels:[],legionProjectId:'p',legionPanel:'commander',legion:{messages:[]},api:async()=>({}),showToast(){},legionStatus:(s:string)=>s}}
 
 test('Worker messages preserve actual instance attribution, Commander direction, centered events and recent running order',()=>{
  const a=app();a.workbench={workers:[{id:'r1',label:'Soldier1'},{id:'r2',label:'Audit1'}],conversations:[{id:'a',title:'a',updatedAt:'2026-01-01',running:false},{id:'b',title:'b',updatedAt:'2025-01-01',running:true}]};a.conversationId='a'

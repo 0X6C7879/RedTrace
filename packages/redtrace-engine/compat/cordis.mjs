@@ -155,6 +155,7 @@ export async function apply(ctx, options) {
     const { providers } = providerProfiles(config)
     // File-watch delivery can lag; the model snapshot and scheduler must use the same revision.
     engine.scheduler.update(config)
+    commanderController?.rescheduleInspections()
     applyCommonEnv(config.commonEnv)
     const adapter = [...ctx.get('loader').entries()].find(entry => entry.options.id === 'llm-pi-ai')
     if (!adapter) throw new Error('DSH llm-pi-ai profile entry is missing')

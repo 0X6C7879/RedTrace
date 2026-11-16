@@ -193,6 +193,7 @@ export async function recoverLegion(ctx,engine,resumeStopped=false,projectId,inc
 export function createCommanderController(ctx, engine, canRun=()=>true) {
   let closed=true, scheduled=false, cursor=0, watchdogTimer, watchdogWork, checking=false
   const legion=engine.legion, store=engine.store, active=new Map(), timers=new Map(), inspections=new Map(),debounces=new Map(),residents=engine.commanderSessions=new Map()
+  let inspectionIntervals={active:60,idle:90}
   const release=async id=>{const resident=residents.get(id);residents.delete(id);await resident?.handle.dispose()}
   const pending=projectId=>{
     const cursor=Number(store.db.prepare('SELECT COALESCE(MAX(id),0) AS n FROM events WHERE project_id=?').get(projectId).n)
@@ -228,6 +229,7 @@ export function createCommanderController(ctx, engine, canRun=()=>true) {
       const projects=store.projects().filter(p=>p.status==='active'&&canRun(p.mode))
       if(!projects.length)return
       const config=engine.configuration.resolvedSnapshot().config
+      inspectionIntervals=config.commanderInspection??{active:60,idle:90}
       for(let i=0;i<projects.length;i++) {
         const project=projects[(cursor+i)%projects.length], campaign=legion.campaign(project.id),periodic=project.mode==='benchmark'
         if(active.has(project.id)||campaign.status!=='idle'||legion.budget(Date.now(),project.id).phase==='ended')continue
@@ -249,7 +251,7 @@ export function createCommanderController(ctx, engine, canRun=()=>true) {
           if(closed||!store.projects().some(p=>p.id===project.id&&p.status==='active'))return
           const current=legion.campaign(project.id)
           if(periodic&&current.status==='idle'){
-            current.nextInspectionAt=Date.now()+legion.inspectionDelay(project.id);legion.saveCampaign(current);armInspection(project.id,current.nextInspectionAt)
+            current.nextInspectionAt=Date.now()+legion.inspectionDelay(project.id,engine.configuration.resolvedSnapshot().config.commanderInspection);legion.saveCampaign(current);armInspection(project.id,current.nextInspectionAt)
           }else if(!periodic&&task.dirty)wake(project.id)
           engine.scheduler.wake()
         })
@@ -296,6 +298,7 @@ export function createCommanderController(ctx, engine, canRun=()=>true) {
       }
       engine.scheduler.start();controller.start();wake(projectId);return result
     },
+    rescheduleInspections(){const next=engine.configuration.resolvedSnapshot().config.commanderInspection??{active:60,idle:90};if(next.active===inspectionIntervals.active&&next.idle===inspectionIntervals.idle)return;inspectionIntervals=next;for(const [id] of inspections){const c=legion.campaign(id);c.nextInspectionAt=Date.now()+legion.inspectionDelay(id,engine.configuration.resolvedSnapshot().config.commanderInspection);legion.saveCampaign(c);armInspection(id,c.nextInspectionAt)}},
     start(){if(!closed)return;closed=false;store.changes.on('change',changed);store.changes.on('legion-message',messaged);store.changes.on('legion-budget',armDeadline);store.changes.on('legion-relay',wake);armDeadline();watchdogTimer=setInterval(()=>{watchdogWork=watchdog().catch(error=>ctx.logger.warn(String(error)))},15_000);watchdogTimer.unref();void recoverLegion(ctx,engine).then(()=>{engine.scheduler.wake();wake()}).catch(error=>ctx.logger.warn(String(error)))},
     async stop(projectId){
       store.project(projectId);clearTimeout(debounces.get(projectId));debounces.delete(projectId);clearTimeout(timers.get(projectId));timers.delete(projectId);clearTimeout(inspections.get(projectId));inspections.delete(projectId)

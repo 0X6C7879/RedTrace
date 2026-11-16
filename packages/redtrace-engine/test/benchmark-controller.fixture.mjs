@@ -71,6 +71,11 @@ try{
   assert.equal(legion.campaign(busy.id).sessionId,busySession,'recovery reuses native history and persisted STATE')
   assert.match(legion.campaign(busy.id).state,/full STATE/)
   failProject=idle.id;await advance(30000);await settle(()=>legion.campaign(idle.id).status==='stopped');assert.equal(legion.campaign(idle.id).failureCode,'INVALID_REQUEST');const permanent=counts(idle.id);await advance(15000);assert.equal(counts(idle.id),permanent);assert.equal(legion.campaign(idle.id).restarts,undefined)
+  const waiting=store.createProject({mode:'benchmark',title:'waiting reload',origin:'local',goal:'verify'}).project;legion.saveCampaign({...legion.campaign(waiting.id),status:'idle',hasSession:true,nextInspectionAt:Date.now()+60000});controller.wake(waiting.id);await settle()
+  const inspectionBefore=legion.campaign(waiting.id).nextInspectionAt,callCount=counts(waiting.id)
+  config.commit(config.read().revision,raw=>{raw.tasks={...raw.tasks,commander:{timeout:300,conclude_timeout:30,inspection_interval:60,idle_inspection_interval:90}}});controller.rescheduleInspections();assert.equal(legion.campaign(waiting.id).nextInspectionAt,inspectionBefore,'unrelated saves do not reset the clock')
+  config.commit(config.read().revision,raw=>{raw.tasks.commander.inspection_interval=120;raw.tasks.commander.idle_inspection_interval=180});controller.rescheduleInspections();assert.equal(legion.campaign(waiting.id).nextInspectionAt,Date.now()+180000);assert.equal(counts(waiting.id),callCount,'hot reload does not immediately call a model');assert.deepEqual(config.snapshot().tasks.commander.inspection_interval,120)
+  console.log('PATROL_INTERVAL_HOT_RELOAD=true; DEFAULT_60_90_PRESERVED=true; GENERAL_EVENT_DRIVEN=true')
   console.log('BENCHMARK_PATROL=true; normal=60000; idle=90000; watchdog=15000; event_wake=false; general_event_wake=true; concurrent_projects=true; waiting_capacity_released=true; native_restart_cap=3; STATE_continuity=true; same_native_agent=true; subsequent_patrol_is_delta_only=true')
 }finally{
   await controller?.close();Date.now=realNow;globalThis.setTimeout=realTimeout;globalThis.setInterval=realInterval;globalThis.clearTimeout=realClear;globalThis.clearInterval=realClearInterval

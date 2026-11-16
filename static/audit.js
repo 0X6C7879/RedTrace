@@ -823,9 +823,10 @@ function runtimeLog() {
     setRuntimeEvents(events,runs,scope,projectId='',graphId=''){
       const scroller=this.$el?.closest('.wb-messages,.fgs-runtime-log'),changed=this.runtimeScope!==scope;
       const follow=changed||scroller&&scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<48,tail=events.at(-1)?.key||events.at(-1)?.event_uid||events.at(-1)?.id||'';
+      const tailContent=events.at(-1)?.content||'';
       if(changed){this.runtimeScope=scope;this.selectedRun='all';this.selectedProvider='all';this._openThinking={};this.auditEvidence=null}
       this.selectedTaskId=projectId;this.auditGraphId=graphId;this.events=events;this.runs=runs;this.renderWindow=events.length;this.reindexEvents();
-      if(scroller&&follow&&(changed||tail!==this.runtimeTail))this.$nextTick(()=>{scroller.scrollTop=scroller.scrollHeight});this.runtimeTail=tail;
+      if(scroller&&follow&&(changed||tail!==this.runtimeTail||tailContent!==this.runtimeTailContent))this.$nextTick(()=>{scroller.scrollTop=scroller.scrollHeight});this.runtimeTail=tail;this.runtimeTailContent=tailContent;
     },
     runtimeRoles(){return [...new Set(this.events.map(e=>this.eventAgent(e)))].filter(Boolean)},
   };

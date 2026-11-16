@@ -102,3 +102,15 @@ test('conversation catalog omits secrets and Commander selections use existing n
  assert.equal((await send({worker:null,reasoning:null})).status,200);assert.equal(e.legion.campaign(p.id).nextWorker,undefined);assert.equal(e.legion.campaign(p.id).reasoning,undefined);
  }finally{await e.close();rmSync(dir,{recursive:true,force:true})}
 });
+
+test('conversation deletion serializes native cleanup, cascades upload records, and preserves the index on failure',async t=>{
+ const store=new Store(':memory:');t.after(()=>store.close());const chats=new ChatStore(store),chat=chats.create('delete fixture'),other=chats.create('keep fixture');chats.saveUpload({id:'u',chatId:chat.id,type:'file',attachment:{name:'test'},createdAt:chat.createdAt});
+ chats.removeSession=async()=>{throw new Error('disk failure')};await assert.rejects(chats.remove(chat.id),/disk failure/);assert.equal(chats.get(chat.id).id,chat.id);assert.equal(chats.uploads(chat.id).length,1);
+ let finish!:()=>void;chats.removeSession=()=>new Promise<void>(r=>finish=r);const pending=chats.remove(chat.id);assert.throws(()=>chats.get(chat.id),/in progress/);await assert.rejects(chats.remove(chat.id),/in progress/);finish();await pending;assert.throws(()=>chats.get(chat.id),/not found/);assert.equal(store.db.prepare('SELECT count(*) AS n FROM chat_uploads').get()!.n,0);assert.equal(chats.get(other.id).title,'keep fixture');
+ chats.save({...other,status:'running'});await assert.rejects(chats.remove(other.id),/response/);
+});
+
+test('patrol interval settings round-trip via the revisioned API and reject invalid values without changing configuration',async()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'patrol-settings-')),e=await serveEngine({root:dir,port:0,autoStart:false}),base='http://127.0.0.1:'+(e.server.address() as any).port;
+ try{const snapshot=e.configuration.snapshot();assert.equal(snapshot.tasks.commander.inspection_interval,60);assert.equal(snapshot.tasks.commander.idle_inspection_interval,90);const payload={expected_revision:snapshot.revision,runtime:snapshot.runtime,tasks:{...snapshot.tasks,commander:{...snapshot.tasks.commander,inspection_interval:120,idle_inspection_interval:180}}};const response=await fetch(base+'/worker-config/runtime-tasks',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});assert.equal(response.status,200);const saved=await response.json();assert.equal(saved.tasks.commander.inspection_interval,120);assert.deepEqual(e.configuration.resolvedSnapshot().config.commanderInspection,{active:120,idle:180});for(const value of [0,-1,1.5]){const invalid=await fetch(base+'/worker-config/runtime-tasks',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({...payload,expected_revision:saved.revision,tasks:{...saved.tasks,commander:{...saved.tasks.commander,inspection_interval:value}}})});assert.equal(invalid.status,422);assert.equal(e.configuration.read().revision,saved.revision)}}finally{await e.close();rmSync(dir,{recursive:true,force:true})}
+});

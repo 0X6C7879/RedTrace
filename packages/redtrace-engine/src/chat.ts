@@ -29,9 +29,11 @@ export function conversationWorker(config:EngineConfig,selection:string,mode?:Pr
 export interface Chat { selectedWorker?:string; reasoning?:string; projectId?:string; kind?:'chief'|'commander-input'; id:string; title:string; sessionId:string; createdAt:string; updatedAt:string; status:'idle'|'running'|'failed'; hasSession:boolean; workerName?:string; error?:string }
 /** Conversation bodies live only in native DSH persistence; this table is an index. */
 export class ChatStore {
+  private readonly deleting=new Set<string>()
   readonly store:Store
+  removeSession?: (chat:Chat)=>Promise<void>
   stopProject?: (projectId:string)=>Promise<void>
-  runtime?: (chat:Chat,content:string,uploads?:Upload[],worker?:string|null,reasoning?:string|null)=>Promise<unknown>
+  runtime?: (chat:Chat,content:string,uploads?:Upload[],worker?:string|null,reasoning?:string|null,emit?:(event:Record<string,unknown>)=>void)=>Promise<unknown>
   models?:(mode?:ProjectMode)=>Promise<ConversationModel[]>
   upload?: (chat:Chat,req:import('node:http').IncomingMessage)=>Promise<Upload>
   readUpload?: (upload:Upload,offset?:number,length?:number)=>Promise<unknown>
@@ -49,8 +51,9 @@ export class ChatStore {
   uploads(chatId:string):Upload[] {this.get(chatId);return this.store.db.prepare('SELECT data FROM chat_uploads WHERE chat_id=? ORDER BY rowid').all(chatId).map(r=>JSON.parse(String(r.data)))}
   owned(chatId:string,ids:string[]):Upload[] {const uploads=this.uploads(chatId);return ids.map(id=>{const upload=uploads.find(u=>u.id===id);if(!upload)throw new HttpError(404,'Attachment does not belong to this conversation');return upload})}
   saveUpload(upload:Upload) {this.get(upload.chatId);this.store.db.prepare('INSERT INTO chat_uploads VALUES (?,?,?)').run(upload.id,upload.chatId,JSON.stringify(upload));return upload}
-  get(id:string):Chat { const row=this.store.db.prepare('SELECT data FROM global_chats WHERE id=?').get(id);if(!row)throw new HttpError(404,'Conversation not found');return JSON.parse(String(row.data)) }
+  get(id:string):Chat { if(this.deleting.has(id))throw new HttpError(409,'Conversation deletion is in progress');const row=this.store.db.prepare('SELECT data FROM global_chats WHERE id=?').get(id);if(!row)throw new HttpError(404,'Conversation not found');return JSON.parse(String(row.data)) }
   save(chat:Chat) { this.store.db.prepare('INSERT INTO global_chats(id,data,project_id) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(chat.id,JSON.stringify(chat),chat.projectId??null);return chat }
+  async remove(id:string) {const chat=this.get(id);if(chat.projectId)throw new HttpError(422,'Project conversations are deleted with their Project');if(chat.status==='running')throw new HttpError(409,'Wait for the response before deleting this conversation');if(!this.removeSession)throw new HttpError(503,'Native conversation cleanup requires the DSH host');this.deleting.add(id);try{await this.removeSession(chat);this.store.db.prepare('DELETE FROM global_chats WHERE id=?').run(id);return {deleted:true,id}}finally{this.deleting.delete(id)}}
   create(title:string) {const id='chat-'+randomUUID();return this.save({id,title:requiredText(title,'title'),sessionId:id,createdAt:now(),updatedAt:now(),status:'idle',hasSession:false})}
 }
 export function chatSlots(store:Store): {projectId:string;workerName?:string}[] { return store.db.prepare("SELECT data FROM global_chats WHERE json_extract(data,'$.status')='running'").all().map(r=>{const c=JSON.parse(String(r.data));return{projectId:c.projectId??'',workerName:c.workerName}}) }
@@ -63,6 +66,7 @@ export function chatRoutes(router:Router,chats:ChatStore,configuration:()=>Engin
   router.add('GET','/v2/chats/models',c=>{const mode=c.url.searchParams.get('mode')??undefined;if(mode!==undefined&&mode!=='general'&&mode!=='benchmark')throw new HttpError(422,'Invalid Project mode');return chats.models?chats.models(mode):configuredConversationModels(configuration(),mode)})
   router.add('GET','/v2/chats',c=>chats.list(c.url.searchParams.get('query')??''))
   router.add('POST','/v2/chats',async c=>chats.create((await body(c.req,Type.Object({title:text},{additionalProperties:false}))).title))
+  router.add('DELETE','/v2/chats/:chat',c=>chats.remove(c.params.chat))
   router.add('GET','/v2/chats/:chat',c=>chats.get(c.params.chat))
   router.add('POST','/v2/chats/:chat/messages',async c=>{
     const input=await body(c.req,Type.Object({content:Type.String(),worker:Type.Optional(Type.Union([text,Type.Null()])),reasoning:Type.Optional(Type.Union([text,Type.Null()])),attachmentIds:Type.Optional(Type.Array(text,{uniqueItems:true}))},{additionalProperties:false})),content=input.content,chat=chats.get(c.params.chat),uploads=chats.owned(chat.id,input.attachmentIds??[])
@@ -71,7 +75,11 @@ export function chatRoutes(router:Router,chats:ChatStore,configuration:()=>Engin
     if(!chats.runtime)throw new HttpError(503,'Global conversations require the DSH host')
     if(chat.status==='running')throw new HttpError(409,'This conversation is already responding')
     // The DSH host owns activation, native write ownership, capacity and error persistence.
-    return chats.runtime(chat,content,uploads,input.worker,input.reasoning)
+    if(!String(c.req.headers.accept??'').includes('application/x-ndjson'))return chats.runtime(chat,content,uploads,input.worker,input.reasoning)
+    const emit=(event:Record<string,unknown>)=>{if(c.res.destroyed)return;if(!c.res.headersSent)c.res.writeHead(200,{'Content-Type':'application/x-ndjson; charset=utf-8','Cache-Control':'no-store','X-Accel-Buffering':'no'});c.res.write(JSON.stringify(event)+'\n')}
+    try{const result=await chats.runtime(chat,content,uploads,input.worker,input.reasoning,emit);emit({kind:'chat.completed',chat:result})}
+    catch(error){if(!c.res.headersSent)throw error;emit({kind:'chat.error',error:error instanceof Error?error.message:String(error)})}
+    c.res.end()
   })
   router.add('GET','/v2/chats/:chat/events',c=>{
     const chat=chats.get(c.params.chat)
