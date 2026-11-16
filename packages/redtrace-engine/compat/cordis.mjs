@@ -1,4 +1,5 @@
-import { runtimeCatalog, commanderCalls, mountToolSettings } from './console.mjs'
+import { runtimeCatalog, mountToolSettings, platformToolOptions, mountSystemLogs } from './console.mjs'
+import { inspectToolCatalog } from './tool-catalog.mjs'
 import { mountLegionContext } from './legion-context.mjs'
 import { Type } from 'typebox'
 import { body, queryNumber } from '../src/http.ts'
@@ -113,7 +114,7 @@ export async function apply(ctx, options) {
   const { createUserMessage, HarnessError } = await load('vendor/deepseek-harness/packages/llm/llm/lib/index.js')
   const { SessionId } = await load('vendor/deepseek-harness/packages/core/session/lib/index.js')
   let commanderController, closeGlobalChat
-  const engine = await createEngine({ root, database: options.database, configuration: options.configuration, autoStart: false, runtimeCatalog: async () => { await refresh(); return runtimeCatalog(ctx) }, commanderCalls: () => commanderCalls(ctx, engine), commanderEvents: (offset,limit,signal,projectId,sessionId) => readCommanderLog(ctx,engine,offset,limit,signal,projectId,sessionId),
+  const engine = await createEngine({ root, database: options.database, configuration: options.configuration, autoStart: false, runtimeCatalog: async () => { await refresh(); return runtimeCatalog(ctx, engine, await inspectToolCatalog(ctx, engine, manager, runtime)) }, commanderEvents: (offset,limit,signal,projectId,sessionId) => readCommanderLog(ctx,engine,offset,limit,signal,projectId,sessionId),
     // The gate is created before the manager exists; it only dereferences it
     // when a request or dispatch actually asks, long after boot settles.
     adapterAvailability: () => pluginId => manager.running(pluginId),
@@ -176,6 +177,7 @@ export async function apply(ctx, options) {
   })
   try {
     await manager.boot(); registerPluginRoutes(ctx, manager)
+    await mountSystemLogs(ctx, engine)
     mountToolSettings(ctx, engine)
     closeGlobalChat = mountGlobalChat(ctx,engine,refresh)
     commanderController = createCommanderController(ctx, engine,()=>!!state()?.presets.has('commander'))
@@ -196,6 +198,7 @@ export async function apply(ctx, options) {
       if (!filename || String(filename) === path.basename(engine.configuration.filename)) void refresh().catch(error => ctx.logger.warn(error))
     })
     ctx.effect(() => async () => { watcher.close(); await closeGlobalChat?.(); await commanderController?.close(); await engine.close() })
+    ctx.logger.info('RedTrace runtime ready: console, plugins and scheduler initialized')
   } catch (error) { watcher?.close(); await engine.close(); throw error }
 
   async function executeDsh(context) {
@@ -229,6 +232,7 @@ export async function apply(ctx, options) {
         // Skills mount DSH-natively from the project root skills catalog; the
         // agent discovers and loads them through the skill tool on demand.
         scoped = await mountExecutionTools(scoped, { task, cwd, sessionRoot: runtime.sessionRoot, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.availableForTask(id),
+          toolEnabled: name => platformToolOptions(engine, name, worker.name).when(),
           onRefresh: refresh => sessionRefresh.set(run.id, async () => { await refresh(); refreshLiveTools() }) })
       }
       if (reporting) scoped.tools.restrict({ allow: [] })
@@ -249,7 +253,7 @@ export async function apply(ctx, options) {
       // The DSH tools runtime projects parameters as lossless JSON; the graph
       // and verb tools carry typebox symbol annotations, so detach them into
       // plain JSON Schema before registration.
-      const registerTool = t => scoped.tools.register({ name: t.name, description: t.description, parameters: JSON.parse(JSON.stringify(t.parameters)),
+      const registerTool = t => scoped.tools.register({ redtrace: true, name: t.name, description: t.description, parameters: JSON.parse(JSON.stringify(t.parameters)),
         output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => value.content },
         async execute(args, execution) {
           if (finished || signal.aborted) throw new Error('Activity has stopped')
@@ -259,7 +263,7 @@ export async function apply(ctx, options) {
           if (result.isError) throw new HarnessError(result.content.filter(block => block.type === 'text').map(block => block.text).join('\n'), result.details?.context?.code ?? 'REDTRACE_TOOL_ERROR')
           if (result.terminate) execution.concludeTurn?.()
           return result
-        } })
+        } }, platformToolOptions(engine, t.name, worker.name))
       for (const t of [...tools.filter(t => !/^(?:knowledge_|http_)/.test(t.name)), ...(!reporting ? resourceTools(context, verbRuntime) : [])]) registerTool(t)
       const liveVerbs = !reporting ? verbTools(context, verbRuntime, step) : []
       const refreshEfficiencyTools = refreshToolRegistrations(tools.filter(t => /^(?:knowledge_|http_)/.test(t.name)), t => efficiencyToolAvailable(context, t.name), registerTool)

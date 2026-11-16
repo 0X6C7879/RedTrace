@@ -69,7 +69,7 @@ async function createHost() {
 /** One Execute-agent session scope. The real setup context extends the
  * agent-loop fiber, whose inject declaration licenses service property
  * access; the carrier mirrors that for this harness. */
-async function mountSession(host, { executionProfile, available }) {
+async function mountSession(host, { executionProfile, available, type = 'soldier' }) {
   const { createScope } = await load(`${VENDOR}/core/scope/lib/index.js`)
   const cwd = scratch(executionProfile)
   mkdirSync(path.join(cwd, 'skills'), { recursive: true })
@@ -77,7 +77,7 @@ async function mountSession(host, { executionProfile, available }) {
   await carrier.await()
   const key = { session: cwd }
   const scope = createScope(carrier.ctx, key)
-  const task = { type: 'soldier', projectId: 'p1', worker: 'w', committed: false, executionProfile }
+  const task = { type, projectId: 'p1', worker: 'w', committed: false, executionProfile }
   let refresh
   await withTimeout(
     mountExecutionTools(scope.ctx, { task, cwd, sessionRoot: cwd, skillsDir: path.join(cwd, 'skills'), available, onRefresh: value => { refresh = value } }),
@@ -417,5 +417,21 @@ test('offline assets advertise skill resources only when present without inlinin
     assert.ok(!toolsSectionText(cwd).includes(resources))
   } finally {
     rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+
+test('platform family Schemas are scoped to General/Soldier and never become global or Scout tools', async t => {
+  const host = await createHost(); t.after(() => host.fiber.dispose())
+  for (const type of ['general','soldier','scout']) {
+    const session = await mountSession(host, {executionProfile:'direct',available:id=>['redtrace-c2','redtrace-webshell'].includes(id),type})
+    t.after(async () => {await session.scope.dispose();rmSync(session.cwd,{recursive:true,force:true})})
+    for (const name of ['c2_listener_create','webshell_register']) {
+      assert.equal(!!host.tools.get(name,session.key),type!=='scout')
+      assert.equal(host.tools.get(name),undefined)
+    }
+    assert.equal(host.tools.get('c2_sessions',session.key),undefined)
+    assert(host.tools.get(shellName,session.key))
+    assert(host.tools.get('skill',session.key))
   }
 })

@@ -11,7 +11,7 @@
 import { accessSync, constants, existsSync } from 'node:fs'
 import path from 'node:path'
 import type { CordisFiber, RuntimeTask, ScopedContext } from './types.js'
-import { mount } from './loader.js'
+import { load, mount } from './loader.js'
 import { TASK_PLUGINS } from './task-plugins.js'
 
 const VENDOR = 'vendor/deepseek-harness/packages'
@@ -56,7 +56,10 @@ export interface ExecutionToolsConfig {
   /** Whether a plugin-manager catalog entry is running; gates the DSH native
    * capability stacks mounted below the shell/fs/skill baseline. */
   available?: (id: string) => boolean
+  toolEnabled?: (name: string) => boolean
   onRefresh?: (refresh: () => Promise<void>) => void
+  /** Management-only inspection of the same native registrations; never executes tools. */
+  onSchemas?: (plugin: string, tools: any[]) => void
 }
 
 /** Default language servers for the LSP stack: the languages security work
@@ -138,6 +141,8 @@ export function toolsSectionText(toolsDir: string): string {
  * are isolated first: two concurrent Execute agents each publishing e.g.
  * `jobs` would otherwise collide in the process-global service store. */
 export async function mountExecutionTools(scoped: ScopedContext, config: ExecutionToolsConfig): Promise<ScopedContext> {
+  const { scopeOf } = config.onSchemas ? await load('vendor/deepseek-harness/packages/core/scope/lib/index.js') : { scopeOf: undefined }
+  const definitions = () => (scoped as any).get('tools').definitions(scopeOf!(scoped))
   const available = config.available ?? (() => false)
   const active = new Map<string, CordisFiber[]>()
   const jobs = available('redtrace-jobs')
@@ -185,15 +190,21 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
     customSkillDirs: [config.skillsDir],
   })
   await mount(scoped, `${VENDOR}/skill/tool-skill/lib/index.js`)
-  if (jobs) active.get('redtrace-jobs')!.push(await mount(scoped, `${VENDOR}/jobs/tool-jobs/lib/index.js`, { maxWaitTimeoutMs: 30_000 }))
+  config.onSchemas?.('redtrace-core', definitions())
+  if (jobs) {
+    const before = config.onSchemas ? new Set(definitions().map((tool: any) => tool.name)) : undefined
+    active.get('redtrace-jobs')!.push(await mount(scoped, `${VENDOR}/jobs/tool-jobs/lib/index.js`, { maxWaitTimeoutMs: 30_000 }))
+    config.onSchemas?.('redtrace-jobs', definitions().filter((tool: any) => !before!.has(tool.name)))
+  }
 
   // Optional fibers belong to this Agent scope and can be changed mid-session.
   type Use = (scope: ScopedContext, module: string, options?: Record<string, any>) => Promise<void>
   const install = async (id: string, add: (use: Use) => Promise<void>) => {
     if (active.has(id)) return
     const fibers: CordisFiber[] = []
+    const before = config.onSchemas ? new Set(definitions().map((tool: any) => tool.name)) : undefined
     const use: Use = async (scope, module, options) => { fibers.push(await mount(scope, module, options)) }
-    try { await add(use); active.set(id, fibers) }
+    try { await add(use); active.set(id, fibers); config.onSchemas?.(id, definitions().filter((tool: any) => !before!.has(tool.name))) }
     catch (error) { for (const fiber of fibers.reverse()) await fiber.dispose(); throw error }
   }
   const remove = async (id: string) => {
@@ -210,7 +221,10 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
   }
   const stacks: Array<[string, (use: Use) => Promise<void>]> = [
     ['redtrace-spill', use => use(scoped, 'packages/redtrace-dsh/lib/spill.js', { sessionRoot: config.sessionRoot })],
-    ...TASK_PLUGINS.map(entry => [entry.id, (use: Use) => use(scoped, entry.modulePath, { cwd: config.cwd })] as [string, (use: Use) => Promise<void>]),
+    ...TASK_PLUGINS.map(entry => [entry.id, (use: Use) => use(scoped, entry.modulePath, { cwd: config.cwd, toolEnabled: config.toolEnabled })] as [string, (use: Use) => Promise<void>]),
+    ...(['general', 'soldier'].includes(config.task.type) ? ['webshell', 'c2'].map(family => [
+      `redtrace-${family}`, (use: Use) => use(scoped, `packages/redtrace-dsh/lib/${family}.js`, { toolEnabled: config.toolEnabled }),
+    ] as [string, (use: Use) => Promise<void>]) : []),
     ['redtrace-web', async use => {
       const scope = scoped.isolate('web').isolate('settings')
       await use(scope, `${VENDOR}/web/web/lib/index.js`, { searchProvider: 'web-search-free', fetchProvider: 'http' })

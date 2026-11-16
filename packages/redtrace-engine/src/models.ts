@@ -1,4 +1,11 @@
-import type { EngineConfig } from './types.ts'
+import type { EngineConfig, Provider } from './types.ts'
+
+// Unknown gateway IDs need an explicit declaration; a settings label is not capability evidence.
+export function modelReasoningEfforts(model: Provider['models'][number]) {
+  if (model.thinkingFormat === 'none' || model.reasoningEfforts === false) return false
+  return model.reasoningEfforts && typeof model.reasoningEfforts === 'object' ? model.reasoningEfforts
+    : undefined
+}
 
 /** DSH model declarations; protocol translation belongs solely to llm-pi-ai. */
 export function providerProfiles(config: EngineConfig) {
@@ -9,7 +16,7 @@ export function providerProfiles(config: EngineConfig) {
     if (key) env[keyName] = key
     providers[name] = { displayName: name, api: p.api, baseURL: p.baseUrl.replace(/\/$/, ''), apiKeyEnv: keyName,
       models: p.models.map(m => ({ id: m.id, name: m.id, contextWindow: m.contextWindow, maxTokens: m.maxTokens, input: ['text', 'image'],
-        ...(m.thinkingFormat === 'none' ? { reasoningEfforts: false } : m.reasoningEfforts == null || m.reasoningEfforts === true ? {} : { reasoningEfforts: m.reasoningEfforts }),
+        ...(modelReasoningEfforts(m) === undefined ? {} : { reasoningEfforts: modelReasoningEfforts(m) }),
         ...(p.api === 'openai-completions' ? { compat: { supportsDeveloperRole: false,
           ...(['deepseek', 'openai'].includes(m.thinkingFormat ?? '') ? { thinkingFormat: m.thinkingFormat } : {}) } } : {}) })) }
   }

@@ -2,7 +2,7 @@
  * RedTrace C2 plugin: the C2 channel family. Registers the operator surface
  * for the family — listener creation, direct sessions with credentials,
  * credential and malleable-profile registration, payload generation (oneliner,
- * Go beacon, external adapter), and session listing — so an Explore agent
+ * Go beacon, external adapter) — so an Explore agent
  * that establishes C2 infrastructure registers it through the audited
  * resource API; every entry is visible on the Web UI operations pages and
  * online sessions become reusable remote.command channels automatically.
@@ -15,7 +15,7 @@ import { query, register, request, serverOf, taskFor, text, type ToolContext } f
 export const name = 'redtrace-c2'
 export const inject = ['tools']
 
-export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): void {
+export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnabled?: (name: string) => boolean } = {}): void {
   const types: TaskType[] = config.types ?? ['general','soldier','scout']
   const resourceBody = (task: ReturnType<typeof taskFor>, kind: string, name: string, rest: Record<string, unknown>) => ({
     kind, name, ...rest, actor_type: 'worker', actor: task.worker, worker: task.worker, ...(task.intentId === undefined ? {} : { intent_id: task.intentId }), publish_fact: false,
@@ -62,7 +62,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): vo
         ...(args.adapter_endpoint === undefined || args.adapter_endpoint === '' ? {} : { secret: { adapter_endpoint: String(args.adapter_endpoint), ...(args.adapter_token === undefined ? {} : { token: String(args.adapter_token) }) } }),
       }), execution.signal)
     },
-  })
+  }, config.toolEnabled)
   register(ctx, {
     name: 'c2_session_create',
     description: 'Register a direct-access session (SSH, Evil-WinRM, PsExec, WMI, or a custom command client) as a shared resource. Provide the target plus either secret_type material (password / hash / private_key_path) or a credential_id referencing a registered credential. Registration is not connection or authentication success. Register credentials with a concrete source for explicit verification/reuse, not batches of guessed usernames/passwords. Reuse the same resource for the same credentials; verify with remote_session_probe. AUTH_FAILED rejects these credentials: stop this authentication branch unless new credential evidence is obtained; renaming/re-registering is not a retry strategy.',
@@ -103,7 +103,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): vo
         ...(args.secret === undefined || args.secret === '' ? {} : { secret: { [String(args.secret_type ?? 'password')]: String(args.secret) } }),
       }), execution.signal)
     },
-  })
+  }, config.toolEnabled)
   register(ctx, {
     name: 'c2_credential_create',
     description: 'Register a credential (host, web, database, Active Directory, cloud, ssh_key, token, certificate, hash, ticket, or custom) as a shared resource. The secret value is stored server-side for terminal and Worker reuse; sessions can reference it by credential_id.',
@@ -135,7 +135,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): vo
         secret: { value: String(args.secret) },
       }), execution.signal)
     },
-  })
+  }, config.toolEnabled)
   register(ctx, {
     name: 'c2_profile_create',
     description: 'Register a malleable traffic profile (User-Agent, beacon URIs, jitter, response headers) as a shared resource; reference it from listeners via profile_id.',
@@ -169,7 +169,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): vo
         },
       }), execution.signal)
     },
-  })
+  }, config.toolEnabled)
   register(ctx, {
     name: 'c2_listener_kinds',
     description: 'List the one-liner payload kinds compatible with a C2 listener (shell and platform availability).',
@@ -183,7 +183,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): vo
       const task = taskFor(execution, types)
       return query(task, `/projects/${encodeURIComponent(task.projectId)}/c2/listeners/${encodeURIComponent(String(args.listener_id))}/oneliner-kinds`, execution.signal)
     },
-  })
+  }, config.toolEnabled)
   register(ctx, {
     name: 'c2_payload_oneliner',
     description: 'Generate a one-liner payload command for a C2 listener and register it as a payload resource. Discover valid kinds with c2_listener_kinds first.',
@@ -201,7 +201,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): vo
         ...(args.callback_host === undefined ? {} : { callback_host: String(args.callback_host) }),
       }, execution.signal)
     },
-  })
+  }, config.toolEnabled)
   register(ctx, {
     name: 'c2_payload_build',
     description: 'Compile the Go beacon binary for a C2 listener and register it as a payload resource. Requires the Go toolchain on the server.',
@@ -225,7 +225,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): vo
         ...(args.sleep_seconds === undefined ? {} : { sleep_seconds: Number(args.sleep_seconds) }),
       }, execution.signal)
     },
-  })
+  }, config.toolEnabled)
   register(ctx, {
     name: 'c2_payload_external',
     description: 'Generate a payload through an external_c2 listener\'s adapter framework and register it as a payload resource. The listener must carry an adapter endpoint.',
@@ -243,21 +243,5 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): vo
         ...(args.options === undefined ? {} : { options: args.options }),
       }, execution.signal)
     },
-  })
-  register(ctx, {
-    name: 'c2_sessions',
-    description: 'List C2 sessions (online and offline) with their resource ids, targets, and status.',
-    parameters: {
-      type: 'object',
-      properties: { q: { type: 'string' }, limit: { type: 'number' } },
-      additionalProperties: false,
-    },
-    async execute(args, execution) {
-      const task = taskFor(execution, types)
-      const search = new URLSearchParams([['kind', 'c2_session']])
-      if (typeof args.q === 'string' && args.q !== '') search.set('q', args.q)
-      if (typeof args.limit === 'number') search.set('limit', String(Math.min(500, Math.max(1, Math.floor(args.limit)))))
-      return query(task, `/projects/${encodeURIComponent(task.projectId)}/resources?${search}`, execution.signal)
-    },
-  })
+  }, config.toolEnabled)
 }

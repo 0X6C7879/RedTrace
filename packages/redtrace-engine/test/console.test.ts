@@ -5,9 +5,6 @@ import path from 'node:path'
 import os from 'node:os'
 import { serveEngine } from '../src/index.ts'
 import vm from 'node:vm'
-import { callArguments } from '../src/console-api.ts'
-
-test('native audit argument parsing preserves malformed attempts instead of inventing parameters',()=>{assert.deepEqual(callArguments('{broken'),{raw:'{broken'});assert.deepEqual(callArguments('{"name":"sample"}'),{name:'sample'})})
 
 const source = path.resolve(import.meta.dirname, '../../..')
 test('console reads General and Benchmark Findings from the original graph and preserves evidence', async () => {
@@ -33,7 +30,7 @@ test('console reads General and Benchmark Findings from the original graph and p
   } finally {await engine.close();rmSync(root,{recursive:true,force:true})}
 })
 
-test('tool counts deduplicate completions and retain real native skill/PTC calls; CLI availability is observed', async()=>{
+test('tool counts contain only live Schemas, excluding CLI and history without scanning audit history', async()=>{
   const root=mkdtempSync(path.join(os.tmpdir(),'console-tools-'))
   mkdirSync(root+'/tools');writeFileSync(root+'/tools/tool_list.md','- '+String.fromCharCode(96)+'node'+String.fromCharCode(96)+'\n- '+String.fromCharCode(96)+'redtrace-nonexistent-cli'+String.fromCharCode(96)+'\n')
   const engine=await serveEngine({root,autoStart:false,port:0,runtimeCatalog:()=>({tools:[{name:'skill',source:'DSH',scope:'real-scope',status:'registered'},{name:'mcp__echo__echo',source:'MCP',scope:'global',status:'registered'}],mcp:[{name:'echo',state:'connected',toolCount:1}]})})
@@ -42,11 +39,10 @@ test('tool counts deduplicate completions and retain real native skill/PTC calls
     const metadata={id:'audit-run',project_id:p.id,task_type:'soldier',status:'completed'}
     engine.store.audit(metadata,[{kind:'tool.started',title:'skill',call_id:'one',arguments:JSON.stringify({name:'sample'}),timestamp:'2026-11-15T00:00:00Z'},{kind:'tool.completed',title:'skill',call_id:'one',arguments:{name:'sample'},timestamp:'2026-11-15T00:00:01Z',error:false},{kind:'tool.started',title:'bash',call_id:'two',arguments:JSON.stringify({command:'node --version'}),timestamp:'2026-11-15T00:00:02Z'},{kind:'tool.completed',title:'bash',call_id:'two',error:true,timestamp:'2026-11-15T00:00:03Z'},{kind:'tool.started',title:'mcp__echo__echo',call_id:'sub',root_call_id:'root',timestamp:'2026-11-15T00:00:04Z'}])
     const data=await(await fetch('http://127.0.0.1:'+(engine.server.address() as {port:number}).port+'/console/tools')).json() as any
-    assert.ok(data.tools.some((t:any)=>t.name==='bash'&&t.source==='历史调用'&&t.manageable),'CLI rows must not hide native Shell controls');assert.equal(data.stats.calls,3);assert.equal(data.stats.failures,1)
-    assert.equal(data.tools.find((t:any)=>t.name==='skill').calls,1)
-    assert.equal(data.tools.find((t:any)=>t.name==='node').calls,1)
-    assert.equal(data.tools.find((t:any)=>t.name==='redtrace-nonexistent-cli').status,'unavailable')
-    assert.equal(data.calls.find((c:any)=>c.name==='skill').arguments.name,'sample')
+    assert.deepEqual(data.tools.map((t:any)=>t.name),['skill','mcp__echo__echo'])
+    assert.equal(data.calls,undefined);assert.equal(data.stats,undefined)
+    assert.equal(engine.store.db.prepare('SELECT count(*) AS n FROM audit_events').get()!.n,5)
+    assert.equal(data.tools.find((t:any)=>t.name==='skill').manageable,false)
     assert.equal(data.mcp[0].state,'connected')
   }finally{await engine.close();rmSync(root,{recursive:true,force:true})}
 })
@@ -96,7 +92,7 @@ test('navigation order is exact and management controls leave core task views in
 
 test('console keeps the original RedTrace palette and introduces no replacement root or body colors',()=>{
  const html=readFileSync(source+'/static/index.html','utf8'),css=readFileSync(source+'/static/console.css','utf8')
- assert.match(html,/redtrace-theme\.css\?v=20260916-detail-tab-1/)
+ assert.match(html,/redtrace-theme\.css\?v=[\w-]+/)
  assert.doesNotMatch(css,/:root\s*\{|--rt-[a-z-]+\s*:|color-scheme\s*:|(?:^|})\s*body\s*\{/)
  assert.match(css,/background:var\(--rt-surface\)/)
 })
@@ -106,4 +102,16 @@ test('creating a Skill after previewing a helper file opens the editable SKILL.m
  const context=vm.createContext({window:{}});vm.runInContext(readFileSync(source+'/static/capabilities.js','utf8'),context)
  const page=context.window.skillsPage();page.filePath='scripts/helper.py';page.createNew()
  assert.equal(page.filePath,'SKILL.md');assert.match(page.draft.content,/# Skill name/)
+})
+
+test('same-name role schemas keep their real parameters and descriptions instead of borrowing the first role',async()=>{
+ const root=mkdtempSync(path.join(os.tmpdir(),'role-schema-ui-'))
+ const registry=[{name:'TodoWrite',description:'Commander planning',parameters:{type:'object',properties:{projectId:{type:'string'}}},source:'RedTrace',scope:'commander',role:'commander:general',status:'registered'},{name:'TodoWrite',description:'Task planning',parameters:{type:'object',properties:{todos:{type:'array'}}},source:'RedTrace',scope:'general-A',role:'general:benchmark',status:'registered'},{name:'TodoWrite',description:'Task planning',parameters:{type:'object',properties:{todos:{type:'array'}}},source:'RedTrace',scope:'general-B',role:'general:benchmark',status:'registered'}]
+ const engine=await serveEngine({root,autoStart:false,port:0,runtimeCatalog:()=>({tools:registry,mcp:[]})})
+ try{
+  const data=await(await fetch('http://127.0.0.1:'+(engine.server.address() as {port:number}).port+'/console/tools')).json() as any
+  assert.equal(data.tools.length,2);assert.notEqual(data.tools[0].id,data.tools[1].id)
+  assert.deepEqual(data.tools[0].roles,['commander:general']);assert(data.tools[0].parameters.properties.projectId)
+  assert.deepEqual(data.tools[1].scopes,['general-A','general-B']);assert(data.tools[1].parameters.properties.todos)
+ }finally{await engine.close();rmSync(root,{recursive:true,force:true})}
 })

@@ -122,7 +122,8 @@ test('boot mounts enabled plugins in order; kernel entries are locked', async (t
   // Dependency order: core first, scheduler last; Spill belongs only to Execute scopes.
   assert.equal(ctx.mounts[0].module, core)
   assert.equal(ctx.mounts.at(-1).module.name, 'redtrace-scheduler')
-  assert.equal(ctx.mounts.length, 6)
+  assert.equal(ctx.mounts.length, 4)
+  assert(!ctx.mounts.some(m=>['redtrace-c2','redtrace-webshell'].includes(m.module.name)))
   assert.ok(!ctx.mounts.some(mount => mount.module.name === 'redtrace-session-query'))
   assert.ok(!ctx.mounts.some(mount => mount.module.name === 'redtrace-spill'))
 
@@ -234,7 +235,7 @@ test('stop and start toggle fibers live and persist across restarts', async (t) 
   const webshell = ctx.mounts.find(({ module }) => module.name === 'redtrace-webshell')
   const stopped = await manager.stop('redtrace-webshell')
   assert.equal(stopped.status, 'stopped')
-  assert.equal(webshell.disposed, true)
+  assert.equal(webshell, undefined, 'Family tools mount per execution scope, not globally')
   assert.deepEqual(JSON.parse(readFileSync(manifestPath, 'utf8')).disabled, ['redtrace-webshell'])
 
   await manager.start('redtrace-webshell')

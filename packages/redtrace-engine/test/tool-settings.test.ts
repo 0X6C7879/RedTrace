@@ -6,18 +6,19 @@ import os from 'node:os'
 import vm from 'node:vm'
 import {serveEngine} from '../src/index.ts'
 const {load,mount}=await import(new URL('../../redtrace-dsh/lib/loader.js',import.meta.url).href)
-const {mountToolSettings}=await import(new URL('../compat/console.mjs',import.meta.url).href)
+const {mountToolSettings,platformToolOptions}=await import(new URL('../compat/console.mjs',import.meta.url).href)
 
 test('tool settings persist global and Worker bindings, including Commander; restore retains the native schema',async()=>{
  const root=mkdtempSync(path.join(os.tmpdir(),'tool-settings-'))
  const schema={type:'object',properties:{text:{type:'string',description:'Native text',default:'hello'}},required:['text']}
- const engine=await serveEngine({root,autoStart:false,port:0,runtimeCatalog:()=>({tools:[{name:'fixture',description:'Native description',parameters:schema,source:'RedTrace',scope:'global',status:'registered'}],mcp:[]})})
+ const engine=await serveEngine({root,autoStart:false,port:0,runtimeCatalog:()=>({tools:[{name:'fixture',description:'Native description',parameters:schema,source:'RedTrace',scope:'global',status:'registered'},{name:'bash',description:'Native shell',parameters:schema,source:'DSH',scope:'global',status:'registered'}],mcp:[]})})
  try{
   engine.configuration.commit(engine.configuration.read().revision,raw=>{raw.workers=['commander','soldier'].map(name=>({name,provider:'mock',roles:[name as 'commander'|'soldier']}))})
   const api='http://127.0.0.1:'+(engine.server.address() as {port:number}).port
   const get=async()=>await(await fetch(api+'/console/tools')).json() as any
   const save=async(revision:string,enabled:boolean,workers:string[])=>fetch(api+'/console/tools/fixture/settings',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({expected_revision:revision,enabled,workers})})
   let data=await get();const revision=data.revision
+  for(const name of ['bash','unregistered-cli'])assert.equal((await fetch(api+'/console/tools/'+name+'/settings',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({expected_revision:revision,enabled:false,workers:[]})})).status,400)
   assert.deepEqual(data.workers.map((w:any)=>w.name),['commander','soldier']);assert.deepEqual(data.tools[0].parameters,schema)
   assert.equal((await save(revision,false,['commander'])).status,200)
   data=await get();assert.equal(data.tools[0].enabled,false);assert.deepEqual(data.tools[0].workerBindings,['commander'])
@@ -46,24 +47,30 @@ test('native dispatch honors global and scoped Worker switches for Commander, Wo
    const carrier=ctx.plugin({inject:['tools','systemPrompt'],apply(){}});await carrier.await()
    const agent:any={options:{},session:ctx.sessions.create(SessionId(id),{meta:{cwd:root}})}
    const scope=createScope(carrier.ctx,agent);agent.ctx=scope.ctx
-   agent.ctx.tools.register({name:'fixture',description:'Real native dispatch',parameters:{type:'object',properties:{}},output:{schema:{type:'object',additionalProperties:true},render:()=>[{type:'text',text:'ran'}]},execute:()=>{bodies++;return{ran:true}}})
+   agent.ctx.tools.register({redtrace:true,name:'fixture',description:'Real native dispatch',parameters:{type:'object',properties:{}},output:{schema:{type:'object',additionalProperties:true},render:()=>[{type:'text',text:'ran'}]},execute:()=>{bodies++;return{ran:true}}},platformToolOptions(engine,'fixture',id===run.id?'soldier':'commander'))
    agents.push(agent)
   }
+  const visible=async(agent:any)=>{const tools=ctx.get('tools'),selection=await tools.resolve({agent,signal:new AbortController().signal});try{return tools.schemas(agent,selection).map((t:any)=>t.name)}finally{selection.dispose()}}
   const set=(enabled:boolean,workers?:string[])=>engine.configuration.commit(engine.configuration.read().revision,raw=>{raw.tool_settings={fixture:{enabled,...(workers?{workers}:{})}}})
-  const invoke=async(agent:any)=>{const batch=await ctx.get('tools').execute({calls:[{type:'tool-call',name:'fixture',arguments:'{}',id:'switch-'+ ++callId}],agent,signal:new AbortController().signal});return batch.results[0].result}
+  const invoke=async(agent:any)=>{const tools=ctx.get('tools'),signal=new AbortController().signal,toolSet=await tools.resolve({agent,signal});try{const batch=await tools.execute({calls:[{type:'tool-call',name:'fixture',arguments:'{}',id:'switch-'+ ++callId}],agent,signal,toolSet});return batch.results[0].result}finally{toolSet.dispose()}}
+
   assert.equal((await invoke(agents[0])).isError,false);assert.equal((await invoke(agents[1])).isError,false);assert.equal(bodies,2)
-  set(false);assert.equal((await invoke(agents[0])).isError,true);assert.equal((await invoke(agents[1])).isError,true);assert.equal(bodies,2)
-  set(true,['commander']);assert.equal((await invoke(agents[0])).isError,false);assert.equal((await invoke(agents[1])).isError,true);assert.equal(bodies,3)
+  assert((await visible(agents[0])).includes('fixture'));assert((await visible(agents[1])).includes('fixture'))
+  engine.configuration.commit(engine.configuration.read().revision,raw=>{raw.tool_settings={read:{enabled:false}}})
+  assert((await visible(agents[1])).includes('read'),'DSH native tool ignores legacy platform switches')
+  set(false);assert(!(await visible(agents[0])).includes('fixture'));assert(!(await visible(agents[1])).includes('fixture'));assert.equal((await invoke(agents[0])).isError,true);assert.equal((await invoke(agents[1])).isError,true);assert.equal(bodies,2)
+  set(true);const stale=await ctx.get('tools').resolve({agent:agents[1],signal:new AbortController().signal})
+  set(true,['commander']);assert((await visible(agents[0])).includes('fixture'));assert(!(await visible(agents[1])).includes('fixture'));assert.equal((await invoke(agents[0])).isError,false);assert.equal((await invoke(agents[1])).isError,true);assert.equal(bodies,3)
   const {ToolExecutionPipeline}=await load('vendor/deepseek-harness/packages/core/tools/lib/pipeline.js'),pipeline=new ToolExecutionPipeline(ctx)
-  const nested=await pipeline.prepare({name:'fixture',callId:'nested',rootCallId:'root',arguments:{},agent:agents[1],parent:{} as any,signal:new AbortController().signal})
-  assert.equal(nested.kind,'post-result');assert.match(nested.result.error.message,/未绑定/);assert.equal(bodies,3)
-  set(true);assert.equal((await invoke(agents[1])).isError,false);assert.equal(bodies,4)
+  const nested=await pipeline.prepare({name:'fixture',callId:'nested',rootCallId:'root',arguments:{},agent:agents[1],toolSet:stale,parent:{} as any,signal:new AbortController().signal})
+  assert.equal(nested.kind,'post-result');assert.match(nested.result.error.message,/未绑定/);assert.equal(bodies,3);stale.dispose()
+  set(true);assert((await visible(agents[1])).includes('fixture'));assert.equal((await invoke(agents[1])).isError,false);assert.equal(bodies,4)
  }finally{await ctx.fiber.dispose();await engine.close();rmSync(root,{recursive:true,force:true})}
 })
 
 test('tool dialog opens schema details and persists the selected global and Worker controls',async()=>{
  const source=path.resolve(import.meta.dirname,'../../..'),calls:any[]=[],ctx=vm.createContext({window:{},capabilityRequest:async(method:string,url:string,body:any)=>{calls.push({method,url,body});return method==='GET'?{revision:'next',workers:[{name:'commander'}],tools:[tool],calls:[],stats:{}}:{}}})
- const tool={name:'fixture',source:'RedTrace',enabled:true,workerBindings:['commander'],parameters:{type:'object',properties:{text:{type:'string',description:'Text',default:'hello'}},required:['text']}}
+ const tool={id:'fixture-schema',name:'fixture',source:'RedTrace',enabled:true,workerBindings:['commander'],parameters:{type:'object',properties:{text:{type:'string',description:'Text',default:'hello'}},required:['text']}}
  vm.runInContext(readFileSync(source+'/static/console.js','utf8'),ctx)
  const page=ctx.window.toolsPage();let opened=false;page.$refs={toolDialog:{showModal(){opened=true}}};page.data={revision:'initial',workers:[{name:'commander'}],tools:[tool]};page.open(tool)
  assert(opened);assert.equal(page.parameters[0].required,true);assert.equal(page.parameters[0].default,'hello')
@@ -75,4 +82,31 @@ test('switch on/off colors override the shared important input styles without ch
  const source=path.resolve(import.meta.dirname,'../../..'),css=readFileSync(source+'/static/console.css','utf8')
  assert.match(css,/\.tool-global input\[role=switch\]\{[^}]*background-color:var\(--rt-surface-active\)!important;[^}]*border-color:var\(--rt-border\)!important/)
  assert.match(css,/\.tool-global input\[role=switch\]:checked\{background-color:var\(--rt-coral\)!important;border-color:var\(--rt-coral\)!important/)
+})
+
+test('tool table switches persist on/off while disabled Schemas remain in the list',async()=>{
+ const tool={id:'schema',name:'submit_fact',enabled:true,manageable:true,workerBindings:['soldier']},calls:any[]=[]
+ const ctx=vm.createContext({window:{},capabilityRequest:async(method:string,url:string,body:any)=>{
+  calls.push({method,url,body});if(method==='PUT')tool.enabled=body.enabled
+  return method==='GET'?{revision:'revision',workers:[],tools:[{...tool}]}:{}
+ }})
+ vm.runInContext(readFileSync(path.resolve(import.meta.dirname,'../../../static/console.js'),'utf8'),ctx)
+ const page=ctx.window.toolsPage();page.data={revision:'revision',workers:[],tools:[{...tool}]}
+ for(const enabled of [false,true]){
+  const event={target:{checked:enabled}};await page.toggle(page.data.tools[0],event)
+  assert.equal(page.data.tools.length,1);assert.equal(page.data.tools[0].enabled,enabled);assert.equal(event.target.checked,enabled)
+ }
+ assert.deepEqual(calls.filter(c=>c.method==='PUT').map(c=>c.body.enabled),[false,true])
+ const html=readFileSync(path.resolve(import.meta.dirname,'../../../static/index.html'),'utf8')
+ assert.match(html,/:checked="tool.enabled"/);assert.match(html,/@change="toggle\(tool,\$event\)"/)
+})
+
+
+test('tool filters use actual registry roles and enabled state, not CLI inventory',()=>{
+ const ctx=vm.createContext({window:{}});vm.runInContext(readFileSync(path.resolve(import.meta.dirname,'../../../static/console.js'),'utf8'),ctx)
+ const page=ctx.window.toolsPage();page.data={tools:[{name:'submit_fact',description:'fact',source:'RedTrace',enabled:true,roles:['soldier:benchmark']},{name:'legion_board',description:'board',source:'RedTrace',enabled:false,roles:['commander:benchmark']}],calls:[],stats:{}}
+ assert.deepEqual(Array.from(page.roles),['commander:benchmark','soldier:benchmark'])
+ page.role='soldier:benchmark';assert.deepEqual(Array.from(page.filtered,(t:any)=>t.name),['submit_fact'])
+ page.role='';page.status='disabled';assert.deepEqual(Array.from(page.filtered,(t:any)=>t.name),['legion_board'])
+ page.source='DSH';assert.equal(page.filtered.length,0)
 })

@@ -7,7 +7,7 @@ import { watch } from 'node:fs'
 import path from 'node:path'
 import { Store } from './store.ts'
 import { workbenchRoutes, projectWorkbench } from './workbench.ts'
-import { ChatStore, chatRoutes, conversationWorkers, configuredConversationModels } from './chat.ts'
+import { ChatStore, chatRoutes, conversationWorker, configuredConversationModels } from './chat.ts'
 import { LegionStore } from './legion-store.ts'
 import { ProjectEvidence } from './project-evidence.ts'
 import { Configuration } from './config.ts'
@@ -24,7 +24,7 @@ import { Operations, operationRoutes } from './operations.ts'
 import { verbRoutes } from './capability-verbs.ts'
 import { ProjectDeletion, deletionRoutes } from './deletion.ts'
 import { consoleRoutes } from './console-api.ts'
-import type { RuntimeCatalog, ToolCall } from './console-api.ts'
+import type { RuntimeCatalog } from './console-api.ts'
 import { dshUpdateRoutes } from './dsh-update.ts'
 
 export { Store, Scheduler, Configuration, Router, LegionStore, ProjectEvidence }
@@ -32,7 +32,7 @@ export type * from './types.ts'
 export type { StepUpdate } from './store.ts'
 export type { TaskContext, RunTask } from './scheduler.ts'
 
-export async function createEngine(options: { root: string; database?: string; configuration?: string; runTask?: RunTask; selectWorker?: SelectWorker; autoStart?: boolean; probeModel?: ProbeModel; runtimeCatalog?: () => RuntimeCatalog | Promise<RuntimeCatalog>; commanderCalls?: () => Promise<ToolCall[]>; commanderEvents?: (offset:number,limit:number,signal:AbortSignal,projectId?:string,sessionId?:string)=>Promise<unknown>; adapterAvailability?: () => (adapter: string) => boolean }) {
+export async function createEngine(options: { root: string; database?: string; configuration?: string; runTask?: RunTask; selectWorker?: SelectWorker; autoStart?: boolean; probeModel?: ProbeModel; runtimeCatalog?: () => RuntimeCatalog | Promise<RuntimeCatalog>; commanderEvents?: (offset:number,limit:number,signal:AbortSignal,projectId?:string,sessionId?:string)=>Promise<unknown>; adapterAvailability?: () => (adapter: string) => boolean }) {
   const [major, minor] = process.versions.node.split('.').map(Number)
   if (major !== 24 || minor < 15) throw new Error('RedTrace requires Node 24.15 or newer in the Node 24 LTS line')
   const root = path.resolve(options.root), configuration = new Configuration(root, options.configuration)
@@ -65,7 +65,7 @@ export async function createEngine(options: { root: string; database?: string; c
     const uploads=chats.owned(chats.entry(b.projectId).id,b.attachmentIds??[])
     if(!b.content.trim()&&!uploads.length)throw new HttpError(422,'Message or attachment required')
     const config=configuration.resolvedSnapshot().config
-    if(b.worker&&!conversationWorkers(config).some(w=>w.name===b.worker))throw new HttpError(422,'Select an enabled DSH Commander model route')
+    if(b.worker&&!conversationWorker(config,b.worker))throw new HttpError(422,'Select an enabled DSH Commander model route')
     if(b.reasoning){const route=b.worker??legion.campaign(b.projectId).nextWorker,choices=chats.models?await chats.models():configuredConversationModels(config);if(!route||!choices.find(w=>w.name===route)?.reasoningEfforts.includes(b.reasoning))throw new HttpError(422,'Selected model does not support this reasoning effort')}
     return store.transaction(()=>{
       if(b.worker!==undefined||b.reasoning!==undefined){const campaign=legion.campaign(b.projectId);if(b.worker!==undefined)campaign.nextWorker=b.worker??undefined;if(b.reasoning!==undefined)campaign.reasoning=b.reasoning??undefined;legion.saveCampaign(campaign)}
@@ -88,7 +88,7 @@ export async function createEngine(options: { root: string; database?: string; c
   const capabilities = new Capabilities(managed, root)
   capabilities.initialize(root)
   capabilityRoutes(router, capabilities)
-  consoleRoutes(router, store, root, configuration, options.runtimeCatalog, options.commanderCalls)
+  consoleRoutes(router, store, configuration, options.runtimeCatalog)
   const operations = new Operations(store, root, adapterGate)
   operationRoutes(router, operations)
   verbRoutes(router, operations, adapterGate)

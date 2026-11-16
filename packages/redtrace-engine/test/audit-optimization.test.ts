@@ -178,7 +178,7 @@ test('FGS refresh reads one graph and omits retired Reason; legacy fallback is l
     store.graph = (...args: any[]) => { reads++; return nativeGraph(...args) }
     page.api = async (_method: string, url: string) => {
       urls.push(url)
-      if (url.endsWith('/usage')) return { total: 0 }
+      if (new URL(url,'http://fixture').pathname.endsWith('/usage')) return { total: 0 }
       return router.handlers.get(url.startsWith('/v2/') ? 'GET /v2/projects/:project/graph' : 'GET /projects/:project')!({ params: { project: project.id }, url: new URL(url, 'http://fixture') })
     }
     await page.loadProject(project.id)

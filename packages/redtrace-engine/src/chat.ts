@@ -8,11 +8,23 @@ import { body, queryNumber } from './http.ts'
 import { HttpError, requiredText, now } from './types.ts'
 import type { AgentTool } from './tool-types.ts'
 import { Check } from 'typebox/value'
+import { modelReasoningEfforts } from './models.ts'
 
 export interface Upload { id:string;chatId:string;type:'image'|'file';attachment:Record<string,any>;createdAt:string }
-export interface ConversationModel { name:string;provider:string;model:string;reasoningEfforts:string[] }
+export interface ConversationModel { name:string;worker:string;provider:string;model:string;reasoningEfforts:string[] }
 export function conversationWorkers(config:EngineConfig) {return config.workers.filter(w=>w.enabled&&w.backend==='dsh'&&w.roles?.includes('commander')).sort((a,b)=>a.priority-b.priority||a.name.localeCompare(b.name))}
-export function configuredConversationModels(config:EngineConfig):ConversationModel[] {return conversationWorkers(config).map(w=>{const model=config.providers[w.provider]?.models.find(m=>m.id===w.model),efforts=model?.reasoningEfforts;return {name:w.name,provider:w.provider,model:w.model,reasoningEfforts:efforts&&typeof efforts==='object'?Object.keys(efforts).filter(k=>efforts[k]!==null):[]}})}
+export function configuredConversationModels(config:EngineConfig):ConversationModel[] {
+  const workers=conversationWorkers(config), routes=workers.map(w=>({name:w.name,worker:w.name,provider:w.provider,model:w.model}))
+  if(workers.length)for(const [provider,profile] of Object.entries(config.providers))for(const model of profile.models) {
+    if(!routes.some(r=>r.provider===provider&&r.model===model.id))routes.push({name:JSON.stringify([workers[0].name,provider,model.id]),worker:workers[0].name,provider,model:model.id})
+  }
+  return routes.map(route=>{const model=config.providers[route.provider]?.models.find(m=>m.id===route.model),efforts=model&&modelReasoningEfforts(model);return {...route,reasoningEfforts:efforts?Object.keys(efforts).filter(k=>k!=='off'&&efforts[k]!==null):[]}})
+}
+/** Model choice changes the native model, never the Worker's role, capacity or tool bindings. */
+export function conversationWorker(config:EngineConfig,selection:string) {
+  const route=configuredConversationModels(config).find(r=>r.name===selection),worker=conversationWorkers(config).find(w=>w.name===route?.worker)
+  return worker&&route?{...worker,provider:route.provider,model:route.model}:undefined
+}
 export interface Chat { selectedWorker?:string; reasoning?:string; projectId?:string; kind?:'chief'|'commander-input'; id:string; title:string; sessionId:string; createdAt:string; updatedAt:string; status:'idle'|'running'|'failed'; hasSession:boolean; workerName?:string; error?:string }
 /** Conversation bodies live only in native DSH persistence; this table is an index. */
 export class ChatStore {

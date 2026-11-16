@@ -389,7 +389,7 @@ const registerableKinds = resourceKinds.filter(kind => kind !== 'result')
  * retired redtrace-resource Cordis plugin. */
 export function resourceTools(context: TaskContext, runtime: VerbRuntime): AgentTool[] {
   const ops = runtime.operations, worker = { actor_type: 'worker', actor: context.worker.name, worker: context.worker.name, intent_id: context.run.stepId }
-  return [
+  const tools = [
     verbTool('resource_register',
       'Register a shared resource for cross-Step reuse: channels (webshell, c2_listener, c2_session), materials (c2_payload, c2_profile, credential_ref, proxy, file). secret stays server-side; c2_session may return secret_once. Prefer a structured family tool when available. For WebShell/C2 sessions, follow family-tool verification and reuse rules: registration is not connectivity proof; do not bulk-register speculative endpoints or guessed credentials.',
       Type.Object({
@@ -430,6 +430,8 @@ export function resourceTools(context: TaskContext, runtime: VerbRuntime): Agent
         }
       }),
   ]
+  const step = context.run.stepId ? context.store.node<Step>(context.run.projectId, context.run.stepId, 'step') : undefined
+  return step?.role === 'scout' ? tools.filter(tool => tool.name !== 'resource_register') : tools
 }
 
 // ─── HTTP API ─────────────────────────────────────────────────────────────────

@@ -31,6 +31,11 @@ export function efficiencyToolAvailable(context: TaskContext, name: string) {
   return !plugin || !context.featureAvailable || context.featureAvailable(plugin)
 }
 
+export function tsecbenchSubmitTool(context: TaskContext): AgentTool {
+  const { store, run, config } = context
+  return tool('tsecbench_submit', 'Submit one flag for the active authorized challenge and return the platform response. Does not create Facts; the Worker must verify the response and explicitly submit_fact for decision-relevant results. Tool arguments and results are retained verbatim in audit events.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }), flag: Type.String({ minLength: 1, maxLength: 4096 }) }), async (args, abort) => {const response=await tsecbenchQuery(config, ['submit', args.unique_code, '--flag', args.flag], abort);recordBenchmarkSubmission(store,run.projectId,args.unique_code,response);return response})
+}
+
 export function graphTools(context: TaskContext, finish: () => void): AgentTool[] {
   const { run, worker, config, signal } = context
   const store = run.graphId ? context.store.forGraph(run.projectId,run.graphId) : context.store.forProject(run.projectId)
@@ -95,10 +100,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     const benchmarkOrigin = store.scopeFact(run.projectId).description
     const benchmarkSkill = installRoot ? path.join(installRoot, 'skills', 'tsecbench-api') : ''
     if (/(?:tsecbench|tsec[\s-]*benchmark)/i.test(benchmarkOrigin) && existsSync(path.join(benchmarkSkill, 'SKILL.md')) && existsSync(path.join(benchmarkSkill, 'scripts', 'tsecbench.py'))) {
-      tools.push(
-        tool('tsecbench_list', 'Read challenge descriptions, progress and container state; no lifecycle operation.', Type.Object({}), (_args, abort) => tsecbenchQuery(config, ['list'], abort)),
-        tool('tsecbench_submit', 'Submit one flag for the active authorized challenge and return the platform response. Does not create Facts; the Worker must verify the response and explicitly submit_fact for decision-relevant results. Tool arguments and results are retained verbatim in audit events.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }), flag: Type.String({ minLength: 1, maxLength: 4096 }) }), async (args, abort) => {const response=await tsecbenchQuery(config, ['submit', args.unique_code, '--flag', args.flag], abort);recordBenchmarkSubmission(store,run.projectId,args.unique_code,response);return response}),
-      )
+      tools.push(tsecbenchSubmitTool({ ...context, store }))
     }
     tools.push(
       tool('submit_fact', 'Publish an incremental confirmed Fact: short title, one-sentence description, optional detailed Markdown doc with exact commands/output, evidence and constraints. Existing file paths are preserved immediately; never put a node ID in path. Keep Artifact/Run/Tool Call provenance. Urgent goal proof, cross-Step prerequisites and real blockers must not wait.', Type.Object({ title: Type.String({ minLength: 1 }), description: Type.String(), doc: Type.Optional(Type.String()), evidence: Type.Array(Type.Object({ description: Type.String(), path: Type.Optional(Type.String()), artifactId: Type.Optional(Type.String()), runId: Type.Optional(Type.String()), toolCallId: Type.Optional(Type.String()) })) }), args => {
@@ -122,7 +124,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     )
   }
   if (!reporting) tools.push(...knowledgeTools(evidenceRoot, context))
-  return tools.map(t => ({ ...t, execute: async (...args) => {
+  return tools.filter(t => step?.role !== 'scout' || t.name !== 'submit_finding').map(t => ({ ...t, execute: async (...args) => {
     if (!Check(t.parameters, args[1])) throw new HttpError(422, 'Invalid tool arguments')
     if (!efficiencyToolAvailable(context, t.name)) throw new Error('Efficiency tool plugin is disabled')
     if (signal.aborted || store.run(run.id).status !== 'running') throw new Error('Activity has stopped')

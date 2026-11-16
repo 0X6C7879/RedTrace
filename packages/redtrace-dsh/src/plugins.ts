@@ -21,8 +21,6 @@ import { TASK_PLUGINS } from './task-plugins.js'
 import * as core from './core.js'
 import * as domain from './domain.js'
 import * as scheduler from './scheduler.js'
-import * as webshell from './webshell.js'
-import * as c2 from './c2.js'
 import * as credentials from './credentials.js'
 import * as attachment from './attachment.js'
 import * as fileReferences from './file-references.js'
@@ -158,13 +156,13 @@ const MANAGED: readonly ManagedEntry[] = [
     intro: '整个运行时的最小内核:装配 agent 循环、会话、模型调用、工具注册与系统提示词。其余全部能力都以插件形式叠加在这层之上。',
   },
   {
-    id: 'redtrace-webshell', label: 'WebShell', category: 'feature', module: webshell,
+    id: 'redtrace-webshell', label: 'WebShell', category: 'feature',
     modulePath: 'packages/redtrace-dsh/lib/webshell.js',
     description: 'WebShell 通道族',
     intro: 'WebShell 能力插件:提供通道连通性探测工具;停用后 remote.command / remote.file.* 动词不再复用 WebShell 通道。',
   },
   {
-    id: 'redtrace-c2', label: 'C2', category: 'feature', module: c2,
+    id: 'redtrace-c2', label: 'C2', category: 'feature',
     modulePath: 'packages/redtrace-dsh/lib/c2.js',
     description: 'C2 通道族',
     intro: 'C2 能力插件:提供 listener 创建、payload 生成与会话查询工具;停用后 remote.command / remote.file.* 动词不再复用 C2 会话通道。',

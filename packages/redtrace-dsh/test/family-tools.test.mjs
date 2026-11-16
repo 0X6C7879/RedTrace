@@ -92,7 +92,6 @@ test('c2 plugin registers listener, session, credential, profile, payload and se
     'c2_payload_oneliner',
     'c2_payload_build',
     'c2_payload_external',
-    'c2_sessions',
   ])
   for (const tool of tools) {
     assert.equal(tool.parameters.type, 'object')

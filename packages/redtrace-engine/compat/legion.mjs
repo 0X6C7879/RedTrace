@@ -1,6 +1,7 @@
+import { platformToolOptions } from './console.mjs'
 // Adapted from sapper-v2 7b75e6f docker/commander/{SKILL.md §§2,4.6,5, watchdog.sh}; native DSH replaces tmux.
 import { accumulateUsage, eventProjection } from '../../redtrace-dsh/lib/audit.js'
-import { chatSlots } from '../src/chat.ts'
+import { chatSlots, conversationWorkers, conversationWorker } from '../src/chat.ts'
 import { HttpError } from '../src/types.ts'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
@@ -112,7 +113,7 @@ export async function runCommander(ctx, engine, worker, signal, projectId) {
         scoped.on('agent/error',({error})=>{resident.cycle.failure=error})
         scoped.tools.restrict({allow:[]})
         scoped.systemPrompt.section({name:'redtrace:commander',order:0,text:()=>legionMission('commander',store.project(projectId).mode)+'\nAssigned Project='+projectId+(periodic?'':'. Read the compact legion_board for task IDs; inspect FGS only on demand.')})
-        for(const tool of tools)scoped.tools.register({name:tool.name,description:tool.description,parameters:JSON.parse(JSON.stringify(tool.parameters)),
+        for(const tool of tools)scoped.tools.register({redtrace:true,name:tool.name,description:tool.description,parameters:JSON.parse(JSON.stringify(tool.parameters)),
           output:{schema:{type:'object',additionalProperties:true},render:(_args,value)=>value.content},
           async execute(args,execution){
             if(resident.cycle.finished||resident.cycle.signal.aborted)throw new Error('Commander has stopped')
@@ -120,7 +121,7 @@ export async function runCommander(ctx, engine, worker, signal, projectId) {
             const result=await tool.execute(execution.callId??'',args,execution.signal)
             if(result.terminate)execution.concludeTurn?.()
             return result
-          }})
+          }},platformToolOptions(engine,tool.name,worker.name))
       }
       handle=await activateAgent(ctx.get('agents'),SessionId(campaign.sessionId),cwd,{agentOptions:{provider:worker.provider,model:worker.model,...(effort?{reasoningEffort:effort}:{})},setup},resume)
       resident.handle=handle;residents?.set(projectId,resident);legion.saveCampaign({...legion.campaign(),hasSession:true})
@@ -213,7 +214,8 @@ export function createCommanderController(ctx, engine, canRun=()=>true) {
         if(runs.filter(r=>r.projectId===project.id).length>=config.maxProjectWorkers)continue
         const owners=new Set([...runs.map(r=>r.projectId),...commands.filter(c=>c.projectId).map(c=>c.projectId)])
         if(!owners.has(project.id)&&owners.size>=config.maxRunningProjects)continue
-        const worker=config.workers.filter(w=>runs.filter(r=>r.worker===w.name).length+commands.filter(c=>c.workerName===w.name).length<w.maxRunning&&w.enabled&&w.roles?.includes('commander')&&(!campaign.nextWorker||campaign.nextWorker===w.name)).sort((a,b)=>a.priority-b.priority||a.name.localeCompare(b.name))[0]
+        const selected=campaign.nextWorker?conversationWorker(config,campaign.nextWorker):undefined
+        const worker=(campaign.nextWorker?(selected?[selected]:[]):conversationWorkers(config)).filter(w=>runs.filter(r=>r.worker===w.name).length+commands.filter(c=>c.workerName===w.name).length<w.maxRunning).sort((a,b)=>a.priority-b.priority||a.name.localeCompare(b.name))[0]
         if(!worker)continue
         const task={abort:new AbortController(),dirty:false,completion:undefined}
         active.set(project.id,task)

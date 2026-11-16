@@ -1,3 +1,5 @@
+> 历史验收记录；2026-11-15 起工具集合改为固定平台集合，当前行为见 rea-integration.md。以下旧数量不作为当前注册表。
+
 # REA 集成验收（2026-10-11，macOS ARM64）
 
 实现说明见 [rea-integration.md](rea-integration.md)。数据为本次实际执行，

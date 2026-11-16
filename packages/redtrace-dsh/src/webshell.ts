@@ -14,7 +14,7 @@ import { register, request, serverOf, taskFor, type ToolContext } from './api-ut
 export const name = 'redtrace-webshell'
 export const inject = ['tools']
 
-export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): void {
+export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnabled?: (name: string) => boolean } = {}): void {
   const types: TaskType[] = config.types ?? ['general','soldier','scout']
   register(ctx, {
     name: 'webshell_register',
@@ -65,7 +65,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): vo
         publish_fact: false,
       }, execution.signal)
     },
-  })
+  }, config.toolEnabled)
   register(ctx, {
     name: 'webshell_test',
     description: 'Probe a WebShell endpoint before registering it. A successful probe means webshell_register can reuse this configuration. Inspect failure details and check endpoint, protocol, parameters and credential evidence before retrying. Do not blindly repeat the same failed probe or register failed candidates as usable sessions.',
@@ -101,5 +101,5 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[] } = {}): vo
         ...(args.verify_tls === undefined ? {} : { verify_tls: Boolean(args.verify_tls) }),
       }, execution.signal)
     },
-  })
+  }, config.toolEnabled)
 }

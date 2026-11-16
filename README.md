@@ -204,7 +204,7 @@ Web 控制台的「设置 → DSH 运行时」提供检查更新和更新按钮�
 
 ### 共享资源与能力动词
 
-资源（WebShell、C2 Listener/Session/Payload、凭证、流量伪装 Profile、代理、文件）由引擎统一登记，人机共用。Web UI 的运维页提供全量管理与审批；Worker 侧通过工具访问：通用的 `resource_register` / `resource_list` / `resource_get`（`resource_register` 支持 secret 存储但不回显），以及 WebShell / C2 通道族的富表单工具（`webshell_register`、`c2_listener_create`、`c2_session_create`、`c2_credential_create`、`c2_profile_create`、payload 生成与 `c2_sessions`）。执行 Worker 在任务中建立的通道、凭证与 payload 都会出现在对应运维页面上。
+资源（WebShell、C2 Listener/Session/Payload、凭证、流量伪装 Profile、代理、文件）由引擎统一登记，人机共用。Web UI 的运维页提供全量管理与审批；Worker 侧通过工具访问：通用的 `resource_register` / `resource_list` / `resource_get`（`resource_register` 支持 secret 存储但不回显），以及 WebShell / C2 通道族的富表单工具（`webshell_register`、`c2_listener_create`、`c2_session_create`、`c2_credential_create`、`c2_profile_create`、payload 生成；会话查询复用 `resource_list` / `resource_get`）。执行 Worker 在任务中建立的通道、凭证与 payload 都会出现在对应运维页面上。
 
 执行 Worker 自主使用已启用的能力工具，不由 Commander 通过 Step `requires/plugins` 预先授权。派发器按当前 Project 资源选择通道（target 主机匹配或 `via` 显式指定），缺少验证缓存时复用轻量探测，不把未记录验证等同于工具不可用。真实连接、资源暂停、适配器支持和有状态通道串行仍须满足。`GET /capabilities/verbs` 提供管理视图；Worker 的 Resource、任务、结果与审计按 Project 隔离。自建 Browser 已删除，保留 Playwright request API 的独立 HTTP 工具，不引进 DSH 浏览器。
 

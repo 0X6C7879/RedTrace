@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -8,10 +8,12 @@ import test from 'node:test'
 import { createHash } from 'node:crypto'
 import { load, repoRoot } from '../lib/loader.js'
 import { mountExecutionTools } from '../lib/execution-tools.js'
-import { reverseEnvironment } from '../lib/reverse.js'
+import { reverseEnvironment, reverseToolSchemas } from '../lib/reverse.js'
 import { PluginManager } from '../lib/plugins.js'
 
 const VENDOR = 'vendor/deepseek-harness/packages'
+const { MCP_TOOLS_WITHOUT_DEDICATED_CLI } = await import(pathToFileURL(path.join(repoRoot, 'node_modules/rea-agents/dist/cliCommandNames.js')).href)
+const retained = new Set([...MCP_TOOLS_WITHOUT_DEDICATED_CLI, 'binary_overview', 'analyze_function', 'procedure_pseudo_code', 'read_function_instructions', 'search_strings', 'search_procedures'])
 const rea = schemas => schemas.filter(t => t.name.startsWith('mcp__rea__'))
 
 export async function host() {
@@ -78,7 +80,9 @@ test('Soldier can lazily load native REA without Commander tool selection; manag
   assert.equal(rea(selected.schemas()).length, 0)
   assert.equal(rea(unrelated.schemas()).length, 0)
   assert.equal((await selected.call('skill', { name: 'reverse-engineer-anything' })).isError, false)
-  assert.equal(rea(selected.schemas()).length, 14)
+  assert.equal(rea(selected.schemas()).length, retained.size)
+  const sorted = tools => tools.sort((a, b) => a.name.localeCompare(b.name))
+  assert.deepEqual(sorted(await reverseToolSchemas()), sorted(rea(selected.schemas()).map(schema => ({ ...schema, redtrace: true }))), 'Offline directory must match the exact native MCP advertisements')
   assert.equal(rea(unrelated.schemas()).length, 0)
   const original = ctx.tools.get('mcp__rea__binary_session', selected.agent)
   await manager.start('redtrace-reverse')
@@ -138,28 +142,26 @@ test('native Skill loads real REA MCP only on demand, isolates Runs, bounds resu
   assert.equal(rea(s.schemas()).length, 0, 'enabled-but-unused exposes no REA schemas')
   const loaded = await s.call('skill', { name: 'reverse-engineer-anything' })
   assert.equal(loaded.isError, false, JSON.stringify(loaded))
-  assert.equal(rea(s.schemas()).length, 14, JSON.stringify(loaded.content).slice(-1800))
-  const expansionSchema = s.schemas().find(tool => tool.name === 'reverse_tools').parameters
-  assert.deepEqual(expansionSchema.required, ['group'])
-  assert.equal(expansionSchema.properties.group.required, undefined)
-  assert.equal(ctx.tools.get('mcp__rea__analyze_function', s.agent), undefined, 'unused native schemas really disappear')
+  assert.equal(rea(s.schemas()).length, retained.size, JSON.stringify(loaded.content).slice(-1800))
+  assert.equal(s.schemas().find(tool => tool.name === 'reverse_tools'), undefined)
+  assert.deepEqual(new Set(rea(s.schemas()).map(t => t.name.replace('mcp__rea__',''))), retained)
+  assert.equal(ctx.tools.get('mcp__rea__analyze_javascript_application', s.agent), undefined, 'path-based CLI has no redundant Schema')
   assert.equal(rea(unrelated.schemas()).length, 0)
   const initial = { tools: rea(s.schemas()).length, schemaBytes: Buffer.byteLength(JSON.stringify(rea(s.schemas()))) }
   const generation = ctx.tools.get('mcp__rea__binary_session', s.agent)
   await s.call('skill', { name: 'reverse-engineer-anything' })
   assert.equal(ctx.tools.get('mcp__rea__binary_session', s.agent), generation)
-  await s.call('reverse_tools', { group: 'all' })
-  assert.equal(rea(s.schemas()).length, 170)
+  assert.equal(rea(s.schemas()).length, retained.size)
   const status = await s.call('mcp__rea__binary_session', {})
   assert.equal(status.isError, false, JSON.stringify(status))
   assert.ok(Buffer.byteLength(JSON.stringify(status.content)) < 8192)
   const dirs = readdirSync(path.join(s.cwd, '.rea'))
   const evidence = dirs.find(d => d.startsWith('run-'))
   assert.ok(evidence)
-  const retained = readdirSync(path.join(s.cwd, '.rea', evidence)).filter(n => n.endsWith('.txt'))
-  assert.ok(retained.length, 'large native status output is retained outside model context')
+  const retainedFiles = readdirSync(path.join(s.cwd, '.rea', evidence)).filter(n => n.endsWith('.txt'))
+  assert.ok(retainedFiles.length, 'large native status output is retained outside model context')
   await s.call('mcp__rea__binary_session', {})
-  assert.equal(readdirSync(path.join(s.cwd, '.rea', evidence)).filter(n => n.endsWith('.txt')).length, retained.length)
+  assert.equal(readdirSync(path.join(s.cwd, '.rea', evidence)).filter(n => n.endsWith('.txt')).length, retainedFiles.length)
   t.diagnostic(JSON.stringify({ initial, activeTools: rea(s.schemas()).length, compactSchemaBytes: Buffer.byteLength(JSON.stringify(rea(s.schemas()))), statusPreviewBytes: Buffer.byteLength(JSON.stringify(status.content)) }))
   const exported = await s.call('mcp__rea__export_evidence_bundle', { path: path.join(s.cwd, '.rea', evidence, 'bundle.json') })
   assert.equal(exported.isError, false, JSON.stringify(exported))
@@ -189,8 +191,7 @@ test('compact and full native MCP input schemas retain identical validation sema
   for (const s of [compact, full]) {
     t.after(async () => { await s.dispose(); rmSync(s.cwd, { recursive: true, force: true }) })
     await s.call('skill', { name: 'reverse-engineer-anything' })
-    await s.call('reverse_tools', { group: 'all' })
-  }
+    }
   const { default: Ajv } = await import(pathToFileURL(path.join(repoRoot, 'node_modules/ajv/dist/2020.js')).href)
   const { TOOL_CONTRACTS } = await import(pathToFileURL(path.join(repoRoot, 'node_modules/rea-agents/dist/contracts/toolContracts.js')).href)
   const a = new Ajv({ strict: false, validateFormats: false }), b = new Ajv({ strict: false, validateFormats: false })
@@ -210,42 +211,32 @@ test('compact and full native MCP input schemas retain identical validation sema
   t.diagnostic(JSON.stringify({ checked, fullBytes: Buffer.byteLength(JSON.stringify(rea(full.schemas()))), compactBytes: Buffer.byteLength(JSON.stringify(rea(compact.schemas()))), maxCompactParametersBytes: Math.max(...rea(compact.schemas()).map(t => Buffer.byteLength(JSON.stringify(t.parameters)))) }))
 })
 
-test('real JavaScript/managed evidence and CLI, with structured EVM/optional-provider boundaries', { timeout: 90000 }, async t => {
-  const ctx = await host()
-  t.after(() => ctx.fiber.dispose())
+test('real REA CLI covers JavaScript, managed members and optional-provider boundaries without extra Schemas', { timeout: 90000 }, async t => {
+  const ctx = await host(); t.after(() => ctx.fiber.dispose())
   const s = await session(ctx, id => id === 'redtrace-reverse')
   t.after(async () => { await s.dispose(); rmSync(s.cwd, { recursive: true, force: true }) })
-  await s.call('skill', { name: 'reverse-engineer-anything' })
-  const source = path.join(s.cwd, 'app')
-  mkdirSync(source)
+  const source = path.join(s.cwd, 'app'); mkdirSync(source)
   writeFileSync(path.join(source, 'package.json'), JSON.stringify({ name: 'oracle', main: 'index.js' }))
   writeFileSync(path.join(source, 'index.js'), 'exports.answer = value => value + 42;\n')
-  const js = await s.call('mcp__rea__analyze_javascript_application', { input_path: source, format: 'auto', integrity_policy: 'fail', detail: 'summary' })
-  assert.equal(js.isError, false, JSON.stringify(js))
-  assert.match(JSON.stringify(js.value), /parent_evidence_id/)
-  assert.ok(rea(s.schemas()).length > 14, 'native entry call expands its scene without a selector model')
-  const bytecode = path.join(s.cwd, 'contract.hex')
-  writeFileSync(bytecode, '600160005260206000f3')
-  const evm = await s.call('mcp__rea__inspect_evm_interface', { path: bytecode, encoding: 'hex' })
-  if (process.platform === 'linux' && process.arch === 'x64') {
-    assert.equal(evm.isError, false, JSON.stringify(evm))
-    assert.match(JSON.stringify(evm.value), /sha256/)
-  } else {
-    assert.equal(evm.isError, true)
-    assert.match(JSON.stringify(evm), /capability_unavailable/)
-  }
-  const cli = execFileSync(process.execPath, [path.join(repoRoot, 'node_modules/rea-agents/scripts/rea.mjs'), 'capabilities', '--format', 'json'], { encoding: 'utf8', env: { ...process.env, ...reverseEnvironment() } })
-  assert.ok(JSON.parse(cli).capabilities)
-  const managed = await s.call('mcp__rea__inspect_managed_artifact', { path: path.join(repoRoot, 'packages/redtrace-dsh/test/fixtures/rea-managed.bin') })
-  assert.equal(managed.isError, false, JSON.stringify(managed))
-  assert.match(JSON.stringify(managed.value), /rea-dotnet-static/)
-  assert.match(JSON.stringify(managed.value), /il-only/)
-  const members = await s.call('mcp__rea__inspect_managed_members', {})
-  assert.equal(members.isError, false, JSON.stringify(members))
-  assert.match(JSON.stringify(members.value), /Oracle|Answer/)
-  await s.call('reverse_tools', { group: 'android' })
-  const missing = await s.call('mcp__rea__inspect_jeb_client', {})
-  assert.match(JSON.stringify(missing), /unavailable|not_available|not found|missing|not configured|dependency/i)
+  const cli = (...args) => execFileSync(process.execPath, [path.join(repoRoot, 'node_modules/rea-agents/scripts/rea.mjs'), ...args, '--format', 'json'], { encoding: 'utf8', env: { ...process.env, ...reverseEnvironment() }, cwd:s.cwd })
+  assert.ok(JSON.parse(cli('capabilities')).capabilities)
+  assert.match(cli('analyze-javascript-application', source), /evidence_id/)
+  const target = path.join(repoRoot, 'packages/redtrace-dsh/test/fixtures/rea-managed.bin')
+  const shell=await s.call(process.platform==='win32'?'pwsh':'bash',{description:'Inspect managed REA fixture',command:(process.platform==='win32'?'node $env:DSH_REA_CLI':'node "$DSH_REA_CLI"')+' inspect-managed-artifact "'+target+'" --format json'})
+  assert.equal(shell.isError,false,JSON.stringify(shell));assert.match(JSON.stringify(shell),/rea-dotnet-static/)
+
+  assert.match(cli('inspect-managed-artifact', target), /rea-dotnet-static/)
+  assert.match(cli('inspect-managed-members', target), /Oracle|Answer/)
+  const bytecode=path.join(s.cwd,'contract.hex');writeFileSync(bytecode,'600160005260206000f3')
+  const optional=(...args)=>spawnSync(process.execPath,[path.join(repoRoot,'node_modules/rea-agents/scripts/rea.mjs'),...args,'--format','json'],{encoding:'utf8',env:{...process.env,...reverseEnvironment()},cwd:s.cwd})
+  const evm=optional('inspect-evm-interface',bytecode,'hex')
+  assert.match(evm.stdout,process.platform==='linux'&&process.arch==='x64'?/sha256/:/capability_unavailable/)
+  const jeb=optional('inspect-jeb-client');assert.match(jeb.stdout,/unavailable|not_available|not found|missing|not configured|dependency/i)
+  t.diagnostic(JSON.stringify({evmExit:evm.status,jebExit:jeb.status}))
+  assert.equal(rea(s.schemas()).length, 0, 'CLI analysis never loads MCP Schemas')
+  await s.call('skill', {name:'reverse-engineer-anything'})
+  assert.equal(rea(s.schemas()).length, retained.size)
+  assert.equal(ctx.tools.get('mcp__rea__inspect_managed_members', s.agent), undefined)
 })
 
 function writePortableTargets(cwd) {

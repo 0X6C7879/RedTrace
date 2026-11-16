@@ -1,54 +1,25 @@
-import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { Type } from 'typebox'
 import { body } from './http.ts'
 import { HttpError } from './types.ts'
 import type { Configuration, RawConfig } from './config.ts'
-import { accessSync, constants, existsSync, readFileSync } from 'node:fs'
 import type { Router } from './http.ts'
 import type { Store } from './store.ts'
 import type { Finding } from './types.ts'
 
 export interface RuntimeCatalog {
-  tools: { name: string; description?: string; parameters?: Record<string, any>; source: string; scope: string; status: string }[]
+  tools: { name: string; description?: string; parameters?: Record<string, any>; source: string; scope: string; status: string; role?: string; enabled?: boolean }[]
   mcp: { name: string; state: string; toolCount?: number; lastError?: string }[]
-}
-export interface ToolCall { projectId: string; runId: string; callId: string; name: string; arguments: Record<string, any>; timestamp: string; error?: boolean; status: string }
-
-// Native model calls retain JSON-text arguments, including malformed attempts.
-export function callArguments(value: any): Record<string, any> {
-  if (typeof value === 'string') { try { return callArguments(JSON.parse(value)) } catch { return { raw: value } } }
-  return value && typeof value === 'object' && !Array.isArray(value) ? value : value == null ? {} : { raw: value }
-}
-
-// Audit is the source of truth: one invocation per session/call ID, including PTC subcalls.
-export function auditCalls(store: Store): ToolCall[] {
-  const calls = new Map<string, ToolCall>()
-  for (const row of store.db.prepare("SELECT project_id,run_id,data FROM audit_events WHERE json_extract(data,'$.kind') IN ('tool.started','tool.completed','skill.started','skill.completed') ORDER BY id").all()) {
-    const e = JSON.parse(String(row.data)), key = row.run_id + ':' + e.call_id
-    if (!e.call_id) continue
-    const previous = calls.get(key)
-    calls.set(key, { projectId: String(row.project_id), runId: String(row.run_id), callId: e.call_id, name: e.title ?? previous?.name ?? '', arguments: callArguments(e.arguments ?? previous?.arguments), timestamp: e.timestamp ?? previous?.timestamp ?? '', error: e.error, status: e.kind.endsWith('completed') ? (e.error ? 'failed' : 'completed') : 'running' })
-  }
-  return [...calls.values()]
-}
-export function callStats(calls: ToolCall[]) { return { calls: calls.length, failures: calls.filter(c => c.error).length, lastCalledAt: calls.map(c => c.timestamp).sort().at(-1) ?? null } }
-function cliCatalog(root: string) {
-  const file = path.join(root, 'tools/tool_list.md')
-  if (!existsSync(file)) return []
-  const names = [...new Set([...readFileSync(file, 'utf8').matchAll(/^-\s+`([a-zA-Z0-9_+.-]+)`/gm)].map(m => m[1]))]
-  return names.map(name => {
-    const executable = (process.env.PATH ?? '').split(path.delimiter).flatMap(dir => process.platform === 'win32' ? ['', '.exe', '.cmd', '.bat'].map(ext => path.join(dir, name + ext)) : [path.join(dir, name)]).find(file => { try { accessSync(file, constants.X_OK); return true } catch { return false } })
-    return { name, description: executable ?? '已登记，PATH 中无同名可执行文件', source: 'CLI', scope: 'shell', status: executable ? 'available' : 'unavailable' }
-  })
 }
 export function toolAllowed(settings: RawConfig['tool_settings'], name: string, worker?: string) {
   const setting = settings?.[name]
   return setting?.enabled !== false && (setting?.workers === undefined || !!worker && setting.workers.includes(worker))
 }
-export function consoleRoutes(router: Router, store: Store, root: string, configuration: Configuration, runtime: () => RuntimeCatalog | Promise<RuntimeCatalog> = () => ({ tools: [], mcp: [] }), commanderCalls: () => Promise<ToolCall[]> = async () => []) {
+export function consoleRoutes(router: Router, store: Store, configuration: Configuration, runtime: () => RuntimeCatalog | Promise<RuntimeCatalog> = () => ({ tools: [], mcp: [] })) {
   router.add('PUT', '/console/tools/:tool/settings', async c => {
     const b = await body(c.req, Type.Object({ expected_revision: Type.String({minLength:64,maxLength:64}), enabled: Type.Boolean(), workers: Type.Array(Type.String({minLength:1}), {uniqueItems:true}) }))
-    if (c.params.tool === 'run_code') throw new HttpError(400, 'Manage the native Shell or end-capability tool instead')
+    const registered = (await runtime()).tools.filter(tool => tool.name === c.params.tool)
+    if (!registered.length || registered.some(tool => tool.source !== 'RedTrace')) throw new HttpError(400, 'Only registered RedTrace platform tools are managed here; DSH tools retain native defaults')
     const {config} = configuration.resolvedSnapshot()
     if (b.workers.some(name => !config.workers.some(w => w.name === name))) throw new HttpError(400, 'Unknown Worker')
     return configuration.commit(b.expected_revision, raw => {
@@ -58,9 +29,10 @@ export function consoleRoutes(router: Router, store: Store, root: string, config
       if (!Object.keys(settings).length) delete raw.tool_settings
     })
   })
-  router.add('GET', '/console/findings', () => {
+  router.add('GET', '/console/findings', c => {
     const projects = new Map(store.projects().map(p => [p.id, p]))
-    return store.db.prepare("SELECT data FROM nodes WHERE kind='finding' AND COALESCE(json_extract(data,'$.deleted'),0)=0 AND COALESCE(json_extract(data,'$.lifecycle'),'active')='active' ORDER BY rowid DESC").all().map(row => {
+    const project=c.url.searchParams.get('projectId'),graph=c.url.searchParams.get('graphId');if(project){store.project(project);if(graph)store.projectGraph(project,graph)}
+    return store.db.prepare("SELECT data FROM nodes WHERE kind='finding' AND COALESCE(json_extract(data,'$.deleted'),0)=0 AND COALESCE(json_extract(data,'$.lifecycle'),'active')='active'"+(project?" AND project_id=?":"")+(graph?" AND json_extract(data,'$.graphId')=?":"")+" ORDER BY rowid DESC").all(...(project?[project]:[]),...(graph?[graph]:[])).map(row => {
       const f = JSON.parse(String(row.data)) as Finding, p = projects.get(f.projectId)!
       const { details: _, report: __, ...summary } = f
       return { ...summary, hasReport: !!f.report, projectTitle: p.title, projectStatus: p.status, mode: p.mode, graphTitle: f.graphId ? store.projectGraph(p.id, f.graphId).title : p.title }
@@ -71,19 +43,16 @@ export function consoleRoutes(router: Router, store: Store, root: string, config
     return store.forGraph(c.params.project, finding.graphId!).readNode(c.params.project, finding.id, 'doc')
   })
   router.add('GET', '/console/tools', async () => {
-    const [live, commander] = await Promise.all([runtime(), commanderCalls()]), calls = [...auditCalls(store), ...commander]
+    const live = await runtime()
     const {raw, revision, config} = configuration.resolvedSnapshot()
-    const registrations = [...live.tools, ...cliCatalog(root)]
-    const names = new Set(live.tools.map(t => t.name))
-    for (const call of calls) if (!names.has(call.name)) { registrations.push({ name: call.name, description: '审计中出现；当前没有活跃注册', source: call.name.startsWith('mcp__') ? 'MCP' : '历史调用', scope: 'audit', status: 'inactive' }); names.add(call.name) }
+    const registrations = live.tools
     const groups = new Map<string, typeof registrations>()
-    for (const tool of registrations) { const key = tool.source + ':' + tool.name; groups.set(key, [...(groups.get(key) ?? []), tool]) }
-    const tools = [...groups.values()].map(group => {
-      const tool = group[0]
-      const observed = tool.source === 'CLI' ? calls.filter(c => ['bash', 'pwsh'].includes(c.name) && String(c.arguments.command ?? c.arguments.script ?? '').trim().split(/\s/)[0] === tool.name) : calls.filter(c => c.name === tool.name)
+    for (const tool of registrations) { const key = JSON.stringify([tool.source, tool.name, tool.description, tool.parameters]); groups.set(key, [...(groups.get(key) ?? []), tool]) }
+    const tools = [...groups].map(([key, group]) => {
+      const tool = group.find(t => t.status === 'registered') ?? group[0]
       const setting = raw.tool_settings?.[tool.name]
-      return { ...tool, enabled: setting?.enabled !== false, workerBindings: setting?.workers ?? config.workers.map(w => w.name), manageable: tool.source !== 'CLI' && tool.name !== 'run_code', scopes: [...new Set(group.map(t => t.scope))], ...callStats(observed) }
+      return { ...tool, id: createHash('sha256').update(key).digest('hex'), enabled: (tool.source !== 'RedTrace' || setting?.enabled !== false) && group.some(t => t.enabled !== false), visibleScopes: [...new Set(group.filter(t => t.status === 'registered' && t.enabled !== false).map(t => t.scope))], roles: [...new Set(group.map(t => t.role).filter(Boolean))], workerBindings: tool.source === 'RedTrace' && setting?.workers !== undefined ? setting.workers : config.workers.map(w => w.name), manageable: tool.source === 'RedTrace', scopes: [...new Set(group.filter(t => t.status === 'registered').map(t => t.scope))] }
     })
-    return { tools, revision, workers: config.workers.map(w => ({name:w.name, roles:w.roles??[], enabled:w.enabled})), mcp: live.mcp, calls: calls.sort((a,b) => b.timestamp.localeCompare(a.timestamp)), stats: callStats(calls), note: '统计来自已留存原生审计，按 run/call ID 去重。CLI 仅归因直接以该命令开头的 Shell 调用；不估算脚本内部调用。' }
+    return { tools, revision, workers: config.workers.map(w => ({name:w.name, roles:w.roles??[], enabled:w.enabled})), mcp: live.mcp, note: '列出真实注册代码提供的全部 Tool Schema，包含未运行角色和已停用工具；不包含 CLI、Skill 脚本或历史工具。开关反映工具配置与能力插件状态，不以会话是否运行判断启用。DSH 原生工具及外部 MCP 保持原生行为；平台开关在下一模型步骤及新调用生效。' }
   })
 }

@@ -13,7 +13,7 @@ const { Configuration } = await import(pathToFileURL(root + '/packages/redtrace-
 const work = mkdtempSync(path.join(os.tmpdir(), 'redtrace-legion-loop-'))
 symlinkSync(path.join(dependencyRoot, 'static'), path.join(work, 'static'))
 mkdirSync(work+'/skills/console-native',{recursive:true});writeFileSync(work+'/skills/console-native/SKILL.md','---\nname: console-native\ndescription: Local native catalog test\n---\nroot-catalog-native-proof\n')
-let api, projectId, child, logs = '', ended = false
+let api, projectId, child, logs = '', ended = false, liveSchemaChecked = false
 const requests = [], roles = new Set(), pending = new Set()
 const lastOutput = b => {
   const tool = b.messages.filter(m => m.role === 'tool').at(-1)
@@ -25,6 +25,7 @@ const model = createServer(async (req, res) => {
   try {
     let raw = ''; for await (const chunk of req) raw += chunk
     const b = JSON.parse(raw), names = (b.tools ?? []).map(t => t.function.name)
+    if(names.includes('legion_board')){const live=await(await fetch(api+'/console/tools')).json();assert(live.tools.some(t=>t.name==='legion_board'&&t.roles.includes('commander:general')));liveSchemaChecked=true}
     requests.push(b)
     const system = b.messages.filter(m => m.role === 'system').map(m => m.content).join('\n')
     const role = ['COMMANDER','GENERAL','SCOUT','SOLDIER'].find(role => system.includes('You are ' + role))
@@ -100,9 +101,8 @@ try {
   const acceptedDeadline=Date.now()+45000
   while(Date.now()<acceptedDeadline){const board=await call('/v2/legion?projectId='+projectId);if(board.campaign.status==='stopped')throw Error(JSON.stringify(board.campaign));if(board.projects[0]?.status==='completed'&&board.campaign.status==='idle')break;await delay(20)}
   const inventory=await call('/console/tools')
-  assert.ok(inventory.tools.some(t=>t.name==='legion_board'&&t.scopes.some(scope=>scope!=='global')),'Commander tools come from the actual native Agent registry')
-  assert.ok(inventory.calls.filter(call=>call.name==='skill'&&call.arguments.name==='console-native').length>=2,'Native skill audit: '+JSON.stringify(inventory.calls.filter(call=>call.name==='skill')))
-  assert.ok(inventory.calls.some(call=>call.name==='legion_board'&&call.projectId===projectId),'Commander stats come from its persisted native log')
+  assert(liveSchemaChecked,'Model and UI both observe the active Commander registry')
+  assert(inventory.tools.some(t=>t.name==='legion_board'&&t.scopes.length===0),'Real Schema stays listed after session disposal without retaining the disposed scope')
   const result=(await call('/v2/legion?projectId='+projectId)).campaign
   assert.equal(result.status,'idle');assert.ok(result.state.includes('Fixture accepted'))
   const g=await call('/v2/projects/'+projectId), runs=await call('/v2/projects/'+projectId+'/runs')
@@ -120,6 +120,7 @@ try {
   child.kill('SIGTERM'); await closed
   const { Store }=await import(pathToFileURL(root+'/packages/redtrace-engine/src/store.ts'));const store=new Store(work+'/.redtrace/engine.db')
   try {
+    const audit=store.db.prepare('SELECT data FROM audit_events').all().map(row=>JSON.parse(row.data));assert(audit.filter(e=>e.kind==='tool.started'&&e.title==='skill'&&JSON.stringify(e.arguments).includes('console-native')).length>=2,'Skill audit is preserved independently of tool inventory')
     const messages=store.db.prepare('SELECT data FROM legion_messages').all().map(row=>JSON.parse(row.data))
     assert.ok(messages.length>=4);assert.ok(messages.some(m=>m.status==='admitted'),'real native inbox admission was not recorded'); assert.ok(messages.some(m=>m.type==='HELP'&&m.status==='admitted')); assert.ok(messages.some(m=>m.content.includes('COMMANDER_TACTICAL_ACK')&&m.status==='admitted'))
     assert.equal(store.run(runs[0].id).pendingTools.length,0)

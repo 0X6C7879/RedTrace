@@ -174,7 +174,7 @@ function auditPage() {
       catch (error) { this.error = error.message; }
     },
     runStatusLabel(status) {
-      return ({running:'执行中',paused:'执行暂停（非 Park）',unknown:'结果待核验',completed:'成功',succeeded:'成功',failed:'失败',cancelled:'已取消',stopped:'已停止',active:'进行中'})[status] || status || '状态未记录';
+      return ({admitted:'已入模',delivered:'已送达',queued:'排队中',pending:'待处理',running:'执行中',paused:'执行暂停（非 Park）',unknown:'结果待核验',completed:'成功',succeeded:'成功',failed:'失败',cancelled:'已取消',stopped:'已停止',active:'进行中'})[status] || status || '状态未记录';
     },
     completionStatus(event) {
       return event.data?.status || event.status || this.runFor(event)?.status || (event.error ? 'failed' : event.exit_code === 0 ? 'completed' : event.exit_code != null ? 'failed' : 'unknown');
@@ -358,11 +358,11 @@ function auditPage() {
     },
 
     eventVisible(event) {
-      if (!['system.prompt', 'user.message', 'assistant.message', 'assistant.delta',
+      if (!['system.prompt', 'session.context', 'user.message', 'assistant.message', 'assistant.delta',
         'thinking.message', 'thinking.delta', 'tool.started', 'tool.completed',
         'command.started', 'command.completed', 'skill.started', 'skill.completed',
         'file.changed', 'run.completed', 'error', 'stderr'].includes(event.kind)) return false;
-      if (['system.prompt', 'user.message', 'assistant.message', 'assistant.delta', 'thinking.message', 'thinking.delta'].includes(event.kind)
+      if (['system.prompt', 'session.context', 'user.message', 'assistant.message', 'assistant.delta', 'thinking.message', 'thinking.delta'].includes(event.kind)
         && !String(event.content || '').trim()) return false;
       if (['command.started', 'tool.started', 'skill.started'].includes(event.kind)) {
         if (this.hasCompletion(event) || this.isRedundantStarted(event)) return false;
@@ -487,6 +487,7 @@ function auditPage() {
         'thinking.message': '思考',
         'thinking.delta': '思考',
         'system.prompt': '系统提示词',
+        'session.context': '会话上下文',
         'tool.started': event.title || '工具',
         'tool.completed': this.toolTitle(event) || '工具结果',
         'command.started': '执行',
@@ -511,7 +512,7 @@ function auditPage() {
     },
 
     isSystemPrompt(event) {
-      return event.kind === 'system.prompt';
+      return ['system.prompt','session.context'].includes(event.kind);
     },
 
     isTool(event) {
@@ -724,7 +725,7 @@ function auditPage() {
       if (!view || view.id !== id) return;
       view.loading = true; view.error = '';
       try {
-        const page = await this.request('/v2/projects/' + encodeURIComponent(projectId) + '/evidence/' + encodeURIComponent(id) + '?offset=' + (more ? view.meta.nextOffset : 0));
+        const page = await this.request('/v2/projects/' + encodeURIComponent(projectId) + '/evidence/' + encodeURIComponent(id) + '?offset=' + (more ? view.meta.nextOffset : 0)+(this.auditGraphId?'&graphId='+encodeURIComponent(this.auditGraphId):''));
         if (this.auditEvidence !== view || this.selectedTaskId !== projectId) return;
         if (page.encoding === 'base64') throw Error('二进制证据不能作为文本预览');
         view.content += page.content; view.meta = { ...page, bytes:page.offset + page.bytes };
@@ -811,4 +812,26 @@ function auditPage() {
       }
     },
   };
+}
+
+// Same native-event renderer in logs, conversations and graph execution members.
+function runtimeLog() {
+  return {
+    ...auditPage(),
+    init(){mountConsoleTemplate(this.$el,'runtime-log-events')},
+    runtimeScope:'',runtimeTail:'',
+    setRuntimeEvents(events,runs,scope,projectId='',graphId=''){
+      const scroller=this.$el?.closest('.wb-messages,.fgs-runtime-log'),changed=this.runtimeScope!==scope;
+      const follow=changed||scroller&&scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<48,tail=events.at(-1)?.key||events.at(-1)?.event_uid||events.at(-1)?.id||'';
+      if(changed){this.runtimeScope=scope;this.selectedRun='all';this.selectedProvider='all';this._openThinking={};this.auditEvidence=null}
+      this.selectedTaskId=projectId;this.auditGraphId=graphId;this.events=events;this.runs=runs;this.renderWindow=events.length;this.reindexEvents();
+      if(scroller&&follow&&(changed||tail!==this.runtimeTail))this.$nextTick(()=>{scroller.scrollTop=scroller.scrollHeight});this.runtimeTail=tail;
+    },
+    runtimeRoles(){return [...new Set(this.events.map(e=>this.eventAgent(e)))].filter(Boolean)},
+  };
+}
+
+// Explicit initialization also covers panels created by Alpine's x-if.
+function mountConsoleTemplate(el,id){
+  Alpine.mutateDom(()=>{const content=document.getElementById(id).content.cloneNode(true),children=[...content.children];el.append(content);for(const child of children)Alpine.initTree(child)});
 }

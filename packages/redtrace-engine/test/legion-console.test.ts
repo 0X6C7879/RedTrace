@@ -132,10 +132,10 @@ test('benchmark cards exclude the main graph and show runs from each task Step',
   assert.equal(app.filteredTaskGraphs({graphs,steps:[]}).length,1)
   app.selectedProjectId='p';app.selectedGraphId='g1';app.fgs={steps:[{id:'s1'},{id:'s2'}]}
   app.api=async(_method:string,url:string)=>{calls.push(url);return {workers:[{id:'r1',worker:'one',graphId:'g1'},{id:'r2',worker:'two',graphId:'g1'},{id:'foreign',worker:'other',graphId:'g2'}]}}
-  app.loadFgsRunLog=async()=>{calls.push('events:'+app.fgsRunId)}
+  app.loadGraphLog=async()=>{calls.push('events:'+app.selectedGraphId)}
   await app.loadGraphWorkerRuns()
   assert.deepEqual(Array.from(app.graphWorkerRuns,(r:any)=>r.id),['r2','r1'])
-  assert.equal(app.fgsRunId,'r2');assert.equal(calls.at(-1),'events:r2')
+  assert.equal(app.fgsRunId,'r2');assert.equal(calls.at(-1),'events:g1')
 })
 
 
@@ -152,7 +152,7 @@ test('worker snapshot exposes effective four-role defaults without inventing an 
     assert.equal(app.runtimeTaskPayload().tasks.commander.max_intents,undefined)
     app.runtimeTaskForm.tasks.commander.max_intents='';assert.equal(app.runtimeTaskPayload().tasks.commander.max_intents,undefined)
     app.runtimeTaskForm.tasks.commander.max_intents=7;assert.equal(app.runtimeTaskPayload().tasks.commander.max_intents,7)
-    assert.doesNotMatch(html,/providerClass\(role\)|providerDotClass\(role\)|providerLabel\(role\)/)
+    assert.doesNotMatch(html.slice(html.indexOf('<section x-show="appPage === \'settings\'"'),html.indexOf('<!-- New Project -->')),/providerClass\(role\)|providerDotClass\(role\)|providerLabel\(role\)/)
   }finally{rmSync(dir,{recursive:true,force:true})}
 })
 

@@ -12,23 +12,13 @@ REA 默认开启，由 Explore 自主按需加载，Reason 不再通过 Step.req
 历史 Step 声明仅兼容读取，新 Step 不保存这些字段，也不因工具声明触发 Replace。
 每个启用插件的 Explore 都能发现官方 Skill 与 CLI；未加载 Skill 时 MCP 不连接、不启动分析引擎。
 Explore 调用原生 `skill({name:"reverse-engineer-anything"})`，自动创建
-该 Run 私有的 DSH MCP Client，不启动 Ghidra。模型从 14 个原生入口开始，
-调用目标入口自动扩展相应类别；`reverse_tools({group:...})` 仅控制可见性，
-**不转发分析调用**。它将原生 ToolDefinition 直接注册到 Explore，分析始终
-使用 `mcp__rea__...`。类别按锁定版本的官方 TOOL_CONTRACTS 生成：
+该 Run 私有的 DSH MCP Client，不启动 Ghidra。
+加载 Skill 后仅注册固定的上游 MCP-only 集合及六个需要复用同一 Program 的高频原生查询。
+其余路径型分析通过 `node "$DSH_REA_CLI" --help` 查询并用原生 Shell 执行；
+不再注册 `reverse_tools` 或按目标自动扩展类别。上游 CLI 每次打开/关闭自己的分析会话，
+不能等价替换持久 Program、注释和内存 Evidence，因此这些 MCP 操作保留。
 
-| group | 官方类别 / 访问范围 |
-|---|---|
-| native | official-proxy、enhanced、native-provider；Ghidra/Hopper/IDA、NativeAOT、符号/引用/数据流、原生运行时 |
-| android | Android/JADX、APKTool、JEB、ADB，含 JNI 与设备工作流 |
-| javascript | browser-provider、electron-provider、runtime-provider；静态 JS/Electron 与运行时观察 |
-| managed | .NET 元数据与托管代码 |
-| artifact | 包/归档、Apple 工件、EVM 字节码 |
-| firmware | 固件识别与提取 |
-| evidence | session、application；证据查看/比较/验证、应用图和重建调查 |
-| all | 全部 170 个官方工具，无永久裁剪；可访问未来未归类工具 |
 
-工具集合只增不减，保持连续分析的 Schema 稳定；停用或 Run 结束时整体释放。
 本地 `mcp/rea.json` 的服务器名保留给该插件，不再被全局 Domain 重复挂载，
 其他 MCP 配置不变。已有 REA 配置不会被删除，其个性化引擎设置请放入
 `common_env`（或启动环境中的 `REA_*`、`GHIDRA_INSTALL_DIR`、`JAVA_HOME`）。

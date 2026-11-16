@@ -27,20 +27,21 @@ export interface ToolDefinition {
 }
 
 export interface ToolContext {
-  readonly tools: { register(definition: ToolDefinition): void }
+  readonly tools: { register(definition: ToolDefinition & { redtrace: true }, options?: { when: () => boolean }): void }
   [key: string]: unknown
 }
 
 export const text = { type: 'string' } as const
 
-export function register(ctx: ToolContext, definition: Omit<ToolDefinition, 'output'>): void {
+export function register(ctx: ToolContext, definition: Omit<ToolDefinition, 'output'>, enabled?: (name: string) => boolean): void {
   ctx.tools.register({
     ...definition,
+    redtrace: true,
     output: {
       schema: { type: 'object', additionalProperties: true },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
     },
-  })
+  }, enabled ? { when: () => enabled(definition.name) } : undefined)
 }
 
 function runtimeValue(name: string): string {
