@@ -3,7 +3,7 @@ import assert from'node:assert/strict'
 import{Store}from'../src/store.ts'
 import{LegionStore}from'../src/legion-store.ts'
 import{legionTools}from'../src/legion-tools.ts'
-const worker={name:'soldier',backend:'mock' as const}
+const worker={name:'worker',backend:'mock' as const}
 function fixture(t:any){const store=new Store(':memory:'),legion=new LegionStore(store),project=()=>store.createProject({title:'fixture',origin:'local fixture',goal:'verify'}).project,p=project(),step=store.addStep(p.id,{description:'work',sourceIds:['origin']}),run=store.claim(p.id,'execute',worker,step.id);t.after(()=>store.close());return{store,legion,p,step,run,project}}
 test('durable HELP is not Fact or execution-contract amendment',t=>{const{store,legion,p,step,run}=fixture(t),before=store.node(p.id,step.id);legion.message(p.id,run.id,'commander','HELP','Need a different angle');assert.equal(store.nodeCount(p.id,'fact'),1);assert.deepEqual(store.node(p.id,step.id),before)})
 test('messages reject missing, foreign and stopped execution actors',t=>{const{store,legion,p,run,project}=fixture(t),q=project();assert.throws(()=>legion.message(p.id,'commander','missing','MESSAGE','x'),/Run not found/);assert.throws(()=>legion.message(q.id,'commander',run.id,'MESSAGE','x'),/another Project/);store.finishRun(run.id,'cancelled');assert.throws(()=>legion.message(p.id,'commander',run.id,'MESSAGE','x'),/stopped/)})

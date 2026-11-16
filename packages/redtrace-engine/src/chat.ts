@@ -1,3 +1,4 @@
+import { type ProjectMode, coordinatorRole } from '../../redtrace-dsh/src/roles.ts'
 import { randomUUID } from 'node:crypto'
 import { Type } from 'typebox'
 import type { Store } from './store.ts'
@@ -12,17 +13,17 @@ import { modelReasoningEfforts } from './models.ts'
 
 export interface Upload { id:string;chatId:string;type:'image'|'file';attachment:Record<string,any>;createdAt:string }
 export interface ConversationModel { name:string;worker:string;provider:string;model:string;reasoningEfforts:string[] }
-export function conversationWorkers(config:EngineConfig) {return config.workers.filter(w=>w.enabled&&w.backend==='dsh'&&w.roles?.includes('commander')).sort((a,b)=>a.priority-b.priority||a.name.localeCompare(b.name))}
-export function configuredConversationModels(config:EngineConfig):ConversationModel[] {
-  const workers=conversationWorkers(config), routes=workers.map(w=>({name:w.name,worker:w.name,provider:w.provider,model:w.model}))
+export function conversationWorkers(config:EngineConfig, mode?:ProjectMode) {return config.workers.filter(w=>w.enabled&&w.backend==='dsh'&&(mode ? w.roles?.includes(coordinatorRole(mode)) : w.roles?.some(r=>r==='commander'||r==='planner'))).sort((a,b)=>a.priority-b.priority||a.name.localeCompare(b.name))}
+export function configuredConversationModels(config:EngineConfig, mode?:ProjectMode):ConversationModel[] {
+  const workers=conversationWorkers(config,mode), routes=workers.map(w=>({name:w.name,worker:w.name,provider:w.provider,model:w.model}))
   if(workers.length)for(const [provider,profile] of Object.entries(config.providers))for(const model of profile.models) {
     if(!routes.some(r=>r.provider===provider&&r.model===model.id))routes.push({name:JSON.stringify([workers[0].name,provider,model.id]),worker:workers[0].name,provider,model:model.id})
   }
   return routes.map(route=>{const model=config.providers[route.provider]?.models.find(m=>m.id===route.model),efforts=model&&modelReasoningEfforts(model);return {...route,reasoningEfforts:efforts?Object.keys(efforts).filter(k=>k!=='off'&&efforts[k]!==null):[]}})
 }
 /** Model choice changes the native model, never the Worker's role, capacity or tool bindings. */
-export function conversationWorker(config:EngineConfig,selection:string) {
-  const route=configuredConversationModels(config).find(r=>r.name===selection),worker=conversationWorkers(config).find(w=>w.name===route?.worker)
+export function conversationWorker(config:EngineConfig,selection:string,mode?:ProjectMode) {
+  const route=configuredConversationModels(config,mode).find(r=>r.name===selection),worker=conversationWorkers(config,mode).find(w=>w.name===route?.worker)
   return worker&&route?{...worker,provider:route.provider,model:route.model}:undefined
 }
 export interface Chat { selectedWorker?:string; reasoning?:string; projectId?:string; kind?:'chief'|'commander-input'; id:string; title:string; sessionId:string; createdAt:string; updatedAt:string; status:'idle'|'running'|'failed'; hasSession:boolean; workerName?:string; error?:string }
@@ -31,7 +32,7 @@ export class ChatStore {
   readonly store:Store
   stopProject?: (projectId:string)=>Promise<void>
   runtime?: (chat:Chat,content:string,uploads?:Upload[],worker?:string|null,reasoning?:string|null)=>Promise<unknown>
-  models?:()=>Promise<ConversationModel[]>
+  models?:(mode?:ProjectMode)=>Promise<ConversationModel[]>
   upload?: (chat:Chat,req:import('node:http').IncomingMessage)=>Promise<Upload>
   readUpload?: (upload:Upload,offset?:number,length?:number)=>Promise<unknown>
   download?: (upload:Upload,context:import('./http.ts').RequestContext)=>Promise<void>
@@ -59,7 +60,7 @@ export function chatRoutes(router:Router,chats:ChatStore,configuration:()=>Engin
   router.add('POST','/v2/chats/:chat/attachments',c=>{const chat=chats.get(c.params.chat);if(!chats.upload)throw new HttpError(503,'Attachments require the DSH host');return chats.upload(chat,c.req)})
   router.add('GET','/v2/chats/:chat/attachments',c=>chats.uploads(c.params.chat))
   router.add('GET','/v2/chats/:chat/attachments/:upload',c=>{const upload=chats.owned(c.params.chat,[c.params.upload])[0];if(!chats.download)throw new HttpError(503,'DSH attachment reader unavailable');return chats.download(upload,c)})
-  router.add('GET','/v2/chats/models',()=>chats.models?chats.models():configuredConversationModels(configuration()))
+  router.add('GET','/v2/chats/models',c=>{const mode=c.url.searchParams.get('mode')??undefined;if(mode!==undefined&&mode!=='general'&&mode!=='benchmark')throw new HttpError(422,'Invalid Project mode');return chats.models?chats.models(mode):configuredConversationModels(configuration(),mode)})
   router.add('GET','/v2/chats',c=>chats.list(c.url.searchParams.get('query')??''))
   router.add('POST','/v2/chats',async c=>chats.create((await body(c.req,Type.Object({title:text},{additionalProperties:false}))).title))
   router.add('GET','/v2/chats/:chat',c=>chats.get(c.params.chat))
@@ -90,7 +91,7 @@ export function chatTools(store:Store,chat?:Chat,chats?:ChatStore):AgentTool[] {
     tool('projects','Search Project titles and current status. No graph or log bodies.',Type.Object({query:Type.Optional(Type.String()),offset,limit},{additionalProperties:false}),args=>store.projects().filter(p=>!args.query||p.title.toLowerCase().includes(args.query.toLowerCase())).slice(args.offset??0,(args.offset??0)+(args.limit??50)).map(p=>({id:p.id,title:p.title,mode:p.mode,status:p.status,objective:p.objective}))),
     tool('project_query','Read Graph indexes, Worker runs, Finding summaries, nodes, progress or the real planner-maintained phase plan for a specified Project only. Paginate; inspect node detail only when needed.',Type.Object({projectId:text,graphId:Type.Optional(text),kind:Type.Union(['graphs','workers','findings','nodes','progress','plan'].map(v=>Type.Literal(v))),nodeId:Type.Optional(text),offset,limit},{additionalProperties:false}),args=>{
       const view=args.graphId?store.forGraph(args.projectId,args.graphId):store.forProject(args.projectId),start=args.offset??0,end=start+(args.limit??50)
-      if(args.kind==='plan'){const project=view.project(args.projectId);if(!args.graphId&&project.mode==='benchmark')throw new HttpError(422,'Select a task Graph for its phase plan');const graphId=args.graphId??view.projectGraphs(args.projectId)[0].id;return {graphId,owner:project.mode==='general'?'Commander':'task planner',todos:new CommanderTodos(view,args.projectId).list(graphId)}}
+      if(args.kind==='plan'){const project=view.project(args.projectId);if(project.mode==='general')throw new HttpError(403,'General task TodoList is read and maintained only by Planner');if(!args.graphId&&project.mode==='benchmark')throw new HttpError(422,'Select a task Graph for its phase plan');const graphId=args.graphId??view.projectGraphs(args.projectId)[0].id;return {graphId,owner:'task planner',todos:new CommanderTodos(view,args.projectId).list(graphId)}}
       if(args.nodeId)return view.readNode(args.projectId,args.nodeId,'summary')
       if(args.kind==='graphs')return view.projectGraphs(args.projectId).slice(start,end)
       if(args.kind==='workers')return view.runs(args.projectId).slice(start,end).map(r=>({id:r.id,graphId:r.graphId,stepId:r.stepId,worker:r.worker,status:r.status,error:r.error,predecessorRunId:r.predecessorRunId}))

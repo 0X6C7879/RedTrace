@@ -1,3 +1,4 @@
+import { executionRole, isReportStep } from '../../redtrace-dsh/src/roles.ts'
 import { chatSlots } from './chat.ts'
 import { LegionStore } from './legion-store.ts'
 import { Store, ACTIVE_NODE_SQL } from './store.ts'
@@ -34,7 +35,7 @@ export class Scheduler {
   private select(resume: Run | undefined, step: Step, active: Run[]) {
     const commands=[...this.legion.campaigns().filter(c=>c.status==='running'),...chatSlots(this.store)]
     const count = (name: string) => active.filter(r => r.worker === name).length+commands.filter(c=>c.workerName===name).length
-    return this.config.workers.map(w => this.selectWorker(w, 'execute', step)).filter((w): w is Worker => !!w && w.enabled && (!step.nextWorker || w.name===step.nextWorker) && !!w.roles?.includes(step.role === 'reporter' ? 'soldier' : step.role ?? 'soldier') && (!resume || w.name === resume.worker && w.backend === resume.backend) && count(w.name) < w.maxRunning)
+    return this.config.workers.map(w => this.selectWorker(w, 'execute', step)).filter((w): w is Worker => !!w && w.enabled && (!step.nextWorker || w.name===step.nextWorker) && !!w.roles?.includes(executionRole(this.store.project(step.projectId).mode, step.role)) && (!resume || w.name === resume.worker && w.backend === resume.backend) && count(w.name) < w.maxRunning)
       .sort((a,b) => a.priority-b.priority || count(a.name)-count(b.name) || a.name.localeCompare(b.name))[0]
   }
   private dispatch() {
@@ -42,7 +43,7 @@ export class Scheduler {
     for (const task of this.running.values()) {
       try {
         const project = this.store.project(task.run.projectId), step = this.store.node<Step>(project.id, task.run.stepId!, 'step')
-        if (this.store.run(task.run.id).status !== 'running' || !(step.role === 'reporter' ? ['active','completed'].includes(project.status) : project.status === 'active') || ['cancelled','parked'].includes(step.status) || step.role !== 'reporter' && this.store.node<Goal>(project.id,step.goalId,'goal').status !== 'open') task.abort.abort('Project or Step stopped')
+        if (this.store.run(task.run.id).status !== 'running' || !(isReportStep(step) ? ['active','completed'].includes(project.status) : project.status === 'active') || ['cancelled','parked'].includes(step.status) || !isReportStep(step) && this.store.node<Goal>(project.id,step.goalId,'goal').status !== 'open') task.abort.abort('Project or Step stopped')
       } catch (error) { if (error instanceof HttpError && error.status===404) task.abort.abort('Project deleted'); else throw error }
     }
     const commands=[...this.legion.campaigns().filter(c=>c.status==='running'),...chatSlots(this.store)], commandSlots=commands.length, active = this.activeRuns, projects = this.store.projects().filter(p=>['active','completed'].includes(p.status))
@@ -53,8 +54,9 @@ export class Scheduler {
         const project=projects[(this.cursor+i)%projects.length]
         if(active.filter(r=>r.projectId===project.id).length+commands.filter(c=>c.projectId===project.id).length>=this.config.maxProjectWorkers)continue
         if(!active.some(r=>r.projectId===project.id)&&!commands.some(c=>c.projectId===project.id)&&new Set([...active.map(r=>r.projectId),...commands.filter(c=>c.projectId).map(c=>c.projectId)]).size>=this.config.maxRunningProjects)continue
-        const steps=this.store.nodes<Step>(project.id,['step']).filter(s=>!s.deleted&&!s.replacementPending&&['pending','paused'].includes(s.status)&&(s.role==='reporter'||project.status==='active'&&this.store.node<Goal>(project.id,s.goalId,'goal').status==='open')).sort((a,b)=>b.priority-a.priority||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id))
+        const steps=this.store.nodes<Step>(project.id,['step']).filter(s=>!s.deleted&&!s.replacementPending&&['pending','paused'].includes(s.status)&&(isReportStep(s)||project.status==='active'&&this.store.node<Goal>(project.id,s.goalId,'goal').status==='open')).sort((a,b)=>b.priority-a.priority||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id))
         for(const step of steps) {
+          if(project.mode==='general'&&!this.store.stepReady(step))continue
           const resume=step.status==='paused'?this.store.runsByStatus('paused',project.id).find(r=>r.stepId===step.id):undefined
           const worker=this.select(resume,step,active);if(!worker)continue
           const run=this.store.claim(project.id,'execute',worker,step.id);active.push(run);this.launch(run,worker);progress=true;break

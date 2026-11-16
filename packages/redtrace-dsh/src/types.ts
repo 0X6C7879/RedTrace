@@ -1,6 +1,7 @@
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 
-export type TaskType = 'commander' | 'general' | 'soldier' | 'scout'
+export type { FixedRole as TaskType } from './roles.js'
+import type { FixedRole as TaskType } from './roles.js'
 export type ExecutionProfile = 'direct' | 'isolated'
 export type ReasoningPolicy = 'auto_max' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
@@ -165,7 +166,7 @@ export interface ScopedContext {
   isolate(name: string): ScopedContext
 }
 
-export interface CordisFiber { await(): Promise<unknown>; dispose(): Promise<void> }
+export interface CordisFiber { await(): Promise<unknown>; dispose(): Promise<void>; update(config: Record<string, unknown>): Promise<unknown> | void }
 
 export interface RuntimeContext extends ScopedContext {
   agents: {

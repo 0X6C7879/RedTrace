@@ -23,7 +23,7 @@ test('Board exposes paused and unknown execution, with Mission descriptions, wit
   const store=new Store(':memory:'),legion=new LegionStore(store),p=store.createProject({title:'console',origin:'local only',goal:'verify'}).project
   try{
     for(const status of ['running','paused','unknown','succeeded'] as const){
-      const step=legion.spawn(p.id,{role:'soldier',taskKey:status,description:'Mission '+status,sourceIds:['origin']})
+      const step=legion.spawn(p.id,{role:'worker',taskKey:status,description:'Mission '+status,sourceIds:['origin']})
       const run=store.claim(p.id,'execute',worker,step.id)
       if(status!=='running')store.finishRun(run.id,status)
     }
@@ -148,7 +148,7 @@ test('worker snapshot exposes effective four-role defaults without inventing an 
     app.applyWorkerSnapshot(snapshot)
     assert.equal(snapshot.tasks.commander.timeout,300)
     assert.equal(snapshot.tasks.scout.timeout,240)
-    assert.equal(Object.keys(snapshot.tasks).sort().join(','),'commander,general,scout,soldier')
+    assert.equal(Object.keys(snapshot.tasks).sort().join(','),'commander,general,planner,scout,soldier,worker')
     assert.equal(app.runtimeTaskPayload().tasks.commander.max_intents,undefined)
     app.runtimeTaskForm.tasks.commander.max_intents='';assert.equal(app.runtimeTaskPayload().tasks.commander.max_intents,undefined)
     app.runtimeTaskForm.tasks.commander.max_intents=7;assert.equal(app.runtimeTaskPayload().tasks.commander.max_intents,7)
@@ -223,7 +223,7 @@ test('Commander native read takes no write ownership, preserves paging and surfa
   const {pathToFileURL}=await import('node:url'),{readCommanderLog}=await import(pathToFileURL(root+'/packages/redtrace-engine/compat/legion.mjs').href)
   let created=0,closed=0;const opens:any[]=[],reads:any[]=[],campaign:any={sessionId:'command-read',hasSession:true,workerName:'actual-route'}
   const persistence={create(){created++},stat:async()=>({}),open:async(id:string,access:string)=>{opens.push({id,access});return {read:async(offset:number,limit:number)=>{reads.push({offset,limit});return {events:[{seq:4,ts:'2026-11-11T00:00:00.000Z',type:'assistant/message',data:{message:{content:[{type:'text',text:'literal Commander output'}]}}}]}},close:async()=>{closed++}}}}
-  const engine={legion:{campaign:()=>campaign}},ctx={get:()=>persistence}
+  const engine={store:{project:()=>({mode:'benchmark'})},legion:{campaign:()=>campaign}},ctx={get:()=>persistence}
   const page=await readCommanderLog(ctx,engine,4,1)
   assert.equal(opens[0].access,'read');assert.equal(created,0);assert.equal(closed,1);assert.equal(reads[0].offset,4);assert.equal(page.nextOffset,5);assert.equal(page.events[0].task_type,'commander');assert.equal(page.events[0].content,'literal Commander output')
   persistence.stat=async()=>undefined as any;await assert.rejects(readCommanderLog(ctx,engine),/missing/)

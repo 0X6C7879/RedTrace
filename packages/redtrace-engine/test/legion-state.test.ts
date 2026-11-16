@@ -21,7 +21,7 @@ function fixture(t: any) {
   t.after(() => { store.close(); rmSync(root, { recursive: true, force: true }) })
   return { root, store, legion, project, evidence: new ProjectEvidence(store, root) }
 }
-const mission = { role: 'general' as const, taskKey: 'challenge-a', description: 'fixture task', sourceIds: ['origin'] }
+const mission = { role: 'worker' as const, taskKey: 'challenge-a', description: 'fixture task', sourceIds: ['origin'] }
 const worker = { name: 'fixture', backend: 'mock' as const, provider: 'mock', model: 'mock', enabled: true, reason: false, explore: true, bootstrap: true, maxRunning: 4, priority: 0 }
 const config = (root: string): EngineConfig => ({ workers: [worker], providers: {}, maxWorkers: 4, maxProjectWorkers: 4, maxRunningProjects: 2, maxSteps: null, decideTimeout: 5, executeTimeout: 5, concludeTimeout: 1, bootstrapTimeout: 5, bootstrapConcludeTimeout: 1, workspaceRoot: root })
 
@@ -40,21 +40,12 @@ test('Campaign is a singleton control record, not a Project; acknowledgements ca
   assert.equal(legion.campaign().state, 'allocation checkpoint')
 })
 
-test('role metadata persists; General may create exactly two same-task squads in its delegated Goal', t => {
-  const { store, legion, project } = fixture(t)
-  const goal = store.addGoal(project.id, 'delegated goal')
-  const parent = legion.spawn(project.id, { ...mission, goalId: goal.id })
-  const run = store.claim(project.id, 'execute', worker, parent.id)
-  const chore = { ...mission, parentRunId: run.id, role: 'soldier' as const }
-  assert.equal(legion.spawn(project.id, chore).parentStepId, parent.id)
-  assert.throws(() => legion.spawn(project.id, { ...chore, taskKey: 'other' }), /same-task/)
-  assert.throws(() => legion.spawn(project.id, { ...chore, goalId: 'goal' }), /escapes/)
-  assert.throws(() => legion.spawn(project.id, { ...chore, role: 'general' }), /same-task/)
-  const second = legion.spawn(project.id, { ...chore, role: 'soldier' })
-  assert.equal(second.role, 'soldier')
-  assert.throws(() => legion.spawn(project.id, chore), /two active squads/)
-  assert.throws(() => store.addStep(project.id, { ...mission, role: 'invalid' as any }), /Invalid Legion role/)
-  assert.throws(() => store.addStep(project.id, { ...mission, taskKey: '' }), /taskKey/)
+test('General rejects delegation, specialists and foreign fixed roles',t=>{
+ const {store,legion,project}=fixture(t),parent=legion.spawn(project.id,mission),run=store.claim(project.id,'execute',worker,parent.id)
+ assert.throws(()=>legion.spawn(project.id,{...mission,parentRunId:run.id}),/not specialist squads/)
+ assert.throws(()=>store.addStep(project.id,{...mission,specialist:{name:'expert',responsibilities:'x',capabilities:['x'],scope:'x'}}),/no specialist Agents/)
+ assert.throws(()=>store.addStep(project.id,{...mission,role:'invalid' as any}),/Invalid general role/)
+ assert.throws(()=>store.addStep(project.id,{...mission,taskKey:''}),/taskKey/)
 })
 
 test('Park survives Run completion, prevents claim/spawn, and requires confirmed stop for reactivation', t => {
@@ -240,7 +231,7 @@ test('HTTP Step schema persists roles and Project artifact endpoint enforces bou
   const project = (await created.json()).project
   const stepResponse = await fetch(base + '/v2/projects/' + project.id + '/steps', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(mission) })
   assert.equal(stepResponse.status, 201)
-  assert.equal((await stepResponse.json()).role, 'general')
+  assert.equal((await stepResponse.json()).role, 'worker')
   mkdirSync(path.join(engine.configuration.workspaceRoot, project.id), { recursive: true })
   const artifact = engine.evidence.publish(project.id, Buffer.from('http proof'), { description: 'fixture' })
   const response = await fetch(base + '/v2/projects/' + project.id + '/evidence/' + artifact.id + '?length=4')

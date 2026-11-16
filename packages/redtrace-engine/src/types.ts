@@ -1,3 +1,4 @@
+import type { FixedRole } from '../../redtrace-dsh/src/roles.ts'
 export type Activity = 'decide' | 'execute'
 export type ProjectStatus = 'active' | 'stopped' | 'completed' | 'deleting'
 export type StepStatus = 'pending' | 'running' | 'paused' | 'parked' | 'blocked' | 'done' | 'cancelled'
@@ -20,11 +21,12 @@ export interface ProjectGraph {
   status: 'active' | 'completed'; originId: string; goalId: string; createdAt: string; updatedAt: string
   revision: number; factSeq: number; evidenceSeq: number; hintSeq: number; endedSeq: number
 }
-export type LegionRole = 'general' | 'soldier' | 'scout' | 'reporter'
+export type LegionRole = Exclude<FixedRole, 'commander' | 'planner'> | 'reporter'
 export interface Evidence { path?: string; artifactId?: string; runId?: string; toolCallId?: string; description: string }
 export interface Specialist { name: string; responsibilities: string; capabilities: string[]; scope: string }
 export interface LegionAssignment {
   specialist?: Specialist
+  reportFindingId?: string
   role?: LegionRole; taskKey?: string; parentStepId?: string
   parkReason?: string; resumeCondition?: string
   predecessorRunId?: string; handoff?: string; handoffPending?: boolean; nextWorker?: string
@@ -34,7 +36,7 @@ export interface NodeBase { graphId?: string | null; id: string; projectId: stri
 export interface Fact extends NodeBase { producerRunId?:string; kind: 'fact'; title: string; description: string; doc?: Evidence; stepId: string | null; evidence: Evidence[]; producerStepIds?: string[] }
 export interface Goal extends NodeBase { kind: 'goal'; description: string; parentId: string | null; status: 'open' | 'achieved' | 'cancelled'; evidenceIds: string[] }
 export interface Step extends NodeBase, LegionAssignment {
-  kind: 'step'; description: string; goalId: string; sourceIds: string[]; factIds: string[]
+  kind: 'step'; description: string; goalId: string; sourceIds: string[]; dependsOn?: string[]; factIds: string[]
   status: StepStatus; priority: number; worker: string | null; executionProfile: 'direct' | 'isolated'
   /** Legacy declarations; ignored by execution. */
   requires?: string[]; attempts: number; endedAt: string | null; failure: string | null
@@ -66,7 +68,7 @@ export interface Run {
   predecessorRunId?: string; handoff?: string
 }
 export interface Worker {
-  roles?: (LegionRole | 'commander')[]
+  roles?: FixedRole[]
   name: string; provider: string; model: string; enabled: boolean
   /** Capabilities from the worker configuration: Decide, ordinary Steps, bootstrap Steps. */
   reason?: boolean; explore?: boolean; bootstrap?: boolean

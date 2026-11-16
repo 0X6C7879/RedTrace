@@ -12,7 +12,7 @@ export function workerInstances(store: Store, projectId: string) {
   const counts = new Map<string,number>()
   const evidence=new Map(store.db.prepare("SELECT json_extract(data,'$.producerRunId') AS producer,COUNT(*) AS n FROM nodes WHERE project_id=? AND kind IN ('fact','finding') GROUP BY producer").all(projectId).map(r=>[String(r.producer),Number(r.n)]))
   return store.runs(projectId).filter(r=>r.stepId).map(run=>{
-    const step=steps.get(run.stepId!)!, role=step.specialist?.name ?? ({soldier:'Soldier',general:'General',scout:'Scout',reporter:'Reporter'}[step.role??'soldier'])
+    const step=steps.get(run.stepId!)!, role=step.specialist?.name ?? ({soldier:'Soldier',general:'General',scout:'Scout',reporter:'Reporter',worker:'Worker'}[step.role??'soldier'])
     const n=(counts.get(role)??0)+1; counts.set(role,n)
     const tokens=run.inputTokens+run.outputTokens+run.cacheReadTokens+run.cacheWriteTokens
     const facts=evidence.get(run.id)??0

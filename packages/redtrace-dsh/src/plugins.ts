@@ -253,7 +253,7 @@ const MANAGED: readonly ManagedEntry[] = [
   },
 ]
 
-const PRESETS: readonly PresetEntry[] = (['commander','general','soldier','scout'] as const).map(role => ({ id: 'redtrace-' + role, label: role + ' 预设', category: 'preset', preset: role, description: 'Legion ' + role + ' Mission', intro: role === 'commander' ? '全局规划、资源分配与证据验收；不直接操作目标。' : '共享 FGS 的独立 DSH 角色会话，保留原生工具与执行隔离。' }))
+const PRESETS: readonly PresetEntry[] = (['commander','general','soldier','scout','planner','worker'] as const).map(role => ({ id: 'redtrace-' + role, label: role + ' 预设', category: 'preset', preset: role, description: 'Legion ' + role + ' Mission', intro: role === 'commander' ? '全局规划、资源分配与证据验收；不直接操作目标。' : '共享 FGS 的独立 DSH 角色会话，保留原生工具与执行隔离。' }))
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,47}$/
 const SETTLE_TIMEOUT_SECONDS = 10
@@ -360,6 +360,10 @@ export class PluginManager {
           enabled: Array.isArray(parsed.enabled) ? [...new Set(parsed.enabled.filter(v => typeof v === 'string').map(v => v === 'redtrace-browser-http' ? 'redtrace-http' : v))] : [],
           user: Array.isArray(parsed.user) ? parsed.user : [],
         }
+        const oldExecutors = ['redtrace-leader','redtrace-operator']
+        if(oldExecutors.every(id=>this.manifest.disabled!.includes(id)))this.manifest.disabled!.push('redtrace-worker')
+        this.manifest.disabled = this.manifest.disabled!.filter(id=>!oldExecutors.includes(id))
+        this.manifest.enabled = [...new Set(this.manifest.enabled!.map(id=>oldExecutors.includes(id)?'redtrace-worker':id))]
         return
       }
     } catch {

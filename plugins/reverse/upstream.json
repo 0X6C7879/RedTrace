@@ -11,5 +11,8 @@
     "reverse-engineer-anything/references/javascript-applications.md": "04cc298e2485d1db7925b8789097fc5fdd042e937ed11980d3eabc29cb176e59",
     "reverse-engineer-anything/references/native-and-artifacts.md": "1947af57448ba7be6a0736ffbe976c7ecdab4105f315ecc06c830727cc5205fe",
     "reverse-engineer-anything/references/runtime-observation.md": "b3eea94dd7d0c6474634de22ac3ccae317f42ba1ba2389d93535ee8dae7d94e1"
+  },
+  "redtraceOverrides": {
+    "reverse-engineer-anything/SKILL.md": "d65c8491013c042993467ed604e5a6d9883187270139ef997727f1473e14e6cf"
   }
 }

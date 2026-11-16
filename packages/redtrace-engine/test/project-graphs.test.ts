@@ -34,9 +34,9 @@ test('three Benchmark Graphs isolate nodes, references, Run, events and completi
 test('General directly funds Soldier or General without Scout classification; scoped tools reject foreign Project',async()=>{
  const s=new Store(':memory:');try{const p=create(s,'General'),other=create(s,'other'),l=new LegionStore(s,p.id);l.claimCommand()
  assert.equal(s.projectGraphs(p.id).length,1);assert.throws(()=>s.createGraph(p.id,{taskKey:'x',title:'x',origin:'o',goal:'g'}))
- const tools=legionTools(s.forProject(p.id),'commander',p.id,null,()=>{}),spawn=tools.find(t=>t.name==='legion_spawn')!
- for(const role of ['soldier','general'])await spawn.execute('',{projectId:p.id,taskKey:role,role,description:'direct',sourceIds:['origin']})
- assert.equal(s.graph(p.id).steps.length,2)
+ const tools=legionTools(s.forProject(p.id),'commander',p.id,null,()=>{}),spawn=tools.find(t=>t.name==='legion_step')!
+ for(const role of ['worker'])await spawn.execute('',{projectId:p.id,description:'direct',sourceIds:['origin']})
+ assert.equal(s.graph(p.id).steps.length,1)
  await assert.rejects(()=>spawn.execute('',{projectId:other.id,taskKey:'x',role:'soldier',description:'cross',sourceIds:['origin']}))
  }finally{s.close()}
 })

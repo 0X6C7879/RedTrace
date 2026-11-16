@@ -59,9 +59,9 @@
 
 /* Role colors are shared with the audit timeline; custom Agent names retain their real role. */
 .wb-message { --wb-role: var(--rt-text-muted); width: 100%; max-width: 56rem; margin: 1.25rem auto; padding: .25rem 0 .25rem 1rem; border: 0; border-left: 2px solid var(--wb-role); border-radius: 0; background: transparent; color: var(--rt-text); }
-.wb-message[data-role=commander], .wb-message[data-role=chief] { --wb-role: var(--rt-cyan); }
+.wb-message[data-role=planner], .wb-message[data-role=commander], .wb-message[data-role=chief] { --wb-role: var(--rt-cyan); }
 .wb-message[data-role=general] { --wb-role: var(--rt-amber); }
-.wb-message[data-role=soldier] { --wb-role: var(--rt-violet); }
+.wb-message[data-role=worker], .wb-message[data-role=soldier] { --wb-role: var(--rt-violet); }
 .wb-message[data-role=scout] { --wb-role: var(--rt-green); }
 .wb-message[data-role=user] { --wb-role: var(--rt-text); }
 body .wb-message[data-side=right] { width: fit-content; max-width: 85%; margin-left: auto; margin-right: 0; padding: .8rem 1rem; border: 1px solid var(--rt-border-soft); border-radius: 16px; background: #101010; }
@@ -145,3 +145,5 @@ body .wb-message pre { font-size: .8125rem; line-height: 1.7; color: var(--rt-te
 .wb-messages .audit-event[data-side=right]>time{position:static;display:block;width:auto;text-align:right;margin-bottom:.25rem}
 .wb-messages .audit-event[data-side=right]>.min-w-0{padding:.65rem .85rem;border:1px solid var(--rt-border-soft);border-radius:16px;background:var(--rt-surface)}
 .wb-messages .audit-event[data-side=right] .runtime-event-heading{justify-content:flex-end}
+
+.provider-planner{color:var(--rt-coral)}.provider-dot-planner{background:var(--rt-coral)}.provider-worker{color:var(--rt-violet)}.provider-dot-worker{background:var(--rt-violet)}

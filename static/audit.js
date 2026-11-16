@@ -458,7 +458,7 @@ function auditPage() {
         commander: 'Commander',
         general: 'General',
         soldier: 'Soldier',
-        scout: 'Scout',
+        scout: 'Scout', planner:'Planner', worker:'Worker',
         reporter: 'Reporter',
         dsh: 'DSH',
         mock: 'Mock',

@@ -18,14 +18,14 @@ test('fixed role schemas preserve planning ownership and specialists inherit Sol
    assert.equal(commander.includes('legion_accept'),mode==='general')
    assert(!commander.some(name=>/^(submit_|resource_|remote_|mcp__)/.test(name)))
    let plain:string[]=[]
-   for(const role of ['general','soldier','scout','reporter','specialist']){
+   for(const role of (mode==='benchmark'?['general','soldier','scout','reporter','specialist']:['worker','report'])){
     if(mode==='general'&&role==='scout')continue
     const graph=mode==='benchmark'?store.createGraph(p.id,{taskKey:role,title:role,origin:'fixture',goal:'verify'}):store.projectGraphs(p.id)[0]
-    const step=store.forGraph(p.id,graph.id).addStep(p.id,{role:(role==='specialist'?'soldier':role) as LegionRole,taskKey:role,description:'fixture',sourceIds:[graph.originId],goalId:graph.goalId,...(role==='specialist'?{specialist:{name:'reverse',responsibilities:'analyze',capabilities:['reverse'],scope:'fixture'}}:{})})
+    const step=store.forGraph(p.id,graph.id).addStep(p.id,{role:(role==='specialist'||role==='report'?(mode==='benchmark'?'soldier':'worker'):role) as LegionRole,...(role==='report'?{reportFindingId:'fixture-finding'}:{}),taskKey:role,description:'fixture',sourceIds:[graph.originId],goalId:graph.goalId,...(role==='specialist'?{specialist:{name:'reverse',responsibilities:'analyze',capabilities:['reverse'],scope:'fixture'}}:{})})
     const run=store.claim(p.id,'execute',worker,step.id),context={store:store.forGraph(p.id,graph.id),run,worker,config,signal:new AbortController().signal}
     const tools=graphTools(context,()=>{}),names=tools.map(t=>t.name)
-    assert.equal(names.includes('legion_spawn'),role==='general')
-    if(role==='reporter')assert.deepEqual(names.sort(),['evidence_read','project_evidence_read','read_execution','read_graph','read_graph_delta','update_finding_report'].sort())
+    assert.equal(names.includes('legion_spawn'),mode==='benchmark'&&role==='general')
+    if(role==='reporter'||role==='report')assert.deepEqual(names.sort(),['evidence_read','project_evidence_read','read_execution','read_graph','read_graph_delta','update_finding_report'].sort())
     else {
      assert(names.includes('submit_fact'));assert(names.includes('legion_handoff'))
      assert.equal(names.includes('TodoWrite'),mode==='benchmark'&&['general','soldier','specialist'].includes(role))
@@ -33,7 +33,7 @@ test('fixed role schemas preserve planning ownership and specialists inherit Sol
      const resources=resourceTools(context,{operations:{}} as any).map(t=>t.name)
      assert.equal(resources.includes('resource_register'),role!=='scout')
     }
-    if(role==='soldier')plain=names
+    if(role==='soldier'||role==='worker')plain=names
     if(role==='specialist')assert.deepEqual(names,plain)
     store.finishRun(run.id,'cancelled')
    }

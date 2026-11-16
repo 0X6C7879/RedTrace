@@ -1,3 +1,4 @@
+import { FIXED_ROLES } from '../../redtrace-dsh/src/roles.ts'
 import { Type } from 'typebox'
 import { createHash } from 'node:crypto'
 import { body } from './http.ts'
@@ -8,7 +9,7 @@ import type { ProbeModel } from './index.ts'
 
 const text = Type.String({ minLength: 1 }), revision = Type.String({ minLength: 64, maxLength: 64, pattern: '^[a-f0-9]+$' })
 const positive = Type.Integer({ minimum: 1 }), policy = Type.Union(['auto_max', 'max', 'xhigh', 'high', 'medium', 'low', 'minimal', 'off'].map(v => Type.Literal(v)))
-const workerSchema = Type.Object({ expected_revision: revision, original_name: Type.Optional(Type.Union([text, Type.Null()])), name: text, provider: text, roles: Type.Optional(Type.Array(Type.Union(['commander','general','soldier','scout'].map(role => Type.Literal(role))), { uniqueItems: true })), model: Type.Optional(text), enabled: Type.Optional(Type.Boolean()), priority: Type.Integer(), max_running: positive })
+const workerSchema = Type.Object({ expected_revision: revision, original_name: Type.Optional(Type.Union([text, Type.Null()])), name: text, provider: text, roles: Type.Optional(Type.Array(Type.Union(FIXED_ROLES.map(role => Type.Literal(role))), { uniqueItems: true })), model: Type.Optional(text), enabled: Type.Optional(Type.Boolean()), priority: Type.Integer(), max_running: positive })
 const providerSchema = Type.Object({ expected_revision: revision, name: text, api: Type.Optional(Type.Union(['openai-completions', 'openai-responses', 'anthropic-messages'].map(v => Type.Literal(v)))), base_url: text, api_key: Type.Optional(Type.Union([Type.String(), Type.Null()])), api_key_env: Type.Optional(Type.Union([Type.String(), Type.Null()])), models: Type.Array(Type.Object({ id: text, context_window: Type.Optional(positive), max_tokens: Type.Optional(positive), reasoning: Type.Optional(policy), reasoning_efforts: Type.Optional(Type.Union([Type.Record(Type.String(), Type.Union([Type.String(), Type.Null()])), Type.Boolean(), Type.Null()])), thinking_format: Type.Optional(Type.Union(['auto', 'deepseek', 'openai', 'none'].map(v => Type.Literal(v)))) }), { minItems: 1 }) })
 export function configRoutes(router: Router, configuration: Configuration, probeModel?: ProbeModel) {
   const checkRevision = (expected: string) => { if (configuration.read().revision !== expected) throw new HttpError(409, 'worker configuration changed; reload before saving') }
@@ -47,7 +48,7 @@ export function configRoutes(router: Router, configuration: Configuration, probe
   })
   const task = Type.Object({ timeout: Type.Integer({ minimum: 5 }), conclude_timeout: Type.Integer({ minimum: 5 }) })
   router.add('PUT', '/worker-config/runtime-tasks', async c => {
-    const b = await body(c.req, Type.Object({ expected_revision: revision, runtime: Type.Object({ max_workers: positive, max_project_workers: positive, max_running_projects: positive }), tasks: Type.Object({ commander: Type.Object({ timeout: Type.Integer({ minimum: 5 }), conclude_timeout: Type.Integer({ minimum: 5 }), max_intents: Type.Optional(positive) }), general: task, soldier: task, scout: task }) }))
+    const b = await body(c.req, Type.Object({ expected_revision: revision, runtime: Type.Object({ max_workers: positive, max_project_workers: positive, max_running_projects: positive }), tasks: Type.Object({ commander: Type.Object({ timeout: Type.Integer({ minimum: 5 }), conclude_timeout: Type.Integer({ minimum: 5 }), max_intents: Type.Optional(positive) }), general: task, soldier: task, scout: task, planner: Type.Optional(task), worker: Type.Optional(task) }) }))
     return configuration.commit(b.expected_revision, raw => { raw.runtime = { ...raw.runtime, ...b.runtime }; raw.tasks = b.tasks })
   })
   router.add('PUT', '/worker-config/common-env', async c => {

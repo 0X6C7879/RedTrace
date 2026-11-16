@@ -18,10 +18,17 @@ export async function retainedReverseContracts(): Promise<any[]> {
   const base = pathToFileURL(path.join(repoRoot, 'node_modules/rea-agents/dist/'))
   const { TOOL_CONTRACTS } = await import(new URL('contracts/toolContracts.js', base).href)
   const { MCP_TOOLS_WITHOUT_DEDICATED_CLI } = await import(new URL('cliCommandNames.js', base).href)
-  // CLI one-shots close their Program; keep hot queries on the shared analysis session.
-  const retained = new Set([...MCP_TOOLS_WITHOUT_DEDICATED_CLI, 'binary_overview', 'analyze_function',
-    'procedure_pseudo_code', 'read_function_instructions', 'search_strings', 'search_procedures'])
-  return TOOL_CONTRACTS.filter((tool: any) => retained.has(tool.name))
+  // Path-based analysis uses CLI; these operations require the live Program,
+  // Hopper navigation/annotations, or this server's retained Evidence context.
+  const stateful = new Set(['open_binary','close_binary','binary_session',
+    'list_documents','goto_address','next_address','prev_address','list_bookmarks',
+    'set_address_name','set_addresses_names','set_bookmark','unset_bookmark','set_comment','set_inline_comment',
+    'get_navigation_context','inspect_address_context',
+    'export_evidence_bundle','import_evidence_bundle','get_evidence_bundle',
+    'compare_artifacts','compare_functions','find_changed_behavior','build_call_path',
+    'correlate_static_and_runtime','verify_reconstruction','list_unknowns','record_unknown',
+    'update_unknown','verify_unknown_resolution'])
+  return TOOL_CONTRACTS.filter((tool: any) => stateful.has(tool.name) && MCP_TOOLS_WITHOUT_DEDICATED_CLI.includes(tool.name))
 }
 
 /** Use REA's own wire-schema projection without starting an MCP or analysis process. */
@@ -59,7 +66,9 @@ export function reverseEnvironment(env: NodeJS.ProcessEnv = process.env): Record
 
 /** Context carries native DSH services loaded dynamically by the adapter. */
 export async function apply(ctx: any, config: { cwd: string; toolEnabled?: (name: string) => boolean }): Promise<void> {
-  const cliCall = process.platform === 'win32' ? 'node $env:DSH_REA_CLI' : 'node "$DSH_REA_CLI"'
+  const bin = path.join(repoRoot, 'node_modules/.bin')
+  if (!(process.env.PATH ?? '').split(path.delimiter).includes(bin)) process.env.PATH = bin + path.delimiter + (process.env.PATH ?? '')
+  const cliCall = 'rea'
   const cli = path.join(repoRoot, 'node_modules/rea-agents/scripts/rea.mjs')
   await mount(ctx, `${VENDOR}/skill/skill-filesystem/lib/index.js`, {
     providerName: 'redtrace-reverse', includeDefaultRoots: false,
@@ -145,7 +154,7 @@ export async function apply(ctx: any, config: { cwd: string; toolEnabled?: (name
       let notice: string
       try {
         await ensure()
-        notice = `Prefer the pinned REA CLI through Shell for path-based analysis; use --help for exact commands. Only fixed stateful MCP operations and hot native queries remain registered for this Run; there is no tool-group selector. Use bounded output, CLI inspect-analysis-view and Evidence IDs. CLI: ${cliCall}. Export evidence before finishing; validate observations before submitting FGS Fact/Finding. On provider failure try supported alternatives once, then record the blocker. CTF fallback knowledge remains in ctf-reverse; legacy engines are retained where replacement is unverified.`
+        notice = `Prefer the pinned REA CLI through Shell for path-based analysis; use --help for exact commands. Only fixed stateful MCP operations remain registered for this Run; there is no tool-group selector. Use bounded output, CLI inspect-analysis-view and Evidence IDs. CLI: ${cliCall}. Export evidence before finishing; validate observations before submitting FGS Fact/Finding. On provider failure try supported alternatives once, then record the blocker. CTF fallback knowledge remains in ctf-reverse; legacy engines are retained where replacement is unverified.`
       } catch (error) {
         notice = JSON.stringify({ status: 'unavailable', component: 'rea_mcp', reason: String(error), fallback: 'Use the pinned CLI or retained CTF tools; do not install interactively or retry without resolving the blocker.' })
       }

@@ -46,11 +46,11 @@ const model=createServer(async(req,res)=>{
    else if(unread){name='legion_read_node';args={projectId:project.id,id:unread.id,detail:'doc'}}
    else if(!calls.includes('TodoWrite')){
    name='TodoWrite';args={projectId:project.id,graphId:graph.id,todos:wake<3?initial:[{content:'verify entry',status:'completed'},{content:'verify credentials',status:credentials?'completed':'in_progress'}]}
-  }else if(wake===1&&calls.filter(n=>n==='legion_spawn').length<3){
-   const n=calls.filter(n=>n==='legion_spawn').length
-   name='legion_spawn';args={projectId:project.id,graphId:graph.id,taskKey:'main',role:'soldier',description:n===0?'stage 1 entry':('independent '+n),sourceIds:[graph.originId],goalId:graph.goalId}
-  }else if(wake===3&&!calls.includes('legion_spawn')){
-   name='legion_spawn';args={projectId:project.id,graphId:graph.id,taskKey:'main',role:'soldier',description:'stage 2 credentials',sourceIds:[entry.id],goalId:graph.goalId}
+  }else if(wake===1&&calls.filter(n=>n==='legion_step').length<3){
+   const n=calls.filter(n=>n==='legion_step').length
+   name='legion_step';args={projectId:project.id,description:n===0?'stage 1 entry':('independent '+n),sourceIds:[graph.originId],goalId:graph.goalId}
+  }else if(wake===3&&!calls.includes('legion_step')){
+   name='legion_step';args={projectId:project.id,description:'stage 2 credentials',sourceIds:[entry.id],goalId:graph.goalId}
   }else{name='legion_finish';args={processed:{},state:'Verified fixture STATE wake '+wake}}
   res.writeHead(200,{'Content-Type':'text/event-stream'})
   res.end('data: '+JSON.stringify({id:'fixture',object:'chat.completion.chunk',created:1,model:'fixture',choices:[{index:0,delta:{tool_calls:[{index:0,id:'call-'+requests,type:'function',function:{name,arguments:JSON.stringify(args)}}]},finish_reason:'tool_calls'}]})+'\n\ndata: [DONE]\n\n')
@@ -60,7 +60,7 @@ try{
  await new Promise(r=>model.listen(0,'127.0.0.1',r))
  configuration.commit(configuration.read().revision,raw=>{
   raw.providers={fixture:{api:'openai-completions',base_url:'http://127.0.0.1:'+model.address().port+'/v1',api_key:'fixture',models:[{id:'fixture',context_window:100000,max_tokens:1000,reasoning:'off',reasoning_efforts:false}]}}
-  raw.workers=[{name:'commander',roles:['commander'],provider:'fixture',model:'fixture',max_running:8}]
+  raw.workers=[{name:'commander',roles:['planner'],provider:'fixture',model:'fixture',max_running:8}]
   raw.runtime={max_workers:8,max_project_workers:8,max_running_projects:2}
  })
  const {Context}=await load('vendor/deepseek-harness/vendor/cordis/lib/index.js');ctx=new Context()

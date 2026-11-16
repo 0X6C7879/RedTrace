@@ -7,14 +7,14 @@
 根依赖安装。本次不构建 Docker。运行时不执行 npm/npx 下载或交互式 setup。
 
 插件管理页中的 **Reverse Engineering** 对应 `redtrace-reverse`，默认启用、按需装载。
-REA 默认开启，由 Explore 自主按需加载，Reason 不再通过 Step.requires/plugins 控制工具。
+REA 默认开启，由 Soldier / Scout / General / Operator / Leader 执行 Worker 按需加载，Commander / Planner 不获得分析工具。
 管理员明确停止会持久化禁用并撤销活动 Run 的本插件 Skill/MCP/分析能力，但不取消 Step 或阻止 Reason 规划。
 历史 Step 声明仅兼容读取，新 Step 不保存这些字段，也不因工具声明触发 Replace。
 每个启用插件的 Explore 都能发现官方 Skill 与 CLI；未加载 Skill 时 MCP 不连接、不启动分析引擎。
 Explore 调用原生 `skill({name:"reverse-engineer-anything"})`，自动创建
 该 Run 私有的 DSH MCP Client，不启动 Ghidra。
-加载 Skill 后仅注册固定的上游 MCP-only 集合及六个需要复用同一 Program 的高频原生查询。
-其余路径型分析通过 `node "$DSH_REA_CLI" --help` 查询并用原生 Shell 执行；
+加载 Skill 后注册 29 个无等价 CLI 的 Program 生命周期、Hopper 导航/注释和内存 Evidence 操作。
+静态分析、函数、字符串、反汇编和伪代码通过 PATH 中的 `rea --help` 查询并用原生 Shell 执行；
 不再注册 `reverse_tools` 或按目标自动扩展类别。上游 CLI 每次打开/关闭自己的分析会话，
 不能等价替换持久 Program、注释和内存 Evidence，因此这些 MCP 操作保留。
 
@@ -22,15 +22,15 @@ Explore 调用原生 `skill({name:"reverse-engineer-anything"})`，自动创建
 本地 `mcp/rea.json` 的服务器名保留给该插件，不再被全局 Domain 重复挂载，
 其他 MCP 配置不变。已有 REA 配置不会被删除，其个性化引擎设置请放入
 `common_env`（或启动环境中的 `REA_*`、`GHIDRA_INSTALL_DIR`、`JAVA_HOME`）。
-CLI 仍由原生 shell 调用 `node "$DSH_REA_CLI" ...`，无需分析代理。
+CLI 由原生 shell 直接调用 `rea ...`（部署包的 node_modules/.bin 加入 PATH），无需分析代理。
 通用 shell 能访问系统安装的 rea，停用不是系统级执行禁止。
 
 ## 引擎与边界
 
 遵循 [REA 官方实现](https://github.com/morluto/rea) 和锁定版本 npm 包；
-官方 Skill 及其六个 references 原样放在 `plugins/reverse/skills/`，不进入
+Skill 与六个上游 references 放在 `plugins/reverse/skills/`，不进入
 全局 managed Skill 根，不提前注入 Skill 正文。`plugins/reverse/upstream.json`
-记录版本、审阅提交和逐文件 SHA256；测试对照安装包验证全部字节与相对引用。
+记录版本、审阅提交和逐文件 SHA256；上游逐文件哈希保留，CLI-first 的本地 Skill 适配单列 redtraceOverrides；references 仍逐字节对照安装包验证。
 现有 [DSH 原生 MCP Client](https://github.com/deepseek-ai/deepseek-harness)
 负责通信、协议、输入校验、错误处理与连接关闭，没有第二套 MCP 协议。
 
@@ -49,7 +49,7 @@ JS 分析和显式 `analysis_timeout_ms` / `timeout_ms` 同样留出上游工作
 Run 生命周期拥有私有 REA 服务，底层 Ghidra 私有 project/process group 由
 REA 原生监督器管理。DSH 关闭 stdio 后 REA 的 EOF/SIGTERM 流程释放分析
 资源；插件还取消自己的活动调用并清理分配的临时目录。不共享 Worker/Step
-Session 或缓存。复用同一 Run 的连接与分析 Program，不为查询重复启动引擎。
+Session 或缓存。保留的 MCP 复用同一 Run 的连接和 Program；CLI 是独立 one-shot，重复静态分析可使用上游 --snapshot，不伪装成与内存 Program 等价。Ghidra 不支持的 Hopper 注释操作按上游返回 capability_unavailable，不新增代理或降级。
 
 ## Evidence 与零人工执行
 
@@ -93,3 +93,5 @@ REDTRACE_REA_REAL_TESTS=1 node --test packages/redtrace-dsh/test/reverse.test.mj
 
 实际数据和环境限制记录在 `docs/rea-acceptance.md`；Mock/契约、原生引擎、
 实际模型测评分别报告，不互相替代。
+
+本次具体保留清单与 Schema 计数见 [角色与工具系统](role-tool-system.md)。

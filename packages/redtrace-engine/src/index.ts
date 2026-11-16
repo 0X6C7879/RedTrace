@@ -1,3 +1,4 @@
+import { executionRole } from '../../redtrace-dsh/src/roles.ts'
 import { HttpError } from './types.ts'
 import { Type } from 'typebox'
 import { LegionExperience } from './legion-experience.ts'
@@ -65,8 +66,8 @@ export async function createEngine(options: { root: string; database?: string; c
     const uploads=chats.owned(chats.entry(b.projectId).id,b.attachmentIds??[])
     if(!b.content.trim()&&!uploads.length)throw new HttpError(422,'Message or attachment required')
     const config=configuration.resolvedSnapshot().config
-    if(b.worker&&!conversationWorker(config,b.worker))throw new HttpError(422,'Select an enabled DSH Commander model route')
-    if(b.reasoning){const route=b.worker??legion.campaign(b.projectId).nextWorker,choices=chats.models?await chats.models():configuredConversationModels(config);if(!route||!choices.find(w=>w.name===route)?.reasoningEfforts.includes(b.reasoning))throw new HttpError(422,'Selected model does not support this reasoning effort')}
+    if(b.worker&&!conversationWorker(config,b.worker,store.project(b.projectId).mode))throw new HttpError(422,'Select an enabled DSH Commander model route')
+    if(b.reasoning){const route=b.worker??legion.campaign(b.projectId).nextWorker,choices=chats.models?await chats.models(store.project(b.projectId).mode):configuredConversationModels(config,store.project(b.projectId).mode);if(!route||!choices.find(w=>w.name===route)?.reasoningEfforts.includes(b.reasoning))throw new HttpError(422,'Selected model does not support this reasoning effort')}
     return store.transaction(()=>{
       if(b.worker!==undefined||b.reasoning!==undefined){const campaign=legion.campaign(b.projectId);if(b.worker!==undefined)campaign.nextWorker=b.worker??undefined;if(b.reasoning!==undefined)campaign.reasoning=b.reasoning??undefined;legion.saveCampaign(campaign)}
       return store.commanderInput(b.projectId,b.content||'用户上传了附件','human',undefined,uploads.map(u=>({type:u.type,attachment:u.attachment})))
@@ -77,7 +78,7 @@ export async function createEngine(options: { root: string; database?: string; c
   router.add('POST','/v2/legion/experience',async c=>{const b=await body(c.req,Type.Object({projectId:text,family:text,title:text,body:text,factIds:refs}));return experience.capture(b.projectId,b)})
   router.add('POST','/v2/legion/transfer',async c=>{const b=await body(c.req,Type.Object({sourceId:Type.Integer({minimum:1}),targetProject:text,taskKey:text,brief:text}));return experience.transfer(b.sourceId,b.targetProject,b.taskKey,b.brief)})
   router.add('POST','/v2/legion/transfer/:id/confirm',async c=>{const b=await body(c.req,Type.Object({projectId:text,factIds:refs}));return experience.confirm(c.params.id,b.projectId,b.factIds)})
-  router.add('POST','/v2/legion/reassign',async c=>{const b=await body(c.req,Type.Object({projectId:text,runId:text,nextWorker:text,summary:text})),run=store.run(b.runId);if(run.projectId!==b.projectId||!run.stepId)throw new HttpError(403,'Run does not belong to Project');const step=store.node<import('./types.ts').Step>(b.projectId,run.stepId,'step');if(!configuration.resolvedSnapshot().config.workers.some(w=>w.name===b.nextWorker&&w.enabled&&w.roles?.includes(step.role??'soldier')))throw new HttpError(422,'Model route does not support the same role');return legion.requestHandoff(run.id,b.summary,b.nextWorker)})
+  router.add('POST','/v2/legion/reassign',async c=>{const b=await body(c.req,Type.Object({projectId:text,runId:text,nextWorker:text,summary:text})),run=store.run(b.runId);if(run.projectId!==b.projectId||!run.stepId)throw new HttpError(403,'Run does not belong to Project');const step=store.node<import('./types.ts').Step>(b.projectId,run.stepId,'step');if(!configuration.resolvedSnapshot().config.workers.some(w=>w.name===b.nextWorker&&w.enabled&&w.roles?.includes(executionRole(store.project(step.projectId).mode,step.role))))throw new HttpError(422,'Model route does not support the same role');return legion.requestHandoff(run.id,b.summary,b.nextWorker)})
   router.add('GET','/v2/legion/experience',c=>experience.search(c.url.searchParams.get('query')??'',c.url.searchParams.get('family')??undefined))
   graphRoutes(router, store, () => configuration.resolvedSnapshot().config.maxSteps, (projectId, graphId) => legion.planningTodos(projectId).list(graphId), configuration.workspaceRoot)
   router.add('GET', '/v2/projects/:project/evidence/:artifact', c => new ProjectEvidence(c.url.searchParams.has('graphId')?store.forGraph(c.params.project,c.url.searchParams.get('graphId')!):store.forProject(c.params.project),configuration.workspaceRoot).read(c.params.project, c.params.artifact, queryNumber(c.url, 'offset', 0), queryNumber(c.url, 'length', 7600, 1, 7600)))

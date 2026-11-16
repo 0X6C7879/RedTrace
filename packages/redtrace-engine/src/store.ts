@@ -1,3 +1,4 @@
+import { LEGACY_GENERAL_ROLES, executorRole, isReportStep } from '../../redtrace-dsh/src/roles.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
@@ -160,15 +161,18 @@ export class Store {
     this.migrateProjectGraphs()
     if(!this.db.prepare('PRAGMA table_info(global_chats)').all().some(c=>c.name==='project_id'))this.db.exec('ALTER TABLE global_chats ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE CASCADE')
     this.migrateFactTitles()
-    this.migrateGeneralScouts()
+    this.migrateGeneralRoles()
     this.changes.setMaxListeners(0)
   }
-  private migrateGeneralScouts() {
+  private migrateGeneralRoles() {
     this.transaction(()=>{
-      for(const row of this.db.prepare("SELECT n.data FROM nodes n JOIN projects p ON p.id=n.project_id WHERE n.kind='step' AND json_extract(p.data,'$.mode')='general' AND json_extract(n.data,'$.role')='scout'").all()) {
+      const roles = LEGACY_GENERAL_ROLES
+      for(const row of this.db.prepare("SELECT n.data FROM nodes n JOIN projects p ON p.id=n.project_id WHERE n.kind='step' AND json_extract(p.data,'$.mode')='general' AND (json_extract(n.data,'$.role') IN ('general','soldier','scout','reporter','leader','operator') OR json_extract(n.data,'$.role') IS NULL)").all()) {
         const step=JSON.parse(String(row.data)) as Step
-        step.role='soldier';this.saveNode(step)
-        this.event(step.projectId,'legion.role_migrated',step,{reason:'General Scout removed; existing mission continues as Soldier, native history preserved'})
+        if(step.role==='reporter') step.reportFindingId=step.sourceIds[0]
+        step.role=(step.role?roles[step.role]:'worker') as Step['role']
+        delete step.specialist; delete step.parentStepId; this.saveNode(step)
+        this.event(step.projectId,'legion.role_migrated',step,{reason:'General fixed roles: Planner / Worker; native history preserved'})
       }
     })
   }
@@ -419,7 +423,6 @@ export class Store {
       if(p.mode==='general') this.saveNode({ id: 'goal', projectId: id, kind: 'goal', description: goal, creator: 'human', createdAt, parentId: null, status: 'open', evidenceIds: [] })
       this.event(id, 'project.created', null, {})
       for (const hint of input.hints ?? []) this.commanderInput(id,hint.content,hint.creator,p.mode==='general'?'main-'+id:undefined)
-      if (p.bootstrap && p.mode==='general') this.addStep(id, { description: goal, sourceIds: ['origin'], goalId: 'goal', creator: 'commander', role: 'soldier', taskKey: 'initial', bootstrap: true })
       return this.graph(id)
     })
   }
@@ -509,7 +512,7 @@ export class Store {
           descendants.add(child.id)
           if (child.status === 'open') { child.status = 'cancelled'; this.saveNode(child); this.event(id, 'goal.updated', child, child) }
         }
-        for (const step of graph.steps.filter(s => s.role !== 'reporter' && descendants.has(s.goalId) && !['done', 'cancelled'].includes(s.status))) this.updateStep(id, step.id, { status: 'cancelled' })
+        for (const step of graph.steps.filter(s => !isReportStep(s) && descendants.has(s.goalId) && !['done', 'cancelled'].includes(s.status))) this.updateStep(id, step.id, { status: 'cancelled' })
       }
       if (goal.id === 'goal' && goal.status === 'achieved') {
         const p = this.project(id); p.status = 'completed'; this.saveProject(p); this.event(id, 'project.completed', goal, goal)
@@ -525,26 +528,33 @@ export class Store {
     const run = this.run(runId)
     return { throughEvidenceSeq: run.deliveredEvidenceSeq ?? run.planningEvidenceSeq ?? 0, throughHintSeq: run.deliveredHintSeq ?? run.planningHintSeq ?? 0 }
   }
-  addStep(id: string, input: { description: string; sourceIds: string[]; goalId?: string; creator?: string; priority?: number; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; bootstrap?: boolean } & Pick<LegionAssignment, 'role' | 'taskKey' | 'parentStepId' | 'specialist'>, maxSteps: number | null = null): Step {
+  addStep(id: string, input: { description: string; sourceIds: string[]; goalId?: string; creator?: string; priority?: number; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; bootstrap?: boolean; dependsOn?: string[] } & Pick<LegionAssignment, 'role' | 'taskKey' | 'parentStepId' | 'specialist' | 'reportFindingId'>, maxSteps: number | null = null): Step {
     return this.transaction(() => {
-      if (input.role === 'reporter') this.project(id); else this.writable(id)
+      if (isReportStep(input)) this.project(id); else this.writable(id)
       const capacity = this.planningCapacity(id, maxSteps)
       if (capacity.remainingSteps === 0) throw new HttpError(409, 'Active Step limit reached', { code: 'STEP_LIMIT_REACHED', planningCapacity: capacity })
-      const goalId = this.node<Goal>(id,input.goalId ?? this.rootGoalId(id),'goal').id; if (input.role !== 'reporter' && this.node<Goal>(id, goalId, 'goal').status !== 'open') throw new HttpError(409, 'Goal is closed')
+      const goalId = this.node<Goal>(id,input.goalId ?? this.rootGoalId(id),'goal').id; if (!isReportStep(input) && this.node<Goal>(id, goalId, 'goal').status !== 'open') throw new HttpError(409, 'Goal is closed')
       const profile = input.executionProfile ?? 'direct'; if (!['direct', 'isolated'].includes(profile)) throw new HttpError(422, 'Invalid execution profile')
-      if (input.role === 'scout' && this.project(id).mode === 'general') throw new HttpError(422, 'General mode has no Scout; Commander owns planning')
-      if (input.role !== undefined && !['general', 'soldier', 'scout', 'reporter'].includes(input.role)) throw new HttpError(422, 'Invalid Legion role')
+      const mode = this.project(id).mode
+      if (mode === 'general' && (input.specialist || input.parentStepId)) throw new HttpError(422, 'General mode has no specialist Agents or squads')
+      if (input.specialist) input = {...input,role:executorRole(mode)}
+      if (input.role !== undefined && !(mode === 'benchmark' ? ['general','soldier','scout','reporter'] : ['worker']).includes(input.role)) throw new HttpError(422, `Invalid ${mode} role`)
       if (input.role !== undefined || input.taskKey !== undefined || input.parentStepId !== undefined) requiredText(input.taskKey, 'taskKey')
       if (input.parentStepId) {
         const parent = this.node<Step>(id, input.parentStepId, 'step')
         if (parent.taskKey !== input.taskKey) throw new HttpError(422, 'Parent Step belongs to another task')
       }
-      const step: Step = { id: this.next(id, 'step', 'i'), projectId: id, kind: 'step', description: requiredText(input.description, 'description'),
-        sourceIds: this.evidenceIds(id, input.sourceIds.map(ref => ref==='origin'?this.originId(id):ref), true), goalId, creator: input.creator ?? 'commander', priority: integer(input.priority ?? 0, 'priority', -2147483648),
+      const dependencies = mode === 'general' ? [...new Set(input.dependsOn ?? [])].map(ref => {
+        const dependency = this.node<Step>(id, ref, 'step')
+        if(dependency.deleted) throw new HttpError(422, 'Step prerequisite is deleted')
+        return dependency.id
+      }) : []
+      const step: Step = { ...(dependencies.length ? {dependsOn:dependencies} : {}), id: this.next(id, 'step', 'i'), projectId: id, kind: 'step', description: requiredText(input.description, 'description'),
+        sourceIds: this.evidenceIds(id, input.sourceIds.map(ref => ref==='origin'?this.originId(id):ref), true), goalId, creator: input.creator ?? (mode==='general'?'planner':'commander'), priority: integer(input.priority ?? 0, 'priority', -2147483648),
         status: 'pending', factIds: [], worker: null, executionProfile: profile, attempts: 0,
         endedAt: null, failure: null, createdAt: now(), bootstrap: input.bootstrap ?? false, planVersion: 1,
         ...(input.specialist ? { specialist: { name: requiredText(input.specialist.name, 'specialist.name'), responsibilities: requiredText(input.specialist.responsibilities, 'specialist.responsibilities'), capabilities: input.specialist.capabilities.map(c => requiredText(c, 'capability')), scope: requiredText(input.specialist.scope, 'specialist.scope') } } : {}),
-        role: input.role ?? 'soldier', taskKey: input.taskKey ?? goalId, ...(input.parentStepId ? { parentStepId: input.parentStepId } : {}) }
+        ...(input.reportFindingId ? { reportFindingId: input.reportFindingId } : {}), role: input.role ?? executorRole(mode), taskKey: input.taskKey ?? goalId, ...(input.parentStepId ? { parentStepId: input.parentStepId } : {}) }
       this.saveNode(step); this.event(id, 'step.added', step, step); return step
     })
   }
@@ -576,7 +586,7 @@ export class Store {
       if (definition && step.attempts && input.mode === 'replace') {
         if (step.bootstrap) throw new HttpError(409, 'Bootstrap cannot be replaced by a planning edit')
         if (input.status !== undefined) throw new HttpError(422, 'Replacement cannot include status')
-        const replacement = this.addStep(id, { description: next.description, sourceIds: next.sourceIds, goalId: next.goalId, priority: next.priority, executionProfile: next.executionProfile, creator: step.creator, role:step.role, taskKey:step.taskKey, parentStepId:step.parentStepId, specialist:step.specialist })
+        const replacement = this.addStep(id, { description: next.description, sourceIds: next.sourceIds, goalId: next.goalId, priority: next.priority, executionProfile: next.executionProfile, creator: step.creator, dependsOn:step.dependsOn, role:step.role, taskKey:step.taskKey, parentStepId:step.parentStepId, specialist:step.specialist })
         replacement.replaces = step.id; replacement.replacementPending = true; replacement.status = 'blocked'
         step.status = 'cancelled'; step.replacedBy = replacement.id; step.endedAt = now()
         this.saveNode(step); this.event(id, 'step.updated', step, step)
@@ -704,7 +714,7 @@ export class Store {
       if (input.severity) node.severity = input.severity
       if (input.assetIds !== undefined) node.assetIds = input.assetIds
       this.saveNode(node); this.event(id, 'finding.added', node, node)
-      if (node.severity) this.requestFindingReport(id, node.id)
+      if (node.severity && this.project(id).mode==='benchmark') this.requestFindingReport(id, node.id)
       return node
     })
   }
@@ -714,10 +724,10 @@ export class Store {
       if (!finding.severity) throw new HttpError(422, 'Legacy Finding has no structured vulnerability metadata; no report is generated automatically')
       if (!['active', 'completed'].includes(this.project(projectId).status)) throw new HttpError(409, 'Project is stopped')
       const scoped = this.forGraph(projectId, finding.graphId!)
-      const existing = scoped.nodes<Step>(projectId, ['step']).find(s => s.role === 'reporter' && s.sourceIds.includes(findingId) && ['pending','running','paused'].includes(s.status))
+      const existing = scoped.nodes<Step>(projectId, ['step']).find(s => isReportStep(s) && s.sourceIds.includes(findingId) && ['pending','running','paused'].includes(s.status))
       if (existing) return existing
       const producer = finding.stepId ? scoped.node<Step>(projectId, finding.stepId, 'step') : undefined
-      return scoped.addStep(projectId, { role: 'reporter', taskKey: producer?.taskKey ?? finding.id, goalId: producer?.goalId,
+      return scoped.addStep(projectId, { role: this.project(projectId).mode === 'benchmark' ? 'reporter' : 'worker', ...(this.project(projectId).mode === 'general' ? { reportFindingId: findingId } : {}), taskKey: producer?.taskKey ?? finding.id, goalId: producer?.goalId,
         description: '为已确认漏洞撰写报告：'+finding.title, sourceIds: [finding.id], creator: 'report_finding' })
     })
   }
@@ -725,7 +735,7 @@ export class Store {
     return this.transaction(() => {
       const finding = this.node<Finding>(projectId, findingId, 'finding'), run = this.run(runId)
       const step = run.stepId ? this.node<Step>(projectId, run.stepId, 'step') : undefined
-      if (run.projectId !== projectId || run.status !== 'running' || step?.role !== 'reporter' || step.status !== 'running' || !step.sourceIds.includes(findingId)) throw new HttpError(409, 'Reporter is not assigned to this Finding')
+      if (run.projectId !== projectId || run.status !== 'running' || !step || !isReportStep(step) || step.status !== 'running' || !step.sourceIds.includes(findingId)) throw new HttpError(409, 'Reporter is not assigned to this Finding')
       this.checkVersion(finding, expectedVersion)
       finding.report = report; this.saveNode(finding); this.event(projectId, 'finding.report_updated', finding, { runId })
       return finding
@@ -807,7 +817,7 @@ export class Store {
     if(this.graphScope && run.graphId!==this.graphScope) throw new HttpError(422,'Cross-Graph Run')
     this.db.prepare('INSERT INTO runs(id,project_id,step_id,activity,status,data,graph_id) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,data=excluded.data').run(run.id, run.projectId, run.stepId, run.activity, run.status, JSON.stringify(run),run.graphId??null)
     const step = run.stepId ? this.node<Step>(run.projectId, run.stepId, 'step') : undefined
-    this.audit({ id: run.id, project_id: run.projectId, intent_id: run.stepId, task_type: step?.role ?? 'soldier', phase: run.activity,
+    this.audit({ id: run.id, project_id: run.projectId, intent_id: run.stepId, task_type: step?.role ?? executorRole(this.project(run.projectId).mode), phase: run.activity,
       graph_id:run.graphId??null, worker: run.worker, provider: run.provider ?? run.backend, engine: run.backend, model: run.model ?? null, execution_profile: step?.executionProfile ?? 'direct', session_id: run.id,
       workspace_kind: 'local', workspace_ref: '', workspace_root: run.workspaceRoot ?? '', status: run.status === 'succeeded' ? 'completed' : run.status,
       started_at: run.startedAt, ended_at: run.endedAt, error: run.error, exit_code: run.status === 'succeeded' ? 0 : null, timed_out: false, cancelled: run.status === 'cancelled',
@@ -841,17 +851,23 @@ export class Store {
       return { accepted: events.length }
     })
   }
+  stepReady(step: Step): boolean {
+    return this.project(step.projectId).mode === 'benchmark' || (step.dependsOn ?? []).every(id => {
+      const dependency = this.node<Step>(step.projectId, id, 'step')
+      return !dependency.deleted && dependency.status === 'done'
+    })
+  }
   claim(id: string, activity: Activity, worker: Pick<Worker, 'name' | 'backend'>, stepId: string | null = null): Run {
     return this.transaction(() => {
       if (activity !== 'execute') throw new HttpError(410, 'Independent Reason execution was replaced by Commander')
-      const reporting = stepId !== null && this.node<Step>(id, stepId, 'step').role === 'reporter'
+      const reporting = stepId !== null && isReportStep(this.node<Step>(id, stepId, 'step'))
       const p = reporting ? this.project(id) : this.active(id)
       if (reporting && !['active', 'completed'].includes(p.status)) throw new HttpError(409, 'Project is stopped')
       let step: Step | undefined
       if (activity === 'execute') {
         if (!stepId) throw new HttpError(422, 'Step required')
         step = this.node<Step>(id, stepId, 'step')
-        if (!['pending', 'paused'].includes(step.status) || step.replacementPending) throw new HttpError(409, 'Step is not claimable')
+        if (!['pending', 'paused'].includes(step.status) || step.replacementPending || p.mode==='general' && !this.stepReady(step)) throw new HttpError(409, 'Step is not claimable')
         if (!reporting && this.node<Goal>(id, step.goalId, 'goal').status !== 'open') throw new HttpError(409, 'Step goal is closed')
         this.evidenceIds(id, step.sourceIds, true)
       }
@@ -875,9 +891,9 @@ export class Store {
       if (run.status !== 'running') return run
       if (run.stepId && status === 'succeeded') {
         const step = this.node<Step>(run.projectId, run.stepId, 'step')
-        if (step.role === 'reporter' ? this.node<Finding>(run.projectId, step.sourceIds[0], 'finding').report?.runId !== run.id : !step.factIds.length) {
+        if (isReportStep(step) ? this.node<Finding>(run.projectId, step.sourceIds[0], 'finding').report?.runId !== run.id : !step.factIds.length) {
           status = 'failed'
-          error = step.role === 'reporter' ? 'Reporter must save the report Artifact before completing the Step' : step.bootstrap ? 'Initial Soldier Mission must return at least one Fact' : 'Legion Worker must return at least one Fact before completing the Step'
+          error = isReportStep(step) ? 'Reporter must save the report Artifact before completing the Step' : step.bootstrap ? 'Initial Soldier Mission must return at least one Fact' : 'Legion Worker must return at least one Fact before completing the Step'
         }
       }
       run.status = status; run.error = error; run.endedAt = status === 'paused' ? null : now(); this.saveRun(run)

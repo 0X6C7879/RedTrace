@@ -15,7 +15,7 @@ test('aborted runs survive their project being deleted mid-flight', async () => 
   try {
     const store = new Store(path.join(root, 'engine.db'))
     const config: EngineConfig = {
-      workers: [{ name: 'fake-reason', provider: 'mock', model: 'mock', enabled: true, roles: ['soldier'], reason: true, explore: false, bootstrap: false, maxRunning: 1, priority: 0, backend: 'dsh' }],
+      workers: [{ name: 'fake-reason', provider: 'mock', model: 'mock', enabled: true, roles: ['worker'], reason: true, explore: false, bootstrap: false, maxRunning: 1, priority: 0, backend: 'dsh' }],
       providers: {}, maxWorkers: 2, maxProjectWorkers: 1, maxRunningProjects: 2, maxSteps: null,
       decideTimeout: 60000, executeTimeout: 60000, concludeTimeout: 60000, bootstrapTimeout: 60000, bootstrapConcludeTimeout: 60000,
       workspaceRoot: path.join(root, 'workspaces'),

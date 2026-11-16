@@ -1,3 +1,4 @@
+import { MODE_ROLES, coordinatorRole } from '../../redtrace-dsh/lib/roles.js'
 import { mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -16,14 +17,12 @@ import { toolAllowed } from '../src/console-api.ts'
 export async function inspectToolCatalog(ctx, engine, manager, runtime) {
   const { config, raw } = engine.configuration.resolvedSnapshot()
   const available = id => manager.availableForTask(id)
-  const executionRoles = ['general:general', 'soldier:general', 'general:benchmark', 'soldier:benchmark', 'scout:benchmark']
+  const executionRoles = ['worker','general','soldier','scout']
   const rows = [], store = new Store(':memory:')
   const add = (tools, role, enabled = () => true) => {
     for (const tool of tools) rows.push({ name: tool.name, description: tool.description, parameters: JSON.parse(JSON.stringify(tool.parameters)),
-      source: tool.redtrace === false ? tool.name.startsWith('mcp__') ? 'MCP' : 'DSH' : 'RedTrace', role, scope: 'catalog', status: 'available',
-      enabled: enabled(tool) && (tool.redtrace === false || (raw.tool_settings?.[tool.name]?.workers === undefined
-        ? toolAllowed(raw.tool_settings, tool.name)
-        : config.workers.some(worker => toolAllowed(raw.tool_settings, tool.name, worker.name) && (worker.roles ?? []).includes(role.split(':')[0])))) })
+      source: tool.name.startsWith('mcp__') ? 'MCP' : tool.redtrace === false ? 'DSH' : 'RedTrace', role, scope: 'catalog', status: 'available',
+      enabled: enabled(tool) && toolAllowed(raw.tool_settings, tool.name, role) })
   }
   const verbs = { operations: engine.operations, isAdapterAvailable: id => manager.running(id) }
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'redtrace-schema-'))
@@ -36,34 +35,45 @@ export async function inspectToolCatalog(ctx, engine, manager, runtime) {
     await mountExecutionTools(scope.ctx, { task: { type: 'soldier', executionProfile: 'direct' }, cwd,
       sessionRoot: cwd, skillsDir: runtime.skillsDir, available: () => true,
       onSchemas(plugin, tools) {
-        const roles = ['redtrace-c2', 'redtrace-webshell'].includes(plugin) ? executionRoles.filter(role => !role.startsWith('scout:')) : executionRoles
+        const roles = ['redtrace-c2', 'redtrace-webshell'].includes(plugin) ? executionRoles.filter(role => role!=='scout') : executionRoles
         for (const role of roles) add(tools.map(tool => ({ ...tool, redtrace: !!tool.redtrace })), role,
           () => plugin === 'redtrace-core' || available(plugin))
       } })
+    for(const role of ['commander','planner']) {
+      const nativeScope=createScope(carrier.ctx,{})
+      try{await mountExecutionTools(nativeScope.ctx,{task:{type:role,executionProfile:'direct'},cwd,sessionRoot:cwd,skillsDir:runtime.skillsDir,
+        available:()=>true,onSchemas(plugin,tools){add(tools.map(t=>({...t,redtrace:!!t.redtrace})),role,()=>plugin==='redtrace-core'||available(plugin))}})}finally{await nativeScope.dispose()}
+    }
     const reverse = await reverseToolSchemas()
     for (const role of executionRoles) add(reverse, role, () => available('redtrace-reverse'))
     for (const mode of ['general', 'benchmark']) {
       const project = store.createProject({ mode, title: 'Schema inspection', origin: 'tsecbench Schema inspection', goal: 'Inspect definitions', bootstrap: false }).project
-      add(legionTools(store, 'commander', project.id, config.maxSteps, () => {}, config, new CommanderTodos()), 'commander:' + mode)
-      for (const role of ['general', 'soldier', 'scout', 'reporter']) {
-        if (mode === 'general' && role === 'scout') continue
+      add(legionTools(store, 'commander', project.id, config.maxSteps, () => {}, config, new CommanderTodos()), coordinatorRole(mode))
+      for (const role of [...MODE_ROLES[mode].slice(1), ...(mode==='benchmark'?['reporter']:[])]) {
         const graph = mode === 'benchmark' ? store.createGraph(project.id, { taskKey: role, title: role, origin: 'Schema inspection', goal: 'Inspect definitions' }) : store.projectGraphs(project.id)[0]
         const step = store.forGraph(project.id, graph.id).addStep(project.id, { role, taskKey: role, description: 'Inspect definitions', sourceIds: [graph.originId], goalId: graph.goalId })
         const worker = { name: 'schema', backend: 'mock' }
         const run = store.claim(project.id, 'execute', worker, step.id)
         const context = { store, run, worker, config, signal: new AbortController().signal, featureAvailable: available }
         const graphSchemas = graphTools(context, () => {})
-        add(graphSchemas, role + ':' + mode, tool => efficiencyToolAvailable(context, tool.name))
+        add(graphSchemas, role==='reporter'?'soldier':role, tool => efficiencyToolAvailable(context, tool.name))
         if (role !== 'reporter') {
-          if (!graphSchemas.some(tool => tool.name === 'tsecbench_submit')) add([tsecbenchSubmitTool(context)], role + ':' + mode, () => false)
-          add(resourceTools(context, verbs), role + ':' + mode)
-          add(verbTools(context, verbs, step), role + ':' + mode, tool => verbToolAvailable(verbs, tool.name))
+          if (!graphSchemas.some(tool => tool.name === 'tsecbench_submit')) add([tsecbenchSubmitTool(context)], role==='reporter'?'soldier':role, () => false)
+          add(resourceTools(context, verbs), role==='reporter'?'soldier':role)
+          add(verbTools(context, verbs, step), role==='reporter'?'soldier':role, tool => verbToolAvailable(verbs, tool.name))
         }
         store.finishRun(run.id, 'cancelled')
       }
-      if (mode === 'general') add(chatTools(store.forProject(project.id), { id: 'schema', projectId: project.id }, new ChatStore(store)), 'chief')
+      if (mode==='general') {
+        const graph=store.projectGraphs(project.id)[0]
+        const step=store.addStep(project.id,{role:'worker',reportFindingId:'finding-schema',taskKey:'report',description:'Report workflow',sourceIds:[graph.originId],goalId:graph.goalId})
+        const worker={name:'schema',backend:'mock'},run=store.claim(project.id,'execute',worker,step.id)
+        add(graphTools({store,run,worker,config,signal:new AbortController().signal},()=>{}),'worker')
+        store.finishRun(run.id,'cancelled')
+      }
+      if (mode === 'general') add(chatTools(store.forProject(project.id), { id: 'schema', projectId: project.id }, new ChatStore(store)), undefined)
     }
-    add(chatTools(store, { id: 'schema' }, new ChatStore(store)), 'assistant')
+    add(chatTools(store, { id: 'schema' }, new ChatStore(store)), undefined)
     return rows
   } finally {
     try { await scope.dispose(); await carrier.dispose() } finally { store.close(); await rm(cwd, { recursive: true, force: true }) }

@@ -1,3 +1,4 @@
+import { FIXED_ROLES, LEGACY_GENERAL_ROLES } from '../../redtrace-dsh/src/roles.ts'
 import { createHash, createHmac, createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'node:crypto'
 import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -8,7 +9,7 @@ import type { EngineConfig, Provider, Worker } from './types.ts'
 type RawModel = { id: string; context_window: number; max_tokens: number; reasoning?: string; reasoning_efforts?: Record<string, string | null> | boolean | null; thinking_format?: string }
 type RawProvider = { api: Provider['api']; base_url: string; api_key?: string; api_key_env?: string; models: RawModel[] }
 type RawWorker = { roles?: Worker['roles']; name: string; provider: string; model?: string; enabled?: boolean; bootstrap?: boolean; reason?: boolean; explore?: boolean; max_running?: number; priority?: number; backend?: Worker['backend'] | 'pi' }
-export interface RawConfig { providers?: Record<string, RawProvider>; workers: RawWorker[]; tool_settings?: Record<string, { enabled: boolean; workers?: string[] }>; runtime?: Record<string, unknown>; tasks?: Record<string, { timeout: number; conclude_timeout: number; max_intents?: number }>; common_env?: Record<string, string>; llm_polling?: { enabled?: boolean; models?: Record<string, string[]> }; [key: string]: unknown }
+export interface RawConfig { providers?: Record<string, RawProvider>; workers: RawWorker[]; tool_settings?: Record<string, { enabled: boolean; roles?: Worker['roles']; workers?: string[] }>; runtime?: Record<string, unknown>; tasks?: Record<string, { timeout: number; conclude_timeout: number; max_intents?: number }>; common_env?: Record<string, string>; llm_polling?: { enabled?: boolean; models?: Record<string, string[]> }; [key: string]: unknown }
 const secretPattern = /^\$\{REDTRACE_SECRET:([a-f0-9]{32})\}$/
 const sensitiveEnvironment = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD)$/
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
@@ -80,6 +81,28 @@ export class Configuration {
     let raw: RawConfig
     try { raw = parse(content.toString('utf8')) } catch { throw new HttpError(503, 'Invalid configuration YAML') }
     if (!raw || !Array.isArray(raw.workers)) throw new HttpError(503, 'Configuration workers must be an array')
+    if (raw.role_version !== 2 && raw.role_version !== 3) {
+      const mapped = Object.fromEntries(['commander','general','soldier'].map(r=>[r,LEGACY_GENERAL_ROLES[r]]))
+      for (const worker of raw.workers) {
+        const roles = worker.roles ?? ['commander','general','soldier','scout']
+        worker.roles = [...new Set([...roles, ...roles.flatMap(role => mapped[role] ? [mapped[role] as NonNullable<Worker['roles']>[number]] : [])])]
+      }
+      for (const setting of Object.values(raw.tool_settings ?? {})) if (setting.workers !== undefined) {
+        setting.roles = [...new Set(raw.workers.filter(w => setting.workers!.includes(w.name)).flatMap(w => w.roles ?? []))]
+        delete setting.workers
+      }
+      if (raw.tasks) for (const [old,role] of Object.entries(mapped)) if (!raw.tasks[role] && raw.tasks[old]) raw.tasks[role] = { ...raw.tasks[old] }
+    }
+    if (raw.role_version !== 3) {
+      const roles = (values: string[]) => [...new Set(values.map(role => role === 'leader' || role === 'operator' ? 'worker' : role))] as NonNullable<Worker['roles']>
+      for (const worker of raw.workers) if (worker.roles) worker.roles = roles(worker.roles)
+      for (const setting of Object.values(raw.tool_settings ?? {})) if (setting.roles) setting.roles = roles(setting.roles)
+      if (raw.tasks) {
+        raw.tasks.worker ??= raw.tasks.operator ?? raw.tasks.leader
+        delete raw.tasks.operator; delete raw.tasks.leader
+      }
+      raw.role_version = 3
+    }
     return { raw, revision: hash(content) }
   }
   private secrets(): Record<string, string> {
@@ -113,12 +136,12 @@ export class Configuration {
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(w.name)) throw new HttpError(422, 'Invalid worker name')
       if (w.provider !== 'mock' && !providers[w.provider]?.models.some(m => m.id === w.model)) throw new HttpError(422, 'Worker references missing provider or model')
       if (w.backend && !['pi', 'dsh', 'mock'].includes(w.backend)) throw new HttpError(422, 'Invalid backend')
-      if (w.roles !== undefined && (!Array.isArray(w.roles) || new Set(w.roles).size !== w.roles.length || w.roles.some(role => !['commander','general','soldier','scout'].includes(role)))) throw new HttpError(422, 'Invalid Legion roles')
-      return { roles: [...(w.roles ?? ['commander','general','soldier','scout'] as const)], name: w.name, provider: w.provider, model: w.model ?? 'mock', enabled: w.enabled ?? true, 
+      if (w.roles !== undefined && (!Array.isArray(w.roles) || new Set(w.roles).size !== w.roles.length || w.roles.some(role => !FIXED_ROLES.includes(role)))) throw new HttpError(422, 'Invalid Legion roles')
+      return { roles: [...(w.roles ?? FIXED_ROLES)], name: w.name, provider: w.provider, model: w.model ?? 'mock', enabled: w.enabled ?? true,
         priority: integer(w.priority ?? 0, 'priority', -2147483648), maxRunning: integer(w.max_running ?? 1, 'max_running', 1), backend: w.provider === 'mock' ? 'mock' as const : 'dsh' as const }
     })
     if (new Set(workers.map(w => w.name)).size !== workers.length) throw new HttpError(422, 'Worker names must be unique')
-    return { workers, providers, llmPolling, taskLimits: Object.fromEntries(['commander','general','soldier','scout'].map(role=>[role,{timeout:integer(raw.tasks?.[role]?.timeout??(role==='scout'?240:role==='commander'?300:900),role+' timeout',1),concludeTimeout:integer(raw.tasks?.[role]?.conclude_timeout??30,role+' conclude timeout',1)}])), commonEnv: Object.fromEntries(Object.entries(raw.common_env ?? {}).map(([name, value]) => { if (!/^[A-Z][A-Z0-9_]*$/.test(name) || typeof value !== 'string') throw new HttpError(422, 'Invalid common environment'); return [name, resolve(value)!] })), maxWorkers: integer(raw.runtime?.max_workers ?? 4, 'max_workers', 1), maxProjectWorkers: integer(raw.runtime?.max_project_workers ?? 4, 'max_project_workers', 1), maxRunningProjects: integer(raw.runtime?.max_running_projects ?? 1, 'max_running_projects', 1),
+    return { workers, providers, llmPolling, taskLimits: Object.fromEntries(FIXED_ROLES.map(role=>[role,{timeout:integer(raw.tasks?.[role]?.timeout??(role==='scout'?240:['commander','planner'].includes(role)?300:900),role+' timeout',1),concludeTimeout:integer(raw.tasks?.[role]?.conclude_timeout??30,role+' conclude timeout',1)}])), commonEnv: Object.fromEntries(Object.entries(raw.common_env ?? {}).map(([name, value]) => { if (!/^[A-Z][A-Z0-9_]*$/.test(name) || typeof value !== 'string') throw new HttpError(422, 'Invalid common environment'); return [name, resolve(value)!] })), maxWorkers: integer(raw.runtime?.max_workers ?? 4, 'max_workers', 1), maxProjectWorkers: integer(raw.runtime?.max_project_workers ?? 4, 'max_project_workers', 1), maxRunningProjects: integer(raw.runtime?.max_running_projects ?? 1, 'max_running_projects', 1),
       maxSteps: raw.tasks?.commander?.max_intents === undefined ? null : integer(raw.tasks.commander.max_intents, 'max_intents', 1), decideTimeout: integer(raw.tasks?.commander?.timeout ?? 300, 'commander timeout', 1), executeTimeout: integer(raw.tasks?.soldier?.timeout ?? 900, 'execute timeout', 1), concludeTimeout: integer(raw.tasks?.soldier?.conclude_timeout ?? 30, 'conclude timeout', 1),
       bootstrapTimeout: integer(raw.tasks?.soldier?.timeout ?? 900, 'bootstrap timeout', 1), bootstrapConcludeTimeout: integer(raw.tasks?.soldier?.conclude_timeout ?? 30, 'bootstrap conclude timeout', 1), workspaceRoot: this.workspaceRoot }
   }

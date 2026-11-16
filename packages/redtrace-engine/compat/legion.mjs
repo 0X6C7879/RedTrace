@@ -1,3 +1,6 @@
+import { mountExecutionTools } from '../../redtrace-dsh/lib/execution-tools.js'
+import { state as runtimeState } from '../../redtrace-dsh/lib/state.js'
+import { coordinatorRole } from '../../redtrace-dsh/lib/roles.js'
 import { platformToolOptions } from './console.mjs'
 // Adapted from sapper-v2 7b75e6f docker/commander/{SKILL.md §§2,4.6,5, watchdog.sh}; native DSH replaces tmux.
 import { accumulateUsage, eventProjection } from '../../redtrace-dsh/lib/audit.js'
@@ -45,7 +48,7 @@ export function attachLegionMailbox(ctx, legion, { projectId, actor, sessionId, 
 export async function readCommanderLog(ctx, engine, offset = 0, limit = 100, signal, projectId, sessionId) {
   const campaign=engine.legion.campaign(projectId)
   if(sessionId&&sessionId!==campaign.sessionId&&![...(campaign.sessionHistory??[]),campaign.previousSessionId].includes(sessionId))throw new HttpError(404,'Session does not belong to this Project Commander')
-  return readNativeLog(ctx,sessionId&&sessionId!==campaign.sessionId?{...campaign,sessionId,hasSession:true,workerName:undefined}:campaign,offset,limit,signal,'commander')
+  return readNativeLog(ctx,sessionId&&sessionId!==campaign.sessionId?{...campaign,sessionId,hasSession:true,workerName:undefined}:campaign,offset,limit,signal,coordinatorRole(engine.store.project(campaign.projectId).mode))
 }
 
 export async function readNativeLog(ctx, campaign, offset = 0, limit = 100, signal, role = 'commander') {
@@ -71,7 +74,8 @@ export async function runCommander(ctx, engine, worker, signal, projectId) {
   if(!projectId)throw new HttpError(422,'Select a Project Commander')
   const store=engine.store.forProject(projectId),legion=new engine.legion.constructor(store,projectId),periodic=store.project(projectId).mode==='benchmark'
   const todos=periodic?undefined:engine.legion.planningTodos(projectId)
-  if(!worker?.enabled||worker.backend!=='dsh'||!worker.roles?.includes('commander'))throw new Error('Commander requires an enabled configured DSH Commander worker')
+  const role=coordinatorRole(store.project(projectId).mode)
+  if(!worker?.enabled||worker.backend!=='dsh'||!worker.roles?.includes(role))throw new Error('Commander requires an enabled configured DSH Commander worker')
   if(store.runsByStatus('running').some(run=>run.activity==='decide'))throw new Error('Stop the active Reason execution before Commander takes control')
   signal.throwIfAborted()
   const config=configuration.resolvedSnapshot().config,activeRuns=engine.store.runsByStatus('running'),commands=[...engine.legion.campaigns().filter(c=>c.status==='running'),...chatSlots(store)]
@@ -80,12 +84,15 @@ export async function runCommander(ctx, engine, worker, signal, projectId) {
   const activeProjects=new Set([...activeRuns.map(r=>r.projectId),...commands.filter(c=>c.projectId).map(c=>c.projectId)])
   if(!activeProjects.has(projectId)&&activeProjects.size>=config.maxRunningProjects)throw new HttpError(409,'Project capacity is full')
   const campaign=legion.claimCommand();legion.saveCampaign({...campaign,workerName:worker.name})
+  ctx.logger.info(role+' cycle.started Project='+projectId+' Session='+campaign.sessionId+' Worker='+worker.name)
   const residents=periodic?engine.commanderSessions:undefined,route=worker.name+':'+worker.provider+':'+worker.model+':'+(campaign.reasoning??'configured')
   let resident=residents?.get(projectId)
   if(resident&&(resident.sessionId!==campaign.sessionId||resident.route!==route)){await resident.handle.dispose();residents.delete(projectId);resident=undefined}
-  resident??={sessionId:campaign.sessionId,route,pendingCalls:new Set(campaign.pendingTools??[]),accounting:{usage:campaign.usage}}
+  resident??={sessionId:campaign.sessionId,route,pendingCalls:new Set(campaign.pendingTools??[]),accounting:{sessionId:campaign.sessionId,usage:campaign.usage}}
   const cycle={finished:false,failure:undefined,signal};resident.cycle=cycle
   const model=config.providers[worker.provider]?.models.find(m=>m.id===worker.model),pendingCalls=resident.pendingCalls,unread=[]
+  const priorAudit=store.db.prepare('SELECT data FROM audit_runs WHERE id=?').get(campaign.sessionId)
+  const auditMetadata={id:campaign.sessionId,project_id:projectId,graph_id:periodic?null:store.projectGraphs(projectId)[0].id,task_type:role,worker:worker.name,provider:worker.provider,model:worker.model,session_id:campaign.sessionId,phase:'decide',started_at:(priorAudit?JSON.parse(priorAudit.data).started_at:undefined)??new Date().toISOString()}
   let handle=resident.handle,mailbox
   const cancel=()=>handle?.agent.cancel({kind:'hook',reason:'Commander cancelled or timed out'})
   try{
@@ -100,9 +107,17 @@ export async function runCommander(ctx, engine, worker, signal, projectId) {
         agent.model.select({provider:worker.provider,model:worker.model,...(effort?{reasoningEffort:effort}:{})})
         const directory=ctx.get('workingDirectory')
         if(directory.get(agent.session)!==cwd)await directory.set(agent,cwd,signal)
+        const runtime=runtimeState()?.config
+        scoped=await mountExecutionTools(scoped,{task:{type:role,projectId,worker:worker.name,committed:false},cwd,
+          sessionRoot:runtime?.sessionRoot??path.join(config.workspaceRoot,'.sessions'),skillsDir:runtime?.skillsDir??path.join(configuration.root,'skills'),
+          available:id=>engine.pluginManager?engine.pluginManager.availableForTask(id):false,
+          toolEnabled:name=>platformToolOptions(engine,name,role).when(),
+          onRefresh:refresh=>engine.sessionRefresh?.set(campaign.sessionId,refresh)})
         mountLegionContext(scoped,ctx,{store,legion,message,onCommanderCompact:summary=>{legion.checkpointState(projectId,'native-compaction');resident.relaySummary=summary;if(!pendingCalls.size)cancel()}})
         scoped.on('session/event',(_session,event)=>{
           const data=event.data??{}
+          const projected=eventProjection(resident.accounting,event)
+          if(projected.length)store.audit(auditMetadata,projected)
           if(event.type==='user/message')for(const id of data.source?.redtraceLegionMessages??[])legion.delivery(projectId,'commander',id,'admitted')
           if(event.type==='assistant/message'&&data.usage){accumulateUsage(resident.accounting,event);legion.saveCampaign({...legion.campaign(),usage:resident.accounting.usage})}
           if(event.type==='tool/call')pendingCalls.add(String(data.callId))
@@ -112,7 +127,7 @@ export async function runCommander(ctx, engine, worker, signal, projectId) {
         })
         scoped.on('agent/error',({error})=>{resident.cycle.failure=error})
         scoped.tools.restrict({allow:[]})
-        scoped.systemPrompt.section({name:'redtrace:commander',order:0,text:()=>legionMission('commander',store.project(projectId).mode)+'\nAssigned Project='+projectId+(periodic?'':'. Read the compact legion_board for task IDs; inspect FGS only on demand.')})
+        scoped.systemPrompt.section({name:'redtrace:commander',order:0,text:()=>legionMission(role,store.project(projectId).mode)+'\nAssigned Project='+projectId+(periodic?'':'. Read the compact legion_board for task IDs; inspect FGS only on demand.')})
         for(const tool of tools)scoped.tools.register({redtrace:true,name:tool.name,description:tool.description,parameters:JSON.parse(JSON.stringify(tool.parameters)),
           output:{schema:{type:'object',additionalProperties:true},render:(_args,value)=>value.content},
           async execute(args,execution){
@@ -121,7 +136,7 @@ export async function runCommander(ctx, engine, worker, signal, projectId) {
             const result=await tool.execute(execution.callId??'',args,execution.signal)
             if(result.terminate)execution.concludeTurn?.()
             return result
-          }},platformToolOptions(engine,tool.name,worker.name))
+          }},platformToolOptions(engine,tool.name,role))
       }
       handle=await activateAgent(ctx.get('agents'),SessionId(campaign.sessionId),cwd,{agentOptions:{provider:worker.provider,model:worker.model,...(effort?{reasoningEffort:effort}:{})},setup},resume)
       resident.handle=handle;residents?.set(projectId,resident);legion.saveCampaign({...legion.campaign(),hasSession:true})
@@ -145,12 +160,13 @@ export async function runCommander(ctx, engine, worker, signal, projectId) {
       let retire=!residents||signal.aborted||cycle.failure||!cycle.finished||resident.relaySummary
       try{if(retire){cancel();await handle.agent.whenIdle();unread.push(...handle.agent.inbox.nextStep.map(m=>m.source?.redtraceLegionMessage).filter(Boolean))}await ctx.get('sessions').flush(handle.agent.session)}
       catch(error){retire=true;legion.saveCampaign({...legion.campaign(),status:'stopped',error:String(error)});throw error}
-      finally{if(retire){residents?.delete(projectId);await handle.dispose()}}
+      finally{if(retire){residents?.delete(projectId);engine.sessionRefresh?.delete(campaign.sessionId);await handle.dispose()}}
     }
   }
   if(resident.relaySummary){const current=legion.campaign();legion.saveCampaign({...current,sessionHistory:[...(current.sessionHistory??(current.previousSessionId?[current.previousSessionId]:[])),current.sessionId],previousSessionId:current.sessionId,sessionId:'command-'+randomUUID(),hasSession:false,nativeCompactionSummary:resident.relaySummary,pendingTools:[],status:'idle'});for(const ref of unread)legion.requeueUnread(ref.projectId,'commander',[ref.id]);store.changes.emit('legion-relay',projectId)}
   else legion.saveCampaign({...legion.campaign(),status:'idle',error:undefined,failureCode:undefined})
   engine.scheduler?.wake()
+  ctx.logger.info(role+' cycle.finished Project='+projectId+' Session='+campaign.sessionId)
   return legion.campaign()
 }
 
@@ -176,14 +192,20 @@ export async function recoverLegion(ctx,engine,resumeStopped=false,projectId,inc
 /** Benchmark patrols on a fixed clock; General and all Workers remain event-driven. */
 export function createCommanderController(ctx, engine, canRun=()=>true) {
   let closed=true, scheduled=false, cursor=0, watchdogTimer, watchdogWork, checking=false
-  const legion=engine.legion, store=engine.store, active=new Map(), timers=new Map(), inspections=new Map(),residents=engine.commanderSessions=new Map()
+  const legion=engine.legion, store=engine.store, active=new Map(), timers=new Map(), inspections=new Map(),debounces=new Map(),residents=engine.commanderSessions=new Map()
   const release=async id=>{const resident=residents.get(id);residents.delete(id);await resident?.handle.dispose()}
   const pending=projectId=>{
     const cursor=Number(store.db.prepare('SELECT COALESCE(MAX(id),0) AS n FROM events WHERE project_id=?').get(projectId).n)
     return cursor>(legion.campaign(projectId).cursors[projectId]?.acknowledged??0)||legion.messages(projectId,'commander').some(m=>m.status==='pending')
   }
-  const changed=projectId=>{const project=store.projects().find(p=>p.id===projectId);if(project?.mode!=='benchmark'||project.status!=='active'||!legion.campaign(projectId).hasSession&&!active.has(projectId))wake(projectId)}
-  const messaged=projectId=>{if(store.project(projectId).mode==='general')wake(projectId)}
+  // ARTEX coalesces graph/completion/finding bursts for 800 ms; Benchmark patrol stays on its clock.
+  const debounce=projectId=>{
+    clearTimeout(debounces.get(projectId))
+    debounces.set(projectId,setTimeout(()=>{debounces.delete(projectId);wake(projectId)},800))
+    debounces.get(projectId).unref()
+  }
+  const changed=projectId=>{const project=store.projects().find(p=>p.id===projectId);if(project?.mode==='general'&&project.status==='active')debounce(projectId);else if(project?.mode!=='benchmark'||project.status!=='active'||!legion.campaign(projectId).hasSession&&!active.has(projectId))wake(projectId)}
+  const messaged=projectId=>{if(store.project(projectId).mode==='general')debounce(projectId)}
   const armInspection=(projectId,at)=>{
     clearTimeout(inspections.get(projectId))
     inspections.set(projectId,setTimeout(()=>{inspections.delete(projectId);wake(projectId)},Math.max(0,at-Date.now())))
@@ -202,25 +224,27 @@ export function createCommanderController(ctx, engine, canRun=()=>true) {
     scheduled=true
     queueMicrotask(()=>{
       scheduled=false
-      if(closed||!canRun()||engine.scheduler.maintenance)return
-      const config=engine.configuration.resolvedSnapshot().config, projects=store.projects().filter(p=>p.status==='active')
+      if(closed||engine.scheduler.maintenance)return
+      const projects=store.projects().filter(p=>p.status==='active'&&canRun(p.mode))
+      if(!projects.length)return
+      const config=engine.configuration.resolvedSnapshot().config
       for(let i=0;i<projects.length;i++) {
         const project=projects[(cursor+i)%projects.length], campaign=legion.campaign(project.id),periodic=project.mode==='benchmark'
         if(active.has(project.id)||campaign.status!=='idle'||legion.budget(Date.now(),project.id).phase==='ended')continue
         if(periodic){if((campaign.nextInspectionAt??0)>Date.now()){armInspection(project.id,campaign.nextInspectionAt);continue}}
-        else if(!pending(project.id))continue
+        else if(debounces.has(project.id)||!pending(project.id))continue
         const runs=store.runsByStatus('running'), commands=[...legion.campaigns().filter(c=>c.status==='running'),...chatSlots(store)]
         if(runs.length+commands.length>=config.maxWorkers)break
         if(runs.filter(r=>r.projectId===project.id).length>=config.maxProjectWorkers)continue
         const owners=new Set([...runs.map(r=>r.projectId),...commands.filter(c=>c.projectId).map(c=>c.projectId)])
         if(!owners.has(project.id)&&owners.size>=config.maxRunningProjects)continue
-        const selected=campaign.nextWorker?conversationWorker(config,campaign.nextWorker):undefined
-        const worker=(campaign.nextWorker?(selected?[selected]:[]):conversationWorkers(config)).filter(w=>runs.filter(r=>r.worker===w.name).length+commands.filter(c=>c.workerName===w.name).length<w.maxRunning).sort((a,b)=>a.priority-b.priority||a.name.localeCompare(b.name))[0]
+        const selected=campaign.nextWorker?conversationWorker(config,campaign.nextWorker,project.mode):undefined
+        const worker=(campaign.nextWorker?(selected?[selected]:[]):conversationWorkers(config,project.mode)).filter(w=>runs.filter(r=>r.worker===w.name).length+commands.filter(c=>c.workerName===w.name).length<w.maxRunning).sort((a,b)=>a.priority-b.priority||a.name.localeCompare(b.name))[0]
         if(!worker)continue
         const task={abort:new AbortController(),dirty:false,completion:undefined}
         active.set(project.id,task)
         clearTimeout(inspections.get(project.id));inspections.delete(project.id)
-        task.completion=runCommander(ctx,engine,worker,AbortSignal.any([task.abort.signal,AbortSignal.timeout(config.decideTimeout*1000)]),project.id).catch(error=>ctx.logger.warn('Commander '+project.id+' stopped: '+String(error))).finally(()=>{
+        task.completion=runCommander(ctx,engine,worker,AbortSignal.any([task.abort.signal,AbortSignal.timeout((config.taskLimits?.[coordinatorRole(project.mode)]?.timeout??config.decideTimeout)*1000)]),project.id).catch(error=>ctx.logger.warn('Commander '+project.id+' stopped: '+String(error))).finally(()=>{
           active.delete(project.id)
           if(closed||!store.projects().some(p=>p.id===project.id&&p.status==='active'))return
           const current=legion.campaign(project.id)
@@ -244,7 +268,7 @@ export function createCommanderController(ctx, engine, canRun=()=>true) {
     }
   }
   const watchdog=async()=>{
-    if(closed||checking||!canRun()||engine.scheduler.maintenance)return
+    if(closed||checking||!store.projects().some(p=>canRun(p.mode))||engine.scheduler.maintenance)return
     checking=true
     try{
       engine.scheduler.watchdog()
@@ -274,13 +298,13 @@ export function createCommanderController(ctx, engine, canRun=()=>true) {
     },
     start(){if(!closed)return;closed=false;store.changes.on('change',changed);store.changes.on('legion-message',messaged);store.changes.on('legion-budget',armDeadline);store.changes.on('legion-relay',wake);armDeadline();watchdogTimer=setInterval(()=>{watchdogWork=watchdog().catch(error=>ctx.logger.warn(String(error)))},15_000);watchdogTimer.unref();void recoverLegion(ctx,engine).then(()=>{engine.scheduler.wake();wake()}).catch(error=>ctx.logger.warn(String(error)))},
     async stop(projectId){
-      store.project(projectId);clearTimeout(timers.get(projectId));timers.delete(projectId);clearTimeout(inspections.get(projectId));inspections.delete(projectId)
+      store.project(projectId);clearTimeout(debounces.get(projectId));debounces.delete(projectId);clearTimeout(timers.get(projectId));timers.delete(projectId);clearTimeout(inspections.get(projectId));inspections.delete(projectId)
       const task=active.get(projectId);task?.abort.abort(new Error('Project Commander stopped'));await task?.completion;await release(projectId)
       legion.saveCampaign({...legion.campaign(projectId),status:'stopped'})
     },
     async close(projectId){
       if(projectId){store.project(projectId);store.setStatus(projectId,'stopped');await controller.stop(projectId);await engine.scheduler.stopProject(projectId);return}
-      closed=true;clearInterval(watchdogTimer);for(const timer of [...timers.values(),...inspections.values()])clearTimeout(timer);timers.clear();inspections.clear()
+      closed=true;clearInterval(watchdogTimer);for(const timer of [...timers.values(),...inspections.values(),...debounces.values()])clearTimeout(timer);timers.clear();inspections.clear();debounces.clear()
       store.changes.off('legion-budget',armDeadline);store.changes.off('legion-relay',wake);store.changes.off('change',changed);store.changes.off('legion-message',messaged)
       for(const task of active.values())task.abort.abort(new Error('Commander lifecycle stopped'))
       await Promise.all([...active.values()].map(t=>t.completion));await watchdogWork;await Promise.all([...residents.keys()].map(release))

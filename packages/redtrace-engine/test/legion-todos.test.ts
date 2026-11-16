@@ -74,7 +74,7 @@ test('Benchmark Commander and Scout have no TodoList tools; Soldier planner and 
   const q=store.createProject({mode:'general',title:'roles',origin:'local',goal:'verify'}).project,l=new LegionStore(store,q.id)
   l.claimCommand(q.id)
   assert(legionTools(store,'commander',q.id,null,()=>{},undefined,l.planningTodos(q.id)).some(t=>t.name==='TodoWrite'))
-  for(const role of ['general','soldier'] as const){
+  for(const role of ['worker'] as const){
     const step=l.spawn(q.id,{taskKey:role,role,description:'fixture',sourceIds:['origin']}),run=store.claim(q.id,'execute',worker,step.id)
     assert(!legionTools(store,run.id,q.id,null,()=>{}).some(t=>t.name==='TodoWrite'))
     assert(!graphTools({store,run,worker:worker as any,config:{maxSteps:null} as EngineConfig,signal:new AbortController().signal},()=>{}).some(t=>t.name==='TodoWrite'))
@@ -98,9 +98,9 @@ test('Only Benchmark General prompt owns task planning while General mode Comman
   assert(command.includes('You never modify FGS'))
   const prompt=legionMission('general','benchmark');assert(prompt.includes('TodoWrite({todos})'));assert(prompt.includes('verified FGS Facts'))
   assert(legionMission('soldier','benchmark').includes('TodoWrite'));assert(!legionMission('scout','benchmark').includes('TodoWrite'))
-  const general=legionMission('commander','general')
+  const general=legionMission('planner','general')
   for(const text of ['TodoWrite','full route once','actual prerequisite Fact IDs','Independent directions'])assert(general.includes(text),text)
-  for(const role of ['scout','general','soldier'] as const)assert(!legionMission(role,'general').includes('TodoWrite'))
+  for(const role of ['worker'] as const)assert(!legionMission(role,'general').includes('TodoWrite'))
 })
 
 test('native DSH wake-ups retain TodoLists, wait for Facts after failure, and dispatch only the next serial stage',{timeout:90000},async()=>{

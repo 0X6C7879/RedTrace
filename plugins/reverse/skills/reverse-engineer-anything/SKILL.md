@@ -3,7 +3,7 @@ name: reverse-engineer-anything
 description: Reverse engineer native, managed, Electron/JavaScript, packaged, firmware, and browser targets with REA. Use shipped-artifact or requested runtime evidence to explain features, compare versions, decompile code, or guide a reconstruction. Skip REA for ordinary source-repository architecture analysis.
 metadata:
   version: "37"
-  tool_count: 170
+  upstream_tool_count: 170
 ---
 
 # REA
@@ -13,6 +13,24 @@ passive application runtime evidence, or comparison with
 behavior not established by available source. For ordinary analysis of a
 complete source repository, use normal repository tools and do not run REA
 readiness or provider commands.
+
+## RedTrace execution contract
+
+Use `rea` from PATH (pinned 6.4.0); no installation during a Mission.
+Start with `rea --help`. Static analysis, function dossiers, strings, procedure
+search, xrefs, pseudocode and instructions use path-based CLI commands:
+`rea inspect`, `rea function`, `rea search`, `rea xrefs`, `rea decompile`,
+`rea instructions`. These commands are not Tool Schemas. Read their `--help`
+for arguments; do not call similarly named MCP tools described by upstream
+references unless actually advertised.
+
+Loading this Skill starts the existing Run-scoped MCP connection only for
+shared Program lifecycle, Hopper navigation/annotation, and retained Evidence
+workflows without equivalent CLI commands. `open_binary`, `binary_session`,
+`close_binary` preserve that live analysis state; composite navigation reads
+replace individual cursor/comment getters. Export Evidence before closing.
+Planner/Commander never load this execution plugin. Skill discovery remains
+DSH-native and on demand.
 
 ## Connect only when needed
 
@@ -32,8 +50,7 @@ Diagnose the observed blocker, continue useful supported work, and resume the
 original task after repair. Client approval, shell PATH, registration and engine
 availability have different remedies; avoid repeating setup for all of them.
 
-Prefer an existing `rea` CLI. When none is installed and REA package acquisition
-is within the authorized scope, use `npx -y rea-agents@6.4.0` in its place.
+Use the pinned `rea` CLI already on PATH; report a missing deployment dependency rather than installing during a Mission.
 Configuration repair starts with a read-only setup plan; show paths, backups and
 skill replacement before applying authorized changes. Preserve existing approval
 and target-execution boundaries. REA setup never installs or upgrades unrelated

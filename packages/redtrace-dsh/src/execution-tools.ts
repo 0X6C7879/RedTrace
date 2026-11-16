@@ -18,8 +18,7 @@ const VENDOR = 'vendor/deepseek-harness/packages'
 
 /** Engine API-key fields of the free web-search plugin, mapped to the
  * environment names RedTrace serves them under (redtrace.yaml common_env,
- * hot-reloaded into the process environment). Read at every session mount so
- * key changes reach new sessions without a restart. */
+ * hot-reloaded into the process environment). Refreshed in existing sessions. */
 const WEB_SEARCH_FREE_KEYS: Record<string, string> = {
   tinyfishApiKey: 'TINYFISH_API_KEY',
   anysearchApiKey: 'ANYSEARCH_API_KEY',
@@ -143,7 +142,9 @@ export function toolsSectionText(toolsDir: string): string {
 export async function mountExecutionTools(scoped: ScopedContext, config: ExecutionToolsConfig): Promise<ScopedContext> {
   const { scopeOf } = config.onSchemas ? await load('vendor/deepseek-harness/packages/core/scope/lib/index.js') : { scopeOf: undefined }
   const definitions = () => (scoped as any).get('tools').definitions(scopeOf!(scoped))
-  const available = config.available ?? (() => false)
+  const commander = config.task.type === 'commander', planner = config.task.type === 'planner'
+  const configured = config.available ?? (() => false)
+  const available = (id: string) => configured(id) && (commander ? id === 'redtrace-fs-search' : planner ? ['redtrace-jobs','redtrace-fs-search','redtrace-web'].includes(id) : true)
   const active = new Map<string, CordisFiber[]>()
   const jobs = available('redtrace-jobs')
   const services = ['shell', 'shellEnv', 'fs', 'skills', 'sandbox', 'sandboxPolicy', 'approval', 'jobs', 'spillStore']
@@ -180,7 +181,7 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
   const shellTool = process.platform === 'win32'
     ? `${VENDOR}/shell/tool-pwsh/lib/index.js`
     : `${VENDOR}/shell/tool-bash/lib/index.js`
-  let shellFiber = await mount(scoped, shellTool, { enableRunInBackground: jobs })
+  let shellFiber = commander ? undefined : await mount(scoped, shellTool, { enableRunInBackground: jobs })
   let background = jobs
   await mount(scoped, `${VENDOR}/fs/fs-observation-policy/lib/index.js`)
   await mount(scoped, `${VENDOR}/fs/tool-fs/lib/index.js`)
@@ -189,7 +190,7 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
     includeDefaultRoots: false,
     customSkillDirs: [config.skillsDir],
   })
-  await mount(scoped, `${VENDOR}/skill/tool-skill/lib/index.js`)
+  if (!commander) await mount(scoped, `${VENDOR}/skill/tool-skill/lib/index.js`)
   config.onSchemas?.('redtrace-core', definitions())
   if (jobs) {
     const before = config.onSchemas ? new Set(definitions().map((tool: any) => tool.name)) : undefined
@@ -198,12 +199,12 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
   }
 
   // Optional fibers belong to this Agent scope and can be changed mid-session.
-  type Use = (scope: ScopedContext, module: string, options?: Record<string, any>) => Promise<void>
-  const install = async (id: string, add: (use: Use) => Promise<void>) => {
+  type Use = (scope: ScopedContext, module: string, options?: Record<string, any>) => Promise<CordisFiber>
+  const install = async (id: string, add: (use: Use) => Promise<unknown>) => {
     if (active.has(id)) return
     const fibers: CordisFiber[] = []
     const before = config.onSchemas ? new Set(definitions().map((tool: any) => tool.name)) : undefined
-    const use: Use = async (scope, module, options) => { fibers.push(await mount(scope, module, options)) }
+    const use: Use = async (scope, module, options) => { const fiber=await mount(scope, module, options); fibers.push(fiber); return fiber }
     try { await add(use); active.set(id, fibers); config.onSchemas?.(id, definitions().filter((tool: any) => !before!.has(tool.name))) }
     catch (error) { for (const fiber of fibers.reverse()) await fiber.dispose(); throw error }
   }
@@ -215,20 +216,23 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
   }
   const setBackground = async (enabled: boolean) => {
     if (background === enabled) return
-    await shellFiber.dispose()
+    await shellFiber!.dispose()
     try { shellFiber = await mount(scoped, shellTool, { enableRunInBackground: enabled }); background = enabled }
     catch (error) { shellFiber = await mount(scoped, shellTool, { enableRunInBackground: background }); throw error }
   }
-  const stacks: Array<[string, (use: Use) => Promise<void>]> = [
+  let webSearch: CordisFiber | undefined, webSearchKeys = ''
+  const stacks: Array<[string, (use: Use) => Promise<unknown>]> = [
     ['redtrace-spill', use => use(scoped, 'packages/redtrace-dsh/lib/spill.js', { sessionRoot: config.sessionRoot })],
-    ...TASK_PLUGINS.map(entry => [entry.id, (use: Use) => use(scoped, entry.modulePath, { cwd: config.cwd, toolEnabled: config.toolEnabled })] as [string, (use: Use) => Promise<void>]),
-    ...(['general', 'soldier'].includes(config.task.type) ? ['webshell', 'c2'].map(family => [
+    ...TASK_PLUGINS.map(entry => [entry.id, (use: Use) => use(scoped, entry.modulePath, { cwd: config.cwd, toolEnabled: config.toolEnabled })] as [string, (use: Use) => Promise<unknown>]),
+    ...(['general', 'soldier', 'worker'].includes(config.task.type) ? ['webshell', 'c2'].map(family => [
       `redtrace-${family}`, (use: Use) => use(scoped, `packages/redtrace-dsh/lib/${family}.js`, { toolEnabled: config.toolEnabled }),
-    ] as [string, (use: Use) => Promise<void>]) : []),
+    ] as [string, (use: Use) => Promise<unknown>]) : []),
     ['redtrace-web', async use => {
       const scope = scoped.isolate('web').isolate('settings')
       await use(scope, `${VENDOR}/web/web/lib/index.js`, { searchProvider: 'web-search-free', fetchProvider: 'http' })
-      await use(scope, 'packages/redtrace-engine/node_modules/dsh-web-search-free/dist/index.js', webSearchFreeConfig())
+      const keys = webSearchFreeConfig()
+      webSearch = await use(scope, 'packages/redtrace-engine/node_modules/dsh-web-search-free/dist/index.js', keys)
+      webSearchKeys = JSON.stringify(keys)
       await use(scope, `${VENDOR}/web/web-fetch-http/lib/index.js`)
       await use(scope, `${VENDOR}/web/tool-web/lib/index.js`, { fetch: true, searchTimeoutMs: 60000 })
     }],
@@ -266,6 +270,10 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
       for (const [id, add] of stacks) {
         if (available(id)) await install(id, add)
         else await remove(id)
+      }
+      if (available('redtrace-web') && webSearch) {
+        const keys = webSearchFreeConfig(), signature = JSON.stringify(keys)
+        if (signature !== webSearchKeys) { await webSearch.update(keys); webSearchKeys = signature }
       }
     })
     last = next

@@ -30,7 +30,7 @@ const model = createServer(async (req, res) => {
     const reporter = system.includes('漏洞报告撰写 agent')
     let name, args
     if (!reporter) {
-      assert.match(system, /You are SOLDIER/)
+      assert.match(system, /You are WORKER/)
       const facts = graph.facts.filter(f => f.id !== 'origin')
       if (!calls.some(c => c.function.name === 'bash')) {
         name = 'bash'; args = { command: `curl -sS -i '${target}/private' > baseline.http; curl -sS -i '${target}/private?debug=1' > proof.http; cat baseline.http proof.http`, description: 'Verify authorized loopback-only fixture baseline and proof' }
@@ -39,7 +39,7 @@ const model = createServer(async (req, res) => {
         name = 'submit_fact'; args = { title: proof ? 'Debug bypass verified' : 'Baseline requires login', description: proof ? 'Loopback fixture debug request returned HTTP 200 and dummy marker without login' : 'Loopback fixture baseline returned HTTP 401', doc: proof ? 'Executed curl -sS -i '+target+'/private?debug=1; full response in proof.http. Fixture only.' : 'Executed curl -sS -i '+target+'/private; full response in baseline.http. Fixture only.', evidence: [{ path: proof ? 'proof.http' : 'baseline.http', description: proof ? 'Real loopback fixture proof response' : 'Real loopback fixture baseline response' }] }
       } else if (!graph.findings.length) {
         name = 'submit_finding'; args = { title: 'Local fixture debug authentication bypass', type: 'CWE-287', severity: 'low', description: 'Verified only in the intentionally vulnerable local fixture: debug query exposes a dummy marker without login', assetIds: [target+'/private'], factIds: facts.map(f => f.id) }
-      } else { name = 'finish_step'; args = { summary: 'Verified loopback baseline/proof; structured Finding handed to independent Reporter' } }
+      } else { await fetch(api+'/v2/projects/'+projectId+'/findings/'+graph.findings[0].id+'/report',{method:'POST'}); name = 'finish_step'; args = { summary: 'Verified fixture; user explicitly requested the Worker report workflow' } }
     } else {
       for (const forbidden of ['bash','read','write','edit','submit_fact','submit_finding','legion_spawn','http_request']) assert.ok(!names.includes(forbidden), 'Reporter unexpectedly has '+forbidden)
       for (const section of ['## 摘要','## 内容']) assert.ok(system.includes(section))
@@ -73,7 +73,7 @@ try {
   await new Promise(r => model.listen(0, '127.0.0.1', r))
   const configuration = new Configuration(work); configuration.initialize(); configuration.commit(configuration.read().revision, raw => {
     raw.providers = { fixture: { api: 'openai-completions', base_url: 'http://127.0.0.1:'+model.address().port+'/v1', api_key: 'fixture-not-secret', models: [{ id: 'fixture', context_window: 100000, max_tokens: 4000, reasoning: 'off', reasoning_efforts: false }] } }
-    raw.workers = [{ name: 'fixture-worker', roles: ['soldier'], provider: 'fixture', model: 'fixture', max_running: 2 }]
+    raw.workers = [{ name: 'fixture-worker', roles: ['worker'], provider: 'fixture', model: 'fixture', max_running: 2 }]
     raw.runtime = { max_workers: 2, max_project_workers: 2, max_running_projects: 1 }
     raw.tasks = { soldier: { timeout: 30, conclude_timeout: 3 } }
   })
@@ -84,9 +84,9 @@ try {
   await until(async () => { try { return (await fetch(api+'/health')).ok } catch { return false } }, Boolean)
   const call = async (route, body) => { const response = await fetch(api+route, body ? { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(body) } : {}); const value = await response.json(); assert.ok(response.ok, JSON.stringify(value)); return value }
   const created = await call('/v2/projects', { mode: 'general', title: 'Fact / Finding / Reporter native fixture', origin: 'Authorized intentionally vulnerable loopback fixture only: '+target, goal: 'Verify retained baseline, proof and report', bootstrap: false }); projectId = created.project.id
-  await call('/v2/projects/'+projectId+'/steps', { role: 'soldier', taskKey: 'fixture', description: 'Verify local fixture auth baseline and debug bypass, then register supporting Facts and Finding', sourceIds: ['origin'] })
+  await call('/v2/projects/'+projectId+'/steps', { role: 'worker', taskKey: 'fixture', description: 'Verify local fixture auth baseline and debug bypass, then register supporting Facts and Finding', sourceIds: ['origin'] })
   const graph = await until(() => call('/v2/projects/'+projectId), g => g.findings[0]?.report && g.steps.every(s => s.status === 'done'))
-  assert.equal(graph.facts.length, 3); assert.equal(graph.steps.length, 2); assert.ok(graph.steps.some(s => s.role === 'reporter'))
+  assert.equal(graph.facts.length, 3); assert.equal(graph.steps.length, 2); assert.ok(graph.steps.some(s => !!s.reportFindingId))
   const runs = await call('/v2/projects/'+projectId+'/runs'); assert.equal(runs.length, 2); assert.ok(runs.every(r => r.status === 'succeeded')); assert.notEqual(runs[0].id, runs[1].id)
   const report = await call('/v2/projects/'+projectId+'/evidence/'+graph.findings[0].report.artifactId)
   assert.equal(report.nextOffset, null); assert.match(report.content, /HTTP\/1.1 401/); assert.match(report.content, /HTTP\/1.1 200/); assert.match(report.content, /FIXTURE_ONLY_NOT_A_SECRET/)

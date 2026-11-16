@@ -1,3 +1,4 @@
+import { executorRole, coordinatorRole, isReportStep } from '../../redtrace-dsh/src/roles.ts'
 import { Type } from 'typebox'
 import type { TSchema, Static } from 'typebox'
 import type { AgentTool, AgentToolResult } from './tool-types.ts'
@@ -59,7 +60,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     return { ...page, planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id), nextOffset: remaining.length ? Math.max(...remaining) : null, nextOffsets }
   })
   const refs = Type.Array(Type.String())
-  const reporting = step?.role === 'reporter'
+  const reporting = isReportStep(step)
   const tools: AgentTool[] = [readGraph, ...(!reporting && step?.role ? legionTools(store, run.id, run.projectId, maxSteps(), finish, config) : [])]
   tools.push(tool('project_evidence_read', 'Read hash-verified Project evidence independently of the producer Run or Session. Artifact IDs are Project-scoped. Binary pages return encoding=base64; decode content accordingly.', Type.Object({ artifact_id: Type.String({ pattern: '^artifact-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), args => new ProjectEvidence(store, config.workspaceRoot).read(run.projectId, args.artifact_id, args.offset, args.length)))
   tools.push(tool('read_graph_delta', 'Read a bounded page of change metadata and current node titles. Historical Facts remain readable by ID. Continue with cursor until hasMore is false. Reading does not acknowledge processing.', Type.Object({ after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), args => ({ ...store.graphDelta(run.projectId, args.after ?? store.run(run.id).deliveredGraphCursor ?? 0, args.limit ?? 100, run.id), planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id) })))
@@ -124,7 +125,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     )
   }
   if (!reporting) tools.push(...knowledgeTools(evidenceRoot, context))
-  return tools.filter(t => step?.role !== 'scout' || t.name !== 'submit_finding').map(t => ({ ...t, execute: async (...args) => {
+  return tools.filter(t => step?.role !== 'scout' || t.name !== 'submit_finding').map(t => ({ ...t, description:store.project(run.projectId).mode==='general'?t.description.replaceAll('Commander','Planner').replaceAll('Soldier','Worker').replaceAll('Sapper','FGS').replace('A separate Reporter Session writes the report; do not write it during Explore.', 'Planner is notified through FGS and assigns report work when needed; no report Step is created automatically.'):t.description, execute: async (...args) => {
     if (!Check(t.parameters, args[1])) throw new HttpError(422, 'Invalid tool arguments')
     if (!efficiencyToolAvailable(context, t.name)) throw new Error('Efficiency tool plugin is disabled')
     if (signal.aborted || store.run(run.id).status !== 'running') throw new Error('Activity has stopped')
@@ -141,10 +142,10 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   } }))
 }
 
-export const activityPrompt = (_activity: 'decide' | 'execute', step?: Step, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => legionMission(step?.role ?? 'soldier', mode, planner) + (step ? '\nAssigned Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'. Read and write only this Graph.' : '') + (step?.specialist ? '\nSpecialist assignment (within existing authorized Scope): '+JSON.stringify(step.specialist) : '') + (step?.bootstrap && mode==='general' ? '\nInitial Mission: establish evidence for the supplied Goal as a Soldier. Commander owns planning and acceptance.' : '')
+export const activityPrompt = (_activity: 'decide' | 'execute', step?: Step, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => legionMission(isReportStep(step) ? 'reporter' : step?.role ?? executorRole(mode), mode, planner) + (step ? '\nAssigned Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'. Read and write only this Graph.' : '') + (step?.specialist ? '\nSpecialist assignment (within existing authorized Scope): '+JSON.stringify(step.specialist) : '') + (step?.bootstrap && mode==='general' ? '\nInitial Mission: establish evidence for the supplied Goal as a Worker. Planner owns planning and acceptance.' : '')
 
-export function activityLimits(config: EngineConfig, activity: 'decide' | 'execute', step?: Step) {
-  return config.taskLimits?.[activity==='decide'?'commander':step?.role==='reporter'?'soldier':step?.role??'soldier'] ?? {timeout:config.executeTimeout,concludeTimeout:config.concludeTimeout}
+export function activityLimits(config: EngineConfig, activity: 'decide' | 'execute', step?: Step, mode: 'benchmark'|'general' = 'benchmark') {
+  return config.taskLimits?.[activity==='decide'?coordinatorRole(mode):isReportStep(step)?executorRole(mode):step?.role??executorRole(mode)] ?? {timeout:config.executeTimeout,concludeTimeout:config.concludeTimeout}
 }
 
 const livePlans = new WeakMap<Store, Map<string, { revision: number; bound: number; text: string }>>()
@@ -185,8 +186,9 @@ export function launchContext(store: Store, runId: string, channels: unknown[] =
     .all(run.projectId,run.graphId??null,run.graphId??null, acknowledgedHintSeq, run.activity === 'decide' ? 1 : 0, run.stepId).map(row => JSON.parse(String(row.data)) as Input) : []
   const goal = run.activity === 'decide' ? store.node<Goal>(run.projectId, 'goal', 'goal') : undefined
   return { projectId: run.projectId, graphId:run.graphId, ...(run.handoff ? {handoff:{confirmedState:run.handoff,predecessorRunId:run.predecessorRunId}} : {}), planningCapacity: store.planningCapacity(run.projectId, maxSteps), acknowledgementBoundary: store.acknowledgementBoundary(run.id), scope: { id: origin.id, description: origin.description },
+    ...(step && store.project(run.projectId).mode==='general' ? {step:store.readNode(run.projectId,step.id),dependencies:step.sourceIds.map(id=>store.readNode(run.projectId,id))} : {}),
     ...(step && store.project(run.projectId).mode==='benchmark' && taskTodoOwner(step,store) ? {planningTodos:new CommanderTodos(store,run.projectId).list(step.graphId!)} : {}),
-    ...(step?.role === 'reporter' ? { reportTrigger: { tool: 'submit_finding', finding_id: step.sourceIds[0], finding: store.readNode(run.projectId, step.sourceIds[0]) } } : {}),
+    ...(isReportStep(step) ? { reportTrigger: { tool: 'submit_finding', finding_id: step!.sourceIds[0], finding: store.readNode(run.projectId, step!.sourceIds[0]) } } : {}),
     ...(goal ? { goal: { id: goal.id, description: goal.description, status: goal.status },
       evidenceSeq: run.planningEvidenceSeq ?? 0, hintSeq: run.planningHintSeq ?? 0, criticalSeq: run.planningCriticalSeq ?? 0, graphCursor: run.deliveredGraphCursor ?? 0,
       } : {}),
@@ -204,7 +206,7 @@ export function graphUpdate(store: Store, projectId: string, cursor: number, ste
   const project = store.project(projectId), run = runId ? store.run(runId) : undefined
   const latestCursor = stepId === null ? undefined : Number(store.db.prepare('SELECT MAX(id) AS id FROM events WHERE project_id=?').get(projectId)?.id ?? cursor)
   const step = run?.stepId ? store.node<Step>(projectId, run.stepId, 'step') : undefined
-   const reporting = step?.role === 'reporter'
+   const reporting = isReportStep(step)
    const stopped = !(reporting ? ['active','completed'].includes(project.status) : project.status === 'active') || !!run && (run.status !== 'running' || !!step && (step.status !== 'running' || !reporting && store.node<Goal>(projectId, step.goalId, 'goal').status !== 'open'))
   const planVersion = step?.planVersion ?? 1, boundStepVersion = run?.boundStepVersion ?? 1
   const planChanged = !stopped && !!step && planVersion !== boundStepVersion
@@ -237,7 +239,7 @@ export function graphUpdate(store: Store, projectId: string, cursor: number, ste
 
 export async function runMock({ store, run, signal }: TaskContext) {
   if (signal.aborted) return
-  if (run.stepId && store.node<Step>(run.projectId, run.stepId, 'step').role === 'reporter') throw new HttpError(409, 'Reporter requires a DSH Session; mock mode does not fabricate vulnerability reports')
+  if (run.stepId && isReportStep(store.node<Step>(run.projectId, run.stepId, 'step'))) throw new HttpError(409, 'Reporter requires a DSH Session; mock mode does not fabricate vulnerability reports')
   const graph = store.graph(run.projectId)
   if (run.activity !== 'execute') throw new HttpError(410,'Independent Reason execution was removed')
   {

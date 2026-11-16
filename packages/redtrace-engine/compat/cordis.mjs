@@ -1,4 +1,5 @@
-import { runtimeCatalog, mountToolSettings, platformToolOptions, mountSystemLogs } from './console.mjs'
+import { executionRole, coordinatorRole, isReportStep } from '../../redtrace-dsh/lib/roles.js'
+import { runtimeCatalog, mountToolSettings, mountMcpRoleTools, platformToolOptions, mountSystemLogs } from './console.mjs'
 import { inspectToolCatalog } from './tool-catalog.mjs'
 import { mountLegionContext } from './legion-context.mjs'
 import { Type } from 'typebox'
@@ -120,7 +121,7 @@ export async function apply(ctx, options) {
     adapterAvailability: () => pluginId => manager.running(pluginId),
     probeModel: (config, worker, signal) => probeModel(ctx, engine.configuration, config, worker, signal),
     selectWorker: (worker, activity, step) => {
-      const preset = step?.role === 'reporter' ? 'soldier' : step?.role ?? 'soldier'
+      const preset = executionRole(step ? engine.store.project(step.projectId).mode : 'benchmark', step?.role)
       if (!state()?.presets.has(preset)) return undefined
       return worker
     },
@@ -143,12 +144,12 @@ export async function apply(ctx, options) {
   // The engine handler serves the Web UI and the whole API; the Cordis web
   // server only owns the plugin-manager routes and falls through to it.
   ctx.effect(() => ctx.webServer.registerFallback(engine.handler))
-  let profileRevision = '', profileSignature = '', watcher
+  let profileRevision = '', profileSignature = '', watcher, mcpWatcher
   let refreshPending = Promise.resolve()
   const refresh = () => refreshPending = refreshPending.catch(() => {}).then(refreshProfiles)
   const refreshProfiles = async () => {
     const shared = state(), mcpConfigs = engine.capabilities.mcpConfigs()
-    if (shared && mcpSignature(mcpConfigs) !== shared.mcpSignature) await shared.remountMcp?.(mcpConfigs)
+    if (shared && mcpSignature(mcpConfigs) !== shared.mcpSignature) { await shared.remountMcp?.(mcpConfigs); await Promise.all([...sessionRefresh.values()].map(refresh=>refresh())) }
     const { raw, revision, config, signature } = engine.configuration.resolvedSnapshot()
     if (signature === profileSignature) return
     const { providers } = providerProfiles(config)
@@ -162,6 +163,8 @@ export async function apply(ctx, options) {
     await adapter.fiber.await()
     if (shared) shared.snapshot = { revision, workers: config.workers.map(w => ({ ...w })), providers, env: {}, commonEnv: config.commonEnv, tasks: raw.tasks, mcpConfigs,
       limits: { maxWorkers: config.maxWorkers, maxProjectWorkers: config.maxProjectWorkers, maxRunningProjects: config.maxRunningProjects, interval: 0 } }
+    ctx.logger.info('Configuration reloaded: revision='+revision.slice(0,12)+' workers='+config.workers.length)
+    await Promise.all([...sessionRefresh.values()].map(refresh=>refresh()))
     profileRevision = revision; profileSignature = signature
   }
   const replacements = {
@@ -172,15 +175,17 @@ export async function apply(ctx, options) {
   const sessionRefresh = new Map()
   const manager = new PluginManager(ctx, runtime, repoRoot, load, replacements, async () => {
     await engine.operations.synchronizeAdapters()
+    ctx.logger.info('Plugin settings synchronized: '+manager.list().filter(p=>['stopped','error'].includes(p.status)).map(p=>p.id+'='+p.status).join(', '))
     await Promise.all([...sessionRefresh.values()].map(refresh => refresh()))
     engine.scheduler.wake(); commanderController?.wake()
   })
+  engine.pluginManager=manager;engine.sessionRefresh=sessionRefresh
   try {
     await manager.boot(); registerPluginRoutes(ctx, manager)
     await mountSystemLogs(ctx, engine)
     mountToolSettings(ctx, engine)
     closeGlobalChat = mountGlobalChat(ctx,engine,refresh)
-    commanderController = createCommanderController(ctx, engine,()=>!!state()?.presets.has('commander'))
+    commanderController = createCommanderController(ctx, engine,mode=>!!state()?.presets.has(coordinatorRole(mode??'benchmark')))
     engine.commanderController=commanderController
     engine.deletion.stopRuntime=async id=>{await engine.chats.stopProject?.(id);await commanderController.stop(id);await engine.scheduler.stopProject(id)}
     if (manager.running('redtrace-scheduler')) commanderController.start()
@@ -191,15 +196,19 @@ export async function apply(ctx, options) {
     engine.router.add('POST', '/v2/legion/command', async c => {
       const input = await body(c.req, Type.Object({projectId:Type.String({minLength:1}), worker: Type.String({ minLength: 1 }) }))
       const config = engine.configuration.resolvedSnapshot().config
-      if(!state()?.presets.has('commander'))throw new Error('Commander preset is disabled')
-      return runCommander(ctx, engine, config.workers.find(worker => worker.name === input.worker), AbortSignal.timeout(config.decideTimeout * 1000),input.projectId)
+      const role=coordinatorRole(engine.store.project(input.projectId).mode)
+      if(!state()?.presets.has(role))throw new Error('Coordinator preset is disabled')
+      return runCommander(ctx, engine, config.workers.find(worker => worker.name === input.worker), AbortSignal.timeout((config.taskLimits?.[role]?.timeout??config.decideTimeout) * 1000),input.projectId)
     })
     watcher = watch(path.dirname(engine.configuration.filename), (_event, filename) => {
       if (!filename || String(filename) === path.basename(engine.configuration.filename)) void refresh().catch(error => ctx.logger.warn(error))
     })
-    ctx.effect(() => async () => { watcher.close(); await closeGlobalChat?.(); await commanderController?.close(); await engine.close() })
+    mcpWatcher = watch(engine.capabilities.mcpDir, (_event, filename) => {
+      if (!filename || String(filename).endsWith('.json')) void refresh().catch(error=>ctx.logger.warn(error))
+    })
+    ctx.effect(() => async () => { watcher.close(); mcpWatcher.close(); await closeGlobalChat?.(); await commanderController?.close(); await engine.close() })
     ctx.logger.info('RedTrace runtime ready: console, plugins and scheduler initialized')
-  } catch (error) { watcher?.close(); await engine.close(); throw error }
+  } catch (error) { watcher?.close(); mcpWatcher?.close(); await engine.close(); throw error }
 
   async function executeDsh(context) {
     await refresh()
@@ -207,10 +216,10 @@ export async function apply(ctx, options) {
     if (run.activity !== 'execute') throw new Error('Independent Reason execution was removed')
     if (!shared) throw new Error('Cordis domain service is unavailable')
     const step = run.stepId ? store.node(run.projectId, run.stepId, 'step') : undefined
-    const reporting = step?.role === 'reporter'
-    const task = { usage: { inputTokens: run.inputTokens, outputTokens: run.outputTokens, cacheReadTokens: run.cacheReadTokens, cacheWriteTokens: run.cacheWriteTokens }, type: step?.role ?? 'soldier', projectId: run.projectId, intentId: run.stepId ?? undefined,
+    const reporting = isReportStep(step)
+    const task = { usage: { inputTokens: run.inputTokens, outputTokens: run.outputTokens, cacheReadTokens: run.cacheReadTokens, cacheWriteTokens: run.cacheWriteTokens }, type: executionRole(store.project(run.projectId).mode,step?.role), projectId: run.projectId, intentId: run.stepId ?? undefined,
       worker: worker.name, sessionId: run.id, runId: run.id, committed: false, notificationEpoch: randomUUID(), server: options.server, startedAt: Date.now(), executionProfile: step?.executionProfile ?? 'direct' }
-    if (!shared.presets.has(reporting ? 'soldier' : task.type)) throw new Error(`Cordis task preset ${task.type} is disabled`)
+    if (!shared.presets.has(task.type)) throw new Error(`Cordis task preset ${task.type} is disabled`)
     const cwd = run.workspaceRoot ?? path.join(config.workspaceRoot, run.projectId); await mkdir(cwd, { recursive: true })
     let finished = false, concludeOnly = false, handle, legionMailbox
     let refreshLiveTools = () => {}
@@ -228,13 +237,15 @@ export async function apply(ctx, options) {
     const { sessionDir } = await load('vendor/deepseek-harness/packages/spill/spill-local/lib/index.js')
     const ownSpillRead = executionEvidenceReadGuard(sessionDir(path.join(runtime.sessionRoot, 'spill'), run.id), cwd)
     const setup = async scoped => {
+      let refreshMcp=()=>{}
       if (!reporting) {
         // Skills mount DSH-natively from the project root skills catalog; the
         // agent discovers and loads them through the skill tool on demand.
         scoped = await mountExecutionTools(scoped, { task, cwd, sessionRoot: runtime.sessionRoot, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.availableForTask(id),
-          toolEnabled: name => platformToolOptions(engine, name, worker.name).when(),
-          onRefresh: refresh => sessionRefresh.set(run.id, async () => { await refresh(); refreshLiveTools() }) })
+          toolEnabled: name => platformToolOptions(engine, name, task.type).when(),
+          onRefresh: refresh => sessionRefresh.set(run.id, async () => { await refresh(); refreshMcp(); refreshLiveTools() }) })
       }
+      if (!reporting) refreshMcp=mountMcpRoleTools(scoped,ctx,engine,task.type)
       if (reporting) scoped.tools.restrict({ allow: [] })
       else {
         mountLegionContext(scoped,ctx,{store,legion:engine.legion,run,task,message})
@@ -263,7 +274,7 @@ export async function apply(ctx, options) {
           if (result.isError) throw new HarnessError(result.content.filter(block => block.type === 'text').map(block => block.text).join('\n'), result.details?.context?.code ?? 'REDTRACE_TOOL_ERROR')
           if (result.terminate) execution.concludeTurn?.()
           return result
-        } }, platformToolOptions(engine, t.name, worker.name))
+        } }, platformToolOptions(engine, t.name, task.type))
       for (const t of [...tools.filter(t => !/^(?:knowledge_|http_)/.test(t.name)), ...(!reporting ? resourceTools(context, verbRuntime) : [])]) registerTool(t)
       const liveVerbs = !reporting ? verbTools(context, verbRuntime, step) : []
       const refreshEfficiencyTools = refreshToolRegistrations(tools.filter(t => /^(?:knowledge_|http_)/.test(t.name)), t => efficiencyToolAvailable(context, t.name), registerTool)
@@ -327,7 +338,7 @@ export async function apply(ctx, options) {
        if (!reporting && step?.role) legionMailbox = attachLegionMailbox(ctx, engine.legion, { projectId: run.projectId, actor: run.id, sessionId: run.id, agent: handle.agent, message, closing: () => finished || signal.aborted })
       // Changes committed during activation remain in the event log until this scan.
       steer(run.projectId)
-      const limits = activityLimits(config, run.activity, step)
+      const limits = activityLimits(config, run.activity, step,store.project(run.projectId).mode)
       await wait(limits.timeout)
       if(task.failure&&!signal.aborted)throw task.failure
       if (!finished && !task.committed && !signal.aborted) {

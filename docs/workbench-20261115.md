@@ -3,10 +3,10 @@
 ## 架构
 - 保留每 Project Commander、Project.mode、Graph、Scheduler、Worker、FGS 和唯一 DSH Harness。
 - Benchmark：独立题目图，首派 Soldier；可选 Scout，不再强制分类门槛。题目规划者接管阶段计划和 Goal 证据验收，General 增援时继承原列表。Commander 保持常驻原生会话和原有 60/90 秒巡检。
-- General：唯一主图，Commander 承担原 Reason 的规划、TodoList、FGS 和验收职责，Worker 独立并发。禁止新建 Scout；重开数据库时把旧 General Scout Mission 迁为 Soldier，记录迁移事件，保留原生审计和内容。
-- specialist 的名称、职责、能力、范围存入既有 Step JSON。专业 Agent 使用既有 Soldier/General 模型路线、Session、生命周期、交接和资源限制；不新增 Harness、执行池或配置必填项。
-- 两模式共享证据停滞阶梯、既有 Park/接力/换模型与止损。复杂任务允许直接 General。绩效按真实 Run 汇总证据、Token、时间和前任；精英编队通过既有配置路线和经验索引形成，不制造独立评价模型。
-- 替换 Mission 保留 role、taskKey、父编队和专业定义；未知工具结果仍需确认，未降低隔离边界。
+- General：只有 Planner / Worker。Planner 独占唯一主 FGS、任务级 TodoList、Step 创建、调度和验收。Worker 执行 Step、提交 Fact/Finding；不拥有 TodoList 或任务计划。旧执行身份迁为 Worker，原始审计保持不变。
+- Benchmark 专业 Agent 继续继承 Soldier。General 不创建动态 Agent 或专业编队，已有专业定义/父编队在角色迁移中解除；执行证据、Run、Session 和交接状态保留。
+- Benchmark 保留原有停滞阶梯、Park、模型升级和经验索引。General 不使用这些编队/绩效/跨题经验机制；通过 FGS 事件、Worker 完成与 Finding 的 800 ms Debounce 唤醒 Planner，复用原有调度容量和 Session 生命周期。
+- General 替换 Step 保留 FGS 前置依赖；未知工具结果仍需确认，未降低隔离边界。独立 Step 可并行；依赖未完成的 Step 不进入可执行 Frontier。
 
 ## 会话与数据
 - Project 三栏布局：Benchmark 固定 Commander；General 固定参谋长及只读 Commander；其下统一 Workers、真实消息流、运行态势。Benchmark 一题一会话；General 一执行实例一会话。编号来自持久化 Run 顺序，不随排序改变。Commander 指令在右，Worker 在左，系统事件居中；上下文和工具细节默认折叠。
@@ -31,4 +31,6 @@ General 的用户入口改为参谋长：独立、按需激活的原生 DSH Sess
 
 三处输入（全局助手、参谋长、Benchmark Commander）均可上传任意文件及 DSH 支持的 PNG/JPEG/WebP/GIF 图片；二进制直传，文件走原生流式存储，图片复用 DSH 原生尺寸/格式策略及模型图片块。仅维护附件归属索引，不复制会话正文；附件只能由其会话引用、下载和转交。Commander 输入附件索引不启动另一个 Agent。文本文件可按需分段读取，二进制文件提供原始内容与下载；未新增格式解析器；附件上传和读取不额外调用模型。
 
-专业 Agent 在创建后即以待执行任务出现，运行后依据真实 Run/Session 稳定编号；接力产生独立实例并保留交接。新增证据记录 producerRunId，避免把同一底层 Worker 路由产生的证据误计到多个 Agent；历史无法归属到 Run 的证据仍保留原始数据，不猜测归属。参谋长是用户请求增加的一次按需模型交互，不参与每次 Worker 工具调用。
+Benchmark 专业 Agent 在创建后即以待执行任务出现，运行后依据真实 Run/Session 稳定编号；接力产生独立实例并保留交接。新增证据记录 producerRunId，避免把同一底层 Worker 路由产生的证据误计到多个 Agent；历史无法归属到 Run 的证据仍保留原始数据，不猜测归属。参谋长是用户请求增加的一次按需模型交互，不参与每次 Worker 工具调用。
+
+当前角色身份、工具绑定与审计统计契约见 [角色与工具系统](role-tool-system.md)。内部 commander 消息地址和既有 API 路径保持稳定，不再作为 General 模式的角色身份。

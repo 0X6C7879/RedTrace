@@ -73,12 +73,12 @@ test('many-to-many Finding folding preserves raw Facts, active dependencies and 
   assert.equal(store.graph(id).facts.length, 3)
 })
 
-test('structured Finding auto-registers one independent Reporter, saves/updates a report Artifact and never produces Facts', async t => {
+test('explicit General report request uses a Worker workflow, saves/updates an Artifact and never produces Facts', async t => {
   const { root, store, project, activate } = fixture(t), id = project.id
   const a = store.addFact(id, 'Local fixture returned literal proof', { title: 'Fixture proof', evidence: [{ description: 'fixture stdout, not live vulnerability proof' }] })
   const finding = store.addFinding(id, { title: 'Fixture vulnerability', description: 'Verified deterministic fixture only', type: 'fixture', severity: 'low', assetIds: ['fixture-target'], factIds: [a.id] })
-  const step = store.nodes<Step>(id, ['step'])[0]
-  assert.equal(step.role, 'reporter'); assert.deepEqual(step.sourceIds, [finding.id])
+  const step = store.requestFindingReport(id, finding.id)
+  assert.equal(step.role, 'worker'); assert.equal(step.reportFindingId,finding.id); assert.deepEqual(step.sourceIds, [finding.id])
   assert.equal(store.requestFindingReport(id, finding.id).id, step.id)
   // Reporting is post-verification work: Goal acceptance must not cancel its pending Session.
   store.updateGoal(id, 'goal', { status: 'achieved', evidenceIds: [finding.id] })
@@ -133,7 +133,7 @@ test('Reporter rejects incomplete completion; retained Doc corruption is visible
   const file = new ProjectEvidence(store, root).publish(id, Buffer.from('original doc'), { description: 'immutable doc' })
   const fact = store.addFact(id, 'Proof', { doc: { artifactId: file.id, description: 'doc' } })
   const finding = store.addFinding(id, { title: 'Fixture', description: 'Fixture', type: 'fixture', severity: 'low', factIds: [fact.id] })
-  const { run } = activate(store.nodes<Step>(id, ['step'])[0])
+  const { run } = activate(store.requestFindingReport(id, finding.id))
   assert.equal(store.finishRun(run.id, 'succeeded').status, 'failed')
   writeFileSync(path.join(root, id, file.path), 'corrupt')
   const result = new ProjectEvidence(store, root).promoteFacts(id)

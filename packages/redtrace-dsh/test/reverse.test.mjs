@@ -8,12 +8,12 @@ import test from 'node:test'
 import { createHash } from 'node:crypto'
 import { load, repoRoot } from '../lib/loader.js'
 import { mountExecutionTools } from '../lib/execution-tools.js'
-import { reverseEnvironment, reverseToolSchemas } from '../lib/reverse.js'
+import { reverseEnvironment, reverseToolSchemas, retainedReverseContracts } from '../lib/reverse.js'
 import { PluginManager } from '../lib/plugins.js'
 
 const VENDOR = 'vendor/deepseek-harness/packages'
 const { MCP_TOOLS_WITHOUT_DEDICATED_CLI } = await import(pathToFileURL(path.join(repoRoot, 'node_modules/rea-agents/dist/cliCommandNames.js')).href)
-const retained = new Set([...MCP_TOOLS_WITHOUT_DEDICATED_CLI, 'binary_overview', 'analyze_function', 'procedure_pseudo_code', 'read_function_instructions', 'search_strings', 'search_procedures'])
+const retained = new Set((await retainedReverseContracts()).map(t=>t.name))
 const rea = schemas => schemas.filter(t => t.name.startsWith('mcp__rea__'))
 
 export async function host() {
@@ -26,7 +26,7 @@ export async function host() {
   return ctx
 }
 
-export async function session(ctx, available) {
+export async function session(ctx, available, type = 'soldier') {
   const cwd = mkdtempSync(path.join(tmpdir(), 'redtrace-rea-test-'))
   mkdirSync(path.join(cwd, 'skills'))
   const carrier = ctx.plugin({ inject: ['tools', 'systemPrompt'], apply() {} })
@@ -38,7 +38,7 @@ export async function session(ctx, available) {
   agent.session = ctx.get('sessions').create(undefined, { cwd })
   let refresh
   const scoped = await mountExecutionTools(scope.ctx, { cwd, sessionRoot: cwd, skillsDir: path.join(cwd, 'skills'),
-    task: { type: 'soldier', executionProfile: 'direct' }, available,
+    task: { type, executionProfile: 'direct' }, available,
     onRefresh: fn => { refresh = fn } })
   let id = 0
   return { cwd, agent, scope, scoped, refresh: () => refresh(), schemas: () => ctx.tools.schemas(agent),
@@ -47,7 +47,7 @@ export async function session(ctx, available) {
   }
 }
 
-test('Soldier can lazily load native REA without Commander tool selection; management veto revokes live scopes', { timeout: 90000 }, async t => {
+test('Worker can lazily load native REA without Planner tool selection; management veto revokes live scopes', { timeout: 90000 }, async t => {
   const root = mkdtempSync(path.join(tmpdir(), 'redtrace-step-rea-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const { Store } = await import(pathToFileURL(path.join(repoRoot, 'packages/redtrace-engine/src/store.ts')))
@@ -63,15 +63,15 @@ test('Soldier can lazily load native REA without Commander tool selection; manag
   const id = store.createProject({ title: 'Fixture', origin: 'Authorized fixture', goal: 'Analyze', bootstrap: false }).project.id
   new LegionStore(store,store.projects()[0].id).claimCommand()
   const tools=legionTools(store,'commander',store.projects()[0].id,null,()=>{})
-  const result=await tools.find(t=>t.name==='legion_spawn').execute('commander-create',{projectId:id,role:'soldier',taskKey:'reverse',description:'Reverse fixture',sourceIds:['origin']})
+  const result=await tools.find(t=>t.name==='legion_step').execute('commander-create',{projectId:id,description:'Reverse fixture',sourceIds:['origin']})
   const step = result.details
   const claimed = store.claim(id, 'execute', { name: 'Explore', backend: 'dsh' }, step.id)
   assert.equal(claimed.stepId, step.id)
   assert.equal(manager.running('redtrace-reverse'), true, 'Default-on availability does not depend on Commander planning')
   const ctx = await host()
   t.after(() => ctx.fiber.dispose())
-  const selected = await session(ctx, name => manager.availableForTask(name, step.plugins))
-  const unrelated = await session(ctx, name => manager.availableForTask(name, []))
+  const selected = await session(ctx, name => manager.availableForTask(name, step.plugins), 'worker')
+  const unrelated = await session(ctx, name => manager.availableForTask(name, []), 'worker')
   sessions.push(selected, unrelated)
   for (const s of sessions) t.after(async () => { await s.dispose(); rmSync(s.cwd, { recursive: true, force: true }) })
   const hasSkill = async s => (await s.scoped.get('skills').list({ cwd: s.cwd, scope: s.agent })).some(skill => skill.name === 'reverse-engineer-anything')
@@ -92,7 +92,7 @@ test('Soldier can lazily load native REA without Commander tool selection; manag
   assert.equal(rea(selected.schemas()).length, 0)
   assert.equal(await hasSkill(selected), false)
   assert.equal((await selected.call('mcp__rea__binary_session', {})).isError, true)
-  await tools.find(t => t.name === 'legion_spawn').execute('planning-remains-available', {projectId:id,role:'soldier',taskKey:'reverse-again',description: 'Reverse again', sourceIds: ['origin'] })
+  await tools.find(t => t.name === 'legion_step').execute('planning-remains-available', {projectId:id,description: 'Reverse again', sourceIds: ['origin'] })
   await manager.start('redtrace-reverse')
   assert.equal(await hasSkill(selected), true)
   assert.equal(rea(selected.schemas()).length, 0, 'fresh connection stays lazy')
@@ -101,14 +101,15 @@ test('Soldier can lazily load native REA without Commander tool selection; manag
   assert.equal(tools.some(t => t.name.startsWith('mcp__rea__')), false, 'Commander never receives analysis schemas')
 })
 
-test('official Skill is byte-identical to the pinned package, with complete local references', () => {
+test('CLI-first Skill adaptation is hash-recorded and pinned references remain byte-identical', () => {
   const root = path.join(repoRoot, 'plugins/reverse')
   const lock = JSON.parse(readFileSync(path.join(root, 'upstream.json')))
   assert.equal(lock.version, '6.4.0')
   for (const [relative, digest] of Object.entries(lock.skillFiles)) {
     const file = readFileSync(path.join(root, 'skills', relative))
-    assert.equal(createHash('sha256').update(file).digest('hex'), digest)
-    assert.deepEqual(file, readFileSync(path.join(repoRoot, 'node_modules/rea-agents/skills', relative)))
+    assert.equal(createHash('sha256').update(file).digest('hex'), lock.redtraceOverrides?.[relative] ?? digest)
+    assert.equal(createHash('sha256').update(readFileSync(path.join(repoRoot, 'node_modules/rea-agents/skills', relative))).digest('hex'),digest)
+    if(!lock.redtraceOverrides?.[relative])assert.deepEqual(file, readFileSync(path.join(repoRoot, 'node_modules/rea-agents/skills', relative)))
   }
   const content = readFileSync(path.join(root, 'skills/reverse-engineer-anything/SKILL.md'), 'utf8')
   for (const match of content.matchAll(/\]\((references\/[^)]+)\)/g)) {
@@ -207,7 +208,8 @@ test('compact and full native MCP input schemas retain identical validation sema
       }
     }
   }
-  assert.ok(checked >= 170)
+  assert.equal(rea(compact.schemas()).length,29)
+  assert.equal(checked,TOOL_CONTRACTS.filter(t=>retained.has(t.name)).reduce((n,t)=>n+t.examples.length*4,0))
   t.diagnostic(JSON.stringify({ checked, fullBytes: Buffer.byteLength(JSON.stringify(rea(full.schemas()))), compactBytes: Buffer.byteLength(JSON.stringify(rea(compact.schemas()))), maxCompactParametersBytes: Math.max(...rea(compact.schemas()).map(t => Buffer.byteLength(JSON.stringify(t.parameters)))) }))
 })
 
@@ -222,7 +224,7 @@ test('real REA CLI covers JavaScript, managed members and optional-provider boun
   assert.ok(JSON.parse(cli('capabilities')).capabilities)
   assert.match(cli('analyze-javascript-application', source), /evidence_id/)
   const target = path.join(repoRoot, 'packages/redtrace-dsh/test/fixtures/rea-managed.bin')
-  const shell=await s.call(process.platform==='win32'?'pwsh':'bash',{description:'Inspect managed REA fixture',command:(process.platform==='win32'?'node $env:DSH_REA_CLI':'node "$DSH_REA_CLI"')+' inspect-managed-artifact "'+target+'" --format json'})
+  const shell=await s.call(process.platform==='win32'?'pwsh':'bash',{description:'Inspect managed REA fixture',command:'rea inspect-managed-artifact "'+target+'" --format json'})
   assert.equal(shell.isError,false,JSON.stringify(shell));assert.match(JSON.stringify(shell),/rea-dotnet-static/)
 
   assert.match(cli('inspect-managed-artifact', target), /rea-dotnet-static/)
@@ -289,6 +291,7 @@ test('real Ghidra ELF/PE decompilation, same-Run reuse, cancellation and process
   await s.call('skill', { name: 'reverse-engineer-anything' })
   assert.equal(owned().filter(line => /java/.test(line)).length, 0)
   const targets = writePortableTargets(s.cwd)
+  for(const target of targets){const procedure=target.endsWith('.exe')?'0x140001000':'0x400080';const out=execFileSync('rea',['decompile',target,procedure,'--provider','ghidra','--format','json'],{encoding:'utf8',cwd:s.cwd,env:{...process.env,...reverseEnvironment()}});assert.match(out,/42|0x2a/)}
   for (const target of targets) {
     const before = Date.now()
     const opened = await s.call('mcp__rea__open_binary', { path: target, provider_id: 'ghidra' })
@@ -297,9 +300,9 @@ test('real Ghidra ELF/PE decompilation, same-Run reuse, cancellation and process
     let processes = owned().filter(line => /java/.test(line)).map(line => line.trim().split(/\s/)[0])
     const procedure = target.endsWith('.exe') ? '0x140001000' : '0x400080'
     for (let i = 0; i < 2; i++) {
-      const analyzed = await s.call('mcp__rea__procedure_pseudo_code', { procedure })
+      const analyzed = await s.call('mcp__rea__inspect_address_context', { address: procedure })
       assert.equal(analyzed.isError, false, JSON.stringify(analyzed))
-      assert.match(JSON.stringify(analyzed.value), /42|0x2a/)
+      assert.match(JSON.stringify(analyzed.value), /400080|140001000/)
       const active = owned().filter(line => /java/.test(line)).map(line => line.trim().split(/\s/)[0])
       if (i === 0) processes = active
       assert.equal(active.length, 1, execFileSync('ps', ['-axo', 'pid,ppid,args'], { encoding: 'utf8' }).split('\n').filter(line => /java|rea.mjs/.test(line)).join('\n'))
@@ -311,7 +314,7 @@ test('real Ghidra ELF/PE decompilation, same-Run reuse, cancellation and process
   }
   const abort = new AbortController()
   await s.call('mcp__rea__open_binary', { path: targets[0], provider_id: 'ghidra' })
-  const pending = s.call('mcp__rea__procedure_pseudo_code', { procedure: '0x140001000' }, abort.signal)
+  const pending = s.call('mcp__rea__inspect_address_context', { address: '0x140001000' }, abort.signal)
   setTimeout(() => abort.abort(), 150)
   assert.equal((await pending).isError, true)
   enabled = false
@@ -328,7 +331,7 @@ test('real Ghidra ELF/PE decompilation, same-Run reuse, cancellation and process
   finally { if (previous === undefined) delete process.env.REA_GHIDRA_STARTUP_TIMEOUT_MS; else process.env.REA_GHIDRA_STARTUP_TIMEOUT_MS = previous }
   await s.call('skill', { name: 'reverse-engineer-anything' })
   await s.call('mcp__rea__open_binary', { path: targets[0], provider_id: 'ghidra' })
-  const timedOut = await s.call('mcp__rea__procedure_pseudo_code', { procedure: '0x140001000' })
+  const timedOut = await s.call('mcp__rea__inspect_address_context', { address: '0x140001000' })
   assert.equal(timedOut.isError, true)
   assert.match(JSON.stringify(timedOut), /timeout|deadline/i)
   enabled = false
@@ -340,7 +343,7 @@ test('real Ghidra ELF/PE decompilation, same-Run reuse, cancellation and process
   await s.refresh()
   await s.call('skill', { name: 'reverse-engineer-anything' })
   await s.call('mcp__rea__open_binary', { path: targets[0], provider_id: 'ghidra' })
-  const busy = s.call('mcp__rea__procedure_pseudo_code', { procedure: '0x140001000' })
+  const busy = s.call('mcp__rea__inspect_address_context', { address: '0x140001000' })
   await new Promise(resolve => setTimeout(resolve, 200))
   owned()
   enabled = false
