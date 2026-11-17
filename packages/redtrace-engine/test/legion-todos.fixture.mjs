@@ -7,6 +7,7 @@ import path from 'node:path'
 import {Configuration} from '../src/config.ts'
 import {Store} from '../src/store.ts'
 import {LegionStore} from '../src/legion-store.ts'
+import {ProjectEvidence} from '../src/project-evidence.ts'
 import {providerProfiles} from '../src/models.ts'
 import {load} from '../../redtrace-dsh/lib/loader.js'
 import {runCommander} from '../compat/legion.mjs'
@@ -27,12 +28,12 @@ const model=createServer(async(req,res)=>{
   const injected=input.messages.map(textOf).map(s=>{try{return JSON.parse(s)}catch{return null}}).filter(s=>s?.instruction?.includes('relevant FGS deltas')).at(-1)
   assert(injected,'each wake must carry compact instructions and cursors')
   assert(!('graphs' in injected),'wake-up must not inject full FGS')
-  assert.deepEqual(injected.planningTodos,wake===1?[]:wake<=3?initial:[{content:'verify entry',status:'completed'},{content:'verify credentials',status:'in_progress'}],'every wake inherits the current task plan, including a fresh native session')
+  assert.deepEqual(injected.planningTodos.map(({content,status})=>({content,status})),wake===1?[]:wake<=3?initial:[{content:'verify entry',status:'completed'},{content:'verify credentials',status:'in_progress'}],'every wake inherits the current task plan, including a fresh native session')
   const current={todos:legion.planningTodos(project.id).list(graph.id),fgs:store.graph(project.id)}
   const boundary=input.messages.findLastIndex(m=>{try{return !!JSON.parse(textOf(m)).instruction?.includes('relevant FGS deltas')}catch{return false}})
   const calls=input.messages.slice(boundary+1).flatMap(m=>m.tool_calls??[]).map(c=>c.function.name)
   for(const message of input.messages.filter(m=>m.role==='system'))assert(!textOf(message).includes('"todos":['),'mutable lists do not belong in the system prompt')
-  assert.deepEqual(current.todos,wake===1&&!calls.includes('TodoWrite')?[]:wake<3||wake===3&&!calls.includes('TodoWrite')?initial:[{content:'verify entry',status:'completed'},{content:'verify credentials',status:wake===5&&calls.includes('TodoWrite')?'completed':'in_progress'}])
+  assert.deepEqual(current.todos.map(({content,status})=>({content,status})),wake===1&&!calls.includes('TodoWrite')?[]:wake<3||wake===3&&!calls.includes('TodoWrite')?initial:[{content:'verify entry',status:'completed'},{content:'verify credentials',status:wake===5&&calls.includes('TodoWrite')?'completed':'in_progress'}])
    const entry=current.fgs.facts.find(f=>f.title==='ENTRY_VERIFIED')
    const credentials=current.fgs.facts.find(f=>f.title==='CREDENTIALS_VERIFIED')
   if(wake<3)assert(!entry)
@@ -45,7 +46,7 @@ const model=createServer(async(req,res)=>{
    else if(!calls.includes('legion_todos')){name='legion_todos';args={projectId:project.id,graphId:graph.id}}
    else if(unread){name='legion_read_node';args={projectId:project.id,id:unread.id,detail:'doc'}}
    else if(!calls.includes('TodoWrite')){
-   name='TodoWrite';args={projectId:project.id,graphId:graph.id,todos:wake<3?initial:[{content:'verify entry',status:'completed'},{content:'verify credentials',status:credentials?'completed':'in_progress'}]}
+   name='TodoWrite';args={projectId:project.id,graphId:graph.id,todos:wake<3?initial:[{content:'verify entry',status:'completed',acceptance:'ENTRY_VERIFIED local proof',factIds:[entry.id]},{content:'verify credentials',status:credentials?'completed':'in_progress',...(credentials?{acceptance:'CREDENTIALS_VERIFIED local proof',factIds:[credentials.id]}:{})}]}
   }else if(wake===1&&calls.filter(n=>n==='legion_step').length<3){
    const n=calls.filter(n=>n==='legion_step').length
    name='legion_step';args={projectId:project.id,description:n===0?'stage 1 entry':('independent '+n),sourceIds:[graph.originId],goalId:graph.goalId}
@@ -79,7 +80,9 @@ try{
  legion.message(project.id,run.id,'commander','REPORT','Worker claims success, no supporting Fact')
  store.finishRun(run.id,'failed','no verified entry')
  await cycle();assert.deepEqual(todos(),initial);assert.equal(store.graph(project.id).steps.length,3)
- const fact=store.addFact(project.id,'ENTRY_VERIFIED',{evidence:[{description:'local deterministic fixture: entry=verified'}]})
+ const evidence=new ProjectEvidence(store.forGraph(project.id,graph.id),configuration.workspaceRoot)
+ const proof=label=>({description:label,artifactId:evidence.publish(project.id,Buffer.from(label),{description:label}).id})
+ const fact=store.addFact(project.id,'ENTRY_VERIFIED',{evidence:[proof('local deterministic fixture: entry=verified')]})
  const old=legion.campaign(project.id)
  legion.saveCampaign({...old,previousSessionId:old.sessionId,sessionId:'command-'+randomUUID(),hasSession:false})
  await cycle();assert.notEqual(legion.campaign(project.id).sessionId,old.sessionId)
@@ -89,7 +92,7 @@ try{
  store.addFact(project.id,'Credentials not verified yet',{runId:second.id,evidence:[{description:'local fixture reports blocker, not success'}]})
  store.finishRun(second.id,'succeeded')
  await cycle();assert.deepEqual(todos().map(t=>t.status),['completed','in_progress']);assert.equal(store.graph(project.id).steps.length,4)
- store.addFact(project.id,'CREDENTIALS_VERIFIED',{evidence:[{description:'local deterministic fixture: credentials=verified'}]})
+ store.addFact(project.id,'CREDENTIALS_VERIFIED',{evidence:[proof('local deterministic fixture: credentials=verified')]})
  await cycle();assert.deepEqual(todos().map(t=>t.status),['completed','completed'])
  assert.equal(store.node(project.id,graph.goalId).status,'open','Todo completion never accepts a Goal')
  console.log('TODOS_NATIVE_DSH=true; wakes=5; fresh_session_memory=true; resumed_session_memory=true; failure_does_not_advance=true; Step_done_without_required_Fact_does_not_advance=true; Fact_advances_next_stage=true; no_duplicate_dispatch=true; independent_parallel=true; todo_snapshot_each_wake=true; model=local-protocol-fixture')

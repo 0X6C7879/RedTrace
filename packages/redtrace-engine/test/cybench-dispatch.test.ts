@@ -20,12 +20,12 @@ test('new CyBench task starts a Soldier without a Scout gate and reinforces by e
   const first=legion.spawn(project.id,mission('soldier','analyze CRC oracle'))
   const firstRun=store.claim(project.id,'execute',{name:'fixture',backend:'mock'},first.id)
   assert.throws(()=>legion.spawn(project.id,mission('soldier','analyze CRC oracle')),/different angle/)
-  for(const run of [scoutRun,firstRun]){run.startedAt=new Date(Date.now()-11*60000).toISOString();store.saveRun(run)}
+  for(const run of [scoutRun,firstRun]){run.startedAt=new Date(Date.now()-11*60000).toISOString();store.saveRun(run);store.db.prepare("UPDATE events SET created_at=? WHERE type='execute.started' AND json_extract(data,'$.runId')=?").run(run.startedAt,run.id)}
   store.db.prepare("UPDATE events SET created_at=? WHERE node_id=? AND type='fact.added'").run(new Date(Date.now()-11*60000).toISOString(),fact.id)
   assert.equal(legion.tactics(project.id)[0].recommendation,'second-angle')
   const second=legion.spawn(project.id,mission('soldier','independent polynomial angle'))
   assert.equal(second.role,'soldier')
-  for(const run of [scoutRun,firstRun]){run.startedAt=new Date(Date.now()-21*60000).toISOString();store.saveRun(run)}
+  for(const run of [scoutRun,firstRun]){run.startedAt=new Date(Date.now()-21*60000).toISOString();store.saveRun(run);store.db.prepare("UPDATE events SET created_at=? WHERE type='execute.started' AND json_extract(data,'$.runId')=?").run(run.startedAt,run.id)}
   store.db.prepare("UPDATE events SET created_at=? WHERE node_id=? AND type='fact.added'").run(new Date(Date.now()-21*60000).toISOString(),fact.id)
   assert.equal(legion.tactics(project.id)[0].recommendation,'general')
   assert.equal(legion.spawn(project.id,mission('general','coordinate hard algebra chain')).role,'general')

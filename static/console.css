@@ -61,3 +61,11 @@ section[x-show="appPage === 'plugins'"]>.max-w-5xl{padding:20px}
 .chat-delete-dialog{max-width:28rem}
 .chat-delete-dialog footer{display:flex;justify-content:flex-end;gap:.5rem;margin-top:1.25rem}
 .chat-delete-dialog button[type=submit]{color:var(--rt-danger);border-color:currentColor}
+
+/* Desktop scheduling controls: stable label baselines, short labels and separate hints. */
+.runtime-capacity-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px 20px;align-items:start}
+.runtime-capacity-grid>label{display:flex;flex-direction:column;min-width:0}
+.runtime-capacity-grid>label>span{font-size:12px!important;line-height:1.5;margin:0!important;color:var(--rt-text)!important}
+.runtime-capacity-grid small{display:block;min-height:2.5em;margin:4px 0 8px;font-size:11px;line-height:1.5;color:var(--rt-text-secondary)}
+.runtime-capacity-grid input{font-variant-numeric:tabular-nums;min-height:40px}
+.runtime-inspection-grid label{display:flex;flex-direction:column;gap:6px}.runtime-inspection-grid input{margin-top:0!important}

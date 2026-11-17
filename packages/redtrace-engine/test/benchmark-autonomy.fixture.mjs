@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import {createServer} from 'node:http'
-import {mkdtempSync,rmSync} from 'node:fs'
+import {mkdtempSync,rmSync,mkdirSync,writeFileSync} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {Store} from '../src/store.ts'
@@ -34,8 +34,16 @@ const server=createServer(async(req,res)=>{try{
   else{name='legion_wait';args={through:legion.campaign(p.id).cursors[p.id].delivered}}
  }else{
   const calls=body.messages.flatMap(m=>m.tool_calls??[]).map(c=>c.function.name),run=store.runsByStatus('running',p.id).find(r=>store.node(p.id,r.stepId,'step').role===role.toLowerCase()),step=store.node(p.id,run.stepId,'step')
-  if(!calls.includes('submit_fact')){name='submit_fact';args={title:role==='SCOUT'?'product and version verified':'task result verified',description:'Local deterministic protocol evidence',evidence:[{description:'actual local fixture result'}]}}
+  if(role==='GENERAL'){
+   assert(!names.includes('submit_fact'));assert(!names.includes('http_request'));assert(!names.includes('bash'))
+   const child=store.nodes(p.id,['step']).find(s=>s.parentStepId===step.id),childRun=child&&store.latestRun(p.id,child.id)
+   if(!child){name='legion_step';args={description:'verify target objective',sourceIds:step.sourceIds}}
+   else if(childRun&&!calls.includes('legion_read_run')){name='legion_read_run';args={runId:childRun.id}}
+   else if(child.factIds.length){name='legion_accept';args={expectedVersion:store.node(p.id,step.goalId,'goal').version,evidenceIds:child.factIds}}
+   else{name='legion_plan_done';args={state:'Worker dispatched; inspect retained proof next round'}}
+  }else if(!calls.includes('submit_fact')){mkdirSync(run.workspaceRoot,{recursive:true});writeFileSync(path.join(run.workspaceRoot,'proof.txt'),'actual deterministic local protocol stdout');name='submit_fact';args={title:role==='SCOUT'?'product and version verified':'task result verified',description:'Local deterministic protocol evidence',evidence:[{description:'actual local fixture result',path:'proof.txt'}]}}
   else if(role==='SCOUT'){name='finish_step';args={summary:'classification complete',difficulty,family:'generic-local-product'}}
+  else if(step.parentStepId){name='finish_step';args={summary:'one assigned Step verified'}}
   else{name='legion_accept';args={expectedVersion:store.node(p.id,step.goalId,'goal').version,evidenceIds:step.factIds}}
  }
  assert(names.includes(name),role+' missing '+name)
@@ -62,7 +70,7 @@ try{
  await settle(()=>legion.tactics(p.id)[0]?.classification?.difficulty===difficulty&&legion.campaign(p.id).status==='idle'&&legion.campaign(p.id).nextInspectionAt===base+60000)
  const session=legion.campaign(p.id).sessionId,agent=ctx.get('agents').get(session);assert(agent);assert.equal(store.nodes(p.id,['step']).length,1)
  await advance(60000);await settle(()=>store.project(p.id).status==='completed');await settle(()=>!ctx.get('agents').get(session))
- assert.deepEqual([...roles].sort(),['COMMANDER','SCOUT',ownerRole.toUpperCase()].sort());assert(workerTools.has('legion_accept'));assert(!commanderTools.has('legion_accept'));assert.equal(store.projectGraphs(p.id)[0].status,'completed');assert.equal(legion.campaign(p.id).endgame,'all tasks completed')
- const runs=store.runs(p.id);assert(runs.every(r=>!r.pendingTools.length&&r.status!=='unknown'),JSON.stringify(runs));assert.equal(runs.length,2)
+ assert.deepEqual([...roles].sort(),(ownerRole==='general'?['COMMANDER','SCOUT','GENERAL','SOLDIER']:['COMMANDER','SCOUT','SOLDIER']).sort());assert(workerTools.has('legion_accept'));assert(!commanderTools.has('legion_accept'));assert.equal(store.projectGraphs(p.id)[0].status,'completed');assert.equal(legion.campaign(p.id).endgame,'all tasks completed')
+ const runs=store.runs(p.id);assert(runs.every(r=>!r.pendingTools.length&&r.status!=='unknown'),JSON.stringify(runs));assert(runs.length>=(ownerRole==='general'?3:2))
  console.log('BENCHMARK_AUTONOMY=true; deterministic_task_init=true; scout_verdict=true; operator_FGS_acceptance=true; all_tasks_complete=true; no_unknown_tool_outcome=true; native_roles='+[...roles].join(','))
 }finally{await controller?.close();await scheduler?.close();Date.now=realNow;globalThis.setTimeout=realTimeout;globalThis.setInterval=realInterval;globalThis.clearTimeout=realClear;globalThis.clearInterval=realClearInterval;await ctx?.fiber.dispose();store.close();server.closeAllConnections();await new Promise(r=>server.close(r));rmSync(work,{recursive:true,force:true})}

@@ -83,6 +83,7 @@ export interface LlmPolling { enabled: boolean; models: Record<string, string[]>
 export interface EngineConfig {
   llmPolling?: LlmPolling
   commanderInspection?: {active:number;idle:number}
+  maxBenchmarkTasks?: number | null
   taskLimits?: Record<string, {timeout:number;concludeTimeout:number}>
   workers: Worker[]; providers: Record<string, Provider>; maxWorkers: number; maxProjectWorkers: number
   maxRunningProjects: number; maxSteps: number | null; decideTimeout: number; executeTimeout: number

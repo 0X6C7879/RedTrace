@@ -18,7 +18,9 @@ export function providerProfiles(config: EngineConfig) {
       models: p.models.map(m => ({ id: m.id, name: m.id, contextWindow: m.contextWindow, maxTokens: m.maxTokens, input: ['text', 'image'],
         ...(modelReasoningEfforts(m) === undefined ? {} : { reasoningEfforts: modelReasoningEfforts(m) }),
         ...(p.api === 'openai-completions' ? { compat: { supportsDeveloperRole: false,
-          ...(['deepseek', 'openai'].includes(m.thinkingFormat ?? '') ? { thinkingFormat: m.thinkingFormat } : {}) } } : {}) })) }
+          ...(['deepseek', 'openai'].includes(m.thinkingFormat ?? '') ? { thinkingFormat: m.thinkingFormat } : {}) } } : {}),
+        // Compatible gateways return unsigned thinking; replay it as thinking, not ordinary text.
+        ...(p.api === 'anthropic-messages' ? { compat: { allowEmptySignature: true } } : {}) })) }
   }
   return { providers, env }
 }

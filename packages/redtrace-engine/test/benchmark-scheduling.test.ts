@@ -30,7 +30,7 @@ test('Watchdog escalates only after confirmed evidence stops advancing', t => {
   store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?)').run(p.id,'T1',JSON.stringify({difficulty:'medium'}))
   const step=store.forGraph(p.id,graph.id).addStep(p.id,{role:'soldier',taskKey:'T1',description:'work',sourceIds:[graph.originId],goalId:graph.goalId})
   const run=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},step.id)
-  run.startedAt=new Date(Date.now()-25*60000).toISOString();store.saveRun(run)
+  run.startedAt=new Date(Date.now()-25*60000).toISOString();store.saveRun(run);store.db.prepare("UPDATE events SET created_at=? WHERE type='execute.started' AND json_extract(data,'$.runId')=?").run(run.startedAt,run.id)
   assert.equal(legion.tactics(p.id)[0].recommendation,'general')
   assert.equal(typeof (legion as any).watchdog,'undefined','Watchdog must not own strategy')
   store.setStatus(p.id,'stopped');store.setStatus(p.id,'active')
@@ -89,12 +89,12 @@ test('escalation uses evidence age, gives a General mid-chain time, and never du
   const graph=store.createGraph(p.id,{taskKey:'T',title:'fixture',origin:'local',goal:'verify'})
   store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?)').run(p.id,'T',JSON.stringify({difficulty:'medium'}))
   const mission={role:'soldier' as const,taskKey:'T',description:'first angle',sourceIds:[graph.originId]},first=legion.spawn(p.id,mission),run=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},first.id),at=Date.now()
-  const age=(minutes:number)=>{run.startedAt=new Date(at-minutes*60000).toISOString();store.saveRun(run)}
+  const age=(minutes:number)=>{run.startedAt=new Date(at-minutes*60000).toISOString();store.saveRun(run);store.db.prepare("UPDATE events SET created_at=? WHERE type='execute.started' AND json_extract(data,'$.runId')=?").run(run.startedAt,run.id)}
   for(const [minutes,recommendation] of [[6,'tactical'],[10,'second-angle'],[19,'second-angle'],[20,'general'],[29,'general']] as const){age(minutes);assert.equal(legion.tactics(p.id,at)[0].recommendation,recommendation)}
   age(15);legion.spawn(p.id,{...mission,description:'second angle'})
   assert.equal(legion.spawn(p.id,{...mission,description:'third angle'}).role,'soldier','distinct specialist angles are bounded by configured capacity, not a new hard cap')
   age(30);const general=legion.spawn(p.id,{...mission,role:'general',description:'upgrade'}),g=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},general.id)
-  g.startedAt=new Date(at-10*60000).toISOString();store.saveRun(g)
+  g.startedAt=new Date(at-10*60000).toISOString();store.saveRun(g);store.db.prepare("UPDATE events SET created_at=? WHERE type='execute.started' AND json_extract(data,'$.runId')=?").run(g.startedAt,g.id)
   assert.equal(legion.tactics(p.id,at)[0].recommendation,'working','a newly upgraded General is not parked at minute 30')
   age(45);assert.equal(legion.tactics(p.id,at)[0].recommendation,'park')
   store.forGraph(p.id,graph.id).addFact(p.id,'confirmed chain progress',{runId:g.id})
@@ -151,7 +151,7 @@ test('Scheduler Watchdog resumes native Session at most three times and never re
   const scheduler=new Scheduler(store,{workers:[{name:'fixture',backend:'mock',enabled:true,roles:['soldier'],maxRunning:1,priority:0}],maxWorkers:1,maxProjectWorkers:1,maxRunningProjects:1,workspaceRoot:'/unused'} as any,async({run})=>{attempts++;ids.push(run.id);const saved=store.run(run.id);saved.failureCode='TRANSPORT';saved.checkpoint={sessionId:run.id};store.saveRun(saved);throw Error('native transport died')})
   const settle=async()=>{for(let i=0;i<10;i++)await new Promise(r=>setImmediate(r))}
   try{scheduler.start();await settle();assert.equal(attempts,1)
-    for(let i=0;i<4;i++){scheduler.watchdog();await settle()}
+    for(let i=0;i<4;i++){scheduler.watchdog();const next=store.node(p.id,step.id,'step') as any;if(next.status==='paused'&&next.retryAfter){assert(next.retryAfter>Date.now());next.retryAfter=Date.now()-1;store.saveNode(next);scheduler.wake()}await settle()}
     assert.equal(attempts,4);assert.equal(new Set(ids).size,1);assert.equal((store.node(p.id,step.id,'step') as any).failureCount,3)
     for(const code of ['AUTH','QUOTA_EXCEEDED','INVALID_REQUEST','CONTEXT_WINDOW_EXCEEDED','ABORTED']){const r=store.run(ids[0]);const s=store.node(p.id,step.id,'step') as any;s.failureCount=0;store.saveNode(s);r.failureCode=code;store.saveRun(r);scheduler.watchdog();await settle();assert.equal(attempts,4)}
     const r=store.run(ids[0]);r.failureCode='TRANSPORT';r.pendingTools=['unknown-side-effect'];store.saveRun(r);scheduler.watchdog();await settle();assert.equal(attempts,4);assert.equal((store.node(p.id,step.id,'step') as any).status,'blocked')

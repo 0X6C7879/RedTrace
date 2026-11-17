@@ -46,12 +46,12 @@ flowchart LR
 
 1. 用户创建 Project，必须选择 benchmark 或 general，提供 Scope、任务目标与可选 Hint；创建后模式固定。
 2. 所属 Commander / Planner 读取自己的 Board、STATE 和增量。Benchmark 使用 Commander、General、Soldier、Scout，保留原有首派、可选侦察和巡检行为。General 只使用 Planner、Worker：Planner 独占唯一主 FGS、任务级 TodoList、Step 创建、调度和验收；Worker 从 Frontier 原子领取可执行 Step，写回 Fact / Finding。第一项 Step 同样由 Planner 创建，不自动启动 Bootstrap 或报告 Worker。
-3. Benchmark General 保留主线执行和专项小队，专业 Agent 继承 Soldier。General 不创建专业 Agent、小队或升级角色；只调度现有 Worker Pool。调度器按模式角色资格、模型路线与既有全局/项目/Worker 配额原子领取 Step，DSH 在独立 Run / Session / Agent Workspace 执行；历史 Workspace 不搬移。
+3. Benchmark 简单题由 Soldier 自主规划和执行；困难题或升级后由唯一 General 进入 ARTEX Planner 模式，只规划、调度和分析证据，Specialist 继承 Soldier 执行工具，每次执行一个 Step。General 项目模式仍只调度现有 Worker Pool。调度器按模式角色资格、模型路线与既有全局/项目/Worker 配额原子领取 Step，DSH 在独立 Run / Session / Agent Workspace 执行；历史 Workspace 不搬移。
 4. Worker 通过 Fact/Finding 共享确认结论，HELP/REPORT 经原生收件箱实际交付；queued 不代表已入模。Planner / Benchmark 单题规划者对证据验收，不把消息或 Step 结束当成果。
 5. Stop/同 Session 恢复、任务 Park 与新 Run 接力分别建模。只有原执行停止、工具结果明确后才能恢复或换模型；未知操作不自动重放。
 6. General Planner 通过确认 Fact/Finding 验收 Goal，Benchmark 仍由单题规划者验收题目 Goal；Family Transfer 只生成未验证 Hint，目标必须复验。没有独立 Reason 调度器；两模式共享同一 DSH 执行内核。
 
-本次架构、数据迁移、API 和使用方法见 [Project Commander 升级说明](docs/project-commander-20261113/GUIDE.md)。历史迁移记录见 [Legion 实施记录](docs/legion-implementation-20261110/IMPLEMENTATION.md)。历史调度设计不再代表独立 Reason 的执行决策。
+本次架构、数据迁移、API 和使用方法见 [Project Commander 升级说明](docs/project-commander-20261113/GUIDE.md)。历史迁移记录见 [Legion 实施记录](docs/legion-implementation-20261110/IMPLEMENTATION.md)。历史调度设计不再代表独立 Reason 的执行决策。题目级 General 的事件循环、Fact 验收与统一额度语义见 [ARTEX Planner 迁移](docs/artex-planner-20261117.md)。
 
 ## 为什么选择 RedTrace
 
@@ -184,7 +184,9 @@ cp redtrace.mock.example.yaml redtrace.yaml
 | `providers` | API 协议（OpenAI/Anthropic 兼容）、endpoint、密钥与模型列表（context window、max tokens、reasoning 策略） |
 | `workers` | 模型路由、启用状态、任务资格、优先级和并发 |
 | `runtime` | 全局/项目并发限制 |
-| `tasks` | Commander、General、Soldier、Scout 的主阶段与收尾超时，及 Mission 上限 |
+| `tasks` | 各角色的主阶段与收尾超时、通用模式 Max Step、Benchmark 最大题目并发 |
+
+`tasks.commander.max_intents` 是通用模式主 FGS 的最大活跃 Step（Max Step）；`tasks.commander.max_benchmark_tasks` 是 Benchmark 同时推进的题目数上限，未配置则不限制。Benchmark 每题仍按原有加人策略增加 Step，不受 Max Step 限制。两项均可在设置页保存后热加载：有足够独立、可执行工作时规划者补足目标，前置条件未满足或方向不足时不重复凑数；降低上限不终止在途任务，后续派发仍受 Worker、项目和全局容量约束。
 | `common_env` | 传递给 Worker 的环境变量 |
 
 配置支持快照与热加载：新任务使用新配置，已经运行的任务继续使用启动时快照。Web 设置页可创建、复制、启停和测试 Worker；写入使用 revision 做乐观并发控制，API Key 不会在查询响应中回显。

@@ -1,4 +1,4 @@
-import { FIXED_ROLES, coordinatorRole } from '../../redtrace-dsh/src/roles.ts'
+import { tokenUsage } from './token-usage.ts'
 import { mkdir, readdir, realpath, stat, open } from 'node:fs/promises'
 import path from 'node:path'
 import { createReadStream } from 'node:fs'
@@ -26,20 +26,11 @@ export async function workspacePath(workspaces: string, projectId: string, relat
 export function auditRoutes(router: Router, store: Store, workspaceRoot: string) {
   const graphId=(c:RequestContext)=>{const id=c.url.searchParams.get('graphId');if(id)store.projectGraph(c.params.project,id);return id}
   const runs = (id?: string, graph?:string|null): Record<string, any>[] => (id ? store.db.prepare('SELECT data FROM audit_runs WHERE project_id=?'+(graph?" AND json_extract(data,'$.graph_id')=?":'')).all(...(graph?[id,graph]:[id])) : store.db.prepare('SELECT data FROM audit_runs').all()).map(r => JSON.parse(String(r.data)))
-  const usage = (values = runs()): Record<string, number> => {
-    const value: Record<string, number> = Object.fromEntries(FIXED_ROLES.map(r=>[r,0]))
-    for (const run of values) value[run.task_type] = (value[run.task_type] ?? 0) + ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens'].reduce((sum, key) => sum + Number(run[key] ?? 0), 0)
-    return { ...value, total: Object.values(value).reduce((a, b) => a + b, 0) }
-  }
-  const commanderUsage=(total:Record<string,number>,projectId?:string)=>{
-    const rows=store.db.prepare('SELECT data,project_id FROM project_campaigns'+(projectId?' WHERE project_id=?':'')).all(...(projectId?[projectId]:[]))
-    for(const row of rows){const usage=JSON.parse(String(row.data)).usage;const tokens=usage?['inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens'].reduce((sum,key)=>sum+Number(usage[key]??0),0):0;total[coordinatorRole(store.project(String(row.project_id)).mode)]+=tokens;total.total+=tokens}return total
-  }
-  router.add('GET','/audit/usage',()=>commanderUsage(usage()))
+  router.add('GET','/audit/usage',()=>tokenUsage(store))
   router.add('GET', '/audit/tasks', () => store.projects().map(p => {
-    const r = runs(p.id); return { id: p.id, title: p.title, status: p.status, created_at: p.createdAt, run_count: r.length, last_run_at: r.map(r => r.started_at).sort().at(-1) ?? null, running_count: r.filter(r => r.status === 'running').length, token_total: usage(r).total }
+    const r = runs(p.id); return { id: p.id, title: p.title, status: p.status, created_at: p.createdAt, run_count: r.length, last_run_at: r.map(r => r.started_at).sort().at(-1) ?? null, running_count: r.filter(r => r.status === 'running').length, token_total: tokenUsage(store,p.id).total }
   }).sort((a, b) => String(b.last_run_at ?? b.created_at).localeCompare(String(a.last_run_at ?? a.created_at))))
-  router.add('GET', '/audit/tasks/:project/usage', c => { store.project(c.params.project); return graphId(c)?usage(runs(c.params.project,graphId(c))):commanderUsage(usage(runs(c.params.project)),c.params.project) })
+  router.add('GET', '/audit/tasks/:project/usage', c => { store.project(c.params.project); return tokenUsage(store,c.params.project,graphId(c)??undefined) })
   router.add('GET', '/audit/tasks/:project/costs', c => {
     store.project(c.params.project)
     return store.runsByStatus('running',c.params.project).concat(['paused','succeeded','failed','unknown','cancelled'].flatMap(status=>store.runsByStatus(status as import('./types.ts').Run['status'],c.params.project))).map(run=>store.runCosts(run.id))

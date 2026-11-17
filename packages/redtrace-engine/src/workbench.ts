@@ -1,3 +1,5 @@
+import { tokenUsage } from './token-usage.ts'
+import { taskTodoPlanner } from './legion-todos.ts'
 import type { Store } from './store.ts'
 import { HttpError } from './types.ts'
 import type { Step, Finding } from './types.ts'
@@ -24,7 +26,7 @@ export function projectWorkbench(store:Store,legion:LegionStore,id:string) {
     const project=store.project(id),graphs=store.projectGraphs(id),workers=workerInstances(store,id)
     const goals=store.nodes(id,['goal']),steps=store.nodes<Step>(id,['step'])
     const findings=store.nodes<Finding>(id,['finding'])
-    return {project,graphs,workers,pendingAgents:steps.filter(s=>s.status==='pending'&&!workers.some(w=>w.stepId===s.id&&w.status==='running')).map(s=>({stepId:s.id,graphId:s.graphId,role:s.role,specialist:s.specialist,title:s.specialist?.name??s.role??'Soldier',mission:s.description})),goals,steps,findings,todos:project.mode==='general'?legion.planningTodos(id).list(graphs[0].id):[],
+    return {project,graphs,workers,usage:tokenUsage(store,id),pendingAgents:steps.filter(s=>s.status==='pending'&&!workers.some(w=>w.stepId===s.id&&w.status==='running')).map(s=>({stepId:s.id,graphId:s.graphId,role:s.role,specialist:s.specialist,title:s.specialist?.name??s.role??'Soldier',taskTitle:graphs.find(g=>g.id===s.graphId)?.title,waitingReason:s.role==='general'&&workers.some(w=>w.stepId===s.id)?'等待事件或心跳':store.stepReady(s)?'等待执行额度':'等待前置证据',mission:s.description})),goals,steps,findings,todos:project.mode==='general'?legion.planningTodos(id).list(graphs[0].id):[],
       conversations:project.mode==='benchmark'?graphs.filter(g=>g.type==='benchmark_task').map(g=>({id:g.id,title:g.title,graphId:g.id,running:workers.some(w=>w.graphId===g.id&&w.status==='running'),updatedAt:g.updatedAt})):workers.map(w=>({id:w.id,title:w.label,runId:w.id,graphId:w.graphId,running:w.status==='running',updatedAt:w.endedAt??w.startedAt})),
       anomalies:workers.filter(w=>['failed','unknown'].includes(w.status)).map(w=>({runId:w.id,label:w.label,error:w.error,status:w.status}))}
 }
@@ -45,7 +47,8 @@ export function workbenchRoutes(router:Router,store:Store,legion:LegionStore) {
     const view=graph?store.forGraph(id,graph):store
     const rawGraphEvents=view.events(id,queryNumber(c.url,'eventAfter',0),100)
     const graphEvents=rawGraphEvents.filter(e=>!runId||e.nodeId===store.run(runId).stepId)
-    return {todos:graph?legion.planningTodos(id).list(graph):[],eventCursor:rawGraphEvents.at(-1)?.id??queryNumber(c.url,'eventAfter',0),events:events.sort((a,b)=>Number(a.id)-Number(b.id)),messages,graphEvents,workers:own,
+    const planner=graph?store.forGraph(id,graph).nodes<Step>(id,['step']).map(s=>taskTodoPlanner(s,store)).find(Boolean):undefined
+    return {usage:tokenUsage(store,id,graph??undefined,runId??undefined),taskPlanner:planner?{stepId:planner.id,role:planner.role,status:planner.status}:null,todos:graph?legion.planningTodos(id).list(graph):[],eventCursor:rawGraphEvents.at(-1)?.id??queryNumber(c.url,'eventAfter',0),events:events.sort((a,b)=>Number(a.id)-Number(b.id)),messages,graphEvents,workers:own,
       cursor:rows.length?Math.max(...rows.map(r=>Number(r.id))):cursor,before:rows.length?Math.min(...rows.map(r=>Number(r.id))):null,hasMore:rows.length===limit}
   })
 }

@@ -13,8 +13,9 @@ import { mkdir, realpath } from 'node:fs/promises'
 import { watch, realpathSync } from 'node:fs'
 import { createEngine } from '../src/index.ts'
 import { createPlanGuard } from '../src/plan-guard.ts'
-import { taskTodoOwner } from '../src/legion-todos.ts'
-import { efficiencyToolAvailable, graphTools, activityPrompt, activityLimits, graphUpdate, livePlan, launchContext, runMock } from '../src/runner.ts'
+import { TASK_PLANNING_TOOLS, taskTodoOwner } from '../src/legion-todos.ts'
+import { legionTools } from '../src/legion-tools.ts'
+import { taskPlanningContext, efficiencyToolAvailable, graphTools, activityPrompt, activityLimits, graphUpdate, livePlan, launchContext, runMock } from '../src/runner.ts'
 import { verbTools, verbToolAvailable, channelsFor, resourceTools } from '../src/capability-verbs.ts'
 import { PluginManager, registerPluginRoutes } from '../../redtrace-dsh/lib/plugins.js'
 import { load, mount, repoRoot } from '../../redtrace-dsh/lib/loader.js'
@@ -62,6 +63,17 @@ export function refreshToolRegistrations(tools, enabled, register) {
       if (live && !active.has(t.name)) active.set(t.name, register(t))
       if (!live && active.has(t.name)) { active.get(t.name)(); active.delete(t.name) }
     }
+  }
+}
+
+export function refreshTaskPlanningTools(store, step, tools, register) {
+  let planningOwner, registrations = []
+  return () => {
+    const owner = taskTodoOwner(step, store)
+    if (owner === planningOwner) return
+    for (const dispose of registrations) dispose()
+    registrations = owner ? tools().filter(t => TASK_PLANNING_TOOLS.has(t.name)).map(register) : []
+    planningOwner = owner
   }
 }
 
@@ -218,20 +230,21 @@ export async function apply(ctx, options) {
     if (run.activity !== 'execute') throw new Error('Independent Reason execution was removed')
     if (!shared) throw new Error('Cordis domain service is unavailable')
     const step = run.stepId ? store.node(run.projectId, run.stepId, 'step') : undefined
-    const reporting = isReportStep(step)
+    const reporting = isReportStep(step), planning = step?.role === 'general'
     const task = { usage: { inputTokens: run.inputTokens, outputTokens: run.outputTokens, cacheReadTokens: run.cacheReadTokens, cacheWriteTokens: run.cacheWriteTokens }, type: executionRole(store.project(run.projectId).mode,step?.role), projectId: run.projectId, intentId: run.stepId ?? undefined,
       worker: worker.name, sessionId: run.id, runId: run.id, committed: false, notificationEpoch: randomUUID(), server: options.server, startedAt: Date.now(), executionProfile: step?.executionProfile ?? 'direct' }
     if (!shared.presets.has(task.type)) throw new Error(`Cordis task preset ${task.type} is disabled`)
     const cwd = run.workspaceRoot ?? path.join(config.workspaceRoot, run.projectId); await mkdir(cwd, { recursive: true })
     let finished = false, concludeOnly = false, handle, legionMailbox
     let refreshLiveTools = () => {}
-    const tools = graphTools(context, () => {
+    const finishActivity = () => {
       finished = true; task.committed = true
       if (handle) {
         const pending = pendingGraphNotice(handle.agent)
         if (pending) handle.agent.inbox.remove(pending.message.id)
       }
-    })
+    }
+    const tools = graphTools(context, finishActivity)
     const model = config.providers[worker.provider].models.find(m => m.id === worker.model)
     const effort = await resolveReasoningEffort(ctx.get('llm'), { provider: worker.provider, model: worker.model, reasoning: model.reasoning ?? 'auto_max' })
     const checkpoint = store.run(run.id).checkpoint, resume = !!checkpoint?.sessionId
@@ -240,16 +253,17 @@ export async function apply(ctx, options) {
     const ownSpillRead = executionEvidenceReadGuard(sessionDir(path.join(runtime.sessionRoot, 'spill'), run.id), cwd)
     const setup = async scoped => {
       let refreshMcp=()=>{}
-      if (!reporting) {
+      if (!reporting && !planning) {
         // Skills mount DSH-natively from the project root skills catalog; the
         // agent discovers and loads them through the skill tool on demand.
         scoped = await mountExecutionTools(scoped, { task, cwd, sessionRoot: runtime.sessionRoot, skillsDir: runtime.skillsDir, toolsDir: path.join(repoRoot, 'tools'), available: id => manager.availableForTask(id),
           toolEnabled: name => platformToolOptions(engine, name, task.type).when(),
           onRefresh: refresh => sessionRefresh.set(run.id, async () => { await refresh(); refreshMcp(); refreshLiveTools() }) })
       }
-      if (!reporting) refreshMcp=mountMcpRoleTools(scoped,ctx,engine,task.type)
-      if (reporting) scoped.tools.restrict({ allow: [] })
-      else {
+      if (!reporting && !planning) refreshMcp=mountMcpRoleTools(scoped,ctx,engine,task.type)
+      if (reporting || planning) scoped.tools.restrict({ allow: planning ? ['read'] : [] })
+      if (planning) scoped.tools.guard(ownSpillRead)
+      if (!reporting) {
         mountLegionContext(scoped,ctx,{store,legion:engine.legion,run,task,message})
         scoped.on('agent/error',({error})=>{task.failure=error;const current=store.run(run.id);current.failureCode=error?.code??'PROCESS_EXIT';store.saveRun(current)})
       }
@@ -261,6 +275,7 @@ export async function apply(ctx, options) {
         // Native spill reads retain the existing archived-evidence recovery allowance.
         scoped.tools.guard(exec => planGuard.check({ name: exec.name === 'read' && ownSpillRead(exec) === undefined ? 'evidence_read' : exec.name, rootCallId: String(exec.rootCallId) }))
       }
+      if (store.project(run.projectId).mode === 'benchmark') scoped.systemPrompt.context({ name: 'redtrace:task-planning', order: 3, required: true, interpolate: false, text: () => JSON.stringify(taskPlanningContext(store, step)) })
       scoped.systemPrompt.context({ name: 'redtrace:live-plan', order: 2, required: true, interpolate: false,
         text: () => livePlan(store, run.id) })
       // The DSH tools runtime projects parameters as lossless JSON; the graph
@@ -277,11 +292,15 @@ export async function apply(ctx, options) {
           if (result.terminate) execution.concludeTurn?.()
           return result
         } }, platformToolOptions(engine, t.name, task.type))
-      for (const t of [...tools.filter(t => !/^(?:knowledge_|http_)/.test(t.name)), ...(!reporting ? resourceTools(context, verbRuntime) : [])]) registerTool(t)
-      const liveVerbs = !reporting ? verbTools(context, verbRuntime, step) : []
+      const taskPlanning = store.project(run.projectId).mode === 'benchmark'
+      for (const t of [...tools.filter(t => !/^(?:knowledge_|http_)/.test(t.name) && !(taskPlanning && TASK_PLANNING_TOOLS.has(t.name))), ...(!reporting && !planning ? resourceTools(context, verbRuntime) : [])]) registerTool(t)
+      const liveVerbs = !reporting && !planning ? verbTools(context, verbRuntime, step) : []
       const refreshEfficiencyTools = refreshToolRegistrations(tools.filter(t => /^(?:knowledge_|http_)/.test(t.name)), t => efficiencyToolAvailable(context, t.name), registerTool)
       const refreshVerbTools = refreshToolRegistrations(liveVerbs, t => verbToolAvailable(verbRuntime, t.name), registerTool)
+      const refreshPlanningTools = taskPlanning && !reporting ? refreshTaskPlanningTools(store, step, () => legionTools(store, run.id, run.projectId, (context.currentMaxSteps ? context.currentMaxSteps() : config.maxSteps), finishActivity, config, undefined, () => engine.configuration.resolvedSnapshot().config), registerTool) : () => {}
+      scoped.on('agent/request', (_request, next) => { refreshLiveTools(); return next() })
       refreshLiveTools = () => {
+        refreshPlanningTools()
         refreshVerbTools()
         refreshEfficiencyTools()
       }
@@ -335,8 +354,8 @@ export async function apply(ctx, options) {
       signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) { cancel(); return }
       store.checkpoint(run.id, { sessionId: run.id })
       cursor = Math.max(cursor, pendingGraphNotice(handle.agent)?.update.cursor ?? 0)
-      prompt(resume ? JSON.stringify({continue:true,...(step && store.project(run.projectId).mode==='benchmark' && taskTodoOwner(step,store) ? {planningTodos:engine.legion.planningTodos(run.projectId).list(step.graphId)} : {})}) : JSON.stringify(launchContext(store, run.id,
-        channelsFor(verbRuntime, [], 8, run.projectId), (context.currentMaxSteps ? context.currentMaxSteps() : config.maxSteps))))
+      prompt(resume ? JSON.stringify({continue:true,...(planning ? launchContext(store,run.id,[],context.currentMaxSteps?context.currentMaxSteps():config.maxSteps) : step ? taskPlanningContext(store, step) : {})}) : JSON.stringify(launchContext(store, run.id,
+        planning ? [] : channelsFor(verbRuntime, [], 8, run.projectId), (context.currentMaxSteps ? context.currentMaxSteps() : config.maxSteps))))
        if (!reporting && step?.role) legionMailbox = attachLegionMailbox(ctx, engine.legion, { projectId: run.projectId, actor: run.id, sessionId: run.id, agent: handle.agent, message, closing: () => finished || signal.aborted })
       // Changes committed during activation remain in the event log until this scan.
       steer(run.projectId)
@@ -345,7 +364,7 @@ export async function apply(ctx, options) {
       if(task.failure&&!signal.aborted)throw task.failure
       if (!finished && !task.committed && !signal.aborted) {
         task.concludeOnly = concludeOnly = true
-        prompt(reporting ? '已进入超时收尾。只根据已读取的真实证据完成本漏洞报告，缺失内容明确标注未提供或未验证，调用 update_finding_report 保存；不得重新探测或伪造证据。' : run.activity === 'execute'
+        prompt(planning ? '结束本轮规划：检查新 Fact、Worker Trace 和 Output，保持未获证据的 Todo 未完成，保存 STATE 并调用 legion_plan_done；不要等待 Worker，不要伪造 Fact。' : reporting ? '已进入超时收尾。只根据已读取的真实证据完成本漏洞报告，缺失内容明确标注未提供或未验证，调用 update_finding_report 保存；不得重新探测或伪造证据。' : run.activity === 'execute'
           ? '已进入超时收尾，必须调用 submit_fact 提交至少一条已有证据支持的汇总结论，再调用 finish_step。题目未解决时保留容器；没有成功成果时只提交有真实测试证据的否定结论，明确对象、方法、范围和观察结果；API、工具或执行故障不是攻击失败，没有证据时不得伪造 Fact，由系统按执行故障结算。'
           : '仅处理已交付的证据并调用 finish_decide，不再执行外部操作。')
         await wait(limits.concludeTimeout)

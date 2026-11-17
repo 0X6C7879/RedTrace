@@ -54,6 +54,7 @@ export async function createEngine(options: { root: string; database?: string; c
     } finally { operations.releaseRunLeases(context.run.id) }
   }
   const scheduler = new Scheduler(store,config,runTask,options.selectWorker,()=>!adapterGate || adapterGate('redtrace-critical-events')), router = new Router()
+  store.stepLimit = () => configuration.resolvedSnapshot().config.maxSteps
   const experience = new LegionExperience(store,configuration.workspaceRoot)
   router.add('GET', '/v2/legion', c => {const id=c.url.searchParams.get('projectId');return id?{...new LegionStore(store,id).board(),transfers:experience.transfers(id)}:{projects:store.projects().map(p=>({id:p.id,title:p.title,mode:p.mode,status:p.status}))}})
   router.add('GET','/v2/projects/:project/commander',c=>({...new LegionStore(store,c.params.project).board(),workbench:{...projectWorkbench(store,legion,c.params.project),input:chats.entry(c.params.project),...(store.project(c.params.project).mode==='general'?{chief:chats.chief(c.params.project)}:{})},transfers:experience.transfers(c.params.project)}))

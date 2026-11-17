@@ -17,7 +17,7 @@ const calls=new Map(),counts=id=>calls.get(id)??0
 const patrolInputs=[]
 let ctx,controller,watchdogs=0,peak=0,requests=0,failProject
 const server=createServer(async(req,res)=>{
-  let text='';for await(const b of req)text+=b;const body=JSON.parse(text),id=[busy.id,idle.id,general.id].find(id=>JSON.stringify(body.messages).includes(id));assert.ok(id)
+  let text='';for await(const b of req)text+=b;const body=JSON.parse(text),id=store.projects().map(p=>p.id).find(id=>JSON.stringify(body.messages).includes(id));assert.ok(id)
   requests++;peak=Math.max(peak,requests);await new Promise(r=>realTimeout(r,10));requests--
   if(failProject===id){res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({error:{message:'invalid fixture request'}}));return}
   const finish=body.messages.at(-1)?.tool_call_id?.startsWith('changes-');if(finish)calls.set(id,counts(id)+1)
@@ -73,8 +73,14 @@ try{
   failProject=idle.id;await advance(30000);await settle(()=>legion.campaign(idle.id).status==='stopped');assert.equal(legion.campaign(idle.id).failureCode,'INVALID_REQUEST');const permanent=counts(idle.id);await advance(15000);assert.equal(counts(idle.id),permanent);assert.equal(legion.campaign(idle.id).restarts,undefined)
   const waiting=store.createProject({mode:'benchmark',title:'waiting reload',origin:'local',goal:'verify'}).project;legion.saveCampaign({...legion.campaign(waiting.id),status:'idle',hasSession:true,nextInspectionAt:Date.now()+60000});controller.wake(waiting.id);await settle()
   const inspectionBefore=legion.campaign(waiting.id).nextInspectionAt,callCount=counts(waiting.id)
-  config.commit(config.read().revision,raw=>{raw.tasks={...raw.tasks,commander:{timeout:300,conclude_timeout:30,inspection_interval:60,idle_inspection_interval:90}}});controller.rescheduleInspections();assert.equal(legion.campaign(waiting.id).nextInspectionAt,inspectionBefore,'unrelated saves do not reset the clock')
+  config.commit(config.read().revision,raw=>{raw.tasks={...raw.tasks,commander:{...raw.tasks.commander,timeout:300,conclude_timeout:30,inspection_interval:60,idle_inspection_interval:90}}});controller.rescheduleInspections();assert.equal(legion.campaign(waiting.id).nextInspectionAt,inspectionBefore,'unrelated saves do not reset the clock')
   config.commit(config.read().revision,raw=>{raw.tasks.commander.inspection_interval=120;raw.tasks.commander.idle_inspection_interval=180});controller.rescheduleInspections();assert.equal(legion.campaign(waiting.id).nextInspectionAt,Date.now()+180000);assert.equal(counts(waiting.id),callCount,'hot reload does not immediately call a model');assert.deepEqual(config.snapshot().tasks.commander.inspection_interval,120)
+  const beforeLimit=counts(general.id)
+  config.commit(config.read().revision,raw=>{raw.tasks.commander.max_intents=2});controller.rescheduleInspections()
+  await settle(()=>counts(general.id)===beforeLimit+1&&legion.campaign(general.id).status==='idle')
+  assert(store.events(general.id).some(e=>e.type==='planning.capacity_changed'),'hot-loaded Max Step wakes General without waiting for a new target Fact')
+  controller.rescheduleInspections();await settle();assert.equal(counts(general.id),beforeLimit+1,'unchanged limits never cause a planning loop')
+  console.log('PLANNING_LIMIT_HOT_RELOAD=true; CAPACITY_CHANGE_WAKES_GENERAL=true; UNCHANGED_LIMIT_NO_SPIN=true')
   console.log('PATROL_INTERVAL_HOT_RELOAD=true; DEFAULT_60_90_PRESERVED=true; GENERAL_EVENT_DRIVEN=true')
   console.log('BENCHMARK_PATROL=true; normal=60000; idle=90000; watchdog=15000; event_wake=false; general_event_wake=true; concurrent_projects=true; waiting_capacity_released=true; native_restart_cap=3; STATE_continuity=true; same_native_agent=true; subsequent_patrol_is_delta_only=true')
 }finally{

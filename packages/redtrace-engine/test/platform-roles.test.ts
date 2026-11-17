@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {Store} from '../src/store.ts'
 import {graphTools} from '../src/runner.ts'
 import {legionTools} from '../src/legion-tools.ts'
-import {CommanderTodos} from '../src/legion-todos.ts'
+import {CommanderTodos, TASK_PLANNING_TOOLS} from '../src/legion-todos.ts'
 import {resourceTools} from '../src/capability-verbs.ts'
 import type {EngineConfig, LegionRole} from '../src/types.ts'
 
@@ -24,17 +24,18 @@ test('fixed role schemas preserve planning ownership and specialists inherit Sol
     const step=store.forGraph(p.id,graph.id).addStep(p.id,{role:(role==='specialist'||role==='report'?(mode==='benchmark'?'soldier':'worker'):role) as LegionRole,...(role==='report'?{reportFindingId:'fixture-finding'}:{}),taskKey:role,description:'fixture',sourceIds:[graph.originId],goalId:graph.goalId,...(role==='specialist'?{specialist:{name:'reverse',responsibilities:'analyze',capabilities:['reverse'],scope:'fixture'}}:{})})
     const run=store.claim(p.id,'execute',worker,step.id),context={store:store.forGraph(p.id,graph.id),run,worker,config,signal:new AbortController().signal}
     const tools=graphTools(context,()=>{}),names=tools.map(t=>t.name)
-    assert.equal(names.includes('legion_spawn'),mode==='benchmark'&&role==='general')
+    assert.equal(names.includes('legion_step'),mode==='benchmark'&&role==='general')
     if(role==='reporter'||role==='report')assert.deepEqual(names.sort(),['evidence_read','project_evidence_read','read_execution','read_graph','read_graph_delta','update_finding_report'].sort())
+    else if(role==='general'){assert(!names.includes('submit_fact'));assert(!names.includes('submit_finding'));assert(names.includes('legion_plan_done'));assert(names.includes('legion_read_run'));assert(names.includes('TodoWrite'))}
     else {
      assert(names.includes('submit_fact'));assert(names.includes('legion_handoff'))
-     assert.equal(names.includes('TodoWrite'),mode==='benchmark'&&['general','soldier','specialist'].includes(role))
+     assert.equal(names.includes('TodoWrite'),mode==='benchmark'&&['general','soldier'].includes(role))
      assert.equal(names.includes('submit_finding'),role!=='scout')
      const resources=resourceTools(context,{operations:{}} as any).map(t=>t.name)
      assert.equal(resources.includes('resource_register'),role!=='scout')
     }
     if(role==='soldier'||role==='worker')plain=names
-    if(role==='specialist')assert.deepEqual(names,plain)
+    if(role==='specialist')assert.deepEqual(names,plain.filter(name=>!TASK_PLANNING_TOOLS.has(name)))
     store.finishRun(run.id,'cancelled')
    }
   }

@@ -1,7 +1,7 @@
 import { coordinatorRole, executionRole } from '../../redtrace-dsh/src/roles.ts'
 import { specialistSchema } from './graph-contracts.ts'
 import { workerInstances } from './workbench.ts'
-import { taskTodoOwner, type CommanderTodos } from './legion-todos.ts'
+import { TASK_PLANNING_TOOLS, taskTodoOwner, type CommanderTodos } from './legion-todos.ts'
 import { LegionExperience } from './legion-experience.ts'
 import { ProjectEvidence } from './project-evidence.ts'
 import { benchmarkAdapter, benchmarkInstance, discoverBenchmarkTasks, tsecbenchQuery } from './benchmark.ts'
@@ -15,9 +15,11 @@ import type { Step, Goal } from './types.ts'
 import { HttpError } from './types.ts'
 import { LegionStore } from './legion-store.ts'
 
-export function legionTools(store: Store, actor: string, projectId: string | undefined, maxSteps: number | null, finish: () => void, config?: EngineConfig, todos?: CommanderTodos): AgentTool[] {
+export function legionTools(store: Store, actor: string, projectId: string | undefined, maxSteps: number | null, finish: () => void, config?: EngineConfig, todos?: CommanderTodos, currentConfig?: () => EngineConfig): AgentTool[] {
   if(projectId)store=store.forProject(projectId)
   const legion = new LegionStore(store,projectId), commander = actor === 'commander', benchmark = !!projectId && store.project(projectId).mode === 'benchmark'
+  const settings = () => currentConfig ? currentConfig() : config
+  const stepLimit = () => currentConfig ? currentConfig().maxSteps : maxSteps
   if(commander&&!benchmark)todos ??= legion.planningTodos(projectId!)
   const tool = (name: string, description: string, parameters: any, execute: (args: any, signal?: AbortSignal) => unknown, terminate = false): AgentTool => ({
     name, label: name, description, parameters, executionMode: 'sequential',
@@ -28,7 +30,7 @@ export function legionTools(store: Store, actor: string, projectId: string | und
         for(const key of ['projectId','targetProject']) if((args as Record<string,unknown>)[key]!==undefined && (args as Record<string,unknown>)[key]!==projectId) throw new HttpError(403,'Commander cannot access another Project')
       }
       if (commander && legion.campaign().status !== 'running') throw new HttpError(409, 'Commander is not running')
-      if(benchmark&&!commander&&['TodoWrite','legion_goal','legion_update_goal','legion_accept'].includes(name)&&step&&!taskTodoOwner(step,store))throw new HttpError(409,'Planning ownership transferred to another task Agent')
+      if(benchmark&&!commander&&TASK_PLANNING_TOOLS.has(name)&&step&&(!taskTodoOwner(step,store)||store.node<Step>(projectId!,step.id,'step').status!=='running'))throw new HttpError(409,'Planning ownership transferred to another task Agent')
       const result = await execute(args, signal)
       if(commander&&benchmark&&['legion_spawn','legion_park','legion_reactivate','legion_reassign','legion_instance','legion_commander_model','legion_adjust','legion_transfer'].includes(name))legion.checkpointState(projectId!,name)
       const value = JSON.parse(JSON.stringify(result)); return { content: [{ type: 'text', text: JSON.stringify(value) }], details: value, ...(terminate ? { terminate: true } : {}) } },
@@ -38,7 +40,7 @@ export function legionTools(store: Store, actor: string, projectId: string | und
   const text = Type.String({ minLength: 1 })
   const experience=()=>{if(!config)throw new Error('Runtime configuration unavailable');return new LegionExperience(commander?store:store.forGraph(projectId!,store.run(actor).graphId!),config.workspaceRoot)}
   const assignment = { specialist:Type.Optional(specialistSchema), escalationReason:Type.Optional(text) }
-  const roster = tool('legion_roster','Read real Worker instances, specialist definitions, performance, predecessor and statuses. Use confirmed evidence per elapsed minute and Token to form elite complementary squads or arrange a compact STATE relay; never treat claims as Facts.',Type.Object(commander&&!benchmark?{projectId:text}:{},{additionalProperties:false}),()=>workerInstances(store,projectId!).slice(-100).map(w=>({runId:w.id,label:w.label,stepId:w.stepId,role:w.role,specialist:w.specialist,taskKey:w.taskKey,status:w.status,worker:w.worker,facts:w.facts,tokens:w.tokens,elapsedMs:w.elapsedMs,predecessorRunId:w.predecessorRunId,error:w.error})))
+  const roster = tool('legion_roster','Read real Worker instances, specialist definitions, performance, predecessor and statuses. Use confirmed evidence per elapsed minute and Token to form elite complementary squads or arrange a compact STATE relay; never treat claims as Facts.',Type.Object(commander&&!benchmark?{projectId:text}:{},{additionalProperties:false}),()=>workerInstances(store,projectId!).filter(w=>commander||w.graphId===step?.graphId).slice(-100).map(w=>({runId:w.id,label:w.label,stepId:w.stepId,role:w.role,specialist:w.specialist,taskKey:w.taskKey,status:w.status,worker:w.worker,facts:w.facts,tokens:w.tokens,elapsedMs:w.elapsedMs,predecessorRunId:w.predecessorRunId,error:w.error})))
   const inspection = commander ? [
     tool('legion_evidence_read','Read a hash-verified retained Project artifact. Binary pages specify base64. No producer Run/Session dependency.',Type.Object({...(!benchmark?scope:{}),artifactId:text,offset:Type.Optional(Type.Integer({minimum:0})),length:Type.Optional(Type.Integer({minimum:1,maximum:7600}))},{additionalProperties:false}),args=>{if(!config)throw new Error('Runtime configuration unavailable');return new ProjectEvidence(store,config.workspaceRoot).read(project(args),args.artifactId,args.offset,args.length)}),
     tool('legion_read_run','Inspect one Project Worker Run or page its original audit trace. Read-only equivalent of Sapper peek / ARTEX get_worker_output and get_worker_trace; no model session is started.',Type.Object({...(!benchmark?scope:{}),runId:text,before:Type.Optional(Type.Integer({minimum:1})),limit:Type.Optional(Type.Integer({minimum:1,maximum:100}))},{additionalProperties:false}),args=>{
@@ -48,7 +50,7 @@ export function legionTools(store: Store, actor: string, projectId: string | und
     }),
   ] : []
   if(commander&&benchmark) return [roster,...inspection,
-    tool('legion_board','Compact campaign Board; taskKey narrows to one task. No FGS bodies.',Type.Object({taskKey:Type.Optional(text)},{additionalProperties:false}),args=>({...legion.boardSummary(args.taskKey),capacity:{maxWorkers:config?.maxWorkers,maxProjectWorkers:config?.maxProjectWorkers,maxRunningProjects:config?.maxRunningProjects,runningWorkers:Number(store.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE status='running'").get()!.n),runningCommanders:Number(store.db.prepare("SELECT COUNT(*) AS n FROM project_campaigns WHERE json_extract(data,'$.status')='running'").get()!.n)}})),
+    tool('legion_board','Compact campaign Board; taskKey narrows to one task. No FGS bodies.',Type.Object({taskKey:Type.Optional(text)},{additionalProperties:false}),args=>({...legion.boardSummary(args.taskKey),capacity:{...legion.questionCapacity(settings()?.maxBenchmarkTasks ?? null),maxWorkers:settings()?.maxWorkers,maxProjectWorkers:settings()?.maxProjectWorkers,maxRunningProjects:settings()?.maxRunningProjects,runningWorkers:Number(store.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE status='running'").get()!.n),runningCommanders:Number(store.db.prepare("SELECT COUNT(*) AS n FROM project_campaigns WHERE json_extract(data,'$.status')='running'").get()!.n)}})),
     tool('legion_read_changes','Read scheduling deltas only. Page until hasMore=false; acknowledge the processed cursor at legion_wait.',Type.Object({after:Type.Optional(Type.Integer({minimum:0})),limit:Type.Optional(Type.Integer({minimum:1,maximum:100}))},{additionalProperties:false}),args=>legion.readCommandChanges(projectId!,args.after,args.limit)),
     tool('legion_inbox','Read unprocessed campaign messages. Delivery is not evidence.',Type.Object({},{additionalProperties:false}),()=>legion.messages(projectId!,'commander').filter(m=>m.status!=='admitted')),
     tool('legion_message','Send a concrete order or intel to a live task owner.',Type.Object({receiver:text,type:Type.Union(['HELP','REPORT','MESSAGE'].map(v=>Type.Literal(v))),content:text},{additionalProperties:false}),args=>legion.message(projectId!,'commander',args.receiver,args.type,args.content)),
@@ -56,7 +58,7 @@ export function legionTools(store: Store, actor: string, projectId: string | und
       let graph=store.projectGraphs(projectId!).find(g=>g.taskKey===args.taskKey)
       graph??=store.createGraph(projectId!,{taskKey:args.taskKey,title:args.taskKey,origin:store.scopeFact(projectId!).description+'\nAssigned task: '+args.taskKey,goal:store.project(projectId!).objective+' · '+args.taskKey})
       if(args.reuseTaskKey){const source=legion.tactics(projectId!).find(t=>t.taskKey===args.reuseTaskKey)?.classification;if(!source)throw new HttpError(422,'Sibling has no confirmed classification');legion.classify(projectId!,args.taskKey,source.difficulty,source.factIds.length?source.factIds:source.sourceFactIds,source.family,source.factIds.length?args.reuseTaskKey:source.sourceTaskKey)}
-      return legion.spawn(projectId!,{role:args.role,taskKey:args.taskKey,description:args.mission,graphId:graph.id,sourceIds:[graph.originId],goalId:graph.goalId,executionProfile:args.executionProfile,specialist:args.specialist,escalationReason:args.escalationReason},maxSteps)
+      return legion.spawn(projectId!,{role:args.role,taskKey:args.taskKey,description:args.mission,graphId:graph.id,sourceIds:[graph.originId],goalId:graph.goalId,executionProfile:args.executionProfile,specialist:args.specialist,escalationReason:args.escalationReason},stepLimit(),settings()?.maxBenchmarkTasks ?? null)
     }),
     tool('legion_adjust','Adjust or cancel an existing Worker mission; no Graph or evidence edits.',Type.Object({missionId:text,description:Type.Optional(text),priority:Type.Optional(Type.Number()),cancel:Type.Optional(Type.Boolean())},{additionalProperties:false}),args=>store.updateStep(projectId!,args.missionId,{description:args.description,priority:args.priority,...(args.cancel?{status:'cancelled' as const}:{})})),
     tool('legion_reassign','Change a live Worker to a configured same-role model at a settled boundary.',Type.Object({runId:text,nextWorker:text,summary:text},{additionalProperties:false}),args=>{const run=store.run(args.runId),step=store.node<Step>(projectId!,run.stepId!,'step');if(!config?.workers.some(w=>w.enabled&&w.name===args.nextWorker&&w.roles?.includes(executionRole(store.project(projectId!).mode,step.role))))throw new HttpError(422,'Replacement route does not support this role');return legion.requestHandoff(run.id,args.summary,args.nextWorker)}),
@@ -73,6 +75,7 @@ export function legionTools(store: Store, actor: string, projectId: string | und
     tool('legion_state','Read saved STATE only on handover; summary saves full concise campaign decisions.',Type.Object({summary:Type.Optional(text)},{additionalProperties:false}),args=>args.summary?legion.saveState(projectId,'commander',args.summary):{state:legion.campaign().state}),
     tool('legion_wait','End this patrol and sleep 60 seconds (90 idle) in the same persistent Session. Release execution slots; Worker events do not wake Commander.',Type.Object({through:Type.Optional(Type.Integer({minimum:0}))},{additionalProperties:false}),args=>{legion.finishCommand(args.through===undefined?{}:{[projectId!]:args.through},undefined,false);legion.checkpointState(projectId!,'patrol-sleep');finish();return{sleepSeconds:legion.inspectionDelay(projectId!)/1000}},true),
   ]
+  const step = !commander ? store.node<Step>(projectId!, store.run(actor).stepId!, 'step') : undefined
   const tools = [...inspection,
     tool('legion_experience_search', 'Search retained experience documents. Results are source-project knowledge, never confirmed target Facts. Check product/version/scope in the target.',Type.Object({query:text,family:Type.Optional(text)}),args=>experience().search(args.query,args.family)),
     tool('legion_experience_capture','Persist a reusable Markdown experience document with confirmed source Fact IDs and update FTS5 immediately. Never store unverified guesses as confirmed experience.',Type.Object({...scope,family:text,title:text,body:text,factIds:Type.Array(text,{minItems:1})}),args=>experience().capture(project(args),args)),
@@ -80,21 +83,31 @@ export function legionTools(store: Store, actor: string, projectId: string | und
     tool('legion_roster', 'Read live Project actor Run IDs, roles and task assignment before messaging; no credentials or external execution.', Type.Object(scope), args => [...store.runsByStatus('running', project(args)), ...store.runsByStatus('paused', project(args))].filter(run => run.stepId).map(run => { const step = store.node<Step>(project(args), run.stepId!, 'step'); if(!benchmark)return{runId:run.id,stepId:step.id,role:step.role,taskKey:step.taskKey,status:run.status,worker:run.worker}; return { runId: run.id, stepId: step.id, role: step.role, specialist: step.specialist, taskKey: step.taskKey, status: run.status, predecessorRunId:run.predecessorRunId, facts:step.factIds.length, inputTokens:run.inputTokens, outputTokens:run.outputTokens } })),
     tool('legion_message', 'Persist HELP/REPORT/MESSAGE for an actor in this Project. pending/queued is NOT model admission or action.', Type.Object({ ...scope, receiver: text, type: Type.Union(['HELP','REPORT','MESSAGE'].map(v => Type.Literal(v))), content: text }), args => legion.message(project(args), actor, args.receiver, args.type, args.content)),
     tool('legion_inbox', 'Read your durable Project messages and their actual delivery status. Messages are unverified, not Facts.', Type.Object(scope), args => legion.messages(project(args), actor)),
-    tool('legion_wait', 'Wait for graph events after a known cursor or a pending message. Does not poll, inject or manufacture progress. Cancelled with this activity.', Type.Object({ ...scope, after: Type.Integer({ minimum: 0 }) }), (args, signal) => commander&&!benchmark ? {mustFinish:true,instruction:'Save STATE and call legion_finish to release capacity. Planner resumes after debounced FGS events.'} : legion.wait(project(args), actor, args.after, signal)),
+    tool('legion_wait', 'Wait for graph events after a known cursor or a pending message. Does not poll, inject or manufacture progress. Cancelled with this activity.', Type.Object({ ...scope, after: Type.Integer({ minimum: 0 }) }), (args, signal) => step?.role==='general' ? (legion.saveState(projectId,actor,store.node<Step>(projectId!,step.id,'step').handoff??'Continue from FGS and Worker traces'),finish(),{planningRoundFinished:true}) : commander&&!benchmark ? {mustFinish:true,instruction:'Save STATE and call legion_finish to release capacity. Planner resumes after debounced FGS events.'} : legion.wait(project(args), actor, args.after, signal), step?.role==='general'),
   ]
-  const step = !commander ? store.node<Step>(projectId!, store.run(actor).stepId!, 'step') : undefined
-  const todoItems=Type.Array(Type.Object({content:Type.String(),status:Type.Union(['pending','in_progress','completed'].map(s=>Type.Literal(s)))},{additionalProperties:false}))
+  const todoItems=Type.Array(Type.Object({content:Type.String(),status:Type.Union(['pending','in_progress','completed'].map(s=>Type.Literal(s))),acceptance:Type.Optional(text),stepIds:Type.Optional(Type.Array(text,{uniqueItems:true})),factIds:Type.Optional(Type.Array(text,{uniqueItems:true}))},{additionalProperties:false}))
+  const verifyFact = (fact: import('./types.ts').Fact) => {
+    if (fact.id === 'origin' || fact.id.startsWith('origin-graph-')) throw new HttpError(422,'Scope is not Goal evidence')
+    const retained = fact.evidence.filter(e => e.artifactId)
+    if (retained.length) {
+      if (!config) throw new HttpError(409, 'Evidence storage configuration unavailable')
+      const evidence = new ProjectEvidence(store.forGraph(projectId!, fact.graphId!), config.workspaceRoot)
+      for (const source of retained) evidence.read(projectId!, source.artifactId!)
+      return
+    }
+    if (!fact.evidence.some(e => e.runId && e.toolCallId && store.db.prepare("SELECT 1 FROM audit_events WHERE project_id=? AND run_id=? AND json_extract(data,'$.graph_id')=? AND json_extract(data,'$.kind')='tool.completed' AND (json_extract(data,'$.tool_call_id')=? OR json_extract(data,'$.call_id')=?)").get(projectId!,e.runId,fact.graphId!,e.toolCallId,e.toolCallId))) throw new HttpError(422, 'Fact has no retained evidence or real tool result')
+  }
   if (commander && !benchmark && todos) tools.push(tool('TodoWrite', 'Replace the complete planning TodoList for this Graph. Only Commander maintains it in General mode.', Type.Object({projectId:text,graphId:text,todos:todoItems},{additionalProperties:false}), args => {
     store.projectGraph(project(args), args.graphId)
-    todos.replace(args.graphId, args.todos)
+    todos.replace(args.graphId, args.todos, verifyFact)
     return { saved: true }
   }))
   if(benchmark&&step&&taskTodoOwner(step,store)) {
     const graphId=step.graphId!,scoped=store.forGraph(projectId!,graphId)
     tools.push(
       tool('legion_goal','Create an evidence-driven stage inside your assigned task Graph.',Type.Object({description:text,parentId:Type.Optional(text)},{additionalProperties:false}),args=>scoped.addGoal(projectId!,args.description,args.parentId??step.goalId,actor)),
-      tool('legion_update_goal','Revise, accept from verified evidence, or abandon a stage inside your task Graph.',Type.Object({id:text,expectedVersion:Type.Integer({minimum:1}),description:Type.Optional(text),status:Type.Optional(Type.Union([Type.Literal('open'),Type.Literal('achieved'),Type.Literal('cancelled')])),evidenceIds:Type.Optional(Type.Array(text,{minItems:1}))},{additionalProperties:false}),args=>scoped.updateGoal(projectId!,args.id,args)),
-      tool('legion_accept','Accept your task Goal from verified target evidence and finish your mission. Never substitute Step completion for Goal proof.',Type.Object({expectedVersion:Type.Integer({minimum:1}),evidenceIds:Type.Array(text,{minItems:1})},{additionalProperties:false}),args=>{const goal=scoped.updateGoal(projectId!,step.goalId,{status:'achieved',expectedVersion:args.expectedVersion,evidenceIds:args.evidenceIds});finish();return goal},true),
+      tool('legion_update_goal','Revise, accept from verified evidence, or abandon a stage inside your task Graph.',Type.Object({id:text,expectedVersion:Type.Integer({minimum:1}),description:Type.Optional(text),status:Type.Optional(Type.Union([Type.Literal('open'),Type.Literal('achieved'),Type.Literal('cancelled')])),evidenceIds:Type.Optional(Type.Array(text,{minItems:1}))},{additionalProperties:false}),args=>{if(args.status==='achieved')for(const id of args.evidenceIds??scoped.node<Goal>(projectId!,args.id,'goal').evidenceIds){const node=scoped.node(projectId!,id);for(const fid of node.kind==='finding'?node.factIds:[id])verifyFact(scoped.node(projectId!,fid,'fact'))}return scoped.updateGoal(projectId!,args.id,args)}),
+      tool('legion_accept','Accept your task Goal from verified target evidence and finish your mission. Never substitute Step completion for Goal proof.',Type.Object({expectedVersion:Type.Integer({minimum:1}),evidenceIds:Type.Array(text,{minItems:1})},{additionalProperties:false}),args=>{for(const id of args.evidenceIds){const node=scoped.node(projectId!,id);for(const factId of node.kind==='finding'?node.factIds:[id])verifyFact(scoped.node(projectId!,factId,'fact'))}const goal=scoped.updateGoal(projectId!,step.goalId,{status:'achieved',expectedVersion:args.expectedVersion,evidenceIds:args.evidenceIds});finish();return goal},true),
       tool('legion_confirm_transfer','Confirm transferred knowledge with Facts from this task.',Type.Object({id:text,factIds:Type.Array(text,{minItems:1})},{additionalProperties:false}),args=>experience().confirm(args.id,projectId!,args.factIds)),
     )
   }
@@ -102,16 +115,38 @@ export function legionTools(store: Store, actor: string, projectId: string | und
     const graphId=step.graphId!, plans=legion.planningTodos(projectId!)
     tools.push(
       tool('legion_todos', 'Read the durable TodoList for your assigned task Graph.',Type.Object({}),()=>plans.list(graphId)),
-      tool('TodoWrite', 'Replace your assigned task Graph TodoList. Complete stages only from verified Facts, not Worker or Step termination.',Type.Object({todos:todoItems},{additionalProperties:false}),args=>{if(!taskTodoOwner(step,store))throw new HttpError(409,'Planning ownership transferred to another task Agent');plans.replace(graphId,args.todos);return{saved:true}}),
+      tool('TodoWrite', 'Replace your assigned task Graph TodoList. Complete stages only from verified Facts, not Worker or Step termination.',Type.Object({todos:todoItems},{additionalProperties:false}),args=>{plans.replace(graphId,args.todos,verifyFact);return{saved:true}}),
     )
   }
   if(!commander)tools.push(tool('legion_handoff', 'Request a fresh Agent/Run after saving STATE. Old execution must stop and all tool outcomes settle before automatic relay; never replay an unknown action.',Type.Object({summary:text,nextWorker:Type.Optional(text)}),args=>{if(args.nextWorker&&!config?.workers.some(w=>w.enabled&&w.name===args.nextWorker&&w.roles?.includes(executionRole(store.project(projectId!).mode,store.node<Step>(projectId!,store.run(actor).stepId!,'step').role))))throw new HttpError(422,'Replacement worker must be enabled and support the same role');return legion.queueHandoff(actor,args.summary,args.nextWorker)}))
-  if (benchmark && (commander || step?.role === 'general')) tools.push(tool('legion_spawn', 'Create a role Mission using existing FGS/DSH execution. Default to one autonomous Soldier; reinforce with a distinct specialist angle, then General. Complex work may escalate immediately with escalationReason. specialist defines an Agent within the existing role route, not a new Harness. Use the selected task Graph originId as sourceIds and its goalId; on the main Graph these are "origin" and "goal". Goal IDs are not sourceIds. Keep the same taskKey through Scout classification, General and its squads. General may delegate only same-task Soldier/Scout, within its Goal, at most two active squads.', Type.Object({ ...scope, ...assignment, role: Type.Union((commander ? ['general','soldier','scout'] : ['soldier','scout']).map(v => Type.Literal(v))), graphId:Type.Optional(text), taskKey: text, description: text, sourceIds: Type.Array(text, { minItems: 1 }), goalId: Type.Optional(text), executionProfile: Type.Optional(Type.Union([Type.Literal('direct'),Type.Literal('isolated')])) }), args => { return legion.spawn(project(args), { ...args, ...(commander ? {} : { parentRunId: actor }) }, maxSteps) }))
+  if (benchmark && step?.role === 'general' && taskTodoOwner(step, store)) {
+    const scoped=store.forGraph(projectId!,step.graphId!)
+    const definition={description:text,sourceIds:Type.Array(text,{minItems:1,uniqueItems:true}),goalId:Type.Optional(text),dependsOn:Type.Optional(Type.Array(text,{uniqueItems:true})),specialist:Type.Optional(specialistSchema),priority:Type.Optional(Type.Integer()),executionProfile:Type.Optional(Type.Union([Type.Literal('direct'),Type.Literal('isolated')]))}
+    const dispatch=(args:any)=>legion.spawn(projectId!,{...args,role:'soldier',graphId:step.graphId!,taskKey:step.taskKey!,parentRunId:actor},stepLimit())
+    tools.push(
+      tool('legion_step','Dispatch one executable Step within this task. Every prerequisite Fact must already exist. Worker runs independently; this call never waits for execution.',Type.Object(definition,{additionalProperties:false}),dispatch),
+      tool('legion_steps','Atomically dispatch independent ready Steps within the same remaining Max Step allowance. Do not batch stages lacking prerequisite Facts.',Type.Object({steps:Type.Array(Type.Object(definition,{additionalProperties:false}),{minItems:1})},{additionalProperties:false}),args=>store.transaction(()=>args.steps.map(dispatch))),
+      tool('legion_update_step','Correct, retry or cancel an assigned Worker Step; inspect its trace and output before retry. Never edits another task.',Type.Object({id:text,expectedVersion:Type.Integer({minimum:1}),description:Type.Optional(text),sourceIds:Type.Optional(Type.Array(text,{minItems:1})),status:Type.Optional(Type.Union([Type.Literal('pending'),Type.Literal('cancelled')])),mode:Type.Optional(Type.Union([Type.Literal('amend'),Type.Literal('replace')]))},{additionalProperties:false}),args=>{const target=scoped.node<Step>(projectId!,args.id,'step');if(target.id===step.id)throw new HttpError(422,'Use legion_plan_done to finish a planning round');return scoped.updateStep(projectId!,args.id,args)}),
+      tool('legion_read_run','Read actual Worker Output and Trace, including failures and tool results. Page older events with before; text summaries alone are not evidence.',Type.Object({runId:text,before:Type.Optional(Type.Integer({minimum:1})),limit:Type.Optional(Type.Integer({minimum:1,maximum:100}))},{additionalProperties:false}),args=>{
+        const run=store.run(args.runId);if(run.projectId!==projectId||run.graphId!==step.graphId)throw new HttpError(403,'Run belongs to another task')
+        const rows=store.db.prepare('SELECT id,data FROM audit_events WHERE project_id=? AND run_id=? AND id<? ORDER BY id DESC LIMIT ?').all(projectId!,run.id,args.before??Number.MAX_SAFE_INTEGER,args.limit??100)
+        return {run,events:rows.map(r=>({...JSON.parse(String(r.data)),id:Number(r.id)})).reverse(),nextBefore:rows.length===(args.limit??100)?Number(rows.at(-1)!.id):null}
+      }),
+      tool('legion_plan_done','Save confirmed STATE and end only this planning round immediately. Workers continue independently; events and heartbeat wake the same Planner. Do not wait for Workers.',Type.Object({state:text},{additionalProperties:false}),args=>{const saved=legion.saveState(projectId,actor,args.state);finish();return saved},true),
+
+    )
+  }
+  if(benchmark&&step&&taskTodoOwner(step,store)){const scoped=store.forGraph(projectId!,step.graphId!);tools.push(
+      tool('legion_task_stop','End an exhausted task honestly without claiming achievement. Preserve Facts, TodoList and trace; first settle or cancel remaining Workers.',Type.Object({reason:text,state:text},{additionalProperties:false}),args=>{
+        if(scoped.nodes<Step>(projectId!,['step']).some(s=>s.id!==step.id&&['pending','running','paused'].includes(s.status))||store.runsByStatus('unknown',projectId!).some(r=>r.graphId===step.graphId))throw new HttpError(409,'Settle remaining task work before stopping')
+        legion.saveState(projectId,actor,args.state);const goal=scoped.node<Goal>(projectId!,step.goalId,'goal');const result=scoped.updateGoal(projectId!,goal.id,{status:'cancelled',expectedVersion:goal.version});store.event(projectId!,'legion.task_exhausted',step,{reason:args.reason});finish();return result
+      },true),
+  )}
   if (commander && !benchmark) tools.push(tool('legion_step', 'Create an execution Step in the unique main FGS for the existing Worker Pool. Only create stages whose prerequisite evidence exists. dependsOn references prerequisite Step IDs; only completed prerequisites can enter the executable Frontier. Independent Steps run concurrently. No Agent creation, delegation or escalation.', Type.Object({projectId:text,description:text,sourceIds:Type.Array(text,{minItems:1}),goalId:Type.Optional(text),dependsOn:Type.Optional(Type.Array(text,{uniqueItems:true})),reportFindingId:Type.Optional(text),priority:Type.Optional(Type.Integer()),executionProfile:Type.Optional(Type.Union([Type.Literal('direct'),Type.Literal('isolated')]))},{additionalProperties:false}), args => {
     const graph=store.projectGraphs(project(args))[0]
     if(args.reportFindingId && !args.sourceIds.includes(args.reportFindingId))throw new HttpError(422,'Report Step must reference its Finding in sourceIds')
     if(args.reportFindingId)store.node(project(args),args.reportFindingId,'finding')
-    return store.forGraph(project(args),graph.id).addStep(project(args),{...args,role:'worker',taskKey:graph.id,creator:'planner'},maxSteps)
+    return store.forGraph(project(args),graph.id).addStep(project(args),{...args,role:'worker',taskKey:graph.id,creator:'planner'},stepLimit())
   }))
   if (commander) tools.push(
     tool('legion_graph','Initialize one Benchmark task as a real isolated FGS. Reuse the returned graphId, originId and goalId for every Mission of this task.',Type.Object({projectId:text,taskKey:text,title:text,origin:text,goal:text}),args=>store.createGraph(project(args),args)),
@@ -152,5 +187,5 @@ export function legionTools(store: Store, actor: string, projectId: string | und
     const allowed = new Set(commander ? ['legion_state','legion_roster','legion_message','legion_inbox','legion_wait','TodoWrite','legion_todos','legion_goal','legion_update_goal','legion_step','legion_update_step','legion_hint','legion_evidence_read','legion_read_run','legion_commander_model','legion_models','legion_stop','legion_read_changes','legion_read_node','legion_accept','legion_finish'] : ['legion_state','legion_message','legion_inbox','legion_wait','legion_handoff'])
     return tools.filter(t=>allowed.has(t.name)).map(t=>({...t,description:t.description.replaceAll('Commander','Planner').replaceAll('Sapper show/doc','FGS show/doc')}))
   }
-  return tools.map(t=>t.name==='legion_roster'?roster:t)
+  return tools.filter(t=>step?.role!=='general'||!['legion_experience_capture','legion_experience_search','legion_confirm_transfer'].includes(t.name)).map(t=>t.name==='legion_roster'?roster:t)
 }

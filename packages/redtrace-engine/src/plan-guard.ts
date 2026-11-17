@@ -1,4 +1,5 @@
 import { isReportStep } from '../../redtrace-dsh/src/roles.ts'
+import { taskTodoOwner, taskPlanReady } from './legion-todos.ts'
 import type { Store } from './store.ts'
 import type { Goal, Step } from './types.ts'
 
@@ -18,6 +19,7 @@ export function createPlanGuard(store: Store, runId: string) {
       const status = store.project(run.projectId).status
       if (!(isReportStep(step) ? ['active','completed'].includes(status) : status === 'active')) return 'Activity has stopped'
       if (step.status !== 'running' || !isReportStep(step) && store.node<Goal>(run.projectId, step.goalId, 'goal').status !== 'open') return 'Step or Goal has stopped'
+      if(store.project(run.projectId).mode==='benchmark'&&taskTodoOwner(step,store)&&!taskPlanReady(step,store)&&!safe.has(exec.name)&&!exec.name.startsWith('legion_')&&exec.name!=='TodoWrite')return 'Write the task attack plan with TodoWrite before execution. The initialized Goal placeholder is not a plan; provide real phases and acceptance criteria. Only the task Planner maintains it.'
       const version = roots.get(exec.rootCallId) ?? turnVersion
       roots.set(exec.rootCallId, version)
       if (!safe.has(exec.name) && (version !== (step.planVersion ?? 1) || (run.boundStepVersion ?? 1) !== (step.planVersion ?? 1))) return `Plan changed: read_graph({id:${JSON.stringify(step.id)}}), then sync_step({planVersion:${step.planVersion ?? 1}}). Old call trees cannot execute actions after synchronization.`

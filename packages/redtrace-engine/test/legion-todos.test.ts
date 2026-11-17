@@ -27,7 +27,7 @@ function fixture(t: any) {
 test('Benchmark Generals own separate durable task Graph TodoLists',async t=>{
   const {store,p,graphs,legion,tools}=fixture(t)
   const generalA=tools(),write=generalA.find(t=>t.name==='TodoWrite')!,read=generalA.find(t=>t.name==='legion_todos')!
-  assert.deepEqual((await read.execute('empty',{})).details,[])
+  assert.deepEqual((await read.execute('empty',{})).details,[{content:'verify',status:'pending'}])
   const before=JSON.stringify(store.forGraph(p.id,graphs[0].id).graph(p.id))
   await write.execute('first',{todos:plan})
   assert.equal(JSON.stringify(store.forGraph(p.id,graphs[0].id).graph(p.id)),before,'TodoWrite never writes FGS or queues Steps')
@@ -63,7 +63,7 @@ test('Benchmark TodoWrite accepts only items and binds writes to the assigned Gr
     {projectId:p.id,graphId:graphs[1].id,todos:plan},
     {projectId:q.id,graphId:store.projectGraphs(q.id)[0].id,todos:plan},
   ]) await assert.rejects(write.execute('invalid',input))
-  assert.deepEqual(legion.planningTodos(p.id).list(graphs[0].id),[])
+  assert.deepEqual(legion.planningTodos(p.id).list(graphs[0].id),[{content:'verify',status:'pending'}])
   assert.deepEqual(legion.planningTodos(p.id).list(graphs[1].id),[])
 })
 
@@ -134,7 +134,7 @@ test('project-detail HTTP snapshot reads current task Graph TodoList without cha
     assert.deepEqual((await request(a)).body.planningTodos,plan)
     assert.deepEqual((await request(b)).body.planningTodos,[])
     assert.deepEqual((await request('/v2/projects/'+q.id+'/graph')).body.planningTodos,[])
-    const next=[{content:'replacement only',status:'completed'}]
+    const next=[{content:'replacement only',status:'in_progress'}]
     await write.execute('next',{todos:next})
     assert.deepEqual((await request(a)).body.planningTodos,next)
     assert.equal((await request('/v2/projects/'+q.id+'/graph?graphId='+graphs[0].id)).status,404)
@@ -149,7 +149,7 @@ test('Benchmark launch and General reinforcement inherit only their assigned tas
  const {store,p,graphs,legion}=fixture(t);legion.planningTodos(p.id).replace(graphs[0].id,plan);
  const spawn=(graph:any,role:'soldier'|'general'|'scout',description:string)=>{const step=legion.spawn(p.id,{graphId:graph.id,taskKey:graph.taskKey,role,description,sourceIds:[graph.originId]});return store.claim(p.id,'execute',worker,step.id)};
  const first=spawn(graphs[0],'soldier','initial task planner');assert.deepEqual(launchContext(store,first.id).planningTodos,plan);
- const other=spawn(graphs[1],'soldier','another task planner');assert.deepEqual(launchContext(store,other.id).planningTodos,[]);
+ const other=spawn(graphs[1],'soldier','another task planner');assert.deepEqual(launchContext(store,other.id).planningTodos,[{content:'verify',status:'pending'}]);
  const reinforcement=spawn(graphs[0],'general','new strategy reinforcement');assert.deepEqual(launchContext(store,reinforcement.id).planningTodos,plan);assert(!('planningTodos' in launchContext(store,first.id)));
  const scout=spawn(graphs[0],'scout','recon only');assert(!('planningTodos' in launchContext(store,scout.id)));
  const general=legionMission('general','benchmark');for(const rule of ['planningTodos','never duplicate covered work','independent directions remain parallel','one item per real stage'])assert(general.includes(rule));

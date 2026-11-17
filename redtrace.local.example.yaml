@@ -11,6 +11,7 @@ runtime:
   max_project_workers: 3
 
 tasks:
+  # max_intents 仅限制通用模式活跃 Step；Benchmark 可另加 max_benchmark_tasks: 6（省略不限制）。
   commander: { timeout: 300, conclude_timeout: 30, max_intents: 4 }
   general: { timeout: 1800, conclude_timeout: 300 }
   soldier: { timeout: 1800, conclude_timeout: 300 }

@@ -28,6 +28,13 @@ window.redtraceWorkbench = {
   uploadUrl(block,target='workbench'){const u=(this.uploadsByChat[this.composerChatId(target)]||[]).find(u=>u.attachment.attachmentId===block.attachment?.attachmentId&&u.attachment.name===block.attachment.name);return u?'/v2/chats/'+encodeURIComponent(u.chatId)+'/attachments/'+encodeURIComponent(u.id):''},
   sendingWorkbench(){return !!this.chatSendingIds[this.composerChatId('workbench')]},
   canComposeWorkbench(){return this.conversationId==='chief'||this.conversationId==='commander'&&this.workbench?.project?.mode==='benchmark'},
+  conversationUsage:null,conversationPlanner:null,
+  conversationTokenRows(){const usage=this.conversationId==='commander'?this.workbench?.usage:this.conversationUsage;const selected=this.conversationId==='commander'?[this.workbench?.project?.mode==='general'?'planner':'commander']:['general','soldier','scout','reporter','worker'];return selected.filter(role=>usage?.breakdown?.[role]?.total).map(role=>({role,...usage.breakdown[role]}))},
+  tokenDetail(row){return '输入 '+this.formatTokens(row.input)+' · 输出 '+this.formatTokens(row.output)+' · 缓存读取 '+this.formatTokens(row.cacheRead)+' · 缓存写入 '+this.formatTokens(row.cacheWrite)+'；Token 非费用'},
+  conversationTaskState(){const graph=this.conversationGraphId();if(!graph)return null;const steps=(this.workbench?.steps||[]).filter(s=>s.graphId===graph),parked=steps.find(s=>s.status==='parked'&&s.parkReason);if(parked)return{label:'Commander 已暂停该题',reason:parked.parkReason,resume:parked.resumeCondition};if(this.workbench?.project.status==='stopped')return{label:'项目已停止 · 进度保留'};const goal=this.workbench?.goals?.find(g=>g.graphId===graph&&!g.parentId);if(goal?.status==='achieved')return{label:'目标已验收'};if(goal?.status==='cancelled')return{label:'已结束 · 未宣称目标达成'};if(this.conversationWorkers().some(w=>w.status==='running'))return{label:'执行中'};return{label:'等待题目规划者继续',reason:steps.find(s=>s.failure)?.failure||'任务 Goal 尚未达成；Step 结束不代表题目完成。'}},
+  pendingForConversation(id){return(this.workbench?.pendingAgents||[]).filter(a=>a.graphId===id)},
+  todoPlaceholder(){const list=this.conversationTodos()||[];const goal=this.workbench?.goals?.find(g=>g.graphId===this.conversationGraphId()&&!g.parentId);return list.length===1&&list[0].content===goal?.description&&!list[0].acceptance},
+  todoOwnerLabel(){return this.conversationPlanner?.role==='general'?'General Planner':'自主 Soldier Planner'},
   conversationPlanningTodos:[],
   conversationTodos(){
     if(this.workbench?.project?.mode==='general')return this.conversationId==='commander'?this.workbench.todos:null;
@@ -35,12 +42,13 @@ window.redtraceWorkbench = {
   },
   workbench:null,conversationId:'commander',conversationEvents:[],conversationMessages:[],conversationGraphEvents:[],conversationCursor:0,conversationBefore:null,conversationHasMore:false,conversationEventCursor:0,
   commanderLogSession:'',
+  commanderError(){return this.workbench?.project?.status!=='stopped'&&this.legion?.campaign?.status==='stopped'?this.legion.campaign.error||'':''},
   commanderSessions(){return [...new Set([...(this.legion?.campaign?.sessionHistory||[]),this.legion?.campaign?.previousSessionId,this.legion?.campaign?.sessionId].filter(Boolean))]},
   async selectCommanderHistory(){this.commanderHistory=[];this.commanderOffset=0;this.commanderSession='';await this.loadConversation();},
   commanderOffset:0,commanderHistory:[],commanderSession:'',commanderHasMore:false,conversationLoading:false,conversationError:'',conversationQuery:'',workbenchCommand:'',workbenchSending:false,
   chats:[],chatId:'',chat:null,chatQuery:'',chatDraft:'',chatEvents:[],chatOffset:0,chatHasMore:false,chatLoading:false,chatSendingIds:{},chatError:'',newChatTitle:'',
   workbenchConversations(){return (this.workbench?.conversations||[]).filter(c=>!this.conversationQuery||c.title.toLowerCase().includes(this.conversationQuery.toLowerCase())).sort((a,b)=>Number(b.running)-Number(a.running)||b.updatedAt.localeCompare(a.updatedAt)||a.id.localeCompare(b.id));},
-  async selectConversation(id){this.conversationId=id;this.conversationPlanningTodos=[];this.conversationEvents=[];this.conversationMessages=[];this.conversationGraphEvents=[];this.conversationCursor=0;this.conversationBefore=null;this.conversationEventCursor=0;this.conversationHasMore=false;this.conversationError='';localStorage.setItem('redtrace-conversation-'+this.legionProjectId,id);await this.loadConversation();},
+  async selectConversation(id){this.conversationId=id;this.conversationUsage=null;this.conversationPlanner=null;this.conversationPlanningTodos=[];this.conversationEvents=[];this.conversationMessages=[];this.conversationGraphEvents=[];this.conversationCursor=0;this.conversationBefore=null;this.conversationEventCursor=0;this.conversationHasMore=false;this.conversationError='';localStorage.setItem('redtrace-conversation-'+this.legionProjectId,id);await this.loadConversation();},
   conversationTitle(){return this.conversationId==='chief'?'会话':this.conversationId==='commander'?(this.workbench?.project?.mode==='general'?'Planner':'Commander'):this.workbench?.conversations.find(c=>c.id===this.conversationId)?.title||'Worker';},
   conversationUrl(){const c=this.workbench?.conversations.find(c=>c.id===this.conversationId);if(!c)return '';return '/v2/projects/'+encodeURIComponent(this.legionProjectId)+'/conversation?'+(c.runId?'runId='+encodeURIComponent(c.runId):'graphId='+encodeURIComponent(c.graphId));},
   async loadConversation(older=false){
@@ -66,7 +74,7 @@ window.redtraceWorkbench = {
         this.conversationEvents=[...new Map([...this.conversationEvents,...page.events].map(e=>[e.event_uid||e.id,e])).values()];
         if(!older)this.conversationCursor=Math.max(this.conversationCursor,page.cursor);
         if(initial||older){this.conversationBefore=page.before;this.conversationHasMore=page.hasMore;}
-        this.conversationPlanningTodos=page.todos||[];
+        this.conversationPlanningTodos=page.todos||[];this.conversationUsage=page.usage||null;this.conversationPlanner=page.taskPlanner||null;
         this.conversationMessages=page.messages;this.conversationGraphEvents=[...new Map([...this.conversationGraphEvents,...page.graphEvents].map(e=>[e.id,e])).values()];this.conversationEventCursor=page.eventCursor;
       }this.conversationError='';
     }catch(e){if(projectId===this.legionProjectId&&id===this.conversationId)this.conversationError=e.message;}finally{this.conversationLoading=false;}

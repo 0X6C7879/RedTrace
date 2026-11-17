@@ -49,7 +49,8 @@ test('General/Soldier owns scoped FGS planning and task acceptance; all task out
  const{store,p,legion}=fixture(t),graphs=['A','B'].map(taskKey=>store.createGraph(p.id,{taskKey,title:taskKey,origin:'local',goal:'verify'}))
  assert.equal(legion.completeBenchmark(p.id),false)
  for(const [i,g] of graphs.entries()){
-  const scoped=store.forGraph(p.id,g.id),step=scoped.addStep(p.id,{role:i?'general':'soldier',taskKey:g.taskKey!,description:'solve task',sourceIds:[g.originId]}),run=store.claim(p.id,'execute',worker,step.id),fact=scoped.addFact(p.id,'verified result',{runId:run.id,evidence:[{description:'local actual evidence'}]})
+  const scoped=store.forGraph(p.id,g.id),step=scoped.addStep(p.id,{role:i?'general':'soldier',taskKey:g.taskKey!,description:'solve task',sourceIds:[g.originId]}),run=store.claim(p.id,'execute',worker,step.id),fact=scoped.addFact(p.id,'verified result',{runId:run.id,evidence:[{description:'local actual evidence',runId:run.id,toolCallId:'fixture-proof'}]})
+  store.audit({id:run.id,project_id:p.id,graph_id:g.id},[{kind:'tool.completed',call_id:'fixture-proof',content:'literal local evidence'}])
   let finished=false;const tools=legionTools(scoped,run.id,p.id,null,()=>{finished=true},config),goal=tools.find(t=>t.name==='legion_goal')!,accept=tools.find(t=>t.name==='legion_accept')!
   await assert.rejects(goal.execute('',{description:'cross',parentId:graphs[1-i].goalId}));assert(!tools.some(t=>t.name==='legion_manage_evidence'));const stage=(await goal.execute('',{description:'verify stage'})).details as any;await tools.find(t=>t.name==='legion_update_goal')!.execute('',{id:stage.id,expectedVersion:stage.version,status:'achieved',evidenceIds:[fact.id]});assert.equal((store.node(p.id,stage.id,'goal') as import('../src/types.ts').Goal).status,'achieved')
   await assert.rejects(accept.execute('',{expectedVersion:1,evidenceIds:[g.originId]}));await accept.execute('',{expectedVersion:1,evidenceIds:[fact.id]});assert(finished)

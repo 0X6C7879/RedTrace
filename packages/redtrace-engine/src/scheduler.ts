@@ -21,12 +21,13 @@ export class Scheduler {
   private readonly execute: RunTask
   private config: EngineConfig
   private running = new Map<string, Active>()
+  private plannerTimer?: ReturnType<typeof setTimeout>
   private scheduled = false
   private closed = true
   private cursor = 0
   private readonly changed = () => this.wake()
   private readonly selectWorker: SelectWorker
-  constructor(store: Store, config: EngineConfig, execute: RunTask, selectWorker: SelectWorker = worker => worker, _criticalEnabled: () => boolean = () => true) { this.store = store; this.legion = new LegionStore(store); this.config = config; this.execute = execute; this.selectWorker = selectWorker }
+  constructor(store: Store, config: EngineConfig, execute: RunTask, selectWorker: SelectWorker = worker => worker, _criticalEnabled: () => boolean = () => true) { this.store = store; this.legion = new LegionStore(store); this.config = config; this.execute = execute; this.selectWorker = selectWorker; this.store.stepLimit = () => this.config.maxSteps }
   start() { if (!this.closed) return; this.closed = false; this.store.recover(); this.store.changes.on('change', this.changed); this.wake() }
   update(config: EngineConfig) { this.config = config; this.wake() }
   get activeRuns() { return this.store.runsByStatus('running') }
@@ -47,16 +48,22 @@ export class Scheduler {
       } catch (error) { if (error instanceof HttpError && error.status===404) task.abort.abort('Project deleted'); else throw error }
     }
     const commands=[...this.legion.campaigns().filter(c=>c.status==='running'),...chatSlots(this.store)], commandSlots=commands.length, active = this.activeRuns, projects = this.store.projects().filter(p=>['active','completed'].includes(p.status))
-    let progress = true
+    let progress = true, nextWakeAt = Infinity
     while(progress && active.length+commandSlots < this.config.maxWorkers) {
       progress = false
       for(let i=0;i<projects.length && active.length+commandSlots<this.config.maxWorkers;i++) {
         const project=projects[(this.cursor+i)%projects.length]
         if(active.filter(r=>r.projectId===project.id).length+commands.filter(c=>c.projectId===project.id).length>=this.config.maxProjectWorkers)continue
         if(!active.some(r=>r.projectId===project.id)&&!commands.some(c=>c.projectId===project.id)&&new Set([...active.map(r=>r.projectId),...commands.filter(c=>c.projectId).map(c=>c.projectId)]).size>=this.config.maxRunningProjects)continue
-        const steps=this.store.nodes<Step>(project.id,['step']).filter(s=>!s.deleted&&!s.replacementPending&&['pending','paused'].includes(s.status)&&(isReportStep(s)||project.status==='active'&&this.store.node<Goal>(project.id,s.goalId,'goal').status==='open')).sort((a,b)=>b.priority-a.priority||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id))
+        if(project.mode==='general' && this.config.maxSteps!==null && active.filter(r=>r.projectId===project.id).length>=this.config.maxSteps)continue
+        const questionLimit = this.config.maxBenchmarkTasks ?? null
+        const activeQuestions = new Set(project.mode==='benchmark' && questionLimit!==null ? [...active.filter(r=>r.projectId===project.id), ...this.store.runsByStatus('unknown',project.id)].map(r=>r.graphId) : [])
+        const steps=this.store.nodes<Step>(project.id,['step']).filter(s=>!s.deleted&&!s.replacementPending&&['pending','paused'].includes(s.status)&&(isReportStep(s)||project.status==='active'&&this.store.node<Goal>(project.id,s.goalId,'goal').status==='open')).sort((a,b)=>(project.mode==='benchmark' && questionLimit!==null && activeQuestions.size<questionLimit ? Number(activeQuestions.has(a.graphId))-Number(activeQuestions.has(b.graphId)) : 0)||b.priority-a.priority||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id))
         for(const step of steps) {
-          if(project.mode==='general'&&!this.store.stepReady(step))continue
+          if(project.mode==='benchmark' && questionLimit!==null && !activeQuestions.has(step.graphId) && activeQuestions.size>=questionLimit)continue
+          if(!this.store.stepReady(step))continue
+          const readyAt=step.role==='general'?this.store.plannerWakeAt(step):step.retryAfter??0
+          if(readyAt>Date.now()){nextWakeAt=Math.min(nextWakeAt,readyAt);continue}
           const resume=step.status==='paused'?this.store.runsByStatus('paused',project.id).find(r=>r.stepId===step.id):undefined
           const worker=this.select(resume,step,active);if(!worker)continue
           const run=this.store.claim(project.id,'execute',worker,step.id);active.push(run);this.launch(run,worker);progress=true;break
@@ -64,7 +71,10 @@ export class Scheduler {
       }
       if(projects.length)this.cursor=(this.cursor+1)%projects.length
     }
+    clearTimeout(this.plannerTimer)
+    if (Number.isFinite(nextWakeAt)) { this.plannerTimer = setTimeout(() => this.wake(), Math.max(0,nextWakeAt-Date.now())); this.plannerTimer.unref() }
   }
+
   private launch(run: Run, worker: Worker) {
     const abort = new AbortController(), config = structuredClone(this.config)
     run.provider = worker.provider; run.model = worker.model
@@ -78,7 +88,7 @@ export class Scheduler {
     this.running.set(run.id, task)
     task.completion = (async () => {
       let status: RunStatus = 'succeeded', error: string | null = null
-      try { await this.execute({ store: run.graphId ? this.store.forGraph(run.projectId,run.graphId) : this.store.forProject(run.projectId), run, worker: structuredClone(worker), config, signal: abort.signal }) }
+      try { await this.execute({ store: run.graphId ? this.store.forGraph(run.projectId,run.graphId) : this.store.forProject(run.projectId), run, worker: structuredClone(worker), config, signal: abort.signal, currentMaxSteps: () => this.config.maxSteps }) }
       catch (reason) { status = 'failed'; error = reason instanceof Error ? reason.message : String(reason) }
       finally {
         try {
@@ -90,7 +100,7 @@ export class Scheduler {
           const completed=this.store.finishRun(run.id, status, error)
           const step = this.store.node<Step>(run.projectId, run.stepId!, 'step')
           if(completed.status==='succeeded'&&step.role==='scout'&&step.scoutVerdict)this.legion.classify(run.projectId,step.taskKey!,step.scoutVerdict.difficulty,step.factIds,step.scoutVerdict.family)
-          if (step.handoffPending && status==='cancelled' && this.store.project(run.projectId).status==='active') new LegionStore(this.store).completeHandoff(run.projectId,step.id)
+          if (step.handoffPending && status==='cancelled' && this.store.project(run.projectId).status==='active') this.resumeHandoff(run.projectId,step)
           if(this.store.project(run.projectId).mode==='benchmark')this.legion.completeBenchmark(run.projectId)
           // Deleting a project mid-abort cascades its runs away; there is nothing left to finish.
         } catch (reason) { if (!(reason instanceof HttpError && reason.status === 404)) throw reason }
@@ -98,17 +108,22 @@ export class Scheduler {
       }
     })()
   }
+  private resumeHandoff(projectId: string, step: Step) {
+    const old=step.predecessorRunId?this.store.run(step.predecessorRunId):undefined
+    if(old&&!['running','unknown'].includes(old.status)&&!old.pendingTools.length&&this.store.planningCapacity(projectId,this.config.maxSteps,step.graphId??undefined).remainingSteps!==0)this.legion.completeHandoff(projectId,step.id)
+  }
   /** Sapper's dead-worker recovery, bounded per native Session; strategy stays with Commander. */
   watchdog() {
     if(this.closed||this.maintenance)return
+    for(const project of this.store.projects().filter(p=>p.status==='active'))for(const step of this.store.nodes<Step>(project.id,['step']).filter(s=>s.status==='parked'&&s.handoffPending))this.resumeHandoff(project.id,step)
     for(const run of this.store.runsByStatus('failed')) {
       if(this.running.has(run.id)||!run.stepId||run.pendingTools.length||this.store.project(run.projectId).status!=='active')continue
       if(!['PROCESS_EXIT','UNKNOWN','SERVER','TIMEOUT','TRANSPORT','STREAM_CLOSED','EMPTY_RESPONSE','RATE_LIMIT'].includes(run.failureCode??''))continue
       const step=this.store.node<Step>(run.projectId,run.stepId,'step')
-      if((step.failureCount??0)>=3||step.status!=='blocked'||this.store.latestRun(run.projectId,step.id)?.id!==run.id||this.legion.budget(Date.now(),run.projectId).phase==='ended')continue
+      if(this.store.planningCapacity(run.projectId,this.config.maxSteps,step.graphId??undefined).remainingSteps===0||(step.failureCount??0)>=3||step.status!=='blocked'||this.store.latestRun(run.projectId,step.id)?.id!==run.id||this.legion.budget(Date.now(),run.projectId).phase==='ended')continue
       this.store.transaction(()=>{
         step.failureCount=(step.failureCount??0)+1;run.status='paused';run.endedAt=null;run.error=null;delete run.failureCode
-        step.status='paused';step.failure=null;step.endedAt=null
+        step.status='paused';step.failure=null;step.endedAt=null;step.retryAfter=Date.now()+1000*2**(step.failureCount-1)
         this.store.saveRun(run);this.store.saveNode(step)
         this.store.event(run.projectId,'legion.worker_restarted',step,{runId:run.id,restarts:step.failureCount})
       })
@@ -122,6 +137,7 @@ export class Scheduler {
   }
   async close() {
     this.closed = true
+    clearTimeout(this.plannerTimer)
     this.store.changes.off('change', this.changed)
     for (const task of this.running.values()) task.abort.abort('Engine shutting down')
     await Promise.all([...this.running.values()].map(t => t.completion))

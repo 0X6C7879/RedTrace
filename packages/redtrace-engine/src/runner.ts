@@ -14,7 +14,7 @@ import type { EngineConfig, Fact, Json, Step, Project, Run, Goal, Input } from '
 import { ProjectEvidence } from './project-evidence.ts'
 import { legionTools } from './legion-tools.ts'
 import { legionMission } from './legion-missions.ts'
-import { CommanderTodos, taskTodoOwner } from './legion-todos.ts'
+import { CommanderTodos, taskTodoPlanner, taskTodoOwner, type Todo } from './legion-todos.ts'
 import { knowledgeTools } from './knowledge.ts'
 import { httpTools } from './http-tools.ts'
 import { Check } from 'typebox/value'
@@ -61,7 +61,8 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   })
   const refs = Type.Array(Type.String())
   const reporting = isReportStep(step)
-  const tools: AgentTool[] = [readGraph, ...(!reporting && step?.role ? legionTools(store, run.id, run.projectId, maxSteps(), finish, config) : [])]
+  const roleTools = !reporting && step?.role ? legionTools(store, run.id, run.projectId, maxSteps(), finish, config, undefined, () => ({...config,maxSteps:maxSteps()})) : []
+  const tools: AgentTool[] = [readGraph, ...roleTools]
   tools.push(tool('project_evidence_read', 'Read hash-verified Project evidence independently of the producer Run or Session. Artifact IDs are Project-scoped. Binary pages return encoding=base64; decode content accordingly.', Type.Object({ artifact_id: Type.String({ pattern: '^artifact-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), args => new ProjectEvidence(store, config.workspaceRoot).read(run.projectId, args.artifact_id, args.offset, args.length)))
   tools.push(tool('read_graph_delta', 'Read a bounded page of change metadata and current node titles. Historical Facts remain readable by ID. Continue with cursor until hasMore is false. Reading does not acknowledge processing.', Type.Object({ after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), args => ({ ...store.graphDelta(run.projectId, args.after ?? store.run(run.id).deliveredGraphCursor ?? 0, args.limit ?? 100, run.id), planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id) })))
   tools.push({ name: 'evidence_read', label: 'evidence_read', description: 'Read at most 7.6 KiB from a large tool result by byte offset, 1-based line, or keyword. Artifacts are scoped to this Project; pass run_id for another producer Run; request the next bounded slice when needed.', parameters: Type.Object({ run_id: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })), id: Type.String({ pattern: '^ev-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), line: Type.Optional(Type.Integer({ minimum: 1 })), query: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), executionMode: 'sequential', execute: async (_toolId: string, args: { run_id?: string; id: string; offset?: number; line?: number; query?: string; length?: number }) => {
@@ -118,6 +119,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
         ? 'Finish this Soldier initial Mission only after publishing a confirmed Fact; Commander owns Goal acceptance.'
         : 'Finish this Step only after explicitly submitting at least one confirmed, evidence-backed Fact. Consolidate the result, including verified failures or blockers, then call finish_step; a text summary alone does not complete the Step.', Type.Object({ summary: Type.String(),...(store.project(run.projectId).mode==='benchmark'&&step?.role==='scout'?{difficulty:Type.Union(['easy','medium','hard','unclear'].map(v=>Type.Literal(v))),family:Type.Optional(Type.String({minLength:1}))}:{}) }), args => {
           const current = store.node<Step>(run.projectId, run.stepId!, 'step')
+          if(store.project(run.projectId).mode==='benchmark'&&current.role==='soldier'&&taskTodoOwner(current,store)&&store.node<Goal>(run.projectId,current.goalId,'goal').status==='open')throw new HttpError(409,'Task Goal is still open: continue your TodoList, accept from verified Facts, or explicitly stop with legion_task_stop. finish_step cannot silently retire the task Planner.')
           if (!current.factIds.length) throw new Error('Legion Worker must submit at least one Fact before finishing')
           if(store.project(run.projectId).mode==='benchmark'&&current.role==='scout'){current.scoutVerdict={difficulty:args.difficulty as 'easy'|'medium'|'hard'|'unclear',...(args.family?{family:args.family as string}:{})};store.saveNode(current)}
           store.runEvent(run.id, 'step.summary', json(args)); finish(); return { saved: true }
@@ -125,7 +127,8 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     )
   }
   if (!reporting) tools.push(...knowledgeTools(evidenceRoot, context))
-  return tools.filter(t => step?.role !== 'scout' || t.name !== 'submit_finding').map(t => ({ ...t, description:store.project(run.projectId).mode==='general'?t.description.replaceAll('Commander','Planner').replaceAll('Soldier','Worker').replaceAll('Sapper','FGS').replace('A separate Reporter Session writes the report; do not write it during Explore.', 'Planner is notified through FGS and assigns report work when needed; no report Step is created automatically.'):t.description, execute: async (...args) => {
+  const plannerTools = new Set(['read_graph','read_graph_delta','evidence_read','project_evidence_read','sync_step', ...roleTools.map(t => t.name)])
+  return tools.filter(t => step?.role !== 'general' || plannerTools.has(t.name)).filter(t => step?.role !== 'scout' || t.name !== 'submit_finding').map(t => ({ ...t, description:store.project(run.projectId).mode==='general'?t.description.replaceAll('Commander','Planner').replaceAll('Soldier','Worker').replaceAll('Sapper','FGS').replace('A separate Reporter Session writes the report; do not write it during Explore.', 'Planner is notified through FGS and assigns report work when needed; no report Step is created automatically.'):t.description, execute: async (...args) => {
     if (!Check(t.parameters, args[1])) throw new HttpError(422, 'Invalid tool arguments')
     if (!efficiencyToolAvailable(context, t.name)) throw new Error('Efficiency tool plugin is disabled')
     if (signal.aborted || store.run(run.id).status !== 'running') throw new Error('Activity has stopped')
@@ -143,6 +146,13 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
 }
 
 export const activityPrompt = (_activity: 'decide' | 'execute', step?: Step, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => legionMission(isReportStep(step) ? 'reporter' : step?.role ?? executorRole(mode), mode, planner) + (step ? '\nAssigned Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'. Read and write only this Graph.' : '') + (step?.specialist ? '\nSpecialist assignment (within existing authorized Scope): '+JSON.stringify(step.specialist) : '') + (step?.bootstrap && mode==='general' ? '\nInitial Mission: establish evidence for the supplied Goal as a Worker. Planner owns planning and acceptance.' : '')
+
+export function taskPlanningContext(store: Store, step: Step): { taskPlanner?: { stepId: string; role: Step['role'] } | null; planningTodos?: Todo[] } {
+  if (store.project(step.projectId).mode !== 'benchmark') return {}
+  const planner = taskTodoPlanner(step, store)
+  return { taskPlanner: planner ? { stepId: planner.id, role: planner.role } : null,
+    ...(planner?.id === step.id ? { planningTodos: new CommanderTodos(store, step.projectId).list(step.graphId!) } : {}) }
+}
 
 export function activityLimits(config: EngineConfig, activity: 'decide' | 'execute', step?: Step, mode: 'benchmark'|'general' = 'benchmark') {
   return config.taskLimits?.[activity==='decide'?coordinatorRole(mode):isReportStep(step)?executorRole(mode):step?.role??executorRole(mode)] ?? {timeout:config.executeTimeout,concludeTimeout:config.concludeTimeout}
@@ -187,7 +197,14 @@ export function launchContext(store: Store, runId: string, channels: unknown[] =
   const goal = run.activity === 'decide' ? store.node<Goal>(run.projectId, 'goal', 'goal') : undefined
   return { projectId: run.projectId, graphId:run.graphId, ...(run.handoff ? {handoff:{confirmedState:run.handoff,predecessorRunId:run.predecessorRunId}} : {}), planningCapacity: store.planningCapacity(run.projectId, maxSteps), acknowledgementBoundary: store.acknowledgementBoundary(run.id), scope: { id: origin.id, description: origin.description },
     ...(step && store.project(run.projectId).mode==='general' ? {step:store.readNode(run.projectId,step.id),dependencies:step.sourceIds.map(id=>store.readNode(run.projectId,id))} : {}),
-    ...(step && store.project(run.projectId).mode==='benchmark' && taskTodoOwner(step,store) ? {planningTodos:new CommanderTodos(store,run.projectId).list(step.graphId!)} : {}),
+    ...(step ? taskPlanningContext(store, step) : {}),
+    ...(step?.role === 'general' ? {plannerRound: {
+      state: step.handoff ?? '',
+      instruction: 'Review new Facts against every Todo acceptance criterion. Read Worker traces/output before retry or acceptance; end the planning round without waiting for Workers.',
+      overview: {goals: store.nodes(run.projectId,['goal'],{limit:100}).map(n => nodeContent(n)), steps: store.nodes(run.projectId,['step'],{limit:100}).map(n => nodeContent(n))},
+      recentEvidence: store.db.prepare("SELECT id FROM nodes WHERE project_id=? AND graph_id=? AND kind IN ('fact','finding') ORDER BY rowid DESC LIMIT 24").all(run.projectId,step.graphId!).map(r => store.readNode(run.projectId,String(r.id))),
+      workers: store.db.prepare('SELECT id FROM runs WHERE project_id=? AND graph_id=? AND step_id<>? ORDER BY rowid DESC LIMIT 12').all(run.projectId,step.graphId!,step.id).map(row => store.run(String(row.id))).map(r => ({run:r,trace:store.db.prepare('SELECT data FROM audit_events WHERE project_id=? AND run_id=? ORDER BY id DESC LIMIT 8').all(run.projectId,r.id).map(e => JSON.parse(String(e.data))).reverse()})),
+    }} : {}),
     ...(isReportStep(step) ? { reportTrigger: { tool: 'submit_finding', finding_id: step!.sourceIds[0], finding: store.readNode(run.projectId, step!.sourceIds[0]) } } : {}),
     ...(goal ? { goal: { id: goal.id, description: goal.description, status: goal.status },
       evidenceSeq: run.planningEvidenceSeq ?? 0, hintSeq: run.planningHintSeq ?? 0, criticalSeq: run.planningCriticalSeq ?? 0, graphCursor: run.deliveredGraphCursor ?? 0,
