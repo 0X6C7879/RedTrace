@@ -111,9 +111,10 @@ test('uncertain native enqueue is retained and never automatically delivered twi
 
 test('the first Commander board is compact and leaves FGS details on demand', async t => {
   const { store, legion, project } = fixture(t); legion.claimCommand()
-  const tool = legionTools(store,'commander',store.projects()[0].id, null, () => {}).find(t => t.name === 'legion_board')!
+  const benchmark=store.createProject({mode:'benchmark',title:'board',origin:'local',goal:'verify'}).project;new LegionStore(store,benchmark.id).claimCommand()
+  const tool = legionTools(store,'commander',benchmark.id, null, () => {}).find(t => t.name === 'legion_board')!
   const board = (await tool.execute('board', {})).details as any
-  assert.equal(board.projectId, project.id); assert.ok(board.lines.length<=100)
+  assert.equal(board.projectId, benchmark.id); assert.ok(board.lines.length<=100)
   assert.ok(!('projects' in board)); assert.ok(!JSON.stringify(board).includes('evidenceIds'))
 })
 
@@ -134,7 +135,7 @@ test('Commander native automatic compaction rotates Session once and successor c
 
 test('native ownership recovery resumes only confirmed stopped Sessions and never replays unknown calls',{timeout:90000},async()=>{const r=await exec(process.execPath,[new URL('./legion-recovery.fixture.mjs',import.meta.url).pathname]);assert.match(r.stdout,/NATIVE_RECOVERY=true/);assert.match(r.stdout,/active_owner_blocked=true/);assert.match(r.stdout,/unknown_tools_not_replayed=true/)})
 
-test('Commander board details are lossless JSON at the native tool boundary',async t=>{const{store,legion,project}=fixture(t);legion.claimCommand();legion.spawn(project.id,{role:'worker',taskKey:'board',description:'scope',sourceIds:['origin']});const output=await legionTools(store,'commander',store.projects()[0].id,null,()=>{}).find(t=>t.name==='legion_board')!.execute('board',{});assert.deepEqual(output.details,JSON.parse(JSON.stringify(output.details)))})
+test('Commander board details are lossless JSON at the native tool boundary',async t=>{const{store,legion,project}=fixture(t);legion.claimCommand();const tools=legionTools(store,'commander',project.id,null,()=>{});assert.equal(tools.some(t=>t.name==='legion_board'),false);const output=await tools.find(t=>t.name==='legion_roster')!.execute('roster',{projectId:project.id});assert.deepEqual(output.details,JSON.parse(JSON.stringify(output.details)))})
 
 test('Commander wait returns a finish instruction rather than deadlocking its shared route',async t=>{const{store,legion,project}=fixture(t),step=store.addStep(project.id,{description:'Worker',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id);const c=legion.claimCommand();legion.saveCampaign({...c,workerName:'fixture'});const tools=legionTools(store,'commander',store.projects()[0].id,null,()=>{},{workers:[{...worker,roles:['planner','worker'],maxRunning:2}],maxWorkers:4} as any);const result=await tools.find(t=>t.name==='legion_wait')!.execute('capacity',{projectId:project.id,after:0});assert.equal((result.details as any).mustFinish,true);assert.equal(store.run(run.id).status,'running');assert.equal(legion.campaign().status,'running')})
 

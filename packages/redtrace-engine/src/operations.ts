@@ -246,6 +246,7 @@ export class Operations {
     return this.publicResource(this.resource(id))
   }
   available(resource: any, actor: any) {
+    if (resource.kind === 'http_session' && actor.actor_type === 'worker' && (!actor.run_id || JSON.parse(resource.metadata_json).run_id !== actor.run_id)) throw new HttpError(403, 'HTTP Session belongs to another Run')
     if (actor.actor_type === 'worker' && resource.worker_paused) throw new HttpError(423, 'Worker operations are paused for this resource')
     if (resource.locked_by && (resource.locked_by !== actor.actor || resource.locked_by_type !== actor.actor_type)) throw new HttpError(423, `Resource is locked by ${resource.locked_by_type}:${resource.locked_by}`)
     if (resource.status === 'retired') throw new HttpError(409, 'Resource is retired')

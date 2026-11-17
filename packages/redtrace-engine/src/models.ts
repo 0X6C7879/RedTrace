@@ -14,7 +14,7 @@ export function providerProfiles(config: EngineConfig) {
     const keyName = `REDTRACE_DSH_KEY_${Buffer.from(name).toString('hex').toUpperCase()}`
     const key = p.apiKey ?? (p.apiKeyEnv ? process.env[p.apiKeyEnv] : undefined)
     if (key) env[keyName] = key
-    providers[name] = { displayName: name, api: p.api, baseURL: p.baseUrl.replace(/\/$/, ''), apiKeyEnv: keyName,
+    providers[name] = { retryPolicy: {mode:'normal',retryableCodes:['RATE_LIMIT','SERVER','TIMEOUT','TRANSPORT','STREAM_CLOSED','EMPTY_RESPONSE']}, displayName: name, api: p.api, baseURL: p.baseUrl.replace(/\/$/, ''), apiKeyEnv: keyName,
       models: p.models.map(m => ({ id: m.id, name: m.id, contextWindow: m.contextWindow, maxTokens: m.maxTokens, input: ['text', 'image'],
         ...(modelReasoningEfforts(m) === undefined ? {} : { reasoningEfforts: modelReasoningEfforts(m) }),
         ...(p.api === 'openai-completions' ? { compat: { supportsDeveloperRole: false,

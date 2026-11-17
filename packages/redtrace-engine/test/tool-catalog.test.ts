@@ -32,7 +32,7 @@ test('idle tool page lists real role/native/REA Schemas, including disabled tool
     assert.equal(find('submit_fact').scopes.length, 0)
     assert.equal(first.tools.filter((t: any) => t.name.startsWith('mcp__rea__')).length, 29)
     assert(!find('nmap')); assert(!find('reverse_tools'))
-    assert(find('legion_board').roles.includes('planner'))
+    assert(!find('legion_board').roles.includes('planner'))
     assert(first.tools.some((t: any) => t.name === 'legion_board' && t.roles.includes('commander')))
     engine.configuration.commit(engine.configuration.read().revision, raw => { raw.tool_settings = { submit_fact: { enabled: false } } })
     const second = await get()

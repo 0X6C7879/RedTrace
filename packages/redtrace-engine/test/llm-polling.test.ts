@@ -13,6 +13,7 @@ const success = [{ type: 'text-delta', index: 0, text: 'OK' }, { type: 'finish',
 const request = (extra = {}) => ({ provider: 'a', model: 'shared', messages: [], ...extra })
 const collect = async (stream: AsyncIterable<any>) => { const chunks = []; for await (const chunk of stream) chunks.push(chunk); return chunks }
 function fixture(replies: Record<string, any>, providers = ['a', 'b'], polling = {}) {
+  let recovery: any
   let listener: any = (_options: any, next: any) => next()
   const calls: any[] = [], events: any[] = [], warnings: any[] = []
   const llm = { stream: (options: any): AsyncIterable<any> => listener(options, async function* () {
@@ -20,9 +21,9 @@ function fixture(replies: Record<string, any>, providers = ['a', 'b'], polling =
     const reply = replies[options.provider] ?? success
     yield* typeof reply === 'function' ? reply(options) : reply
   }) }
-  installModelPolling({ on: (_: string, fn: any) => { listener = fn }, get: (key: string) => key === 'llm' ? llm : { get: () => ({ append: (...args: any[]) => events.push(args) }) }, logger: { warn: (...args: any[]) => warnings.push(args) } },
+  installModelPolling({ on: (event: string, fn: any) => { if(event==='llm/stream')listener = fn;else recovery=fn }, get: (key: string) => key === 'llm' ? llm : { get: () => ({ append: (...args: any[]) => events.push(args) }) }, logger: { warn: (...args: any[]) => warnings.push(args) } },
     Object.fromEntries(providers.map(provider => [provider, { models: [{ id: 'shared' }] }])), polling)
-  return { llm, calls, events, warnings }
+  return { llm, calls, events, warnings, recover: (failure:any,next:any)=>recovery({failure},next) }
 }
 
 test('same model rotates across providers, deduplicates entries and keeps single routes unchanged', async () => {
@@ -37,7 +38,7 @@ test('same model rotates across providers, deduplicates entries and keeps single
 })
 
 test('eligible failures switch before content, retaining billable usage and actual route audit', async () => {
-  for (const [code, status] of [['AUTH', 401], ['QUOTA_EXCEEDED', 402], ['AUTH', 403], ['PI_AI_ERROR', 404], ['TIMEOUT', 408], ['SERVER', 503], ['TRANSPORT', undefined], ['MISSING_CREDENTIAL', undefined], ['EMPTY_RESPONSE', undefined]] as const) {
+  for (const [code, status] of [['RATE_LIMIT', 429], ['AUTH', 401], ['QUOTA_EXCEEDED', 402], ['AUTH', 403], ['PI_AI_ERROR', 404], ['TIMEOUT', 408], ['SERVER', 503], ['TRANSPORT', undefined], ['MISSING_CREDENTIAL', undefined], ['EMPTY_RESPONSE', undefined]] as const) {
     const f = fixture({ a: [{ type: 'usage', usage: { inputTokens: 2, outputTokens: 0, totalTokens: 2 } }, finish(code, status)], b: [success[0], { type: 'usage', usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 } }, success[1]] })
     const result = await collect(f.llm.stream(request({ sessionId: 'fixture' })))
     assert.deepEqual(f.calls.map(c => c.provider), ['a', 'b'])
@@ -49,7 +50,7 @@ test('eligible failures switch before content, retaining billable usage and actu
 })
 
 test('request errors, cancellation, partial text/reasoning/tools and plugin throws never replay', async () => {
-  for (const [code, status] of [['RATE_LIMIT', 429], ['INVALID_REQUEST', 400], ['INVALID_REQUEST', 413], ['CONTEXT_WINDOW_EXCEEDED', undefined], ['UNSUPPORTED_CONTENT', undefined], ['ABORTED', undefined]] as const) {
+  for (const [code, status] of [['INVALID_REQUEST', 400], ['INVALID_REQUEST', 413], ['CONTEXT_WINDOW_EXCEEDED', undefined], ['UNSUPPORTED_CONTENT', undefined], ['ABORTED', undefined]] as const) {
     const f = fixture({ a: [finish(code, status)] })
     await collect(f.llm.stream(request()))
     assert.equal(f.calls.length, 1)
@@ -71,9 +72,9 @@ test('request errors, cancellation, partial text/reasoning/tools and plugin thro
   assert.equal(thrown.calls.length, 1)
 })
 
-test('exhaustion attempts each same-model provider once and surfaces the last failure', async () => {
+test('exhaustion attempts each same-model provider once and retains a recoverable failure for native bounded retry', async () => {
   const f = fixture({ a: [finish('SERVER', 503)], b: [finish('AUTH', 401)] })
-  assert.deepEqual(await collect(f.llm.stream(request())), [{ type: 'finish', reason: finish('AUTH', 401).reason, replayState: undefined }])
+  assert.deepEqual(await collect(f.llm.stream(request())), [{ type: 'finish', reason: finish('SERVER', 503).reason, replayState: undefined }])
   assert.deepEqual(f.calls.map(c => c.provider), ['a', 'b'])
 })
 
@@ -162,4 +163,12 @@ test('polling settings disable rotation, control initial order and exclude unsel
   const direct = fixture({ a: [finish()] }, ['a','b'], { enabled: true, models: { shared: ['b'] } });
   await collect(direct.llm.stream(request()));
   assert.deepEqual(direct.calls.map(c => c.provider), ['a']);
+})
+
+test('partial responses veto native request retries, preserving the original failure',async()=>{
+ const error=finish('TIMEOUT'),f=fixture({a:[success[0],error]})
+ await collect(f.llm.stream(request()))
+ assert.throws(()=>f.recover(error.reason.failure,()=>{throw Error('unsafe retry')}),(e:any)=>e.code==='PARTIAL_RESPONSE'&&e.failure===error.reason.failure)
+ const untouched=finish('TIMEOUT').reason.failure
+ assert.equal(f.recover(untouched,()=> 'native bounded retry'),'native bounded retry')
 })

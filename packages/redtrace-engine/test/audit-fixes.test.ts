@@ -62,7 +62,7 @@ test('Operations completion wakes waiting callers and cleans listeners on cancel
   assert.equal((await ops.waitTask(next.id,1,new AbortController().signal)).status,'queued')
  } finally {await ops.close();store.close();rmSync(root,{recursive:true,force:true})}
 })
-test('all HTTP requests overlap across Workers sharing one Session; custom methods, redirects and explicit isolation work',async()=>{
+test('all HTTP requests overlap across Workers with isolated Sessions; custom methods, redirects and explicit isolation work',async()=>{
  let active=0,peak=0;const waiting:Array<()=>void>=[]
  const server=createServer((req,res)=>{
   if(req.url==='/set'){res.setHeader('Set-Cookie','identity=fixture; Path=/');res.end('set');return}
@@ -87,15 +87,15 @@ test('all HTTP requests overlap across Workers sharing one Session; custom metho
   const seed:any=await batch(a).execute('seed',{requests:[{url:url+'/set'}]})
   const calls=Promise.all([batch(a).execute('many',{requests:Array.from({length:6},(_,i)=>({url:url+'/hold?i='+i}))}),batch(b).execute('peer',{requests:[{url:url+'/hold?peer=1'},{url:url+'/hold?peer=2'}]})])
   const results:any[]=await Promise.race([calls,new Promise<never>((_,reject)=>{timeout=setTimeout(()=>reject(new Error('requests were serialized')),3000)})])
-  assert.equal(peak,8);assert.equal(results[0].session,results[1].session);assert.equal(seed.session,results[0].session)
-  for(const result of results.flatMap(row=>row.results))assert.equal(Buffer.from(JSON.parse(readFileSync(result.evidence.file,'utf8')).response.bodyBase64,'base64').toString(),'identity=fixture')
+  assert.equal(peak,8);assert.notEqual(results[0].session,results[1].session);assert.equal(seed.session,results[0].session)
+  for(const [i,row] of results.entries())for(const result of row.results)assert.equal(Buffer.from(JSON.parse(readFileSync(result.evidence.file,'utf8')).response.bodyBase64,'base64').toString(),i===0?'identity=fixture':'anonymous')
   const redirects:any=await batch(a).execute('redirects',{requests:[{url:url+'/redirect'},{url:url+'/redirect',followRedirects:true},{url:url+'/method',method:'PROPFIND'},{url:url.replace('http://','http://user:pass@')+'/method',method:'TRACE'}]})
   assert.deepEqual(redirects.results.map((row:any)=>row.status),[302,200,200,200])
   const isolated:any=await batch(b).execute('isolated',{session:'separate',requests:[{url:url+'/method'}]})
   assert.notEqual(isolated.session,seed.session)
   assert.equal(Buffer.from(JSON.parse(readFileSync(isolated.results[0].evidence.file,'utf8')).response.bodyBase64,'base64').toString(),'GET:anonymous')
   await closeHttpSessions(store)
-  const restored:any=await batch(b).execute('restart',{session:seed.session,requests:[{url:url+'/method'}]})
+  const restored:any=await batch(a).execute('restart',{session:seed.session,requests:[{url:url+'/method'}]})
   assert.equal(Buffer.from(JSON.parse(readFileSync(restored.results[0].evidence.file,'utf8')).response.bodyBase64,'base64').toString(),'GET:identity=fixture')
  } finally {if(timeout)clearTimeout(timeout);for(const finish of waiting)finish();server.closeAllConnections();await closeHttpSessions(store);await operations.close();store.close();await new Promise<void>(resolve=>server.close(()=>resolve()));rmSync(root,{recursive:true,force:true})}
 })

@@ -6,13 +6,13 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { Store } from '../src/store.ts'
 import { Operations } from '../src/operations.ts'
-import { httpTools, closeHttpSessions } from '../src/http-tools.ts'
+import { httpTools, closeHttpSessions, closeRunHttpSessions } from '../src/http-tools.ts'
 import { graphTools } from '../src/runner.ts'
 import type { TaskContext } from '../src/scheduler.ts'
 import type { EngineConfig, Worker } from '../src/types.ts'
 const { snapshotJsonValue } = await import(new URL('../../../vendor/deepseek-harness/packages/util/values/lib/index.js', import.meta.url).href)
 
-test('HTTP Resource: optional session, shared cookies/restart, isolation, replay, concurrent batches and no Browser', async () => {
+test('HTTP Resource: optional session, Run-owned cookies/restart, isolation, replay, concurrent batches and no Browser', async () => {
   const seen: string[] = []
   const server = createServer((req, res) => {
     seen.push(req.url!)
@@ -51,9 +51,14 @@ test('HTTP Resource: optional session, shared cookies/restart, isolation, replay
     for (let i = 0; i < 10; i++) await batch.execute('extra', { session: 'extra-' + i, requests: [{ url }] })
     const second = context(), next = httpTools(second).find(t => t.name === 'http_batch')!
     const shared: any = await next.execute('shared', { requests: [{ url }] })
-    assert.equal(shared.session, initial.session)
-    await closeHttpSessions(store)
-    const restored: any = await next.execute('restart', { session: initial.session, requests: [{ url }] })
+    assert.notEqual(shared.session, initial.session)
+    assert.equal(JSON.parse(Buffer.from(read(shared.results[0]).response.bodyBase64, 'base64').toString()).cookie, 'anonymous')
+    await assert.rejects(next.execute('cross-run', {session:initial.session,requests:[{url}]}), /another Run/)
+    assert.throws(()=>operations.available(operations.resource(initial.session),{actor_type:'worker',actor:worker.name,run_id:second.run.id}), /another Run/)
+    await closeRunHttpSessions(store.forProject(project.id), first.run.id)
+    const stillIndependent:any=await next.execute('peer-alive',{requests:[{url}]})
+    assert.equal(stillIndependent.session,shared.session)
+    const restored: any = await batch.execute('restart', { session: initial.session, requests: [{ url }] })
     assert.equal(JSON.parse(Buffer.from(read(restored.results[0]).response.bodyBase64, 'base64').toString()).cookie, 'identity=fixture')
     const foreign = store.createProject({ title: 'Other', origin: 'scope', goal: 'fixture', bootstrap: false }).project
     await assert.rejects(httpTools(context(foreign.id)).find(t=>t.name==='http_batch')!.execute('foreign', { session: initial.session, requests: [{ url }] }), /not found in this Project/)
@@ -74,6 +79,6 @@ test('HTTP Resource: optional session, shared cookies/restart, isolation, replay
     for (const args of [{session: 123,requests:[{url}]},{requests:[{url:'file:///etc/passwd'}]},{requests:[{url: 'invalid'}]}]) await assert.rejects(batch.execute('invalid', args as any))
     assert.equal(seen.length, count)
     operations.updateResource(initial.session, {worker_paused: 1})
-    await assert.rejects(next.execute('paused', {session: initial.session,requests:[{url}]}), /paused/)
+    await assert.rejects(batch.execute('paused', {session: initial.session,requests:[{url}]}), /paused/)
   } finally { await closeHttpSessions(store); await operations.close(); store.close(); server.closeAllConnections(); await new Promise<void>(r=>server.close(()=>r())); rmSync(root,{recursive:true,force:true}) }
 })

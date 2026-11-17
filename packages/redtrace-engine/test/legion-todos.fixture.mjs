@@ -24,12 +24,12 @@ const model=createServer(async(req,res)=>{
   let text='';for await(const b of req)text+=b
   const input=JSON.parse(text);requests++
   assert(input.tools.some(t=>t.function.name==='TodoWrite'))
-  const injected=input.messages.map(textOf).map(s=>{try{return JSON.parse(s)}catch{return null}}).filter(s=>s?.instruction?.includes('compact legion_board')).at(-1)
+  const injected=input.messages.map(textOf).map(s=>{try{return JSON.parse(s)}catch{return null}}).filter(s=>s?.instruction?.includes('relevant FGS deltas')).at(-1)
   assert(injected,'each wake must carry compact instructions and cursors')
   assert(!('graphs' in injected),'wake-up must not inject full FGS')
   assert.deepEqual(injected.planningTodos,wake===1?[]:wake<=3?initial:[{content:'verify entry',status:'completed'},{content:'verify credentials',status:'in_progress'}],'every wake inherits the current task plan, including a fresh native session')
   const current={todos:legion.planningTodos(project.id).list(graph.id),fgs:store.graph(project.id)}
-  const boundary=input.messages.findLastIndex(m=>{try{return !!JSON.parse(textOf(m)).instruction?.includes('compact legion_board')}catch{return false}})
+  const boundary=input.messages.findLastIndex(m=>{try{return !!JSON.parse(textOf(m)).instruction?.includes('relevant FGS deltas')}catch{return false}})
   const calls=input.messages.slice(boundary+1).flatMap(m=>m.tool_calls??[]).map(c=>c.function.name)
   for(const message of input.messages.filter(m=>m.role==='system'))assert(!textOf(message).includes('"todos":['),'mutable lists do not belong in the system prompt')
   assert.deepEqual(current.todos,wake===1&&!calls.includes('TodoWrite')?[]:wake<3||wake===3&&!calls.includes('TodoWrite')?initial:[{content:'verify entry',status:'completed'},{content:'verify credentials',status:wake===5&&calls.includes('TodoWrite')?'completed':'in_progress'}])
@@ -41,7 +41,7 @@ const model=createServer(async(req,res)=>{
    const unread=[entry,credentials].filter(Boolean).find(f=>!details.some(d=>d.id===f.id))
    for(const detail of details)assert(detail.evidence.length)
   let name,args
-   if(!calls.includes('legion_board')){name='legion_board';args={}}
+   if(!calls.includes('legion_roster')){name='legion_roster';args={projectId:project.id}}
    else if(!calls.includes('legion_todos')){name='legion_todos';args={projectId:project.id,graphId:graph.id}}
    else if(unread){name='legion_read_node';args={projectId:project.id,id:unread.id,detail:'doc'}}
    else if(!calls.includes('TodoWrite')){

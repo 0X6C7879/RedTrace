@@ -25,7 +25,7 @@ const model = createServer(async (req, res) => {
   try {
     let raw = ''; for await (const chunk of req) raw += chunk
     const b = JSON.parse(raw), names = (b.tools ?? []).map(t => t.function.name)
-    if(names.includes('legion_board')){const live=await(await fetch(api+'/console/tools')).json();assert(live.tools.some(t=>t.name==='legion_board'&&t.roles.includes('planner')));assert(live.runs.some(r=>r.visibleSchemas===names.length),'Run visible count must match the actual provider Tool Schema list');liveSchemaChecked=true}
+    if(names.includes('legion_roster')){const live=await(await fetch(api+'/console/tools')).json();assert(!names.includes('legion_board'));assert(live.tools.some(t=>t.name==='legion_roster'&&t.roles.includes('planner')));assert(live.runs.some(r=>r.visibleSchemas===names.length),'Run visible count must match the actual provider Tool Schema list');liveSchemaChecked=true}
     requests.push(b)
     const system = b.messages.filter(m => m.role === 'system').map(m => m.content).join('\n')
     const role = ['PLANNER','WORKER'].find(role => system.includes('You are ' + role))
@@ -43,7 +43,7 @@ const model = createServer(async (req, res) => {
       const inbox=await(await fetch(api+'/v2/legion?projectId='+projectId)).json()
       const unanswered=inbox.messages.find(m=>m.type==='HELP'&&!inbox.messages.some(reply=>reply.receiver===m.sender&&reply.content==='PLANNER_ACK'))
       const tasks=['entry-a','entry-b'],unfinished=g.steps.filter(s=>s.status!=='done')
-      if(!calls.includes('legion_board')){name='legion_board';args={}}
+      if(!calls.includes('legion_roster')){name='legion_roster';args={projectId}}
       else if(!calls.includes('legion_read_changes')){name='legion_read_changes';args={projectId}}
       else if(unanswered){name='legion_message';args={projectId,receiver:unanswered.sender,type:'MESSAGE',content:'PLANNER_ACK'}}
       else if(tasks.some(title=>!g.steps.some(s=>s.description===title))){name='legion_step';args={projectId,description:tasks.find(title=>!g.steps.some(s=>s.description===title)),sourceIds:['origin']}}
@@ -89,7 +89,7 @@ try {
   while(Date.now()<acceptedDeadline){const board=await call('/v2/legion?projectId='+projectId);if(board.campaign.status==='stopped')throw Error(JSON.stringify(board.campaign));if(board.projects[0]?.status==='completed'&&board.campaign.status==='idle')break;await delay(20)}
   const inventory=await call('/console/tools')
   assert(liveSchemaChecked,'Model and UI both observe the active Commander registry')
-  assert(inventory.tools.some(t=>t.name==='legion_board'&&t.scopes.length===0),'Real Schema stays listed after session disposal without retaining the disposed scope')
+  assert(inventory.tools.some(t=>t.name==='legion_roster'&&t.scopes.length===0),'Real Schema stays listed after session disposal without retaining the disposed scope')
   const result=(await call('/v2/legion?projectId='+projectId)).campaign
   assert.equal(result.status,'idle');assert.ok(result.state.includes('Fixture accepted'))
   const g=await call('/v2/projects/'+projectId), runs=await call('/v2/projects/'+projectId+'/runs')

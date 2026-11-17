@@ -13,8 +13,8 @@ import type { TaskContext } from './scheduler.ts'
 type Session = { session?: string; challenge?: string; identity?: string }
 type RequestInput = { url: string; method?: string; headers?: Record<string, string>; body?: string; followRedirects?: boolean }
 type Entry = { api: APIRequestContext; pending: Set<Promise<unknown>>; saving?: Promise<void>; dirty: boolean; closed: boolean; resourceId: string; stateFile: string }
-const managers = new WeakMap<TaskContext['store'], Map<string, Entry>>()
-const openings = new WeakMap<TaskContext['store'], Promise<void>>()
+const managers = new WeakMap<TaskContext['store']['db'], Map<string, Entry>>()
+const openings = new WeakMap<TaskContext['store']['db'], Map<string, Promise<void>>>()
 const sessionSchema = { session: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })), challenge: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })), identity: Type.Optional(Type.String({ pattern: '^[A-Za-z0-9_.-]{1,96}$' })) }
 const requestSchema = Type.Object({ url: Type.String({ minLength: 8, maxLength: 4096 }), method: Type.Optional(Type.String({ pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$", maxLength: 64 })), headers: Type.Optional(Type.Record(Type.String(), Type.String({ maxLength: 4096 }))), body: Type.Optional(Type.String({ maxLength: 262144 })), followRedirects: Type.Optional(Type.Boolean()) })
 
@@ -25,20 +25,22 @@ function safeUrl(value: string) {
   return url
 }
 function sessions(context: TaskContext) {
-  let entries = managers.get(context.store)
-  if (!entries) { entries = new Map(); managers.set(context.store, entries) }
+  let entries = managers.get(context.store.db)
+  if (!entries) { entries = new Map(); managers.set(context.store.db, entries) }
   return entries
 }
 async function entryFor(context: TaskContext, args: Session) {
   const ops = context.operations
   if (!ops) throw new Error('HTTP Resource service is unavailable')
   let result!: Entry
-  const opening = (openings.get(context.store) ?? Promise.resolve()).then(async () => {
-    const key = JSON.stringify([args.identity ?? 'anonymous', args.challenge ?? '', args.session ?? 'default'])
+  let pending = openings.get(context.store.db)
+  if (!pending) { pending = new Map(); openings.set(context.store.db, pending) }
+  const opening = (pending.get(context.run.id) ?? Promise.resolve()).then(async () => {
+    const key = JSON.stringify([context.run.id, args.identity ?? 'anonymous', args.challenge ?? '', args.session ?? 'default'])
     let resource: any = args.session?.startsWith('http_') ? ops.ownedResource(context.run.projectId, args.session) : context.store.db.prepare("SELECT * FROM shared_resources WHERE project_id=? AND kind='http_session' AND json_extract(metadata_json,'$.session_key')=?").get(context.run.projectId, key)
-    if (!resource) resource = ops.resource(ops.create(context.run.projectId, { kind: 'http_session', name: args.session ?? 'default', target: '', metadata: { session_key: key, identity: args.identity ?? 'anonymous', requests: {} }, actor_type: 'worker', actor: context.worker.name, worker: context.worker.name, intent_id: context.run.stepId }).resource.id)
+    if (!resource) resource = ops.resource(ops.create(context.run.projectId, { kind: 'http_session', name: args.session ?? 'default', target: '', metadata: { run_id: context.run.id, session_key: key, identity: args.identity ?? 'anonymous', requests: {} }, actor_type: 'worker', actor: context.worker.name, worker: context.worker.name, intent_id: context.run.stepId }).resource.id)
     if (resource.kind !== 'http_session') throw new HttpError(422, 'Not an HTTP session Resource')
-    ops.available(resource, { actor_type: 'worker', actor: context.worker.name })
+    ops.available(resource, { actor_type: 'worker', actor: context.worker.name, run_id: context.run.id })
     if (resource.status !== 'available') throw new HttpError(409, `HTTP session is ${resource.status}`)
     let entry = sessions(context).get(resource.id)
     if (!entry) {
@@ -50,7 +52,7 @@ async function entryFor(context: TaskContext, args: Session) {
     }
     result = entry
   })
-  openings.set(context.store, opening.catch(() => {})); await opening
+  pending.set(context.run.id, opening.catch(() => {})); await opening
   return result
 }
 async function persist(entry: Entry) {
@@ -67,17 +69,24 @@ async function persist(entry: Entry) {
   await entry.saving
 }
 export async function disposeHttpResource(store: TaskContext['store'], id: string, destroy = false) {
-  const entry = managers.get(store)?.get(id)
+  const entry = managers.get(store.db)?.get(id)
   if (!entry) return
   entry.closed = true
   await Promise.allSettled([...entry.pending])
   if (entry.saving) await entry.saving
   if (!destroy) await persist(entry)
-  managers.get(store)?.delete(id); await entry.api.dispose()
+  managers.get(store.db)?.delete(id); await entry.api.dispose()
   if (destroy) await rm(entry.stateFile, { force: true })
 }
+export async function closeRunHttpSessions(store: TaskContext['store'], runId: string) {
+  for (const [id] of managers.get(store.db) ?? []) {
+    const resource = store.db.prepare('SELECT metadata_json FROM shared_resources WHERE id=?').get(id)
+    if (resource && JSON.parse(String(resource.metadata_json)).run_id === runId) await disposeHttpResource(store, id)
+  }
+  openings.get(store.db)?.delete(runId)
+}
 export async function closeHttpSessions(store: TaskContext['store'], projectId?: string, destroy = false) {
-  for (const [id] of managers.get(store) ?? []) {
+  for (const [id] of managers.get(store.db) ?? []) {
     const resource = store.db.prepare('SELECT project_id FROM shared_resources WHERE id=?').get(id)
     if (projectId && resource?.project_id !== projectId) continue
     await disposeHttpResource(store, id, destroy || !resource)
@@ -107,7 +116,7 @@ async function batch(context: TaskContext, entry: Entry, requests: RequestInput[
   const send = async (item: RequestInput, index: number) => {
     if (context.signal.aborted) throw new Error('HTTP operation cancelled; no automatic replay')
     const resource = ops.ownedResource(context.run.projectId, entry.resourceId)
-    ops.available(resource, { actor_type: 'worker', actor: context.worker.name })
+    ops.available(resource, { actor_type: 'worker', actor: context.worker.name, run_id: context.run.id })
     if (resource.status !== 'available') throw new HttpError(409, `HTTP session is ${resource.status}`)
     const started = Date.now(), requestId = `req-${randomUUID()}`
     let response
@@ -139,7 +148,7 @@ async function batch(context: TaskContext, entry: Entry, requests: RequestInput[
 }
 export function httpTools(context: TaskContext): AgentTool[] {
   const tools = [
-    { name: 'http_batch', label: 'http_batch', description: 'Send explicit HTTP requests without a browser. Project Resource cookies persist across Steps and restart. Session is optional; return its Resource id for reuse. All requests and Workers run concurrently in a shared Session by default; use a distinct session only for isolation. followRedirects is optional per request (default false). Full evidence is archived, failures are not automatically replayed.', parameters: Type.Object({ ...sessionSchema, requests: Type.Array(requestSchema, { minItems: 1 }), parallel: Type.Optional(Type.Boolean()) }), execute: async (_id: string, args: Session & { requests: RequestInput[]; parallel?: boolean }, entry: Entry) => batch(context, entry, args.requests) },
+    { name: 'http_batch', label: 'http_batch', description: 'Send explicit HTTP requests without a browser. Cookies persist only within this Run, including Session recovery. Session is optional; return its Resource id for reuse. Requests run concurrently; each Run owns independent HTTP Sessions. followRedirects is optional per request (default false). Full evidence is archived, failures are not automatically replayed.', parameters: Type.Object({ ...sessionSchema, requests: Type.Array(requestSchema, { minItems: 1 }), parallel: Type.Optional(Type.Boolean()) }), execute: async (_id: string, args: Session & { requests: RequestInput[]; parallel?: boolean }, entry: Entry) => batch(context, entry, args.requests) },
     { name: 'http_replay', label: 'http_replay', description: 'Explicitly replay an archived http_batch Request ID in its Project HTTP Resource. Uses the original method/body/headers and current cookies; supports query variants and explicit overrides. No hidden baseline request or automatic retry. Token names are not a permission gate.', parameters: Type.Object({ ...sessionSchema, request_id: Type.String({ minLength: 1, maxLength: 64 }), variants: Type.Array(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 128 }), value: Type.String({ maxLength: 4096 }) })), { minItems: 1 }), method: requestSchema.properties.method, body: requestSchema.properties.body, headers: requestSchema.properties.headers, followRedirects: requestSchema.properties.followRedirects }), execute: async (_id: string, args: Session & { request_id: string; variants: { name: string; value: string }[][]; method?: string; body?: string; headers?: Record<string, string>; followRedirects?: boolean }, entry: Entry) => {
       const record = JSON.parse(context.operations!.ownedResource(context.run.projectId, entry.resourceId).metadata_json).requests[args.request_id]
       if (!record) throw new Error('HTTP Request ID not found in this Project Resource')
@@ -162,7 +171,7 @@ export function httpTools(context: TaskContext): AgentTool[] {
     if (entry.closed || sessions(context).get(entry.resourceId) !== entry) throw new Error('HTTP session was closed before launch')
     const work = (async () => {
       if (context.signal.aborted) throw new Error('HTTP operation cancelled before launch')
-      // A cancelled Worker must not dispose the Session used by its peers.
+      // Run-owned contexts never dispose another Run’s requests.
       return await (tool.execute as (id: string, args: any, entry: Entry) => Promise<unknown>)(_id, args, entry)
     })()
     entry.pending.add(work)

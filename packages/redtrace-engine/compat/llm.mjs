@@ -29,12 +29,10 @@ export async function apply(ctx, config) {
 function canFailover(reason, signal) {
   if (signal?.aborted || reason.kind !== 'error') return false
   const failure = reason.failure
-  // Sapper: transient throttling belongs to DSH retry, not credential rotation.
-  if (failure.code === 'RATE_LIMIT') return false
   if (['INVALID_REQUEST', 'CONTEXT_WINDOW_EXCEEDED', 'ABORTED'].includes(failure.code)) return false
   const status = failure.status ?? Number(failure.message.match(/\b([45]\d{2})\b/)?.[1])
   if (status) return [401, 402, 403, 404, 408, 429].includes(status) || status >= 500
-  return ['AUTH', 'QUOTA_EXCEEDED', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT', 'STREAM_CLOSED', 'EMPTY_RESPONSE', 'MISSING_CREDENTIAL', 'INVALID_CREDENTIAL'].includes(failure.code)
+  return ['AUTH', 'QUOTA', 'ACCOUNT_QUOTA', 'ACCOUNT_SIGN_IN_REQUIRED', 'ACCOUNT_TOKEN_INVALID', 'QUOTA_EXCEEDED', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT', 'STREAM_CLOSED', 'EMPTY_RESPONSE', 'MISSING_CREDENTIAL', 'INVALID_CREDENTIAL'].includes(failure.code)
 }
 
 const addUsage = (left = {}, right = {}) => Object.fromEntries(
@@ -43,7 +41,19 @@ const addUsage = (left = {}, right = {}) => Object.fromEntries(
 
 /** Same exact model ID shares one round-robin cursor across Workers. */
 export function installModelPolling(ctx, providers, polling = {}) {
-  if (polling.enabled === false) return
+  const unsafeFailures = new WeakSet()
+  ctx.on('agent/request-error', ({ failure }, next) => {
+    if (unsafeFailures.has(failure)) throw Object.assign(new Error('Partial model response cannot be safely replayed: '+failure.message, {cause:failure}), {code:'PARTIAL_RESPONSE',failure})
+    return next()
+  }, {prepend:true})
+  async function* observe(stream) {
+    let emitted=false
+    for await (const chunk of stream) {
+      if(chunk.type==='finish'&&emitted&&chunk.reason.kind==='error')unsafeFailures.add(chunk.reason.failure)
+      else if(!['usage','finish'].includes(chunk.type))emitted=true
+      yield chunk
+    }
+  }
   const groups = new Map(), cursors = new Map(), routed = new WeakSet()
   for (const [provider, profile] of Object.entries(providers)) {
     for (const model of profile.models ?? []) {
@@ -55,11 +65,11 @@ export function installModelPolling(ctx, providers, polling = {}) {
   for (const [model, names] of Object.entries(polling.models ?? {})) groups.set(model, names.filter(name => groups.get(model)?.includes(name)))
   ctx.on('llm/stream', async function* (options, next) {
     const members = groups.get(options.model)
-    if (routed.has(options) || !members?.includes(options.provider) || members.length < 2) { yield* next(); return }
+    if (polling.enabled === false || routed.has(options) || !members?.includes(options.provider) || members.length < 2) { yield* observe(next()); return }
     const start = cursors.get(options.model) ?? (Object.hasOwn(polling.models ?? {}, options.model) ? 0 : members.indexOf(options.provider))
     cursors.set(options.model, (start + 1) % members.length)
     const session = options.sessionId ? ctx.get('sessions')?.get(options.sessionId) : undefined
-    let spent = {}
+    let spent = {}, retryableFailure
     for (let attempt = 0; attempt < members.length; attempt++) {
       if (options.signal?.aborted) {
         yield { type: 'finish', reason: { kind: 'aborted', failure: { code: 'ABORTED', message: 'LLM polling aborted by caller' } } }
@@ -74,18 +84,21 @@ export function installModelPolling(ctx, providers, polling = {}) {
       if (changed) routed.add(request)
       session?.append('llm/polling', { requestedProvider: options.provider, provider, model: options.model, attempt: attempt + 1 })
       let emitted = false, usage
-      for await (const chunk of changed ? ctx.get('llm').stream(request) : next()) {
+      for await (const chunk of observe(changed ? ctx.get('llm').stream(request) : next())) {
         if (chunk.type === 'usage') { usage = chunk.usage; continue }
         if (chunk.type === 'finish') {
+          if(chunk.reason.kind==='error') {
+            session?.append('llm/polling-failed',{provider,model:options.model,code:chunk.reason.failure.code,failure:chunk.reason.failure,usage})
+            if(!emitted&&['RATE_LIMIT','SERVER','TIMEOUT','TRANSPORT','STREAM_CLOSED','EMPTY_RESPONSE'].includes(chunk.reason.failure.code))retryableFailure=chunk.reason
+          }
           if (!emitted && attempt + 1 < members.length && canFailover(chunk.reason, options.signal)) {
             spent = addUsage(spent, usage)
             const code = chunk.reason.failure.code
-            session?.append('llm/polling-failed', { provider, model: options.model, code })
             ctx.logger.warn('LLM polling: %s/%s failed (%s); trying next provider', provider, options.model, code)
             break
           }
           if (usage || Object.keys(spent).length) yield { type: 'usage', usage: addUsage(spent, usage) }
-          yield changed ? { ...chunk, replayState: undefined } : chunk
+          yield !emitted&&chunk.reason.kind==='error'&&retryableFailure ? {...chunk,reason:retryableFailure,replayState:undefined} : changed ? { ...chunk, replayState: undefined } : chunk
           return
         }
         emitted = true

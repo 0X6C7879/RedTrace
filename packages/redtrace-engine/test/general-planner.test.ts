@@ -10,7 +10,7 @@ import {legionTools} from '../src/legion-tools.ts'
 import {graphTools,launchContext} from '../src/runner.ts'
 import {Scheduler} from '../src/scheduler.ts'
 import {chatTools} from '../src/chat.ts'
-import type {Step,EngineConfig,Worker} from '../src/types.ts'
+import type {Step,Goal,Fact,EngineConfig,Worker} from '../src/types.ts'
 
 const worker:Worker={name:'pool',roles:['worker'],provider:'mock',model:'mock',backend:'mock',enabled:true,maxRunning:3,priority:0}
 
@@ -105,4 +105,40 @@ test('stored v2 General Steps migrate to Worker without retaining squads or rewr
   const count=store.events(p.id).filter(e=>e.type==='legion.role_migrated').length
   store.close();store=new Store(file);assert.equal(store.events(p.id).filter(e=>e.type==='legion.role_migrated').length,count)
  }finally{store.close();rmSync(root,{recursive:true,force:true})}
+})
+
+
+test('General stops exhausted work without accepting Goal; negative Facts survive and unfinished work blocks stop',async()=>{
+ const store=new Store(':memory:')
+ try{
+  const p=store.createProject({title:'negative',origin:'local fixture',goal:'verify'}).project,l=new LegionStore(store,p.id)
+  l.claimCommand();let finished=false
+  const tools=legionTools(store,'commander',p.id,null,()=>{finished=true}),stop=tools.find(t=>t.name==='legion_stop')!
+  assert(!tools.some(t=>t.name==='legion_board'))
+  const step=store.addStep(p.id,{description:'test one payload on /fixture',sourceIds:['origin']}),run=store.claim(p.id,'execute',worker,step.id)
+  await assert.rejects(stop.execute('',{reason:'exhausted',state:'keep state'}),/Unsettled/)
+  const fact=store.addFact(p.id,'GET /fixture with payload X returned literal X, not execution; only this endpoint and payload tested',{title:'Payload X did not execute',runId:run.id,evidence:[{description:'fixture stdout: literal X'}]})
+  store.finishRun(run.id,'succeeded')
+  const changes=l.readChanges(p.id);assert(JSON.stringify(changes).includes(fact.id))
+  await stop.execute('',{reason:'tested direction exhausted',state:'Negative Fact '+fact.id+'; no further direction in scope'})
+  assert(finished);assert.equal(store.project(p.id).status,'stopped');assert.equal(store.node<Goal>(p.id,'goal','goal').status,'open')
+  assert.equal(l.campaign().endgame,'tested direction exhausted');assert(l.campaign().state.includes(fact.id))
+  assert.equal(store.node<Fact>(p.id,fact.id,'fact').description,fact.description)
+  store.setStatus(p.id,'active');assert.equal(store.project(p.id).status,'active')
+ }finally{store.close()}
+})
+
+test('Worker system fault with unresolved tool outcome settles unknown without fabricated Fact',async()=>{
+ const store=new Store(':memory:'),root=mkdtempSync(path.join(os.tmpdir(),'worker-fault-'))
+ const scheduler=new Scheduler(store,{workers:[worker],workspaceRoot:root,maxWorkers:2,maxProjectWorkers:2,maxRunningProjects:1,maxSteps:null} as EngineConfig,async({run})=>{
+  store.toolStarted(run.id,'uncertain-call',{name:'fixture',arguments:{}})
+  throw Error('fixture transport lost')
+ })
+ try{
+  const p=store.createProject({title:'fault',origin:'fixture',goal:'verify'}).project,s=store.addStep(p.id,{description:'execute',sourceIds:['origin']})
+  scheduler.start();for(let i=0;i<30&&!store.runsByStatus('unknown').length;i++)await new Promise(r=>setImmediate(r))
+  const [run]=store.runsByStatus('unknown');assert(run);assert.equal(run.stepId,s.id);assert.deepEqual(run.pendingTools,['uncertain-call'])
+  assert.equal(store.node<Step>(p.id,s.id).factIds.length,0);scheduler.watchdog();assert.equal(store.runsByStatus('running').length,0)
+  assert(store.events(p.id).some(e=>e.type==='execute.unknown'))
+ }finally{await scheduler.close();store.close();rmSync(root,{recursive:true,force:true})}
 })

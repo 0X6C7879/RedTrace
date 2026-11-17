@@ -1,3 +1,4 @@
+import { closeRunHttpSessions } from '../src/http-tools.ts'
 import { executionRole, coordinatorRole, isReportStep } from '../../redtrace-dsh/lib/roles.js'
 import { runtimeCatalog, mountToolSettings, mountMcpRoleTools, platformToolOptions, mountSystemLogs } from './console.mjs'
 import { inspectToolCatalog } from './tool-catalog.mjs'
@@ -345,15 +346,15 @@ export async function apply(ctx, options) {
       if (!finished && !task.committed && !signal.aborted) {
         task.concludeOnly = concludeOnly = true
         prompt(reporting ? '已进入超时收尾。只根据已读取的真实证据完成本漏洞报告，缺失内容明确标注未提供或未验证，调用 update_finding_report 保存；不得重新探测或伪造证据。' : run.activity === 'execute'
-          ? '已进入超时收尾，必须调用 submit_fact 提交至少一条已有证据支持的汇总结论，再调用 finish_step。题目未解决时保留容器；没有成功成果时如实提交已验证的失败、限制或阻塞，禁止伪造事实。'
+          ? '已进入超时收尾，必须调用 submit_fact 提交至少一条已有证据支持的汇总结论，再调用 finish_step。题目未解决时保留容器；没有成功成果时只提交有真实测试证据的否定结论，明确对象、方法、范围和观察结果；API、工具或执行故障不是攻击失败，没有证据时不得伪造 Fact，由系统按执行故障结算。'
           : '仅处理已交付的证据并调用 finish_decide，不再执行外部操作。')
         await wait(limits.concludeTimeout)
       }
-      if (!finished && !task.committed && !signal.aborted) throw new Error(concludeOnly ? 'Activity ended without a structured completion' : 'Agent execution failed')
+      if (!finished && !task.committed && !signal.aborted) { const current=store.run(run.id);current.failureCode=concludeOnly?'TIMEOUT':'PROCESS_EXIT';store.saveRun(current);throw new Error(concludeOnly ? 'Activity ended without a structured completion' : 'Agent execution failed') }
     } finally {
       signal.removeEventListener('abort', cancel); legionMailbox?.()
       try { if (handle) { cancel(); await handle.agent.whenIdle(); await ctx.get('sessions').flush(handle.agent.session); store.checkpoint(run.id, { sessionId: run.id }); await handle.dispose() } }
-      finally { sessionRefresh.delete(run.id); unlisten(); unlistenGraph(); shared.tasks.delete(run.id) }
+      finally { try { await closeRunHttpSessions(store,run.id) } finally { sessionRefresh.delete(run.id); unlisten(); unlistenGraph(); shared.tasks.delete(run.id) } }
     }
   }
 }

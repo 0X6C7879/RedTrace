@@ -85,8 +85,8 @@ export class Scheduler {
           if (abort.signal.aborted) {
             const project = this.store.project(run.projectId)
             status = error ? 'unknown' : (this.closed || project.status === 'stopped') && run.activity === 'execute' ? 'paused' : 'cancelled'
-            if (this.store.run(run.id).pendingTools.length) { status = 'unknown'; error = 'Activity stopped with an unconfirmed tool result; verify before retrying' }
           }
+          if (this.store.run(run.id).pendingTools.length) { status = 'unknown'; error = 'Activity stopped with an unconfirmed tool result; verify before retrying' }
           const completed=this.store.finishRun(run.id, status, error)
           const step = this.store.node<Step>(run.projectId, run.stepId!, 'step')
           if(completed.status==='succeeded'&&step.role==='scout'&&step.scoutVerdict)this.legion.classify(run.projectId,step.taskKey!,step.scoutVerdict.difficulty,step.factIds,step.scoutVerdict.family)
