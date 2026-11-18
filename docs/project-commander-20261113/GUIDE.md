@@ -1,5 +1,7 @@
 # Project Commander + 双模式 FGS（2026-11-13）
 
+> 历史指南：下文保留当时的配置和行为。Scout 已退役；当前可用角色及迁移规则见[角色与工具系统](../role-tool-system.md)。
+
 ## 1. 架构变化
 
 Project 是组织和调度边界；Graph 是任务状态边界；每个 Project 的 Commander 只管理自己。DSH 仍是唯一真实 Agent 执行器，Scheduler、模型路由、FGS、审计、消息、FTS5 和原生压缩继续复用，没有第二套 Reason/Decide 执行路径。

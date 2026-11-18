@@ -36,11 +36,13 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   const evidenceRoot = path.join(run.workspaceRoot ?? path.join(config.workspaceRoot ?? path.join(os.tmpdir(), 'redtrace-workspaces'), run.projectId), '.redtrace-output', 'evidence')
   const step = store.assignment(run)
   if (step?.role === 'scout') return []
+  const planning = !!step && store.project(run.projectId).mode==='benchmark' && taskTodoOwner(step,store)
+  const capacity = () => planning ? {planningCapacity:store.planningCapacity(run.projectId,maxSteps())} : {}
   const kinds = ['fact', 'goal', 'step', 'finding', 'hint', 'observation'] as const
   const readGraph = tool('read_graph', 'Sapper graph/show/doc: without id read only titles, folding supporting Facts under Findings except active Step dependencies. With id read a summary and linked Fact summaries; detail=doc returns full document/evidence references for project_evidence_read. Hints and observations are unverified. SQL pagination is bounded.', Type.Object({ id: Type.Optional(Type.String()), detail: Type.Optional(Type.Union([Type.Literal('summary'), Type.Literal('doc')])), offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), order:Type.Optional(Type.Union([Type.Literal('oldest'),Type.Literal('newest')])), kinds: Type.Optional(Type.Array(Type.Union(kinds.map(k => Type.Literal(k))), { uniqueItems: true })) }, { additionalProperties: false }), async args => {
-    if (args.id) return { ...store.readNode(run.projectId, args.id, args.detail), planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id) }
+    if (args.id) return { ...store.readNode(run.projectId, args.id, args.detail), ...capacity(), acknowledgementBoundary: store.acknowledgementBoundary(run.id) }
     const offset = args.offset ?? 0, limit = args.limit ?? 100, selected = new Set(args.kinds ?? kinds)
-    const project = store.project(run.projectId), page: Record<string, unknown> = { project, graph:run.graphId?store.projectGraph(run.projectId,run.graphId):null, facts: [], goals: [], steps: [], findings: [], hints: [], observations: [] }, nextOffsets: Record<string, number | null> = {}
+    const project = store.project(run.projectId), page: Record<string, unknown> = { ...(planning ? {project,graph:run.graphId?store.projectGraph(run.projectId,run.graphId):null} : {projectId:run.projectId,graphId:run.graphId}), facts: [], goals: [], steps: [], findings: [], hints: [], observations: [] }, nextOffsets: Record<string, number | null> = {}
     for (const kind of kinds) {
       if (!selected.has(kind)) continue
       page[kind === 'fact' ? 'facts' : kind === 'goal' ? 'goals' : kind === 'step' ? 'steps' : kind === 'finding' ? 'findings' : `${kind}s`] = store.nodes(run.projectId, [kind], { offset, limit, context: true, order:args.order }).map(node => nodeContent(node))
@@ -48,14 +50,14 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
       nextOffsets[kind] = offset + limit < total ? offset + limit : null
     }
     const remaining = Object.values(nextOffsets).filter((value): value is number => value !== null)
-    return { ...page, planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id), nextOffset: remaining.length ? Math.max(...remaining) : null, nextOffsets }
+    return { ...page, ...capacity(), acknowledgementBoundary: store.acknowledgementBoundary(run.id), nextOffset: remaining.length ? Math.max(...remaining) : null, nextOffsets }
   })
   const refs = Type.Array(Type.String())
   const reporting = isReportStep(step)
   const roleTools = !reporting && step?.role ? legionTools(store, run.id, run.projectId, maxSteps(), finish, config, undefined, () => ({...config,maxSteps:maxSteps()})) : []
   const tools: AgentTool[] = [readGraph, ...roleTools]
   tools.push(tool('project_evidence_read', 'Read hash-verified Project evidence independently of the producer Run or Session. Artifact IDs are Project-scoped. Binary pages return encoding=base64; decode content accordingly.', Type.Object({ artifact_id: Type.String({ pattern: '^artifact-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), args => new ProjectEvidence(store, config.workspaceRoot).read(run.projectId, args.artifact_id, args.offset, args.length)))
-  tools.push(tool('read_graph_delta', 'Read a bounded page of change metadata and current node titles. Historical Facts remain readable by ID. Continue with cursor until hasMore is false. Reading does not acknowledge processing.', Type.Object({ after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), args => ({ ...store.graphDelta(run.projectId, args.after ?? store.run(run.id).deliveredGraphCursor ?? 0, args.limit ?? 100, run.id), planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id) })))
+  tools.push(tool('read_graph_delta', 'Read a bounded page of change metadata and current node titles. Historical Facts remain readable by ID. Continue with cursor until hasMore is false. Reading does not acknowledge processing.', Type.Object({ after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), args => ({ ...store.graphDelta(run.projectId, args.after ?? store.run(run.id).deliveredGraphCursor ?? 0, args.limit ?? 100, run.id), ...capacity(), acknowledgementBoundary: store.acknowledgementBoundary(run.id) })))
   tools.push({ name: 'evidence_read', label: 'evidence_read', description: 'Read at most 7.6 KiB from a large tool result by byte offset, 1-based line, or keyword. Artifacts are scoped to this Project; pass run_id for another producer Run; request the next bounded slice when needed.', parameters: Type.Object({ run_id: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })), id: Type.String({ pattern: '^ev-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), line: Type.Optional(Type.Integer({ minimum: 1 })), query: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), executionMode: 'sequential', execute: async (_toolId: string, args: { run_id?: string; id: string; offset?: number; line?: number; query?: string; length?: number }) => {
     if (!/^ev-[a-f0-9]{64}$/.test(args.id) || [args.offset, args.line, args.query].filter(value => value !== undefined).length > 1) throw new Error('Provide a valid evidence ID and only one read selector')
     const producer = store.run(args.run_id ?? run.id)
@@ -165,11 +167,11 @@ export function livePlan(store: Store, runId: string) {
   return text
 }
 
-export function launchContext(store: Store, runId: string, channels?: unknown[], maxSteps?: number | null): ReturnType<typeof executionContext> | ReturnType<typeof plannerContext>
-export function launchContext(store: Store, runId: string, channels: unknown[] = [], maxSteps: number | null = null) {
+export function launchContext(store: Store, runId: string, channels?: unknown[], maxSteps?: number | null, incremental?: boolean): ReturnType<typeof executionContext> | ReturnType<typeof plannerContext>
+export function launchContext(store: Store, runId: string, channels: unknown[] = [], maxSteps: number | null = null, incremental = false) {
   const run = store.run(runId)
   if(run.graphId)store=store.forGraph(run.projectId,run.graphId)
-  return run.activity==='plan'?plannerContext(store,run,maxSteps):executionContext(store,runId,channels,maxSteps)
+  return run.activity==='plan'?plannerContext(store,run,maxSteps,incremental):executionContext(store,runId,channels,maxSteps)
 }
 export function reportContext(store: Store, run: Run, findingId: string) {
   if (run.graphId) store = store.forGraph(run.projectId, run.graphId)
@@ -186,13 +188,13 @@ function executionContext(store:Store,runId:string,channels:unknown[],maxSteps:n
     ON e.project_id=n.project_id AND e.node_id=n.id AND e.type='hint.added'
     WHERE n.project_id=? AND (? IS NULL OR n.graph_id=?) AND n.kind='hint' AND COALESCE(json_extract(n.data,'$.deleted'),0)=0
     AND COALESCE(json_extract(e.data,'$.hintSeq'),1)>?
-    AND (?=1 OR json_extract(n.data,'$.stepId') IS NULL OR json_extract(n.data,'$.stepId')=?) ORDER BY n.rowid LIMIT 9`)
-    .all(run.projectId,run.graphId??null,run.graphId??null, acknowledgedHintSeq, run.activity === 'decide' ? 1 : 0, run.stepId).map(row => JSON.parse(String(row.data)) as Input) : []
+    AND (?=1 OR json_extract(n.data,'$.stepId') IS NULL OR json_extract(n.data,'$.stepId')=?) ORDER BY (json_extract(n.data,'$.stepId')=?) DESC, n.rowid LIMIT 9`)
+    .all(run.projectId,run.graphId??null,run.graphId??null, acknowledgedHintSeq, run.activity === 'decide' ? 1 : 0, run.stepId,run.stepId).map(row => JSON.parse(String(row.data)) as Input) : []
   const goal = run.activity === 'decide' ? store.node<Goal>(run.projectId, 'goal', 'goal') : undefined
   return { projectId: run.projectId, graphId:run.graphId, ...(run.handoff ? {handoff:{confirmedState:run.handoff,predecessorRunId:run.predecessorRunId}} : {}),
     ...(!step || taskTodoOwner(step, store) ? { planningCapacity: store.planningCapacity(run.projectId, maxSteps) } : {}),
     acknowledgementBoundary: store.acknowledgementBoundary(run.id), scope: { id: origin.id, description: origin.description },
-    ...(step && store.project(run.projectId).mode==='general' ? {step:store.readNode(run.projectId,step.id),dependencies:step.sourceIds.map(id=>store.readNode(run.projectId,id))} : {}),
+    ...(step ? {dependencies:step.sourceIds.filter(id=>id!==origin.id).map(id=>store.readNode(run.projectId,id))} : {}),
     ...(step ? taskPlanningContext(store, step) : {}),
     ...(goal ? { goal: { id: goal.id, description: goal.description, status: goal.status },
       evidenceSeq: run.planningEvidenceSeq ?? 0, hintSeq: run.planningHintSeq ?? 0, criticalSeq: run.planningCriticalSeq ?? 0, graphCursor: run.deliveredGraphCursor ?? 0,
@@ -253,15 +255,15 @@ export async function runMock({ store, run, signal }: TaskContext) {
   }
 }
 
-export function plannerContext(store: Store, run: Run, maxSteps: number | null) {
+export function plannerContext(store: Store, run: Run, maxSteps: number | null, incremental = false) {
   const graph=store.projectGraph(run.projectId,run.graphId!),planner=graph.planner!,scoped=store.forGraph(run.projectId,graph.id)
   const compact=(node:import('./types.ts').GraphNode)=>{const {projectId,graphId,creator,createdAt,...index}=nodeContent(node);return index}
   const page=(kind:'goal'|'step'|'fact'|'finding'|'hint',limit:number)=>{const order=kind==='fact'||kind==='finding'?'newest':'oldest',total=scoped.nodeCount(run.projectId,kind,true);return{items:scoped.nodes(run.projectId,[kind],{limit,context:true,order}).map(compact),total,offset:0,limit,order,nextOffset:total>limit?limit:null}}
   const changes=store.plannerEvents(planner),steps=scoped.nodes<Step>(run.projectId,['step']),runs=store.runs(run.projectId).filter(r=>r.graphId===graph.id&&r.activity==='execute'),queued=steps.filter(s=>s.status==='pending'),goal=scoped.node<Goal>(run.projectId,graph.goalId,'goal')
-  return {projectId:run.projectId,graphId:graph.id,step:undefined,dependencies:undefined,hints:undefined,scope:{id:graph.originId,description:scoped.node<Fact>(run.projectId,graph.originId,'fact').description},goal:{id:goal.id,description:goal.description,status:goal.status,version:goal.version},planningCapacity:scoped.planningCapacity(run.projectId,maxSteps),...taskPlanningContext(scoped,planner),plannerRound:{state:planner.handoff??'',
+  return {projectId:run.projectId,graphId:graph.id,step:undefined,dependencies:undefined,hints:undefined,...(!incremental ? {scope:{id:graph.originId,description:scoped.node<Fact>(run.projectId,graph.originId,'fact').description},goal:{id:goal.id,description:goal.description,status:goal.status,version:goal.version}} : {}),planningCapacity:scoped.planningCapacity(run.projectId,maxSteps),...(!incremental ? taskPlanningContext(scoped,planner) : {}),plannerRound:{state:planner.handoff??'',
     triggers:{...changes,events:changes.events.map(e=>({id:e.id,type:e.type,nodeId:e.nodeId,payload:e.payload,...(e.message?{message:e.message}:{}),...(!e.graphId?{projectEvent:true}:{})}))},
-    overview:{goals:page('goal',20),steps:page('step',40),facts:page('fact',24),findings:page('finding',24),hints:page('hint',12)},
+    ...(incremental ? {frontier:{goals:scoped.nodes<Goal>(run.projectId,['goal']).filter(g=>g.status==='open').slice(0,20).map(compact),changedNodes:[...new Set(changes.events.map(e=>e.nodeId).filter((id):id is string=>!!id))].slice(0,40).map(id=>scoped.readNode(run.projectId,id))}} : {overview:{goals:page('goal',20),steps:page('step',40),facts:page('fact',24),findings:page('finding',24),hints:page('hint',12)}}),
     activeSteps:runs.filter(r=>['running','paused','unknown'].includes(r.status)).map(r=>({stepId:r.stepId,runId:r.id,status:r.status})),
     queue:{ids:queued.slice(0,40).map(s=>s.id),total:queued.length,nextOffset:queued.length>40?40:null},
-    workers:runs.slice(-12).map(r=>({id:r.id,stepId:r.stepId,status:r.status,error:r.error,failureCode:r.failureCode})),totalRuns:runs.length}}
+    workers:runs.filter(r=>!incremental||changes.events.some(e=>e.nodeId===r.stepId)).slice(-12).map(r=>({id:r.id,stepId:r.stepId,status:r.status,error:r.error,failureCode:r.failureCode})),totalRuns:runs.length}}
 }

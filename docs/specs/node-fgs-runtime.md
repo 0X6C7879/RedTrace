@@ -42,7 +42,7 @@ Worker 用 `sync_step({planVersion})` 接收当前 Step、祖先 Goal 和有效�
 
 ## DSH 原生能力插件
 
-凡是 DSH 原生提供的通用 Agent 能力,不再自研 Skill/MCP;RedTrace 只保留安全任务编排(FGS、Commander / General / Soldier / Scout、Intent 调度、Worker/Provider 路由、Fact/Finding/Step、共享 Resource、审计)。通用能力分两类进入插件管理页(`/__redtrace/plugins`,manifest 位于 `.redtrace/plugins.json`):
+凡是 DSH 原生提供的通用 Agent 能力,不再自研 Skill/MCP;RedTrace 只保留安全任务编排(FGS、Benchmark 的 Commander / General / Soldier、General 模式的 Planner / Worker、Intent 调度、Worker/Provider 路由、Fact/Finding/Step、共享 Resource、审计)。通用能力分两类进入插件管理页(`/__redtrace/plugins`,manifest 位于 `.redtrace/plugins.json`):
 
 **会话级能力栈**——`packages/redtrace-dsh/src/execution-tools.ts` 在每个 Execute 会话的 scoped 上下文里挂载,插件运行才挂载，启停对运行中的 Execute 会话生效。每个会话先 `isolate` 再挂载服务,并发 Execute 互不冲突,会话结束自动清理(后台任务、PTY、spill 文件句柄随会话销毁):
 

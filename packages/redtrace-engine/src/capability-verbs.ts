@@ -375,7 +375,7 @@ const wrapDispatch = (runtime: VerbRuntime, context: TaskContext) => async (verb
 /** Tools follow live adapter availability, never Reason declarations. */
 export function verbTools(context: TaskContext, runtime: VerbRuntime, _step?: Step): AgentTool[] {
   const dispatch = wrapDispatch(runtime, context)
-  return verbRegistry.filter(verb => verb.id === 'remote.task' || ADAPTERS.some(adapter => !adapter.stub && adapter.verbs.includes(verb.id)))
+  return verbRegistry.filter(verb => !['remote.file.touch'].includes(verb.id)).filter(verb => verb.id === 'remote.task' || ADAPTERS.some(adapter => !adapter.stub && adapter.verbs.includes(verb.id)))
     .map(verb => verbTool(toolName(verb.id), verb.description, verb.parameters, async args => dispatch(verb.id, args as Record<string, unknown>)))
 }
 

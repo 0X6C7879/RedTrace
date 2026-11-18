@@ -51,7 +51,7 @@ flowchart LR
 5. Stop/同 Session 恢复、任务 Park 与新 Run 接力分别建模。只有原执行停止、工具结果明确后才能恢复或换模型；未知操作不自动重放。
 6. General Planner 通过确认 Fact/Finding 验收 Goal，Benchmark 仍由单题规划者验收题目 Goal；Family Transfer 只生成未验证 Hint，目标必须复验。没有独立 Reason 调度器；两模式共享同一 DSH 执行内核。
 
-本次架构、数据迁移、API 和使用方法见 [Project Commander 升级说明](docs/project-commander-20261113/GUIDE.md)。历史迁移记录见 [Legion 实施记录](docs/legion-implementation-20261110/IMPLEMENTATION.md)。历史调度设计不再代表独立 Reason 的执行决策。题目级 General 的事件循环、Fact 验收与统一额度语义见 [ARTEX Planner 迁移](docs/artex-planner-20261117.md)。
+本次架构、数据迁移、API 和使用方法参见历史 [Project Commander 升级说明](docs/project-commander-20261113/GUIDE.md)。历史迁移记录见 [Legion 实施记录](docs/legion-implementation-20261110/IMPLEMENTATION.md)。历史调度设计不再代表独立 Reason 的执行决策。题目级 General 的事件循环、Fact 验收与统一额度语义见 [ARTEX Planner 迁移](docs/artex-planner-20261117.md)。
 
 ## 为什么选择 RedTrace
 

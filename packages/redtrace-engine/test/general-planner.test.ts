@@ -51,7 +51,7 @@ test('Planner TodoList survives Store reopen without FGS writes; Worker cannot r
   const context={store,run,worker,config:{workspaceRoot:root,maxSteps:null} as EngineConfig,signal:new AbortController().signal}
   const names=graphTools(context,()=>{}).map(t=>t.name)
   for(const name of ['TodoWrite','legion_todos','legion_spawn','legion_step','legion_update_step','legion_goal','legion_accept','legion_experience_search'])assert(!names.includes(name),name)
-  const launch=launchContext(store,run.id);assert(!('planningTodos' in launch));assert(!('planningCapacity' in launch));assert.equal(launch.step?.id,s.id);assert.equal(launch.dependencies?.length,1)
+  const launch=launchContext(store,run.id);assert(!('planningTodos' in launch));assert(!('planningCapacity' in launch));assert(!('step' in launch));assert.equal(launch.dependencies?.length,0)
   const query=chatTools(store).find(t=>t.name==='project_query')!
   await assert.rejects(query.execute('read-plan',{projectId:p.id,kind:'plan'}),/only by Planner/)
   store.audit({id:'planner-session',project_id:p.id,graph_id:g.id,task_type:'planner'},[{kind:'tool.started',title:'TodoWrite',call_id:'plan',arguments:{todos}}])

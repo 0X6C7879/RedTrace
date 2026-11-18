@@ -186,5 +186,5 @@ export function legionTools(store: Store, actor: string, projectId: string | und
     const allowed = new Set(commander ? ['legion_state','legion_roster','legion_message','legion_inbox','legion_wait','TodoWrite','legion_todos','legion_goal','legion_update_goal','legion_step','legion_update_step','legion_hint','legion_evidence_read','legion_read_run','legion_commander_model','legion_models','legion_stop','legion_read_changes','legion_read_node','legion_accept','legion_finish'] : ['legion_state','legion_message','legion_inbox','legion_wait','legion_handoff'])
     return tools.filter(t=>allowed.has(t.name)).map(t=>({...t,description:t.description.replaceAll('Commander','Planner').replaceAll('Sapper show/doc','FGS show/doc')}))
   }
-  return tools.filter(t=>step?.role!=='general'||!['legion_experience_capture','legion_experience_search','legion_confirm_transfer'].includes(t.name)).map(t=>t.name==='legion_roster'?roster:t)
+  return tools.filter(t=>step?.role==='general' || !['legion_experience_capture','legion_experience_search','legion_confirm_transfer','legion_roster'].includes(t.name)).map(t=>t.name==='legion_roster'?roster:t)
 }

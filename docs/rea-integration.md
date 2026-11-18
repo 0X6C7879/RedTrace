@@ -2,7 +2,7 @@
 
 锁定 `rea-agents@6.4.0`；部署使用现有 npm 依赖和 `npm run dsh:build`，运行任务期间不安装依赖。
 
-- Soldier、Scout 和 General 模式 Worker 可按需加载 `reverse-engineer-anything` Skill，通过原生 Shell 调用 PATH 中的 `rea`。先读 `rea --help`，再读具体命令 `--help`。
+- Soldier 和 General 模式 Worker 可按需加载 `reverse-engineer-anything` Skill，通过原生 Shell 调用 PATH 中的 `rea`。先读 `rea --help`，再读具体命令 `--help`。
 - Commander、纯 Planner、Reporter 不加载此执行插件。CLI Skill 不额外注册 Tool Schema。
 - **删除全部 29 个 REA MCP 注册和连接生命周期**；加载 Skill 不启动 MCP、也不启动分析引擎。旧 `mcp/rea.json` 不会被全局挂载；其他 MCP 保持原有契约。
 - REA 的 CLI 命令自行管理分析进程；RedTrace 不增加 MCP、代理、额外超时或重试。原生 DSH Shell、Jobs、Spill 和 Compaction 保留。
