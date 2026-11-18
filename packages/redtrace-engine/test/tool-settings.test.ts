@@ -48,7 +48,7 @@ test('native dispatch honors global and scoped Worker switches for Commander, Wo
    const carrier=ctx.plugin({inject:['tools','systemPrompt'],apply(){}});await carrier.await()
    const agent:any={options:{},session:ctx.sessions.create(SessionId(id),{meta:{cwd:root}})}
    const scope=createScope(carrier.ctx,agent);agent.ctx=scope.ctx
-   agent.ctx.tools.register({redtrace:true,name:'fixture',description:'Real native dispatch',parameters:{type:'object',properties:{}},output:{schema:{type:'object',additionalProperties:true},render:()=>[{type:'text',text:'ran'}]},execute:()=>{bodies++;return{ran:true}}},platformToolOptions(engine,'fixture',id===run.id?'worker':'planner'))
+   agent.ctx.tools.register({redtrace:true,name:'fixture',description:'Real native dispatch',parameters:{type:'object',properties:{}},output:{schema:{type:'object',additionalProperties:true},render:()=>[{type:'text',text:'ran'}]},execute:()=>{bodies++;return{ran:true}}},platformToolOptions(engine,'fixture',id===run.id?'soldier':'general'))
    agents.push(agent)
   }
   const visible=async(agent:any)=>{const tools=ctx.get('tools'),selection=await tools.resolve({agent,signal:new AbortController().signal});try{return tools.schemas(agent,selection).map((t:any)=>t.name)}finally{selection.dispose()}}
@@ -61,7 +61,7 @@ test('native dispatch honors global and scoped Worker switches for Commander, Wo
   assert(!(await visible(agents[1])).includes('read'),'DSH binding hot-loads into the native selected Schema list')
   set(false);assert(!(await visible(agents[0])).includes('fixture'));assert(!(await visible(agents[1])).includes('fixture'));assert.equal((await invoke(agents[0])).isError,true);assert.equal((await invoke(agents[1])).isError,true);assert.equal(bodies,2)
   set(true);const stale=await ctx.get('tools').resolve({agent:agents[1],signal:new AbortController().signal})
-  set(true,['planner']);assert((await visible(agents[0])).includes('fixture'));assert(!(await visible(agents[1])).includes('fixture'));assert.equal((await invoke(agents[0])).isError,false);assert.equal((await invoke(agents[1])).isError,true);assert.equal(bodies,3)
+  set(true,['general']);assert((await visible(agents[0])).includes('fixture'));assert(!(await visible(agents[1])).includes('fixture'));assert.equal((await invoke(agents[0])).isError,false);assert.equal((await invoke(agents[1])).isError,true);assert.equal(bodies,3)
   const {ToolExecutionPipeline}=await load('vendor/deepseek-harness/packages/core/tools/lib/pipeline.js'),pipeline=new ToolExecutionPipeline(ctx)
   const nested=await pipeline.prepare({name:'fixture',callId:'nested',rootCallId:'root',arguments:{},agent:agents[1],toolSet:stale,parent:{} as any,signal:new AbortController().signal})
   assert.equal(nested.kind,'post-result');assert.match(nested.result.error.message,/未绑定|not available|not found|Unknown tool/);assert.equal(bodies,3);stale.dispose()
@@ -105,8 +105,8 @@ test('tool table switches persist on/off while disabled Schemas remain in the li
 
 test('tool filters use actual registry roles and enabled state, not CLI inventory',()=>{
  const ctx=vm.createContext({window:{}});vm.runInContext(readFileSync(path.resolve(import.meta.dirname,'../../../static/console.js'),'utf8'),ctx)
- const page=ctx.window.toolsPage();page.data={roleGroups:{benchmark:['commander','general','soldier'],general:['planner','worker']},tools:[{name:'submit_fact',description:'fact',source:'RedTrace',enabled:true,roles:['soldier']},{name:'legion_board',description:'board',source:'RedTrace',enabled:false,roles:['commander']}],calls:[],stats:{}}
- assert.deepEqual(Array.from(page.roles),['commander','general','soldier','planner','worker'])
+ const page=ctx.window.toolsPage();page.data={roleGroups:{benchmark:['commander','general','soldier'],general:['general','soldier']},tools:[{name:'submit_fact',description:'fact',source:'RedTrace',enabled:true,roles:['soldier']},{name:'legion_board',description:'board',source:'RedTrace',enabled:false,roles:['commander']}],calls:[],stats:{}}
+ assert.deepEqual(Array.from(page.roles),['commander','general','soldier'])
  page.role='soldier';assert.deepEqual(Array.from(page.filtered,(t:any)=>t.name),['submit_fact'])
  page.role='';page.status='disabled';assert.deepEqual(Array.from(page.filtered,(t:any)=>t.name),['legion_board'])
  page.source='DSH';assert.equal(page.filtered.length,0)
@@ -123,12 +123,12 @@ test('external MCP keeps native generation ownership while scoped role condition
   const {mountMcpRoleTools}=await import(new URL('../compat/console.mjs',import.meta.url).href)
   const definition=(generation:number)=>({name:'mcp__fixture__echo',description:'Native MCP fixture',parameters:{type:'object',properties:{}},output:{schema:{type:'object',additionalProperties:true},render:()=>[{type:'text',text:String(generation)}]},execute:async()=>({generation})})
   const first=definition(1);let remove=ctx.get('tools').register(first)
-  const refresh=mountMcpRoleTools(scope.ctx,ctx,engine,'worker')
+  const refresh=mountMcpRoleTools(scope.ctx,ctx,engine,'soldier')
   assert.equal(ctx.get('tools').get(first.name,agent),first)
   const schemas=async()=>{const set=await ctx.get('tools').resolve({agent,modelSelection:agent.model.current(),signal:new AbortController().signal});try{return ctx.get('tools').schemas(agent,set).map((t:any)=>t.name)}finally{set.dispose()}}
-  engine.configuration.commit(engine.configuration.read().revision,raw=>{raw.tool_settings={[first.name]:{enabled:true,roles:['soldier']}}})
+  engine.configuration.commit(engine.configuration.read().revision,raw=>{raw.tool_settings={[first.name]:{enabled:true,roles:['general']}}})
   assert(!(await schemas()).includes(first.name))
-  engine.configuration.commit(engine.configuration.read().revision,raw=>{raw.tool_settings={[first.name]:{enabled:true,roles:['worker']}}})
+  engine.configuration.commit(engine.configuration.read().revision,raw=>{raw.tool_settings={[first.name]:{enabled:true,roles:['soldier']}}})
   assert((await schemas()).includes(first.name))
   remove();const second=definition(2);remove=ctx.get('tools').register(second);refresh()
   assert.equal(ctx.get('tools').get(first.name,agent),second,'do not retain a disposed MCP connection in the scoped copy')

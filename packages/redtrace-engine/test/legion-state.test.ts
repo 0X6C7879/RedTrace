@@ -21,7 +21,7 @@ function fixture(t: any) {
   t.after(() => { store.close(); rmSync(root, { recursive: true, force: true }) })
   return { root, store, legion, project, evidence: new ProjectEvidence(store, root) }
 }
-const mission = { role: 'worker' as const, taskKey: 'challenge-a', description: 'fixture task', sourceIds: ['origin'] }
+const mission = { role: 'soldier' as const, taskKey: 'challenge-a', description: 'fixture task', sourceIds: ['origin'] }
 const worker = { name: 'fixture', backend: 'mock' as const, provider: 'mock', model: 'mock', enabled: true, reason: false, explore: true, bootstrap: true, maxRunning: 4, priority: 0 }
 const config = (root: string): EngineConfig => ({ workers: [worker], providers: {}, maxWorkers: 4, maxProjectWorkers: 4, maxRunningProjects: 2, maxSteps: null, decideTimeout: 5, executeTimeout: 5, concludeTimeout: 1, bootstrapTimeout: 5, bootstrapConcludeTimeout: 1, workspaceRoot: root })
 
@@ -40,10 +40,10 @@ test('Campaign is a singleton control record, not a Project; acknowledgements ca
   assert.equal(legion.campaign().state, 'allocation checkpoint')
 })
 
-test('General rejects delegation, specialists and foreign fixed roles',t=>{
+test('General Executors cannot delegate; custom specialists use Soldier identity and foreign roles are rejected',t=>{
  const {store,legion,project}=fixture(t),parent=legion.spawn(project.id,mission),run=store.claim(project.id,'execute',worker,parent.id)
- assert.throws(()=>legion.spawn(project.id,{...mission,parentRunId:run.id}),/not specialist squads/)
- assert.throws(()=>store.addStep(project.id,{...mission,specialist:{name:'expert',responsibilities:'x',capabilities:['x'],scope:'x'}}),/no specialist Agents/)
+ assert.throws(()=>legion.spawn(project.id,{...mission,parentRunId:run.id}),/General-assigned Soldier/)
+ assert.equal(store.addStep(project.id,{...mission,specialist:{name:'expert',responsibilities:'x',capabilities:['x'],scope:'x'}}).specialist?.name,'expert')
  assert.throws(()=>store.addStep(project.id,{...mission,role:'invalid' as any}),/Invalid general role/)
  assert.throws(()=>store.addStep(project.id,{...mission,taskKey:''}),/taskKey/)
 })
@@ -231,7 +231,7 @@ test('HTTP Step schema persists roles and Project artifact endpoint enforces bou
   const project = (await created.json()).project
   const stepResponse = await fetch(base + '/v2/projects/' + project.id + '/steps', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(mission) })
   assert.equal(stepResponse.status, 201)
-  assert.equal((await stepResponse.json()).role, 'worker')
+  assert.equal((await stepResponse.json()).role, 'soldier')
   mkdirSync(path.join(engine.configuration.workspaceRoot, project.id), { recursive: true })
   const artifact = engine.evidence.publish(project.id, Buffer.from('http proof'), { description: 'fixture' })
   const response = await fetch(base + '/v2/projects/' + project.id + '/evidence/' + artifact.id + '?length=4')
@@ -390,7 +390,7 @@ test('preflight keeps HTTP/credential resources and blocks queued operations and
   store.finishRun(run.id, 'succeeded'); store.setStatus(project.id, 'stopped')
   for (const kind of ['http_session', 'credential_ref']) store.db.prepare('INSERT INTO shared_resources(id,project_id,kind,name,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?)').run(kind, kind === 'credential_ref' ? null : project.id, kind, 'fixture', 'fixture', 'fixture', 'fixture')
   store.db.prepare('INSERT INTO operation_tasks(id,project_id,resource_id,action,actor_type,actor,created_at) VALUES (?,?,?,?,?,?,?)').run('op', project.id, 'http_session', 'fixture', 'human', 'fixture', 'fixture')
-  store.db.prepare('INSERT INTO resource_leases VALUES (?,?,?,?,?,?,?,?)').run('fixture', 'credential_ref', 'worker', 'fixture', run.id, 1, '2999-01-01T00:00:00.000Z', 'fixture')
+  store.db.prepare('INSERT INTO resource_leases VALUES (?,?,?,?,?,?,?,?)').run('fixture', 'credential_ref', 'soldier', 'fixture', run.id, 1, '2999-01-01T00:00:00.000Z', 'fixture')
   const services = sessionServices(root, project.id), report = await evidence.preflightReset(project.id, services)
   assert.equal(report.dataReady, false)
   assert.ok(report.blockers.some(b => b.owner === 'op')); assert.ok(report.blockers.some(b => b.owner === run.id && /lease/.test(b.reason)))

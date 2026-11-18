@@ -4,7 +4,7 @@ import { CommanderTodos } from './legion-todos.ts'
 import { benchmarkPlatformView } from './benchmark-metadata.ts'
 import { Store } from './store.ts'
 import { HttpError, now, requiredText } from './types.ts'
-import type { Step, Goal } from './types.ts'
+import type { Step, Goal, LegionRole } from './types.ts'
 
 export interface CommandCursor { delivered: number; acknowledged: number }
 export interface Campaign {
@@ -15,7 +15,7 @@ export interface Campaign {
   cursors: Record<string, CommandCursor>
 }
 export interface SpawnMission {
-  specialist?: Step['specialist']; escalationReason?: string; role: NonNullable<Step['role']>; taskKey: string; description: string; sourceIds: string[]
+  specialist?: Step['specialist']; escalationReason?: string; role: LegionRole; taskKey: string; description: string; sourceIds: string[]
   dependsOn?: string[]; reportFindingId?: string; graphId?: string; goalId?: string; parentRunId?: string; priority?: number; executionProfile?: Step['executionProfile']
 }
 
@@ -76,18 +76,6 @@ export class LegionStore {
     if(!Number.isFinite(deadline)||deadline<=Date.now())throw new HttpError(422,'Deadline must be a future epoch in milliseconds')
     const c=this.campaign(projectId);c.startedAt=Date.now();c.deadline=deadline;this.saveCampaign(c);this.store.changes.emit('legion-budget',c.projectId);return this.budget(Date.now(),c.projectId)
   }
-  classify(projectId:string,taskKey:string,difficulty:'easy'|'medium'|'hard'|'unclear',factIds:string[],family?:string,sourceTaskKey?:string) {
-    this.active(projectId);requiredText(taskKey,'taskKey')
-    if(!['easy','medium','hard','unclear'].includes(difficulty)||!factIds.length)throw new HttpError(422,'Classification requires a verdict and confirmed target evidence')
-    const source=sourceTaskKey?this.tactics(projectId).find(t=>t.taskKey===sourceTaskKey):undefined
-    if(sourceTaskKey&&(!family||sourceTaskKey===taskKey||source?.classification?.family!==family||!source.classification.difficulty||source.classification.difficulty==='unclear'))throw new HttpError(422,'Scout reuse requires a classified sibling with the same explicit family')
-    for(const id of factIds){const fact=this.store.node(projectId,id,'fact');if(id==='origin'||!('stepId'in fact)||!fact.stepId||this.store.node<Step>(projectId,fact.stepId,'step').taskKey!==(sourceTaskKey??taskKey)||!sourceTaskKey&&this.store.node<Step>(projectId,fact.stepId,'step').role!=='scout'||this.store.node<Step>(projectId,fact.stepId,'step').status!=='done')throw new HttpError(422,'Classification evidence must come from this completed Scout task')}
-    const row=this.store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(projectId,taskKey)
-    const graph=sourceTaskKey?this.store.projectGraphs(projectId).find(g=>g.taskKey===taskKey):undefined
-    if(sourceTaskKey&&!graph)throw new HttpError(422,'Initialize the target task Graph before Scout reuse')
-    const hint=graph?this.store.forGraph(projectId,graph.id).addInput(projectId,'hint','[Family Scout reuse] '+family+'; sibling='+sourceTaskKey+'; source Facts='+factIds.join(',')+'. UNVERIFIED IN THIS TARGET: read the sibling evidence, verify target product/version and family differences before exploiting.','commander'):undefined
-    const data={...(row?JSON.parse(String(row.data)):{}),difficulty,factIds:sourceTaskKey?[]:factIds,...(family?{family}:{}),...(sourceTaskKey?{sourceTaskKey,sourceFactIds:factIds,hintId:hint!.id}:{}),classifiedAt:now()};if(!sourceTaskKey){delete data.sourceTaskKey;delete data.sourceFactIds;delete data.hintId}this.store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?) ON CONFLICT(project_id,task_key) DO UPDATE SET data=excluded.data').run(projectId,taskKey,JSON.stringify(data));this.store.event(projectId,'legion.classified',null,{taskKey,difficulty});return data
-  }
   tactics(projectId:string,at=Date.now()) {
     const tasks=new Set([...this.store.projectGraphs(projectId).filter(g=>g.taskKey).map(g=>g.taskKey!),...this.store.nodes<Step>(projectId,['step']).filter(s=>!s.deleted).map(s=>s.taskKey??s.goalId)])
     if(this.store.project(projectId).mode==='general') return []
@@ -113,8 +101,7 @@ export class LegionStore {
       const goalStatus=graph&&this.store.node<Goal>(projectId,graph.goalId,'goal').status,achieved=goalStatus==='achieved'
       const live=steps.filter(s=>['pending','running','paused'].includes(s.status)),general=graph?.planner,hasGeneral=!!general&&['pending','running','paused'].includes(general.status)
       const generalRuns=runs.filter(r=>r.activity==='plan'&&r.graphId===graph?.id),generalMinutes=executionTime(generalRuns.flatMap(r=>intervals.get(r.id)??[{...r,endedAt:r.endedAt?confirmedEnd(r,r.endedAt):r.endedAt}]),at)/60000
-      const needsClassification=!classification?.classifiedAt&&!steps.some(s=>s.role!=='scout')
-      const recommendation=classification?.platformCompleted===true||achieved?'achieved':goalStatus==='cancelled'?'exhausted':steps.some(s=>s.status==='parked')?'parked':needsClassification?running.length&&stalledMinutes>=10?'second-angle':running.length&&stalledMinutes>=5?'tactical':'classification-required':classification?.difficulty==='hard'&&!hasGeneral?'general':!running.length?'dispatch':hasGeneral&&stalledMinutes>=30&&(generalMinutes>=25||stalledMinutes>=45)?'park':hasGeneral?'working':stalledMinutes>=20?'general':stalledMinutes>=10?'second-angle':stalledMinutes>=5?'tactical':'working'
+      const recommendation=classification?.platformCompleted===true||achieved?'achieved':goalStatus==='cancelled'?'exhausted':steps.some(s=>s.status==='parked')?'parked':!running.length?'dispatch':hasGeneral&&stalledMinutes>=30&&(generalMinutes>=25||stalledMinutes>=45)?'park':hasGeneral?'working':stalledMinutes>=20?'general':stalledMinutes>=10?'second-angle':stalledMinutes>=5?'tactical':'working'
       return{taskKey,elapsedMs,stalledMinutes,lastEvidenceAt,classification,recommendation:recommendation==='general'?senior:recommendation,stepIds:steps.map(s=>s.id),facts:steps.flatMap(s=>s.factIds),generals:Number(hasGeneral)}
     })
   }
@@ -262,12 +249,12 @@ export class LegionStore {
     return this.store.nodes(projectId, ['step']).filter((node): node is Step => node.kind === 'step' && node.taskKey === taskKey && !node.deleted)
   }
   spawn(projectId: string, mission: SpawnMission, maxBenchmarkTasks: number | null = null) {
-    if (mission.role === 'scout') throw new HttpError(422, 'Scout is retired')
+    if (String(mission.role) === 'scout') throw new HttpError(422, 'Scout is retired')
     return this.store.transaction(() => {
       this.active(projectId)
       if (['submission','ended'].includes(this.budget(Date.now(),projectId).phase)) throw new HttpError(409, 'Campaign is in submission-only or ended phase; no new Missions')
       if (this.store.project(projectId).mode === 'general') {
-        if (mission.role !== 'worker' || mission.specialist || mission.parentRunId || mission.escalationReason) throw new HttpError(422, 'General mode uses Planner-assigned Worker Steps, not specialist squads or escalation')
+        if (mission.role !== 'soldier' || mission.parentRunId || mission.escalationReason) throw new HttpError(422, 'General mode uses General-assigned Soldier or custom Executor Steps')
       }
       if (mission.specialist) mission = { ...mission, role: executorRole(this.store.project(projectId).mode) }
       requiredText(mission.taskKey, 'taskKey')
@@ -282,10 +269,13 @@ export class LegionStore {
         const record=this.store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(projectId,mission.taskKey)
         const task=record?JSON.parse(String(record.data)):undefined
         if(task?.platformCompleted===true&&!mission.parentRunId)throw new HttpError(409,'Task is already platform-completed')
-        if(!mission.parentRunId&&(!task?.classifiedAt||!task.factIds?.length||!!task.sourceTaskKey))throw new HttpError(409,'Existing evidence-backed task classification is required before dispatch')
+        if(!mission.parentRunId&&!graph.planner) {
+          const upgrade=mission.role==='general'&&this.steps(projectId,mission.taskKey).some(s=>s.role==='soldier'&&s.status!=='cancelled')
+          mission={...mission,role:(task?.platformMetadata?.flag_count??0)>1||upgrade?'general':'soldier'}
+        }
       }
       if (mission.role === 'general') return this.store.addPlanner(projectId,graph.id,mission)
-      if (mode === 'general' && mission.role !== 'worker') throw new HttpError(422, 'General mode requires Worker')
+      if (mode === 'general' && mission.role !== 'soldier') throw new HttpError(422, 'General mode requires Soldier')
       if (!mission.parentRunId) {
         const active = this.steps(projectId, mission.taskKey).filter(s => ['pending','running','paused'].includes(s.status))
         if (active.some(s => s.role === mission.role && s.description === mission.description)) throw new HttpError(409, 'Assign a different angle from the active Worker')

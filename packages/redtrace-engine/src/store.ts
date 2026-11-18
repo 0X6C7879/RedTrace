@@ -1,4 +1,4 @@
-import { LEGACY_GENERAL_ROLES, executorRole, isReportStep } from '../../redtrace-dsh/src/roles.ts'
+import { executorRole, isReportStep } from '../../redtrace-dsh/src/roles.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { CommanderTodos, taskTodoPlanner } from './legion-todos.ts'
 import { mkdirSync } from 'node:fs'
@@ -186,13 +186,12 @@ export class Store {
   }
   private migrateGeneralRoles() {
     this.transaction(()=>{
-      const roles = LEGACY_GENERAL_ROLES
-      for(const row of this.db.prepare("SELECT n.data FROM nodes n JOIN projects p ON p.id=n.project_id WHERE n.kind='step' AND json_extract(p.data,'$.mode')='general' AND (json_extract(n.data,'$.role') IN ('general','soldier','reporter','leader','operator') OR json_extract(n.data,'$.role') IS NULL)").all()) {
+      for(const row of this.db.prepare("SELECT n.data FROM nodes n JOIN projects p ON p.id=n.project_id WHERE n.kind='step' AND json_extract(p.data,'$.mode')='general' AND (json_extract(n.data,'$.role') IN ('general','worker','reporter','leader','operator') OR json_extract(n.data,'$.role') IS NULL)").all()) {
         const step=JSON.parse(String(row.data)) as Step
         if(step.role==='reporter') step.reportFindingId=step.sourceIds[0]
-        step.role=(step.role?roles[step.role]:'worker') as Step['role']
-        delete step.specialist; delete step.parentStepId; this.saveNode(step)
-        this.event(step.projectId,'legion.role_migrated',step,{reason:'General fixed roles: Planner / Worker; native history preserved'})
+        step.role='soldier'
+        delete step.parentStepId; this.saveNode(step)
+        this.event(step.projectId,'legion.role_migrated',step,{reason:'General Planner / Soldier Executor; native history preserved'})
       }
     })
   }
@@ -314,19 +313,19 @@ export class Store {
     if (kind && value.kind !== kind) throw new HttpError(404, `${kind} not found`)
     return value
   }
-  nodes<T extends GraphNode = GraphNode>(projectId: string, kinds: T['kind'][], page?: { offset?: number; limit?: number; context?: boolean; order?: 'oldest'|'newest' }): T[] {
+  nodes<T extends GraphNode = GraphNode>(projectId: string, kinds: T['kind'][], page?: { offset?: number; limit?: number; context?: boolean; order?: 'oldest'|'newest'; statuses?: string[] }): T[] {
     this.project(projectId)
     if (!kinds.length) return []
     const placeholders = kinds.map(() => '?').join(',')
     const offset = integer(page?.offset ?? 0, 'node offset'), limit = page?.limit === undefined ? undefined : integer(page.limit, 'node limit', 1)
-    const sql = `SELECT data FROM nodes WHERE project_id=? AND kind IN (${placeholders}) AND ${ACTIVE_NODE_SQL}${this.graphFilter()}${page?.context ? ' AND '+CONTEXT_FACT_SQL : ''} ORDER BY rowid ${page?.order==='newest'?'DESC':'ASC'}${limit === undefined ? '' : ' LIMIT ? OFFSET ?'}`
-    const params = [projectId, ...kinds, ...(page?.context ? [projectId, projectId] : [])]
+    const sql = `SELECT data FROM nodes WHERE project_id=? AND kind IN (${placeholders}) AND ${ACTIVE_NODE_SQL}${this.graphFilter()}${page?.context ? ' AND '+CONTEXT_FACT_SQL : ''}${page?.statuses?.length ? " AND json_extract(data,'$.status') IN ("+page.statuses.map(()=>'?').join(',')+")" : ''} ORDER BY rowid ${page?.order==='newest'?'DESC':'ASC'}${limit === undefined ? '' : ' LIMIT ? OFFSET ?'}`
+    const params = [projectId, ...kinds, ...(page?.context ? [projectId, projectId] : []),...(page?.statuses??[])]
     return (this.db.prepare(sql).all(...(limit === undefined ? params : [...params, limit, offset])) as { data: string }[])
       .map(row => ({ version: 1, ...JSON.parse(row.data) }))
   }
-  nodeCount(projectId: string, kind: GraphNode['kind'], context = false): number {
+  nodeCount(projectId: string, kind: GraphNode['kind'], context = false, statuses: string[] = []): number {
     this.project(projectId)
-    return Number((this.db.prepare(`SELECT COUNT(*) AS value FROM nodes WHERE project_id=? AND kind=? AND ${ACTIVE_NODE_SQL}${this.graphFilter()}${context ? ' AND '+CONTEXT_FACT_SQL : ''}`).get(projectId, kind, ...(context ? [projectId, projectId] : [])) as { value: number }).value)
+    return Number((this.db.prepare(`SELECT COUNT(*) AS value FROM nodes WHERE project_id=? AND kind=? AND ${ACTIVE_NODE_SQL}${this.graphFilter()}${context ? ' AND '+CONTEXT_FACT_SQL : ''}${statuses.length ? " AND json_extract(data,'$.status') IN ("+statuses.map(()=>'?').join(',')+")" : ''}`).get(projectId, kind, ...(context ? [projectId, projectId] : []),...statuses) as { value: number }).value)
   }
   readNode(projectId: string, id: string, detail: 'summary' | 'doc' = 'summary'): ReturnType<typeof nodeContent> & {facts?:ReturnType<typeof nodeContent>[]} {
     let node:GraphNode
@@ -561,9 +560,9 @@ export class Store {
       const profile = input.executionProfile ?? 'direct'; if (!['direct', 'isolated'].includes(profile)) throw new HttpError(422, 'Invalid execution profile')
       const mode = this.project(id).mode
       if (input.role === 'scout') throw new HttpError(422, `Invalid ${mode} role`)
-      if (mode === 'general' && (input.specialist || input.parentStepId)) throw new HttpError(422, 'General mode has no specialist Agents or squads')
+      if (mode === 'general' && input.parentStepId) throw new HttpError(422, 'General mode has no executor squads')
+      if (input.role !== undefined && !(mode === 'benchmark' ? ['soldier','reporter'] : ['soldier']).includes(input.role)) throw new HttpError(422, `Invalid ${mode} role`)
       if (input.specialist) input = {...input,role:executorRole(mode)}
-      if (input.role !== undefined && !(mode === 'benchmark' ? ['soldier','reporter'] : ['worker']).includes(input.role)) throw new HttpError(422, `Invalid ${mode} role`)
       if (input.role !== undefined || input.taskKey !== undefined || input.parentStepId !== undefined) requiredText(input.taskKey, 'taskKey')
       if (input.parentStepId) {
         const parent = this.node<Step>(id, input.parentStepId, 'step')
@@ -777,7 +776,7 @@ export class Store {
       const existing = scoped.nodes<Step>(projectId, ['step']).find(s => isReportStep(s) && s.sourceIds.includes(findingId) && ['pending','running','paused'].includes(s.status))
       if (existing) return existing
       const producer = finding.stepId ? scoped.node<Step>(projectId, finding.stepId, 'step') : undefined
-      return scoped.addStep(projectId, { role: this.project(projectId).mode === 'benchmark' ? 'reporter' : 'worker', ...(this.project(projectId).mode === 'general' ? { reportFindingId: findingId } : {}), taskKey: producer?.taskKey ?? finding.id, goalId: producer?.goalId,
+      return scoped.addStep(projectId, { role: this.project(projectId).mode === 'benchmark' ? 'reporter' : 'soldier', ...(this.project(projectId).mode === 'general' ? { reportFindingId: findingId } : {}), taskKey: producer?.taskKey ?? finding.id, goalId: producer?.goalId,
         description: '为已确认漏洞撰写报告：'+finding.title, sourceIds: [finding.id], creator: 'report_finding' })
     })
   }
@@ -828,11 +827,21 @@ export class Store {
       this.event(id, 'project.reopened', null, { description, creator }); return hint
     })
   }
-  runs(projectId?: string): Run[] {
+  runs(projectId?: string, page?: { activity?: Run['activity']; stepId?: string; limit?: number; statuses?: Run['status'][] }): Run[] {
     projectId ??= this.projectScope
     if(projectId) this.project(projectId)
-    const rows = projectId === undefined ? this.db.prepare('SELECT data FROM runs ORDER BY rowid').all() : this.db.prepare('SELECT data FROM runs WHERE project_id=?'+this.graphFilter()+' ORDER BY rowid').all(projectId)
+    const where: string[] = [], params: (string|number)[] = []
+    if(projectId) { where.push('project_id=?'+this.graphFilter()); params.push(projectId) }
+    if(page?.activity) { where.push('activity=?'); params.push(page.activity) }
+    if(page?.stepId) { where.push('step_id=?'); params.push(page.stepId) }
+    if(page?.statuses?.length) { where.push('status IN ('+page.statuses.map(()=>'?').join(',')+')'); params.push(...page.statuses) }
+    if(page?.limit!==undefined) params.push(integer(page.limit,'run limit',1))
+    const rows=this.db.prepare('SELECT data FROM runs'+(where.length?' WHERE '+where.join(' AND '):'')+' ORDER BY rowid '+(page?.limit!==undefined?'DESC LIMIT ?':'ASC')).all(...params)
     return rows.map(r => JSON.parse(String(r.data)))
+  }
+  runCount(projectId: string, activity: Run['activity']): number {
+    this.project(projectId)
+    return Number(this.db.prepare('SELECT COUNT(*) AS n FROM runs WHERE project_id=? AND activity=?'+this.graphFilter()).get(projectId,activity)!.n)
   }
   runsByStatus(status: Run['status'], projectId?: string): Run[] {
     projectId ??= this.projectScope
@@ -961,7 +970,7 @@ export class Store {
     return {saved:true,through}
   }
   plannerWakeAt(planner: GraphPlanner): number {
-    const runs=this.runs(planner.projectId).filter(r=>r.activity==='plan'&&r.graphId===planner.graphId)
+    const runs=this.forGraph(planner.projectId,planner.graphId).runs(planner.projectId,{activity:'plan',limit:1})
     if(runs.some(r=>['running','unknown'].includes(r.status)))return Infinity
     if(!runs.length||runs.some(r=>r.status==='paused'))return planner.retryAfter??0
     const event=this.db.prepare("SELECT created_at FROM events WHERE project_id=? AND (graph_id=? OR graph_id IS NULL) AND id>? AND type IN ('fact.added','finding.added','hint.added','goal.updated','step.added','step.updated','step.revised','step.cancelled','step.handoff_ready','execute.succeeded','execute.failed','execute.cancelled','execute.unknown','legion.message','planning.capacity_changed','planner.stalled') ORDER BY id DESC LIMIT 1").get(planner.projectId,planner.graphId,planner.cursor.acknowledged)
@@ -976,7 +985,7 @@ export class Store {
     this.active(id)
     const paused=this.runsByStatus('paused',id).find(r=>r.activity==='plan'&&r.graphId===graph.id)
     if(paused&&(paused.worker!==worker.name||paused.backend!==worker.backend||paused.pendingTools.length))throw new HttpError(409,'Planner resume must keep its route and settled tools')
-    const previous=this.runs(id).filter(r=>r.activity==='plan'&&r.graphId===graph.id).at(-1)
+    const previous=this.forGraph(id,graph.id).runs(id,{activity:'plan',limit:1})[0]
     const reusable=previous&&previous.worker===worker.name&&previous.status!=='cancelled'?previous:undefined
     const run:Run=paused??reusable??{id:'run-'+randomUUID(),projectId:id,graphId:graph.id,stepId:null,activity:'plan',worker:worker.name,backend:worker.backend,status:'running',startedAt:now(),endedAt:null,baseRevision:graph.revision,checkpoint:null,pendingTools:[],error:null,inputTokens:0,outputTokens:0,cacheReadTokens:0,cacheWriteTokens:0,...(previous?{predecessorRunId:previous.id}:{}),handoff:planner.handoff}
     delete run.processedGraphCursor;delete run.failureCode;run.error=null;run.status='running';run.endedAt=null;planner.status='running';this.savePlanner(planner);this.saveRun(run)

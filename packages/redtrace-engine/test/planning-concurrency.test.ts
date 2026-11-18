@@ -17,7 +17,7 @@ import { load } from '../../redtrace-dsh/lib/loader.js'
 const settle = async () => { for (let i = 0; i < 12; i++) await new Promise(resolve => setImmediate(resolve)) }
 const mission = (store: Store, projectId: string, taskKey: string, description = taskKey) => {
   const graph = store.projectGraphs(projectId).find(g => g.taskKey === taskKey)!
-  return { role: 'scout' as const, taskKey, description, graphId: graph.id, goalId: graph.goalId, sourceIds: [graph.originId] }
+  return { role: 'soldier' as const, taskKey, description, graphId: graph.id, goalId: graph.goalId, sourceIds: [graph.originId] }
 }
 const tasks = (store: Store, id: string) => new Set(store.runsByStatus('running', id).map(r => r.graphId)).size
 
@@ -46,7 +46,7 @@ test('resident planning tools enforce live Max Step in both project modes and qu
   for (const taskKey of ['A', 'B']) store.createGraph(p.id, { taskKey, title: taskKey, origin: 'local fixture', goal: 'verify' })
   legion.claimCommand(p.id)
   const tools = legionTools(store, 'commander', p.id, 1, () => {}, config, undefined, () => config)
-  const spawn = (taskKey: string, text = taskKey) => tools.find(t => t.name === 'legion_spawn')!.execute('fixture', { taskKey, role: 'scout', mission: text })
+  const spawn = (taskKey: string, text = taskKey) => tools.find(t => t.name === 'legion_spawn')!.execute('fixture', { taskKey, role: 'soldier', mission: text })
   await spawn('A'); await spawn('A','queued direction'); config = {...config,maxSteps:2}; await spawn('A', 'independent evidence-based reinforcement')
   await assert.rejects(spawn('B'), /Question concurrency limit/)
   assert.equal(new LegionStore(store, p.id).questionCapacity(config.maxBenchmarkTasks).activeTasks, 1)
@@ -65,7 +65,7 @@ test('resident planning tools enforce live Max Step in both project modes and qu
 test('Scheduler fills question slots first, refills on completion and hot-loads without cancelling running work', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'question-dispatch-')), c = new Configuration(root); c.initialize()
   let config = { ...c.resolvedSnapshot().config, maxWorkers: 20, maxProjectWorkers: 10, maxRunningProjects: 5, maxBenchmarkTasks: 2, maxSteps: 2,
-    workers: [{ name: 'pool', enabled: true, priority: 0, maxRunning: 20, backend: 'mock' as const, provider: 'mock', model: 'mock', roles: ['soldier' as const, 'worker' as const] }] }
+    workers: [{ name: 'pool', enabled: true, priority: 0, maxRunning: 20, backend: 'mock' as const, provider: 'mock', model: 'mock', roles: ['soldier' as const, 'soldier' as const] }] }
   const store = new Store(':memory:'), legion = new LegionStore(store), done = new Map<string, () => void>()
   const scheduler = new Scheduler(store, config, async ({ run, signal }) => new Promise<void>(resolve => { done.set(run.id, resolve); signal.addEventListener('abort', () => resolve(), { once: true }) }))
   const p = store.createProject({ mode: 'benchmark', title: 'questions', origin: 'local fixture', goal: 'verify' }).project
@@ -91,7 +91,7 @@ test('Scheduler fills question slots first, refills on completion and hot-loads 
 test('General Max Step limits execution of existing queued directions, excludes unmet dependencies and hot-loads upward', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'general-frontier-')), c = new Configuration(root); c.initialize()
   const config = { ...c.resolvedSnapshot().config, maxWorkers: 20, maxProjectWorkers: 10, maxSteps: 2,
-    workers: [{ name: 'pool', enabled: true, priority: 0, maxRunning: 20, backend: 'mock' as const, provider: 'mock', model: 'mock', roles: ['worker' as const] }] }
+    workers: [{ name: 'pool', enabled: true, priority: 0, maxRunning: 20, backend: 'mock' as const, provider: 'mock', model: 'mock', roles: ['soldier' as const] }] }
   const store = new Store(':memory:'), done = new Map<string, () => void>()
   const scheduler = new Scheduler(store, config, async ({ run, signal }) => new Promise<void>(resolve => { done.set(run.id, resolve); signal.addEventListener('abort', () => resolve(), { once: true }) }))
   const p = store.createProject({ mode: 'general', title: 'directions', origin: 'local fixture', goal: 'verify' }).project
@@ -153,7 +153,7 @@ test('native planners fill distinct ready slots and read hot-loaded targets in t
     const queued=store.nodes(general.id,['step']).length
     const available = bench ? capacity.taskSlots : Math.max(0,Math.min(3,capacity.maxSteps)-queued)
     const name = available > 0 ? bench ? 'legion_spawn' : 'legion_step' : bench ? 'legion_wait' : 'legion_finish'
-    const args = available > 0 ? bench ? { taskKey: capacity.unassignedTaskKeys[0], role: 'scout', mission: 'recon independent question ' + capacity.unassignedTaskKeys[0] }
+    const args = available > 0 ? bench ? { taskKey: capacity.unassignedTaskKeys[0], role: 'soldier', mission: 'recon independent question ' + capacity.unassignedTaskKeys[0] }
       : { projectId: id, description: 'distinct ready direction ' + (queued + 1), sourceIds: ['origin'] }
       : bench ? {through:0} : { processed: {}, state: 'Existing independent directions cover configured Max Step; wait for new evidence.' }
     res.writeHead(200, { 'Content-Type': 'text/event-stream' })
@@ -164,7 +164,7 @@ test('native planners fill distinct ready slots and read hot-loaded targets in t
     raw.runtime = { max_workers: 20, max_project_workers: 10, max_running_projects: 5 }
     raw.tasks!.commander.max_intents = 2; raw.tasks!.commander.max_benchmark_tasks = 2
     raw.providers = { fixture: { api: 'openai-completions', base_url: 'http://127.0.0.1:' + (server.address() as any).port + '/v1', api_key: 'fixture', models: [{ id: 'fixture', context_window: 100000, max_tokens: 1000, reasoning: 'off', reasoning_efforts: false }] } }
-    raw.workers = [{ name: 'planner', provider: 'fixture', model: 'fixture', roles: ['commander','planner'], max_running: 5 }]
+    raw.workers = [{ name: 'general', provider: 'fixture', model: 'fixture', roles: ['commander','general'], max_running: 5 }]
   })
   const { Context } = await load('vendor/deepseek-harness/vendor/cordis/lib/index.js'), ctx = new Context()
   const engine: any = { store, legion, configuration, commanderSessions: new Map() }

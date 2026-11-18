@@ -9,7 +9,7 @@ test('model and audit retain credentials, flags, bodies and URL parameters verba
  const worker: Worker = { name:'fixture', backend:'mock', provider:'mock', model:'', enabled:true, reason:true, explore:true, bootstrap:false, maxRunning:1, priority:0 }
  try {
   const project = store.createProject({title:'Raw evidence',origin:'fixture',goal:'fixture',bootstrap:false}).project
-  const run = store.claim(project.id,'execute',worker,store.addStep(project.id,{description:'Legion read-only fixture',sourceIds:['origin'],role:'worker',taskKey:'fixture'}).id)
+  const run = store.claim(project.id,'execute',worker,store.addStep(project.id,{description:'Legion read-only fixture',sourceIds:['origin'],role:'soldier',taskKey:'fixture'}).id)
   const original = {token:'fixture-token',flag:'flag{fixture}',cookie:'session=fixture',responseBody:'raw-body',url:'https://fixture.invalid/?token=fixture'}
   const fact = store.addFact(project.id,JSON.stringify(original),{creator:'human'})
   const tools = graphTools({store,run,worker,config:{maxSteps:null} as EngineConfig,signal:new AbortController().signal},()=>{})

@@ -795,7 +795,7 @@
     <div class="flex-1"></div>
     <div class="flex shrink-0 items-center gap-2.5 text-xs tabular-nums"
       title="当前 FGS 累计用量">
-      <template x-for="role in (project?.project.mode==='general'?['planner','worker']:['general','soldier','reporter'])" :key="role"><span class="flex items-center gap-1" :class="'provider-'+role" :title="role.charAt(0).toUpperCase()+role.slice(1)"><span class="h-1.5 w-1.5 rounded-full" :class="'provider-dot-'+role"></span><span x-text="formatTokens(tokenUsage?.[role])"></span></span></template>
+      <template x-for="role in (project?.project.mode==='general'?['general','soldier']:['general','soldier','reporter'])" :key="role"><span class="flex items-center gap-1" :class="'provider-'+role" :title="role.charAt(0).toUpperCase()+role.slice(1)"><span class="h-1.5 w-1.5 rounded-full" :class="'provider-dot-'+role"></span><span x-text="formatTokens(tokenUsage?.[role])"></span></span></template>
       <span class="font-medium text-slate-500" title="总计">
         共 <span x-text="formatTokens(tokenUsage?.total)"></span>
       </span>
@@ -2265,7 +2265,7 @@
 
         <div class="runtime-inspection-grid"><label class="mt-2 block text-xs">Commander 巡检（秒）<input aria-label="Benchmark Commander 巡检间隔（秒）" x-model.number="runtimeTaskForm.tasks.commander.inspection_interval" type="number" min="1" required class="mt-2 h-9 w-full rounded border p-2"></label><label class="mt-2 block text-xs">Commander 空闲巡检（秒）<input aria-label="Benchmark Commander 空闲巡检间隔（秒）" x-model.number="runtimeTaskForm.tasks.commander.idle_inspection_interval" type="number" min="1" required class="mt-2 h-9 w-full rounded border p-2"></label></div>
         <div class="runtime-task-grid mt-5 grid gap-3 border-t border-slate-100 pt-5 lg:grid-cols-4">
-          <template x-for="role in ['commander','general','soldier','planner','worker']" :key="role"><fieldset class="rounded-xl bg-slate-50/70 p-4"><legend class="px-1 text-xs font-semibold text-slate-600" x-text="workerTaskLabel(role)"></legend><label class="block text-xs">任务超时（秒）<input x-model.number="runtimeTaskForm.tasks[role].timeout" type="number" min="5" class="mt-2 h-9 w-full rounded border p-2"></label><label class="mt-2 block text-xs">收尾超时（秒）<input x-model.number="runtimeTaskForm.tasks[role].conclude_timeout" type="number" min="5" class="mt-2 h-9 w-full rounded border p-2"></label></fieldset></template>
+          <template x-for="role in ['commander','general','soldier']" :key="role"><fieldset class="rounded-xl bg-slate-50/70 p-4"><legend class="px-1 text-xs font-semibold text-slate-600" x-text="workerTaskLabel(role)"></legend><label class="block text-xs">任务超时（秒）<input x-model.number="runtimeTaskForm.tasks[role].timeout" type="number" min="5" class="mt-2 h-9 w-full rounded border p-2"></label><label class="mt-2 block text-xs">收尾超时（秒）<input x-model.number="runtimeTaskForm.tasks[role].conclude_timeout" type="number" min="5" class="mt-2 h-9 w-full rounded border p-2"></label></fieldset></template>
         </div>
       </div>
     <div x-show="runtimeSettingsError" class="runtime-config-error" role="alert"><p x-text="runtimeSettingsError"></p><button type="button" @click="reloadRuntimeTaskDraft()">载入服务器配置（放弃草稿）</button></div></form>
@@ -2492,7 +2492,7 @@
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">模型</span><select x-model="workerForm.model" x-effect="if (!workerModelOptions().includes(workerForm.model)) workerForm.model = workerModelOptions()[0] || ''" class="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><template x-for="model in workerModelOptions()" :key="model"><option :value="model" x-text="model"></option></template><template x-if="!workerModelOptions().length"><option value="" disabled>该 Provider 未配置模型</option></template></select></label>
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">优先级（小者优先）</span><input x-model.number="workerForm.priority" type="number" min="0" max="1000" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">最大并发数</span><input x-model.number="workerForm.max_running" type="number" min="1" :max="workerConfig.runtime_max_workers || 1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
-      <div class="sm:col-span-2"><span class="mb-2 block text-[11px] font-medium text-slate-500">模式角色资格（Benchmark / General）</span><div class="flex flex-wrap gap-4"><template x-for="taskType in ['commander','general','soldier','planner','worker']" :key="taskType"><label class="inline-flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" :value="taskType" x-model="workerForm.task_types" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span x-text="workerTaskLabel(taskType)"></span></label></template></div></div>
+      <div class="sm:col-span-2"><span class="mb-2 block text-[11px] font-medium text-slate-500">模式角色资格（Benchmark / General）</span><div class="flex flex-wrap gap-4"><template x-for="taskType in ['commander','general','soldier']" :key="taskType"><label class="inline-flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" :value="taskType" x-model="workerForm.task_types" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span x-text="workerTaskLabel(taskType)"></span></label></template></div></div>
       <label class="inline-flex items-center gap-2 sm:col-span-2"><input type="checkbox" x-model="workerForm.enabled" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span class="text-xs text-slate-600">启用并允许接收新任务</span></label>
       <div x-show="workerTestResult" class="sm:col-span-2 rounded-xl px-3 py-2 text-xs" :class="workerTestResult?.ok ? 'bg-teal-50 text-teal-700' : 'bg-rose-50 text-rose-700'"><span x-text="workerTestResult?.detail"></span><span x-show="workerTestResult?.duration_ms != null" class="ml-2 opacity-70" x-text="`${workerTestResult?.duration_ms} ms`"></span></div>
     </div>
@@ -2806,7 +2806,7 @@ function redtraceApp() {
     workerSaveBusy: false,
     workerTestBusy: false,
     workerTestResult: null,
-    workerForm: { name: '', provider: '', model: '', enabled: true, task_types: ['commander', 'general', 'soldier', 'planner', 'worker'], priority: 0, max_running: 1 },
+    workerForm: { name: '', provider: '', model: '', enabled: true, task_types: ['commander', 'general', 'soldier'], priority: 0, max_running: 1 },
     pollingSaveBusy: false,
     pollingForm: { enabled: true, groups: [] },
     showProviderEditor: false,
@@ -3518,7 +3518,7 @@ function redtraceApp() {
           max_running_projects: Number(value.runtime.max_running_projects),
           max_project_workers: Number(value.runtime.max_project_workers),
         },
-        tasks: Object.fromEntries(['commander','general','soldier','planner','worker'].map(role => [role,{ timeout:Number(value.tasks[role].timeout), conclude_timeout:Number(value.tasks[role].conclude_timeout), ...(role==='commander'?{inspection_interval:Number(value.tasks.commander.inspection_interval),idle_inspection_interval:Number(value.tasks.commander.idle_inspection_interval)}:{}), ...(role==='commander'&&value.tasks.commander.max_intents!=null&&value.tasks.commander.max_intents!==''?{max_intents:Number(value.tasks.commander.max_intents)}:{}), ...(role==='commander'&&value.tasks.commander.max_benchmark_tasks!=null&&value.tasks.commander.max_benchmark_tasks!==''?{max_benchmark_tasks:Number(value.tasks.commander.max_benchmark_tasks)}:{}) }])),
+        tasks: Object.fromEntries(['commander','general','soldier'].map(role => [role,{ timeout:Number(value.tasks[role].timeout), conclude_timeout:Number(value.tasks[role].conclude_timeout), ...(role==='commander'?{inspection_interval:Number(value.tasks.commander.inspection_interval),idle_inspection_interval:Number(value.tasks.commander.idle_inspection_interval)}:{}), ...(role==='commander'&&value.tasks.commander.max_intents!=null&&value.tasks.commander.max_intents!==''?{max_intents:Number(value.tasks.commander.max_intents)}:{}), ...(role==='commander'&&value.tasks.commander.max_benchmark_tasks!=null&&value.tasks.commander.max_benchmark_tasks!==''?{max_benchmark_tasks:Number(value.tasks.commander.max_benchmark_tasks)}:{}) }])),
       };
     },
 
@@ -3543,7 +3543,7 @@ function redtraceApp() {
       const snapshot = await this.loadWorkerConfig(true);
       if (snapshot) { this.runtimeSettingsDirty = false; this.applyWorkerSnapshot(snapshot); this.runtimeSettingsError = ''; }
     },
-    workerRoleRoutes(role) { return (this.workerConfig.workers || []).filter(worker=>worker.enabled&&worker.roles?.includes(role)&&(!['commander','planner'].includes(role)||worker.provider!=='mock')); },
+    workerRoleRoutes(role) { return (this.workerConfig.workers || []).filter(worker=>worker.enabled&&worker.roles?.includes(role)&&(!['commander','general'].includes(role)||worker.provider!=='mock')); },
 
     addCommonEnvRow() {
       this.commonEnvForm.push({
@@ -3718,7 +3718,7 @@ function redtraceApp() {
     },
 
     workerTaskLabel(taskType) {
-      return { planner:'General · Planner', worker:'General · Worker', commander:'Benchmark · Commander', general:'Benchmark · General', soldier:'Benchmark · Soldier' }[taskType] || taskType;
+      return { planner:'历史 Planner', worker:'历史 Worker', commander:'Benchmark · Commander', general:'General · Planner', soldier:'Soldier · Executor / 自主规划' }[taskType] || taskType;
     },
 
     async testProvider(provider) {
@@ -3943,7 +3943,7 @@ function redtraceApp() {
           provider,
           model: '',
           enabled: true,
-          task_types: ['commander', 'general', 'soldier', 'planner', 'worker'],
+          task_types: ['commander', 'general', 'soldier'],
           priority: 0,
           max_running: 1,
         };

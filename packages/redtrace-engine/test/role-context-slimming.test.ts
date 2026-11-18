@@ -10,9 +10,9 @@ test('executors keep dependencies, references and messaging, not roster, experie
  try{for(const mode of ['general','benchmark'] as const){
  const p=store.createProject({mode,title:'fixture',origin:'scope constraint',goal:'goal constraint',bootstrap:false}).project
  const g=mode==='benchmark'?store.createGraph(p.id,{taskKey:'task',title:'task',origin:'task scope',goal:'task goal'}):store.projectGraphs(p.id)[0],s=store.forGraph(p.id,g.id)
- if(mode==='benchmark')store.addPlanner(p.id,g.id,{description:'planner',sourceIds:[g.originId]})
+ if(mode==='benchmark')store.addPlanner(p.id,g.id,{description:'general',sourceIds:[g.originId]})
  const fact=s.addFact(p.id,'important dependency',{evidence:[{description:'retained source'}]})
- const step=s.addStep(p.id,{role:mode==='benchmark'?'soldier':'worker',taskKey:'task',description:'execute constraint',sourceIds:[g.originId,fact.id],goalId:g.goalId,...(mode==='benchmark'?{specialist:{name:'specialist',responsibilities:'proof',capabilities:['shell'],scope:'local'}}:{})})
+ const step=s.addStep(p.id,{role:mode==='benchmark'?'soldier':'soldier',taskKey:'task',description:'execute constraint',sourceIds:[g.originId,fact.id],goalId:g.goalId,...(mode==='benchmark'?{specialist:{name:'specialist',responsibilities:'proof',capabilities:['shell'],scope:'local'}}:{})})
  s.addInput(p.id,'hint','generic hint');s.addInput(p.id,'hint','step hint','user',step.id)
  const run=store.claim(p.id,'execute',worker,step.id),ctx={store:s,run,worker,config,signal:new AbortController().signal},tools=graphTools(ctx,()=>{}),names=tools.map(t=>t.name)
  for(const n of ['legion_roster','legion_experience_search','legion_experience_capture','TodoWrite','legion_step'])assert(!names.includes(n),n)

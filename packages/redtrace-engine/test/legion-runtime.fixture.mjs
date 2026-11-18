@@ -26,21 +26,21 @@ const model = createServer(async (req, res) => {
   try {
     let raw = ''; for await (const chunk of req) raw += chunk
     const b = domainFixtureRequest(JSON.parse(raw),res), names = (b.tools ?? []).map(t => t.function.name)
-    if(names.includes('legion_roster')){const live=await(await fetch(api+'/console/tools')).json();assert(!names.includes('legion_board'));assert(live.tools.some(t=>t.name==='legion_inspect'&&t.roles.includes('planner')));assert(live.runs.some(r=>r.visibleSchemas===b.wireTools.length),'Run visible count must match the actual provider Tool Schema list');liveSchemaChecked=true}
+    if(names.includes('legion_roster')){const live=await(await fetch(api+'/console/tools')).json();assert(!names.includes('legion_board'));assert(live.tools.some(t=>t.name==='legion_inspect'&&t.roles.includes('general')));assert(live.runs.some(r=>r.visibleSchemas===b.wireTools.length),'Run visible count must match the actual provider Tool Schema list');liveSchemaChecked=true}
     requests.push(b)
     const system = b.messages.filter(m => m.role === 'system').map(m => m.content).join('\n')
-    const role = ['PLANNER','WORKER'].find(role => system.includes('You are ' + role))
+    const role = ['GENERAL','SOLDIER'].find(role => system.includes('You are ' + role))
     if (!role) throw new Error('Missing Legion Mission: ' + system.slice(0,300))
     roles.add(role)
     const textOf=m=>typeof m.content==='string'?m.content:(m.content??[]).map(b=>b.text??'').join('')
-    const boundary=b.messages.findLastIndex(m=>m.role==='user'&&(()=>{try{return !!JSON.parse(textOf(m)).instruction}catch{return false}})())
-    const current=role==='PLANNER'?b.messages.slice(boundary+1):b.messages
+    const boundary=b.messages.findLastIndex(m=>m.role==='user'&&(()=>{try{return !!(JSON.parse(textOf(m)).instruction||JSON.parse(textOf(m)).frontier)}catch{return false}})())
+    const current=role==='GENERAL'?b.messages.slice(boundary+1):b.messages
     const calls=current.flatMap(m=>m.tool_calls??[]).map(c=>c.function.name),last=calls.at(-1)
     const g=await(await fetch(api+'/v2/projects/'+projectId)).json()
     const admittedText=b.messages.filter(m=>m.role==='user').map(textOf).join('\n')
     let name,args
-    if(role==='PLANNER'){
-      for(const forbidden of ['submit_fact','legion_spawn','legion_experience_search','legion_reassign'])assert(!names.includes(forbidden))
+    if(role==='GENERAL'){
+      for(const forbidden of ['submit_fact','legion_spawn','legion_reassign'])assert(!names.includes(forbidden))
       const inbox=await(await fetch(api+'/v2/legion?projectId='+projectId)).json()
       const unanswered=inbox.messages.find(m=>m.type==='HELP'&&!inbox.messages.some(reply=>reply.receiver===m.sender&&reply.content==='PLANNER_ACK'))
       const tasks=['entry-a','entry-b'],unfinished=g.steps.filter(s=>s.status!=='done')
@@ -74,7 +74,7 @@ try {
   await new Promise(resolve => model.listen(0, '127.0.0.1', resolve))
   const config = new Configuration(work); config.initialize(); config.commit(config.read().revision, raw => {
     raw.providers = { fixture: { api: 'openai-completions', base_url: 'http://127.0.0.1:' + model.address().port + '/v1', api_key: 'fixture-not-a-secret', models: [{ id: 'fixture', context_window: 50000, max_tokens: 2000, reasoning: 'off', reasoning_efforts: false }] } }
-    raw.workers = ['commander','worker'].map(role => ({ name: role, roles: [role==='commander'?'planner':role], provider: 'fixture', model: 'fixture', reason: false, explore: false, bootstrap: false, max_running: role === 'worker' ? 2 : 1 }))
+    raw.workers = ['commander','soldier'].map(role => ({ name: role, roles: [role==='commander'?'general':role], provider: 'fixture', model: 'fixture', reason: false, explore: false, bootstrap: false, max_running: role === 'soldier' ? 2 : 1 }))
     raw.runtime = { max_workers: 4, max_project_workers: 4, max_running_projects: 1 }
     raw.tasks = { commander: { timeout: 45, conclude_timeout: 5 }, general: { timeout: 30, conclude_timeout: 5 }, soldier: { timeout: 30, conclude_timeout: 5 }, scout: { timeout: 20, conclude_timeout: 5 } }
   })
@@ -95,12 +95,12 @@ try {
   assert.equal(result.status,'idle');assert.ok(result.state.includes('Fixture accepted'))
   const g=await call('/v2/projects/'+projectId), runs=await call('/v2/projects/'+projectId+'/runs')
   assert.equal(g.project.status,'completed');assert.equal(g.steps.length,3);assert.ok(g.steps.every(s=>s.status==='done'));assert.ok(runs.every(r=>r.status==='succeeded')); for (const run of runs) assert.equal(run.worker, g.steps.find(s=>s.id===run.stepId).role)
-  assert.deepEqual([...roles].sort(),['PLANNER','WORKER'])
+  assert.deepEqual([...roles].sort(),['GENERAL','SOLDIER'])
   const resumed=await call('/v2/legion/command',{projectId,worker:'commander'});assert.equal(resumed.sessionId,result.sessionId);assert.equal(resumed.status,'idle');assert.equal((await call('/v2/projects/'+projectId)).steps.length,3)
-  const usage=await call('/audit/usage');assert.ok(usage.planner>0,'Global Commander usage must come from actual native assistant messages');assert.ok(usage.total>=usage.planner)
+  const usage=await call('/audit/usage');assert.ok(usage.general>0,'Global Commander usage must come from actual native assistant messages');assert.ok(usage.total>=usage.general)
   const logPage = await call('/v2/legion/session/events?projectId='+projectId+'&offset=0&limit=100')
   assert.equal(logPage.sessionId,result.sessionId);assert.equal(logPage.available,true);assert.ok(logPage.nextOffset<=100)
-  assert.ok(logPage.events.some(event=>event.task_type==='planner'&&['tool.started','assistant.message','user.message'].includes(event.kind)))
+  assert.ok(logPage.events.some(event=>event.task_type==='general'&&['tool.started','assistant.message','user.message'].includes(event.kind)))
   const repeated=await call('/v2/legion/session/events?projectId='+projectId+'&offset=0&limit=100');assert.deepEqual(repeated.events.map(e=>e.timestamp),logPage.events.map(e=>e.timestamp),'Historical Commander timestamps must not change when reread');assert.ok(logPage.events.some(e=>e.kind==='system.prompt'),'Current native system/message must be visible')
   const nextPage=await call('/v2/legion/session/events?projectId='+projectId+'&offset='+logPage.nextOffset+'&limit=100');assert.ok(nextPage.nextOffset>=logPage.nextOffset)
   assert.equal((await fetch(api+'/v2/legion/session/events?projectId='+projectId+'&limit=0')).status,422)
@@ -128,7 +128,7 @@ try {
     assert.equal(store.run(runs[0].id).pendingTools.length,0)
     const campaign=JSON.parse(store.db.prepare('SELECT data FROM project_campaigns WHERE project_id=?').get(projectId).data)
     assert.ok(campaign.cursors[projectId].acknowledged>0)
-    console.log('RUN_VISIBLE_SCHEMAS='+JSON.stringify(Object.fromEntries(['PLANNER','WORKER'].map(role=>[role,[...new Set(requests.filter(b=>b.messages.some(m=>m.role==='system'&&String(m.content).includes('You are '+role))).map(b=>b.wireTools?.length??b.tools.length))]]))));
+    console.log('RUN_VISIBLE_SCHEMAS='+JSON.stringify(Object.fromEntries(['GENERAL','SOLDIER'].map(role=>[role,[...new Set(requests.filter(b=>b.messages.some(m=>m.role==='system'&&String(m.content).includes('You are '+role))).map(b=>b.wireTools?.length??b.tools.length))]]))));
   console.log('LEGION_RUNTIME_SUPPORTED=true; roles=Planner,Worker; specialist_workers=0; worker_has_no_plan_tools=true; serial_dependencies=true; shared_fgs=true; commander_acceptance=true; native_message_admission=true; state_and_cursor_persisted=true; commander_native_resume=true; help_reply_admitted=true; model=local-protocol-fixture; commander_native_log_read=true')
   } finally { store.close() }
 } catch (error) {

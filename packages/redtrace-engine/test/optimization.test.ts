@@ -1,4 +1,4 @@
-import {scoutedSpawn} from './scout-fixture.ts'
+import {spawnTask} from './task-fixture.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {mkdtempSync,rmSync} from 'node:fs'
@@ -12,14 +12,14 @@ import {domainTools,TOOL_DOMAINS,domainAction} from '../../redtrace-dsh/src/tool
 import {toolAllowed} from '../src/console-api.ts'
 import {Configuration} from '../src/config.ts'
 import type {EngineConfig,GraphPlanner,Step} from '../src/types.ts'
-const worker={name:'fixture',backend:'mock' as const,provider:'mock',model:'mock',roles:['general','soldier','scout','worker'] as ('general'|'soldier'|'scout'|'worker')[],enabled:true,priority:0,maxRunning:100}
+const worker={name:'fixture',backend:'mock' as const,provider:'mock',model:'mock',roles:['general','soldier','scout','soldier'] as ('general'|'soldier'|'scout'|'soldier')[],enabled:true,priority:0,maxRunning:100}
 const settle=async()=>{for(let i=0;i<30;i++)await new Promise(r=>setImmediate(r))}
 const config={workers:[worker],providers:{},maxSteps:3,maxWorkers:100,maxProjectWorkers:100,maxRunningProjects:10,maxBenchmarkTasks:10,workspaceRoot:os.tmpdir()} as EngineConfig
 
 test('ten Benchmark Graphs each claim three of ten queued Steps; General has identical per-Graph semantics',async()=>{
  for(const mode of ['benchmark','general'] as const){const store=new Store(':memory:'),p=store.createProject({mode,title:mode,origin:'local',goal:'verify'}).project
  const graphs=mode==='benchmark'?Array.from({length:10},(_,i)=>store.createGraph(p.id,{taskKey:String(i),title:String(i),origin:'local',goal:'verify'})):store.projectGraphs(p.id)
- for(const graph of graphs)for(let i=0;i<10;i++)store.forGraph(p.id,graph.id).addStep(p.id,{description:'queued '+i,sourceIds:[graph.originId],priority:i,role:mode==='benchmark'?'soldier':'worker',taskKey:graph.taskKey??graph.id})
+ for(const graph of graphs)for(let i=0;i<10;i++)store.forGraph(p.id,graph.id).addStep(p.id,{description:'queued '+i,sourceIds:[graph.originId],priority:i,role:mode==='benchmark'?'soldier':'soldier',taskKey:graph.taskKey??graph.id})
  const scheduler=new Scheduler(store,config,async({signal})=>new Promise<void>(r=>signal.addEventListener('abort',()=>r(),{once:true})))
  try{scheduler.start();await settle();assert.equal(scheduler.activeRuns.length,graphs.length*3);for(const graph of graphs){assert.equal(store.planningCapacity(p.id,3,graph.id).activeSteps,3);assert.equal(store.forGraph(p.id,graph.id).nodeCount(p.id,'step'),10);const priorities=scheduler.activeRuns.filter(r=>r.graphId===graph.id).map(r=>store.node<Step>(p.id,r.stepId!,'step').priority).sort((a,b)=>b-a);assert.deepEqual(priorities,[9,8,7])}}finally{await scheduler.close();store.close()}}
 })
@@ -34,16 +34,16 @@ test('paused claims reserve, resume their own slot, unknown results block replac
 })
 
 test('Max Step=1 allows a Graph Planner plus one execution Worker; role identity never consumes capacity',()=>{
- const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'planner',origin:'local',goal:'verify'}).project,graph=store.createGraph(p.id,{taskKey:'A',title:'A',origin:'local',goal:'verify'}),legion=new LegionStore(store),scope=store.forGraph(p.id,graph.id);store.stepLimit=()=>1
- try{scoutedSpawn(legion,p.id,{role:'general',taskKey:'A',description:'plan',sourceIds:[graph.originId]});const planner=scope.claim(p.id,'plan',worker);assert.equal(planner.stepId,null);assert.equal(scope.planningCapacity(p.id).activeSteps,0)
- const step=scoutedSpawn(legion,p.id,{role:'scout',taskKey:'A',description:'recon',sourceIds:[graph.originId]}) as Step;store.claim(p.id,'execute',worker,step.id);assert.equal(scope.planningCapacity(p.id).activeSteps,1);assert.equal(scope.nodeCount(p.id,'step'),1)
+ const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'general',origin:'local',goal:'verify'}).project,graph=store.createGraph(p.id,{taskKey:'A',title:'A',origin:'local',goal:'verify'}),legion=new LegionStore(store),scope=store.forGraph(p.id,graph.id);store.stepLimit=()=>1
+ try{spawnTask(legion,p.id,{role:'general',taskKey:'A',description:'plan',sourceIds:[graph.originId]});const planner=scope.claim(p.id,'plan',worker);assert.equal(planner.stepId,null);assert.equal(scope.planningCapacity(p.id).activeSteps,0)
+ const step=spawnTask(legion,p.id,{role:'soldier',taskKey:'A',description:'recon',sourceIds:[graph.originId]}) as Step;store.claim(p.id,'execute',worker,step.id);assert.equal(scope.planningCapacity(p.id).activeSteps,1);assert.equal(scope.nodeCount(p.id,'step'),1)
  }finally{store.close()}
 })
 
 test('persistent Planner delivery is not processing; failure/reopen/handoff keep unprocessed events and the same TodoList',()=>{
  const root=mkdtempSync(path.join(os.tmpdir(),'planner-cursor-'));let store=new Store(root+'/db')
  try{const p=store.createProject({mode:'benchmark',title:'events',origin:'local',goal:'verify'}).project,g=store.createGraph(p.id,{taskKey:'A',title:'A',origin:'local',goal:'verify'}),scope=store.forGraph(p.id,g.id),legion=new LegionStore(store)
- scoutedSpawn(legion,p.id,{role:'general',taskKey:'A',description:'plan',sourceIds:[g.originId]});const run=scope.claim(p.id,'plan',worker),payload=launchContext(scope,run.id) as any,through=payload.plannerRound.triggers.cursor
+ spawnTask(legion,p.id,{role:'general',taskKey:'A',description:'plan',sourceIds:[g.originId]});const run=scope.claim(p.id,'plan',worker),payload=launchContext(scope,run.id) as any,through=payload.plannerRound.triggers.cursor
  store.completePlanning(run.id,through,'tentative round');store.finishRun(run.id,'failed','fixture transport');assert.equal(store.projectGraph(p.id,g.id).planner!.cursor.acknowledged,0)
  store.close();store=new Store(root+'/db');let planner=store.projectGraph(p.id,g.id).planner!;planner.retryAfter=0;store.savePlanner(planner)
  const retry=store.forGraph(p.id,g.id).claim(p.id,'plan',worker);assert.equal(retry.id,run.id,'same Session on retry');assert.equal(JSON.parse(String(store.db.prepare('SELECT data FROM audit_runs WHERE id=?').get(retry.id)!.data)).status,'running','resident Planner Audit reopens with its native Run');const redelivery=store.plannerEvents(store.projectGraph(p.id,g.id).planner!);assert(redelivery.events.some(e=>e.id===through))
@@ -90,7 +90,7 @@ test('Trace index excludes Thinking/parameters, preserves totals/search/pages an
 
 test('Planner handoff waits for its own tool result and starts a fresh Session only after confirmed stop',()=>{
  const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'relay',origin:'local',goal:'verify'}).project,g=store.createGraph(p.id,{taskKey:'A',title:'A',origin:'local',goal:'verify'}),scope=store.forGraph(p.id,g.id),legion=new LegionStore(store)
- try{scoutedSpawn(legion,p.id,{role:'general',taskKey:'A',description:'plan',sourceIds:[g.originId]});const run=scope.claim(p.id,'plan',worker);store.toolStarted(run.id,'relay',{name:'legion_handoff'});legion.queueHandoff(run.id,'retain full chain','upgraded');legion.settleHandoff(run.id);assert.equal(store.projectGraph(p.id,g.id).planner!.status,'running');store.toolEnded(run.id,'relay',{});legion.settleHandoff(run.id);assert.equal(store.projectGraph(p.id,g.id).planner!.status,'parked');store.finishRun(run.id,'cancelled');const next=scope.claim(p.id,'plan',{name:'upgraded',backend:'mock'});assert.notEqual(next.id,run.id);assert.equal(next.predecessorRunId,run.id);assert.equal(next.handoff,'retain full chain');assert.equal(scope.planningCapacity(p.id,1).activeSteps,0)
+ try{spawnTask(legion,p.id,{role:'general',taskKey:'A',description:'plan',sourceIds:[g.originId]});const run=scope.claim(p.id,'plan',worker);store.toolStarted(run.id,'relay',{name:'legion_handoff'});legion.queueHandoff(run.id,'retain full chain','upgraded');legion.settleHandoff(run.id);assert.equal(store.projectGraph(p.id,g.id).planner!.status,'running');store.toolEnded(run.id,'relay',{});legion.settleHandoff(run.id);assert.equal(store.projectGraph(p.id,g.id).planner!.status,'parked');store.finishRun(run.id,'cancelled');const next=scope.claim(p.id,'plan',{name:'upgraded',backend:'mock'});assert.notEqual(next.id,run.id);assert.equal(next.predecessorRunId,run.id);assert.equal(next.handoff,'retain full chain');assert.equal(scope.planningCapacity(p.id,1).activeSteps,0)
  }finally{store.close()}
 })
 
@@ -101,8 +101,8 @@ test('native stale/nested domain calls cannot bypass per-action role policy',asy
  mountToolSettings(ctx,engine);const p=engine.store.createProject({title:'policy',origin:'local',goal:'verify'}).project,step=engine.store.addStep(p.id,{description:'execute',sourceIds:['origin']}),run=engine.store.claim(p.id,'execute',worker,step.id),{SessionId}=await load('vendor/deepseek-harness/packages/core/session/lib/index.js'),{createScope}=await load('vendor/deepseek-harness/packages/core/scope/lib/index.js'),carrier=ctx.plugin({inject:['tools','systemPrompt'],apply(){}});await carrier.await()
  const agent:any={options:{},session:ctx.sessions.create(SessionId(run.id),{meta:{cwd:root}})},scope=createScope(carrier.ctx,agent);agent.ctx=scope.ctx
  let calls=0;const tool=domainTools([{name:'resource_list',description:'read',parameters:{type:'object',properties:{}},execute:async(_args:any,_execution:any)=>({ran:++calls})},{name:'resource_register',description:'write',parameters:{type:'object',properties:{name:{type:'string'}},required:['name']},execute:async(_args:any,_execution:any)=>({ran:++calls})}])[0]
- scope.ctx.tools.register({...tool,redtrace:true,output:{schema:{type:'object',additionalProperties:true},render:()=>[{type:'text',text:'ran'}]},execute:(args:any)=>tool.execute(args,{})},platformToolOptions(engine,tool.name,'worker'))
- const stale=await ctx.tools.resolve({agent,signal:new AbortController().signal});engine.configuration.commit(engine.configuration.read().revision,raw=>{raw.tool_settings={resource_manage:{enabled:true,actions:{register:{enabled:true,roles:['soldier']}}}}})
+ scope.ctx.tools.register({...tool,redtrace:true,output:{schema:{type:'object',additionalProperties:true},render:()=>[{type:'text',text:'ran'}]},execute:(args:any)=>tool.execute(args,{})},platformToolOptions(engine,tool.name,'soldier'))
+ const stale=await ctx.tools.resolve({agent,signal:new AbortController().signal});engine.configuration.commit(engine.configuration.read().revision,raw=>{raw.tool_settings={resource_manage:{enabled:true,actions:{register:{enabled:true,roles:['general']}}}}})
  const {ToolExecutionPipeline}=await load('vendor/deepseek-harness/packages/core/tools/lib/pipeline.js'),pipeline=new ToolExecutionPipeline(ctx),blocked=await pipeline.prepare({name:'resource_manage',callId:'nested',rootCallId:'root',arguments:{action:'register',name:'fixture'},agent,toolSet:stale,parent:{},signal:new AbortController().signal})
  assert.equal(blocked.kind,'post-result');assert.equal(calls,0);stale.dispose();await scope.dispose();await carrier.dispose()
  }finally{await ctx.fiber.dispose();await engine.close();rmSync(root,{recursive:true,force:true})}
@@ -110,7 +110,7 @@ test('native stale/nested domain calls cannot bypass per-action role policy',asy
 
 test('Graph Planner debounce is 800 ms after the latest relevant event, not the first burst event',()=>{
  const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'debounce',origin:'local',goal:'verify'}).project,g=store.createGraph(p.id,{taskKey:'A',title:'A',origin:'local',goal:'verify'}),scope=store.forGraph(p.id,g.id)
- try{scoutedSpawn(new LegionStore(store),p.id,{role:'general',taskKey:'A',description:'plan',sourceIds:[g.originId]});const run=scope.claim(p.id,'plan',worker),changes=store.plannerEvents(store.projectGraph(p.id,g.id).planner!);store.completePlanning(run.id,changes.cursor,'wait for evidence');store.finishRun(run.id,'succeeded');const first=scope.addInput(p.id,'hint','first'),last=scope.addInput(p.id,'hint','latest')
+ try{spawnTask(new LegionStore(store),p.id,{role:'general',taskKey:'A',description:'plan',sourceIds:[g.originId]});const run=scope.claim(p.id,'plan',worker),changes=store.plannerEvents(store.projectGraph(p.id,g.id).planner!);store.completePlanning(run.id,changes.cursor,'wait for evidence');store.finishRun(run.id,'succeeded');const first=scope.addInput(p.id,'hint','first'),last=scope.addInput(p.id,'hint','latest')
  store.db.prepare('UPDATE events SET created_at=? WHERE node_id=?').run(new Date(Date.now()-2000).toISOString(),first.id);store.db.prepare('UPDATE events SET created_at=? WHERE node_id=?').run(new Date(Date.now()-100).toISOString(),last.id)
  assert(store.plannerWakeAt(store.projectGraph(p.id,g.id).planner!)>Date.now()+500)
  }finally{store.close()}
@@ -118,7 +118,7 @@ test('Graph Planner debounce is 800 ms after the latest relevant event, not the 
 
 test('local Watchdog ignores healthy tool activity and emits one stall trigger per idle interval',async()=>{
  const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'watchdog',origin:'local',goal:'verify'}).project,g=store.createGraph(p.id,{taskKey:'A',title:'A',origin:'local',goal:'verify'}),scope=store.forGraph(p.id,g.id)
- scoutedSpawn(new LegionStore(store),p.id,{role:'general',taskKey:'A',description:'plan',sourceIds:[g.originId]});scope.addStep(p.id,{description:'execute',sourceIds:[g.originId]})
+ spawnTask(new LegionStore(store),p.id,{role:'general',taskKey:'A',description:'plan',sourceIds:[g.originId]});scope.addStep(p.id,{description:'execute',sourceIds:[g.originId]})
  let rounds=0;const scheduler=new Scheduler(store,config,async ctx=>{if(ctx.run.activity==='plan'){rounds++;const changes=store.plannerEvents(store.projectGraph(p.id,g.id).planner!);store.completePlanning(ctx.run.id,changes.cursor,'Workers continue')}else await new Promise<void>(r=>ctx.signal.addEventListener('abort',()=>r(),{once:true}))})
  try{scheduler.start();await settle();const run=store.runsByStatus('running',p.id).find(r=>r.activity==='execute')!;run.startedAt=new Date(Date.now()-10*60_000).toISOString();store.saveRun(run);const metadata=JSON.parse(String(store.db.prepare('SELECT data FROM audit_runs WHERE id=?').get(run.id)!.data));store.audit(metadata,[{kind:'tool.completed',timestamp:new Date().toISOString(),call_id:'healthy',content:'ongoing tool activity'}]);scheduler.watchdog();await settle();assert.equal(rounds,1);assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM events WHERE type='planner.stalled'").get()!.n,0)
  store.db.prepare("UPDATE audit_events SET data=json_set(data,'$.timestamp',?) WHERE run_id=?").run(new Date(Date.now()-6*60_000).toISOString(),run.id);scheduler.watchdog();scheduler.watchdog();assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM events WHERE type='planner.stalled'").get()!.n,1)

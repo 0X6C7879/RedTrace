@@ -181,7 +181,7 @@ test('Spill is Execute-only, session-isolated, hot-reloadable and preserves evid
   const text = `HEAD\n${'tool output line\n'.repeat(10000)}${clue}${'tool output line\n'.repeat(10000)}TAIL\n`
   const sessions = []
   let callId = 0
-  for (const type of ['commander', 'general', 'soldier', 'scout']) {
+  for (const type of ['commander', 'general', 'soldier', 'soldier']) {
     const carrier = host.plugin({ inject: ['tools', 'systemPrompt'], apply() {} }); await carrier.await()
     const agent = { options: {}, session: host.sessions.create(undefined, { meta: { cwd: root } }) }
     const scope = createScope(carrier.ctx, agent)
@@ -197,10 +197,10 @@ test('Spill is Execute-only, session-isolated, hot-reloadable and preserves evid
     const call = (name, args) => host.tools.execute({ calls: [{ type: 'tool-call', name, arguments: JSON.stringify(args), id: `spill-${++callId}` }], agent, signal: new AbortController().signal }).then(batch => batch.results[0].result)
     const result = await call('fixture', {}), visible = result.content.map(block => block.text ?? '').join('')
     assert.equal(result.value.text, text)
-    if (type === 'commander') {
+    if (type !== 'soldier') {
       assert.equal(visible, text)
       assert.equal(scoped.get('spillStore'), undefined)
-      assert.equal(existsSync(path.join(root, 'spill')), false)
+      if(type==='commander')assert.equal(existsSync(path.join(root, 'spill')), false)
     } else {
       assert.ok(visible.startsWith('HEAD\n')); assert.match(visible, /TAIL/)
       assert.ok(visible.includes(clue), 'unique middle attack clues must remain visible')
@@ -230,8 +230,8 @@ test('Spill is Execute-only, session-isolated, hot-reloadable and preserves evid
     }
     sessions.push({ type, scoped, call, refresh })
   }
-  const [commander, general, soldier, scout] = sessions
-  assert.notEqual(soldier.scoped.get('spillStore'), scout.scoped.get('spillStore'))
+  const [commander, general, soldier, custom] = sessions
+  assert.notEqual(soldier.scoped.get('spillStore'), custom.scoped.get('spillStore'))
   await manager.stop('redtrace-spill'); await Promise.all(sessions.map(s => s.refresh()))
   for (const s of sessions) {
     assert.equal(s.scoped.get('spillStore'), undefined)
@@ -239,9 +239,9 @@ test('Spill is Execute-only, session-isolated, hot-reloadable and preserves evid
   }
   await manager.start('redtrace-spill'); await Promise.all(sessions.map(s => s.refresh()))
   assert.equal((await commander.call('fixture', {})).content[0].text, text)
-  for (const s of [general, soldier, scout]) assert.match((await s.call('fixture', {})).content[0].text, /Full formatted result stored at:/)
-  scout.scoped.get('spillStore').saveText = async () => { throw new Error('fixture storage unavailable') }
-  assert.equal((await scout.call('fixture', {})).content[0].text, text)
+  for (const s of [soldier, custom]) assert.match((await s.call('fixture', {})).content[0].text, /Full formatted result stored at:/)
+  custom.scoped.get('spillStore').saveText = async () => { throw new Error('fixture storage unavailable') }
+  assert.equal((await custom.call('fixture', {})).content[0].text, text)
   assert.match((await soldier.call('fixture', {})).content[0].text, /Full formatted result stored at:/)
 })
 
@@ -423,15 +423,15 @@ test('offline assets advertise skill resources only when present without inlinin
 
 test('platform family Schemas are scoped to General/Soldier and never become global or Scout tools', async t => {
   const host = await createHost(); t.after(() => host.fiber.dispose())
-  for (const type of ['soldier','worker','scout']) {
+  for (const type of ['soldier','general','scout']) {
     const session = await mountSession(host, {executionProfile:'direct',available:id=>['redtrace-c2','redtrace-webshell'].includes(id),type})
     t.after(async () => {await session.scope.dispose();rmSync(session.cwd,{recursive:true,force:true})})
     for (const name of ['c2_manage','webshell_manage']) {
-      assert.equal(!!host.tools.get(name,session.key),type!=='scout')
+      assert.equal(!!host.tools.get(name,session.key),type==='soldier')
       assert.equal(host.tools.get(name),undefined)
     }
     assert.equal(host.tools.get('c2_sessions',session.key),undefined)
-    assert(host.tools.get(shellName,session.key))
-    assert(host.tools.get('skill',session.key))
+    assert.equal(!!host.tools.get(shellName,session.key),type==='soldier')
+    assert.equal(!!host.tools.get('skill',session.key),type==='soldier')
   }
 })

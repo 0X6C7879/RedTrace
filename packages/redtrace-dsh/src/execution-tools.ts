@@ -143,9 +143,8 @@ export function toolsSectionText(toolsDir: string): string {
 export async function mountExecutionTools(scoped: ScopedContext, config: ExecutionToolsConfig): Promise<ScopedContext> {
   const { scopeOf } = config.onSchemas ? await load('vendor/deepseek-harness/packages/core/scope/lib/index.js') : { scopeOf: undefined }
   const definitions = () => (scoped as any).get('tools').definitions(scopeOf!(scoped))
-  const commander = config.task.type === 'commander', planner = config.task.type === 'planner'
-  const configured = config.available ?? (() => false)
-  const available = (id: string) => configured(id) && (commander ? id === 'redtrace-fs-search' : planner ? ['redtrace-jobs','redtrace-fs-search','redtrace-web'].includes(id) : true)
+  if (config.task.type !== 'soldier') return scoped
+  const available = config.available ?? (() => false)
   const active = new Map<string, CordisFiber[]>()
   const jobs = available('redtrace-jobs')
   const services = ['shell', 'shellEnv', 'fs', 'skills', 'sandbox', 'sandboxPolicy', 'approval', 'jobs', 'spillStore']
@@ -182,7 +181,7 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
   const shellTool = process.platform === 'win32'
     ? `${VENDOR}/shell/tool-pwsh/lib/index.js`
     : `${VENDOR}/shell/tool-bash/lib/index.js`
-  let shellFiber = commander ? undefined : await mount(scoped, shellTool, { enableRunInBackground: jobs })
+  let shellFiber = await mount(scoped, shellTool, { enableRunInBackground: jobs })
   let background = jobs
   await mount(scoped, `${VENDOR}/fs/fs-observation-policy/lib/index.js`)
   await mount(scoped, `${VENDOR}/fs/tool-fs/lib/index.js`)
@@ -191,7 +190,7 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
     includeDefaultRoots: false,
     customSkillDirs: [config.skillsDir],
   })
-  if (!commander) await mount(scoped, `${VENDOR}/skill/tool-skill/lib/index.js`)
+  await mount(scoped, `${VENDOR}/skill/tool-skill/lib/index.js`)
   config.onSchemas?.('redtrace-core', definitions())
   if (jobs) {
     const before = config.onSchemas ? new Set(definitions().map((tool: any) => tool.name)) : undefined
@@ -225,7 +224,7 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
   const stacks: Array<[string, (use: Use) => Promise<unknown>]> = [
     ['redtrace-spill', use => use(scoped, 'packages/redtrace-dsh/lib/spill.js', { sessionRoot: config.sessionRoot })],
     ...TASK_PLUGINS.map(entry => [entry.id, (use: Use) => use(scoped, entry.modulePath, { cwd: config.cwd, toolEnabled: config.toolEnabled })] as [string, (use: Use) => Promise<unknown>]),
-    ...(['general', 'soldier', 'worker'].includes(config.task.type) ? ['webshell', 'c2'].map(family => [
+    ...(config.task.type === 'soldier' ? ['webshell', 'c2'].map(family => [
       `redtrace-${family}`, (use: Use) => use(scoped, `packages/redtrace-dsh/lib/${family}.js`, { toolEnabled: config.toolEnabled }),
     ] as [string, (use: Use) => Promise<unknown>]) : []),
     ['redtrace-web', async use => {

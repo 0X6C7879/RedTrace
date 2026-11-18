@@ -98,7 +98,7 @@ test('explicit General report request uses a Worker workflow, saves/updates an A
   const a = store.addFact(id, 'Local fixture returned literal proof', { title: 'Fixture proof', evidence: [{ description: 'fixture stdout, not live vulnerability proof' }] })
   const finding = store.addFinding(id, { title: 'Fixture vulnerability', description: 'Verified deterministic fixture only', type: 'fixture', severity: 'low', assetIds: ['fixture-target'], factIds: [a.id] })
   const step = store.requestFindingReport(id, finding.id)
-  assert.equal(step.role, 'worker'); assert.equal(step.reportFindingId,finding.id); assert.deepEqual(step.sourceIds, [finding.id])
+  assert.equal(step.role, 'soldier'); assert.equal(step.reportFindingId,finding.id); assert.deepEqual(step.sourceIds, [finding.id])
   assert.equal(store.requestFindingReport(id, finding.id).id, step.id)
   // Reporting is post-verification work: Goal acceptance must not cancel its pending Session.
   store.updateGoal(id, 'goal', { status: 'achieved', evidenceIds: [finding.id] })

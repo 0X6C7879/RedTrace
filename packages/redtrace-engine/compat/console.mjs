@@ -61,7 +61,7 @@ export async function runtimeCatalog(ctx, engine, catalog = []) {
       const visible = new Set(agent ? registry.schemas(agent,selection).map(t=>t.name) : [])
       if(agent){const selectedSchemas=registry.schemas(agent,selection);const wire=JSON.stringify(selectedSchemas);runs.push({runId:scope,role,mode,visibleSchemas:visible.size,schemaBytes:Buffer.byteLength(wire),schemaEstimatedTokens:Math.ceil(wire.length/4),schemaTokenMethod:'ceil(serialized chars/4), not billing'})}
       selection?.dispose()
-      return (registry?.definitions(agent) ?? []).filter(tool=>agent||tool.name.startsWith('mcp__')).flatMap(tool => (tool.name.startsWith('mcp__')&&!agent?['general','soldier','worker']:[role]).map(binding=>({ name: tool.name, description: tool.description, parameters: tool.parameters,
+      return (registry?.definitions(agent) ?? []).filter(tool=>agent||tool.name.startsWith('mcp__')).flatMap(tool => (tool.name.startsWith('mcp__')&&!agent?['soldier']:[role]).map(binding=>({ name: tool.name, description: tool.description, parameters: tool.parameters,
         scope, role:binding, mode, status: 'registered',
         enabled: toolAllowed(settings, tool.name, binding), visible: visible.has(tool.name),
         source: tool.name.startsWith('mcp__') ? 'MCP' : tool.redtrace ? 'RedTrace' : 'DSH' })))

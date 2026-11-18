@@ -31,7 +31,7 @@ export interface GraphPlanner {
   cursor: { delivered: number; acknowledged: number }; createdAt: string; legacyAssignments?: Step[]
 }
 export type TaskAssignment = Step | GraphPlanner
-export type LegionRole = Exclude<FixedRole, 'commander' | 'planner'> | 'reporter'
+export type LegionRole = Exclude<FixedRole, 'commander'> | 'reporter'
 export interface Evidence { path?: string; artifactId?: string; runId?: string; toolCallId?: string; description: string }
 export interface Specialist { name: string; responsibilities: string; capabilities: string[]; scope: string }
 export interface LegionAssignment {

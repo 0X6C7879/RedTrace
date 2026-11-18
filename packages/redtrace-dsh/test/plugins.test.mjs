@@ -391,7 +391,7 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const list = await call('GET', '/__redtrace/plugins')
   assert.equal(list.status, 200)
-  assert.equal(JSON.parse(list.body).plugins.length, 33)
+  assert.equal(JSON.parse(list.body).plugins.length, 31)
   for (const id of ['redtrace-trace-search', 'redtrace-repeat-reminder', 'redtrace-shell', 'redtrace-remote-terminal', 'redtrace-ptc', 'redtrace-scout']) {
     assert.ok(!JSON.parse(list.body).plugins.some(plugin => plugin.id === id))
     assert.equal((await call('POST', `/__redtrace/plugins/${id}/start`)).status, 400)
@@ -462,18 +462,18 @@ test('reverse plugin is default-on, explicit stop persists and can be restarted'
   assert.equal(second.manager.view('redtrace-reverse').status, 'running')
 })
 
-test('Planner/Worker keep their preset settings and the retired Scout ID is removed from the manifest',async t=>{
+test('General/Soldier inherit retired preset settings and the retired Scout ID is removed from the manifest',async t=>{
  const root=scratch('general-presets'),manifest=path.join(root,'plugins.json')
  t.after(()=>rmSync(root,{recursive:true,force:true}))
  writeFileSync(manifest,JSON.stringify({version:1,disabled:['redtrace-leader','redtrace-operator','redtrace-scout']}))
  const {manager}=makeManager(root,manifest,async()=>({}))
  await manager.boot()
  try{
-  assert.equal(manager.view('redtrace-worker').status,'stopped')
+  assert.equal(manager.view('redtrace-soldier').status,'stopped')
   assert.throws(()=>manager.view('redtrace-scout'),/unknown plugin/)
   assert(!JSON.parse(readFileSync(manifest,'utf8')).disabled.includes('redtrace-scout'))
-  assert.equal(manager.view('redtrace-planner').status,'running')
+  assert.equal(manager.view('redtrace-general').status,'running')
   assert.throws(()=>manager.view('redtrace-leader'))
   assert.throws(()=>manager.view('redtrace-operator'))
- }finally{await manager.stop('redtrace-worker')}
+ }finally{await manager.stop('redtrace-soldier')}
 })

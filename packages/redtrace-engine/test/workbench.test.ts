@@ -1,4 +1,4 @@
-import {scoutedSpawn} from './scout-fixture.ts'
+import {spawnTask} from './task-fixture.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {mkdtempSync,rmSync} from 'node:fs'
@@ -25,31 +25,31 @@ import {ChatStore,chatTools} from '../src/chat.ts'
 import {serveEngine} from '../src/index.ts'
 import {Scheduler} from '../src/scheduler.ts'
 import type {EngineConfig,Step} from '../src/types.ts'
-const worker={name:'fixture',roles:['soldier','general','worker'] as NonNullable<import('../src/types.ts').Worker['roles']>,backend:'mock' as const,provider:'mock',model:'fixture',enabled:true,maxRunning:4,priority:0}
+const worker={name:'fixture',roles:['soldier','general','soldier'] as NonNullable<import('../src/types.ts').Worker['roles']>,backend:'mock' as const,provider:'mock',model:'fixture',enabled:true,maxRunning:4,priority:0}
 const specialist={name:'CodeAudit',responsibilities:'review the assigned endpoint',capabilities:['source audit'],scope:'local fixture endpoint only'}
-for(const mode of ['benchmark','general'] as const)test(mode+(mode==='benchmark'?' preserves custom Agents and STATE relay':' uses ordinary Worker Steps and STATE relay without dynamic Agents'),async t=>{
+for(const mode of ['benchmark','general'] as const)test(mode+(mode==='benchmark'?' preserves custom Agents and STATE relay':' uses Soldier Steps and STATE relay'),async t=>{
  const store=new Store(':memory:');t.after(()=>store.close());const p=store.createProject({mode,title:'fixture',origin:'authorized local fixture',goal:'verify'}).project,legion=new LegionStore(store,p.id)
  const graph=mode==='benchmark'?store.createGraph(p.id,{taskKey:'a',title:'a',origin:'local',goal:'verify'}):store.projectGraphs(p.id)[0]
- const mission={role:(mode==='benchmark'?'soldier':'worker') as 'soldier'|'worker',taskKey:'a',graphId:graph.id,description:'first independent angle',sourceIds:[graph.originId],...(mode==='benchmark'?{specialist}:{})},a=scoutedSpawn(legion,p.id,mission),b=scoutedSpawn(legion,p.id,{...mission,description:'second independent angle',specialist:undefined})
+ const mission={role:(mode==='benchmark'?'soldier':'soldier') as 'soldier'|'soldier',taskKey:'a',graphId:graph.id,description:'first independent angle',sourceIds:[graph.originId],...(mode==='benchmark'?{specialist}:{})},a=spawnTask(legion,p.id,mission),b=spawnTask(legion,p.id,{...mission,description:'second independent angle',specialist:undefined})
  assert.deepEqual(store.node<Step>(p.id,a.id,'step').specialist,mode==='benchmark'?specialist:undefined)
- assert.throws(()=>scoutedSpawn(legion,p.id,mission),/different angle/)
- if(mode==='general')assert.throws(()=>legion.spawn(p.id,{...mission,specialist:undefined,role:'scout'}),/Scout is retired/)
+ assert.throws(()=>spawnTask(legion,p.id,mission),/different angle/)
+ if(mode==='general')assert.throws(()=>legion.spawn(p.id,{...mission,specialist:undefined,role:'scout' as never}),/Scout is retired/)
  const r=store.claim(p.id,'execute',worker,a.id);store.addFact(p.id,'first run evidence',{runId:r.id,creator:worker.name});legion.requestHandoff(r.id,'confirmed source and failed angle');store.finishRun(r.id,'cancelled');legion.completeHandoff(p.id,a.id);const successor=store.claim(p.id,'execute',worker,a.id)
  store.addFact(p.id,'second run evidence',{runId:successor.id,creator:worker.name});assert.deepEqual(workerInstances(store,p.id).map(w=>w.facts),[1,1]);assert.equal(successor.predecessorRunId,r.id);assert.deepEqual(store.node<Step>(p.id,a.id,'step').specialist,mode==='benchmark'?specialist:undefined)
- const instances=workerInstances(store,p.id);assert.deepEqual(instances.map(w=>w.label),mode==='benchmark'?['CodeAudit1','CodeAudit2']:['Worker1','Worker2']);assert.equal(new Set(instances.map(w=>w.id)).size,2)
+ const instances=workerInstances(store,p.id);assert.deepEqual(instances.map(w=>w.label),mode==='benchmark'?['CodeAudit1','CodeAudit2']:['Soldier1','Soldier2']);assert.equal(new Set(instances.map(w=>w.id)).size,2)
  legion.park(p.id,'a','verified blocker','new evidence');assert.equal(store.node<Step>(p.id,b.id,'step').status,'parked')
 })
 
 test('Benchmark ownership transfers from Soldier planner to General without duplicating TodoList; General Commander alone plans',async t=>{
  const store=new Store(':memory:');t.after(()=>store.close());const p=store.createProject({mode:'benchmark',title:'fixture',origin:'local',goal:'verify'}).project,legion=new LegionStore(store,p.id),g=store.createGraph(p.id,{taskKey:'a',title:'a',origin:'local',goal:'verify'})
- const spawn=(role:'soldier'|'general',description:string)=>{const step=scoutedSpawn(legion,p.id,{role,taskKey:'a',graphId:g.id,description,sourceIds:[g.originId]});const r=role==='general'?store.forGraph(p.id,g.id).claim(p.id,'plan',worker):store.claim(p.id,'execute',worker,step.id);return legionTools(store,r.id,p.id,null,()=>{})}
+ const spawn=(role:'soldier'|'general',description:string)=>{const step=spawnTask(legion,p.id,{role,taskKey:'a',graphId:g.id,description,sourceIds:[g.originId]});const r=role==='general'?store.forGraph(p.id,g.id).claim(p.id,'plan',worker):store.claim(p.id,'execute',worker,step.id);return legionTools(store,r.id,p.id,null,()=>{})}
  const first=spawn('soldier','first planner'),todo=first.find(t=>t.name==='TodoWrite')!;await todo.execute('write',{todos:[{content:'verified stage',status:'in_progress'}]})
  assert(!spawn('soldier','different angle').some(t=>t.name==='TodoWrite'))
  const general=spawn('general','complex multi-stage escalation');assert(general.some(t=>t.name==='TodoWrite'));await assert.rejects(todo.execute('stale',{todos:[]}),/ownership transferred/)
  assert.equal(legion.planningTodos(p.id).list(g.id).length,1)
  const q=store.createProject({mode:'general',title:'general',origin:'local',goal:'verify'}).project,l=new LegionStore(store,q.id);l.claimCommand()
  assert(legionTools(store,'commander',q.id,null,()=>{},undefined,l.planningTodos(q.id)).some(t=>t.name==='TodoWrite'))
- const s=l.spawn(q.id,{role:'worker',taskKey:'a',description:'execute only',sourceIds:['origin']}),r=store.claim(q.id,'execute',worker,s.id)
+ const s=l.spawn(q.id,{role:'soldier',taskKey:'a',description:'execute only',sourceIds:['origin']}),r=store.claim(q.id,'execute',worker,s.id)
  assert(!legionTools(store,r.id,q.id,null,()=>{}).some(t=>['TodoWrite','legion_goal','legion_accept'].includes(t.name)))
 })
 
@@ -65,7 +65,7 @@ test('real API conversation scopes, stable instance labels, paging, human sender
  const req=async(url:string,body?:unknown)=>{const response=await fetch(base+url,body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}:undefined);assert.equal(response.status,200);return response.json()}
  try{
  const s=engine.store,p=s.createProject({mode:'benchmark',title:'bench',origin:'local',goal:'verify'}).project,graphs=['a','b'].map(taskKey=>s.createGraph(p.id,{taskKey,title:taskKey,origin:'local',goal:'verify'}))
- const runs=graphs.map(g=>{const step=scoutedSpawn(engine.legion,p.id,{role:'soldier',taskKey:g.taskKey!,description:g.title,sourceIds:[g.originId]});const run=s.claim(p.id,'execute',worker,step.id);s.runEvent(run.id,'assistant.message',{content:g.title});return run})
+ const runs=graphs.map(g=>{const step=spawnTask(engine.legion,p.id,{role:'soldier',taskKey:g.taskKey!,description:g.title,sourceIds:[g.originId]});const run=s.claim(p.id,'execute',worker,step.id);s.runEvent(run.id,'assistant.message',{content:g.title});return run})
  const board=await req('/v2/projects/'+p.id+'/workbench');assert.deepEqual(board.workers.map((w:any)=>w.label),['Soldier','Soldier']);assert.equal(board.conversations.length,2)
  engine.legion.planningTodos(p.id).replace(graphs[0].id,[{content:'A only',status:'in_progress'}]);engine.legion.planningTodos(p.id).replace(graphs[1].id,[{content:'B only',status:'pending'}]);
  const url='/v2/projects/'+p.id+'/conversation?graphId='+graphs[0].id,page=await req(url);assert.equal(page.todos[0].content,'A only');assert.equal((await req('/v2/projects/'+p.id+'/conversation?graphId='+graphs[1].id)).todos[0].content,'B only');assert.deepEqual((await req('/v2/projects/'+p.id+'/conversation')).todos,[]);assert.equal(page.events.length,1);assert.equal(page.events[0].content,'a');assert.equal((await req(url+'&after='+page.cursor)).events.length,0)
@@ -80,7 +80,7 @@ test('real API conversation scopes, stable instance labels, paging, human sender
 
 test('global DSH chats consume existing global and route capacity without serializing Workers',async t=>{
  const store=new Store(':memory:');t.after(()=>store.close());const p=store.createProject({mode:'general',title:'parallel',origin:'local',goal:'verify'}).project,legion=new LegionStore(store),chats=new ChatStore(store),chat=chats.create('occupied');chats.save({...chat,status:'running',workerName:worker.name})
- for(let i=0;i<3;i++)scoutedSpawn(legion,p.id,{role:'worker',taskKey:'angle-'+i,description:'work '+i,sourceIds:['origin']})
+ for(let i=0;i<3;i++)spawnTask(legion,p.id,{role:'soldier',taskKey:'angle-'+i,description:'work '+i,sourceIds:['origin']})
  const config={workers:[{...worker,maxRunning:3}],providers:{},maxWorkers:3,maxProjectWorkers:3,maxRunningProjects:1,maxSteps:null,workspaceRoot:'/tmp',executeTimeout:5,concludeTimeout:1} as EngineConfig
  let release!:()=>void;const wait=new Promise<void>(r=>release=r),scheduler=new Scheduler(store,config,async()=>wait)
  try{scheduler.start();await new Promise(r=>setImmediate(r));assert.equal(scheduler.activeRuns.length,2);chats.save({...chats.get(chat.id),status:'idle'});scheduler.wake();await new Promise(r=>setImmediate(r));assert.equal(scheduler.activeRuns.length,3)}finally{release();await scheduler.close()}

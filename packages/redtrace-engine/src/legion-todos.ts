@@ -52,12 +52,11 @@ export class CommanderTodos {
 export const TASK_PLANNING_TOOLS = new Set(['TodoWrite', 'legion_todos', 'legion_goal', 'legion_update_goal', 'legion_accept', 'legion_confirm_transfer', 'legion_spawn', 'legion_step', 'legion_steps', 'legion_update_step', 'legion_task_stop'])
 
 export function taskTodoPlanner(step: TaskAssignment, store: Store): TaskAssignment | undefined {
-  if (!step.graphId) return undefined
+  if (!step.graphId || store.project(step.projectId).mode === 'general') return undefined
   const planner = store.projectGraph(step.projectId,step.graphId).planner
   if (planner) return planner
-  const candidates = store.forProject(step.projectId).nodes<Step>(step.projectId, ['step']).filter(s => s.graphId === step.graphId && !s.deleted && !s.parentStepId && !s.specialist && s.role === 'soldier')
-  const soldiers = candidates.filter(s => s.status !== 'cancelled')
-  return soldiers.find(s => s.status !== 'done') ?? soldiers[0]
+  const row=store.db.prepare("SELECT data FROM nodes WHERE project_id=? AND graph_id=? AND kind='step' AND json_extract(data,'$.role')='soldier' AND COALESCE(json_extract(data,'$.deleted'),0)=0 AND json_extract(data,'$.parentStepId') IS NULL AND json_extract(data,'$.specialist') IS NULL AND json_extract(data,'$.status')!='cancelled' ORDER BY (json_extract(data,'$.status')='done'),rowid LIMIT 1").get(step.projectId,step.graphId)
+  return row?JSON.parse(String(row.data)) as Step:undefined
 }
 
 export function taskTodoOwner(step: TaskAssignment, store: Store): boolean {

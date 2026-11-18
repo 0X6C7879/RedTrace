@@ -13,7 +13,7 @@ import {load} from '../../redtrace-dsh/lib/loader.js'
 const work=mkdtempSync(path.join(os.tmpdir(),'benchmark-patrol-')),config=new Configuration(work);config.initialize()
 const store=new Store(work+'/engine.db'),legion=new LegionStore(store),busy=store.createProject({mode:'benchmark',title:'busy',origin:'local',goal:'verify'}).project,idle=store.createProject({mode:'benchmark',title:'idle',origin:'local',goal:'verify'}).project,general=store.createProject({mode:'general',title:'general',origin:'local',goal:'verify'}).project
 const graph=store.createGraph(busy.id,{taskKey:'T',title:'local',origin:'local',goal:'verify'})
-store.forGraph(busy.id,graph.id).addStep(busy.id,{role:'scout',taskKey:'T',description:'classify',sourceIds:[graph.originId]})
+store.forGraph(busy.id,graph.id).addStep(busy.id,{role:'soldier',taskKey:'T',description:'classify',sourceIds:[graph.originId]})
 const calls=new Map(),counts=id=>calls.get(id)??0
 const patrolInputs=[]
 let ctx,controller,watchdogs=0,peak=0,requests=0,failProject
@@ -34,7 +34,7 @@ const settle=async(predicate=()=>true)=>{for(let i=0;i<600;i++){await new Promis
 const advance=async(ms)=>{const end=clock+ms;while(true){const due=[...timers].filter(t=>t.at<=end).sort((a,b)=>a.at-b.at)[0];if(!due)break;clock=due.at;if(due.interval)due.at+=due.delay;else timers.delete(due);due.fn();await settle();}clock=end;await settle()}
 try{
   await new Promise(r=>server.listen(0,'127.0.0.1',r))
-  config.commit(config.read().revision,raw=>{raw.runtime={max_workers:4,max_project_workers:3,max_running_projects:4};raw.providers={fixture:{api:'openai-completions',base_url:'http://127.0.0.1:'+server.address().port+'/v1',api_key:'fixture',models:[{id:'fixture',context_window:20000,max_tokens:512,reasoning:'off',reasoning_efforts:false}]}};raw.workers=[{name:'commander',roles:['commander','planner'],provider:'fixture',model:'fixture',max_running:4}]})
+  config.commit(config.read().revision,raw=>{raw.runtime={max_workers:4,max_project_workers:3,max_running_projects:4};raw.providers={fixture:{api:'openai-completions',base_url:'http://127.0.0.1:'+server.address().port+'/v1',api_key:'fixture',models:[{id:'fixture',context_window:20000,max_tokens:512,reasoning:'off',reasoning_efforts:false}]}};raw.workers=[{name:'commander',roles:['commander','general'],provider:'fixture',model:'fixture',max_running:4}]})
   const{Context}=await load('vendor/deepseek-harness/vendor/cordis/lib/index.js');ctx=new Context()
   for(const file of ['vendor/deepseek-harness/packages/session/session-projection/lib/index.js','packages/redtrace-dsh/lib/core.js']){const m=await load(file);await ctx.plugin(m.default??m).await()}
   const persist=await load('vendor/deepseek-harness/packages/session/session-persistence-jsonl/lib/index.js');await ctx.plugin(persist,{root:work+'/sessions'}).await()

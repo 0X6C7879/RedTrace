@@ -1,4 +1,4 @@
-import {scoutedSpawn} from './scout-fixture.ts'
+import {spawnTask} from './task-fixture.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -21,7 +21,7 @@ function fixture(t:any) {
   const graph=store.createGraph(p.id,{taskKey:'A',title:'A',origin:'local fixture',goal:'verified objective'})
   mkdirSync(root+'/'+p.id,{recursive:true})
   const scoped=store.forGraph(p.id,graph.id),config={workers:[worker],providers:{},maxWorkers:8,maxProjectWorkers:8,maxRunningProjects:1,maxSteps:null,workspaceRoot:root} as EngineConfig
-  const add=(role:'general'|'soldier'='general')=>scoutedSpawn(legion,p.id,{role,taskKey:'A',graphId:graph.id,description:role,sourceIds:[graph.originId]})
+  const add=(role:'general'|'soldier'='general')=>spawnTask(legion,p.id,{role,taskKey:'A',graphId:graph.id,description:role,sourceIds:[graph.originId]})
   const context=(step:TaskAssignment)=>{const run=step.role==='general'?scoped.claim(p.id,'plan',worker):store.claim(p.id,'execute',worker,step.id);return{store:scoped,run,worker,config,signal:new AbortController().signal}}
   const evidence=new ProjectEvidence(scoped,root)
   const fact=(runId?:string)=>{const artifact=evidence.publish(p.id,Buffer.from('literal local stdout: verified'),{description:'local evidence',...(runId?{runId}:{})});return scoped.addFact(p.id,'verified local result',{...(runId?{runId}:{}),evidence:[{description:'literal stdout',artifactId:artifact.id}]})}

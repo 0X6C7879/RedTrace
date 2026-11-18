@@ -138,13 +138,13 @@ test('creating a Skill after previewing a helper file opens the editable SKILL.m
 
 test('same-name role schemas keep their real parameters and descriptions instead of borrowing the first role',async()=>{
  const root=mkdtempSync(path.join(os.tmpdir(),'role-schema-ui-'))
- const registry=[{name:'TodoWrite',description:'Commander planning',parameters:{type:'object',properties:{projectId:{type:'string'}}},source:'RedTrace',scope:'commander',role:'planner',status:'registered'},{name:'TodoWrite',description:'Task planning',parameters:{type:'object',properties:{todos:{type:'array'}}},source:'RedTrace',scope:'general-A',role:'general',status:'registered'},{name:'TodoWrite',description:'Task planning',parameters:{type:'object',properties:{todos:{type:'array'}}},source:'RedTrace',scope:'general-B',role:'general',status:'registered'}]
+ const registry=[{name:'TodoWrite',description:'Commander planning',parameters:{type:'object',properties:{projectId:{type:'string'}}},source:'RedTrace',scope:'commander',role:'general',status:'registered'},{name:'TodoWrite',description:'Task planning',parameters:{type:'object',properties:{todos:{type:'array'}}},source:'RedTrace',scope:'general-A',role:'general',status:'registered'},{name:'TodoWrite',description:'Task planning',parameters:{type:'object',properties:{todos:{type:'array'}}},source:'RedTrace',scope:'general-B',role:'general',status:'registered'}]
  const engine=await serveEngine({root,autoStart:false,port:0,runtimeCatalog:()=>({tools:registry,mcp:[]})})
  try{
   const data=await(await fetch('http://127.0.0.1:'+(engine.server.address() as {port:number}).port+'/console/tools')).json() as any
  assert.equal(data.tools.length,1)
- const tool=data.tools[0];assert.deepEqual(tool.roles,['general','planner']);assert.equal(tool.schemas.length,2)
- assert(tool.schemas.some((s:any)=>s.roles.includes('planner')&&s.parameters.properties.projectId&&s.description==='Commander planning'))
+ const tool=data.tools[0];assert.deepEqual(tool.roles,['general']);assert.equal(tool.schemas.length,2)
+ assert(tool.schemas.some((s:any)=>s.roles.includes('general')&&s.parameters.properties.projectId&&s.description==='Commander planning'))
  assert(tool.schemas.some((s:any)=>s.roles.includes('general')&&s.parameters.properties.todos&&s.description==='Task planning'))
  assert.deepEqual(tool.scopes,['commander','general-A','general-B'])
  }finally{await engine.close();rmSync(root,{recursive:true,force:true})}

@@ -46,15 +46,15 @@ test('General acceptance waits for internal instance cleanup, while Commander ca
  }finally{store.close();rmSync(root,{recursive:true,force:true})}
 })
 
-test('Commander cannot bypass existing task classification or manipulate task platforms',async()=>{
+test('Commander dispatches without classification but cannot manipulate task platforms',async()=>{
  const store=new Store(':memory:');try{
  const p=store.createProject({mode:'benchmark',title:'boundary',origin:'local fixture',goal:'verify'}).project,l=new LegionStore(store,p.id),g=store.createGraph(p.id,{taskKey:'T',title:'T',origin:'local',goal:'verify'})
  l.claimCommand();const tools=domainTools(legionTools(store,'commander',p.id,1,()=>{}))
  assert(!tools.some(t=>['legion_instance','legion_evidence_read','tsecbench_task','tsecbench_submit','legion_experience'].includes(t.name)))
  assert.deepEqual(JSON.parse(JSON.stringify(tools.find(t=>t.name==='legion_platform')!.parameters)).properties.action.enum,['list'])
  assert(!JSON.parse(JSON.stringify(tools.find(t=>t.name==='legion_inspect')!.parameters)).properties.action.enum.includes('run'))
- for(const role of ['soldier','general'] as const) assert.throws(()=>l.spawn(p.id,{role,taskKey:'T',description:'skip classification',sourceIds:[g.originId]}),/Existing evidence-backed task classification/)
- assert.throws(()=>l.spawn(p.id,{role:'scout',taskKey:'T',description:'retired role',sourceIds:[g.originId]}),/Scout is retired/)
+ assert.equal(l.spawn(p.id,{role:'soldier',taskKey:'T',description:'direct dispatch',sourceIds:[g.originId]}).role,'soldier')
+ assert.throws(()=>l.spawn(p.id,{role:'scout' as never,taskKey:'T',description:'retired role',sourceIds:[g.originId]}),/Scout is retired/)
  }finally{store.close()}
 })
 

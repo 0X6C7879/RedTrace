@@ -17,7 +17,7 @@ import { toolAllowed } from '../src/console-api.ts'
 export async function inspectToolCatalog(ctx, engine, manager, runtime) {
   const { config, raw } = engine.configuration.resolvedSnapshot()
   const available = id => manager.availableForTask(id)
-  const executionRoles = ['worker','soldier']
+  const executionRoles = ['soldier']
   const rows = [], store = new Store(':memory:')
   const add = (tools, role, enabled = () => true) => {
     for (const tool of domainTools(tools)) rows.push({ name: tool.name, description: tool.description, parameters: JSON.parse(JSON.stringify(tool.parameters)),
@@ -38,11 +38,6 @@ export async function inspectToolCatalog(ctx, engine, manager, runtime) {
         for (const role of executionRoles) add(tools.map(tool => ({ ...tool, redtrace: !!tool.redtrace })), role,
           () => plugin === 'redtrace-core' || available(plugin))
       } })
-    for(const role of ['planner']) {
-      const nativeScope=createScope(carrier.ctx,{})
-      try{await mountExecutionTools(nativeScope.ctx,{task:{type:role,executionProfile:'direct'},cwd,sessionRoot:cwd,skillsDir:runtime.skillsDir,
-        available:()=>true,onSchemas(plugin,tools){add(tools.map(t=>({...t,redtrace:!!t.redtrace})),role,()=>plugin==='redtrace-core'||available(plugin))}})}finally{await nativeScope.dispose()}
-    }
     for (const mode of ['general', 'benchmark']) {
       const project = store.createProject({ mode, title: 'Schema inspection', origin: 'tsecbench Schema inspection', goal: 'Inspect definitions', bootstrap: false }).project
       add(legionTools(store, 'commander', project.id, config.maxSteps, () => {}, config, new CommanderTodos()), coordinatorRole(mode))
@@ -62,9 +57,9 @@ export async function inspectToolCatalog(ctx, engine, manager, runtime) {
       }
       if (mode==='general') {
         const graph=store.projectGraphs(project.id)[0]
-        const step=store.addStep(project.id,{role:'worker',reportFindingId:'finding-schema',taskKey:'report',description:'Report workflow',sourceIds:[graph.originId],goalId:graph.goalId})
+        const step=store.addStep(project.id,{role:'soldier',reportFindingId:'finding-schema',taskKey:'report',description:'Report workflow',sourceIds:[graph.originId],goalId:graph.goalId})
         const worker={name:'schema',backend:'mock'},run=store.claim(project.id,'execute',worker,step.id)
-        add(graphTools({store,run,worker,config,signal:new AbortController().signal},()=>{}),'worker')
+        add(graphTools({store,run,worker,config,signal:new AbortController().signal},()=>{}),'soldier')
         store.finishRun(run.id,'cancelled')
       }
       if (mode === 'general') add(chatTools(store.forProject(project.id), { id: 'schema', projectId: project.id }, new ChatStore(store)), undefined)

@@ -276,7 +276,7 @@ export async function apply(ctx, options) {
         // Native spill reads retain the existing archived-evidence recovery allowance.
         scoped.tools.guard(exec => planGuard.check({ name: exec.name === 'read' && ownSpillRead(exec) === undefined ? 'evidence_read' : exec.name, rootCallId: String(exec.rootCallId),arguments:exec.arguments }))
       }
-      if (!reporting && store.project(run.projectId).mode === 'benchmark') scoped.systemPrompt.context({ name: 'redtrace:task-planning', order: 3, required: true, interpolate: false, text: () => {const planner=taskTodoPlanner(step,store);return JSON.stringify({taskPlanner:planner?{id:planner.id,role:planner.role}:null})} })
+      if (!reporting) scoped.systemPrompt.context({ name: 'redtrace:task-planning', order: 3, required: true, interpolate: false, text: () => {return JSON.stringify({taskPlanner:taskPlanningContext(store,step).taskPlanner})} })
       if (!reporting) scoped.systemPrompt.context({ name: 'redtrace:live-plan', order: 2, required: true, interpolate: false,
         text: () => livePlan(store, run.id) })
       // The DSH tools runtime projects parameters as lossless JSON; the graph

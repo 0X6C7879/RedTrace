@@ -94,7 +94,7 @@ test('reference boundaries and atomic failure preserve current evidence', () => 
   } finally { s.close() }
 })
 
-test('Commander reads evidence at Step capacity without relaxing Mission limits',()=>{const s=new Store(':memory:');try{const id=create(s),legion=new LegionStore(s);legion.spawn(id,{role:'worker',taskKey:'a',description:'at capacity',sourceIds:['origin']});const fact=s.addFact(id,'Ready to evaluate');s.addFinding(id,{title:'F',description:'F',factIds:[fact.id]});legion.claimCommand();assert.ok(legion.readChanges(id).events.some(e=>e.type==='finding.added'));assert.equal(legion.spawn(id,{role:'worker',taskKey:'b',description:'queued',sourceIds:['origin']}).status,'pending')}finally{s.close()}})
+test('Commander reads evidence at Step capacity without relaxing Mission limits',()=>{const s=new Store(':memory:');try{const id=create(s),legion=new LegionStore(s);legion.spawn(id,{role:'soldier',taskKey:'a',description:'at capacity',sourceIds:['origin']});const fact=s.addFact(id,'Ready to evaluate');s.addFinding(id,{title:'F',description:'F',factIds:[fact.id]});legion.claimCommand();assert.ok(legion.readChanges(id).events.some(e=>e.type==='finding.added'));assert.equal(legion.spawn(id,{role:'soldier',taskKey:'b',description:'queued',sourceIds:['origin']}).status,'pending')}finally{s.close()}})
 
 
 test('legacy planning revision tracks its allowlist independently of paired wake eligibility', () => {

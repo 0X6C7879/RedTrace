@@ -32,19 +32,19 @@ tool_settings:
       fact: {enabled: true, roles: []}
 `)
   }
-  const roles = ['soldier', 'planner', 'worker']
+  const roles = ['general', 'soldier']
   const engine = await serveEngine({ root, autoStart: false, port: 0, runtimeCatalog: () => ({
     tools: roles.map(role => ({ name: 'read', role, description: 'Read a fixture', parameters: {}, source: 'DSH', scope: 'catalog', status: 'available' })),
     mcp: [],
   }) })
   try {
-    assert.deepEqual(FIXED_ROLES, ['commander','general','soldier','planner','worker'])
+    assert.deepEqual(FIXED_ROLES, ['commander','general','soldier'])
     assert.throws(() => executionRole('benchmark', 'scout'), /Invalid benchmark role/)
-    assert.deepEqual(engine.configuration.snapshot().workers.map(w => w.roles), [['soldier','worker']])
+    assert.deepEqual(engine.configuration.snapshot().workers.map(w => w.roles), [['soldier']])
     const settings = engine.configuration.read().raw.tool_settings
     assert.deepEqual(settings?.fgs_publish.actions?.fact.roles, [], 'an explicit empty allowlist remains deny-all')
     assert(toolAllowed(settings, 'read', 'soldier'))
-    assert(!toolAllowed(settings, 'read', 'worker'))
+    assert(!toolAllowed(settings, 'read', 'general'))
     assert(!toolAllowed(settings, 'read', 'scout'))
     assert.doesNotMatch(readFileSync(file, 'utf8'), /\bscout\b/i)
 
@@ -64,11 +64,11 @@ tool_settings:
     assert.deepEqual(Array.from(page.draft.roles), ['soldier'])
     await page.toggle(page.detail, {target:{checked:false}})
     assert.equal(page.detail.enabled, false)
-    page.draft = {enabled:true, roles:['soldier','worker'], actions:{}}
+    page.draft = {enabled:true, roles:['soldier'], actions:{}}
     await page.save()
     assert.equal(page.error, '')
     await page.load()
-    assert.deepEqual(page.data.tools[0].roleBindings, ['soldier','worker'])
+    assert.deepEqual(page.data.tools[0].roleBindings, ['soldier'])
     assert.doesNotMatch(readFileSync(file, 'utf8'), /\bscout\b/i)
   } finally { await engine.close(); rmSync(root, { recursive: true, force: true }) }
 })
@@ -80,20 +80,17 @@ test('stored Scout Steps remain readable, cannot run or get reassigned, and do n
   const legion = new LegionStore(store,p.id)
   const mission = {taskKey:'fixture',graphId:graph.id,description:'Fixture',sourceIds:[graph.originId]}
   const step = store.forGraph(p.id,graph.id).addStep(p.id,{...mission,role:'soldier'})
-  store.saveNode({...step,role:'scout'})
+  store.saveNode({...step,role:'scout' as never})
   const scheduler = new Scheduler(store,{
     workers:[{name:'route',roles:['soldier'],enabled:true,backend:'mock',provider:'mock',model:'mock',priority:0,maxRunning:1}],
     maxWorkers:1,maxProjectWorkers:1,maxRunningProjects:1,maxSteps:null,
   } as EngineConfig,async()=>{assert.fail('A retired Step must not start on the Soldier route')})
   try {
-    assert.throws(()=>legion.spawn(p.id,{...mission,role:'scout'}),/Scout is retired/)
+    assert.throws(()=>legion.spawn(p.id,{...mission,role:'scout' as never}),/Scout is retired/)
     assert.throws(()=>store.forGraph(p.id,graph.id).addStep(p.id,{
-      ...mission,role:'scout',specialist:{name:'Retired',responsibilities:'Fixture',scope:'Offline',capabilities:[]},
+      ...mission,role:'scout' as never,specialist:{name:'Retired',responsibilities:'Fixture',scope:'Offline',capabilities:[]},
     }),/Invalid benchmark role/)
     assert.throws(()=>store.claim(p.id,'execute',{name:'route',backend:'mock'},step.id),/not claimable/)
-    for (const role of ['soldier','general'] as const) {
-      assert.throws(()=>legion.spawn(p.id,{...mission,role}),/Existing evidence-backed task classification/)
-    }
     scheduler.start()
     await new Promise<void>(resolve=>setImmediate(resolve))
     assert.equal(store.runs(p.id).length,0)

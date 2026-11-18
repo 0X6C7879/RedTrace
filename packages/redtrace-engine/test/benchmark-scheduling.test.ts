@@ -1,4 +1,4 @@
-import {scoutedSpawn} from './scout-fixture.ts'
+import {spawnTask} from './task-fixture.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
@@ -97,12 +97,12 @@ test('escalation uses evidence age, gives a General mid-chain time, and never du
   t.after(()=>store.close())
   const graph=store.createGraph(p.id,{taskKey:'T',title:'fixture',origin:'local',goal:'verify'})
   store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?)').run(p.id,'T',JSON.stringify({difficulty:'medium'}))
-  const mission={role:'soldier' as const,taskKey:'T',description:'first angle',sourceIds:[graph.originId]},first=scoutedSpawn(legion,p.id,mission),run=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},first.id),at=Date.now()
+  const mission={role:'soldier' as const,taskKey:'T',description:'first angle',sourceIds:[graph.originId]},first=spawnTask(legion,p.id,mission),run=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},first.id),at=Date.now()
   const age=(minutes:number)=>{run.startedAt=new Date(at-minutes*60000).toISOString();store.saveRun(run);store.db.prepare("UPDATE events SET created_at=? WHERE type='execute.started' AND json_extract(data,'$.runId')=?").run(run.startedAt,run.id)}
   for(const [minutes,recommendation] of [[6,'tactical'],[10,'second-angle'],[19,'second-angle'],[20,'general'],[29,'general']] as const){age(minutes);assert.equal(legion.tactics(p.id,at)[0].recommendation,recommendation)}
-  age(15);scoutedSpawn(legion,p.id,{...mission,description:'second angle'})
-  assert.equal(scoutedSpawn(legion,p.id,{...mission,description:'third angle'}).role,'soldier','distinct specialist angles are bounded by configured capacity, not a new hard cap')
-  age(30);const general=scoutedSpawn(legion,p.id,{...mission,role:'general',description:'upgrade'}),g=store.forGraph(p.id,graph.id).claim(p.id,'plan',{name:'fixture',backend:'mock'})
+  age(15);spawnTask(legion,p.id,{...mission,description:'second angle'})
+  assert.equal(spawnTask(legion,p.id,{...mission,description:'third angle'}).role,'soldier','distinct specialist angles are bounded by configured capacity, not a new hard cap')
+  age(30);const general=spawnTask(legion,p.id,{...mission,role:'general',description:'upgrade'}),g=store.forGraph(p.id,graph.id).claim(p.id,'plan',{name:'fixture',backend:'mock'})
   g.startedAt=new Date(at-10*60000).toISOString();store.saveRun(g);store.db.prepare("UPDATE events SET created_at=? WHERE type='execute.started' AND json_extract(data,'$.runId')=?").run(g.startedAt,g.id)
   assert.equal(legion.tactics(p.id,at)[0].recommendation,'working','a newly upgraded General is not parked at minute 30')
   age(45);assert.equal(legion.tactics(p.id,at)[0].recommendation,'park')
@@ -112,19 +112,16 @@ test('escalation uses evidence age, gives a General mid-chain time, and never du
   assert.equal(legion.reactivate(p.id,'T','new confirmed intel').length,3)
 })
 
-test('sibling family evidence is only a Hint and cannot replace target Scout', t => {
-  const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'family',origin:'manual local',goal:'verify'}).project,legion=new LegionStore(store,p.id)
-  t.after(()=>store.close())
-  const a=store.createGraph(p.id,{taskKey:'unrelated-name-a',title:'source',origin:'local',goal:'verify'}),b=store.createGraph(p.id,{taskKey:'unrelated-name-b',title:'target',origin:'local',goal:'verify'})
-  const scout=legion.spawn(p.id,{role:'scout',taskKey:a.taskKey!,description:'classify',sourceIds:[a.originId]}),run=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},scout.id),fact=store.forGraph(p.id,a.id).addFact(p.id,'verified product and version',{runId:run.id})
-  store.finishRun(run.id,'succeeded');legion.classify(p.id,a.taskKey!,'medium',[fact.id],'product-v1')
-  assert.throws(()=>legion.classify(p.id,b.taskKey!,'medium',[fact.id],'wrong-family',a.taskKey!),/same explicit family/)
-  const reused=legion.classify(p.id,b.taskKey!,'medium',[fact.id],'product-v1',a.taskKey!)
-  assert.deepEqual(reused.factIds,[]);assert.equal(store.forGraph(p.id,b.id).nodes(p.id,['fact']).length,1)
-  assert.match((store.node(p.id,reused.hintId,'hint') as any).content,/UNVERIFIED IN THIS TARGET/)
-  assert.throws(()=>legion.spawn(p.id,{role:'soldier',taskKey:b.taskKey!,description:'read sibling, verify target differences',sourceIds:[b.originId]}),/Scout/)
-  assert.equal(store.forGraph(p.id,b.id).nodes(p.id,['step']).filter((s:any)=>s.role==='scout').length,0)
-  const local=legion.spawn(p.id,{role:'scout',taskKey:b.taskKey!,description:'verify target',sourceIds:[b.originId]}),probe=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},local.id),proof=store.forGraph(p.id,b.id).addFact(p.id,'actual target reconnaissance',{runId:probe.id});store.finishRun(probe.id,'succeeded');legion.classify(p.id,b.taskKey!,'easy',[proof.id]);assert.equal(legion.tactics(p.id).find(t=>t.taskKey===b.taskKey)!.classification.sourceTaskKey,undefined);assert.equal(legion.spawn(p.id,{role:'soldier',taskKey:b.taskKey!,description:'solve verified target',sourceIds:[proof.id]}).role,'soldier')
+test('historical classification stays readable but neither sibling hints nor Scout are prerequisites', t => {
+ const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'family',origin:'local',goal:'verify'}).project,legion=new LegionStore(store,p.id)
+ t.after(()=>store.close())
+ const a=store.createGraph(p.id,{taskKey:'source',title:'source',origin:'local',goal:'verify'}),b=store.createGraph(p.id,{taskKey:'target',title:'target',origin:'local',goal:'verify'})
+ store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?)').run(p.id,'target',JSON.stringify({difficulty:'hard',classifiedAt:'legacy',factIds:[],sourceTaskKey:'source'}))
+ store.forGraph(p.id,b.id).addInput(p.id,'hint','UNVERIFIED sibling product; verify in target')
+ const soldier=legion.spawn(p.id,{role:'soldier',taskKey:'target',description:'verify target',sourceIds:[b.originId]})
+ assert.equal(soldier.role,'soldier');assert.equal(legion.tactics(p.id).find(t=>t.taskKey==='target')!.classification.classifiedAt,'legacy')
+ assert.equal(store.forGraph(p.id,b.id).nodes(p.id,['fact']).length,1)
+ assert.throws(()=>legion.spawn(p.id,{role:'scout' as never,taskKey:'source',description:'retired',sourceIds:[a.originId]}),/Scout is retired/)
 })
 
 test('80% context and major decisions checkpoint full STATE without recursive growth', async t => {
@@ -132,7 +129,7 @@ test('80% context and major decisions checkpoint full STATE without recursive gr
   t.after(()=>store.close());legion.claimCommand();legion.saveState(p.id,'commander','allocation; parked blocker; intel; queue; exact next move')
   const graph=store.createGraph(p.id,{taskKey:'T',title:'fixture',origin:'local',goal:'verify'}),{legionTools}=await import('../src/legion-tools.ts')
   const tool=legionTools(store,'commander',p.id,null,()=>{}).find(t=>t.name==='legion_spawn')!
-  await tool.execute('spawn',{role:'scout',taskKey:'T',mission:'classify'})
+  await tool.execute('spawn',{role:'soldier',taskKey:'T',mission:'solve'})
   assert.equal(JSON.parse(legion.campaign().state).reason,'legion_spawn')
   const {mountLegionContext}=await import(new URL('../compat/legion-context.mjs',import.meta.url).href),listeners=new Map<string,any[]>(),messages:string[]=[]
   const scoped={on(name:string,fn:any){listeners.set(name,[...(listeners.get(name)??[]),fn])}},ctx={get(name:string){return name==='tokenMeter'?{measure(){return{totalTokens:80}}}:{resolveModelInfo(){return{context:{contextWindow:100}}}}}}
@@ -149,7 +146,7 @@ test('Benchmark Worker mailbox still wakes immediately',async t=>{
   const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'mailbox',origin:'local',goal:'verify'}).project,legion=new LegionStore(store,p.id)
   t.after(()=>store.close());const{attachLegionMailbox}=await import(new URL('../compat/legion.mjs',import.meta.url).href)
   let steers=0;const ctx={on(){return()=>{}}},agent={status:'idle',steer(){steers++},inject(){steers++}},message=(text:string,source:any)=>({text,source})
-  const g=store.createGraph(p.id,{taskKey:'T',title:'worker',origin:'local',goal:'verify'}),step=store.forGraph(p.id,g.id).addStep(p.id,{role:'soldier',taskKey:'T',description:'work',sourceIds:[g.originId]}),run=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},step.id)
+  const g=store.createGraph(p.id,{taskKey:'T',title:'soldier',origin:'local',goal:'verify'}),step=store.forGraph(p.id,g.id).addStep(p.id,{role:'soldier',taskKey:'T',description:'work',sourceIds:[g.originId]}),run=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},step.id)
   const worker=attachLegionMailbox(ctx,legion,{projectId:p.id,actor:run.id,sessionId:run.id,agent,message});legion.message(p.id,'commander',run.id,'MESSAGE','act now');assert.equal(steers,1);worker()
 })
 

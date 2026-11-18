@@ -49,7 +49,7 @@ test('worker mutations probe the live model before commit and retain the old sna
     assert.deepEqual((await call('/worker-config')).data.common_env.map((entry: { name: string }) => entry.name), ['ZULU_VAR', 'ALPHA_VAR'])
     snapshot = (await call('/worker-config/providers', 'POST', { expected_revision: snapshot.revision, name: 'fixture', api: 'openai-completions', base_url: `http://127.0.0.1:${(model.address() as { port: number }).port}/v1`, api_key: 'fixture-key', models: [{ id: 'fixture', context_window: 10000, max_tokens: 1000 }] })).data
     assert.doesNotMatch(readFileSync(path.join(root, '.redtrace/redtrace.yaml'), 'utf8'), /fixture-key/)
-    const worker = { expected_revision: snapshot.revision, name: 'worker', provider: 'fixture', model: 'fixture', priority: 0, max_running: 1 }
+    const worker = { expected_revision: snapshot.revision, name: 'soldier', provider: 'fixture', model: 'fixture', priority: 0, max_running: 1 }
     const saved = await call('/worker-config/workers', 'POST', worker)
     assert.equal(saved.status, 201); assert.equal(probes, 1); assert.equal(saved.data.engine, 'dsh'); assert.equal(saved.data.workers[0].type, 'dsh')
     snapshot = (await call('/worker-config/providers', 'POST', { expected_revision: saved.data.revision, name: 'offline', api: 'openai-completions', base_url: 'http://127.0.0.1:1/v1', api_key: 'x', models: [{ id: 'offline' }] })).data

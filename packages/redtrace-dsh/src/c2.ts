@@ -17,7 +17,7 @@ export const inject = ['tools']
 
 export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnabled?: (name: string) => boolean } = {}): void {
   const definitions: Parameters<typeof registerDomain>[1] = []
-  const types: TaskType[] = config.types ?? ['soldier','worker']
+  const types: TaskType[] = config.types ?? ['soldier']
   const resourceBody = (task: ReturnType<typeof taskFor>, kind: string, name: string, rest: Record<string, unknown>) => ({
     kind, name, ...rest, actor_type: 'worker', actor: task.worker, worker: task.worker, ...(task.intentId === undefined ? {} : { intent_id: task.intentId }), publish_fact: false,
   })

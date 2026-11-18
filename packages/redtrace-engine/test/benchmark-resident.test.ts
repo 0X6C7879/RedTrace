@@ -28,8 +28,8 @@ test('Benchmark registers compact global tools directly, with no FGS or redundan
  for(const tool of tools){const schema=JSON.parse(JSON.stringify(tool.parameters));assert.equal(schema.additionalProperties,false);assert(!schema.properties.projectId);assert(!schema.properties.graphId)}
  assert(Buffer.byteLength(JSON.stringify(tools.map(t=>({name:t.name,description:t.description,parameters:t.parameters}))))<10500)
  assert(Buffer.byteLength(legionMission('commander','benchmark'))<5000)
- await assert.rejects(tools.find(t=>t.name==='legion_spawn')!.execute('',{projectId:p.id,role:'scout',taskKey:'T',mission:'classify'}),/Invalid tool arguments/)
- const spawn=await tools.find(t=>t.name==='legion_spawn')!.execute('',{role:'scout',taskKey:'T',mission:'classify'})
+ await assert.rejects(tools.find(t=>t.name==='legion_spawn')!.execute('',{projectId:p.id,role:'scout' as never,taskKey:'T',mission:'classify'}),/Invalid tool arguments/)
+ const spawn=await tools.find(t=>t.name==='legion_spawn')!.execute('',{role:'soldier',taskKey:'T',mission:'solve'})
  const step=spawn.details as any,graph=store.projectGraphs(p.id)[0];assert.equal(step.graphId,graph.id);assert.deepEqual(step.sourceIds,[graph.originId])
 })
 
@@ -75,16 +75,14 @@ test('Workers can message the current sleeping Graph Planner without messaging s
  }finally{store.close()}
 })
 
-test('Scout classification publishes after successful completion, without Commander evidence operations',async t=>{
- const{store,p,legion}=fixture(t);const g=store.createGraph(p.id,{taskKey:'T',title:'local',origin:'local',goal:'verify'});legion.spawn(p.id,{role:'scout',taskKey:'T',description:'classify',sourceIds:[g.originId]})
- const scheduler=new Scheduler(store,config,async context=>{
-   const tools=graphTools(context,()=>{});assert(!tools.some(t=>t.name==='legion_accept'));await tools.find(t=>t.name==='submit_fact')!.execute('',{title:'product verified',description:'local product/version',evidence:[{description:'local fixture'}]})
-   const finish=tools.find(t=>t.name==='finish_step')!;await assert.rejects(finish.execute('',{summary:'missing verdict'}),/Invalid tool arguments/)
-   await finish.execute('',{summary:'classification evidence complete',difficulty:'hard',family:'generic-product'})
- })
- try{scheduler.start();for(let i=0;i<50&&!legion.tactics(p.id)[0]?.classification;i++)await new Promise(r=>setImmediate(r));assert.equal(legion.tactics(p.id)[0].classification.difficulty,'hard');assert.equal(legion.tactics(p.id)[0].classification.family,'generic-product');assert.equal(legion.tactics(p.id)[0].recommendation,'general')}finally{await scheduler.close()}
- legion.claimCommand();const command=legionTools(store,'commander',p.id,null,()=>{},config);const general=(await command.find(t=>t.name==='legion_spawn')!.execute('',{taskKey:'T',role:'general',mission:'solve the chain'})).details as any;assert.equal(general.role,'general')
- await assert.rejects(command.find(t=>t.name==='legion_spawn')!.execute('',{taskKey:'unrelated-platform-name',role:'general',mission:'verify sibling differences'}),/Scout/)
+test('Benchmark dispatch is immediate without classification or Scout',async t=>{
+ const{store,p,legion}=fixture(t);legion.claimCommand()
+ const command=legionTools(store,'commander',p.id,null,()=>{},config),spawn=command.find(t=>t.name==='legion_spawn')!
+ const soldier=(await spawn.execute('',{taskKey:'T',role:'soldier',mission:'solve directly'})).details as import('../src/types.ts').Step
+ assert.equal(soldier.role,'soldier');assert(!legion.tactics(p.id)[0].classification)
+ await assert.rejects(spawn.execute('',{taskKey:'retired',role:'scout' as never,mission:'classify'}),/Invalid tool arguments/)
+ const unknown=(await spawn.execute('',{taskKey:'unknown',role:'general',mission:'metadata unknown'})).details as import('../src/types.ts').Step
+ assert.equal(unknown.role,'soldier')
 })
 
 test('General/Soldier owns scoped FGS planning and task acceptance; all task outcomes end Benchmark',async t=>{
@@ -114,7 +112,7 @@ for(const [name,fixture,marker] of [
 ])test(name,{timeout:90000},async()=>{const{execFile}=await import('node:child_process'),{promisify}=await import('node:util');const result=await promisify(execFile)(process.execPath,[new URL('./'+fixture,import.meta.url).pathname],{maxBuffer:2*1024*1024});assert(result.stdout.includes(marker),result.stdout)})
 
 
-test('native Benchmark hard verdict routes directly to General and General accepts its own task',{timeout:90000},async()=>{const{execFile}=await import('node:child_process'),{promisify}=await import('node:util');const result=await promisify(execFile)(process.execPath,[new URL('./benchmark-autonomy.fixture.mjs',import.meta.url).pathname,'hard'],{maxBuffer:2*1024*1024});assert.match(result.stdout,/BENCHMARK_AUTONOMY=true/);assert.match(result.stdout,/GENERAL/)})
+test('native Benchmark multi-flag metadata routes directly to General and General accepts its own task',{timeout:90000},async()=>{const{execFile}=await import('node:child_process'),{promisify}=await import('node:util');const result=await promisify(execFile)(process.execPath,[new URL('./benchmark-autonomy.fixture.mjs',import.meta.url).pathname,'hard'],{maxBuffer:2*1024*1024});assert.match(result.stdout,/BENCHMARK_AUTONOMY=true/);assert.match(result.stdout,/GENERAL/)})
 
 
 test('native Commander and Worker argument errors identify bad fields without disabling validation',{timeout:90000},async()=>{const{execFile}=await import('node:child_process'),{promisify}=await import('node:util');const r=await promisify(execFile)(process.execPath,[new URL('./benchmark-autonomy.fixture.mjs',import.meta.url).pathname],{env:{...process.env,REDTRACE_INVALID_ACTION_PROBE:'1'},maxBuffer:2*1024*1024});assert.match(r.stdout,/NATIVE_ACTION_DIAGNOSTICS=true/);assert.match(r.stdout,/BENCHMARK_AUTONOMY=true/)})

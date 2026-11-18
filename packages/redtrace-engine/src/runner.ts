@@ -1,4 +1,4 @@
-import { executorRole, coordinatorRole, isReportStep } from '../../redtrace-dsh/src/roles.ts'
+import { executorRole, coordinatorRole, executionRole, isReportStep } from '../../redtrace-dsh/src/roles.ts'
 import { Type } from 'typebox'
 import type { TSchema, Static } from 'typebox'
 import type { AgentTool, AgentToolResult } from './tool-types.ts'
@@ -10,6 +10,7 @@ import type { Store } from './store.ts'
 import type { TaskContext } from './scheduler.ts'
 import type { EngineConfig, Fact, Json, Step, Project, Run, Goal, Input, TaskAssignment, GraphPlanner } from './types.ts'
 import { ProjectEvidence } from './project-evidence.ts'
+import { LegionStore } from './legion-store.ts'
 import { legionTools } from './legion-tools.ts'
 import { legionMission } from './legion-missions.ts'
 import { CommanderTodos, taskTodoPlanner, taskTodoOwner, type Todo } from './legion-todos.ts'
@@ -36,11 +37,11 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   const evidenceRoot = path.join(run.workspaceRoot ?? path.join(config.workspaceRoot ?? path.join(os.tmpdir(), 'redtrace-workspaces'), run.projectId), '.redtrace-output', 'evidence')
   const step = store.assignment(run)
   if (step?.role === 'scout') return []
-  const planning = !!step && store.project(run.projectId).mode==='benchmark' && taskTodoOwner(step,store)
-  const capacity = () => planning ? {planningCapacity:store.planningCapacity(run.projectId,maxSteps())} : {}
+  const planning = !!step && taskTodoOwner(step,store)
+  const capacity = () => planning ? {planningCapacity:store.planningCapacity(run.projectId,maxSteps()),acknowledgementBoundary:store.acknowledgementBoundary(run.id)} : {}
   const kinds = ['fact', 'goal', 'step', 'finding', 'hint', 'observation'] as const
   const readGraph = tool('read_graph', 'Sapper graph/show/doc: without id read only titles, folding supporting Facts under Findings except active Step dependencies. With id read a summary and linked Fact summaries; detail=doc returns full document/evidence references for project_evidence_read. Hints and observations are unverified. SQL pagination is bounded.', Type.Object({ id: Type.Optional(Type.String()), detail: Type.Optional(Type.Union([Type.Literal('summary'), Type.Literal('doc')])), offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), order:Type.Optional(Type.Union([Type.Literal('oldest'),Type.Literal('newest')])), kinds: Type.Optional(Type.Array(Type.Union(kinds.map(k => Type.Literal(k))), { uniqueItems: true })) }, { additionalProperties: false }), async args => {
-    if (args.id) return { ...store.readNode(run.projectId, args.id, args.detail), ...capacity(), acknowledgementBoundary: store.acknowledgementBoundary(run.id) }
+    if (args.id) return { ...store.readNode(run.projectId, args.id, args.detail), ...capacity() }
     const offset = args.offset ?? 0, limit = args.limit ?? 100, selected = new Set(args.kinds ?? kinds)
     const project = store.project(run.projectId), page: Record<string, unknown> = { ...(planning ? {project,graph:run.graphId?store.projectGraph(run.projectId,run.graphId):null} : {projectId:run.projectId,graphId:run.graphId}), facts: [], goals: [], steps: [], findings: [], hints: [], observations: [] }, nextOffsets: Record<string, number | null> = {}
     for (const kind of kinds) {
@@ -50,14 +51,14 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
       nextOffsets[kind] = offset + limit < total ? offset + limit : null
     }
     const remaining = Object.values(nextOffsets).filter((value): value is number => value !== null)
-    return { ...page, ...capacity(), acknowledgementBoundary: store.acknowledgementBoundary(run.id), nextOffset: remaining.length ? Math.max(...remaining) : null, nextOffsets }
+    return { ...page, ...capacity(), nextOffset: remaining.length ? Math.max(...remaining) : null, nextOffsets }
   })
   const refs = Type.Array(Type.String())
   const reporting = isReportStep(step)
   const roleTools = !reporting && step?.role ? legionTools(store, run.id, run.projectId, maxSteps(), finish, config, undefined, () => ({...config,maxSteps:maxSteps()})) : []
   const tools: AgentTool[] = [readGraph, ...roleTools]
   tools.push(tool('project_evidence_read', 'Read hash-verified Project evidence independently of the producer Run or Session. Artifact IDs are Project-scoped. Binary pages return encoding=base64; decode content accordingly.', Type.Object({ artifact_id: Type.String({ pattern: '^artifact-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), args => new ProjectEvidence(store, config.workspaceRoot).read(run.projectId, args.artifact_id, args.offset, args.length)))
-  tools.push(tool('read_graph_delta', 'Read a bounded page of change metadata and current node titles. Historical Facts remain readable by ID. Continue with cursor until hasMore is false. Reading does not acknowledge processing.', Type.Object({ after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), args => ({ ...store.graphDelta(run.projectId, args.after ?? store.run(run.id).deliveredGraphCursor ?? 0, args.limit ?? 100, run.id), ...capacity(), acknowledgementBoundary: store.acknowledgementBoundary(run.id) })))
+  tools.push(tool('read_graph_delta', 'Read a bounded page of change metadata and current node titles. Historical Facts remain readable by ID. Continue with cursor until hasMore is false. Reading does not acknowledge processing.', Type.Object({ after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), args => ({ ...store.graphDelta(run.projectId, args.after ?? store.run(run.id).deliveredGraphCursor ?? 0, args.limit ?? 100, run.id), ...capacity() })))
   tools.push({ name: 'evidence_read', label: 'evidence_read', description: 'Read at most 7.6 KiB from a large tool result by byte offset, 1-based line, or keyword. Artifacts are scoped to this Project; pass run_id for another producer Run; request the next bounded slice when needed.', parameters: Type.Object({ run_id: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })), id: Type.String({ pattern: '^ev-[a-f0-9]{64}$' }), offset: Type.Optional(Type.Integer({ minimum: 0 })), line: Type.Optional(Type.Integer({ minimum: 1 })), query: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })), length: Type.Optional(Type.Integer({ minimum: 1, maximum: 7600 })) }), executionMode: 'sequential', execute: async (_toolId: string, args: { run_id?: string; id: string; offset?: number; line?: number; query?: string; length?: number }) => {
     if (!/^ev-[a-f0-9]{64}$/.test(args.id) || [args.offset, args.line, args.query].filter(value => value !== undefined).length > 1) throw new Error('Provide a valid evidence ID and only one read selector')
     const producer = store.run(args.run_id ?? run.id)
@@ -131,12 +132,15 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   } }))
 }
 
-export const activityPrompt = (_activity: 'decide' | 'execute' | 'plan', step?: TaskAssignment, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => legionMission(isReportStep(step) ? 'reporter' : step?.role ?? executorRole(mode), mode, planner) + (step ? '\nAssigned Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'. Read and write only this Graph.' : '') + ((step && 'specialist' in step && step.specialist) ? '\nSpecialist assignment (within existing authorized Scope): '+JSON.stringify('specialist' in step ? step.specialist : undefined) : '') + ((step && 'bootstrap' in step && step.bootstrap) && mode==='general' ? '\nInitial Mission: establish evidence for the supplied Goal as a Worker. Planner owns planning and acceptance.' : '')
+export const activityPrompt = (_activity: 'decide' | 'execute' | 'plan', step?: TaskAssignment, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => legionMission(isReportStep(step) ? 'reporter' : executionRole(mode,step?.role), mode, planner) + (step ? '\nAssigned Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'. Read and write only this Graph.' : '') + ((step && 'specialist' in step && step.specialist) ? '\nSpecialist assignment (within existing authorized Scope): '+JSON.stringify('specialist' in step ? step.specialist : undefined) : '') + ((step && 'bootstrap' in step && step.bootstrap) && mode==='general' ? '\nInitial Mission: establish evidence for the supplied Goal as a Worker. Planner owns planning and acceptance.' : '')
 
-export function taskPlanningContext(store: Store, step: TaskAssignment): { taskPlanner?: { stepId: string; role: Step['role'] } | null; planningTodos?: Todo[] } {
-  if (store.project(step.projectId).mode !== 'benchmark') return {}
+export function taskPlanningContext(store: Store, step: TaskAssignment): { taskPlanner?: { stepId: string; role: Step['role']; receiver?: string; sessionId?: string } | null; planningTodos?: Todo[] } {
+  if (store.project(step.projectId).mode === 'general') {
+    const campaign = store.db.prepare('SELECT data FROM project_campaigns WHERE project_id=?').get(step.projectId)
+    return { taskPlanner: { stepId: 'commander', role: 'general', receiver: 'commander', ...(campaign ? { sessionId: JSON.parse(String(campaign.data)).sessionId } : {}) } }
+  }
   const planner = taskTodoPlanner(step, store)
-  return { taskPlanner: planner ? { stepId: planner.id, role: planner.role } : null,
+  return { taskPlanner: planner ? { stepId: planner.id, role: planner.role, receiver: store.forGraph(step.projectId,step.graphId!).runs(step.projectId,{activity:planner.role==='general'?'plan':'execute',...(planner.role==='general'?{}:{stepId:planner.id}),limit:1})[0]?.id } : null,
     ...(planner?.id === step.id ? { planningTodos: new CommanderTodos(store, step.projectId).list(step.graphId!) } : {}) }
 }
 
@@ -193,7 +197,7 @@ function executionContext(store:Store,runId:string,channels:unknown[],maxSteps:n
   const goal = run.activity === 'decide' ? store.node<Goal>(run.projectId, 'goal', 'goal') : undefined
   return { projectId: run.projectId, graphId:run.graphId, ...(run.handoff ? {handoff:{confirmedState:run.handoff,predecessorRunId:run.predecessorRunId}} : {}),
     ...(!step || taskTodoOwner(step, store) ? { planningCapacity: store.planningCapacity(run.projectId, maxSteps) } : {}),
-    acknowledgementBoundary: store.acknowledgementBoundary(run.id), scope: { id: origin.id, description: origin.description },
+    ...(!step || taskTodoOwner(step, store) ? { acknowledgementBoundary: store.acknowledgementBoundary(run.id) } : {}), scope: { id: origin.id, description: origin.description },
     ...(step ? {dependencies:step.sourceIds.filter(id=>id!==origin.id).map(id=>store.readNode(run.projectId,id))} : {}),
     ...(step ? taskPlanningContext(store, step) : {}),
     ...(goal ? { goal: { id: goal.id, description: goal.description, status: goal.status },
@@ -259,11 +263,26 @@ export function plannerContext(store: Store, run: Run, maxSteps: number | null, 
   const graph=store.projectGraph(run.projectId,run.graphId!),planner=graph.planner!,scoped=store.forGraph(run.projectId,graph.id)
   const compact=(node:import('./types.ts').GraphNode)=>{const {projectId,graphId,creator,createdAt,...index}=nodeContent(node);return index}
   const page=(kind:'goal'|'step'|'fact'|'finding'|'hint',limit:number)=>{const order=kind==='fact'||kind==='finding'?'newest':'oldest',total=scoped.nodeCount(run.projectId,kind,true);return{items:scoped.nodes(run.projectId,[kind],{limit,context:true,order}).map(compact),total,offset:0,limit,order,nextOffset:total>limit?limit:null}}
-  const changes=store.plannerEvents(planner),steps=scoped.nodes<Step>(run.projectId,['step']),runs=store.runs(run.projectId).filter(r=>r.graphId===graph.id&&r.activity==='execute'),queued=steps.filter(s=>s.status==='pending'),goal=scoped.node<Goal>(run.projectId,graph.goalId,'goal')
-  return {projectId:run.projectId,graphId:graph.id,step:undefined,dependencies:undefined,hints:undefined,...(!incremental ? {scope:{id:graph.originId,description:scoped.node<Fact>(run.projectId,graph.originId,'fact').description},goal:{id:goal.id,description:goal.description,status:goal.status,version:goal.version}} : {}),planningCapacity:scoped.planningCapacity(run.projectId,maxSteps),...(!incremental ? taskPlanningContext(scoped,planner) : {}),plannerRound:{state:planner.handoff??'',
+  const changes=store.plannerEvents(planner),runs=scoped.runs(run.projectId,{activity:'execute',limit:12}),active=scoped.runs(run.projectId,{activity:'execute',statuses:['running','paused','unknown']}),queued=scoped.nodes<Step>(run.projectId,['step'],{statuses:['pending'],limit:40}),queueTotal=scoped.nodeCount(run.projectId,'step',false,['pending']),goal=scoped.node<Goal>(run.projectId,graph.goalId,'goal')
+  return {projectId:run.projectId,graphId:graph.id,step:undefined,dependencies:undefined,hints:undefined,...(!incremental ? {scope:{id:graph.originId,description:scoped.node<Fact>(run.projectId,graph.originId,'fact').description},goal:{id:goal.id,description:goal.description,status:goal.status,version:goal.version}} : {}),planningCapacity:scoped.planningCapacity(run.projectId,maxSteps),...(!incremental ? taskPlanningContext(scoped,planner) : {planningTodos:new CommanderTodos(scoped,run.projectId).list(graph.id).filter(t=>t.status!=='completed')}),plannerRound:{state:planner.handoff??'',
     triggers:{...changes,events:changes.events.map(e=>({id:e.id,type:e.type,nodeId:e.nodeId,payload:e.payload,...(e.message?{message:e.message}:{}),...(!e.graphId?{projectEvent:true}:{})}))},
-    ...(incremental ? {frontier:{goals:scoped.nodes<Goal>(run.projectId,['goal']).filter(g=>g.status==='open').slice(0,20).map(compact),changedNodes:[...new Set(changes.events.map(e=>e.nodeId).filter((id):id is string=>!!id))].slice(0,40).map(id=>scoped.readNode(run.projectId,id))}} : {overview:{goals:page('goal',20),steps:page('step',40),facts:page('fact',24),findings:page('finding',24),hints:page('hint',12)}}),
-    activeSteps:runs.filter(r=>['running','paused','unknown'].includes(r.status)).map(r=>({stepId:r.stepId,runId:r.id,status:r.status})),
-    queue:{ids:queued.slice(0,40).map(s=>s.id),total:queued.length,nextOffset:queued.length>40?40:null},
-    workers:runs.filter(r=>!incremental||changes.events.some(e=>e.nodeId===r.stepId)).slice(-12).map(r=>({id:r.id,stepId:r.stepId,status:r.status,error:r.error,failureCode:r.failureCode})),totalRuns:runs.length}}
+    ...(incremental ? {frontier:{goals:scoped.nodes<Goal>(run.projectId,['goal'],{statuses:['open'],limit:20}).map(compact),changedNodes:[...new Set(changes.events.map(e=>e.nodeId).filter((id):id is string=>!!id))].slice(0,40).map(id=>scoped.readNode(run.projectId,id))}} : {overview:{goals:page('goal',20),steps:page('step',40),facts:page('fact',24),findings:page('finding',24),hints:page('hint',12)}}),
+    activeSteps:active.map(r=>({stepId:r.stepId,runId:r.id,status:r.status})),
+    queue:{ids:queued.map(s=>s.id),total:queueTotal,nextOffset:queueTotal>40?40:null},
+    workers:runs.map(r=>({id:r.id,stepId:r.stepId,status:r.status,error:r.error,failureCode:r.failureCode})),totalRuns:scoped.runCount(run.projectId,'execute')}}
+}
+
+/** General uses its existing campaign Session and cursors, not a second planning actor. */
+export function generalPlanningContext(store: Store, projectId: string, incremental = false) {
+  const legion = new LegionStore(store,projectId), campaign=legion.campaign(), graph=store.projectGraphs(projectId)[0], scoped=store.forGraph(projectId,graph.id)
+  const todos=legion.planningTodos(projectId).list(graph.id), changes=legion.readChanges(projectId)
+  return {projectId,graphId:graph.id,continue:incremental,taskPlanner:{stepId:'commander',role:'general',receiver:'commander',sessionId:campaign.sessionId},
+    ...(!incremental?{scope:scoped.readNode(projectId,graph.originId),goal:scoped.readNode(projectId,graph.goalId)}:{}),
+    planningTodos:incremental?todos.filter(t=>t.status!=='completed'):todos,
+    frontier:{goals:scoped.nodes<Goal>(projectId,['goal'],{statuses:['open'],limit:20}).map(n=>nodeContent(n)),
+      steps:scoped.nodes<Step>(projectId,['step'],{statuses:['pending','running','paused','blocked'],limit:40}).map(n=>nodeContent(n))},
+    ...(!incremental?{overview:{facts:scoped.nodes(projectId,['fact'],{context:true,order:'newest',limit:24}).map(n=>nodeContent(n)),findings:scoped.nodes(projectId,['finding'],{order:'newest',limit:24}).map(n=>nodeContent(n))}}:{}),
+    changes,workers:scoped.runs(projectId,{activity:'execute',limit:12}).map(r=>({id:r.id,stepId:r.stepId,status:r.status,error:r.error})),
+    activeSteps:scoped.runs(projectId,{activity:'execute',statuses:['running','paused','unknown']}).map(r=>({runId:r.id,stepId:r.stepId,status:r.status})),
+    planningCapacity:scoped.planningCapacity(projectId,store.stepLimit?.()??null),cursors:legion.campaign().cursors}
 }

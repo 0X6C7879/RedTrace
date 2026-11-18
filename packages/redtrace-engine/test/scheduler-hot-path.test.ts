@@ -9,7 +9,7 @@ import { Scheduler } from '../src/scheduler.ts'
 import { graphUpdate } from '../src/runner.ts'
 import type { EngineConfig, Worker } from '../src/types.ts'
 
-const worker: Worker = { name: 'hot-path', backend: 'mock', provider: 'mock', model: '', enabled: true, roles: ['worker'], reason: true, explore: true, bootstrap: false, maxRunning: 8, priority: 0 }
+const worker: Worker = { name: 'hot-path', backend: 'mock', provider: 'mock', model: '', enabled: true, roles: ['soldier'], reason: true, explore: true, bootstrap: false, maxRunning: 8, priority: 0 }
 const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 8, maxProjectWorkers: 8, maxRunningProjects: 2, maxSteps: null,
   decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: os.tmpdir() }
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
@@ -47,7 +47,7 @@ test('DSH shared notification scan drains more than 500 events without reading t
 
 test('dispatch health and scheduling never load the full graph with 20,083 nodes', async () => {
   const store = new Store(':memory:'), id = store.createProject({ title: 'Large', origin: 'Scope', goal: 'Goal' }).project.id
-  const initial = store.claim(id,'execute',worker,store.addStep(id,{description:'Legion read-only fixture',sourceIds:['origin'],role:'worker',taskKey:'fixture'}).id); store.finishRun(initial.id, 'succeeded')
+  const initial = store.claim(id,'execute',worker,store.addStep(id,{description:'Legion read-only fixture',sourceIds:['origin'],role:'soldier',taskKey:'fixture'}).id); store.finishRun(initial.id, 'succeeded')
   store.addStep(id, { description: 'Wait for shutdown', sourceIds: ['origin'] })
   const insert = store.db.prepare('INSERT INTO nodes(project_id,id,kind,data,graph_id) VALUES (?,?,?,?,?)')
   store.db.exec('BEGIN')

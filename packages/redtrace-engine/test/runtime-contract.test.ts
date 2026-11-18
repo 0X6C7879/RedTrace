@@ -26,7 +26,7 @@ test('Execute recovery guard and evidence_read retain real-path containment and 
   const foreign=store.createProject({title:'foreign',origin:'scope',goal:'check',bootstrap:false}).project
   const producerStep=store.addStep(project.id,{description:'produce',sourceIds:['origin']}),producer=store.claim(project.id,'execute',worker,producerStep.id)
   const foreignStep=store.addStep(foreign.id,{description:'foreign',sourceIds:['origin']}),foreignRun=store.claim(foreign.id,'execute',worker,foreignStep.id)
-  const run=store.claim(project.id,'execute',worker,store.addStep(project.id,{description:'Legion read-only fixture',sourceIds:['origin'],role:'worker',taskKey:'fixture'}).id),cwd=path.join(root,project.id);run.workspaceRoot=cwd;mkdirSync(cwd)
+  const run=store.claim(project.id,'execute',worker,store.addStep(project.id,{description:'Legion read-only fixture',sourceIds:['origin'],role:'soldier',taskKey:'fixture'}).id),cwd=path.join(root,project.id);run.workspaceRoot=cwd;mkdirSync(cwd)
   const output=Buffer.from('{"fixture":"verified"}'),sha=createHash('sha256').update(output).digest('hex'),id='ev-'+sha
   const evidence=path.join(cwd,'.redtrace-output','evidence',producer.id);mkdirSync(evidence,{recursive:true});writeFileSync(path.join(evidence,id+'.json'),output)
   const guard=executionEvidenceReadGuard(path.join(root,'missing-spill'),cwd),read=(file:string)=>guard({name:'read',arguments:{file_path:file}})
@@ -59,8 +59,8 @@ test('Resource APIs, task polling and routing stay Project-scoped; accepted larg
   assert.equal(result.content,output);assert.equal(result.size_bytes,Buffer.byteLength(output));assert.equal(result.sha256,createHash('sha256').update(output).digest('hex'))
   const file=path.join(engine.operations.outputRoot,'webshell','results',`${task.id}-${result.id}.txt`)
   assert.equal(readFileSync(file,'utf8'),output)
-  assert.throws(()=>engine.operations.createTask(a.id,foreign.id,{action:'command',arguments:{command:'never'},actor_type:'worker',actor:'fixture'}),/not found in this Project/)
-  assert.throws(()=>engine.operations.createTask(a.id,global.id,{action:'command',arguments:{command:'never'},actor_type:'worker',actor:'fixture'}),/not found in this Project/)
+  assert.throws(()=>engine.operations.createTask(a.id,foreign.id,{action:'command',arguments:{command:'never'},actor_type:'soldier',actor:'fixture'}),/not found in this Project/)
+  assert.throws(()=>engine.operations.createTask(a.id,global.id,{action:'command',arguments:{command:'never'},actor_type:'soldier',actor:'fixture'}),/not found in this Project/)
   await assert.rejects(verbTask({operations:engine.operations},task.id,b.id),/not found in this Project/)
   assert.deepEqual(channelsFor({operations:engine.operations},[],8,a.id).map(r=>r.id),[own.id])
   const run=engine.store.claim(a.id,'execute',worker,engine.store.addStep(a.id,{description:'Resource isolation fixture',sourceIds:['origin']}).id),list=resourceTools({store:engine.store,run,worker,config:{} as EngineConfig,signal:new AbortController().signal},{operations:engine.operations})

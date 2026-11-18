@@ -31,7 +31,7 @@ const model = createServer(async (req, res) => {
     const reporter = system.includes('漏洞报告撰写 agent')
     let name, args
     if (!reporter) {
-      assert.match(system, /You are WORKER/)
+      assert.match(system, /You are SOLDIER/)
       const facts = graph.facts.filter(f => f.id !== 'origin')
       if (!calls.some(c => c.function.name === 'bash')) {
         name = 'bash'; args = { command: `curl -sS -i '${target}/private' > baseline.http; curl -sS -i '${target}/private?debug=1' > proof.http; cat baseline.http proof.http`, description: 'Verify authorized loopback-only fixture baseline and proof' }
@@ -74,7 +74,7 @@ try {
   await new Promise(r => model.listen(0, '127.0.0.1', r))
   const configuration = new Configuration(work); configuration.initialize(); configuration.commit(configuration.read().revision, raw => {
     raw.providers = { fixture: { api: 'openai-completions', base_url: 'http://127.0.0.1:'+model.address().port+'/v1', api_key: 'fixture-not-secret', models: [{ id: 'fixture', context_window: 100000, max_tokens: 4000, reasoning: 'off', reasoning_efforts: false }] } }
-    raw.workers = [{ name: 'fixture-worker', roles: ['worker'], provider: 'fixture', model: 'fixture', max_running: 2 }]
+    raw.workers = [{ name: 'fixture-worker', roles: ['soldier'], provider: 'fixture', model: 'fixture', max_running: 2 }]
     raw.runtime = { max_workers: 2, max_project_workers: 2, max_running_projects: 1 }
     raw.tasks = { soldier: { timeout: 30, conclude_timeout: 3 } }
   })
@@ -85,7 +85,7 @@ try {
   await until(async () => { try { return (await fetch(api+'/health')).ok } catch { return false } }, Boolean)
   const call = async (route, body) => { const response = await fetch(api+route, body ? { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(body) } : {}); const value = await response.json(); assert.ok(response.ok, JSON.stringify(value)); return value }
   const created = await call('/v2/projects', { mode: 'general', title: 'Fact / Finding / Reporter native fixture', origin: 'Authorized intentionally vulnerable loopback fixture only: '+target, goal: 'Verify retained baseline, proof and report', bootstrap: false }); projectId = created.project.id
-  await call('/v2/projects/'+projectId+'/steps', { role: 'worker', taskKey: 'fixture', description: 'Verify local fixture auth baseline and debug bypass, then register supporting Facts and Finding', sourceIds: ['origin'] })
+  await call('/v2/projects/'+projectId+'/steps', { role: 'soldier', taskKey: 'fixture', description: 'Verify local fixture auth baseline and debug bypass, then register supporting Facts and Finding', sourceIds: ['origin'] })
   const graph = await until(() => call('/v2/projects/'+projectId), g => g.findings[0]?.report && g.steps.every(s => s.status === 'done'))
   assert.equal(graph.facts.length, 3); assert.equal(graph.steps.length, 2); assert.ok(graph.steps.some(s => !!s.reportFindingId))
   const runs = await call('/v2/projects/'+projectId+'/runs'); assert.equal(runs.length, 2); assert.ok(runs.every(r => r.status === 'succeeded')); assert.notEqual(runs[0].id, runs[1].id)

@@ -366,10 +366,8 @@ export class PluginManager {
           enabled: Array.isArray(parsed.enabled) ? [...new Set(parsed.enabled.filter(v => typeof v === 'string'))] : [],
           user: Array.isArray(parsed.user) ? parsed.user : [],
         }
-        const oldExecutors = ['redtrace-leader','redtrace-operator']
-        if(oldExecutors.every(id=>this.manifest.disabled!.includes(id)))this.manifest.disabled!.push('redtrace-worker')
-        this.manifest.disabled = this.manifest.disabled!.filter(id=>!oldExecutors.includes(id))
-        this.manifest.enabled = [...new Set(this.manifest.enabled!.map(id=>oldExecutors.includes(id)?'redtrace-worker':id))]
+        const aliases: Record<string,string> = {'redtrace-planner':'redtrace-general','redtrace-worker':'redtrace-soldier','redtrace-leader':'redtrace-soldier','redtrace-operator':'redtrace-soldier'}
+        for(const key of ['disabled','enabled'] as const)this.manifest[key]=[...new Set(this.manifest[key]!.map(id=>aliases[id]??id))]
         return
       }
     } catch {

@@ -1,4 +1,4 @@
-import {scoutedSpawn} from './scout-fixture.ts'
+import {spawnTask} from './task-fixture.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -33,7 +33,7 @@ function fixture(t: any, filename = ':memory:') {
   const p = store.createProject({ mode: 'benchmark', title: 'fixture', origin: 'local', goal: 'verify' }).project
   const graph = store.createGraph(p.id, { taskKey: 'A', title: 'A', origin: 'local', goal: 'verify A' })
   t.after(() => store.close())
-  const add = (role: 'general' | 'soldier' | 'scout', extra: Pick<Step, 'specialist'> = {}) => scoutedSpawn(legion,p.id, { graphId: graph.id, taskKey: 'A', role, description: role + ' ' + store.nodes(p.id, ['step']).length, sourceIds: [graph.originId], ...extra })
+  const add = (role: 'general' | 'soldier' | 'scout', extra: Pick<Step, 'specialist'> = {}) => spawnTask(legion,p.id, { graphId: graph.id, taskKey: 'A', role:role as never, description: role + ' ' + store.nodes(p.id, ['step']).length, sourceIds: [graph.originId], ...extra })
   const tools = (step: TaskAssignment) => { const run = step.role==='general'?store.forGraph(p.id,graph.id).claim(p.id,'plan',worker):store.claim(p.id, 'execute', worker, step.id); return { run, tools: legionTools(store, run.id, p.id, null, () => {}) } }
   const todos = () => legion.planningTodos(p.id).list(graph.id)
   const owners = () => [...store.projectGraphs(p.id).flatMap(g=>g.planner?[g.planner]:[]),...store.nodes<Step>(p.id, ['step'])].filter(s => taskTodoOwner(s, store))
@@ -41,7 +41,7 @@ function fixture(t: any, filename = ':memory:') {
   return { store, legion, p, graph, add, tools, todos, owners, row }
 }
 
-for (const roles of [['general', 'soldier'], ['soldier', 'soldier'], ['scout', 'soldier', 'general'], ['general', 'specialist']] as const) {
+for (const roles of [['general', 'soldier'], ['soldier', 'soldier'], ['soldier', 'soldier', 'general'], ['general', 'specialist']] as const) {
   test('task lifecycle creates exactly one TodoList and owner before execution: ' + roles.join('+'), async t => {
     const f = fixture(t), steps = roles.map(role => role === 'specialist' ? f.add('soldier', { specialist }) : f.add(role))
     assert(f.row(), 'TodoList must exist before any Agent is claimed')
@@ -58,8 +58,8 @@ for (const roles of [['general', 'soldier'], ['soldier', 'soldier'], ['scout', '
   })
 }
 
-test('Scout-only has no TodoList; adding a non-Scout initializes it even through direct addStep', t => {
-  const f = fixture(t); f.add('scout'); assert.equal(f.row(), undefined); assert.deepEqual(f.owners(), [])
+test('Scout is rejected without a TodoList; direct Soldier creation initializes planning', t => {
+  const f = fixture(t); assert.throws(()=>f.add('scout'),/Scout is retired/); assert.equal(f.row(), undefined); assert.deepEqual(f.owners(), [])
   const step = f.store.forGraph(f.p.id, f.graph.id).addStep(f.p.id, { taskKey: 'A', role: 'soldier', description: 'direct API', sourceIds: [f.graph.originId] })
   assert(f.row()); assert.deepEqual(f.owners().map(s => s.id), [step.id])
 })
@@ -81,7 +81,7 @@ test('parallel questions, database reopen, native handoff and replacement preser
   const f = fixture(t, root + '/engine.db'), soldier = f.add('soldier'), first = f.tools(soldier)
   await first.tools.find(t => t.name === 'TodoWrite')!.execute('progress', { todos: progress })
   const b = f.store.createGraph(f.p.id, { taskKey: 'B', title: 'B', origin: 'local', goal: 'verify B' })
-  scoutedSpawn(f.legion,f.p.id, { graphId: b.id, taskKey: 'B', role: 'soldier', description: 'B task', sourceIds: [b.originId] })
+  spawnTask(f.legion,f.p.id, { graphId: b.id, taskKey: 'B', role: 'soldier', description: 'B task', sourceIds: [b.originId] })
   assert.notDeepEqual(f.legion.planningTodos(f.p.id).list(b.id), progress)
   f.legion.requestHandoff(first.run.id, 'verified entry; continue result'); f.store.finishRun(first.run.id, 'cancelled'); f.legion.completeHandoff(f.p.id, soldier.id)
   const next = f.tools(f.store.node<Step>(f.p.id, soldier.id, 'step'))
@@ -103,7 +103,7 @@ test('parallel questions, database reopen, native handoff and replacement preser
 test('Scheduler repairs legacy missing lists before executing concurrent questions and never reinitializes an existing empty list', async t => {
   const f = fixture(t), a = f.add('soldier')
   const b = f.store.createGraph(f.p.id, { taskKey: 'B', title: 'B', origin: 'local', goal: 'verify B' })
-  scoutedSpawn(f.legion,f.p.id, { graphId: b.id, taskKey: 'B', role: 'soldier', description: 'B', sourceIds: [b.originId] })
+  spawnTask(f.legion,f.p.id, { graphId: b.id, taskKey: 'B', role: 'soldier', description: 'B', sourceIds: [b.originId] })
   f.legion.planningTodos(f.p.id).replace(b.id, [])
   f.store.db.prepare('DELETE FROM commander_todos WHERE project_id=? AND graph_id=?').run(f.p.id, f.graph.id)
   const launched: string[] = [], scheduler = new Scheduler(f.store, { workers: [{ ...worker, enabled: true, roles: ['soldier'], maxRunning: 2, priority: 0 }], maxWorkers: 2, maxProjectWorkers: 2, maxRunningProjects: 1, maxSteps: null, workspaceRoot: '/tmp/task-todos' } as EngineConfig, async ({ run, signal }) => {
@@ -149,10 +149,10 @@ test('running Agent registrations gain and lose planning tools as maintenance tr
 })
 
 
-test('General delegated Soldier/Scout squads execute and report but never maintain the task list', t => {
+test('General delegated Soldier Executors execute and report but never maintain the task list', t => {
   const f = fixture(t), general = f.add('general'), parent = f.tools(general)
-  for (const role of ['soldier', 'scout'] as const) {
-    const child = scoutedSpawn(f.legion,f.p.id, { graphId: f.graph.id, taskKey: 'A', role, description: 'delegated ' + role, sourceIds: [f.graph.originId], parentRunId: parent.run.id })
+  for (const role of ['soldier', 'soldier'] as const) {
+    const child = spawnTask(f.legion,f.p.id, { graphId: f.graph.id, taskKey: 'A', role:role as never, description: 'delegated ' + role, sourceIds: [f.graph.originId], parentRunId: parent.run.id })
     assert(!f.tools(child).tools.some(t => t.name === 'TodoWrite'))
   }
   assert.deepEqual(f.owners().map(s => s.id), [general.id])

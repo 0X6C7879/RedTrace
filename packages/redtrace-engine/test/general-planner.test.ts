@@ -12,7 +12,7 @@ import {Scheduler} from '../src/scheduler.ts'
 import {chatTools} from '../src/chat.ts'
 import type {Step,Goal,Fact,EngineConfig,Worker} from '../src/types.ts'
 
-const worker:Worker={name:'pool',roles:['worker'],provider:'mock',model:'mock',backend:'mock',enabled:true,maxRunning:3,priority:0}
+const worker:Worker={name:'pool',roles:['soldier'],provider:'mock',model:'mock',backend:'mock',enabled:true,maxRunning:3,priority:0}
 
 test('General Frontier gates dependencies at atomic claim; independent Steps still run concurrently',async()=>{
  const store=new Store(':memory:'),root=mkdtempSync(path.join(os.tmpdir(),'general-frontier-'))
@@ -54,7 +54,7 @@ test('Planner TodoList survives Store reopen without FGS writes; Worker cannot r
   const launch=launchContext(store,run.id);assert(!('planningTodos' in launch));assert(!('planningCapacity' in launch));assert(!('step' in launch));assert.equal(launch.dependencies?.length,0)
   const query=chatTools(store).find(t=>t.name==='project_query')!
   await assert.rejects(query.execute('read-plan',{projectId:p.id,kind:'plan'}),/only by Planner/)
-  store.audit({id:'planner-session',project_id:p.id,graph_id:g.id,task_type:'planner'},[{kind:'tool.started',title:'TodoWrite',call_id:'plan',arguments:{todos}}])
+  store.audit({id:'planner-session',project_id:p.id,graph_id:g.id,task_type:'general'},[{kind:'tool.started',title:'TodoWrite',call_id:'plan',arguments:{todos}}])
   const read=graphTools(context,()=>{}).find(t=>t.name==='read_execution')!
   const history=await read.execute('runs',{});assert(!(history.details as any).runs.some((r:any)=>r.id==='planner-session'))
   await assert.rejects(read.execute('plan-history',{run_id:'planner-session'}),/not in this Graph/)
@@ -66,9 +66,9 @@ test('v2 qualifications/tool bindings collapse Leader/Operator once and preserve
  try{
   mkdirSync(path.join(root,'.redtrace'));writeFileSync(path.join(root,'.redtrace/redtrace.yaml'),'role_version: 2\nworkers:\n - {name: shared, provider: mock, roles: [commander, general, soldier, planner, leader, operator]}\ntasks:\n operator: {timeout: 77, conclude_timeout: 9}\ntool_settings:\n fixture: {enabled: true, roles: [soldier, leader, operator]}\n')
   const c=new Configuration(root),first=c.read()
-  assert.deepEqual(first.raw.workers[0].roles,['commander','general','soldier','planner','worker'])
-  assert.deepEqual(first.raw.tool_settings?.fixture.roles,['soldier','worker']);assert.equal(first.raw.tasks?.worker.timeout,77)
-  c.commit(first.revision,()=>{});assert.equal(c.read().raw.role_version,3);assert.equal(c.read().raw.tasks?.operator,undefined)
+  assert.deepEqual(first.raw.workers[0].roles,['commander','general','soldier'])
+  assert.deepEqual(first.raw.tool_settings?.fixture.roles,['soldier']);assert.equal(first.raw.tasks?.soldier.timeout,77)
+  c.commit(first.revision,()=>{});assert.equal(c.read().raw.role_version,4);assert.equal(c.read().raw.tasks?.operator,undefined)
   assert.deepEqual(c.read().raw.workers[0].roles,first.raw.workers[0].roles)
  }finally{rmSync(root,{recursive:true,force:true})}
 })
@@ -90,7 +90,7 @@ test('native Planner debounces FGS/Worker/Finding events and permits zero-Step c
  console.log(stdout.trim())
 })
 
-test('stored v2 General Steps migrate to Worker without retaining squads or rewriting audit evidence',()=>{
+test('stored v2 General Steps migrate to Soldier, preserving custom definitions and audit evidence',()=>{
  const root=mkdtempSync(path.join(os.tmpdir(),'general-step-v3-')),file=path.join(root,'engine.db');let store=new Store(file)
  try{
   const p=store.createProject({title:'migration',origin:'fixture',goal:'verify'}).project
@@ -100,7 +100,7 @@ test('stored v2 General Steps migrate to Worker without retaining squads or rewr
   const audit=JSON.stringify(store.db.prepare('SELECT data FROM audit_events').all())
   store.close();store=new Store(file)
   const migrated=store.node<Step>(p.id,step.id)
-  assert.equal(migrated.role,'worker');assert.equal(migrated.specialist,undefined);assert.equal(migrated.parentStepId,undefined)
+  assert.equal(migrated.role,'soldier');assert.equal(migrated.specialist?.name,'expert');assert.equal(migrated.parentStepId,undefined)
   assert.equal(migrated.description,'original Mission');assert.equal(JSON.stringify(store.db.prepare('SELECT data FROM audit_events').all()),audit)
   const count=store.events(p.id).filter(e=>e.type==='legion.role_migrated').length
   store.close();store=new Store(file);assert.equal(store.events(p.id).filter(e=>e.type==='legion.role_migrated').length,count)

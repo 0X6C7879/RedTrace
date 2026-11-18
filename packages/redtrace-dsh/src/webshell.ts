@@ -16,7 +16,7 @@ export const inject = ['tools']
 
 export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnabled?: (name: string) => boolean } = {}): void {
   const definitions: Parameters<typeof registerDomain>[1] = []
-  const types: TaskType[] = config.types ?? ['soldier','worker']
+  const types: TaskType[] = config.types ?? ['soldier']
   definitions.push({
     name: 'webshell_register',
     description: 'Register a WebShell as a shared resource so remote.command / remote.file.* can reuse it. target is the shell URL; password and parameters must match how the shell is reached. Use webshell_test first to verify the connection. Register only an established endpoint with known configuration/credential evidence, not speculative endpoints or batches of guessed passwords. Registration alone is not connection success. Reuse an existing matching resource; renaming/re-registering does not repair authentication or protocol failures.',

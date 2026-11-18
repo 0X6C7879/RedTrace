@@ -82,7 +82,7 @@ export class Configuration {
     let raw: RawConfig
     try { raw = parse(content.toString('utf8')) } catch { throw new HttpError(503, 'Invalid configuration YAML') }
     if (!raw || !Array.isArray(raw.workers)) throw new HttpError(503, 'Configuration workers must be an array')
-    if (raw.role_version !== 2 && raw.role_version !== 3) {
+    if (raw.role_version !== 2 && raw.role_version !== 3 && raw.role_version !== 4) {
       const mapped = Object.fromEntries(['commander','general','soldier'].map(r=>[r,LEGACY_GENERAL_ROLES[r]]))
       for (const worker of raw.workers) {
         const roles = worker.roles ?? MODE_ROLES.benchmark
@@ -94,15 +94,19 @@ export class Configuration {
       }
       if (raw.tasks) for (const [old,role] of Object.entries(mapped)) if (!raw.tasks[role] && raw.tasks[old]) raw.tasks[role] = { ...raw.tasks[old] }
     }
-    if (raw.role_version !== 3) {
-      const roles = (values: string[]) => [...new Set(values.map(role => role === 'leader' || role === 'operator' ? 'worker' : role))] as NonNullable<Worker['roles']>
+    if (raw.role_version !== 4) {
+      const roles = (values: string[]) => [...new Set(values.map(role => role === 'commander' ? role : LEGACY_GENERAL_ROLES[role] ?? role))] as NonNullable<Worker['roles']>
       for (const worker of raw.workers) if (worker.roles) worker.roles = roles(worker.roles)
-      for (const setting of Object.values(raw.tool_settings ?? {})) if (setting.roles) setting.roles = roles(setting.roles)
-      if (raw.tasks) {
-        raw.tasks.worker ??= raw.tasks.operator ?? raw.tasks.leader
-        delete raw.tasks.operator; delete raw.tasks.leader
+      for (const setting of Object.values(raw.tool_settings ?? {})) {
+        if (setting.roles) setting.roles = roles(setting.roles)
+        for (const action of Object.values(setting.actions ?? {})) if(action.roles) action.roles=roles(action.roles)
       }
-      raw.role_version = 3
+      if (raw.tasks) {
+        raw.tasks.general = raw.tasks.planner ?? raw.tasks.general
+        raw.tasks.soldier ??= raw.tasks.worker ?? raw.tasks.operator ?? raw.tasks.leader
+        delete raw.tasks.planner; delete raw.tasks.worker; delete raw.tasks.operator; delete raw.tasks.leader
+      }
+      raw.role_version = 4
     }
     for(const [name,setting] of Object.entries(raw.tool_settings??{})) {
       const mapped=domainAction(name)

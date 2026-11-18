@@ -17,7 +17,7 @@ import path from 'node:path'
 const text = Type.String({ minLength: 1, pattern: '\\S' }), refs = Type.Array(text, { minItems: 1 })
 const profile = Type.Union([Type.Literal('direct'), Type.Literal('isolated')])
 const requires = Type.Array(Type.String(), { uniqueItems: true, maxItems: 16 })
-const stepSchema = Type.Object({ dependsOn:Type.Optional(Type.Array(text,{uniqueItems:true})), specialist:Type.Optional(specialistSchema), role: Type.Optional(Type.Union([Type.Literal('soldier'), Type.Literal('reporter'), Type.Literal('worker')])), taskKey: Type.Optional(text), parentStepId: Type.Optional(text), description: text, sourceIds: refs, goalId: Type.Optional(text), creator: Type.Optional(text), priority: Type.Optional(Type.Integer()), executionProfile: Type.Optional(profile), requires: Type.Optional(requires), plugins: Type.Optional(taskPluginsSchema) })
+const stepSchema = Type.Object({ dependsOn:Type.Optional(Type.Array(text,{uniqueItems:true})), specialist:Type.Optional(specialistSchema), role: Type.Optional(Type.Union([Type.Literal('soldier'), Type.Literal('reporter')])), taskKey: Type.Optional(text), parentStepId: Type.Optional(text), description: text, sourceIds: refs, goalId: Type.Optional(text), creator: Type.Optional(text), priority: Type.Optional(Type.Integer()), executionProfile: Type.Optional(profile), requires: Type.Optional(requires), plugins: Type.Optional(taskPluginsSchema) })
 
 export function graphRoutes(router: Router, store: Store, planningTodos?: (projectId: string, graphId: string) => Todo[], workspaceRoot?: string) {
   const view = (c:RequestContext) => {

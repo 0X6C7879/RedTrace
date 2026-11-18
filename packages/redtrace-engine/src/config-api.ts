@@ -48,7 +48,7 @@ export function configRoutes(router: Router, configuration: Configuration, probe
   })
   const task = Type.Object({ timeout: Type.Integer({ minimum: 5 }), conclude_timeout: Type.Integer({ minimum: 5 }) })
   router.add('PUT', '/worker-config/runtime-tasks', async c => {
-    const b = await body(c.req, Type.Object({ expected_revision: revision, runtime: Type.Object({ max_workers: positive, max_project_workers: positive, max_running_projects: positive }), tasks: Type.Object({ commander: Type.Object({ timeout: Type.Integer({ minimum: 5 }), conclude_timeout: Type.Integer({ minimum: 5 }), max_intents: Type.Optional(positive), max_benchmark_tasks: Type.Optional(positive), inspection_interval:Type.Optional(positive), idle_inspection_interval:Type.Optional(positive) }), general: task, soldier: task, planner: Type.Optional(task), worker: Type.Optional(task) }, {additionalProperties:false}) }))
+    const b = await body(c.req, Type.Object({ expected_revision: revision, runtime: Type.Object({ max_workers: positive, max_project_workers: positive, max_running_projects: positive }), tasks: Type.Object({ commander: Type.Object({ timeout: Type.Integer({ minimum: 5 }), conclude_timeout: Type.Integer({ minimum: 5 }), max_intents: Type.Optional(positive), max_benchmark_tasks: Type.Optional(positive), inspection_interval:Type.Optional(positive), idle_inspection_interval:Type.Optional(positive) }), general: task, soldier: task }, {additionalProperties:false}) }))
     return configuration.commit(b.expected_revision, raw => { raw.runtime = { ...raw.runtime, ...b.runtime }; raw.tasks = b.tasks })
   })
   router.add('PUT', '/worker-config/common-env', async c => {

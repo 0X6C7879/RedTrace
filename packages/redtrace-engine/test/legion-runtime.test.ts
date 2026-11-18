@@ -1,4 +1,4 @@
-import {scoutedSpawn} from './scout-fixture.ts'
+import {spawnTask} from './task-fixture.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -26,7 +26,7 @@ test('shipped DSH host executes Planner/Worker identities, HELP reply, shared FG
 })
 
 test('General Worker has no delegation or plan tools and messages never become Facts', async t => {
-  const {store,legion,project}=fixture(t),step=scoutedSpawn(legion,project.id,{role:'worker',taskKey:'a',description:'work',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id)
+  const {store,legion,project}=fixture(t),step=spawnTask(legion,project.id,{role:'soldier',taskKey:'a',description:'work',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id)
   const tools=legionTools(store,run.id,project.id,null,()=>{})
   assert(!tools.some(t=>['legion_spawn','legion_step','TodoWrite','legion_todos','legion_accept'].includes(t.name)))
   const count=store.nodeCount(project.id,'fact')
@@ -123,11 +123,11 @@ test('the first Commander board is compact and leaves FGS details on demand', as
 test('Benchmark General squads inherit isolated execution and cannot weaken their parent profile', t => {
   const {store}=fixture(t),project=store.createProject({mode:'benchmark',title:'isolation',origin:'local',goal:'verify'}).project,legion=new LegionStore(store,project.id)
   store.createGraph(project.id,{taskKey:'isolated',title:'isolated',origin:'local',goal:'verify'})
-  const step = scoutedSpawn(legion,project.id, { role: 'general', taskKey: 'isolated', description: 'isolated parent', sourceIds: ['origin'], executionProfile: 'isolated' })
+  const step = spawnTask(legion,project.id, { role: 'general', taskKey: 'isolated', description: 'isolated parent', sourceIds: ['origin'], executionProfile: 'isolated' })
   const run = store.forGraph(project.id,step.graphId!).claim(project.id, 'plan', worker)
   const mission = { role: 'soldier' as const, taskKey: 'isolated', description: 'bounded squad', sourceIds: ['origin'], parentRunId: run.id }
-  assert.equal(scoutedSpawn(legion,project.id, mission).executionProfile, 'isolated')
-  assert.throws(() => scoutedSpawn(legion,project.id, { ...mission, executionProfile: 'direct' }), /weaken execution isolation/)
+  assert.equal(spawnTask(legion,project.id, mission).executionProfile, 'isolated')
+  assert.throws(() => spawnTask(legion,project.id, { ...mission, executionProfile: 'direct' }), /weaken execution isolation/)
 })
 
 test('native current context meter triggers automatic compaction and a fresh Agent/Run with preserved summary', {timeout:90000},async()=>{const result=await exec(process.execPath,[new URL('./legion-context.fixture.mjs',import.meta.url).pathname],{maxBuffer:2*1024*1024});assert.match(result.stdout,/NATIVE_CONTEXT_ACCEPTANCE=true/);assert.match(result.stdout,/fresh_run_and_agent=true/);assert.match(result.stdout,/automatic_compaction=true/)})
@@ -138,6 +138,6 @@ test('native ownership recovery resumes only confirmed stopped Sessions and neve
 
 test('Commander board details are lossless JSON at the native tool boundary',async t=>{const{store,legion,project}=fixture(t);legion.claimCommand();const tools=legionTools(store,'commander',project.id,null,()=>{});assert.equal(tools.some(t=>t.name==='legion_board'),false);const output=await tools.find(t=>t.name==='legion_roster')!.execute('roster',{projectId:project.id});assert.deepEqual(output.details,JSON.parse(JSON.stringify(output.details)))})
 
-test('Commander wait returns a finish instruction rather than deadlocking its shared route',async t=>{const{store,legion,project}=fixture(t),step=store.addStep(project.id,{description:'Worker',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id);const c=legion.claimCommand();legion.saveCampaign({...c,workerName:'fixture'});const tools=legionTools(store,'commander',store.projects()[0].id,null,()=>{},{workers:[{...worker,roles:['planner','worker'],maxRunning:2}],maxWorkers:4} as any);const result=await tools.find(t=>t.name==='legion_wait')!.execute('capacity',{projectId:project.id,after:0});assert.equal((result.details as any).mustFinish,true);assert.equal(store.run(run.id).status,'running');assert.equal(legion.campaign().status,'running')})
+test('Commander wait returns a finish instruction rather than deadlocking its shared route',async t=>{const{store,legion,project}=fixture(t),step=store.addStep(project.id,{description:'Worker',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id);const c=legion.claimCommand();legion.saveCampaign({...c,workerName:'fixture'});const tools=legionTools(store,'commander',store.projects()[0].id,null,()=>{},{workers:[{...worker,roles:['general','soldier'],maxRunning:2}],maxWorkers:4} as any);const result=await tools.find(t=>t.name==='legion_wait')!.execute('capacity',{projectId:project.id,after:0});assert.equal((result.details as any).mustFinish,true);assert.equal(store.run(run.id).status,'running');assert.equal(legion.campaign().status,'running')})
 
 test('disabled Commander preset does not acquire the campaign or bypass native plugin availability',async t=>{const{store,legion}=fixture(t),{createCommanderController}=await import(new URL('../compat/legion.mjs',import.meta.url).href);const controller=createCommanderController({get(){return undefined},logger:{warn(){}}},{store,legion,scheduler:{maintenance:false,wake(){}},configuration:{resolvedSnapshot(){throw Error('Disabled preset must not select a model')}}},()=>false);controller.start();await new Promise(r=>setTimeout(r,30));await controller.close();assert.equal(legion.campaign().status,'idle')})

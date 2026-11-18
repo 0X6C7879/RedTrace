@@ -50,7 +50,7 @@ window.toolsPage = function () {
     query:'',source:'',mode:'',role:'',status:'',detail:null,draft:{enabled:true,roles:[],actions:{}},saving:false,saved:'',error:'',loading:false,active:false,
     usage:null,statsLoading:false,statsFilters:{projectId:'',mode:'',role:'',from:'',to:''},historyTool:'',historyOffset:0,
     get sources(){return [...new Set(this.data.tools.map(t=>t.source))].sort()},
-    get roles(){return Object.values(this.data.roleGroups||{}).flat()},
+    get roles(){return [...new Set(Object.values(this.data.roleGroups||{}).flat())]},
     get filtered(){const q=this.query.trim().toLowerCase(),modeRoles=this.data.roleGroups?.[this.mode];return this.data.tools.filter(t=>(!this.source||t.source===this.source)&&(!modeRoles||(t.roles||[]).some(r=>modeRoles.includes(r)))&&(!this.role||(t.roleBindings||t.roles||[]).includes(this.role))&&(!this.status||(this.status==='enabled'?t.enabled:!t.enabled))&&(!q||(t.name+' '+t.description).toLowerCase().includes(q))).map(t=>{const schema=this.role?t.schemas?.find(s=>s.roles.includes(this.role)):null;return schema?{...t,description:schema.description,parameters:schema.parameters,schemaBytes:schema.bytes,schemaEstimatedTokens:schema.estimatedTokens}:t})},
     get parameters(){const schema=this.detail?.parameters;return Object.entries(schema?.properties||{}).map(([name,value])=>({name,...value,required:(schema.required||[]).includes(name)}))},
     parameterType(p){return Array.isArray(p.type)?p.type.join(' | '):p.type||(p.enum?'enum':p.anyOf||p.oneOf?'union':'object')},

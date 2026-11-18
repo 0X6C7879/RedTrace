@@ -13,7 +13,7 @@ import { modelReasoningEfforts } from './models.ts'
 
 export interface Upload { id:string;chatId:string;type:'image'|'file';attachment:Record<string,any>;createdAt:string }
 export interface ConversationModel { name:string;worker:string;provider:string;model:string;reasoningEfforts:string[] }
-export function conversationWorkers(config:EngineConfig, mode?:ProjectMode) {return config.workers.filter(w=>w.enabled&&w.backend==='dsh'&&(mode ? w.roles?.includes(coordinatorRole(mode)) : w.roles?.some(r=>r==='commander'||r==='planner'))).sort((a,b)=>a.priority-b.priority||a.name.localeCompare(b.name))}
+export function conversationWorkers(config:EngineConfig, mode?:ProjectMode) {return config.workers.filter(w=>w.enabled&&w.backend==='dsh'&&(mode ? w.roles?.includes(coordinatorRole(mode)) : w.roles?.some(r=>r==='commander'||r==='general'))).sort((a,b)=>a.priority-b.priority||a.name.localeCompare(b.name))}
 export function configuredConversationModels(config:EngineConfig, mode?:ProjectMode):ConversationModel[] {
   const workers=conversationWorkers(config,mode), routes=workers.map(w=>({name:w.name,worker:w.name,provider:w.provider,model:w.model}))
   if(workers.length)for(const [provider,profile] of Object.entries(config.providers))for(const model of profile.models) {

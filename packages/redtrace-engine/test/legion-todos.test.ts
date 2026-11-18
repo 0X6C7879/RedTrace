@@ -1,4 +1,4 @@
-import {scoutedSpawn} from './scout-fixture.ts'
+import {spawnTask} from './task-fixture.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { promisify } from 'node:util'
@@ -68,14 +68,14 @@ test('Benchmark TodoWrite accepts only items and binds writes to the assigned Gr
   assert.deepEqual(legion.planningTodos(p.id).list(graphs[1].id),[])
 })
 
-test('Benchmark Commander and Scout have no TodoList tools; Soldier planner and General Commander own their lists',t=>{
+test('Benchmark Commander has no Todo tools and Scout is rejected; task Planner owns the list',t=>{
   const {store,p,tools}=fixture(t)
   assert(!legionTools(store,'commander',p.id,null,()=>{},undefined,new LegionStore(store).planningTodos(p.id)).some(t=>['TodoWrite','legion_todos'].includes(t.name)))
-  for(const role of ['scout'] as const)assert(!tools(undefined,role).some(t=>['TodoWrite','legion_todos'].includes(t.name)))
+  assert.throws(()=>tools(undefined,'scout'),/Scout is retired|Invalid benchmark role/)
   const q=store.createProject({mode:'general',title:'roles',origin:'local',goal:'verify'}).project,l=new LegionStore(store,q.id)
   l.claimCommand(q.id)
   assert(legionTools(store,'commander',q.id,null,()=>{},undefined,l.planningTodos(q.id)).some(t=>t.name==='TodoWrite'))
-  for(const role of ['worker'] as const){
+  for(const role of ['soldier'] as const){
     const step=l.spawn(q.id,{taskKey:role,role,description:'fixture',sourceIds:['origin']}),run=store.claim(q.id,'execute',worker,step.id)
     assert(!legionTools(store,run.id,q.id,null,()=>{}).some(t=>t.name==='TodoWrite'))
     assert(!graphTools({store,run,worker:worker as any,config:{maxSteps:null} as EngineConfig,signal:new AbortController().signal},()=>{}).some(t=>t.name==='TodoWrite'))
@@ -98,10 +98,10 @@ test('Only Benchmark General prompt owns task planning while General mode Comman
   assert(!command.includes('legion_todo'))
   assert(command.includes('You never modify FGS'))
   const prompt=legionMission('general','benchmark');assert(prompt.includes('legion_todo({action:"write",todos})'));assert(prompt.includes('verified FGS Facts'))
-  assert(legionMission('soldier','benchmark').includes('legion_todo'));assert.throws(()=>legionMission('scout','benchmark'),/Invalid benchmark role/)
-  const general=legionMission('planner','general')
+  assert(legionMission('soldier','benchmark').includes('legion_todo'));assert.throws(()=>legionMission('scout' as never,'benchmark'),/Invalid benchmark role/)
+  const general=legionMission('general','general')
   for(const text of ['legion_todo','full route once','actual prerequisite Fact IDs','Independent directions'])assert(general.includes(text),text)
-  for(const role of ['worker'] as const)assert(!legionMission(role,'general').includes('legion_todo'))
+  for(const role of ['soldier'] as const)assert(!legionMission(role,'general').includes('legion_todo'))
 })
 
 test('native DSH wake-ups retain TodoLists, wait for Facts after failure, and dispatch only the next serial stage',{timeout:90000},async()=>{
@@ -148,10 +148,10 @@ test('project-detail HTTP snapshot reads current task Graph TodoList without cha
 
 test('Benchmark launch and General reinforcement inherit only their assigned task planning memory',async t=>{
  const {store,p,graphs,legion}=fixture(t);legion.planningTodos(p.id).replace(graphs[0].id,plan);
- const spawn=(graph:any,role:'soldier'|'general'|'scout',description:string)=>{const step=scoutedSpawn(legion,p.id,{graphId:graph.id,taskKey:graph.taskKey,role,description,sourceIds:[graph.originId]});return role==='general'?store.forGraph(p.id,graph.id).claim(p.id,'plan',worker):store.claim(p.id,'execute',worker,step.id)};
+ const spawn=(graph:any,role:'soldier'|'general'|'scout',description:string)=>{const step=spawnTask(legion,p.id,{graphId:graph.id,taskKey:graph.taskKey,role:role as never,description,sourceIds:[graph.originId]});return role==='general'?store.forGraph(p.id,graph.id).claim(p.id,'plan',worker):store.claim(p.id,'execute',worker,step.id)};
  const first=spawn(graphs[0],'soldier','initial task planner');assert.deepEqual(launchContext(store,first.id).planningTodos,plan);
  const other=spawn(graphs[1],'soldier','another task planner');assert.deepEqual(launchContext(store,other.id).planningTodos,[{content:'verify',status:'pending'}]);
  const reinforcement=spawn(graphs[0],'general','new strategy reinforcement');assert.deepEqual(launchContext(store,reinforcement.id).planningTodos,plan);assert(!('planningTodos' in launchContext(store,first.id)));
- const scout=spawn(graphs[0],'scout','recon only');assert(!('planningTodos' in launchContext(store,scout.id)));
+ assert.throws(()=>spawn(graphs[0],'scout','retired'),/Scout is retired/);
  const general=legionMission('general','benchmark');for(const rule of ['planningTodos','never duplicate covered work','independent directions remain parallel','one item per real stage'])assert(general.includes(rule));
 });

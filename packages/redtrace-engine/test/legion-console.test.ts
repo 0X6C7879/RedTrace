@@ -24,7 +24,7 @@ test('Board exposes paused and unknown execution, with Mission descriptions, wit
   const store=new Store(':memory:'),legion=new LegionStore(store),p=store.createProject({title:'console',origin:'local only',goal:'verify'}).project
   try{
     for(const status of ['running','paused','unknown','succeeded'] as const){
-      const step=legion.spawn(p.id,{role:'worker',taskKey:status,description:'Mission '+status,sourceIds:['origin']})
+      const step=legion.spawn(p.id,{role:'soldier',taskKey:status,description:'Mission '+status,sourceIds:['origin']})
       const run=store.claim(p.id,'execute',worker,step.id)
       if(status!=='running')store.finishRun(run.id,status)
     }
@@ -154,7 +154,7 @@ test('worker snapshot exposes effective active-role defaults without inventing a
     const snapshot=new Configuration(dir).snapshot(),app=page()
     app.applyWorkerSnapshot(snapshot)
     assert.equal(snapshot.tasks.commander.timeout,300)
-    assert.equal(Object.keys(snapshot.tasks).sort().join(','),'commander,general,planner,soldier,worker')
+    assert.equal(Object.keys(snapshot.tasks).sort().join(','),'commander,general,soldier')
     assert.equal(app.runtimeTaskPayload().tasks.commander.max_intents,undefined)
     app.runtimeTaskForm.tasks.commander.max_intents='';assert.equal(app.runtimeTaskPayload().tasks.commander.max_intents,undefined)
     app.runtimeTaskForm.tasks.commander.max_intents=7;assert.equal(app.runtimeTaskPayload().tasks.commander.max_intents,7)

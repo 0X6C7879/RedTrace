@@ -8,7 +8,7 @@ const {load,mount}=await import(new URL('../../redtrace-dsh/lib/loader.js',impor
 const {mountExecutionTools}=await import(new URL('../../redtrace-dsh/lib/execution-tools.js',import.meta.url).href)
 const {mountToolSettings,mountSystemLogs}=await import(new URL('../compat/console.mjs',import.meta.url).href)
 
-test('Commander/Planner native documents work; editable DSH settings hot-load Schema and dispatch without changing native definitions',{timeout:30000},async()=>{
+test('Soldier native documents work; editable DSH settings hot-load Schema and dispatch without changing native definitions',{timeout:30000},async()=>{
  const root=mkdtempSync(path.join(os.tmpdir(),'coordinator-io-')),engine=await serveEngine({root,autoStart:false,port:0})
  const {Context}=await load('vendor/deepseek-harness/vendor/cordis/lib/index.js'),ctx=new Context()
  try{
@@ -16,8 +16,8 @@ test('Commander/Planner native documents work; editable DSH settings hot-load Sc
   mountToolSettings(ctx,engine)
   const {createScope}=await load('vendor/deepseek-harness/packages/core/scope/lib/index.js'),{SessionId}=await load('vendor/deepseek-harness/packages/core/session/lib/index.js')
   let call=0
-  for(const [mode,role] of [['benchmark','commander'],['general','planner']] as const){
-   const p=engine.store.createProject({mode,title:role,origin:'local fixture',goal:'verify'}).project,c=engine.legion.campaign(p.id),cwd=path.join(root,p.id);mkdirSync(cwd)
+  for(const [mode,role] of [['benchmark','soldier'],['general','soldier']] as const){
+   const p=engine.store.createProject({mode,title:role,origin:'local fixture',goal:'verify'}).project,graph=mode==='benchmark'?engine.store.createGraph(p.id,{taskKey:'fixture',title:'fixture',origin:'local',goal:'verify'}):engine.store.projectGraphs(p.id)[0],step=engine.store.forGraph(p.id,graph.id).addStep(p.id,{role:'soldier',taskKey:'fixture',description:'native I/O',sourceIds:[graph.originId]}),run=engine.store.claim(p.id,'execute',{name:'fixture',backend:'mock'},step.id),c={sessionId:run.id},cwd=path.join(root,p.id);mkdirSync(cwd)
    const carrier=ctx.plugin({inject:['tools','systemPrompt'],apply(){}});await carrier.await()
    const agent:any={options:{},session:ctx.sessions.create(SessionId(c.sessionId),{meta:{cwd}}),model:{current:()=>({provider:'fixture',model:'fixture'})}},scope=createScope(carrier.ctx,agent);agent.ctx=scope.ctx
    await mountExecutionTools(scope.ctx,{task:{type:role,projectId:p.id,worker:'fixture',committed:false},cwd,sessionRoot:root,skillsDir:path.join(root,'skills'),available:(id:string)=>['redtrace-fs-search','redtrace-jobs'].includes(id)})
@@ -26,7 +26,7 @@ test('Commander/Planner native documents work; editable DSH settings hot-load Sc
    const names=async()=>{const s=await resolve();try{return ctx.tools.schemas(agent,s).map((t:any)=>t.name)}finally{s.dispose()}}
    const invoke=async(name:string,args:any,set?:any)=>{const own=!set,selected=set??await resolve();try{return(await ctx.tools.execute({agent,signal:new AbortController().signal,toolSet:selected,calls:[{type:'tool-call',name,id:'native-'+ ++call,arguments:JSON.stringify(args)}]})).results[0].result}finally{if(own)selected.dispose()}}
    const tools=await names();for(const name of ['read','write','edit','glob','grep'])assert(tools.includes(name),role+' '+name)
-   assert.equal(tools.includes('bash'),role==='planner');assert(!tools.some((n:string)=>n.startsWith('mcp__rea__')))
+   assert.equal(tools.includes('bash'),true);assert(!tools.some((n:string)=>n.startsWith('mcp__rea__')))
    assert.equal((await invoke('write',{file_path:'handoff.md',content:role+' evidence=verified\n'})).isError,false)
    assert.equal((await invoke('read',{file_path:'handoff.md'})).isError,false)
    assert.equal((await invoke('edit',{file_path:'handoff.md',old_string:'verified',new_string:'retained'})).isError,false)
@@ -45,7 +45,7 @@ test('Commander/Planner native documents work; editable DSH settings hot-load Sc
    engine.configuration.commit(engine.configuration.read().revision,raw=>{delete raw.tool_settings})
    const definition=ctx.tools.get('read',agent)
    const schema=JSON.stringify(ctx.tools.get('read',agent).parameters),stale=await resolve()
-   engine.configuration.commit(engine.configuration.read().revision,raw=>{raw.tool_settings={read:{enabled:true,roles:[role==='commander'?'planner':'commander']}}})
+   engine.configuration.commit(engine.configuration.read().revision,raw=>{raw.tool_settings={read:{enabled:true,roles:['general']}}})
    assert(!(await names()).includes('read'));assert.equal((await invoke('read',{file_path:'handoff.md'},stale)).isError,true)
    stale.dispose()
    engine.configuration.commit(engine.configuration.read().revision,raw=>{raw.tool_settings={read:{enabled:false}}})
@@ -96,7 +96,7 @@ test('existing native Web session reloads common-env keys; an in-flight search k
   for(const file of ['vendor/deepseek-harness/packages/session/session-projection/lib/index.js','vendor/deepseek-harness/packages/subprocess/subprocess-local/lib/index.js','packages/redtrace-dsh/lib/core.js'])await mount(ctx,file)
   const carrier=ctx.plugin({inject:['tools','systemPrompt'],apply(){}});await carrier.await()
   const {createScope}=await load('vendor/deepseek-harness/packages/core/scope/lib/index.js'),scope=createScope(carrier.ctx,{})
-  await mountExecutionTools(scope.ctx,{task:{type:'planner',projectId:'fixture',worker:'fixture',committed:false},cwd:root,sessionRoot:root,skillsDir:root,available:(id:string)=>id==='redtrace-web',onRefresh:(fn:()=>Promise<void>)=>refresh=fn,onSchemas:(_plugin:string,tools:any[])=>{search=tools.find(t=>t.name==='web_search')??search}})
+  await mountExecutionTools(scope.ctx,{task:{type:'soldier',projectId:'fixture',worker:'fixture',committed:false},cwd:root,sessionRoot:root,skillsDir:root,available:(id:string)=>id==='redtrace-web',onRefresh:(fn:()=>Promise<void>)=>refresh=fn,onSchemas:(_plugin:string,tools:any[])=>{search=tools.find(t=>t.name==='web_search')??search}})
   const pending=search.execute({queries:['local fixture']},{signal:new AbortController().signal})
   await started;process.env.EXA_API_KEY='fixture-after';await refresh();release();await pending
   await search.execute({queries:['local fixture']},{signal:new AbortController().signal})
