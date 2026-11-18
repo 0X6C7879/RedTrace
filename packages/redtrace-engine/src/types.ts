@@ -31,13 +31,14 @@ export interface GraphPlanner {
   cursor: { delivered: number; acknowledged: number }; createdAt: string; legacyAssignments?: Step[]
 }
 export type TaskAssignment = Step | GraphPlanner
-export type LegionRole = Exclude<FixedRole, 'commander'> | 'reporter'
+export type LegionRole = Exclude<FixedRole, 'commander'>
 export interface Evidence { path?: string; artifactId?: string; runId?: string; toolCallId?: string; description: string }
 export interface Specialist { name: string; responsibilities: string; capabilities: string[]; scope: string }
 export interface LegionAssignment {
   specialist?: Specialist
   reportFindingId?: string
-  role?: LegionRole | 'scout'; taskKey?: string; parentStepId?: string; plannerId?: string // Scout can occur in stored Steps only.
+  reportFindingVersion?: number
+  role?: LegionRole | 'scout' | 'reporter'; taskKey?: string; parentStepId?: string; plannerId?: string // Scout/Reporter may occur in legacy stored Steps only.
   parkReason?: string; resumeCondition?: string
   predecessorRunId?: string; handoff?: string; handoffPending?: boolean; nextWorker?: string
   handoffRequest?: { summary: string; nextWorker?: string }

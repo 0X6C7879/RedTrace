@@ -91,13 +91,12 @@ export class LegionStore {
     }
     for(const [id,time]of open){const run=byRunId.get(id);if(run?.status==='running')intervals.set(id,[...(intervals.get(id)??[]),{...run,startedAt:time}])}
     const evidence=new Map<string,string>(this.store.db.prepare("SELECT graph_id,MAX(created_at) AS at FROM events WHERE project_id=? AND type IN ('fact.added','finding.added') GROUP BY graph_id").all(projectId).map(r=>[String(r.graph_id),String(r.at)]))
-    const activeAt=String(this.store.db.prepare("SELECT COALESCE(MAX(created_at),'1970-01-01') AS at FROM events WHERE project_id=? AND type='project.active'").get(projectId)!.at)
     return [...tasks].map(taskKey=>{
       const steps=this.steps(projectId,taskKey),ids=new Set(steps.map(s=>s.id))
       const taskRuns=runs.filter(r=>ids.has(r.stepId??'')),timedRuns=taskRuns.flatMap(r=>intervals.get(r.id)??[{...r,endedAt:r.endedAt?confirmedEnd(r,r.endedAt):r.endedAt}]),elapsedMs=executionTime(timedRuns,at)
       const row=this.store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(projectId,taskKey),classification=row?JSON.parse(String(row.data)):null
       const graph=this.store.projectGraphs(projectId).find(g=>g.taskKey===taskKey),lastEvidenceAt=evidence.get(graph?.id??steps[0]?.graphId??'')
-      const running=taskRuns.filter(r=>r.status==='running'),stalledMinutes=running.length?executionTime(timedRuns,at,Math.max(Date.parse(lastEvidenceAt??'1970-01-01'),Date.parse(activeAt)))/60000:0
+      const running=taskRuns.filter(r=>r.status==='running'),stalledMinutes=running.length?executionTime(timedRuns,at,Date.parse(lastEvidenceAt??'1970-01-01'))/60000:0
       const goalStatus=graph&&this.store.node<Goal>(projectId,graph.goalId,'goal').status,achieved=goalStatus==='achieved'
       const live=steps.filter(s=>['pending','running','paused'].includes(s.status)),general=graph?.planner,hasGeneral=!!general&&['pending','running','paused'].includes(general.status)
       const generalRuns=runs.filter(r=>r.activity==='plan'&&r.graphId===graph?.id),generalMinutes=executionTime(generalRuns.flatMap(r=>intervals.get(r.id)??[{...r,endedAt:r.endedAt?confirmedEnd(r,r.endedAt):r.endedAt}]),at)/60000
@@ -181,7 +180,7 @@ export class LegionStore {
     const untouched=tasks.filter(t=>!t.own.length&&!t.g.planner&&t.tactic?.classification?.platformCompleted!==true)
     lines.push(`Tasks=${tasks.length}; platformCompleted=${tasks.filter(t=>t.tactic?.classification?.platformCompleted===true).length}; internalAchieved=${tasks.filter(t=>t.goal?.status==='achieved').length}; untouched=${untouched.length}`)
     const instances=this.store.db.prepare("SELECT task_key,json_extract(data,'$.platformInstance.status') AS status,json_extract(data,'$.platformCompleted') AS completed,json_extract(data,'$.platformObservedAt') AS observed FROM legion_tasks WHERE project_id=? AND json_extract(data,'$.platformInstance.status')!='stopped' ORDER BY task_key").all(id)
-    if(instances.length)lines.push('Platform instances (last refresh): '+instances.map(t=>`${t.task_key}=${t.status}${t.completed?'(completed)':''}@${t.observed}`).join(', '))
+    if(instances.length)lines.push('Platform instances (last refresh; non-stopped means occupied, including completed tasks): '+instances.map(t=>`${t.task_key}=${t.status}${t.completed?'(completed)':''}@${t.observed}`).join(', '))
     if(!taskKey&&untouched.length)lines.push('Classification required: '+untouched.map(t=>t.g.taskKey).join(', '))
     const selected=taskKey?tasks:tasks.filter(t=>!untouched.includes(t)&&t.tactic?.classification?.platformCompleted!==true)
     const capacity=Math.max(0,99-lines.length)

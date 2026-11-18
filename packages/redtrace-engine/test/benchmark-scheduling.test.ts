@@ -35,7 +35,7 @@ test('Watchdog escalates only after confirmed evidence stops advancing', t => {
   assert.equal(legion.tactics(p.id)[0].recommendation,'general')
   assert.equal(typeof (legion as any).watchdog,'undefined','Watchdog must not own strategy')
   store.setStatus(p.id,'stopped');store.setStatus(p.id,'active')
-  assert.equal(legion.tactics(p.id)[0].recommendation,'working','paused project time must not count as evidence stagnation')
+  assert.equal(legion.tactics(p.id)[0].recommendation,'general','changing Project state is not new evidence and must not erase active stagnation')
   store.forGraph(p.id,graph.id).addFact(p.id,'new evidence',{evidence:[{description:'verified fixture'}]})
   assert.equal(legion.tactics(p.id)[0].recommendation,'working')
 
@@ -49,6 +49,29 @@ test('Manual Benchmark adapter needs neither instance nor submission API', async
   const config={workspaceRoot:'/unused'} as any
   assert.equal((await discoverBenchmarkTasks(store,config,p.id)).challenges[0].unique_code,'local-1')
   assert.deepEqual(await benchmarkInstance(store,config,p.id,'local-1','start'),{supported:false,adapter:'manual',action:'start',taskKey:'local-1'})
+})
+
+test('observed TSecBench transposition discovers tasks instead of silently selecting manual mode',async t=>{
+ const root=mkdtempSync(path.join(os.tmpdir(),'platform-name-')),script=path.join(root,'skills/tsecbench-api/scripts/tsecbench.py')
+ mkdirSync(path.dirname(script),{recursive:true});writeFileSync(script,'import json,sys\nassert sys.argv[1:] == ["list"]\nprint(json.dumps({"ok":True,"challenges":[{"unique_code":"T1","is_completed":False},{"unique_code":"T2","is_completed":True}]}))\n')
+ const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'tsec',origin:'在tscebench上完成测评',goal:'解决所有题目'}).project
+ new LegionStore(store,p.id).claimCommand();t.after(()=>{store.close();rmSync(root,{recursive:true,force:true})})
+ const {legionTools}=await import('../src/legion-tools.ts'),tool=legionTools(store,'commander',p.id,null,()=>{},{workspaceRoot:root+'/workspaces'} as any).find(t=>t.name==='legion_platform_list')!
+ const result=await tool.execute('list',{}),board=result.details as any
+ assert.equal(benchmarkAdapter(store,p.id).kind,'tsecbench');assert.equal(board.adapter.kind,'tsecbench')
+ assert.equal(store.projectGraphs(p.id).length,1);assert.equal(store.projectGraphs(p.id)[0].taskKey,'T1')
+ assert.equal(store.db.prepare('SELECT count(*) AS n FROM legion_tasks WHERE project_id=?').get(p.id)!.n,2)
+})
+
+test('malformed platform lists fail explicitly rather than reporting zero tasks',async t=>{
+ const root=mkdtempSync(path.join(os.tmpdir(),'platform-shape-')),script=path.join(root,'skills/tsecbench-api/scripts/tsecbench.py')
+ mkdirSync(path.dirname(script),{recursive:true});writeFileSync(script,'import json\nprint(json.dumps({"ok":True,"unexpected":[]}))\n')
+ const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'shape',origin:'TSecBench',goal:'verify'}).project
+ new LegionStore(store);t.after(()=>{store.close();rmSync(root,{recursive:true,force:true})})
+ await assert.rejects(discoverBenchmarkTasks(store,{workspaceRoot:root+'/workspaces'} as any,p.id),/TSecBench task list is missing challenges/)
+ assert.equal(store.projectGraphs(p.id).length,0)
+ writeFileSync(script,'import json\nprint(json.dumps({"ok":True,"challenges":[]}))\n')
+ assert.deepEqual((await discoverBenchmarkTasks(store,{workspaceRoot:root+'/workspaces'} as any,p.id)).challenges,[])
 })
 
 test('platform refresh exposes real instance holders, including completed tasks, without closing anything',async()=>{
@@ -170,4 +193,18 @@ test('native Commander patrol clock, per-Project concurrency, General events and
   const {execFile}=await import('node:child_process'),{promisify}=await import('node:util')
   const result=await promisify(execFile)(process.execPath,[new URL('./benchmark-controller.fixture.mjs',import.meta.url).pathname],{maxBuffer:2*1024*1024})
   assert.match(result.stdout,/BENCHMARK_PATROL=true/);assert.match(result.stdout,/waiting_capacity_released=true/);assert.match(result.stdout,/native_restart_cap=3/)
+})
+
+test('native pause excludes offline time but retains prior active stagnation for escalation',t=>{
+ const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'clock',origin:'local fixture',goal:'verify'}).project,legion=new LegionStore(store,p.id)
+ t.after(()=>store.close());const graph=store.createGraph(p.id,{taskKey:'T',title:'T',origin:'local',goal:'verify'}),scoped=store.forGraph(p.id,graph.id),step=scoped.addStep(p.id,{role:'soldier',taskKey:'T',description:'work',sourceIds:[graph.originId]}),worker={name:'fixture',backend:'mock' as const},run=scoped.claim(p.id,'execute',worker,step.id),at=Date.now()
+ store.finishRun(run.id,'paused');store.setStatus(p.id,'stopped');store.setStatus(p.id,'active');scoped.claim(p.id,'execute',worker,step.id)
+ const events=store.db.prepare("SELECT id,type FROM events WHERE project_id=? AND type IN ('execute.started','execute.paused','project.stopped','project.active') ORDER BY id").all(p.id)
+ const stamps=[at-30*60000,at-20*60000,at-20*60000,at-60000,at-60000]
+ assert.equal(events.length,5)
+ events.forEach((event,index)=>store.db.prepare('UPDATE events SET created_at=? WHERE id=?').run(new Date(stamps[index]).toISOString(),Number(event.id)))
+ const tactic=legion.tactics(p.id,at)[0]
+ assert.equal(tactic.elapsedMs,11*60000,'10 active minutes before pause plus 1 after resume, excluding 19 offline minutes')
+ assert.equal(tactic.stalledMinutes,11,'pause is not new evidence and must not erase prior stagnation')
+ assert.equal(tactic.recommendation,'second-angle')
 })

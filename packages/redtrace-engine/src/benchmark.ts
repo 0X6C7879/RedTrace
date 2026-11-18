@@ -13,7 +13,7 @@ export function benchmarkAdapter(store:Store,projectId:string) {
   store.project(projectId)
   const origin=store.scopeFact(projectId)
   const description='description'in origin?origin.description:''
-  const tsec=/(?:tsecbench|tsec[\s-]*benchmark)/i.test(description)
+  const tsec=/(?:ts(?:ec|ce)bench|tsec[\s-]*benchmark)/i.test(description)
   return {kind:tsec?'tsecbench':/(?:tpctf|ctfy)/i.test(description)?'tpctf':'manual',instanceApi:tsec,submissionApi:tsec}
 }
 async function tpctfQuery(config:EngineConfig,args:string[],signal?:AbortSignal) {
@@ -73,7 +73,8 @@ export async function discoverBenchmarkTasks(store:Store,config:EngineConfig,pro
   }
   if(adapter.kind==='manual')return {adapter,challenges:store.projectGraphs(projectId).filter(g=>g.type==='benchmark_task').map(g=>({unique_code:g.taskKey,title:g.title}))}
   const response=await tsecbenchQuery(config,['list'],signal)
-  if(store.project(projectId).mode==='benchmark'&&Array.isArray(response.challenges)) {
+  if(!Array.isArray(response?.challenges))throw new HttpError(502,'TSecBench task list is missing challenges')
+  if(store.project(projectId).mode==='benchmark') {
     store.transaction(()=>{
       for(const challenge of response.challenges){
         const taskKey=challenge.unique_code
@@ -111,6 +112,12 @@ export async function benchmarkInstance(store:Store,config:EngineConfig,projectI
     const graph=store.projectGraphs(projectId).find(g=>g.taskKey===code)
     const scoped=graph?store.forGraph(projectId,graph.id):store
     scoped.addInput(projectId,'observation','Platform started '+code+'; authorized targets: '+response.container_addr.join(', '),exceptRun??'platform')
-  }else { if(response?.closed!==true)throw new HttpError(502,'Platform close is unconfirmed; retain instance state and verify before retry',response);store.setBenchmarkHosts(projectId,code) }
+  }else {
+    if(response?.closed!==true)throw new HttpError(502,'Platform close is unconfirmed; retain instance state and verify before retry',response)
+    store.setBenchmarkHosts(projectId,code)
+    const instance={status:'stopped',hosts:[]}
+    const updated=store.db.prepare("UPDATE legion_tasks SET data=json_set(data,'$.platformInstance',json(?),'$.platformObservedAt',?) WHERE project_id=? AND task_key=? AND json_extract(data,'$.platformInstance.status') IS NOT 'stopped'").run(JSON.stringify(instance),new Date().toISOString(),projectId,code)
+    if(updated.changes)store.event(projectId,'legion.instance_updated',null,{taskKey:code,...instance})
+  }
   legion.platformEvent(projectId,code,action,response);return response
 }

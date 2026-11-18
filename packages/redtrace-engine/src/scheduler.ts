@@ -36,8 +36,9 @@ export class Scheduler {
   private select(resume: Run | undefined, step: TaskAssignment, active: Run[]) {
     const commands=[...this.legion.campaigns().filter(c=>c.status==='running'),...chatSlots(this.store)]
     const count = (name: string) => active.filter(r => r.worker === name).length+commands.filter(c=>c.workerName===name).length
+    const preferred=step.role==='general'?this.store.forGraph(step.projectId,step.graphId!).runs(step.projectId,{activity:'plan',limit:1})[0]?.worker:undefined
     return this.config.workers.map(w => this.selectWorker(w, step.role==='general'?'plan':'execute', step)).filter((w): w is Worker => !!w && w.enabled && (!step.nextWorker || w.name===step.nextWorker) && !!w.roles?.includes(executionRole(this.store.project(step.projectId).mode, step.role)) && (!resume || w.name === resume.worker && w.backend === resume.backend) && count(w.name) < w.maxRunning)
-      .sort((a,b) => a.priority-b.priority || count(a.name)-count(b.name) || a.name.localeCompare(b.name))[0]
+      .sort((a,b) => a.priority-b.priority || Number(b.name===preferred)-Number(a.name===preferred) || count(a.name)-count(b.name) || a.name.localeCompare(b.name))[0]
   }
   private dispatch() {
     if (this.maintenance) return

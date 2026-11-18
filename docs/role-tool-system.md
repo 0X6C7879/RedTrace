@@ -14,7 +14,7 @@
 
 General 的 Planner 是唯一规划者：独占主 FGS、Goal 验收、Step 创建和任务级 TodoList。Worker 仅领取执行 Step、调用执行工具并写回 Fact / Finding；没有 TodoList、建 Step、Goal 管理或验收工具。不创建动态 Agent、专业小队或 Sapper 式升级角色。Benchmark 专业 Agent 仍继承 Soldier；原有报告、单题规划、首派、巡检和交接保持。
 
-General 新 Finding 只触发 Planner，不自动创建报告 Step。Planner 可用 legion_step(reportFindingId, sourceIds) 显式安排既有报告工作流，执行身份始终是 Worker；报告也可按 Skill 处理。
+Benchmark 和 General 的新 Finding 均不自动创建报告 Step 或 Agent Session。报告不是固定角色。General Planner 用 `legion_plan({action:"report",projectId,findingId})` 按需请求报告：执行中的原 Worker 在当前 Session 保存报告后继续任务；已完成且保留 checkpoint 的原 Worker 复用同一 Run/Session。仅上下文不可用，或 Planner 明确指定 `independent:true` 进行独立整理时，才创建普通 Soldier 报告 Step。报告仍保存为 Finding 关联的 Markdown Artifact，保留原始证据和历史报告。
 
 ### TodoList、FGS 和 Frontier
 
@@ -114,3 +114,7 @@ General 的图状态变化、Worker 完成/失败和 Finding 写入通过现有�
 系统日志仍使用 Cordis 已有的最近 1000 条内存缓冲。将既有 SQLite FGS 事件中的 Project、Step、Run、Fact、Finding 生命周期转入该日志，游标避免重复；协调者轮次、配置刷新、插件同步也记录真实事件。不额外创建工具调用表，不记录模型正文、完整证据或工具参数。Worker 失败/未知结果记为警告；无活动时不添加假心跳。
 
 原代码首次加载需重新启动对应代码进程；这与保存配置后无需重启不同。本轮不擅自恢复真实 Project 或启动商业模型任务。
+
+## 续跑、路由与止损计时
+
+完整恢复项目使用原生 `/v2/legion/resume`，同时恢复 Commander 与 Worker；仅修改 Project.status 不等于恢复已停止的 Commander。图级 General 在原路由仍可用、同优先级时优先复用原 Run/Session；容量不足或明确换人仍遵守既有路由与并发规则。停滞时间按已记录的执行区间计算：排除暂停/离线，但恢复本身不是新证据，不清零此前的活跃停滞。平台明确返回 `closed=true` 后立即同步 Board 的实例状态，不等下一次巡检。

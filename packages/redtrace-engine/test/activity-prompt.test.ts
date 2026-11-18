@@ -24,3 +24,8 @@ test('compact benchmark Skill documents CLI discovery, scoring, lifecycle and bu
   assert.match(skill, /未解决题默认保留实例/)
   assert.match(skill, /不得让新题 Worker 代管旧题清理，不添加专门清理 Agent/)
 })
+
+test('task planning describes reusable concurrent Step slots, not a lifetime attempt budget',()=>{
+ for(const role of ['general','soldier'] as const){const prompt=legionMission(role);assert.match(prompt,/concurrent execution limit, not a lifetime attempt budget/);assert.match(prompt,/completed executions release slots/)}
+ assert.match(legionMission('general'),/existing Worker Skills and injected runtime credentials/)
+})

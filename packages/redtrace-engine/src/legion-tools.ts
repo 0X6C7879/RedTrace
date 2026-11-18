@@ -5,7 +5,7 @@ import { workerInstances } from './workbench.ts'
 import { TASK_PLANNING_TOOLS, taskTodoOwner, type CommanderTodos } from './legion-todos.ts'
 import { LegionExperience } from './legion-experience.ts'
 import { ProjectEvidence } from './project-evidence.ts'
-import { benchmarkInstance, discoverBenchmarkTasks } from './benchmark.ts'
+import { benchmarkAdapter, benchmarkInstance, discoverBenchmarkTasks } from './benchmark.ts'
 import type { EngineConfig } from './types.ts'
 import { Type } from 'typebox'
 import type { TSchema } from 'typebox'
@@ -63,7 +63,12 @@ export function legionTools(store: Store, actor: string, projectId: string | und
     tool('legion_models','Configured role-model routes and capacities; no credentials.',Type.Object({},{additionalProperties:false}),()=>config?.workers.map(w=>({name:w.name,roles:w.roles,enabled:w.enabled,provider:w.provider,model:w.model,maxRunning:w.maxRunning,priority:w.priority}))??[]),
     tool('legion_commander_model','Choose the configured Commander route for the next patrol.',Type.Object({worker:text},{additionalProperties:false}),args=>{if(!config?.workers.some(w=>w.name===args.worker&&w.enabled&&w.roles?.includes(coordinatorRole(benchmark?'benchmark':'general'))))throw new HttpError(422,'Invalid Commander route');const c=legion.campaign();c.nextWorker=args.worker;legion.saveCampaign(c);return{nextWorker:args.worker}}),
     tool('legion_deadline','Set the explicit campaign deadline in epoch milliseconds.',Type.Object({deadline:Type.Integer({minimum:1})},{additionalProperties:false}),args=>legion.setDeadline(args.deadline)),
-    tool('legion_platform_list','Refresh platform task outcomes and initialize missing tasks with the existing adapter; return compact Board.',Type.Object({},{additionalProperties:false}),async(_args,signal)=>{if(!config)throw Error('Runtime configuration unavailable');await discoverBenchmarkTasks(store,config,projectId!,signal);return legion.boardSummary()}),
+    tool('legion_platform_list','Refresh platform task outcomes and initialize missing tasks with the existing adapter; return compact Board.',Type.Object({},{additionalProperties:false}),async(_args,signal)=>{
+      if(!config)throw Error('Runtime configuration unavailable')
+      await discoverBenchmarkTasks(store,config,projectId!,signal)
+      const adapter=benchmarkAdapter(store,projectId!)
+      return {...legion.boardSummary(),adapter,...(adapter.kind==='manual'?{notice:'No automatic platform adapter matched the Project scope. This lists local task graphs, not remote platform tasks.'}:{})}
+    }),
     tool('legion_state','Read scheduling STATE only on handover; summary saves allocation, blockers and unfinished instructions, never solving intel.',Type.Object({summary:Type.Optional(text)},{additionalProperties:false}),args=>args.summary?legion.saveState(projectId,'commander',args.summary):{state:legion.commanderState()}),
     tool('legion_wait','Acknowledge through=last processed changes cursor, then end this patrol in the same persistent Session. Use the prior acknowledged cursor if no changes were processed. Sleep 60 seconds (90 idle); release execution slots.',Type.Object({through:Type.Integer({minimum:0})},{additionalProperties:false}),args=>{legion.finishCommand({[projectId!]:args.through},undefined,false);legion.checkpointState(projectId!,'patrol-sleep');finish();return{sleepSeconds:legion.inspectionDelay(projectId!)/1000}},true),
   ]
@@ -75,7 +80,7 @@ export function legionTools(store: Store, actor: string, projectId: string | und
     tool('legion_roster', 'Read live Project actor Run IDs, roles and task assignment before messaging; no credentials or external execution.', Type.Object(scope), args => [...store.runsByStatus('running', project(args)), ...store.runsByStatus('paused', project(args))].filter(run => run.stepId).map(run => { const step = store.node<Step>(project(args), run.stepId!, 'step'); if(!benchmark)return{runId:run.id,stepId:step.id,role:step.role,taskKey:step.taskKey,status:run.status,worker:run.worker}; return { runId: run.id, stepId: step.id, role: step.role, specialist: step.specialist, taskKey: step.taskKey, status: run.status, predecessorRunId:run.predecessorRunId, facts:step.factIds.length, inputTokens:run.inputTokens, outputTokens:run.outputTokens } })),
     tool('legion_message', 'Persist HELP/REPORT/MESSAGE for an actor in this Project. pending/queued is NOT model admission or action.', Type.Object({ ...scope, receiver: text, type: Type.Union(['HELP','REPORT','MESSAGE'].map(v => Type.Literal(v))), content: text }), args => legion.message(project(args), actor, args.receiver, args.type, args.content)),
     tool('legion_inbox', 'Read your durable Project messages and their actual delivery status. Messages are unverified, not Facts.', Type.Object(scope), args => legion.messages(project(args), actor)),
-    tool('legion_wait', 'Wait for graph events after a known cursor or a pending message. Does not poll, inject or manufacture progress. Cancelled with this activity.', Type.Object({ ...scope, after: Type.Integer({ minimum: 0 }) }), (args, signal) => step?.role==='general' ? (legion.saveState(projectId,actor,store.assignment(store.run(actor))?.handoff??'Continue from FGS and Worker traces'),finish(),{planningRoundFinished:true}) : commander&&!benchmark ? {mustFinish:true,instruction:'Save STATE and call legion_finish to release capacity. Planner resumes after debounced FGS events.'} : legion.wait(project(args), actor, args.after, signal), step?.role==='general'),
+    tool('legion_wait', 'General: acknowledge processed events through after and end this planning round; never wait for Workers. Others: wait for graph events after a known cursor or a pending message. Cancelled with this activity.', Type.Object({ ...scope, after: Type.Integer({ minimum: 0 }) }), (args, signal) => step?.role==='general' ? (store.completePlanning(actor,args.after,store.assignment(store.run(actor))?.handoff??'Continue from FGS and Worker traces'),finish(),{planningRoundFinished:true}) : commander&&!benchmark ? {mustFinish:true,instruction:'Save STATE and call legion_finish to release capacity. Planner resumes after debounced FGS events.'} : legion.wait(project(args), actor, args.after, signal), step?.role==='general'),
   ]
   const todoItems=Type.Array(Type.Object({content:Type.String(),status:Type.Union(['pending','in_progress','completed'].map(s=>Type.Literal(s))),acceptance:Type.Optional(text),stepIds:Type.Optional(Type.Array(text,{uniqueItems:true})),factIds:Type.Optional(Type.Array(text,{uniqueItems:true}))},{additionalProperties:false}))
   const verifyFact = (fact: import('./types.ts').Fact) => {
@@ -94,6 +99,7 @@ export function legionTools(store: Store, actor: string, projectId: string | und
     todos.replace(args.graphId, args.todos, verifyFact)
     return { saved: true }
   }))
+  if(commander&&!benchmark)tools.push(tool('legion_report','Request a verified Finding report only when needed. Prefer its producing Worker and original Session; create a report-only Soldier Step only when that context is unavailable. Set independent=true only for necessary independent consolidation.',Type.Object({projectId:text,findingId:text,independent:Type.Optional(Type.Boolean())},{additionalProperties:false}),args=>store.requestFindingReport(project(args),args.findingId,args.independent)))
   if(benchmark&&step&&taskTodoOwner(step,store)) {
     const graphId=step.graphId!,scoped=store.forGraph(projectId!,graphId)
     tools.push(
@@ -103,8 +109,14 @@ export function legionTools(store: Store, actor: string, projectId: string | und
         for(const id of args.evidenceIds){const node=scoped.node(projectId!,id);for(const factId of node.kind==='finding'?node.factIds:[id])verifyFact(scoped.node(projectId!,factId,'fact'))}
         const current=scoped.node<Goal>(projectId!,step.goalId,'goal')
         if(current.version!==args.expectedVersion)throw new HttpError(409,'Goal version changed; read the current Goal before acceptance')
+        if(benchmarkAdapter(store,projectId!).instanceApi){
+          if(!config)throw new Error('Runtime configuration unavailable')
+          await discoverBenchmarkTasks(store,config,projectId!,signal)
+        }
         const record=store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(projectId!,step.taskKey!)
-        if(record&&JSON.parse(String(record.data)).platformCompleted===true&&store.project(projectId!).benchmarkHosts?.[step.taskKey!]?.length){
+        const task=record?JSON.parse(String(record.data)):undefined
+        const instanceOpen=task?.platformInstance?task.platformInstance.status!=='stopped':store.project(projectId!).benchmarkHosts?.[step.taskKey!]?.length
+        if(task?.platformCompleted===true&&instanceOpen){
           if(step.role==='general')throw new HttpError(409,'Confirm managed instance cleanup before accepting; General cannot operate its lifecycle')
           if(!config)throw new Error('Runtime configuration unavailable')
           await benchmarkInstance(store,config,projectId!,step.taskKey!,'close',signal,actor)
@@ -183,7 +195,7 @@ export function legionTools(store: Store, actor: string, projectId: string | und
     tool('legion_finish', 'Save Commander STATE and acknowledge only delivered, processed Project cursors. Finish this command cycle, not the whole campaign.', Type.Object({ processed: Type.Record(Type.String(), Type.Integer({ minimum: 0 })), state: text }), args => { const saved = legion.finishCommand(args.processed, args.state, false); finish(); return saved }, true),
   )
   if(!benchmark) {
-    const allowed = new Set(commander ? ['legion_state','legion_roster','legion_experience_search','legion_experience_capture','legion_message','legion_inbox','legion_wait','TodoWrite','legion_todos','legion_goal','legion_update_goal','legion_step','legion_update_step','legion_hint','legion_evidence_read','legion_read_run','legion_commander_model','legion_models','legion_stop','legion_read_changes','legion_read_node','legion_accept','legion_finish'] : ['legion_state','legion_message','legion_inbox','legion_wait','legion_handoff'])
+    const allowed = new Set(commander ? ['legion_state','legion_roster','legion_experience_search','legion_experience_capture','legion_message','legion_inbox','legion_wait','TodoWrite','legion_todos','legion_goal','legion_update_goal','legion_step','legion_report','legion_update_step','legion_hint','legion_evidence_read','legion_read_run','legion_commander_model','legion_models','legion_stop','legion_read_changes','legion_read_node','legion_accept','legion_finish'] : ['legion_state','legion_message','legion_inbox','legion_wait','legion_handoff'])
     return tools.filter(t=>allowed.has(t.name)).map(t=>({...t,description:t.description.replaceAll('Commander','Planner').replaceAll('Sapper show/doc','FGS show/doc')}))
   }
   return tools.filter(t=>step?.role==='general' || t.name==='legion_experience_search'&&!!step&&taskTodoOwner(step,store) || !['legion_experience_capture','legion_experience_search','legion_confirm_transfer','legion_roster'].includes(t.name)).map(t=>t.name==='legion_roster'?roster:t)

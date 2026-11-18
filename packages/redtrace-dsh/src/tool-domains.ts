@@ -7,7 +7,7 @@ export const TOOL_DOMAINS: Record<string, Record<string,string>> = {
   fgs_publish: {fact:'submit_fact',finding:'submit_finding'},
   legion_inspect: {board:'legion_board',roster:'legion_roster',run:'legion_read_run',changes:'legion_read_changes',node:'legion_read_node',triggers:'legion_triggers'},
   legion_task: {spawn:'legion_spawn',adjust:'legion_adjust',reassign:'legion_reassign',park:'legion_park',reactivate:'legion_reactivate'},
-  legion_plan: {step:'legion_step',steps:'legion_steps',update_step:'legion_update_step',goal:'legion_goal',update_goal:'legion_update_goal',accept:'legion_accept',done:'legion_plan_done',stop:'legion_task_stop',hint:'legion_hint'},
+  legion_plan: {step:'legion_step',steps:'legion_steps',update_step:'legion_update_step',goal:'legion_goal',update_goal:'legion_update_goal',accept:'legion_accept',done:'legion_plan_done',stop:'legion_task_stop',report:'legion_report',hint:'legion_hint'},
   legion_todo: {read:'legion_todos',write:'TodoWrite'},
   legion_messages: {read:'legion_inbox',send:'legion_message',wait:'legion_wait'},
   legion_models_manage: {list:'legion_models',select:'legion_commander_model'},

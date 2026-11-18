@@ -186,9 +186,9 @@ export class Store {
   }
   private migrateGeneralRoles() {
     this.transaction(()=>{
-      for(const row of this.db.prepare("SELECT n.data FROM nodes n JOIN projects p ON p.id=n.project_id WHERE n.kind='step' AND json_extract(p.data,'$.mode')='general' AND (json_extract(n.data,'$.role') IN ('general','worker','reporter','leader','operator') OR json_extract(n.data,'$.role') IS NULL)").all()) {
+      for(const row of this.db.prepare("SELECT n.data FROM nodes n JOIN projects p ON p.id=n.project_id WHERE n.kind='step' AND (json_extract(n.data,'$.role')='reporter' OR json_extract(p.data,'$.mode')='general' AND (json_extract(n.data,'$.role') IN ('general','worker','leader','operator') OR json_extract(n.data,'$.role') IS NULL))").all()) {
         const step=JSON.parse(String(row.data)) as Step
-        if(step.role==='reporter') step.reportFindingId=step.sourceIds[0]
+        if(step.role==='reporter') { step.reportFindingId=step.sourceIds[0]; if(this.project(step.projectId).mode==='benchmark'&&step.status==='pending'&&!step.attempts&&step.creator==='report_finding')step.status='cancelled' }
         step.role='soldier'
         delete step.parentStepId; this.saveNode(step)
         this.event(step.projectId,'legion.role_migrated',step,{reason:'General Planner / Soldier Executor; native history preserved'})
@@ -561,7 +561,7 @@ export class Store {
       const mode = this.project(id).mode
       if (input.role === 'scout') throw new HttpError(422, `Invalid ${mode} role`)
       if (mode === 'general' && input.parentStepId) throw new HttpError(422, 'General mode has no executor squads')
-      if (input.role !== undefined && !(mode === 'benchmark' ? ['soldier','reporter'] : ['soldier']).includes(input.role)) throw new HttpError(422, `Invalid ${mode} role`)
+      if (input.role !== undefined && input.role !== 'soldier') throw new HttpError(422, `Invalid ${mode} role`)
       if (input.specialist) input = {...input,role:executorRole(mode)}
       if (input.role !== undefined || input.taskKey !== undefined || input.parentStepId !== undefined) requiredText(input.taskKey, 'taskKey')
       if (input.parentStepId) {
@@ -761,22 +761,32 @@ export class Store {
       if (input.severity) node.severity = input.severity
       if (input.assetIds !== undefined) node.assetIds = input.assetIds
       this.saveNode(node); this.event(id, 'finding.added', node, node)
-      if (node.severity && this.project(id).mode==='benchmark') {
-        this.requestFindingReport(id,node.id)
-      }
       return node
     })
   }
-  requestFindingReport(projectId: string, findingId: string): Step {
+  requestFindingReport(projectId: string, findingId: string, independent = false): Step {
     return this.transaction(() => {
       const finding = this.node<Finding>(projectId, findingId, 'finding')
       if (!finding.severity) throw new HttpError(422, 'Legacy Finding has no structured vulnerability metadata; no report is generated automatically')
       if (!['active', 'completed'].includes(this.project(projectId).status)) throw new HttpError(409, 'Project is stopped')
       const scoped = this.forGraph(projectId, finding.graphId!)
+      const producer = finding.stepId ? scoped.node<Step>(projectId, finding.stepId, 'step') : undefined
+      const prior = finding.producerRunId ? this.run(finding.producerRunId) : undefined
+      if(!independent&&this.project(projectId).mode==='general'&&producer&&prior&&prior.stepId===producer.id){
+        if(['running','paused'].includes(prior.status)&&['running','paused'].includes(producer.status)){
+          scoped.addInput(projectId,'hint','Report requested for Finding '+finding.id+': save its verified ARTEX Markdown with update_finding_report in this Session, then continue the assigned work.','planner',producer.id)
+          return producer
+        }
+        if(prior.status==='succeeded'&&producer.status==='done'&&(prior.checkpoint as {sessionId?:string}|null)?.sessionId&&!prior.pendingTools.length){
+          producer.reportFindingId=finding.id;producer.reportFindingVersion=finding.version??1;producer.status='paused';producer.endedAt=null
+          prior.status='paused';prior.endedAt=null;this.saveRun(prior);scoped.saveNode(producer)
+          scoped.event(projectId,'step.reactivated',producer,{runId:prior.id,reason:'Report delivery in original Worker Session'})
+          return producer
+        }
+      }
       const existing = scoped.nodes<Step>(projectId, ['step']).find(s => isReportStep(s) && s.sourceIds.includes(findingId) && ['pending','running','paused'].includes(s.status))
       if (existing) return existing
-      const producer = finding.stepId ? scoped.node<Step>(projectId, finding.stepId, 'step') : undefined
-      return scoped.addStep(projectId, { role: this.project(projectId).mode === 'benchmark' ? 'reporter' : 'soldier', ...(this.project(projectId).mode === 'general' ? { reportFindingId: findingId } : {}), taskKey: producer?.taskKey ?? finding.id, goalId: producer?.goalId,
+      return scoped.addStep(projectId, { role: 'soldier', reportFindingId: findingId, taskKey: producer?.taskKey ?? finding.id, goalId: producer?.goalId,
         description: '为已确认漏洞撰写报告：'+finding.title, sourceIds: [finding.id], creator: 'report_finding' })
     })
   }
@@ -784,7 +794,7 @@ export class Store {
     return this.transaction(() => {
       const finding = this.node<Finding>(projectId, findingId, 'finding'), run = this.run(runId)
       const step = run.stepId ? this.node<Step>(projectId, run.stepId, 'step') : undefined
-      if (run.projectId !== projectId || run.status !== 'running' || !step || !isReportStep(step) || step.status !== 'running' || !step.sourceIds.includes(findingId)) throw new HttpError(409, 'Reporter is not assigned to this Finding')
+      if (run.projectId !== projectId || run.graphId !== finding.graphId || run.status !== 'running' || !step || step.status !== 'running' || !(step.reportFindingId===findingId || step.sourceIds.includes(findingId) || this.project(projectId).mode==='general'&&finding.stepId===step.id)) throw new HttpError(409, 'Worker is not assigned to this Finding')
       this.checkVersion(finding, expectedVersion)
       finding.report = report; this.saveNode(finding); this.event(projectId, 'finding.report_updated', finding, { runId })
       return finding
@@ -1050,9 +1060,10 @@ export class Store {
       }
       if (run.stepId && status === 'succeeded') {
         const step = this.node<Step>(run.projectId, run.stepId, 'step')
-        if (isReportStep(step) ? this.node<Finding>(run.projectId, step.sourceIds[0], 'finding').report?.runId !== run.id : !step.factIds.length) {
+        const finding=isReportStep(step)?this.node<Finding>(run.projectId,step.reportFindingId??step.sourceIds[0],'finding'):undefined
+        if (finding ? finding.report?.runId!==run.id||(finding.version??1)<=(step.reportFindingVersion??0) : !step.factIds.length) {
           status = 'failed'
-          error = isReportStep(step) ? 'Reporter must save the report Artifact before completing the Step' : step.bootstrap ? 'Initial Soldier Mission must return at least one Fact' : 'Legion Worker must return at least one Fact before completing the Step'
+          error = isReportStep(step) ? 'Worker must save the requested report Artifact before completing the Step' : step.bootstrap ? 'Initial Soldier Mission must return at least one Fact' : 'Legion Worker must return at least one Fact before completing the Step'
         }
       }
       run.status = status; run.error = error; run.endedAt = status === 'paused' ? null : now(); this.saveRun(run)

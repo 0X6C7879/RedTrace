@@ -18,7 +18,7 @@ test('fixed role schemas preserve planning ownership and specialists inherit Sol
    assert.equal(commander.includes('legion_accept'),mode==='general')
    assert(!commander.some(name=>/^(submit_|resource_|remote_|mcp__)/.test(name)))
    let plain:string[]=[]
-   for(const role of (mode==='benchmark'?['general','soldier','reporter','specialist']:['soldier','report'])){
+   for(const role of (mode==='benchmark'?['general','soldier','specialist']:['soldier','report'])){
     const graph=mode==='benchmark'?store.createGraph(p.id,{taskKey:role,title:role,origin:'fixture',goal:'verify'}):store.projectGraphs(p.id)[0]
     const step=role==='general'?store.addPlanner(p.id,graph.id,{description:'fixture',sourceIds:[graph.originId]}):store.forGraph(p.id,graph.id).addStep(p.id,{role:(role==='specialist'||role==='report'?(mode==='benchmark'?'soldier':'soldier'):role) as LegionRole,...(role==='report'?{reportFindingId:'fixture-finding'}:{}),taskKey:role,description:'fixture',sourceIds:[graph.originId],goalId:graph.goalId,...(role==='specialist'?{specialist:{name:'reverse',responsibilities:'analyze',capabilities:['reverse'],scope:'fixture'}}:{})})
     const run=role==='general'?store.forGraph(p.id,graph.id).claim(p.id,'plan',worker):store.claim(p.id,'execute',worker,step.id),context={store:store.forGraph(p.id,graph.id),run,worker,config,signal:new AbortController().signal}

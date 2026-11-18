@@ -364,7 +364,7 @@ export async function apply(ctx, options) {
       signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) { cancel(); return }
       store.checkpoint(run.id, { sessionId: run.id })
       cursor = Math.max(cursor, pendingGraphNotice(handle.agent)?.update.cursor ?? 0)
-      if (reporting) prompt(JSON.stringify({ ...(resume ? { continue: true } : {}), ...reportContext(store, run, step.sourceIds[0]) }))
+      if (reporting) prompt(JSON.stringify({ ...(resume ? { continue: true } : {}), ...reportContext(store, run, step.reportFindingId??step.sourceIds[0]) }))
       else prompt(resume ? JSON.stringify({continue:true,...(planning ? launchContext(store,run.id,[],context.currentMaxSteps?context.currentMaxSteps():config.maxSteps,true) : step ? taskPlanningContext(store, step) : {})}) : JSON.stringify(launchContext(store, run.id,
         [], (context.currentMaxSteps ? context.currentMaxSteps() : config.maxSteps))))
        if (!reporting && step?.role) legionMailbox = attachLegionMailbox(ctx, engine.legion, { projectId: run.projectId, actor: run.id, sessionId: run.id, agent: handle.agent, message, closing: () => finished || signal.aborted })

@@ -28,9 +28,14 @@ test('Reporter launch contains only the assigned Finding and its supporting Fact
   } finally { store.close() }
 })
 
-test('native DSH separates Soldier verification from ARTEX Reporter and traces real retained responses', { timeout: 90000 }, async () => {
+test('native Worker verifies and writes the ARTEX report in the same Session with retained evidence', { timeout: 90000 }, async () => {
   const result = await promisify(execFile)(process.execPath, [new URL('./reporter-runtime.fixture.mjs', import.meta.url).pathname], { maxBuffer: 2 * 1024 * 1024 })
   assert.match(result.stdout, /REPORTER_RUNTIME_OK=true/)
   assert.match(result.stdout, /original_audit_read=true; retained_evidence_read=true/)
   assert.match(result.stdout, /live_model=false/)
+})
+
+test('completed native Worker resumes its original Session for requested report delivery',{timeout:90000},async()=>{
+ const result=await promisify(execFile)(process.execPath,[new URL('./reporter-runtime.fixture.mjs',import.meta.url).pathname,'--resume'],{maxBuffer:2*1024*1024})
+ assert.match(result.stdout,/REPORTER_RUNTIME_OK=true; sessions=1/)
 })

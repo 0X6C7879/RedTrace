@@ -44,6 +44,7 @@ try{
  child=spawn(process.execPath,[root+'/scripts/run-redtrace-node.mjs','--root',work,'--host','127.0.0.1','--port',String(port)],{cwd:root,env:{...process.env,DSH_HOME:work+'/.dsh',REDTRACE_SOURCE_ROOT:root,REDTRACE_CODE_ROOT:root,REDTRACE_DSH_ROOT:root,REDTRACE_DATA_ROOT:work+'/.redtrace'},stdio:['ignore','pipe','pipe']});closed=new Promise(r=>child.once('close',r));for(const s of [child.stdout,child.stderr])s.on('data',b=>logs=(logs+b).slice(-20000))
  const until=Date.now()+20000;while(Date.now()<until){try{if((await fetch(api+'/runtime/config')).ok)break}catch{}await delay(40)}
  const response=await fetch(api+'/v2/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'benchmark',title:'native Planner fixture',origin:'authorized local protocol fixture only',goal:'verify two local proof files',bootstrap:false})});assert(response.ok);projectId=(await response.json()).project.id
+ const initialized=await fetch(api+'/v2/projects/'+projectId+'/graphs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({taskKey:'A',title:'A',origin:'authorized local protocol fixture only',goal:'verify two local proof files'})});assert(initialized.ok)
 
  const deadline=Date.now()+25000;let done=false
  while(Date.now()<deadline){if(modelError)throw modelError;if((await get('/v2/projects/'+projectId)).project.status==='completed'){done=true;break}await delay(50)}

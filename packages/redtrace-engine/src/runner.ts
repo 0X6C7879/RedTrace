@@ -12,7 +12,7 @@ import type { EngineConfig, Fact, Json, Step, Project, Run, Goal, Input, TaskAss
 import { ProjectEvidence } from './project-evidence.ts'
 import { LegionStore } from './legion-store.ts'
 import { legionTools } from './legion-tools.ts'
-import { legionMission } from './legion-missions.ts'
+import { legionMission, reportWorkflowPrompt } from './legion-missions.ts'
 import { CommanderTodos, taskTodoPlanner, taskTodoOwner, type Todo } from './legion-todos.ts'
 import { knowledgeTools } from './knowledge.ts'
 import { Check, Errors } from 'typebox/value'
@@ -88,7 +88,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     const content = `Evidence ${args.id} | byte ${offset}-${offset + chunk.length}/${bytes.length} | nextOffset=${nextOffset ?? 'none'}\n${chunk.toString('utf8')}`
     return { content: [{ type: 'text', text: content }], details: { id: args.id, offset, bytes: chunk.length, totalBytes: bytes.length, nextOffset } }
   } } as unknown as AgentTool)
-  tools.push(...reporterTools({ ...context, store }, finish).filter(t => reporting || t.name === 'read_execution'))
+  tools.push(...reporterTools({ ...context, store }, finish).filter(t => reporting || t.name === 'read_execution' || store.project(run.projectId).mode==='general'&&step?.role==='soldier'))
   if (!reporting && step?.role!=='general') {
 
     tools.push(tool('sync_step', 'Adopt the latest Step contract at a safe boundary. Read current planVersion first. Returns goals and active dependencies. Old call trees remain blocked; generate your next action from this contract.', Type.Object({ planVersion: Type.Integer({ minimum: 1 }) }), args => store.syncStep(run.id, args.planVersion)))
@@ -102,7 +102,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
         const doc = args.doc ? { artifactId: storage.publish(run.projectId, Buffer.from(args.doc), { description: args.title+' — doc', runId: run.id }).id, description: args.title+' — doc', runId: run.id } : undefined
         return store.addFact(run.projectId, args.description, { title: args.title, doc, runId: run.id, evidence, creator: worker.name })
       }),
-      tool('submit_finding', 'ARTEX report_finding: register only a vulnerability actually triggered and verified in this target, never version/CVE matches or guesses. title=name, type=vulnclass, description=summary; severity and affected assetIds plus supporting factIds. A separate Reporter Session writes the report; do not write it during Explore. New Findings reach Commander through FGS deltas.', Type.Object({ title: Type.String(), description: Type.String(), type: Type.String(), severity: Type.Union(['critical','high','medium','low'].map(v => Type.Literal(v))), assetIds: Type.Array(Type.String()), factIds: refs }), args => store.addFinding(run.projectId, { ...args, creator: worker.name, runId: run.id })),
+      tool('submit_finding', 'ARTEX report_finding: register only a vulnerability actually triggered and verified in this target, never version/CVE matches or guesses. title=name, type=vulnclass, description=summary; severity and affected assetIds plus supporting factIds. Benchmark records the structured Finding only; no report Agent is started. In General mode, write a report in this Worker Session only when the Planner requests it. New Findings reach Commander through FGS deltas.', Type.Object({ title: Type.String(), description: Type.String(), type: Type.String(), severity: Type.Union(['critical','high','medium','low'].map(v => Type.Literal(v))), assetIds: Type.Array(Type.String()), factIds: refs }), args => store.addFinding(run.projectId, { ...args, creator: worker.name, runId: run.id })),
       tool('finish_step', (step && 'bootstrap' in step && step.bootstrap)
         ? 'Finish this Soldier initial Mission only after publishing a confirmed Fact; Commander owns Goal acceptance.'
         : 'Finish this Step only after explicitly submitting at least one confirmed, evidence-backed Fact. Consolidate the result, including verified failures or blockers, then call finish_step; a text summary alone does not complete the Step.', Type.Object({ summary: Type.String() }), args => {
@@ -115,7 +115,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   }
   if (!reporting && step?.role!=='general') tools.push(...knowledgeTools(evidenceRoot, context))
   const plannerTools = new Set(['read_graph','read_graph_delta','evidence_read','project_evidence_read', ...roleTools.map(t => t.name)])
-  return tools.filter(t => step?.role !== 'general' || plannerTools.has(t.name)).map(t => ({ ...t, description:store.project(run.projectId).mode==='general'?t.description.replaceAll('Commander','Planner').replaceAll('Soldier','Worker').replaceAll('Sapper','FGS').replace('A separate Reporter Session writes the report; do not write it during Explore.', 'Planner is notified through FGS and assigns report work when needed; no report Step is created automatically.'):t.description, execute: async (...args) => {
+  return tools.filter(t => step?.role !== 'general' || plannerTools.has(t.name)).map(t => ({ ...t, description:store.project(run.projectId).mode==='general'?t.description.replaceAll('Commander','Planner').replaceAll('Soldier','Worker').replaceAll('Sapper','FGS').replace('Benchmark records the structured Finding only; no report Agent is started. In General mode, write a report in this Worker Session only when the Planner requests it.', 'Planner is notified through FGS and assigns report work when needed; no report Step is created automatically.'):t.description, execute: async (...args) => {
     if (!Check(t.parameters, args[1])) throw new HttpError(422, 'Invalid tool arguments for '+t.name+': '+JSON.stringify([...Errors(t.parameters,args[1])].map(e=>({path:e.instancePath,message:e.message}))))
     if (!efficiencyToolAvailable(context, t.name)) throw new Error('Efficiency tool plugin is disabled')
     if (signal.aborted || store.run(run.id).status !== 'running') throw new Error('Activity has stopped')
@@ -132,7 +132,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   } }))
 }
 
-export const activityPrompt = (_activity: 'decide' | 'execute' | 'plan', step?: TaskAssignment, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => legionMission(isReportStep(step) ? 'reporter' : executionRole(mode,step?.role), mode, planner) + (step ? '\nAssigned Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'. Read and write only this Graph.' : '') + ((step && 'specialist' in step && step.specialist) ? '\nSpecialist assignment (within existing authorized Scope): '+JSON.stringify('specialist' in step ? step.specialist : undefined) : '') + ((step && 'bootstrap' in step && step.bootstrap) && mode==='general' ? '\nInitial Mission: establish evidence for the supplied Goal as a Worker. Planner owns planning and acceptance.' : '')
+export const activityPrompt = (_activity: 'decide' | 'execute' | 'plan', step?: TaskAssignment, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => (isReportStep(step) ? reportWorkflowPrompt : legionMission(executionRole(mode,step?.role), mode, planner)) + (step ? '\nAssigned Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'. Read and write only this Graph.' : '') + ((step && 'specialist' in step && step.specialist) ? '\nSpecialist assignment (within existing authorized Scope): '+JSON.stringify('specialist' in step ? step.specialist : undefined) : '') + ((step && 'bootstrap' in step && step.bootstrap) && mode==='general' ? '\nInitial Mission: establish evidence for the supplied Goal as a Worker. Planner owns planning and acceptance.' : '')
 
 export function taskPlanningContext(store: Store, step: TaskAssignment): { taskPlanner?: { stepId: string; role: Step['role']; receiver?: string; sessionId?: string } | null; planningTodos?: Todo[] } {
   if (store.project(step.projectId).mode === 'general') {

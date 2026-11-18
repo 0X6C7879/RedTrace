@@ -94,6 +94,27 @@ test('Planner and three Workers overlap, event processing commits only on succes
  }finally{await scheduler.close()}
 })
 
+test('Planner wait commits only processed delivered events and does not spin on the same trigger',async t=>{
+ const f=fixture(t),general=f.add(),ctx=f.context(general)
+ let finished=false
+ const tools=legionTools(f.scoped,ctx.run.id,f.p.id,null,()=>{finished=true},f.config),wait=tools.find(t=>t.name==='legion_wait')!
+ const child=(await tools.find(t=>t.name==='legion_step')!.execute('queue',{description:'local fixture work',sourceIds:[f.graph.originId]})).details as Step
+ const planner=()=>f.store.projectGraph(f.p.id,f.graph.id).planner!
+ const delivered=f.store.plannerEvents(planner()).cursor
+ await assert.rejects(wait.execute('future',{after:delivered+1}),/exceeds delivered/);assert.equal(finished,false)
+ await wait.execute('processed',{after:delivered});assert.equal(finished,true)
+ assert.equal(planner().cursor.acknowledged,0,'acknowledgement commits only when the round succeeds')
+ f.store.finishRun(ctx.run.id,'succeeded');assert.equal(planner().cursor.acknowledged,delivered)
+ assert.equal(f.store.plannerWakeAt(planner()),Infinity,'quiet round must not replay its old Step trigger')
+ const worker=f.context(child);f.fact(worker.run.id)
+ assert(Number.isFinite(f.store.plannerWakeAt(planner())),'new Worker evidence still wakes Planner')
+ const next=f.store.plannerEvents(planner()).cursor,paused=planner();paused.retryAfter=0;f.store.savePlanner(paused)
+ f.store.db.prepare("UPDATE events SET created_at='2000-01-01T00:00:00Z' WHERE project_id=?").run(f.p.id)
+ const second=f.context(paused),again=legionTools(f.scoped,second.run.id,f.p.id,null,()=>{},f.config).find(t=>t.name==='legion_wait')!
+ f.store.plannerEvents(planner());await again.execute('paused',{after:next});f.store.finishRun(second.run.id,'paused')
+ assert.equal(planner().cursor.acknowledged,delivered,'paused rounds never acknowledge pending evidence')
+})
+
 test('failed Worker retains literal Trace/Output and partial progress for the next Planner round',async t=>{
   const f=fixture(t),general=f.add(),planner=f.context(general),tools=graphTools(planner,()=>{})
   const child=(await tools.find(t=>t.name==='legion_step')!.execute('dispatch',{description:'inspect local service',sourceIds:[f.graph.originId]})).details as Step
@@ -129,7 +150,7 @@ test('exhausted Planner task stops honestly and remains visibly exhausted, never
 test('Finding report queues even when execution slots are full',t=>{
  const f=fixture(t),soldier=f.add('soldier'),ctx=f.context(soldier),proof=f.fact(ctx.run.id);f.store.stepLimit=()=>1
  const finding=f.scoped.addFinding(f.p.id,{title:'local verified finding',description:'fixture',type:'fixture',severity:'low',factIds:[proof.id],runId:ctx.run.id})
- assert.equal(f.scoped.nodeCount(f.p.id,'step'),2);const report=f.scoped.requestFindingReport(f.p.id,finding.id);assert.equal(report.sourceIds[0],finding.id);assert.throws(()=>f.context(report),/Step limit/)
+ assert.equal(f.scoped.nodeCount(f.p.id,'step'),1);const report=f.scoped.requestFindingReport(f.p.id,finding.id);assert.equal(f.scoped.nodeCount(f.p.id,'step'),2);assert.equal(report.sourceIds[0],finding.id);assert.throws(()=>f.context(report),/Step limit/)
 })
 
 test('legacy completed Todos without Fact acceptance are durably reopened for review without losing the attack chain',t=>{
@@ -144,4 +165,22 @@ test('legacy completed Todos without Fact acceptance are durably reopened for re
     const row=reopened.db.prepare('SELECT data FROM commander_todos WHERE project_id=? AND graph_id=?').get(f.p.id,f.graph.id)!
     assert.deepEqual(JSON.parse(String(row.data)),actual);assert.equal(reopened.node(f.p.id,proof.id,'fact').id,proof.id)
   }finally{reopened.close()}
+})
+
+test('quiet Planner keeps its reusable route despite unrelated load when that route still has capacity',async t=>{
+ const f=fixture(t),general=f.add(),first=f.context(general),initial=launchContext(f.scoped,first.run.id) as any
+ f.store.completePlanning(first.run.id,initial.plannerRound.triggers.cursor,'initial plan retained');f.store.finishRun(first.run.id,'succeeded')
+ const other=f.store.createGraph(f.p.id,{taskKey:'B',title:'B',origin:'local',goal:'verify'}),poolA={...worker,maxRunning:2},poolB={...worker,name:'spare',maxRunning:2}
+ f.store.forGraph(f.p.id,other.id).addStep(f.p.id,{role:'soldier',taskKey:'B',description:'unrelated work',sourceIds:[other.originId]})
+ const plans:Run[]=[],scheduler=new Scheduler(f.store,{...f.config,workers:[poolA,poolB]},async ctx=>{
+  if(ctx.run.activity==='plan'){plans.push(ctx.run);const payload=launchContext(ctx.store,ctx.run.id) as any;ctx.store.completePlanning(ctx.run.id,payload.plannerRound.triggers.cursor,'processed new evidence')}
+  else await new Promise<void>(resolve=>ctx.signal.addEventListener('abort',()=>resolve(),{once:true}))
+ })
+ try{
+  scheduler.start();await settle();assert.equal(f.store.runsByStatus('running').find(r=>r.activity==='execute')!.worker,poolA.name)
+  f.fact();f.store.db.prepare("UPDATE events SET created_at='2000-01-01T00:00:00Z' WHERE project_id=?").run(f.p.id);await settle()
+  assert.equal(plans.length,1);assert.equal(plans[0].worker,first.run.worker);assert.equal(plans[0].id,first.run.id,'load balancing must not create a fresh Planner Session while its current route has spare capacity')
+  scheduler.update({...f.config,workers:[{...poolA,maxRunning:1},poolB]});f.fact();f.store.db.prepare("UPDATE events SET created_at='2000-01-01T00:00:00Z' WHERE project_id=?").run(f.p.id);await settle()
+  assert.equal(plans.length,2);assert.equal(plans[1].worker,poolB.name,'a full preferred route must not serialize available capacity')
+ }finally{await scheduler.close()}
 })

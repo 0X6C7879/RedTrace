@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs'
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {Store} from '../src/store.ts'
@@ -26,7 +26,15 @@ test('completed-task recovery wakes only its existing Planner and never requeues
 test('General acceptance waits for internal instance cleanup, while Commander cannot redispatch solved work',async()=>{
  const root=mkdtempSync(path.join(os.tmpdir(),'completed-instance-cleanup-')),store=new Store(':memory:')
  try{
-  const dir=path.join(root,'skills/tsecbench-api');mkdirSync(dir+'/scripts',{recursive:true});writeFileSync(dir+'/SKILL.md','fixture');writeFileSync(dir+'/scripts/tsecbench.py','import json,sys\nassert sys.argv[1:] == ["close","T"]\nprint(json.dumps({"closed":True,"unique_code":"T"}))\n')
+  const dir=path.join(root,'skills/tsecbench-api');mkdirSync(dir+'/scripts',{recursive:true});writeFileSync(dir+'/SKILL.md','fixture');writeFileSync(dir+'/scripts/tsecbench.py',`import json,sys,pathlib
+marker=pathlib.Path(__file__).with_suffix('.closed')
+if sys.argv[1:] == ['list']:
+ print(json.dumps({'challenges':[{'unique_code':'T','is_completed':True,'container_status':'stopped' if marker.exists() else 'available','container_addr':[]}]}))
+else:
+ assert sys.argv[1:] == ['close','T']
+ marker.touch()
+ print(json.dumps({'closed':True,'unique_code':'T'}))
+`)
   const p=store.createProject({mode:'benchmark',title:'cleanup',origin:'TSecBench authorized fixture',goal:'verify'}).project,g=store.createGraph(p.id,{taskKey:'T',title:'T',origin:'local',goal:'verify'}),scoped=store.forGraph(p.id,g.id),l=new LegionStore(store,p.id),config={workspaceRoot:root+'/workspaces',maxSteps:3} as EngineConfig
   const planner=store.addPlanner(p.id,g.id,{description:'plan',sourceIds:[g.originId]}),prun=scoped.claim(p.id,'plan',worker),proofStep=scoped.addStep(p.id,{description:'proof',role:'soldier',taskKey:'T',sourceIds:[g.originId]}),proofRun=store.claim(p.id,'execute',worker,proofStep.id)
   store.audit({id:proofRun.id,project_id:p.id,graph_id:g.id},[{kind:'tool.completed',call_id:'proof',content:'local verified proof'}]);const fact=scoped.addFact(p.id,'verified proof',{runId:proofRun.id,evidence:[{description:'tool stdout',runId:proofRun.id,toolCallId:'proof'}]});store.finishRun(proofRun.id,'succeeded')
@@ -74,4 +82,30 @@ test('internal TSecBench cleanup still blocks on unsettled peers', async () => {
   assert.deepEqual(await benchmarkInstance(store,config,p.id,'T','close'),{closed:true})
   assert.equal(store.project(p.id).benchmarkHosts?.T,undefined)
  } finally {store.close();rmSync(root,{recursive:true,force:true})}
+})
+
+for(const closed of [true,false])test('CLI-started completed instance is settled before Soldier acceptance; closed='+closed,async t=>{
+ const root=mkdtempSync(path.join(os.tmpdir(),'cli-instance-accept-')),store=new Store(':memory:'),dir=path.join(root,'skills/tsecbench-api/scripts')
+ t.after(()=>{store.close();rmSync(root,{recursive:true,force:true})});mkdirSync(dir,{recursive:true})
+ writeFileSync(dir+'/tsecbench.py',`import json,sys,pathlib
+p=pathlib.Path(__file__).with_suffix('.calls')
+with p.open('a') as f: f.write(' '.join(sys.argv[1:])+'\\n')
+if sys.argv[1:] == ['list']:
+ print(json.dumps({'ok':True,'challenges':[{'unique_code':'T','is_completed':True,'container_status':'available','container_addr':['127.0.0.1:9001']}]}))
+else:
+ assert sys.argv[1:] == ['close','T']
+ print(json.dumps({'closed':${closed?'True':'False'}}))
+`)
+ const p=store.createProject({mode:'benchmark',title:'CLI lifecycle',origin:'TSecBench fixture',goal:'verify'}).project,g=store.createGraph(p.id,{taskKey:'T',title:'T',origin:'local',goal:'verify'}),scoped=store.forGraph(p.id,g.id)
+ new LegionStore(store);const step=scoped.addStep(p.id,{role:'soldier',taskKey:'T',description:'own task',sourceIds:[g.originId]}),run=scoped.claim(p.id,'execute',worker,step.id)
+ store.audit({id:run.id,project_id:p.id,graph_id:g.id},[{kind:'tool.completed',call_id:'proof',content:'platform submission accepted'}])
+ const fact=scoped.addFact(p.id,'confirmed proof',{runId:run.id,evidence:[{description:'retained result',runId:run.id,toolCallId:'proof'}]})
+ assert.equal(store.project(p.id).benchmarkHosts,undefined,'CLI start is not tracked by legacy managed hosts')
+ let finished=false;const accept=legionTools(scoped,run.id,p.id,null,()=>{finished=true},{workspaceRoot:root+'/workspaces'} as EngineConfig).find(t=>t.name==='legion_accept')!
+ const action=()=>accept.execute('accept',{expectedVersion:1,evidenceIds:[fact.id]})
+ if(closed)await action();else await assert.rejects(action(),/close is unconfirmed/)
+ assert.equal(finished,closed);assert.equal(scoped.node<Goal>(p.id,g.goalId,'goal').status,closed?'achieved':'open')
+ const observed=JSON.parse(String(store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(p.id,'T')!.data)).platformInstance
+ assert.equal(observed.status,closed?'stopped':'available','confirmed close must update Board immediately, not wait for Commander polling')
+ assert.equal(readFileSync(dir+'/tsecbench.calls','utf8'),'list\nclose T\n')
 })

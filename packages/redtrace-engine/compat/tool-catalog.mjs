@@ -41,17 +41,17 @@ export async function inspectToolCatalog(ctx, engine, manager, runtime) {
     for (const mode of ['general', 'benchmark']) {
       const project = store.createProject({ mode, title: 'Schema inspection', origin: 'tsecbench Schema inspection', goal: 'Inspect definitions', bootstrap: false }).project
       add(legionTools(store, 'commander', project.id, config.maxSteps, () => {}, config, new CommanderTodos()), coordinatorRole(mode))
-      for (const role of [...MODE_ROLES[mode].slice(1), ...(mode==='benchmark'?['reporter']:[])]) {
+      for (const role of MODE_ROLES[mode].slice(1)) {
         const graph = mode === 'benchmark' ? store.createGraph(project.id, { taskKey: role, title: role, origin: 'Schema inspection', goal: 'Inspect definitions' }) : store.projectGraphs(project.id)[0]
         const step = role==='general'?store.addPlanner(project.id,graph.id,{description:'Inspect definitions',sourceIds:[graph.originId]}):store.forGraph(project.id, graph.id).addStep(project.id, { role, taskKey: role, description: 'Inspect definitions', sourceIds: [graph.originId], goalId: graph.goalId })
         const worker = { name: 'schema', backend: 'mock' }
         const run = role==='general'?store.forGraph(project.id,graph.id).claim(project.id,'plan',worker):store.claim(project.id, 'execute', worker, step.id)
         const context = { store, run, worker, config, signal: new AbortController().signal, featureAvailable: available }
         const graphSchemas = graphTools(context, () => {})
-        add(graphSchemas, role==='reporter'?'soldier':role, tool => efficiencyToolAvailable(context, tool.name))
-        if (role !== 'reporter' && role !== 'general') {
-          add(resourceTools(context, verbs), role==='reporter'?'soldier':role)
-          add(verbTools(context, verbs, step), role==='reporter'?'soldier':role, tool => verbToolAvailable(verbs, tool.name))
+        add(graphSchemas, role, tool => efficiencyToolAvailable(context, tool.name))
+        if (role !== 'general') {
+          add(resourceTools(context, verbs), role)
+          add(verbTools(context, verbs, step), role, tool => verbToolAvailable(verbs, tool.name))
         }
         store.finishRun(run.id, 'cancelled')
       }

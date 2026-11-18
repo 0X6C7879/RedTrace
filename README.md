@@ -45,7 +45,7 @@ flowchart LR
 一次典型任务会经历：
 
 1. 用户创建 Project，必须选择 benchmark 或 general，提供 Scope、任务目标与可选 Hint；创建后模式固定。
-2. 所属 Commander / Planner 读取自己的 Board、STATE 和增量。Benchmark 固定角色为 Commander、General、Soldier。Scout 已退役；没有既有证据分类的题目保持未分配，不改派其他角色补齐。General 只使用 Planner、Worker：Planner 独占唯一主 FGS、任务级 TodoList、Step 创建、调度和验收；Worker 从 Frontier 原子领取可执行 Step，写回 Fact / Finding。第一项 Step 同样由 Planner 创建，不自动启动 Bootstrap 或报告 Worker。
+2. 所属 Commander / Planner 读取自己的 Board、STATE 和增量。Benchmark 固定角色为 Commander、General、Soldier。Scout 已退役；没有既有证据分类的题目保持未分配，不改派其他角色补齐。General 只使用 Planner、Worker：Planner 独占唯一主 FGS、任务级 TodoList、Step 创建、调度和验收；Worker 从 Frontier 原子领取可执行 Step，写回 Fact / Finding。第一项 Step 同样由 Planner 创建，不自动启动 Bootstrap 或报告 Worker。Benchmark 发现漏洞不再自动启动 Reporter；General 的报告是 Worker 的可选交付能力，由 Planner 按需决定，优先复用产生 Finding 的 Worker / 原 Session，仅在上下文不可用或明确需要独立整理时安排额外 Soldier Step。
 3. Benchmark 简单题由 Soldier 自主规划和执行；困难题或升级后由唯一 General 进入 ARTEX Planner 模式，只规划、调度和分析证据，Specialist 继承 Soldier 执行工具，每次执行一个 Step。General 项目模式仍只调度现有 Worker Pool。调度器按模式角色资格、模型路线与既有全局/项目/Worker 配额原子领取 Step，DSH 在独立 Run / Session / Agent Workspace 执行；历史 Workspace 不搬移。
 4. Worker 通过 Fact/Finding 共享确认结论，HELP/REPORT 经原生收件箱实际交付；queued 不代表已入模。Planner / Benchmark 单题规划者对证据验收，不把消息或 Step 结束当成果。
 5. Stop/同 Session 恢复、任务 Park 与新 Run 接力分别建模。只有原执行停止、工具结果明确后才能恢复或换模型；未知操作不自动重放。

@@ -8,7 +8,7 @@ import { graphTools } from '../src/runner.ts'
 import { graphContent, foldedFactIds } from '../src/graph-content.ts'
 import { ProjectEvidence } from '../src/project-evidence.ts'
 import { createPlanGuard } from '../src/plan-guard.ts'
-import { legionMission } from '../src/legion-missions.ts'
+import { legionMission, reportWorkflowPrompt } from '../src/legion-missions.ts'
 import type { EngineConfig, Fact, Finding, Step } from '../src/types.ts'
 import { serveEngine } from '../src/index.ts'
 import vm from 'node:vm'
@@ -170,14 +170,14 @@ test('Fact Doc and Reporter evidence retain existing cross-Graph boundaries', as
   const file = new ProjectEvidence(left, root).publish(p.id, Buffer.from('private graph A proof'), { description: 'A proof' })
   assert.throws(() => right.addFact(p.id, 'B', { doc: { artifactId: file.id, description: 'A doc' } }), /Cross-Graph artifact/)
   const fact = right.addFact(p.id, 'B proof'), finding = right.addFinding(p.id, { title: 'B finding', description: 'B fixture', type: 'fixture', severity: 'low', factIds: [fact.id] })
-  const step = right.nodes<Step>(p.id, ['step'])[0], run = right.claim(p.id, 'execute', worker, step.id)
+  const step = right.requestFindingReport(p.id,finding.id), run = right.claim(p.id, 'execute', worker, step.id)
   const tools = graphTools({ store: right, run, worker, config, signal: new AbortController().signal }, () => {})
   await assert.rejects(tools.find(t => t.name === 'project_evidence_read')!.execute('foreign', { artifact_id: file.id }), /not in this Graph/)
   assert.equal(right.node<Finding>(p.id, finding.id).report, undefined)
 })
 
 test('runtime prompt keeps only summary/method with existing evidence interfaces', () => {
-  const runtime = legionMission('reporter')
+  const runtime = reportWorkflowPrompt
   for (const heading of ['## 摘要','## 内容']) assert.ok(runtime.includes(heading))
   assert.doesNotMatch(runtime, /## (影响与危害|根因分析|修复建议)/)
   assert.match(runtime, /project_evidence_read/); assert.match(runtime, /read_execution/); assert.match(runtime, /expectedVersion/)
@@ -231,4 +231,18 @@ test('FGS canvas folds supporting Facts, expands referenced Fact and preserves s
   app.selectedProjectId = 'B'; app.selectedGraphId = 'graph-B'
   resolve({ id: 'f001', description: 'A private summary' }); await pending
   assert.equal(app.fgsNodeDetail, null, 'late A response must not appear in B')
+})
+
+test('Reporter locates compact trace events before expanding exact original evidence',async t=>{
+ const {store,project,activate}=fixture(t),step=store.addStep(project.id,{description:'producer',sourceIds:['origin']}),{run,call}=activate(step)
+ const original='LITERAL_PROOF_'+'x'.repeat(50000),thinking='PRIVATE_REASONING_'+'y'.repeat(50000)
+ store.audit({id:run.id,project_id:project.id,graph_id:run.graphId??null},[{kind:'thinking.message',content:thinking},{kind:'tool.completed',title:'bash',call_id:'proof-call',arguments:{command:'printf literal-proof'},content:original}])
+ const eventId=Number(store.db.prepare("SELECT id FROM audit_events WHERE run_id=? AND json_extract(data,'$.call_id')='proof-call'").get(run.id)!.id)
+ const page=await call('read_execution',{run_id:run.id,limit:100})
+ assert(JSON.stringify(page).length<3000,'index never embeds the full Worker trace');assert(!JSON.stringify(page).includes('PRIVATE_REASONING_'))
+ assert(page.events.some((e:any)=>e.id===eventId&&e.callId==='proof-call'&&e.detailAvailable))
+ const exact=await call('read_execution',{run_id:run.id,event_id:eventId})
+ assert.equal(exact.event.content,original);assert.deepEqual(exact.event.arguments,{command:'printf literal-proof'})
+ const other=store.createProject({title:'other',origin:'fixture',goal:'verify'}).project,foreign=store.claim(other.id,'execute',worker,store.addStep(other.id,{description:'foreign',sourceIds:['origin']}).id)
+ await assert.rejects(call('read_execution',{run_id:foreign.id,event_id:eventId}),/not in this Graph/)
 })
