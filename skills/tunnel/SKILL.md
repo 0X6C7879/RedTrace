@@ -1,6 +1,6 @@
 ---
 name: tunnel
-description: "Network reachability and pivoting after an operator already has a foothold. Use to make previously unreachable hosts, subnets, services or listener directions reachable via Ligolo-ng, Chisel, GOST v3, SSH/native forwarding, socat/netsh, Microsoft Dev Tunnels, DNS/HTTP/QUIC fallback transports, and multi-hop routing. This module does not exploit services, obtain credentials, or own C2/persistence. Its success condition is changed reachability: the operator can route/connect to the intended internal network/service through the selected foothold."
+description: "已有立足点后的网络可达/枢纽/多跳（SSH/Chisel/Ligolo/GOST/DNS/HTTP/QUIC 等）；须实测可达，不利用服务/取凭据/管理 C2 或持久化。"
 ---
 
 # /tunnel — Network Reachability & Pivoting

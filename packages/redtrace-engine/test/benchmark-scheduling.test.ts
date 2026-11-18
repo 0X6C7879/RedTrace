@@ -20,7 +20,7 @@ test('War Board is at most 100 lines and puts HELP ahead of other tasks', t => {
   assert.ok(board.lines.length<=100)
   assert.match(board.lines[1],/^HELP /)
   assert(board.lines.some(line=>line.startsWith('T109 ')))
-  assert(board.lines.some(line=>line.startsWith('Classification required: ')&&line.includes('T000')))
+  assert(board.lines.some(line=>line.startsWith('待分配：')&&line.includes('T000')))
   assert.ok(!JSON.stringify(board).includes('Need a concrete next move and full FGS'))
 })
 

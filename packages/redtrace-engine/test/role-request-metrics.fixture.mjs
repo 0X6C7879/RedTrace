@@ -3,29 +3,32 @@ import {createServer} from 'node:http'
 import {spawn} from 'node:child_process'
 import {mkdtempSync,symlinkSync,rmSync,writeFileSync} from 'node:fs'
 import {setTimeout as delay} from 'node:timers/promises'
-import {Configuration} from '../src/config.ts'
-import {Store} from '../src/store.ts'
 import path from 'node:path'
-const repo=path.resolve(import.meta.dirname,'../../..'),root=mkdtempSync('/tmp/redtrace-request-'),out=path.resolve(process.argv[2]),labels={},captures={}
+import {pathToFileURL} from 'node:url'
+const repo=path.resolve(process.env.REDTRACE_METRICS_REPO??path.resolve(import.meta.dirname,'../../..'))
+const {Configuration}=await import(pathToFileURL(repo+'/packages/redtrace-engine/src/config.ts'))
+const {Store}=await import(pathToFileURL(repo+'/packages/redtrace-engine/src/store.ts'))
+const root=mkdtempSync('/tmp/redtrace-request-'),out=path.resolve(process.argv[2]),labels={},captures={}
 let child,logs='',failure
 symlinkSync(repo+'/static',root+'/static')
+symlinkSync(repo+'/skills',root+'/skills')
 const text=m=>typeof m.content==='string'?m.content:JSON.stringify(m.content)
 const payloads=body=>body.messages.flatMap(m=>{try{return [JSON.parse(text(m))]}catch{return []}})
 const server=createServer(async(req,res)=>{try{
  let raw='';for await(const b of req)raw+=b
  const body=JSON.parse(raw),all=JSON.stringify(body.messages),id=Object.keys(labels).find(id=>all.includes(id)),sys=body.messages.filter(m=>m.role==='system').map(text).join('\n'),tools=body.tools??[],names=tools.map(t=>t.function.name)
  let label=labels[id]
- if(sys.includes('You are COMMANDER'))label=label==='Benchmark Commander'?label:undefined
- else if(sys.includes('You are GENERAL'))label=['Benchmark General','General Planner'].includes(label)?label:undefined
+ if(/(?:你是 |You are )COMMANDER/.test(sys))label=label==='Benchmark Commander'?label:undefined
+ else if(/(?:你是 |You are )GENERAL/.test(sys))label=['Benchmark General','General Planner'].includes(label)?label:undefined
  else if(sys.includes('漏洞报告撰写 agent'))label='Reporter'
- else if(!sys.includes('You are SOLDIER'))label=undefined
- if(['Benchmark Specialist','Custom Executor'].includes(label)&&!sys.includes('Specialist assignment'))label=undefined
+ else if(!/(?:你是 |You are )SOLDIER/.test(sys))label=undefined
+ if(['Benchmark Specialist','Custom Executor'].includes(label)&&!/(?:Specialist 分工|Specialist assignment)/.test(sys))label=undefined
  if(label)(captures[label]??=[]).push(body)
  let delta={content:'Local request observation only.'},name,args
  const payload=payloads(body).findLast(p=>p?.plannerRound||p?.frontier||p?.patrol)
- if(sys.includes('You are COMMANDER')){name='legion_messages';args={action:'wait',through:payload?.cursor??0}}
+ if(/(?:你是 |You are )COMMANDER/.test(sys)){name='legion_messages';args={action:'wait',through:payload?.cursor??0}}
  else if(label==='Benchmark General'){name='legion_plan';args={action:'done',state:'Confirmed local planning state',through:payload.plannerRound.triggers.cursor}}
- else if(sys.includes('You are GENERAL')){name='legion_finish';args={processed:payload?.changes?{[id]:payload.changes.cursor}:{},state:'Confirmed local General state'}}
+ else if(/(?:你是 |You are )GENERAL/.test(sys)){name='legion_finish';args={processed:payload?.changes?{[id]:payload.changes.cursor}:{},state:'Confirmed local General state'}}
  else if(label&&['General Soldier','Custom Executor','Benchmark Specialist'].includes(label)&&captures[label].length===1){name='fgs_query';args={action:'changes'}}
  if(label&&['Benchmark General','General Planner'].includes(label)&&captures[label].length===1)setTimeout(()=>{const db=new Store(root+'/.redtrace/engine.db'),g=db.projectGraphs(id)[0];db.forGraph(id,g.id).addFact(id,'new local fixture report',{evidence:[{description:'local fixture'}]});db.close()},1200)
  if(name){assert(names.includes(name),label+': missing '+name);delta={tool_calls:[{index:0,id:'fixture-'+Date.now(),type:'function',function:{name,arguments:JSON.stringify(args)}}]}}
@@ -57,7 +60,7 @@ try{
  assert(!names.includes('legion_todo'));assert(!names.includes('legion_experience'));assert(!names.includes('legion_roster'));assert(names.includes('bash'));assert(JSON.stringify(requests[0].messages).includes('taskPlanner'))
  for(const request of requests.slice(1))for(const m of request.messages.filter(m=>m.role==='tool')){assert(!text(m).includes('acknowledgementBoundary'));assert(!text(m).includes('planningCapacity'))}
  }
- if(label==='Benchmark Soldier'){assert(names.includes('legion_todo'));assert(names.includes('legion_experience'))}
+ if(label==='Benchmark Soldier'){assert(names.includes('legion_todo'));assert(names.includes('legion_experience'));const catalog=JSON.stringify(requests[0].messages);for(const name of ['tsecbench-api','ctf-web','stagnation-recovery'])assert(catalog.includes('`'+name+'`'),'missing Skill '+name)}
  }
  for(const label of ['Benchmark General','General Planner']){
  const next=payloads(captures[label].at(-1)).findLast(p=>p?.plannerRound||p?.frontier)

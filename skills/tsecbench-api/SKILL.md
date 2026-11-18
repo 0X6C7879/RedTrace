@@ -1,8 +1,6 @@
 ---
 name: tsecbench-api
-description: >-
-  Use for authorized TSec Benchmark tasks: VPN checks, challenge progress,
-  container lifecycle, score-penalized hints and flag submission.
+description: "授权 TSecBench 平台操作：VPN、题目进度、实例生命周期、扣分提示及 Flag 提交。"
 ---
 # TSecBench API
 
@@ -17,7 +15,7 @@ description: >-
 ## 流程
 
 1. 执行 Worker 首次进入评测先通过 CLI 执行 `python scripts/tsecbench.py vpn`。访问靶场前须确认 VPN 已通过；网络异常或长时间中断后重新检查。检查实际访问 `http://10.0.100.58`，只接受 `status=ok`；不能用平台地址替代。没有自动预检或自动连接 VPN。失败则停止平台操作并上报阻塞，恢复后再继续。
-2. Commander 用 `legion_platform (action=list)` 获取清单和进度，跳过 `is_completed=true`，没有既有证据分类的题目保持未分配。字段：`unique_code`、`description`、`difficulty/level`、`total_score`、`correct_flag_count/flag_count`、`is_completed`、`container_status`、`container_addr[]`。
+2. Commander 用 `legion_platform (action=list)` 获取清单和进度，跳过 `is_completed=true`，按平台 flag_count 派遣：>1 由 General 规划，1 或未知由 Soldier 自主规划；不等待分类证据。字段：`unique_code`、`description`、`difficulty/level`、`total_score`、`correct_flag_count/flag_count`、`is_completed`、`container_status`、`container_addr[]`。
 3. 同题 Step 复用实例，不重复启动。`available` 表示可访问，`pending/stop_pending` 先复核状态，`stopped` 表示未运行。各题环境与提交独立，不混用题号、地址或 flag。
 4. 每得到可信 flag 立即 `submit`，检查 `correct`、`awarded`、`cumulative_score`、`correct_flag_count/total_flag_count`；flag 长度 1–4096。平台确认正确后，执行 Worker 立即提交验收 Fact，记录题号、进度和分数；进度未满继续本题。本地成功不等于平台验收，重复正确 flag 不再加分。
 5. 未解决题默认保留实例。清理仍遵守现有内部控制：先保留平台确认和证据，同题其他执行及未知结果全部结算后才能关闭；仅 `closed=true` 或明确复核已停止才算释放实例。不得让新题 Worker 代管旧题清理，不添加专门清理 Agent。不能关闭其他题实例。

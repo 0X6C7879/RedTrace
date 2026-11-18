@@ -1,6 +1,6 @@
 ---
 name: ctf-forensics
-description: Provides digital forensics and signal analysis techniques for CTF challenges. Use when analyzing disk images, memory dumps, event logs, network captures, cryptocurrency transactions, steganography, PDF analysis, Windows registry, Volatility, PCAP, Docker images, coredumps, side-channel power traces, DTMF audio spectrograms, packet timing analysis, CD audio disc images, or recovering deleted files and credentials.
+description: "CTF 磁盘/内存/coredump/日志/PCAP/包时序/容器/注册表取证、加密货币、隐写/PDF、DTMF/频谱/CD 音频/信号/功耗侧信道及删除文件/凭据恢复。"
 license: MIT
 compatibility: Requires filesystem-based agent (Claude Code or similar) with bash, Python 3, and internet access for tool installation.
 allowed-tools: Bash Read Write Edit Glob Grep Task WebFetch WebSearch

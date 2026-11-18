@@ -11,9 +11,9 @@ ARTEX: https://github.com/RuoJi6/ARTEX commit 73d5437c5a64559ed803bcd096d2a0a001
 
 ## 最小接口适配
 - sapper-fact-layers.md：explore.md 文档三层和增量事实段，CLI 改为 FGS 工具；按用户要求默认只 Title。注意：Sapper 上游 graph/默认提示词实际包含 Title + Description，show 返回完整节点，doc 专读文档；严格 Title-only 是本次 RedTrace 适配，不宣称是上游原行为。
-- reporter.md：保留 Reporter 职责、八节结构、复现/证据/PoC/修复/纪律，只替换唤起句中的提交工具、Project/Graph/Finding ID、查询与保存接口和证据来源。上游独立 Finding/探索节点双 ID 统一为现有 FGS ID，EvidenceVersion 改用现有 Finding version 乐观并发检查。不迁入 PG、流量绑定系统或独立漏洞表。截图开关与 browser MCP 未引入，遵循原文不可用时不伪造截图规则。
+- reporter.md：RedTrace 已改为原 Worker 的按需交付，不是独立 Reporter；仅“摘要/内容”，完整保留复现链及证据来源，用实际 Finding version 保存。原始八节提示词仅保留在 upstream/artex-reporter.md，不注入模型。
 - agent/tools.go addFinding、db/findings.go DBFinding/ValidSeverity：name→title，vulnclass→type，summary→description，severity/asset_ids→severity/assetIds，证据通过 factIds→Fact→Evidence；原 details 保留。
-- server/orchestration.go seedReporterAgent：每个新结构化 Finding 创建一个 Reporter FGS Step，通过现有 Scheduler 在独立 DSH Session 执行；多个 Finding 可按已有全局/Worker 容量并发，未新增上游 maxParallel=5 限制、队列或状态库。Reporter 使用已配置 Soldier 模型路线与 preset，不新增必须配置项。
+- server/orchestration.go seedReporterAgent：仅作历史来源说明，不沿用自动 Reporter 生命周期。当前 Finding 不自动派报告；Planner 按需请求，优先原 Worker/Session，必要时创建 report-only Soldier Step，沿用现有容量和路由。
 - lib/sapper.py：add_fact/build_graph_view/render_graph_text/render_prompt/cmd_show/cmd_doc 调用链作为字段/按需读取依据，未复制文件存储和图数据库。
 
 ## 许可证

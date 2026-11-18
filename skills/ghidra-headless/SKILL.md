@@ -1,9 +1,6 @@
 ---
 name: ghidra-headless
-description: >-
-  Retained legacy fallback for Ghidra batch exports; prefer the plugin-owned REA Skill when visible. Reverse engineers binaries using Ghidra's headless analyzer. Use when
-  decompiling executables, extracting functions, strings, symbols, or
-  analyzing call graphs from compiled binaries without the Ghidra GUI.
+description: "Ghidra 无界面反编译/函数/字符串/符号/调用图批量导出的旧备用；可见时优先 REA Skill。"
 allowed-tools:
   - Bash
   - Read

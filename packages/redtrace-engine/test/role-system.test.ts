@@ -46,7 +46,7 @@ test('General is sole Planner; Soldier and custom Executor inherit execution ide
  assert.equal(step.role,'soldier');assert.deepEqual(step.specialist,custom?specialist:undefined)
  const run=store.claim(p.id,'execute',worker,step.id),names=legionTools(store,run.id,p.id,null,()=>{}).map(t=>t.name)
  for(const name of ['TodoWrite','legion_todos','legion_goal','legion_accept','legion_spawn','legion_step','legion_roster','legion_experience_search','legion_experience_capture'])assert(!names.includes(name),name)
- assert.match(legionMission('general','general'),/Never execute tasks/);assert.match(legionMission('soldier','general',false),/You are SOLDIER/)
+ assert.match(legionMission('general','general'),/不执行任务/);assert.match(legionMission('soldier','general',false),/你是 SOLDIER/)
  store.finishRun(run.id,'cancelled')
  }
  }finally{store.close()}

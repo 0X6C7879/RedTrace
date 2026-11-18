@@ -17,7 +17,7 @@ export function domainFixtureRequest(input,res) {
 export function recordWireRequest(body){
  const file=process.env.REDTRACE_SCHEMA_METRICS;if(!file)return
  const text=m=>typeof m.content==='string'?m.content:(m.content??[]).map(b=>b.text??'').join('')
- const system=(body.messages??[]).filter(m=>m.role==='system').map(text).join('\n'),role=system.match(/You are (COMMANDER|PLANNER|GENERAL|SOLDIER|SCOUT|WORKER)/)?.[1]?.toLowerCase()??'other'
+ const system=(body.messages??[]).filter(m=>m.role==='system').map(text).join('\n'),role=system.match(/你是 (COMMANDER|PLANNER|GENERAL|SOLDIER|SCOUT|WORKER)/)?.[1]?.toLowerCase()??'other'
  const schema=JSON.stringify(body.tools??[]),context=JSON.stringify(body.messages??[]);let rows=[];try{rows=JSON.parse(readFileSync(file,'utf8'))}catch(e){if(e.code!=='ENOENT')throw e}
  const launches=(body.messages??[]).filter(m=>m.role==='user').map(m=>{try{return JSON.parse(text(m))}catch{return null}}).filter(m=>m?.plannerRound);const launch=launches.at(-1);
  rows.push({role,...(launch?{launchBytes:Buffer.byteLength(JSON.stringify(launch)),launchEstimatedTokens:Math.ceil(JSON.stringify(launch).length/4)}:{}),count:(body.tools??[]).length,schemaBytes:Buffer.byteLength(schema),schemaEstimatedTokens:Math.ceil(schema.length/4),contextBytes:Buffer.byteLength(context),contextEstimatedTokens:Math.ceil(context.length/4),tools:body.tools})

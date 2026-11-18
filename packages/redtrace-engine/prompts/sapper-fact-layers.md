@@ -1,9 +1,7 @@
-FGS layers: title → description → doc/evidence. Read only what is needed; preserve technical meaning.
-- Origin: exact scope/requirements. Goal/SubGoal: outcome, acceptance and prerequisites. Step: action, input Fact IDs, expected evidence; preserve stage order/dependencies.
-- title: readable conclusion in the Goal's language, not the summary copied. Keep precise identifiers in description.
-- description: latest incremental fact / incremental confirmed result, with decision-relevant host:port, version, credential, constraints or failure. No recap or forced length limit.
-- doc/evidence: exact commands, Payload, HTTP headers/status/differences, outputs, stack traces and reproduction details. Preserve paths, credentials, Flags and Artifact/Run/Tool Call provenance. Long raw evidence stays here, not in indexes.
-- Append-only nodes: correct errors with a new Fact citing the old ID, contradiction, evidence and current conclusion. Never delete nodes or merge Fact/Finding. Retain history; do not use corrected claims as prerequisites. Step failure/cancellation/replanning and Goal status updates remain.
-
-submit_fact({title,description,doc,evidence}) stores doc Markdown as a Project Artifact. read_graph() gives title indexes; supporting Facts fold under Findings except active Step dependencies. read_graph({id}) gives summaries and supporting Fact summaries; detail:"doc" exposes Doc/Evidence references. project_evidence_read reads bytes; page until nextOffset=null. Prefer read_graph_delta and relevant IDs over rereading known history.
-submit_finding({title,type,severity,description,assetIds,factIds}): actually triggered, evidence-backed vulnerabilities only, never version/CVE matches or speculation. Reporter writes reports separately. Original evidence stays retained.
+FGS 三层按需读：
+- title：Goal 语言的结论，非摘要副本；精确标识放 description。
+- description：增量确证及决策所需 host:port/版本/凭据/约束/失败，不复述、不强限长度。
+- doc/evidence：完整命令/Payload/HTTP 头、状态、差异/输出/堆栈/复现/路径/凭据/Flag 及 Artifact/Run/Tool Call 来源；长原文不塞索引。
+Origin 保留精确范围/需求；Goal/SubGoal 写结果/验收/前提；Step 写动作/输入 Fact ID/预期证据及阶段顺序/依赖。
+节点只增不减：纠错新增 Fact 引旧 ID/矛盾/证据/现结论，旧错不作前提；不删除/合并 Fact/Finding，保留历史及 Step 失败/取消/重规划、Goal 更新。
+read_graph() 为 title 索引，支撑 Fact 折入 Finding（活动 Step 依赖除外）；read_graph({id}) 为摘要/关联 Fact；detail:"doc" 展开引用，project_evidence_read 分页至 nextOffset=null。优先 read_graph_delta/相关 ID，不重读已知历史。

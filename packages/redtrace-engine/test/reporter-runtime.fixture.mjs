@@ -33,7 +33,7 @@ const model = createServer(async (req, res) => {
     let name, args
     if(reporting&&graph.findings[0].report){name='finish_step';args={summary:'Verified issue and optional report saved in this Worker Session'}}
     else if (!reporting) {
-      assert.match(system, /You are SOLDIER/)
+      assert.match(system, /你是 SOLDIER/)
       const facts = graph.facts.filter(f => f.id !== 'origin')
       if (!calls.some(c => c.function.name === 'bash')) {
         name = 'bash'; args = { command: `curl -sS -i '${target}/private' > baseline.http; curl -sS -i '${target}/private?debug=1' > proof.http; cat baseline.http proof.http`, description: 'Verify authorized loopback-only fixture baseline and proof' }
@@ -44,8 +44,8 @@ const model = createServer(async (req, res) => {
         name = 'submit_finding'; args = { title: 'Local fixture debug authentication bypass', type: 'CWE-287', severity: 'low', description: 'Verified only in the intentionally vulnerable local fixture: debug query exposes a dummy marker without login', assetIds: [target+'/private'], factIds: facts.map(f => f.id) }
       } else { name = 'finish_step'; args = { summary: 'Verified fixture; report can be requested in the retained Worker Session' } }
     } else {
-      assert.match(system,/You are SOLDIER/);assert.ok(names.includes('update_finding_report'))
-      assert(!system.includes('You are REPORTER'))
+      assert.match(system,/你是 SOLDIER/);assert.ok(names.includes('update_finding_report'))
+      assert(!system.includes('你是 REPORTER'))
       findingId = graph.findings[0].id
       const detail = toolOutputs.find(o => o.call?.function.name === 'read_graph'&&JSON.parse(o.call.function.arguments).id===findingId)?.value
       const listed = toolOutputs.find(o => o.call?.function.name === 'read_execution' && !JSON.parse(o.call.function.arguments).run_id)?.value

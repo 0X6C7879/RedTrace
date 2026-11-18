@@ -377,7 +377,7 @@ export async function apply(ctx, options) {
         task.concludeOnly = concludeOnly = true
         prompt(rewriteToolNames(planning ? '结束本轮规划：检查新 Fact、Worker Trace 和 Output，保持未获证据的 Todo 未完成，保存 STATE 并调用 legion_plan_done；不要等待 Worker，不要伪造 Fact。' : reporting ? '已进入超时收尾。只根据已读取的真实证据完成本漏洞报告，缺失内容明确标注未提供或未验证，调用 update_finding_report 保存；不得重新探测或伪造证据。' : run.activity === 'execute'
           ? '已进入超时收尾，必须调用 submit_fact 提交至少一条已有证据支持的汇总结论，再调用 finish_step。题目未解决时保留容器；没有成功成果时只提交有真实测试证据的否定结论，明确对象、方法、范围和观察结果；API、工具或执行故障不是攻击失败，没有证据时不得伪造 Fact，由系统按执行故障结算。'
-          : '仅处理已交付的证据并调用 finish_decide，不再执行外部操作。'))
+          : '仅处理已交付证据、保存 STATE 并结束本轮，不再执行外部操作。'))
         await wait(limits.concludeTimeout)
       }
       if (!finished && !task.committed && !signal.aborted) { const current=store.run(run.id);current.failureCode=concludeOnly?'TIMEOUT':'PROCESS_EXIT';store.saveRun(current);throw new Error(concludeOnly ? 'Activity ended without a structured completion' : 'Agent execution failed') }

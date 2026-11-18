@@ -11,7 +11,7 @@ import { ProjectEvidence } from './project-evidence.ts'
 export function reporterTools(context: TaskContext, finish: () => void): AgentTool[] {
   const { store, run, config } = context
   return [
-    { name: 'read_execution', label: 'read_execution', description: 'List producer Runs or compact trace locators by run_id; query narrows the index. Read exact original commands/results with run_id plus event_id before citing them. Fact evidence.runId/toolCallId locates proof; never reconstruct missing output.', parameters: Type.Object({ run_id: Type.Optional(Type.String()), before: Type.Optional(Type.Integer({ minimum: 1 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), query: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })), event_id: Type.Optional(Type.Integer({ minimum: 1 })) }), executionMode: 'sequential',
+    { name: 'read_execution', label: 'read_execution', description: "按 run_id 列 producer Run/精简 Trace，query 定位；引用前以 run_id+event_id 核对完整原始命令/结果。Fact evidence.runId/toolCallId 定位证明，不补造缺失输出。", parameters: Type.Object({ run_id: Type.Optional(Type.String()), before: Type.Optional(Type.Integer({ minimum: 1 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), query: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })), event_id: Type.Optional(Type.Integer({ minimum: 1 })) }), executionMode: 'sequential',
       async execute(_id, args: { run_id?: string; before?: number; limit?: number; query?: string; event_id?: number }) {
         const limit = args.limit ?? 100, before = args.before ?? Number.MAX_SAFE_INTEGER
         let value: unknown
@@ -26,7 +26,7 @@ export function reporterTools(context: TaskContext, finish: () => void): AgentTo
         const text=JSON.stringify(value)
         return { content: [{ type: 'text', text }], details: JSON.parse(text) }
       } },
-    { name: 'update_finding_report', label: 'update_finding_report', description: 'Save the ARTEX Markdown report as a hash-addressed Project Artifact and link it back to this assigned Finding. expectedVersion is the version actually read from read_graph. This saves a Worker deliverable without ending ordinary execution; a report-only Step ends after saving. Never invent evidence.', parameters: Type.Object({ finding_id: Type.String(), expectedVersion: Type.Integer({ minimum: 1 }), report: Type.String({ minLength: 1 }) }), executionMode: 'sequential',
+    { name: 'update_finding_report', label: 'update_finding_report', description: "保存 hash 寻址 Markdown Artifact 并关联本 Finding；expectedVersion 用实际读取版本。普通 Worker 保存后继续，report-only Step 保存后结束；不造证据。", parameters: Type.Object({ finding_id: Type.String(), expectedVersion: Type.Integer({ minimum: 1 }), report: Type.String({ minLength: 1 }) }), executionMode: 'sequential',
       async execute(_id, args: { finding_id: string; expectedVersion: number; report: string }) {
         const step = store.node<Step>(run.projectId, run.stepId!, 'step')
         if (!(step.reportFindingId===args.finding_id || step.sourceIds.includes(args.finding_id) || store.project(run.projectId).mode==='general'&&store.node<Finding>(run.projectId,args.finding_id,'finding').stepId===step.id)) throw new HttpError(403, 'Worker cannot update another Finding')

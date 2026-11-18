@@ -16,7 +16,7 @@ const projects=['A','B'].map(title=>store.createProject({mode:'general',title,or
 const requests=new Map(),first=new Set(),responses=new Set();let release;const both=new Promise(r=>release=r);let overlap=false,ctx,controller
 const model=createServer(async(req,res)=>{
  responses.add(res);res.on('close',()=>responses.delete(res))
- try{let text='';for await(const b of req)text+=b;const input=domainFixtureRequest(JSON.parse(text),res),all=JSON.stringify(input.messages),projectId=all.match(/Assigned Project=(proj_\d+)/)?.[1];assert(projectId)
+ try{let text='';for await(const b of req)text+=b;const input=domainFixtureRequest(JSON.parse(text),res),all=JSON.stringify(input.messages),projectId=all.match(/分配 Project=(proj_\d+)/)?.[1];assert(projectId)
  const system=input.messages.map(m=>typeof m.content==='string'?m.content:(m.content??[]).map(b=>b.text??'').join('')).join('\n')
  const shown=system.match(/Current working directory: ("[^"]+")/)
  assert(shown);assert.equal(realpathSync(JSON.parse(shown[1])),realpathSync(path.join(configuration.workspaceRoot,projectId)))

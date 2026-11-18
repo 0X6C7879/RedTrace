@@ -24,7 +24,7 @@ const settle=async predicate=>{for(let i=0;i<1000;i++){if(modelError)throw model
 const advance=async ms=>{const end=clock+ms;for(const t of [...timers].sort((a,b)=>a.at-b.at)){if(t.at>end)continue;clock=t.at;if(t.interval)t.at+=t.delay;else timers.delete(t);t.fn();await new Promise(r=>realTimeout(r,5))}clock=end}
 const text=m=>typeof m.content==='string'?m.content:(m.content??[]).map(b=>b.text??'').join('')
 const server=createServer(async(req,res)=>{try{
- let raw='';for await(const b of req)raw+=b;const body=domainFixtureRequest(JSON.parse(raw),res),system=body.messages.filter(m=>m.role==='system').map(text).join('\n'),role=['COMMANDER','SOLDIER','GENERAL'].find(r=>system.includes('You are '+r));assert.ok(role);roles.add(role);requests++
+ let raw='';for await(const b of req)raw+=b;const body=domainFixtureRequest(JSON.parse(raw),res),system=body.messages.filter(m=>m.role==='system').map(text).join('\n'),role=['COMMANDER','SOLDIER','GENERAL'].find(r=>system.includes('你是 '+r));assert.ok(role);roles.add(role);requests++
  if(process.env.REDTRACE_INVALID_ACTION_PROBE)for(const m of body.messages.filter(m=>m.role==='tool')){const value=text(m);if(value.includes('must be string'))diagnostics.add('commander');if(value.includes('evidence')&&value.includes('Invalid tool arguments'))diagnostics.add('soldier')}
  const names=body.tools.map(t=>t.function.name);for(const n of names)(role==='COMMANDER'?commanderTools:workerTools).add(n)
  let name,args

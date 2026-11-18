@@ -1,6 +1,6 @@
 ---
 name: ctf-reverse
-description: CTF solving references for custom VMs, anti-debugging, emulation, symbolic constraints and flag validation. Prefer reverse-engineer-anything for supported static analysis; use these references for specialized solving and retained legacy fallbacks.
+description: "CTF 自定义 VM、反调试、模拟、符号约束及 Flag 验证。支持的静态分析优先 reverse-engineer-anything；本 Skill 补专项解题和旧备用路径。"
 license: MIT
 compatibility: Requires preinstalled tools. Do not install interactively during evaluation.
 allowed-tools: Bash Read Write Edit Glob Grep Task WebFetch WebSearch

@@ -1,6 +1,6 @@
 ---
 name: privesc-linux
-description: "Linux local privilege escalation from a low-privilege shell to root. Covers quiet vs loud enumeration, sudo/GTFOBins, CVE-2025-32463 chwoot and CVE-2025-32462 host bypass, polkit/udisks CVE-2025-6018/6019, SUID/capabilities, systemd timers/units, cron/PATH/LD_PRELOAD, dangerous groups and docker.sock, host-local container escape, and version-gated kernel LPE including Copy Fail CVE-2026-31431. Use when the operator has a Linux foothold and needs root. Kubernetes RBAC stays in /k8s. Endpoint blocks hand off to /edr-bypass then return here."
+description: "已有 Linux 立足点提权 root：本机权限/配置/服务/容器/版本匹配内核；K8s RBAC 归 /k8s，防护阻塞交 /edr-bypass 后返回。"
 ---
 
 # /privesc-linux — Linux 本机提权

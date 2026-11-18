@@ -16,8 +16,8 @@ export class LegionExperience {
     this.store.project(projectId);if(!input.factIds.length)throw new HttpError(422,'Experience requires confirmed source Facts')
     for(const id of input.factIds){this.store.node(projectId,id,'fact');if(id==='origin')throw new HttpError(422,'Scope alone is not experience evidence')}
     const family=requiredText(input.family,'family'),title=requiredText(input.title,'title'),body=requiredText(input.body,'body')
-    const document='# '+title+'\n\nFamily: '+family+'\nSource Project: '+projectId+'\nSource Facts: '+input.factIds.join(', ')+'\n\n'+body+'\n\nTransfer is a Hint only. Reverify product, version, scope and prerequisites in the target Project.\n'
-    const artifact=new ProjectEvidence(this.store,this.workspaceRoot).publish(projectId,Buffer.from(document),{description:'Verified source experience: '+title})
+    const document='# '+title+'\n\nFamily: '+family+'\nSource Project: '+projectId+'\nSource Facts: '+input.factIds.join(', ')+'\n\n'+body+'\n\n转移仅作 Hint；在目标 Project 重验产品/版本/范围/前提。\n'
+    const artifact=new ProjectEvidence(this.store,this.workspaceRoot).publish(projectId,Buffer.from(document),{description:'确证源经验：'+title})
     const row=this.store.db.prepare('INSERT INTO legion_experience(project_id,family,title,body,artifact_id,fact_ids,created_at) VALUES (?,?,?,?,?,?,?) RETURNING id').get(projectId,family,title,body,artifact.id,JSON.stringify(input.factIds),now())!
     return{id:Number(row.id),projectId,family,title,artifactId:artifact.id,sha256:artifact.sha256}
   }
@@ -32,7 +32,7 @@ export class LegionExperience {
     const sourceView=Object.create(this.store) as Store
     Object.defineProperties(sourceView,{projectScope:{value:String(source.project_id)},graphScope:{value:undefined}})
     new ProjectEvidence(sourceView,this.workspaceRoot).read(String(source.project_id),String(source.artifact_id))
-    const id='transfer-'+randomUUID(),content='[Family Transfer '+id+'] UNVERIFIED IN THIS TARGET. Source '+source.project_id+' / experience '+sourceId+' / family '+source.family+' / artifact '+source.artifact_id+'\n'+brief+'\nReverify target product/version and prerequisites before using this technique. Do not promote source claims into target Facts.'
+    const id='transfer-'+randomUUID(),content='[Family Transfer '+id+'] 本目标未验证；源 '+source.project_id+' / experience '+sourceId+' / family '+source.family+' / artifact '+source.artifact_id+'\n'+brief+'\n先在目标重验产品/版本/前提；不将源结论直接作目标 Fact。'
     const graph=this.store.projectGraphs(targetProject).find(g=>g.taskKey===taskKey)??this.store.projectGraphs(targetProject).find(g=>g.type==='main')
     if(!graph)throw new HttpError(422,'Initialize the target task Graph before transfer')
     const hint=this.store.forGraph(targetProject,graph.id).addInput(targetProject,'hint',content,'commander')

@@ -29,7 +29,7 @@ const model = createServer(async (req, res) => {
     if(names.includes('legion_roster')){const live=await(await fetch(api+'/console/tools')).json();assert(!names.includes('legion_board'));assert(live.tools.some(t=>t.name==='legion_inspect'&&t.roles.includes('general')));assert(live.runs.some(r=>r.visibleSchemas===b.wireTools.length),'Run visible count must match the actual provider Tool Schema list');liveSchemaChecked=true}
     requests.push(b)
     const system = b.messages.filter(m => m.role === 'system').map(m => m.content).join('\n')
-    const role = ['GENERAL','SOLDIER'].find(role => system.includes('You are ' + role))
+    const role = ['GENERAL','SOLDIER'].find(role => system.includes('你是 ' + role))
     if (!role) throw new Error('Missing Legion Mission: ' + system.slice(0,300))
     roles.add(role)
     const textOf=m=>typeof m.content==='string'?m.content:(m.content??[]).map(b=>b.text??'').join('')
@@ -128,7 +128,7 @@ try {
     assert.equal(store.run(runs[0].id).pendingTools.length,0)
     const campaign=JSON.parse(store.db.prepare('SELECT data FROM project_campaigns WHERE project_id=?').get(projectId).data)
     assert.ok(campaign.cursors[projectId].acknowledged>0)
-    console.log('RUN_VISIBLE_SCHEMAS='+JSON.stringify(Object.fromEntries(['GENERAL','SOLDIER'].map(role=>[role,[...new Set(requests.filter(b=>b.messages.some(m=>m.role==='system'&&String(m.content).includes('You are '+role))).map(b=>b.wireTools?.length??b.tools.length))]]))));
+    console.log('RUN_VISIBLE_SCHEMAS='+JSON.stringify(Object.fromEntries(['GENERAL','SOLDIER'].map(role=>[role,[...new Set(requests.filter(b=>b.messages.some(m=>m.role==='system'&&String(m.content).includes('你是 '+role))).map(b=>b.wireTools?.length??b.tools.length))]]))));
   console.log('LEGION_RUNTIME_SUPPORTED=true; roles=Planner,Worker; specialist_workers=0; worker_has_no_plan_tools=true; serial_dependencies=true; shared_fgs=true; commander_acceptance=true; native_message_admission=true; state_and_cursor_persisted=true; commander_native_resume=true; help_reply_admitted=true; model=local-protocol-fixture; commander_native_log_read=true')
   } finally { store.close() }
 } catch (error) {

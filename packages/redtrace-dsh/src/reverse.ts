@@ -29,6 +29,6 @@ export async function apply(ctx: any): Promise<void> {
   await mount(ctx,'vendor/deepseek-harness/packages/skill/skill-filesystem/lib/index.js',{
     providerName:'redtrace-reverse',includeDefaultRoots:false,customSkillDirs:[path.join(repoRoot,'plugins/reverse/skills')],watch:false,
   })
-  ctx.shellEnv.register({name:'redtrace-reverse',variables:{DSH_REA_CLI:{description:'Pinned REA CLI path'}},resolve:()=>({DSH_REA_CLI:path.join(repoRoot,'node_modules/rea-agents/scripts/rea.mjs')})})
-  ctx.systemPrompt.section({name:'redtrace:rea-cli',order:3,interpolate:false,text:'REA is CLI-only: load reverse-engineer-anything and use rea --help through the native shell. Never call or start REA MCP tools. No CLI script is a Tool Schema.'})
+  ctx.shellEnv.register({name:'redtrace-reverse',variables:{DSH_REA_CLI:{description:"固定 REA CLI 路径"}},resolve:()=>({DSH_REA_CLI:path.join(repoRoot,'node_modules/rea-agents/scripts/rea.mjs')})})
+  ctx.systemPrompt.section({name:'redtrace:rea-cli',order:3,interpolate:false,text:'REA 仅用 CLI：加载 reverse-engineer-anything，通过原生 Shell 查 rea --help；不调用/启动 REA MCP，不将 CLI 脚本视为 Tool Schema。'})
 }

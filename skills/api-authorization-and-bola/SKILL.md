@@ -1,31 +1,23 @@
 ---
 name: api-authorization-and-bola
-description: >-
-  API authorization and BOLA testing playbook. Use when APIs expose object identifiers, nested resources, hidden writable fields, or weak function-level authorization.
+description: API 对象 ID、嵌套资源、隐藏可写字段或函数权限薄弱时，定向验证 BOLA/BFLA、动词滥用及 mass assignment。
 ---
 
-# SKILL: API Authorization and BOLA — Object Access, Function Access, and Mass Assignment
+# API 授权：BOLA / BFLA / Mass Assignment
 
-> **AI LOAD INSTRUCTION**: Use this skill when an API exposes object IDs, nested resources, or role-sensitive functions and you need a focused authorization test path: BOLA, BFLA, method abuse, and hidden field control.
+## 验证循环
 
-## 1. CORE TEST LOOP
+1. 建立测试账号 A/B。
+2. 以 A 捕获创建、读取、更新、删除请求，再用 B 的 token 对照重放。
+3. 检查同级/嵌套端点、替代 HTTP 动词及角色敏感函数。
 
-1. Create Account A and Account B.
-2. As Account A, capture create, read, update, and delete flows.
-3. Replay with Account B's token.
-4. Test sibling endpoints, nested endpoints, and alternate HTTP verbs.
-
-## 2. TEST SURFACES
-
-| Surface | Example |
+| 测试面 | 示例 |
 |---|---|
-| object read | `/api/v1/orders/123` |
-| nested object | `/api/v1/users/1/invoices/9` |
-| admin or internal function | `/api/v1/admin/users` |
-| update path | `PUT`, `PATCH`, `DELETE` variants |
-| hidden JSON fields | `role`, `org`, `verified`, `tier` |
-
-## 3. QUICK PAYLOADS
+| 对象读取 | `/api/v1/orders/123` |
+| 嵌套对象 | `/api/v1/users/1/invoices/9` |
+| 管理/内部函数 | `/api/v1/admin/users` |
+| 修改路径 | `PUT`、`PATCH`、`DELETE` |
+| 隐藏 JSON 字段 | `role`、`org`、`verified`、`tier` |
 
 ```json
 {"role":"admin"}
@@ -34,15 +26,6 @@ description: >-
 {"verified":true}
 ```
 
-## 4. WHAT TESTERS MISS
+别漏查 Header/Cookie/GraphQL 参数和嵌套对象中的 ID、同路由弱鉴权动词、只验父资源未验子资源、管理文档暴露的额外可写字段。
 
-- object IDs in headers, cookies, GraphQL args, and nested objects
-- alternate methods sharing the same route but weaker authz
-- parent check present, child resource check missing
-- admin docs revealing extra writable fields
-
-## 5. NEXT ROUTING
-
-- For JWT or token-layer abuse: [api auth and jwt abuse](../api-auth-and-jwt-abuse/SKILL.md)
-- For GraphQL and hidden parameter discovery: [graphql and hidden parameters](../graphql-and-hidden-parameters/SKILL.md)
-- For broader IDOR patterns outside APIs: [idor broken object authorization](../idor-broken-object-authorization/SKILL.md)
+JWT/token 及更广泛 IDOR 路径见 [认证与访问控制](../auth-access-control/SKILL.md)；GraphQL/隐藏参数发现见 [API 测试](../api-testing/SKILL.md)。

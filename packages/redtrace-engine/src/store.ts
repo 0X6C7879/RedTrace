@@ -774,7 +774,7 @@ export class Store {
       const prior = finding.producerRunId ? this.run(finding.producerRunId) : undefined
       if(!independent&&this.project(projectId).mode==='general'&&producer&&prior&&prior.stepId===producer.id){
         if(['running','paused'].includes(prior.status)&&['running','paused'].includes(producer.status)){
-          scoped.addInput(projectId,'hint','Report requested for Finding '+finding.id+': save its verified ARTEX Markdown with update_finding_report in this Session, then continue the assigned work.','planner',producer.id)
+          scoped.addInput(projectId,'hint','报告请求 Finding '+finding.id+'：在本 Session 用 update_finding_report 保存已验证 ARTEX Markdown，再继续原任务。','planner',producer.id)
           return producer
         }
         if(prior.status==='succeeded'&&producer.status==='done'&&(prior.checkpoint as {sessionId?:string}|null)?.sessionId&&!prior.pendingTools.length){

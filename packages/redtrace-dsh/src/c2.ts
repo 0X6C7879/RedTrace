@@ -23,7 +23,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
   })
   definitions.push({
     name: 'c2_listener_create',
-    description: 'Create a C2 listener as a shared resource. listener_type is one of http_beacon, https_beacon, tcp_reverse, tcp_bind, external_c2; TCP listeners take bind_host/bind_port, beacon listeners take callback_host, external_c2 only registers adapter_endpoint; read its sessions explicitly and use resource_register to register external sessions with connection_type=external_c2 and secret.endpoint=<adapter>/execute. TCP/beacon sessions become reusable remote.command channels when they connect.',
+    description: "创建共享 C2 listener。listener_type 支持 http_beacon/https_beacon/tcp_reverse/tcp_bind/external_c2；TCP 用 bind_host/bind_port，beacon 用 callback_host。external_c2 仅注册 adapter_endpoint，须显式读取会话并用 resource_register 注册 connection_type=external_c2、secret.endpoint=<adapter>/execute。TCP/beacon 连入后可作 remote.command 通道。",
     parameters: {
       type: 'object',
       properties: {
@@ -66,7 +66,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
   })
   definitions.push({
     name: 'c2_session_create',
-    description: 'Register a direct-access session (SSH, Evil-WinRM, PsExec, WMI, or a custom command client) as a shared resource. Provide the target plus either secret_type material (password / hash / private_key_path) or a credential_id referencing a registered credential. Registration is not connection or authentication success. Register credentials with a concrete source for explicit verification/reuse, not batches of guessed usernames/passwords. Reuse the same resource for the same credentials; verify with remote_session_probe. AUTH_FAILED rejects these credentials: stop this authentication branch unless new credential evidence is obtained; renaming/re-registering is not a retry strategy.',
+    description: "注册 SSH/Evil-WinRM/PsExec/WMI/自定义命令会话：target 加 secret_type 材料（password/hash/private_key_path）或 credential_id。注册≠认证/连接成功；凭据须有具体来源，不批量猜测。同凭据复用资源，用 remote_session_probe 验证。AUTH_FAILED 后停止该认证分支，有新凭据证据才继续；改名/重注册不能修复失败。",
     parameters: {
       type: 'object',
       properties: {
@@ -107,7 +107,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
   })
   definitions.push({
     name: 'c2_credential_create',
-    description: 'Register a credential (host, web, database, Active Directory, cloud, ssh_key, token, certificate, hash, ticket, or custom) as a shared resource. The secret value is stored server-side for terminal and Worker reuse; sessions can reference it by credential_id.',
+    description: "注册共享凭据（host/web/database/Active Directory/cloud/ssh_key/token/certificate/hash/ticket/custom）；secret 仅存服务端供终端/Worker 复用，会话用 credential_id 引用。",
     parameters: {
       type: 'object',
       properties: {
@@ -139,7 +139,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
   })
   definitions.push({
     name: 'c2_profile_create',
-    description: 'Register a malleable traffic profile (User-Agent, beacon URIs, jitter, response headers) as a shared resource; reference it from listeners via profile_id.',
+    description: "注册共享流量 profile（User-Agent、beacon URI、jitter、响应头）；listener 用 profile_id 引用。",
     parameters: {
       type: 'object',
       properties: {
@@ -173,7 +173,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
   })
   definitions.push({
     name: 'c2_listener_kinds',
-    description: 'List the one-liner payload kinds compatible with a C2 listener (shell and platform availability).',
+    description: "列出 C2 listener 兼容的 oneliner 类型及 Shell/平台。",
     parameters: {
       type: 'object',
       properties: { listener_id: text },
@@ -187,7 +187,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
   })
   definitions.push({
     name: 'c2_payload_oneliner',
-    description: 'Generate a one-liner payload command for a C2 listener and register it as a payload resource. Discover valid kinds with c2_listener_kinds first.',
+    description: "生成并注册 listener 的 oneliner Payload；先用 c2_listener_kinds 查合法类型。",
     parameters: {
       type: 'object',
       properties: { listener_id: text, kind: text, callback_host: { type: 'string' } },
@@ -205,7 +205,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
   })
   definitions.push({
     name: 'c2_payload_build',
-    description: 'Compile the Go beacon binary for a C2 listener and register it as a payload resource. Requires the Go toolchain on the server.',
+    description: "编译并注册 listener 的 Go beacon；服务端需 Go 工具链。",
     parameters: {
       type: 'object',
       properties: {
@@ -229,7 +229,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
   })
   definitions.push({
     name: 'c2_payload_external',
-    description: 'Generate a payload through an external_c2 listener\'s adapter framework and register it as a payload resource. The listener must carry an adapter endpoint.',
+    description: "通过 external_c2 listener 的 adapter 生成并注册 Payload；listener 必须有 adapter endpoint。",
     parameters: {
       type: 'object',
       properties: { listener_id: text, format: text, options: { type: 'object', additionalProperties: true } },

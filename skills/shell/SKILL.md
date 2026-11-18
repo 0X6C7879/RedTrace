@@ -1,6 +1,6 @@
 ---
 name: shell
-description: "Shell and session operations after an attack module already established command execution, a raw shell, webshell channel, container/runner shell, or remote session. This module does not own exploitation and should not pull SSH/WinRM/RDP authentication or vulnerability-to-shell chains out of Web/AD/Cloud/K8s/CI-CD/Service/Phishing. Use it to bootstrap a usable callback from existing command execution, stabilize Linux PTY, upgrade Windows sessions with ConPTY where applicable, manage listeners, recover fragile sessions, and exchange files for continued operations."
+description: "已有执行/raw shell/WebShell/容器/远程会话后的回连、PTY/ConPTY、listener、恢复/文件交换；不接管认证或漏洞到 Shell 链。"
 ---
 
 # /shell — Shell & Session Operations

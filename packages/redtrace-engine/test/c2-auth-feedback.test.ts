@@ -36,10 +36,10 @@ test('explicit authentication failure is visible, invalidates channel, and marks
     assert.doesNotMatch(activityPrompt('execute'), /SSH 返回 AUTH_FAILED/)
     assert.ok(Buffer.byteLength(activityPrompt('execute')) <= 8000)
     const source = readFileSync(new URL('../../redtrace-dsh/src/c2.ts', import.meta.url), 'utf8')
-    assert.match(source, /Registration is not connection or authentication success/)
+    assert.match(source, /注册≠认证\/连接成功/)
     const webshell = readFileSync(new URL('../../redtrace-dsh/src/webshell.ts', import.meta.url), 'utf8')
-    assert.match(webshell, /not speculative endpoints or batches of guessed passwords/)
-    assert.match(webshell, /Do not blindly repeat the same failed probe/)
+    assert.match(webshell, /不猜端点\/批量密码/)
+    assert.match(webshell, /不盲重试同一失败/)
   } finally { await ops.close(); store.close(); rmSync(root, { recursive: true, force: true }) }
 })
 

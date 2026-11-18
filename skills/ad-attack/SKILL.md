@@ -1,6 +1,6 @@
 ---
 name: ad-attack
-description: "Active Directory exploitation after domain credentials exist: Kerberos (AS-REP/Kerberoast including cracking the ticket then using the account), delegation, NTLM coercion/relay, lateral movement, ACL abuse, ADCS ESC1-ESC17 and CVE paths, dMSA/BadSuccessor, Kerberos reflection, identity confusion, management-plane, domain trust, and domain persistence. Own the current AD chain through crack-and-use to DA, equivalent domain control, or the targeted host SYSTEM. Do not stop after requesting TGS. Host C2 belongs to /post. Operator chooses next modules."
+description: "已有域凭据后的 AD 链（Kerberos/委派/relay/ACL/ADCS/dMSA/信任/持久化）：破解并使用至 DA/等价域控/指定主机 SYSTEM，不止索 TGS；C2 归 /post，操作者选下一模块。"
 ---
 
 # /ad-attack — 域攻击

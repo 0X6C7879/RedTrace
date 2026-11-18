@@ -1,6 +1,6 @@
 ---
 name: privesc-win
-description: "Windows local privilege escalation from a low-privilege shell to Administrator or SYSTEM. Covers quiet vs loud enumeration, SeImpersonate/Potato family including LocalPotato, token privileges (SeBackup/SeRestore/SeManageVolume/SeLoadDriver/SeDebug), service/DLL/COM/scheduled-task abuse, AlwaysInstallElevated and UAC boundary, KrbRelayUp-style domain-joined local admin, and version-gated kernel LPE. Use when the operator already has a Windows foothold and needs local SYSTEM. Endpoint blocks hand off to /edr-bypass then return here."
+description: "已有 Windows 立足点，提权 Administrator/SYSTEM；本机权限/服务/令牌/内核路径，不接管域攻击；防护阻塞交 /edr-bypass 后返回。"
 ---
 
 # /privesc-win — Windows 本机提权

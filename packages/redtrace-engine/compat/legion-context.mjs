@@ -12,7 +12,7 @@ export function mountLegionContext(scoped, ctx, { store, legion, run, task, mess
     const tokens=meter.measure(session,header).totalTokens+(header.config.maxTokens??info.defaultMaxTokens??0),ratio=tokens/capacity
     if(run){const current=store.run(run.id);current.contextPressure={source:'dsh-token-meter',tokens,capacity,ratio};store.saveRun(current)}
     if(ratio<0.75)warned=false
-    if(ratio>=0.80&&!warned&&currentAgent?.status==='running'){warned=true;if(!run)legion.checkpointState(store.projectScope,'context-80-percent');currentAgent.inject(message('Native current context pressure is '+Math.round(ratio*100)+'%. Save full confirmed STATE with legion_state now. Preserve unknown outcomes. DSH owns automatic compaction; do not invoke manual compaction.'))}
+    if(ratio>=0.80&&!warned&&currentAgent?.status==='running'){warned=true;if(!run)legion.checkpointState(store.projectScope,'context-80-percent');currentAgent.inject(message('当前上下文压力 '+Math.round(ratio*100)+'%。立即用 legion_state 存完整确证 STATE，保留未知结果；DSH 管自动压缩，不手动压缩。'))}
   })
   scoped.on('session/event',(session,event)=>{
     if(event.type==='compaction/summary')summary=event.data?.summary?.filter(b=>b.type==='text').map(b=>b.text).join('\n')

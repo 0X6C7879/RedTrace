@@ -30,23 +30,23 @@ export function rewriteToolNames(text:string):string {
   return text
 }
 const descriptions:Record<string,string>={
- webshell_manage:'test: probe a known endpoint; register: share verified configuration. Registration is not connection success. Never guess credentials.',
- c2_manage:'listener: create; session: register direct access; credential/profile: store; kinds: list listener types. Registration is not authentication success; retain source evidence.',
- c2_payload:'oneliner: command stager; build: Go beacon; external: adapter payload. Use the assigned authorized listener and target.',
- fgs_query:'overview: paginated FGS summaries or one node (detail=doc expands evidence); changes: incremental metadata, not processing acknowledgement.',
- fgs_publish:'fact: verified incremental evidence, including tested negatives; finding: target-verified vulnerability supported by Fact IDs. API/tool failures are not attack Facts.',
- legion_inspect:'Read only the advertised scheduling/FGS actions. Run reads are summary/search/pages; original detail is on demand. Reads never acknowledge processing.',
- legion_task:'spawn: task actor; adjust: revise/cancel mission; reassign: settled model handoff; park/reactivate: stop/resume a task after outcomes settle.',
- legion_plan:'step/steps: queue one/atomic batch; update_step: revise/cancel; goal/update_goal: stages; accept: evidence-backed acceptance; done: save STATE and acknowledge processed triggers; stop: exhausted task; hint: unverified input. Max Step counts claimed execution only.',
- legion_todo:'read/write the complete task TodoList. Only its Planner may write; completion requires acceptance criteria and retained Fact evidence.',
- legion_messages:'read: durable inbox; send: HELP/REPORT/MESSAGE to an authorized actor; wait: end Planner patrol or wait for events. Delivery is not processing or evidence.',
- legion_models_manage:'list configured model routes; select route for the next cycle. No provider or reasoning configuration is changed.',
- legion_platform:'list: refresh tasks/outcomes; hint: paid hint only with explicit score-penalty confirmation.',
- legion_experience:'search/capture confirmed source experience; transfer as unverified target intel; confirm using actual target Facts.',
- knowledge_query:'search offline CVE/templates; match component/version prerequisites; read full source by ID with byte pagination. Candidate matches are not vulnerability proof.',
- resource_manage:'list/get shared Project resources; register established channels or materials with known configuration and source evidence. Secrets remain server-side; no speculative credential batches.',
- remote_files:'Read/write/list/mkdir/touch/stat/hash/move/delete/upload/download through an existing authorized channel. Source and destination scope and risk checks remain enforced.',
- pivot_manage:'socks: create; validate: verify path; paths: list; close: stop. Reuse existing authorized sessions; capability checks remain enforced.'
+ webshell_manage:'test 探测已知端点；register 共享已验证配置。注册≠连接成功，不猜凭据。',
+ c2_manage:'listener 创建；session 注册直连；credential/profile 存储；kinds 列类型。注册≠认证成功，保留来源证据。',
+ c2_payload:'oneliner 命令；build Go beacon；external adapter Payload。仅用分配且授权的 listener/目标。',
+ fgs_query:'overview 分页摘要/单节点（detail=doc 展开证据）；changes 增量元数据，读取≠确认处理。',
+ fgs_publish:'fact 增量确证，含实测否定；finding 本目标已验证且有 Fact ID 支撑的漏洞。API/工具故障不是攻击 Fact。',
+ legion_inspect:'仅用所列调度/FGS action；Run 先摘要/搜索/分页，按需原文。读取不确认处理。',
+ legion_task:'spawn 派任务；adjust 调整/取消；reassign 结清后换模型；park/reactivate 停止/结清后恢复。',
+ legion_plan:'step/steps 单个/原子批量排队；update_step 修订/取消；goal/update_goal 阶段；accept 凭证验收；done 存 STATE/确认已处理事件；stop 止损；report 按需交付；hint 未验证输入。Max Step 仅限 claim 的执行。',
+ legion_todo:'读/替换完整任务 TodoList；仅所属 Planner 可写，完成须验收标准及留存 Fact 证据。',
+ legion_messages:'read 持久收件箱；send 向授权 actor 发 HELP/REPORT/MESSAGE；wait 结束 Planner 巡检/等事件。送达≠处理/证据。',
+ legion_models_manage:'list 配置内模型；select 选下轮路由，不改 provider/推理配置。',
+ legion_platform:'list 刷新任务/结果；hint 须明确确认扣分才可购买。',
+ legion_experience:'search/capture 确证源经验；transfer 为目标未验证情报；confirm 须实际目标 Fact。',
+ knowledge_query:'search 离线 CVE/模板；match 组件/版本/前提；read 按 ID/字节分页读原文。匹配≠漏洞确证。',
+ resource_manage:'list/get 本 Project 共享资源；register 有已知配置/来源证据的通道/材料。secret 留服务端，不批量猜凭据。',
+ remote_files:'经已建立授权通道操作远程文件；源/目的范围及风险检查不变。',
+ pivot_manage:'socks 创建；validate 验路径；paths 列表；close 停止。复用授权会话，能力检查不变。'
 }
 type Tool = {name:string;description:string;parameters:any;execute:(...args:any[])=>any}
 /** Shared fields are serialized once; branches retain action-specific required fields and types. */
@@ -71,7 +71,7 @@ export function domainTools<T extends Tool>(tools:T[], allowed:(name:string)=>bo
     const anyOf=[...branches.values()].map(branch=>({properties:{action:branch.actions.length===1?{const:branch.actions[0]}:{enum:branch.actions},...branch.properties},...(branch.required.length?{required:branch.required}:{})}))
     const parameters={type:'object',properties,required:['action',...common],additionalProperties:false,...(branches.size>1||conflicts.size?{anyOf}:{})}
     result.push({...members[0].tool,name,label:name,parameters,
-      description:(descriptions[name]??'')+'\n'+members.map(({action,tool})=>action+'('+((tool.parameters.required??[]).join(',')||'no required fields')+')').join('; '),
+      description:descriptions[name]??'',
       execute(...args:any[]){
         const input=typeof args[0]==='string'?args[1]:args[0],{action,...values}=input
         const member=members.find(m=>m.action===action)

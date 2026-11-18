@@ -19,7 +19,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
   const types: TaskType[] = config.types ?? ['soldier']
   definitions.push({
     name: 'webshell_register',
-    description: 'Register a WebShell as a shared resource so remote.command / remote.file.* can reuse it. target is the shell URL; password and parameters must match how the shell is reached. Use webshell_test first to verify the connection. Register only an established endpoint with known configuration/credential evidence, not speculative endpoints or batches of guessed passwords. Registration alone is not connection success. Reuse an existing matching resource; renaming/re-registering does not repair authentication or protocol failures.',
+    description: "注册已建立的 WebShell 供 remote.command/remote.file.* 复用。target 为 URL，password/parameters 匹配实际连接；先 webshell_test 验证。仅注册有配置/凭据证据的端点，不猜端点/批量密码。注册≠连通；复用匹配资源，改名/重注册不能修复认证或协议失败。",
     parameters: {
       type: 'object',
       properties: {
@@ -69,7 +69,7 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
   })
   definitions.push({
     name: 'webshell_test',
-    description: 'Probe a WebShell endpoint before registering it. A successful probe means webshell_register can reuse this configuration. Inspect failure details and check endpoint, protocol, parameters and credential evidence before retrying. Do not blindly repeat the same failed probe or register failed candidates as usable sessions.',
+    description: "注册前探测 WebShell；成功配置可交 webshell_register 复用。失败先查详情、端点、协议、参数及凭据证据，不盲重试同一失败、不将失败项注册为可用会话。",
     parameters: {
       type: 'object',
       properties: {

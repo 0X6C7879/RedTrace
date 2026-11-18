@@ -1,4 +1,5 @@
 const {domainFixtureRequest}=await import(new URL('./domain-fixture.mjs',import.meta.url).href)
+import {legionMission} from '../src/legion-missions.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
@@ -131,11 +132,11 @@ test('settings and planner contracts retain one Max Step setting for both modes'
   const root = path.resolve(import.meta.dirname, '../../..'), html = readFileSync(root + '/static/index.html', 'utf8')
   assert(html.includes('最大题目并发')); assert(html.includes('每张 Graph 执行 Step 上限'))
   assert(html.includes('max_benchmark_tasks:Number(value.tasks.commander.max_benchmark_tasks)'))
-  const general = readFileSync(root + '/packages/redtrace-engine/prompts/general-planner.md', 'utf8')
+  const general = legionMission('general','general')
   const benchmark = readFileSync(root + '/packages/redtrace-engine/prompts/benchmark-commander.md', 'utf8')
-  assert(general.includes('not a creation budget or a target queue length'))
-  assert(benchmark.includes('Fill distinct eligible tasks up to configured targetTasks before reinforcement'))
-  assert(benchmark.includes('Max Step caps claimed execution Steps per Graph'))
+  assert(general.includes('非终身尝试/创建预算/队列目标'))
+  assert(benchmark.includes('先填满 targetTasks 内不同合格任务，再增援'))
+  assert(benchmark.includes('Max Step 是每 Graph 并发执行上限'))
 })
 
 test('native planners fill distinct ready slots and read hot-loaded targets in the same Benchmark Session', { timeout: 30000 }, async () => {
@@ -147,8 +148,8 @@ test('native planners fill distinct ready slots and read hot-loaded targets in t
   const server = createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk
     const body = domainFixtureRequest(JSON.parse(raw),res), text = body.messages.map((m: any) => typeof m.content === 'string' ? m.content : (m.content ?? []).map((b: any) => b.text ?? '').join('\n')).join('\n')
-    const id = text.match(/Assigned Project=(proj_\d+)/)![1]
-    const capacity = JSON.parse(text.match(/Live planning capacity: (\{[^\n]+\})/)![1]); observed.push({ id, ...capacity })
+    const id = text.match(/分配 Project=(proj_\d+)/)![1]
+    const capacity = JSON.parse(text.match(/当前规划容量：(\{[^\n]+\})/)![1]); observed.push({ id, ...capacity })
     const bench = id === benchmark.id
     const queued=store.nodes(general.id,['step']).length
     const available = bench ? capacity.taskSlots : Math.max(0,Math.min(3,capacity.maxSteps)-queued)

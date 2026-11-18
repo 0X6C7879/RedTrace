@@ -21,7 +21,7 @@ export function createPlanGuard(store: Store, runId: string) {
       const status = store.project(run.projectId).status
       if (!(isReportStep(step) ? ['active','completed'].includes(status) : status === 'active')) return 'Activity has stopped'
       if (step.status !== 'running' || !isReportStep(step) && store.node<Goal>(run.projectId, step.goalId, 'goal').status !== 'open') return 'Step or Goal has stopped'
-      if(store.project(run.projectId).mode==='benchmark'&&taskTodoOwner(step,store)&&!taskPlanReady(step,store)&&!safe.has(name)&&!name.startsWith('legion_')&&name!=='TodoWrite')return 'Write the task attack plan with TodoWrite before execution. The initialized Goal placeholder is not a plan; provide real phases and acceptance criteria. Only the task Planner maintains it.'
+      if(store.project(run.projectId).mode==='benchmark'&&taskTodoOwner(step,store)&&!taskPlanReady(step,store)&&!safe.has(name)&&!name.startsWith('legion_')&&name!=='TodoWrite')return '执行前由任务 Planner 用 TodoWrite 写实际阶段/验收标准；初始 Goal 占位不算计划。'
       const version = roots.get(exec.rootCallId) ?? turnVersion
       roots.set(exec.rootCallId, version)
       if (!safe.has(name) && (version !== (step.planVersion ?? 1) || (run.boundStepVersion ?? 1) !== (step.planVersion ?? 1))) return `Plan changed: fgs_query({action:"overview",id:${JSON.stringify(step.id)}}), then sync_step({planVersion:${step.planVersion ?? 1}}). Old call trees cannot execute actions after synchronization.`

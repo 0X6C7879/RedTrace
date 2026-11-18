@@ -64,85 +64,85 @@ const fileVerbs = ['remote.command']
 const VERBS: readonly VerbDefinition[] = [
   {
     id: 'remote.task', action: 'task', risk: 'low',
-    description: 'Poll one operation task: status, output, and result reference. Use it after a still-running dispatch.',
+    description: "查询仍在运行的 operation task：状态、输出、结果引用。",
     parameters: Type.Object({ task_id: Type.String({ minLength: 1, maxLength: 64 }) }),
     arguments: () => ({}),
   },
   {
     id: 'remote.command', action: 'command', risk: 'medium',
-    description: 'Run a shell command on a remote target. The runtime reuses an available channel automatically; pass via (resource id) to force one, or target (host) to select by host. Establish a supported channel first when none exists.',
+    description: "通过已建立通道执行远程命令；自动复用可用通道，via 指定 resource ID，target 按 host 选取。无通道先建立。",
     parameters: Type.Object({ command: Type.String({ minLength: 1 }), cwd: Type.Optional(pathSchema), timeout: timeoutSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ command: args.command, cwd: args.cwd, timeout: args.timeout }),
   },
   {
     id: 'remote.session.probe', action: 'probe_info', risk: 'low',
-    description: 'Probe a registered channel for minimal host, identity, working-directory, and architecture data; successful output promotes only runtime-verified capabilities. Registration alone is not verification. AUTH_FAILED rejects the current credentials: stop that authentication branch unless new credential evidence is obtained; do not guess more passwords or rename/re-register sessions. Transport/protocol failures require checking the connection/configuration, not duplicate registrations.',
+    description: "探测已注册通道的 host/identity/cwd/arch，仅成功实测才提升能力；注册≠验证。AUTH_FAILED 后停止该凭据分支，新证据才重试，不猜密码/改名重注册；传输/协议失败先查连接配置。",
     parameters: Type.Object({ timeout: timeoutSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ timeout: args.timeout }),
   },
   {
     id: 'remote.file.read', action: 'read_file', risk: 'low',
-    description: 'Read a remote file (base64) over an existing WebShell or C2 session channel; channel selection matches remote.command.',
+    description: "经已建立 WebShell/C2 通道读远程文件（base64）；选通道同 remote.command。",
     parameters: Type.Object({ path: pathSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ path: args.path }),
   },
   {
     id: 'remote.file.write', action: 'write_file', risk: 'medium',
-    description: 'Write text content to a remote file over an existing WebShell or C2 session channel; channel selection matches remote.command.',
+    description: "经已建立 WebShell/C2 通道写文本文件；选通道同 remote.command。",
     parameters: Type.Object({ path: pathSchema, content: Type.String(), overwrite: Type.Optional(Type.Boolean()), target: targetSchema, via: viaSchema }),
     arguments: args => ({ path: args.path, overwrite: args.overwrite === true, content_base64: Buffer.from(String(args.content), 'utf8').toString('base64') }),
   },
   {
     id: 'remote.file.list', action: 'list_files', risk: 'low',
-    description: 'List a remote directory over an existing WebShell or C2 session channel; channel selection matches remote.command.',
+    description: "经已建立 WebShell/C2 通道列目录；选通道同 remote.command。",
     parameters: Type.Object({ path: pathSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ path: args.path }),
   },
   {
     id: 'remote.file.mkdir', action: 'create_directory', risk: 'medium',
-    description: 'Create a remote directory over an existing WebShell or C2 session channel; channel selection matches remote.command.',
+    description: "经已建立 WebShell/C2 通道建目录；选通道同 remote.command。",
     parameters: Type.Object({ path: pathSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ path: args.path }),
   },
   {
     id: 'remote.file.touch', action: 'create_file', risk: 'medium',
-    description: 'Create an empty remote file over an existing WebShell or C2 session channel; channel selection matches remote.command.',
+    description: "经已建立 WebShell/C2 通道建空文件；选通道同 remote.command。",
     parameters: Type.Object({ path: pathSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ path: args.path }),
   },
   {
     id: 'remote.file.stat', action: 'stat_file', risk: 'low',
-    description: 'Read remote file metadata through a channel that has verified file capability.',
+    description: "经已验证文件能力的通道读远程文件元数据。",
     parameters: Type.Object({ path: pathSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ path: args.path }),
   },
   {
     id: 'remote.file.hash', action: 'hash_file', risk: 'low',
-    description: 'Calculate a remote file SHA-256 through a channel that has verified file capability.',
+    description: "经已验证文件能力的通道计算远程文件 SHA-256。",
     parameters: Type.Object({ path: pathSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ path: args.path }),
   },
   {
     id: 'remote.file.move', action: 'move_file', risk: 'medium',
-    description: 'Move or rename a remote file or directory over an existing WebShell or C2 session channel; channel selection matches remote.command.',
+    description: "经已建立 WebShell/C2 通道移动/重命名文件或目录；选通道同 remote.command。",
     parameters: Type.Object({ path: pathSchema, destination: Type.String({ minLength: 1, maxLength: 1024 }), target: targetSchema, via: viaSchema }),
     arguments: args => ({ path: args.path, destination: args.destination }),
   },
   {
     id: 'remote.file.delete', action: 'delete_file', risk: 'high',
-    description: 'Delete a remote file or directory over an existing WebShell or C2 session channel. High risk is recorded for audit; no human approval wait. Channel selection matches remote.command.',
+    description: "经已建立 WebShell/C2 通道删除文件/目录；选通道同 remote.command。高风险记审计，不等待人工审批。",
     parameters: Type.Object({ path: pathSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ path: args.path }),
   },
   {
     id: 'remote.file.upload', action: 'upload_file', risk: 'medium',
-    description: 'Upload a managed File resource through verified SFTP with resumable temporary transfer, SHA-256 verification, and atomic publication.',
+    description: "经已验证 SFTP 上传托管 File：临时文件续传、SHA-256 校验、原子发布。",
     parameters: Type.Object({ artifact_id: Type.String({ minLength: 1, maxLength: 64 }), path: pathSchema, overwrite: Type.Optional(Type.Boolean()), timeout: timeoutSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ artifact_id: args.artifact_id, path: args.path, overwrite: args.overwrite === true, timeout: args.timeout }),
   },
   {
     id: 'remote.file.download', action: 'download_file', risk: 'low',
-    description: 'Download a remote file through verified SFTP into the controlled Artifact store and return a reusable File resource.',
+    description: "经已验证 SFTP 下载到受控 Artifact 存储，返回可复用 File 资源。",
     parameters: Type.Object({ path: pathSchema, timeout: timeoutSchema, target: targetSchema, via: viaSchema }),
     arguments: args => ({ path: args.path, timeout: args.timeout }),
   },
@@ -180,20 +180,20 @@ const ADAPTERS: readonly AdapterDefinition[] = [
   {
     id: 'proxy', label: '代理/Pivot', pluginId: 'redtrace-pivot', verbs: ['pivot.socks', 'pivot.validate', 'pivot.paths', 'pivot.close'],
     kinds: ['proxy'],
-    establish: '使用 pivot.socks 建立受管 SSH Forward、Chisel 或 Ligolo 路径。',
+    establish: '用 pivot.socks 建立托管 SSH Forward/Chisel；Ligolo 禁用。',
   },
 ]
 
 const STUB_VERBS: readonly VerbDefinition[] = [
   {
     id: 'pivot.socks', action: 'pivot.socks', risk: 'medium',
-    description: 'Establish a managed SSH Forward or Chisel process (Ligolo is disabled). Worker calls execute without human approval.',
+    description: "建立托管 SSH Forward/Chisel（Ligolo 禁用）；Worker 执行不等待人工审批。",
     parameters: Type.Object({ provider: Type.Union(['ssh-forward', 'chisel'].map(v => Type.Literal(v))), socks_endpoint: Type.Optional(Type.String()), source_session_id: Type.Optional(Type.String()), mode: Type.Optional(Type.Union([Type.Literal('server'), Type.Literal('client')])), bind: Type.Optional(Type.String()), bind_host: Type.Optional(Type.String()), bind_port: Type.Optional(Type.Integer()), server: Type.Optional(Type.String()), remote: Type.Optional(Type.String()), target_scope: Type.Optional(Type.String()), protocols: Type.Optional(Type.Array(Type.Union([Type.Literal('tcp'), Type.Literal('udp')]))), name: Type.Optional(Type.String()) }),
     arguments: args => ({ ...args }),
   },
-  { id: 'pivot.validate', action: 'pivot.validate', risk: 'low', description: 'Validate the actual managed route endpoint.', parameters: Type.Object({ via: Type.String(), host: Type.Optional(Type.String()), port: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })), url: Type.Optional(Type.String()), timeout: timeoutSchema }), arguments: args => ({ ...args }) },
-  { id: 'pivot.paths', action: 'pivot.paths', risk: 'low', description: 'List live directional routes matching a target scope.', parameters: Type.Object({ target: Type.String() }), arguments: args => ({ ...args }) },
-  { id: 'pivot.close', action: 'pivot.close', risk: 'medium', description: 'Stop a managed route and mark it offline.', parameters: Type.Object({ via: Type.String() }), arguments: args => ({ ...args }) },
+  { id: 'pivot.validate', action: 'pivot.validate', risk: 'low', description: "验证实际托管路由端点。", parameters: Type.Object({ via: Type.String(), host: Type.Optional(Type.String()), port: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })), url: Type.Optional(Type.String()), timeout: timeoutSchema }), arguments: args => ({ ...args }) },
+  { id: 'pivot.paths', action: 'pivot.paths', risk: 'low', description: "列出匹配目标范围的活动定向路由。", parameters: Type.Object({ target: Type.String() }), arguments: args => ({ ...args }) },
+  { id: 'pivot.close', action: 'pivot.close', risk: 'medium', description: "停止并标记托管路由。", parameters: Type.Object({ via: Type.String() }), arguments: args => ({ ...args }) },
 ]
 
 export const verbRegistry = [...VERBS, ...STUB_VERBS]
@@ -391,7 +391,7 @@ export function resourceTools(context: TaskContext, runtime: VerbRuntime): Agent
   const ops = runtime.operations, worker = { actor_type: 'worker', actor: context.worker.name, worker: context.worker.name, intent_id: context.run.stepId }
   const tools = [
     verbTool('resource_register',
-      'Register a shared resource for cross-Step reuse: channels (webshell, c2_listener, c2_session), materials (c2_payload, c2_profile, credential_ref, proxy, file). secret stays server-side; c2_session may return secret_once. Prefer a structured family tool when available. For WebShell/C2 sessions, follow family-tool verification and reuse rules: registration is not connectivity proof; do not bulk-register speculative endpoints or guessed credentials.',
+      '注册跨 Step 共享通道/材料：webshell/c2_listener/c2_session/c2_payload/c2_profile/credential_ref/proxy/file。secret 留服务端，c2_session 可能返回 secret_once；优先专用工具，遵循其验证/复用规则。注册≠连通，不批量注册猜测端点/凭据。',
       Type.Object({
         kind: Type.Union(registerableKinds.map(kind => Type.Literal(kind))),
         name: Type.String({ minLength: 1, maxLength: 160 }),
@@ -407,7 +407,7 @@ export function resourceTools(context: TaskContext, runtime: VerbRuntime): Agent
         return { resource: created.resource, ...(created.resource.kind === 'c2_session' && created.secret_once ? { secret_once: created.secret_once } : {}) }
       }),
     verbTool('resource_list',
-      'List shared resources; filter by kind and a free-text query.',
+      '按 kind/关键词列共享资源。',
       Type.Object({ kind: Type.Optional(Type.String()), q: Type.Optional(Type.String()), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })) }),
       args => {
         const clauses: string[] = ['project_id=?'], values: unknown[] = [context.run.projectId]
@@ -419,7 +419,7 @@ export function resourceTools(context: TaskContext, runtime: VerbRuntime): Agent
         return { resources: rows.map(row => ops.publicResource(row)) }
       }),
     verbTool('resource_get',
-      'Fetch one shared resource with its recent operation tasks and audit trail.',
+      '读单个共享资源、最近 operation task/审计。',
       Type.Object({ resource_id: Type.String({ minLength: 1, maxLength: 64 }) }),
       args => {
         const row = ops.ownedResource(context.run.projectId, String(args.resource_id))

@@ -61,7 +61,7 @@ export class LegionStore {
   campaigns(): Campaign[] { return this.store.projects().map(p=>this.campaign(p.id)) }
   commanderState(projectId?:string) {
     const c=this.campaign(projectId)
-    return this.store.project(c.projectId).mode==='benchmark'&&c.stateScope!=='scheduling'?'Legacy tactical STATE is archived, not scheduling authority. Rebuild allocation from current Board, live owners and unfinished user instructions.':c.state
+    return this.store.project(c.projectId).mode==='benchmark'&&c.stateScope!=='scheduling'?'旧战术 STATE 已归档，不作调度依据；按当前 Board/活动归属/未完用户指令重建分配。':c.state
   }
   saveCampaign(campaign: Campaign) {
     const id=this.owner(campaign.projectId)
@@ -180,12 +180,12 @@ export class LegionStore {
     const untouched=tasks.filter(t=>!t.own.length&&!t.g.planner&&t.tactic?.classification?.platformCompleted!==true)
     lines.push(`Tasks=${tasks.length}; platformCompleted=${tasks.filter(t=>t.tactic?.classification?.platformCompleted===true).length}; internalAchieved=${tasks.filter(t=>t.goal?.status==='achieved').length}; untouched=${untouched.length}`)
     const instances=this.store.db.prepare("SELECT task_key,json_extract(data,'$.platformInstance.status') AS status,json_extract(data,'$.platformCompleted') AS completed,json_extract(data,'$.platformObservedAt') AS observed FROM legion_tasks WHERE project_id=? AND json_extract(data,'$.platformInstance.status')!='stopped' ORDER BY task_key").all(id)
-    if(instances.length)lines.push('Platform instances (last refresh; non-stopped means occupied, including completed tasks): '+instances.map(t=>`${t.task_key}=${t.status}${t.completed?'(completed)':''}@${t.observed}`).join(', '))
-    if(!taskKey&&untouched.length)lines.push('Classification required: '+untouched.map(t=>t.g.taskKey).join(', '))
+    if(instances.length)lines.push('平台实例（上次刷新；非 stopped 仍占位，含已完成题）：'+instances.map(t=>`${t.task_key}=${t.status}${t.completed?'(completed)':''}@${t.observed}`).join(', '))
+    if(!taskKey&&untouched.length)lines.push('待分配：'+untouched.map(t=>t.g.taskKey).join(', '))
     const selected=taskKey?tasks:tasks.filter(t=>!untouched.includes(t)&&t.tactic?.classification?.platformCompleted!==true)
     const capacity=Math.max(0,99-lines.length)
     for(const task of selected.slice(0,capacity))lines.push(`${task.g.taskKey} ${task.tactic?.classification?.platformCompleted===true?'platform-completed':task.goal?.status==='achieved'?'goal-achieved':task.goal?.status==='cancelled'?'exhausted':task.own.some(s=>s.status==='parked')?'parked':task.live.length?'active':'pending'}; submitted=${!!task.tactic?.classification?.submissionAttemptedAt}; runs=${task.live.map(r=>r.id+':'+r.status+':'+(r.activity==='plan'?'general':steps.find(s=>s.id===r.stepId)?.role)).join(',')||'-'}; difficulty=${task.tactic?.classification?.difficulty??'unknown'}; stalled=${Math.floor(task.tactic?.stalledMinutes??0)}m; next=${task.tactic?.recommendation??'classification-required'}`)
-    if(selected.length>capacity)lines.push(`omitted=${selected.length-capacity}; query Board by taskKey`)
+    if(selected.length>capacity)lines.push(`omitted=${selected.length-capacity}；按 taskKey 查 Board`)
     return{projectId:id,sessionId:campaign.sessionId,cursors:campaign.cursors,budget,lines:lines.slice(0,100)}
   }
   questionCapacity(maxTasks: number | null = null) {

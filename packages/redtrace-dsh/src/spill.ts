@@ -12,7 +12,7 @@ export function compactToolText(text: string): string {
     let end = i + 1
     while (end < lines.length && lines[end] === lines[i]) end++
     const original = lines.slice(i, end).join('')
-    const folded = lines[i] + '[previous line repeated ' + (end - i - 1) + ' more times]\n'
+    const folded = lines[i] + '[上一行另重复 ' + (end - i - 1) + ' 次]\n'
     result.push(end - i >= 3 && folded.length < original.length ? folded : original)
     i = end
   }
@@ -36,7 +36,7 @@ export async function apply(ctx: RuntimeContext, config: RuntimeConfig): Promise
     try { ref = await spillStore.saveText({ owner: { sessionId: exec.agent.session.header.id }, source: { kind: 'tool', toolName, callId, label }, suggestedName: toolName + '.txt', content: source }) }
     catch (error) { ctx.logger?.warn('Tool deduplication: '+String(error)+'; keeping full output'); return content }
     const notice = formatSpillNotice({ kind: 'unknown' }, ref, 0)
-    const compacted = [{ type: 'text', text: folded.map(b => b.text).join('') + '\n\nRepeated lines folded with exact counts. Complete original:\n' + notice }]
+    const compacted = [{ type: 'text', text: folded.map(b => b.text).join('') + '\n\n相邻相同行已按次数折叠，完整原文：\n' + notice }]
     return compacted.reduce((n, b) => n + b.text.length, 0) < source.length ? compacted : content
   }
   ctx.on('tools/post-execute', async (exec, result, next) => {

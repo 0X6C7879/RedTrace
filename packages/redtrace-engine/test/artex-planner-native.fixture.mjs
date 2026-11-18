@@ -18,10 +18,10 @@ const model=createServer(async(req,res)=>{try{
  projectId??=system.match(/Assigned Project=(\S+)/)?.[1]
  const graph=(await get('/v2/projects/'+projectId+'/graphs'))[0],fgs=graph?await get('/v2/projects/'+projectId+'?graphId='+graph.id):{steps:[]},calls=body.messages.flatMap(m=>m.tool_calls??[]).map(c=>c.function.name)
  let name,args
- if(system.includes('You are COMMANDER')){
+ if(system.includes('你是 COMMANDER')){
   if(!graph?.planner){const db=new Store(work+'/.redtrace/engine.db');db.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?) ON CONFLICT(project_id,task_key) DO UPDATE SET data=excluded.data').run(projectId,'A',JSON.stringify({platformMetadata:{flag_count:2}}));db.close();name='legion_spawn';args={taskKey:'A',role:'general',mission:'Plan independent local proof Steps'}}
   else{name='legion_wait';args={through:(await get('/v2/legion?projectId='+projectId)).campaign.cursors[projectId]?.acknowledged??0}}
- }else if(system.includes('You are GENERAL')){
+ }else if(system.includes('你是 GENERAL')){
   assert(!names.some(n=>/^(bash|shell|http_|browser|mcp__|submit_fact|submit_finding|resource_)/.test(n)));assert(names.includes('read'),'retained native Spill must remain readable')
   const children=fgs.steps.filter(s=>s.plannerId),proofs=children.flatMap(s=>s.factIds),ready=proofs.length===2&&children.every(s=>s.status==='done')
   if(!children.length){name='legion_steps';args={steps:['proof A','proof B'].map(description=>({description,sourceIds:[graph.originId]}))};plannerBatched=true}
@@ -30,10 +30,10 @@ const model=createServer(async(req,res)=>{try{
   else if(ready){name='legion_accept';args={expectedVersion:fgs.goals.find(g=>g.id===graph.goalId).version,evidenceIds:proofs}}
   else{name='legion_plan_done';args={state:'two Workers dispatched; review their retained proof and actual trace'}}
  }else{
-  assert(system.includes('You are SOLDIER'));assert(names.includes('bash'));assert(!names.includes('TodoWrite'));assert(!names.includes('legion_todos'));assert(!names.includes('legion_step'));workerExecution=true
+  assert(system.includes('你是 SOLDIER'));assert(names.includes('bash'));assert(!names.includes('TodoWrite'));assert(!names.includes('legion_todos'));assert(!names.includes('legion_step'));workerExecution=true
   const step=fgs.steps.find(s=>s.role==='soldier'&&body.messages.map(text).join('\n').includes(s.id)),runs=await get('/v2/projects/'+projectId+'/runs'),run=runs.find(r=>r.stepId===step.id&&r.status==='running')
   if(!calls.includes('submit_fact')){mkdirSync(run.workspaceRoot,{recursive:true});writeFileSync(path.join(run.workspaceRoot,'proof.txt'),'literal native local protocol evidence '+step.id);name='submit_fact';args={title:'native proof '+step.id,description:'verified local fixture output',evidence:[{description:'actual retained file bytes',path:'proof.txt'}]}}
-  else{name='finish_step';args={summary:'assigned local Step verified',...(system.includes('You are SCOUT')?{difficulty:'easy',family:'local-fixture'}:{})}}
+  else{name='finish_step';args={summary:'assigned local Step verified',...(system.includes('你是 SCOUT')?{difficulty:'easy',family:'local-fixture'}:{})}}
  }
  assert(names.includes(name),name)
  res.writeHead(200,{'Content-Type':'text/event-stream'});res.end('data: '+JSON.stringify({id:'fixture',object:'chat.completion.chunk',created:1,model:'fixture',choices:[{index:0,delta:{tool_calls:[{index:0,id:'call-'+Date.now()+'-'+Math.random(),type:'function',function:{name,arguments:JSON.stringify(args)}}]},finish_reason:'tool_calls'}]})+'\n\ndata: [DONE]\n\n')

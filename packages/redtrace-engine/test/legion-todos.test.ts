@@ -96,11 +96,11 @@ test('Benchmark General owns task subgoals while Commander keeps global allocati
 test('Only Benchmark General prompt owns task planning while General mode Commander remains unchanged',()=>{
   const command=legionMission('commander','benchmark')
   assert(!command.includes('legion_todo'))
-  assert(command.includes('You never modify FGS'))
-  const prompt=legionMission('general','benchmark');assert(prompt.includes('legion_todo({action:"write",todos})'));assert(prompt.includes('verified FGS Facts'))
+  assert(command.includes('不改 FGS'))
+  const prompt=legionMission('general','benchmark');assert(prompt.includes('legion_todo({action:"write",todos})'));assert(prompt.includes('留存 Fact 实际满足验收'))
   assert(legionMission('soldier','benchmark').includes('legion_todo'));assert.throws(()=>legionMission('scout' as never,'benchmark'),/Invalid benchmark role/)
   const general=legionMission('general','general')
-  for(const text of ['legion_todo','full route once','actual prerequisite Fact IDs','Independent directions'])assert(general.includes(text),text)
+  for(const text of ['legion_todo','完整路线','不预支/编造','独立方向并发'])assert(general.includes(text),text)
   for(const role of ['soldier'] as const)assert(!legionMission(role,'general').includes('legion_todo'))
 })
 
@@ -153,5 +153,5 @@ test('Benchmark launch and General reinforcement inherit only their assigned tas
  const other=spawn(graphs[1],'soldier','another task planner');assert.deepEqual(launchContext(store,other.id).planningTodos,[{content:'verify',status:'pending'}]);
  const reinforcement=spawn(graphs[0],'general','new strategy reinforcement');assert.deepEqual(launchContext(store,reinforcement.id).planningTodos,plan);assert(!('planningTodos' in launchContext(store,first.id)));
  assert.throws(()=>spawn(graphs[0],'scout','retired'),/Scout is retired/);
- const general=legionMission('general','benchmark');for(const rule of ['planningTodos','never duplicate covered work','independent directions remain parallel','one item per real stage'])assert(general.includes(rule));
+ const general=legionMission('general','benchmark');for(const rule of ['planningTodos','先查 pending/running/paused 避重复','独立方向并发','每真实阶段一项'])assert(general.includes(rule));
 });

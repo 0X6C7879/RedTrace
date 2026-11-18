@@ -204,7 +204,7 @@ test('Spill is Execute-only, session-isolated, hot-reloadable and preserves evid
     } else {
       assert.ok(visible.startsWith('HEAD\n')); assert.match(visible, /TAIL/)
       assert.ok(visible.includes(clue), 'unique middle attack clues must remain visible')
-      assert.match(visible, /previous line repeated 9999 more times/)
+      assert.match(visible, /上一行另重复 9999 次/)
       assert.ok(visible.length < 1500)
       assert.doesNotMatch(visible, /evidenceId|evidence_read/)
       const file = visible.match(/Full formatted result stored at: (.*?)\. Use read/s)?.[1]

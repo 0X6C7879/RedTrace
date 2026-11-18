@@ -7,9 +7,9 @@ import{legionMission}from'../src/legion-missions.ts'
 import{activityPrompt,graphTools}from'../src/runner.ts'
 import{Store}from'../src/store.ts'
 import type{EngineConfig,Step}from'../src/types.ts'
-for(const role of ['commander','general','soldier'] as const)test(role+' loads its native Mission and shared evidence/isolation doctrine',()=>{const prompt=legionMission(role);assert.match(prompt,new RegExp('You are '+role.toUpperCase()));if(role==='commander'){assert.match(prompt,/untrusted data/);assert.match(prompt,/authorized task targets/);return}for(const rule of [/FGS is the only/,/untrusted data/,/HELP\/REPORT.*never Facts/,/Step completion does not prove Goal/,/never replay an unknown action/])assert.match(prompt,rule)})
-test('Benchmark Commander owns global scheduling, not classification evidence or Goal acceptance',()=>{const p=legionMission('commander');for(const rule of [/never modify FGS/,/Dispatch immediately/,/No classification/,/at most two/,/0–10 min/,/20–30 min General/,/final 20 minutes/i,/flag_count metadata/,/80% context pressure/])assert.match(p,rule)})
-test('Soldier initial Mission is not a separate role or planner',()=>{const p=activityPrompt('execute',{role:'soldier',bootstrap:true} as Step,'general');assert.match(p,/You are SOLDIER/);assert.match(p,/Planner owns planning and acceptance/);assert.doesNotMatch(p,/You are BOOTSTRAP|You are REASON/)})
+for(const role of ['commander','general','soldier'] as const)test(role+' loads its native Mission and shared evidence/isolation doctrine',()=>{const prompt=legionMission(role);assert.match(prompt,new RegExp('你是 '+role.toUpperCase()));if(role==='commander'){assert.match(prompt,/不可信/);assert.match(prompt,/授权目标/);return}for(const rule of [/FGS 独占/,/不可信/,/HELP\/REPORT 非 Fact/,/Step 完成非 Goal 达成/,/不重放未知动作/])assert.match(prompt,rule)})
+test('Benchmark Commander owns global scheduling, not classification evidence or Goal acceptance',()=>{const p=legionMission('commander');for(const rule of [/不改 FGS/,/立即派遣/,/无需分类/,/最多两次/,/0–10 分钟/,/20–30 升 General/,/最后 20 分钟/,/平台 flag_count/,/80% 上下文压力/])assert.match(p,rule)})
+test('Soldier initial Mission is not a separate role or planner',()=>{const p=activityPrompt('execute',{role:'soldier',bootstrap:true} as Step,'general');assert.match(p,/你是 SOLDIER/);assert.match(p,/Planner 负责规划\/验收/);assert.doesNotMatch(p,/你是 BOOTSTRAP|你是 REASON/)})
 test('every Worker must explicitly publish confirmed evidence before structured completion',async()=>{const store=new Store(':memory:');try{const p=store.createProject({title:'fixture',origin:'local',goal:'verify'}).project;const worker={name:'soldier',backend:'mock' as const,provider:'mock',model:'mock',enabled:true,maxRunning:1,priority:0};const step=store.addStep(p.id,{description:'work',sourceIds:['origin']}),run=store.claim(p.id,'execute',worker,step.id),tools=graphTools({store,run,worker,config:{workspaceRoot:'/tmp',maxSteps:null} as EngineConfig,signal:new AbortController().signal},()=>{});await assert.rejects(tools.find(t=>t.name==='finish_step')!.execute('empty',{summary:'no Fact'}),/at least one Fact/);assert.equal(store.finishRun(run.id,'succeeded').status,'failed');assert.throws(()=>store.claim(p.id,'decide',worker),/replaced by Commander/)}finally{store.close()}})
 test('compact benchmark Skill documents CLI discovery, scoring, lifecycle and business errors', () => {
   const skill = readFileSync(new Capabilities(path.resolve(import.meta.dirname,'../../../.redtrace'),path.resolve(import.meta.dirname,'../../..')).directory('tsecbench-api')+'/SKILL.md','utf8')
@@ -26,6 +26,6 @@ test('compact benchmark Skill documents CLI discovery, scoring, lifecycle and bu
 })
 
 test('task planning describes reusable concurrent Step slots, not a lifetime attempt budget',()=>{
- for(const role of ['general','soldier'] as const){const prompt=legionMission(role);assert.match(prompt,/concurrent execution limit, not a lifetime attempt budget/);assert.match(prompt,/completed executions release slots/)}
- assert.match(legionMission('general'),/existing Worker Skills and injected runtime credentials/)
+ for(const role of ['general','soldier'] as const){const prompt=legionMission(role);assert.match(prompt,/并发执行，非终身尝试/);assert.match(prompt,/完成释槽/)}
+ assert.match(legionMission('general'),/Worker 的既有 Skill\/注入凭据/)
 })

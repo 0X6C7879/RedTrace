@@ -181,7 +181,7 @@ test('runtime prompt keeps only summary/method with existing evidence interfaces
   for (const heading of ['## 摘要','## 内容']) assert.ok(runtime.includes(heading))
   assert.doesNotMatch(runtime, /## (影响与危害|根因分析|修复建议)/)
   assert.match(runtime, /project_evidence_read/); assert.match(runtime, /read_execution/); assert.match(runtime, /expectedVersion/)
-  assert.match(legionMission('soldier'), /incremental confirmed result/)
+  assert.match(legionMission('soldier'), /增量确证/)
   const markup = readFileSync(new URL('../../../static/index.html', import.meta.url), 'utf8')
   assert.ok(markup.includes('<p class="mt-1 text-slate-600 whitespace-pre-wrap break-words" x-text="fact.description">'))
   assert.ok(markup.includes("reporter: 'Reporter'"))
