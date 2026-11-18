@@ -1,3 +1,4 @@
+import {scoutedSpawn} from './scout-fixture.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
@@ -18,8 +19,8 @@ test('War Board is at most 100 lines and puts HELP ahead of other tasks', t => {
   const board=new LegionStore(store,p.id).boardSummary()
   assert.ok(board.lines.length<=100)
   assert.match(board.lines[1],/^HELP /)
-  assert.match(board.lines[2],/T109/)
-  assert.ok(board.lines.at(-1)?.startsWith('omitted='))
+  assert(board.lines.some(line=>line.startsWith('T109 ')))
+  assert(board.lines.some(line=>line.startsWith('Scout queue: ')&&line.includes('T000')))
   assert.ok(!JSON.stringify(board).includes('Need a concrete next move and full FGS'))
 })
 
@@ -48,6 +49,14 @@ test('Manual Benchmark adapter needs neither instance nor submission API', async
   const config={workspaceRoot:'/unused'} as any
   assert.equal((await discoverBenchmarkTasks(store,config,p.id)).challenges[0].unique_code,'local-1')
   assert.deepEqual(await benchmarkInstance(store,config,p.id,'local-1','start'),{supported:false,adapter:'manual',action:'start',taskKey:'local-1'})
+})
+
+test('platform refresh exposes real instance holders, including completed tasks, without closing anything',async()=>{
+ const root=mkdtempSync(path.join(os.tmpdir(),'platform-instance-refresh-')),script=path.join(root,'skills/tsecbench-api/scripts/tsecbench.py')
+ mkdirSync(path.dirname(script),{recursive:true});writeFileSync(script,'import json,sys\nassert sys.argv[1:] == ["list"]\nprint(json.dumps({"challenges":[{"unique_code":"done","is_completed":True,"container_status":"available","container_addr":["127.0.0.1:9001"]},{"unique_code":"live","is_completed":False,"container_status":"available","container_addr":["127.0.0.1:9002"]}]}))\n')
+ const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'status',origin:'TSecBench authorized fixture',goal:'verify'}).project,l=new LegionStore(store,p.id)
+ try{await discoverBenchmarkTasks(store,{workspaceRoot:root+'/workspaces'} as any,p.id);const lines=l.boardSummary().lines.join('\n');assert.match(lines,/done=available\(completed\)/);assert.match(lines,/live=available/);const events=store.events(p.id).filter(e=>e.type==='legion.instance_updated');assert.equal(events.length,2);await discoverBenchmarkTasks(store,{workspaceRoot:root+'/workspaces'} as any,p.id);assert.equal(store.events(p.id).filter(e=>e.type==='legion.instance_updated').length,2,'unchanged refresh does not manufacture events');assert.equal(store.project(p.id).benchmarkHosts,undefined,'read-only discovery does not start or close instances')}
+ finally{store.close();rmSync(root,{recursive:true,force:true})}
 })
 
 test('TPCTF adapter discovers scored tasks through its existing CLI without taking instance ownership', async () => {
@@ -88,22 +97,22 @@ test('escalation uses evidence age, gives a General mid-chain time, and never du
   t.after(()=>store.close())
   const graph=store.createGraph(p.id,{taskKey:'T',title:'fixture',origin:'local',goal:'verify'})
   store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?)').run(p.id,'T',JSON.stringify({difficulty:'medium'}))
-  const mission={role:'soldier' as const,taskKey:'T',description:'first angle',sourceIds:[graph.originId]},first=legion.spawn(p.id,mission),run=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},first.id),at=Date.now()
+  const mission={role:'soldier' as const,taskKey:'T',description:'first angle',sourceIds:[graph.originId]},first=scoutedSpawn(legion,p.id,mission),run=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},first.id),at=Date.now()
   const age=(minutes:number)=>{run.startedAt=new Date(at-minutes*60000).toISOString();store.saveRun(run);store.db.prepare("UPDATE events SET created_at=? WHERE type='execute.started' AND json_extract(data,'$.runId')=?").run(run.startedAt,run.id)}
   for(const [minutes,recommendation] of [[6,'tactical'],[10,'second-angle'],[19,'second-angle'],[20,'general'],[29,'general']] as const){age(minutes);assert.equal(legion.tactics(p.id,at)[0].recommendation,recommendation)}
-  age(15);legion.spawn(p.id,{...mission,description:'second angle'})
-  assert.equal(legion.spawn(p.id,{...mission,description:'third angle'}).role,'soldier','distinct specialist angles are bounded by configured capacity, not a new hard cap')
-  age(30);const general=legion.spawn(p.id,{...mission,role:'general',description:'upgrade'}),g=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},general.id)
+  age(15);scoutedSpawn(legion,p.id,{...mission,description:'second angle'})
+  assert.equal(scoutedSpawn(legion,p.id,{...mission,description:'third angle'}).role,'soldier','distinct specialist angles are bounded by configured capacity, not a new hard cap')
+  age(30);const general=scoutedSpawn(legion,p.id,{...mission,role:'general',description:'upgrade'}),g=store.forGraph(p.id,graph.id).claim(p.id,'plan',{name:'fixture',backend:'mock'})
   g.startedAt=new Date(at-10*60000).toISOString();store.saveRun(g);store.db.prepare("UPDATE events SET created_at=? WHERE type='execute.started' AND json_extract(data,'$.runId')=?").run(g.startedAt,g.id)
   assert.equal(legion.tactics(p.id,at)[0].recommendation,'working','a newly upgraded General is not parked at minute 30')
   age(45);assert.equal(legion.tactics(p.id,at)[0].recommendation,'park')
-  store.forGraph(p.id,graph.id).addFact(p.id,'confirmed chain progress',{runId:g.id})
+  store.forGraph(p.id,graph.id).addFact(p.id,'confirmed chain progress',{runId:run.id})
   assert.equal(legion.tactics(p.id,at)[0].recommendation,'working')
   legion.park(p.id,'T','blocked chain','new confirmed intel');store.finishRun(run.id,'cancelled');store.finishRun(g.id,'cancelled')
-  assert.equal(legion.reactivate(p.id,'T','new confirmed intel').length,4)
+  assert.equal(legion.reactivate(p.id,'T','new confirmed intel').length,3)
 })
 
-test('explicit family evidence skips only duplicate Scout and remains unverified in the new target', t => {
+test('sibling family evidence is only a Hint and cannot replace target Scout', t => {
   const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'family',origin:'manual local',goal:'verify'}).project,legion=new LegionStore(store,p.id)
   t.after(()=>store.close())
   const a=store.createGraph(p.id,{taskKey:'unrelated-name-a',title:'source',origin:'local',goal:'verify'}),b=store.createGraph(p.id,{taskKey:'unrelated-name-b',title:'target',origin:'local',goal:'verify'})
@@ -113,8 +122,9 @@ test('explicit family evidence skips only duplicate Scout and remains unverified
   const reused=legion.classify(p.id,b.taskKey!,'medium',[fact.id],'product-v1',a.taskKey!)
   assert.deepEqual(reused.factIds,[]);assert.equal(store.forGraph(p.id,b.id).nodes(p.id,['fact']).length,1)
   assert.match((store.node(p.id,reused.hintId,'hint') as any).content,/UNVERIFIED IN THIS TARGET/)
-  assert.equal(legion.spawn(p.id,{role:'soldier',taskKey:b.taskKey!,description:'read sibling, verify target differences',sourceIds:[b.originId]}).role,'soldier')
+  assert.throws(()=>legion.spawn(p.id,{role:'soldier',taskKey:b.taskKey!,description:'read sibling, verify target differences',sourceIds:[b.originId]}),/Scout/)
   assert.equal(store.forGraph(p.id,b.id).nodes(p.id,['step']).filter((s:any)=>s.role==='scout').length,0)
+  const local=legion.spawn(p.id,{role:'scout',taskKey:b.taskKey!,description:'verify target',sourceIds:[b.originId]}),probe=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},local.id),proof=store.forGraph(p.id,b.id).addFact(p.id,'actual target reconnaissance',{runId:probe.id});store.finishRun(probe.id,'succeeded');legion.classify(p.id,b.taskKey!,'easy',[proof.id]);assert.equal(legion.tactics(p.id).find(t=>t.taskKey===b.taskKey)!.classification.sourceTaskKey,undefined);assert.equal(legion.spawn(p.id,{role:'soldier',taskKey:b.taskKey!,description:'solve verified target',sourceIds:[proof.id]}).role,'soldier')
 })
 
 test('80% context and major decisions checkpoint full STATE without recursive growth', async t => {
@@ -129,9 +139,9 @@ test('80% context and major decisions checkpoint full STATE without recursive gr
   mountLegionContext(scoped,ctx,{store:store.forProject(p.id),legion,message:(s:string)=>s})
   await listeners.get('agent/request')![0]({agent:{status:'running',inject:(m:string)=>messages.push(m)}},()=>{})
   for(const f of listeners.get('session/event')!)await f({}, {type:'request/header',data:{header:{config:{}}}})
-  const state=JSON.parse(legion.campaign().state);assert.equal(state.reason,'context-80-percent');assert.match(state.notes,/exact next move/);assert.equal(state.tasks.length,1);assert.equal(messages.length,1)
+  const state=JSON.parse(legion.campaign().state);assert.equal(state.reason,'context-80-percent');assert.match(state.notes,/exact next move/);assert.equal(state.board,'legion_inspect(action=board)');assert(!('tasks' in state));assert.equal(messages.length,1)
   legion.checkpointState(p.id,'repeat');assert.equal(JSON.parse(legion.campaign().state).notes,state.notes)
-  const waiting=await legionTools(store,'commander',p.id,null,()=>{}).find(t=>t.name==='legion_wait')!.execute('wait',{})
+  const waiting=await legionTools(store,'commander',p.id,null,()=>{}).find(t=>t.name==='legion_wait')!.execute('wait',{through:0})
   assert.equal((waiting.details as any).sleepSeconds,60)
 })
 

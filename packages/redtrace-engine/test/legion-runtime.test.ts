@@ -1,3 +1,4 @@
+import {scoutedSpawn} from './scout-fixture.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -25,7 +26,7 @@ test('shipped DSH host executes Planner/Worker identities, HELP reply, shared FG
 })
 
 test('General Worker has no delegation or plan tools and messages never become Facts', async t => {
-  const {store,legion,project}=fixture(t),step=legion.spawn(project.id,{role:'worker',taskKey:'a',description:'work',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id)
+  const {store,legion,project}=fixture(t),step=scoutedSpawn(legion,project.id,{role:'worker',taskKey:'a',description:'work',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id)
   const tools=legionTools(store,run.id,project.id,null,()=>{})
   assert(!tools.some(t=>['legion_spawn','legion_step','TodoWrite','legion_todos','legion_accept'].includes(t.name)))
   const count=store.nodeCount(project.id,'fact')
@@ -42,7 +43,7 @@ test('event wait wakes for durable messages and abort removes its listeners', as
   legion.delivery(project.id, 'commander', message.id, 'queued')
   assert.deepEqual((await legion.wait(project.id, 'commander', after)).messages, [message.id])
   legion.delivery(project.id, 'commander', message.id, 'admitted')
-  const abort = new AbortController(), pending = legion.wait(project.id, 'commander', after, abort.signal)
+  const abort = new AbortController(), pending = legion.wait(project.id, 'commander', Number(store.db.prepare('SELECT MAX(id) AS n FROM events').get()!.n), abort.signal)
   abort.abort(new Error('fixture cancellation'))
   await assert.rejects(pending, /fixture cancellation/)
   assert.equal(store.changes.listenerCount('legion-message'), 0)
@@ -122,11 +123,11 @@ test('the first Commander board is compact and leaves FGS details on demand', as
 test('Benchmark General squads inherit isolated execution and cannot weaken their parent profile', t => {
   const {store}=fixture(t),project=store.createProject({mode:'benchmark',title:'isolation',origin:'local',goal:'verify'}).project,legion=new LegionStore(store,project.id)
   store.createGraph(project.id,{taskKey:'isolated',title:'isolated',origin:'local',goal:'verify'})
-  const step = legion.spawn(project.id, { role: 'general', taskKey: 'isolated', description: 'isolated parent', sourceIds: ['origin'], executionProfile: 'isolated' })
-  const run = store.claim(project.id, 'execute', worker, step.id)
+  const step = scoutedSpawn(legion,project.id, { role: 'general', taskKey: 'isolated', description: 'isolated parent', sourceIds: ['origin'], executionProfile: 'isolated' })
+  const run = store.forGraph(project.id,step.graphId!).claim(project.id, 'plan', worker)
   const mission = { role: 'soldier' as const, taskKey: 'isolated', description: 'bounded squad', sourceIds: ['origin'], parentRunId: run.id }
-  assert.equal(legion.spawn(project.id, mission).executionProfile, 'isolated')
-  assert.throws(() => legion.spawn(project.id, { ...mission, executionProfile: 'direct' }), /weaken execution isolation/)
+  assert.equal(scoutedSpawn(legion,project.id, mission).executionProfile, 'isolated')
+  assert.throws(() => scoutedSpawn(legion,project.id, { ...mission, executionProfile: 'direct' }), /weaken execution isolation/)
 })
 
 test('native current context meter triggers automatic compaction and a fresh Agent/Run with preserved summary', {timeout:90000},async()=>{const result=await exec(process.execPath,[new URL('./legion-context.fixture.mjs',import.meta.url).pathname],{maxBuffer:2*1024*1024});assert.match(result.stdout,/NATIVE_CONTEXT_ACCEPTANCE=true/);assert.match(result.stdout,/fresh_run_and_agent=true/);assert.match(result.stdout,/automatic_compaction=true/)})

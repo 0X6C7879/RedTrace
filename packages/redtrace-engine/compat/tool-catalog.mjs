@@ -1,3 +1,4 @@
+import {domainTools} from '../../redtrace-dsh/lib/tool-domains.js'
 import { MODE_ROLES, coordinatorRole } from '../../redtrace-dsh/lib/roles.js'
 import { mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
@@ -10,18 +11,17 @@ import { chatTools, ChatStore } from '../src/chat.ts'
 import { resourceTools, verbTools, verbToolAvailable } from '../src/capability-verbs.ts'
 import { load } from '../../redtrace-dsh/lib/loader.js'
 import { mountExecutionTools } from '../../redtrace-dsh/lib/execution-tools.js'
-import { reverseToolSchemas } from '../../redtrace-dsh/lib/reverse.js'
 import { toolAllowed } from '../src/console-api.ts'
 
 /** Inspect the real factories in a disposable registry, not model sessions or audit history. */
 export async function inspectToolCatalog(ctx, engine, manager, runtime) {
   const { config, raw } = engine.configuration.resolvedSnapshot()
   const available = id => manager.availableForTask(id)
-  const executionRoles = ['worker','general','soldier','scout']
+  const executionRoles = ['worker','soldier','scout']
   const rows = [], store = new Store(':memory:')
   const add = (tools, role, enabled = () => true) => {
-    for (const tool of tools) rows.push({ name: tool.name, description: tool.description, parameters: JSON.parse(JSON.stringify(tool.parameters)),
-      source: tool.name.startsWith('mcp__') ? 'MCP' : tool.redtrace === false ? 'DSH' : 'RedTrace', role, scope: 'catalog', status: 'available',
+    for (const tool of domainTools(tools)) rows.push({ name: tool.name, description: tool.description, parameters: JSON.parse(JSON.stringify(tool.parameters)),
+      source: tool.name.startsWith('mcp__') ? 'MCP' : tool.redtrace === false ? 'DSH' : 'RedTrace', role, scope: role?'catalog':'assistant', status: 'available',
       enabled: enabled(tool) && toolAllowed(raw.tool_settings, tool.name, role) })
   }
   const verbs = { operations: engine.operations, isAdapterAvailable: id => manager.running(id) }
@@ -39,26 +39,24 @@ export async function inspectToolCatalog(ctx, engine, manager, runtime) {
         for (const role of roles) add(tools.map(tool => ({ ...tool, redtrace: !!tool.redtrace })), role,
           () => plugin === 'redtrace-core' || available(plugin))
       } })
-    for(const role of ['commander','planner']) {
+    for(const role of ['planner']) {
       const nativeScope=createScope(carrier.ctx,{})
       try{await mountExecutionTools(nativeScope.ctx,{task:{type:role,executionProfile:'direct'},cwd,sessionRoot:cwd,skillsDir:runtime.skillsDir,
         available:()=>true,onSchemas(plugin,tools){add(tools.map(t=>({...t,redtrace:!!t.redtrace})),role,()=>plugin==='redtrace-core'||available(plugin))}})}finally{await nativeScope.dispose()}
     }
-    const reverse = await reverseToolSchemas()
-    for (const role of executionRoles) add(reverse, role, () => available('redtrace-reverse'))
     for (const mode of ['general', 'benchmark']) {
       const project = store.createProject({ mode, title: 'Schema inspection', origin: 'tsecbench Schema inspection', goal: 'Inspect definitions', bootstrap: false }).project
       add(legionTools(store, 'commander', project.id, config.maxSteps, () => {}, config, new CommanderTodos()), coordinatorRole(mode))
       for (const role of [...MODE_ROLES[mode].slice(1), ...(mode==='benchmark'?['reporter']:[])]) {
         const graph = mode === 'benchmark' ? store.createGraph(project.id, { taskKey: role, title: role, origin: 'Schema inspection', goal: 'Inspect definitions' }) : store.projectGraphs(project.id)[0]
-        const step = store.forGraph(project.id, graph.id).addStep(project.id, { role, taskKey: role, description: 'Inspect definitions', sourceIds: [graph.originId], goalId: graph.goalId })
+        const step = role==='general'?store.addPlanner(project.id,graph.id,{description:'Inspect definitions',sourceIds:[graph.originId]}):store.forGraph(project.id, graph.id).addStep(project.id, { role, taskKey: role, description: 'Inspect definitions', sourceIds: [graph.originId], goalId: graph.goalId })
         const worker = { name: 'schema', backend: 'mock' }
-        const run = store.claim(project.id, 'execute', worker, step.id)
+        const run = role==='general'?store.forGraph(project.id,graph.id).claim(project.id,'plan',worker):store.claim(project.id, 'execute', worker, step.id)
         const context = { store, run, worker, config, signal: new AbortController().signal, featureAvailable: available }
         const graphSchemas = graphTools(context, () => {})
         add(graphSchemas, role==='reporter'?'soldier':role, tool => efficiencyToolAvailable(context, tool.name))
-        if (role !== 'reporter') {
-          if (!graphSchemas.some(tool => tool.name === 'tsecbench_submit')) add([tsecbenchSubmitTool(context)], role==='reporter'?'soldier':role, () => false)
+        if (role !== 'reporter' && role !== 'general') {
+          if (role!=='scout'&&!graphSchemas.some(tool => tool.name === 'tsecbench_submit')) add([tsecbenchSubmitTool(context)], role==='reporter'?'soldier':role, () => false)
           add(resourceTools(context, verbs), role==='reporter'?'soldier':role)
           add(verbTools(context, verbs, step), role==='reporter'?'soldier':role, tool => verbToolAvailable(verbs, tool.name))
         }

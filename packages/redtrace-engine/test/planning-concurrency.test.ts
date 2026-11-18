@@ -1,3 +1,4 @@
+const {domainFixtureRequest}=await import(new URL('./domain-fixture.mjs',import.meta.url).href)
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
@@ -16,7 +17,7 @@ import { load } from '../../redtrace-dsh/lib/loader.js'
 const settle = async () => { for (let i = 0; i < 12; i++) await new Promise(resolve => setImmediate(resolve)) }
 const mission = (store: Store, projectId: string, taskKey: string, description = taskKey) => {
   const graph = store.projectGraphs(projectId).find(g => g.taskKey === taskKey)!
-  return { role: 'soldier' as const, taskKey, description, graphId: graph.id, goalId: graph.goalId, sourceIds: [graph.originId] }
+  return { role: 'scout' as const, taskKey, description, graphId: graph.id, goalId: graph.goalId, sourceIds: [graph.originId] }
 }
 const tasks = (store: Store, id: string) => new Set(store.runsByStatus('running', id).map(r => r.graphId)).size
 
@@ -45,8 +46,8 @@ test('resident planning tools enforce live Max Step in both project modes and qu
   for (const taskKey of ['A', 'B']) store.createGraph(p.id, { taskKey, title: taskKey, origin: 'local fixture', goal: 'verify' })
   legion.claimCommand(p.id)
   const tools = legionTools(store, 'commander', p.id, 1, () => {}, config, undefined, () => config)
-  const spawn = (taskKey: string, text = taskKey) => tools.find(t => t.name === 'legion_spawn')!.execute('fixture', { taskKey, role: 'soldier', mission: text })
-  await spawn('A'); await assert.rejects(spawn('A', 'over budget'), /Active Step limit/); config = {...config,maxSteps:2}; await spawn('A', 'independent evidence-based reinforcement')
+  const spawn = (taskKey: string, text = taskKey) => tools.find(t => t.name === 'legion_spawn')!.execute('fixture', { taskKey, role: 'scout', mission: text })
+  await spawn('A'); await spawn('A','queued direction'); config = {...config,maxSteps:2}; await spawn('A', 'independent evidence-based reinforcement')
   await assert.rejects(spawn('B'), /Question concurrency limit/)
   assert.equal(new LegionStore(store, p.id).questionCapacity(config.maxBenchmarkTasks).activeTasks, 1)
   config = { ...config, maxBenchmarkTasks: 2 }; await spawn('B')
@@ -56,23 +57,23 @@ test('resident planning tools enforce live Max Step in both project modes and qu
   legion.claimCommand(g.id)
   const general = legionTools(store, 'commander', g.id, 1, () => {}, config, undefined, () => config)
   const add = (description: string) => general.find(t => t.name === 'legion_step')!.execute('fixture', { projectId: g.id, description, sourceIds: ['origin'] })
-  await add('direction one'); await assert.rejects(add('direction two'), /Active Step limit/)
-  config = { ...config, maxSteps: 2 }; await add('direction two')
-  assert.equal(store.planningCapacity(g.id, config.maxSteps).remainingSteps, 0)
+  await add('direction one'); await add('direction two')
+  config = { ...config, maxSteps: 2 }; await add('direction three')
+  assert.equal(store.planningCapacity(g.id, config.maxSteps).remainingSteps, 2)
 })
 
 test('Scheduler fills question slots first, refills on completion and hot-loads without cancelling running work', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'question-dispatch-')), c = new Configuration(root); c.initialize()
   let config = { ...c.resolvedSnapshot().config, maxWorkers: 20, maxProjectWorkers: 10, maxRunningProjects: 5, maxBenchmarkTasks: 2, maxSteps: 2,
-    workers: [{ name: 'pool', enabled: true, priority: 0, maxRunning: 20, backend: 'mock' as const, provider: 'mock', model: 'mock', roles: ['soldier' as const, 'worker' as const] }] }
+    workers: [{ name: 'pool', enabled: true, priority: 0, maxRunning: 20, backend: 'mock' as const, provider: 'mock', model: 'mock', roles: ['soldier' as const, 'scout' as const, 'worker' as const] }] }
   const store = new Store(':memory:'), legion = new LegionStore(store), done = new Map<string, () => void>()
   const scheduler = new Scheduler(store, config, async ({ run, signal }) => new Promise<void>(resolve => { done.set(run.id, resolve); signal.addEventListener('abort', () => resolve(), { once: true }) }))
   const p = store.createProject({ mode: 'benchmark', title: 'questions', origin: 'local fixture', goal: 'verify' }).project
   for (const taskKey of ['A', 'B', 'C']) {
     store.createGraph(p.id, { taskKey, title: taskKey, origin: 'local fixture', goal: 'verify' })
-    legion.spawn(p.id, mission(store, p.id, taskKey), 1)
+    legion.spawn(p.id, mission(store, p.id, taskKey))
   }
-  legion.spawn(p.id, mission(store, p.id, 'A', 'different mechanism'), 2)
+  legion.spawn(p.id, mission(store, p.id, 'A', 'different mechanism'))
   try {
     scheduler.start(); await settle(); assert.equal(tasks(store, p.id), 2)
     const order = [...done.keys()].map(id => store.projectGraph(p.id, store.run(id).graphId!).taskKey)
@@ -82,7 +83,7 @@ test('Scheduler fills question slots first, refills on completion and hot-loads 
     for (const r of store.runsByStatus('running', p.id)) { store.addFact(p.id, 'verified fixture result', { runId: r.id, evidence: [{ description: 'local fixture only' }] }); done.get(r.id)!() }
     await settle(); assert.equal(store.runsByStatus('running', p.id).length, 0)
     const graph = store.createGraph(p.id, { taskKey: 'D', title: 'D', origin: 'local fixture', goal: 'verify' })
-    legion.spawn(p.id, mission(store, p.id, 'D'), 1); await settle(); assert.equal(tasks(store, p.id), 1)
+    legion.spawn(p.id, mission(store, p.id, 'D')); await settle(); assert.equal(tasks(store, p.id), 1)
     assert.equal(store.runsByStatus('running', p.id)[0].graphId, graph.id)
   } finally { await scheduler.close(); store.close(); rmSync(root, { recursive: true, force: true }) }
 })
@@ -112,13 +113,13 @@ test('General Max Step limits execution of existing queued directions, excludes 
 
 test('unknown outcomes retain a question slot and are never replayed to fill concurrency', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'unknown-question-')), c = new Configuration(root); c.initialize()
-  const config = { ...c.resolvedSnapshot().config, maxBenchmarkTasks: 1, workers: [{ name: 'pool', enabled: true, priority: 0, maxRunning: 4, backend: 'mock' as const, provider: 'mock', model: 'mock', roles: ['soldier' as const] }] }
+  const config = { ...c.resolvedSnapshot().config, maxBenchmarkTasks: 1, workers: [{ name: 'pool', enabled: true, priority: 0, maxRunning: 4, backend: 'mock' as const, provider: 'mock', model: 'mock', roles: ['scout' as const] }] }
   const store = new Store(':memory:'), p = store.createProject({ mode: 'benchmark', title: 'unknown', origin: 'local fixture', goal: 'verify' }).project, legion = new LegionStore(store, p.id)
   for (const taskKey of ['A','B']) store.createGraph(p.id, { taskKey, title: taskKey, origin: 'local fixture', goal: 'verify' })
   const first = legion.spawn(p.id, mission(store, p.id, 'A')), run = store.claim(p.id, 'execute', config.workers[0], first.id)
   store.finishRun(run.id, 'unknown', 'external result requires verification')
   assert.equal(legion.questionCapacity(1).activeTasks, 1)
-  assert.throws(() => legion.spawn(p.id, mission(store, p.id, 'B'), null, 1), /Question concurrency limit/)
+  assert.throws(() => legion.spawn(p.id, mission(store, p.id, 'B'), 1), /Question concurrency limit/)
   legion.spawn(p.id, mission(store, p.id, 'B'))
   let calls = 0
   const scheduler = new Scheduler(store, config, async () => { calls++ })
@@ -128,13 +129,13 @@ test('unknown outcomes retain a question slot and are never replayed to fill con
 
 test('settings and planner contracts retain one Max Step setting for both modes', () => {
   const root = path.resolve(import.meta.dirname, '../../..'), html = readFileSync(root + '/static/index.html', 'utf8')
-  assert(html.includes('最大题目并发')); assert(html.includes('活跃 Step 上限'))
+  assert(html.includes('最大题目并发')); assert(html.includes('每张 Graph 执行 Step 上限'))
   assert(html.includes('max_benchmark_tasks:Number(value.tasks.commander.max_benchmark_tasks)'))
   const general = readFileSync(root + '/packages/redtrace-engine/prompts/general-planner.md', 'utf8')
   const benchmark = readFileSync(root + '/packages/redtrace-engine/prompts/benchmark-commander.md', 'utf8')
-  assert(general.includes('Fill available Max Step slots'))
-  assert(benchmark.includes('Fill vacant question slots before legion_wait'))
-  assert(benchmark.includes('Max Step caps active Steps per task'))
+  assert(general.includes('not a creation budget or a target queue length'))
+  assert(benchmark.includes('Fill distinct eligible tasks up to configured targetTasks before reinforcement'))
+  assert(benchmark.includes('Max Step caps claimed execution Steps per Graph'))
 })
 
 test('native planners fill distinct ready slots and read hot-loaded targets in the same Benchmark Session', { timeout: 30000 }, async () => {
@@ -145,15 +146,16 @@ test('native planners fill distinct ready slots and read hot-loaded targets in t
   for (const taskKey of ['A','B','C']) store.createGraph(benchmark.id, { taskKey, title: taskKey, origin: 'local fixture', goal: 'verify' })
   const server = createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk
-    const body = JSON.parse(raw), text = body.messages.map((m: any) => typeof m.content === 'string' ? m.content : (m.content ?? []).map((b: any) => b.text ?? '').join('\n')).join('\n')
+    const body = domainFixtureRequest(JSON.parse(raw),res), text = body.messages.map((m: any) => typeof m.content === 'string' ? m.content : (m.content ?? []).map((b: any) => b.text ?? '').join('\n')).join('\n')
     const id = text.match(/Assigned Project=(proj_\d+)/)![1]
     const capacity = JSON.parse(text.match(/Live planning capacity: (\{[^\n]+\})/)![1]); observed.push({ id, ...capacity })
     const bench = id === benchmark.id
-    const available = bench ? capacity.taskSlots : capacity.activeSteps < 3 ? capacity.remainingSteps : 0
+    const queued=store.nodes(general.id,['step']).length
+    const available = bench ? capacity.taskSlots : Math.max(0,Math.min(3,capacity.maxSteps)-queued)
     const name = available > 0 ? bench ? 'legion_spawn' : 'legion_step' : bench ? 'legion_wait' : 'legion_finish'
-    const args = available > 0 ? bench ? { taskKey: capacity.unassignedTaskKeys[0], role: 'soldier', mission: 'own independent question ' + capacity.unassignedTaskKeys[0] }
-      : { projectId: id, description: 'distinct ready direction ' + (capacity.activeSteps + 1), sourceIds: ['origin'] }
-      : bench ? {} : { processed: {}, state: 'Existing independent directions cover configured Max Step; wait for new evidence.' }
+    const args = available > 0 ? bench ? { taskKey: capacity.unassignedTaskKeys[0], role: 'scout', mission: 'recon independent question ' + capacity.unassignedTaskKeys[0] }
+      : { projectId: id, description: 'distinct ready direction ' + (queued + 1), sourceIds: ['origin'] }
+      : bench ? {through:0} : { processed: {}, state: 'Existing independent directions cover configured Max Step; wait for new evidence.' }
     res.writeHead(200, { 'Content-Type': 'text/event-stream' })
     res.end('data: ' + JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call-' + observed.length, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: 'tool_calls' }] }) + '\n\ndata: [DONE]\n\n')
   })
@@ -175,18 +177,18 @@ test('native planners fill distinct ready slots and read hot-loaded targets in t
     const cycle = (id: string) => runCommander(ctx, engine, configuration.resolvedSnapshot().config.workers[0], AbortSignal.timeout(10000), id)
     await cycle(benchmark.id); await cycle(general.id)
     assert.equal(legion.questionCapacity.call(new LegionStore(store, benchmark.id), 2).activeTasks, 2)
-    assert.equal(store.planningCapacity(general.id, 2).activeSteps, 2)
+    assert.equal(store.nodeCount(general.id,'step'), 2)
     const agent = engine.commanderSessions.get(benchmark.id).handle.agent
     configuration.commit(configuration.read().revision, raw => { raw.tasks!.commander.max_intents = 3; raw.tasks!.commander.max_benchmark_tasks = 3 })
     await cycle(benchmark.id); await cycle(general.id)
     assert.equal(engine.commanderSessions.get(benchmark.id).handle.agent, agent)
     assert.equal(new LegionStore(store, benchmark.id).questionCapacity(3).activeTasks, 3)
-    assert.equal(store.planningCapacity(general.id, 3).activeSteps, 3)
+    assert.equal(store.nodeCount(general.id,'step'), 3)
     configuration.commit(configuration.read().revision, raw => { raw.tasks!.commander.max_benchmark_tasks = 5; raw.tasks!.commander.max_intents = 5 })
     await cycle(benchmark.id); await cycle(general.id)
     assert.equal(store.nodes(benchmark.id, ['step']).length, 3, 'fewer remaining questions: do not invent or duplicate missions')
     assert.equal(store.nodes(general.id, ['step']).length, 3, 'fewer distinct viable directions: do not manufacture work to fill Max Step')
-    assert(observed.some(c => c.id === general.id && c.maxSteps === 3 && c.remainingSteps === 1))
+    assert(observed.some(c => c.id === general.id && c.maxSteps === 3 && c.remainingSteps === 3))
     assert(observed.some(c => c.id === benchmark.id && c.maxTasks === 5 && c.targetTasks === 3 && c.taskSlots === 0))
   } finally {
     for (const resident of engine.commanderSessions.values()) await resident.handle.dispose()

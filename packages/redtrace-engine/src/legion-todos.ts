@@ -1,6 +1,6 @@
 import type { Store } from './store.ts'
 import { HttpError, isScopeId } from './types.ts'
-import type { Fact, Step } from './types.ts'
+import type { Fact, Step, TaskAssignment } from './types.ts'
 
 /** Per-Graph planning memory; never part of FGS. */
 export interface Todo {
@@ -33,12 +33,12 @@ export class CommanderTodos {
       if (item.status === 'completed' && (!item.acceptance?.trim() || !item.factIds?.length)) throw new HttpError(422, 'Completed Todo requires acceptance criteria and evidence-backed Fact IDs')
       if (!this.store) continue
       const scoped = this.store.forGraph(this.projectId!, graphId)
-      for (const id of item.stepIds ?? []) scoped.node(this.projectId!, id, 'step')
+      for (const id of item.stepIds ?? []) if(scoped.readNode(this.projectId!,id).kind!=='step')throw new HttpError(422,'Todo Step reference is not a Step')
       for (const id of item.factIds ?? []) {
         const fact = scoped.node<Fact>(this.projectId!, id, 'fact')
         if (isScopeId(id) || !fact.evidence.length) throw new HttpError(422, 'Todo requires actual target evidence, not Scope or a Worker claim')
         if (item.status === 'completed') {
-          if (!fact.evidence.some(e => e.artifactId || e.runId && e.toolCallId)) throw new HttpError(422, 'Todo Fact must reference retained evidence or a real tool result')
+          if (!fact.evidence.some(e => e.artifactId || e.runId && e.toolCallId)) throw new HttpError(422, 'Todo Fact '+id+' must reference retained evidence or a real tool result. Description-only evidence cannot complete a Todo. Keep it pending or publish a linked correction Fact with an existing evidence.path or runId+toolCallId; do not repeat the unchanged completion.')
           verify?.(fact)
         }
       }
@@ -51,17 +51,16 @@ export class CommanderTodos {
 
 export const TASK_PLANNING_TOOLS = new Set(['TodoWrite', 'legion_todos', 'legion_goal', 'legion_update_goal', 'legion_accept', 'legion_confirm_transfer', 'legion_spawn', 'legion_step', 'legion_steps', 'legion_update_step', 'legion_task_stop'])
 
-export function taskTodoPlanner(step: Step, store: Store): Step | undefined {
+export function taskTodoPlanner(step: TaskAssignment, store: Store): TaskAssignment | undefined {
   if (!step.graphId) return undefined
-  const candidates = store.forProject(step.projectId).nodes<Step>(step.projectId, ['step']).filter(s => s.graphId === step.graphId && !s.deleted && !s.parentStepId && !s.specialist && ['general', 'soldier'].includes(s.role ?? ''))
-  // Once upgraded, only a General retains planning authority, including recovery and parking.
-  const generals = candidates.filter(s => s.role === 'general')
-  if (generals.length) return generals.find(s => !['done','cancelled'].includes(s.status)) ?? generals.at(-1)
+  const planner = store.projectGraph(step.projectId,step.graphId).planner
+  if (planner) return planner
+  const candidates = store.forProject(step.projectId).nodes<Step>(step.projectId, ['step']).filter(s => s.graphId === step.graphId && !s.deleted && !s.parentStepId && !s.specialist && s.role === 'soldier')
   const soldiers = candidates.filter(s => s.status !== 'cancelled')
   return soldiers.find(s => s.status !== 'done') ?? soldiers[0]
 }
 
-export function taskTodoOwner(step: Step, store: Store): boolean {
+export function taskTodoOwner(step: TaskAssignment, store: Store): boolean {
   return taskTodoPlanner(step, store)?.id === step.id
 }
 

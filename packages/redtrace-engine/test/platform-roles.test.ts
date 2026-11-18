@@ -21,8 +21,8 @@ test('fixed role schemas preserve planning ownership and specialists inherit Sol
    for(const role of (mode==='benchmark'?['general','soldier','scout','reporter','specialist']:['worker','report'])){
     if(mode==='general'&&role==='scout')continue
     const graph=mode==='benchmark'?store.createGraph(p.id,{taskKey:role,title:role,origin:'fixture',goal:'verify'}):store.projectGraphs(p.id)[0]
-    const step=store.forGraph(p.id,graph.id).addStep(p.id,{role:(role==='specialist'||role==='report'?(mode==='benchmark'?'soldier':'worker'):role) as LegionRole,...(role==='report'?{reportFindingId:'fixture-finding'}:{}),taskKey:role,description:'fixture',sourceIds:[graph.originId],goalId:graph.goalId,...(role==='specialist'?{specialist:{name:'reverse',responsibilities:'analyze',capabilities:['reverse'],scope:'fixture'}}:{})})
-    const run=store.claim(p.id,'execute',worker,step.id),context={store:store.forGraph(p.id,graph.id),run,worker,config,signal:new AbortController().signal}
+    const step=role==='general'?store.addPlanner(p.id,graph.id,{description:'fixture',sourceIds:[graph.originId]}):store.forGraph(p.id,graph.id).addStep(p.id,{role:(role==='specialist'||role==='report'?(mode==='benchmark'?'soldier':'worker'):role) as LegionRole,...(role==='report'?{reportFindingId:'fixture-finding'}:{}),taskKey:role,description:'fixture',sourceIds:[graph.originId],goalId:graph.goalId,...(role==='specialist'?{specialist:{name:'reverse',responsibilities:'analyze',capabilities:['reverse'],scope:'fixture'}}:{})})
+    const run=role==='general'?store.forGraph(p.id,graph.id).claim(p.id,'plan',worker):store.claim(p.id,'execute',worker,step.id),context={store:store.forGraph(p.id,graph.id),run,worker,config,signal:new AbortController().signal}
     const tools=graphTools(context,()=>{}),names=tools.map(t=>t.name)
     assert.equal(names.includes('legion_step'),mode==='benchmark'&&role==='general')
     if(role==='reporter'||role==='report')assert.deepEqual(names.sort(),['evidence_read','project_evidence_read','read_execution','read_graph','read_graph_delta','update_finding_report'].sort())

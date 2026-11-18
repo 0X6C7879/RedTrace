@@ -253,7 +253,7 @@ const MANAGED: readonly ManagedEntry[] = [
   },
 ]
 
-const PRESETS: readonly PresetEntry[] = (['commander','general','soldier','scout','planner','worker'] as const).map(role => ({ id: 'redtrace-' + role, label: role + ' 预设', category: 'preset', preset: role, description: 'Legion ' + role + ' Mission', intro: role === 'commander' ? '全局规划、资源分配与证据验收；不直接操作目标。' : '共享 FGS 的独立 DSH 角色会话，保留原生工具与执行隔离。' }))
+const PRESETS: readonly PresetEntry[] = (['commander','general','soldier','scout','planner','worker'] as const).map(role => ({ id: 'redtrace-' + role, label: role + ' 预设', category: 'preset', preset: role, description: 'Legion ' + role + ' Mission', intro: role === 'commander' ? 'Benchmark 全局题目状态与资源调度；不参与实例、解题或 flag 提交生命周期。' : '共享 FGS 的独立 DSH 角色会话，保留原生工具与执行隔离。' }))
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,47}$/
 const SETTLE_TIMEOUT_SECONDS = 10

@@ -7,17 +7,17 @@ import { existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
-import { recordBenchmarkSubmission, tsecbenchQuery } from './benchmark.ts'
+import { benchmarkInstance, recordBenchmarkSubmission, tsecbenchQuery } from './benchmark.ts'
 import type { Store } from './store.ts'
 import type { TaskContext } from './scheduler.ts'
-import type { EngineConfig, Fact, Json, Step, Project, Run, Goal, Input } from './types.ts'
+import type { EngineConfig, Fact, Json, Step, Project, Run, Goal, Input, TaskAssignment, GraphPlanner } from './types.ts'
 import { ProjectEvidence } from './project-evidence.ts'
 import { legionTools } from './legion-tools.ts'
 import { legionMission } from './legion-missions.ts'
 import { CommanderTodos, taskTodoPlanner, taskTodoOwner, type Todo } from './legion-todos.ts'
 import { knowledgeTools } from './knowledge.ts'
 import { httpTools } from './http-tools.ts'
-import { Check } from 'typebox/value'
+import { Check, Errors } from 'typebox/value'
 import { HttpError } from './types.ts'
 import { nodeContent } from './graph-content.ts'
 import { reporterTools } from './reporter.ts'
@@ -34,25 +34,25 @@ export function efficiencyToolAvailable(context: TaskContext, name: string) {
 
 export function tsecbenchSubmitTool(context: TaskContext): AgentTool {
   const { store, run, config } = context
-  return tool('tsecbench_submit', 'Submit one flag for the active authorized challenge and return the platform response. Does not create Facts; the Worker must verify the response and explicitly submit_fact for decision-relevant results. Tool arguments and results are retained verbatim in audit events.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }), flag: Type.String({ minLength: 1, maxLength: 4096 }) }), async (args, abort) => {const response=await tsecbenchQuery(config, ['submit', args.unique_code, '--flag', args.flag], abort);recordBenchmarkSubmission(store,run.projectId,args.unique_code,response);return response})
+  return tool('tsecbench_submit', 'Submit one flag for the active authorized challenge and return the platform response. Does not create Facts; the Worker must verify the response and explicitly submit_fact for decision-relevant results. Tool arguments and results are retained verbatim in audit events.', Type.Object({ unique_code: Type.String({ minLength: 1, maxLength: 128 }), flag: Type.String({ minLength: 1, maxLength: 4096 }) }), async (args, abort) => {const assigned=store.project(run.projectId).mode==='benchmark'?store.assignment(run)?.taskKey:undefined;if(assigned&&args.unique_code!==assigned)throw new HttpError(403,'Submission must belong to the assigned task');const response=await tsecbenchQuery(config, ['submit', args.unique_code, '--flag', args.flag], abort);recordBenchmarkSubmission(store,run.projectId,args.unique_code,response);return response})
 }
 
 export function graphTools(context: TaskContext, finish: () => void): AgentTool[] {
   const { run, worker, config, signal } = context
   const store = run.graphId ? context.store.forGraph(run.projectId,run.graphId) : context.store.forProject(run.projectId)
-  if (run.activity !== 'execute') throw new HttpError(410, 'Independent Reason execution was replaced by Commander')
+  if (!['execute','plan'].includes(run.activity)) throw new HttpError(410, 'Independent Reason execution was replaced by Commander')
   const maxSteps = () => context.currentMaxSteps ? context.currentMaxSteps() : config.maxSteps ?? null
   const evidenceRoot = path.join(run.workspaceRoot ?? path.join(config.workspaceRoot ?? path.join(os.tmpdir(), 'redtrace-workspaces'), run.projectId), '.redtrace-output', 'evidence')
   const installRoot = config.workspaceRoot ? path.dirname(config.workspaceRoot) : undefined
-  const step = run.stepId ? store.node<Step>(run.projectId, run.stepId, 'step') : undefined
+  const step = store.assignment(run)
   const kinds = ['fact', 'goal', 'step', 'finding', 'hint', 'observation'] as const
-  const readGraph = tool('read_graph', 'Sapper graph/show/doc: without id read only titles, folding supporting Facts under Findings except active Step dependencies. With id read a summary and linked Fact summaries; detail=doc returns full document/evidence references for project_evidence_read. Hints and observations are unverified. SQL pagination is bounded.', Type.Object({ id: Type.Optional(Type.String()), detail: Type.Optional(Type.Union([Type.Literal('summary'), Type.Literal('doc')])), offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), kinds: Type.Optional(Type.Array(Type.Union(kinds.map(k => Type.Literal(k))), { uniqueItems: true })) }, { additionalProperties: false }), async args => {
+  const readGraph = tool('read_graph', 'Sapper graph/show/doc: without id read only titles, folding supporting Facts under Findings except active Step dependencies. With id read a summary and linked Fact summaries; detail=doc returns full document/evidence references for project_evidence_read. Hints and observations are unverified. SQL pagination is bounded.', Type.Object({ id: Type.Optional(Type.String()), detail: Type.Optional(Type.Union([Type.Literal('summary'), Type.Literal('doc')])), offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), order:Type.Optional(Type.Union([Type.Literal('oldest'),Type.Literal('newest')])), kinds: Type.Optional(Type.Array(Type.Union(kinds.map(k => Type.Literal(k))), { uniqueItems: true })) }, { additionalProperties: false }), async args => {
     if (args.id) return { ...store.readNode(run.projectId, args.id, args.detail), planningCapacity: store.planningCapacity(run.projectId, maxSteps()), acknowledgementBoundary: store.acknowledgementBoundary(run.id) }
     const offset = args.offset ?? 0, limit = args.limit ?? 100, selected = new Set(args.kinds ?? kinds)
     const project = store.project(run.projectId), page: Record<string, unknown> = { project, graph:run.graphId?store.projectGraph(run.projectId,run.graphId):null, facts: [], goals: [], steps: [], findings: [], hints: [], observations: [] }, nextOffsets: Record<string, number | null> = {}
     for (const kind of kinds) {
       if (!selected.has(kind)) continue
-      page[kind === 'fact' ? 'facts' : kind === 'goal' ? 'goals' : kind === 'step' ? 'steps' : kind === 'finding' ? 'findings' : `${kind}s`] = store.nodes(run.projectId, [kind], { offset, limit, context: true }).map(node => nodeContent(node))
+      page[kind === 'fact' ? 'facts' : kind === 'goal' ? 'goals' : kind === 'step' ? 'steps' : kind === 'finding' ? 'findings' : `${kind}s`] = store.nodes(run.projectId, [kind], { offset, limit, context: true, order:args.order }).map(node => nodeContent(node))
       const total = store.nodeCount(run.projectId, kind, true)
       nextOffsets[kind] = offset + limit < total ? offset + limit : null
     }
@@ -95,27 +95,36 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
     return { content: [{ type: 'text', text: content }], details: { id: args.id, offset, bytes: chunk.length, totalBytes: bytes.length, nextOffset } }
   } } as unknown as AgentTool)
   tools.push(...reporterTools({ ...context, store }, finish).filter(t => reporting || t.name === 'read_execution'))
-  if (!reporting) {
+  if (!reporting && step?.role!=='general') {
 
     tools.push(tool('sync_step', 'Adopt the latest Step contract at a safe boundary. Read current planVersion first. Returns goals and active dependencies. Old call trees remain blocked; generate your next action from this contract.', Type.Object({ planVersion: Type.Integer({ minimum: 1 }) }), args => store.syncStep(run.id, args.planVersion)))
     tools.push(...httpTools(context))
     const benchmarkOrigin = store.scopeFact(run.projectId).description
     const benchmarkSkill = installRoot ? path.join(installRoot, 'skills', 'tsecbench-api') : ''
     if (/(?:tsecbench|tsec[\s-]*benchmark)/i.test(benchmarkOrigin) && existsSync(path.join(benchmarkSkill, 'SKILL.md')) && existsSync(path.join(benchmarkSkill, 'scripts', 'tsecbench.py'))) {
-      tools.push(tsecbenchSubmitTool({ ...context, store }))
+      if(step?.role!=='scout')tools.push(tsecbenchSubmitTool({ ...context, store }))
+      if(store.project(run.projectId).mode==='benchmark') {
+        const taskKey=step!.taskKey!
+        tools.push(tool('tsecbench_list','Read only this assigned task statement, platform progress and instance status.',Type.Object({},{additionalProperties:false}),async(_args,abort)=>{const response=await tsecbenchQuery(config,['list'],abort);const task=response.challenges?.find((c:any)=>c.unique_code===taskKey);if(!task)throw new HttpError(404,'Assigned task is absent from platform list');return task}))
+        tools.push(tool('tsecbench_start','Start this assigned task instance and persist authorized targets. Reuse an already running instance.',Type.Object({},{additionalProperties:false}),(_args,abort)=>benchmarkInstance(store,config,run.projectId,taskKey,'start',abort,run.id)))
+        if(step?.role!=='scout') {
+          tools.push(tool('tsecbench_close','Close this assigned task only after peers and unknown results settle; preserve evidence first.',Type.Object({},{additionalProperties:false}),(_args,abort)=>benchmarkInstance(store,config,run.projectId,taskKey,'close',abort,run.id)))
+          tools.push(tool('tsecbench_hint','Request a score-penalized hint for this task only with explicit confirmation.',Type.Object({confirmScorePenalty:Type.Literal(true)},{additionalProperties:false}),(_args,abort)=>tsecbenchQuery(config,['hint',taskKey,'--confirm-score-penalty'],abort)))
+        }
+      }
     }
     tools.push(
       tool('submit_fact', 'Publish an incremental confirmed Fact, including a tested negative result with target, method, scope and observations (never model/API/tool faults or untested directions): short title, one-sentence description, optional detailed Markdown doc with exact commands/output, evidence and constraints. Existing file paths are preserved immediately; never put a node ID in path. Keep Artifact/Run/Tool Call provenance. Urgent goal proof, cross-Step prerequisites and real blockers must not wait.', Type.Object({ title: Type.String({ minLength: 1 }), description: Type.String(), doc: Type.Optional(Type.String()), evidence: Type.Array(Type.Object({ description: Type.String(), path: Type.Optional(Type.String()), artifactId: Type.Optional(Type.String()), runId: Type.Optional(Type.String()), toolCallId: Type.Optional(Type.String()) }), {minItems:1}) }), args => {
         const storage = new ProjectEvidence(store, config.workspaceRoot)
         const evidence = args.evidence.map(source => {
-          if (source.artifactId) storage.read(run.projectId, source.artifactId)
+          if (source.artifactId && !(source.path && source.artifactId.startsWith('ev-'))) storage.read(run.projectId, source.artifactId)
           return source.path ? { ...source, artifactId: storage.promoteFile(run.projectId, { ...source, runId: run.id }, run.workspaceRoot).id, runId: run.id } : source
         })
         const doc = args.doc ? { artifactId: storage.publish(run.projectId, Buffer.from(args.doc), { description: args.title+' — doc', runId: run.id }).id, description: args.title+' — doc', runId: run.id } : undefined
         return store.addFact(run.projectId, args.description, { title: args.title, doc, runId: run.id, evidence, creator: worker.name })
       }),
       tool('submit_finding', 'ARTEX report_finding: register only a vulnerability actually triggered and verified in this target, never version/CVE matches or guesses. title=name, type=vulnclass, description=summary; severity and affected assetIds plus supporting factIds. A separate Reporter Session writes the report; do not write it during Explore. New Findings reach Commander through FGS deltas.', Type.Object({ title: Type.String(), description: Type.String(), type: Type.String(), severity: Type.Union(['critical','high','medium','low'].map(v => Type.Literal(v))), assetIds: Type.Array(Type.String()), factIds: refs }), args => store.addFinding(run.projectId, { ...args, creator: worker.name, runId: run.id })),
-      tool('finish_step', step?.bootstrap
+      tool('finish_step', (step && 'bootstrap' in step && step.bootstrap)
         ? 'Finish this Soldier initial Mission only after publishing a confirmed Fact; Commander owns Goal acceptance.'
         : 'Finish this Step only after explicitly submitting at least one confirmed, evidence-backed Fact. Consolidate the result, including verified failures or blockers, then call finish_step; a text summary alone does not complete the Step.', Type.Object({ summary: Type.String(),...(store.project(run.projectId).mode==='benchmark'&&step?.role==='scout'?{difficulty:Type.Union(['easy','medium','hard','unclear'].map(v=>Type.Literal(v))),family:Type.Optional(Type.String({minLength:1}))}:{}) }), args => {
           const current = store.node<Step>(run.projectId, run.stepId!, 'step')
@@ -126,10 +135,10 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
         }, true),
     )
   }
-  if (!reporting) tools.push(...knowledgeTools(evidenceRoot, context))
-  const plannerTools = new Set(['read_graph','read_graph_delta','evidence_read','project_evidence_read','sync_step', ...roleTools.map(t => t.name)])
+  if (!reporting && step?.role!=='general') tools.push(...knowledgeTools(evidenceRoot, context))
+  const plannerTools = new Set(['read_graph','read_graph_delta','evidence_read','project_evidence_read', ...roleTools.map(t => t.name)])
   return tools.filter(t => step?.role !== 'general' || plannerTools.has(t.name)).filter(t => step?.role !== 'scout' || t.name !== 'submit_finding').map(t => ({ ...t, description:store.project(run.projectId).mode==='general'?t.description.replaceAll('Commander','Planner').replaceAll('Soldier','Worker').replaceAll('Sapper','FGS').replace('A separate Reporter Session writes the report; do not write it during Explore.', 'Planner is notified through FGS and assigns report work when needed; no report Step is created automatically.'):t.description, execute: async (...args) => {
-    if (!Check(t.parameters, args[1])) throw new HttpError(422, 'Invalid tool arguments')
+    if (!Check(t.parameters, args[1])) throw new HttpError(422, 'Invalid tool arguments for '+t.name+': '+JSON.stringify([...Errors(t.parameters,args[1])].map(e=>({path:e.instancePath,message:e.message}))))
     if (!efficiencyToolAvailable(context, t.name)) throw new Error('Efficiency tool plugin is disabled')
     if (signal.aborted || store.run(run.id).status !== 'running') throw new Error('Activity has stopped')
     let value
@@ -145,16 +154,16 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   } }))
 }
 
-export const activityPrompt = (_activity: 'decide' | 'execute', step?: Step, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => legionMission(isReportStep(step) ? 'reporter' : step?.role ?? executorRole(mode), mode, planner) + (step ? '\nAssigned Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'. Read and write only this Graph.' : '') + (step?.specialist ? '\nSpecialist assignment (within existing authorized Scope): '+JSON.stringify(step.specialist) : '') + (step?.bootstrap && mode==='general' ? '\nInitial Mission: establish evidence for the supplied Goal as a Worker. Planner owns planning and acceptance.' : '')
+export const activityPrompt = (_activity: 'decide' | 'execute' | 'plan', step?: TaskAssignment, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => legionMission(isReportStep(step) ? 'reporter' : step?.role ?? executorRole(mode), mode, planner) + (step ? '\nAssigned Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'. Read and write only this Graph.' : '') + ((step && 'specialist' in step && step.specialist) ? '\nSpecialist assignment (within existing authorized Scope): '+JSON.stringify('specialist' in step ? step.specialist : undefined) : '') + ((step && 'bootstrap' in step && step.bootstrap) && mode==='general' ? '\nInitial Mission: establish evidence for the supplied Goal as a Worker. Planner owns planning and acceptance.' : '')
 
-export function taskPlanningContext(store: Store, step: Step): { taskPlanner?: { stepId: string; role: Step['role'] } | null; planningTodos?: Todo[] } {
+export function taskPlanningContext(store: Store, step: TaskAssignment): { taskPlanner?: { stepId: string; role: Step['role'] } | null; planningTodos?: Todo[] } {
   if (store.project(step.projectId).mode !== 'benchmark') return {}
   const planner = taskTodoPlanner(step, store)
   return { taskPlanner: planner ? { stepId: planner.id, role: planner.role } : null,
     ...(planner?.id === step.id ? { planningTodos: new CommanderTodos(store, step.projectId).list(step.graphId!) } : {}) }
 }
 
-export function activityLimits(config: EngineConfig, activity: 'decide' | 'execute', step?: Step, mode: 'benchmark'|'general' = 'benchmark') {
+export function activityLimits(config: EngineConfig, activity: 'decide' | 'execute' | 'plan', step?: TaskAssignment, mode: 'benchmark'|'general' = 'benchmark') {
   return config.taskLimits?.[activity==='decide'?coordinatorRole(mode):isReportStep(step)?executorRole(mode):step?.role??executorRole(mode)] ?? {timeout:config.executeTimeout,concludeTimeout:config.concludeTimeout}
 }
 
@@ -181,11 +190,17 @@ export function livePlan(store: Store, runId: string) {
   return text
 }
 
+export function launchContext(store: Store, runId: string, channels?: unknown[], maxSteps?: number | null): ReturnType<typeof executionContext> | ReturnType<typeof plannerContext>
 export function launchContext(store: Store, runId: string, channels: unknown[] = [], maxSteps: number | null = null) {
   const run = store.run(runId)
   if(run.graphId)store=store.forGraph(run.projectId,run.graphId)
+  return run.activity==='plan'?plannerContext(store,run,maxSteps):executionContext(store,runId,channels,maxSteps)
+}
+function executionContext(store:Store,runId:string,channels:unknown[],maxSteps:number|null) {
+  const run=store.run(runId)
+  if(run.graphId)store=store.forGraph(run.projectId,run.graphId)
   const origin = store.node<Fact>(run.projectId, 'origin', 'fact')
-  const step = run.stepId ? store.node<Step>(run.projectId, run.stepId, 'step') : undefined
+  const step = store.assignment(run)
   const includeHints = !!run.stepId
   const acknowledgedHintSeq = run.activity === 'decide' ? store.project(run.projectId).acknowledgedHintSeq ?? 0 : 0
   const hints = includeHints ? store.db.prepare(`SELECT n.data FROM nodes n JOIN events e
@@ -198,13 +213,6 @@ export function launchContext(store: Store, runId: string, channels: unknown[] =
   return { projectId: run.projectId, graphId:run.graphId, ...(run.handoff ? {handoff:{confirmedState:run.handoff,predecessorRunId:run.predecessorRunId}} : {}), planningCapacity: store.planningCapacity(run.projectId, maxSteps), acknowledgementBoundary: store.acknowledgementBoundary(run.id), scope: { id: origin.id, description: origin.description },
     ...(step && store.project(run.projectId).mode==='general' ? {step:store.readNode(run.projectId,step.id),dependencies:step.sourceIds.map(id=>store.readNode(run.projectId,id))} : {}),
     ...(step ? taskPlanningContext(store, step) : {}),
-    ...(step?.role === 'general' ? {plannerRound: {
-      state: step.handoff ?? '',
-      instruction: 'Review new Facts against every Todo acceptance criterion. Read Worker traces/output before retry or acceptance; end the planning round without waiting for Workers.',
-      overview: {goals: store.nodes(run.projectId,['goal'],{limit:100}).map(n => nodeContent(n)), steps: store.nodes(run.projectId,['step'],{limit:100}).map(n => nodeContent(n))},
-      recentEvidence: store.db.prepare("SELECT id FROM nodes WHERE project_id=? AND graph_id=? AND kind IN ('fact','finding') ORDER BY rowid DESC LIMIT 24").all(run.projectId,step.graphId!).map(r => store.readNode(run.projectId,String(r.id))),
-      workers: store.db.prepare('SELECT id FROM runs WHERE project_id=? AND graph_id=? AND step_id<>? ORDER BY rowid DESC LIMIT 12').all(run.projectId,step.graphId!,step.id).map(row => store.run(String(row.id))).map(r => ({run:r,trace:store.db.prepare('SELECT data FROM audit_events WHERE project_id=? AND run_id=? ORDER BY id DESC LIMIT 8').all(run.projectId,r.id).map(e => JSON.parse(String(e.data))).reverse()})),
-    }} : {}),
     ...(isReportStep(step) ? { reportTrigger: { tool: 'submit_finding', finding_id: step!.sourceIds[0], finding: store.readNode(run.projectId, step!.sourceIds[0]) } } : {}),
     ...(goal ? { goal: { id: goal.id, description: goal.description, status: goal.status },
       evidenceSeq: run.planningEvidenceSeq ?? 0, hintSeq: run.planningHintSeq ?? 0, criticalSeq: run.planningCriticalSeq ?? 0, graphCursor: run.deliveredGraphCursor ?? 0,
@@ -263,4 +271,17 @@ export async function runMock({ store, run, signal }: TaskContext) {
     const fact = store.addFact(run.projectId, 'Mock verification completed', { runId: run.id, creator: 'mock', evidence: [{ description: 'Deterministic test runner; no external operation' }] })
     store.addFinding(run.projectId, { title: 'Mock result', description: 'Deterministic test result', factIds: [fact.id] })
   }
+}
+
+export function plannerContext(store: Store, run: Run, maxSteps: number | null) {
+  const graph=store.projectGraph(run.projectId,run.graphId!),planner=graph.planner!,scoped=store.forGraph(run.projectId,graph.id)
+  const compact=(node:import('./types.ts').GraphNode)=>{const {projectId,graphId,creator,createdAt,...index}=nodeContent(node);return index}
+  const page=(kind:'goal'|'step'|'fact'|'finding'|'hint',limit:number)=>{const order=kind==='fact'||kind==='finding'?'newest':'oldest',total=scoped.nodeCount(run.projectId,kind,true);return{items:scoped.nodes(run.projectId,[kind],{limit,context:true,order}).map(compact),total,offset:0,limit,order,nextOffset:total>limit?limit:null}}
+  const changes=store.plannerEvents(planner),steps=scoped.nodes<Step>(run.projectId,['step']),runs=store.runs(run.projectId).filter(r=>r.graphId===graph.id&&r.activity==='execute'),queued=steps.filter(s=>s.status==='pending'),goal=scoped.node<Goal>(run.projectId,graph.goalId,'goal')
+  return {projectId:run.projectId,graphId:graph.id,step:undefined,dependencies:undefined,hints:undefined,scope:{id:graph.originId,description:scoped.node<Fact>(run.projectId,graph.originId,'fact').description},goal:{id:goal.id,description:goal.description,status:goal.status,version:goal.version},planningCapacity:scoped.planningCapacity(run.projectId,maxSteps),...taskPlanningContext(scoped,planner),plannerRound:{state:planner.handoff??'',
+    triggers:{...changes,events:changes.events.map(e=>({id:e.id,type:e.type,nodeId:e.nodeId,payload:e.payload,...(e.message?{message:e.message}:{}),...(!e.graphId?{projectEvent:true}:{})}))},
+    overview:{goals:page('goal',20),steps:page('step',40),facts:page('fact',24),findings:page('finding',24),hints:page('hint',12)},
+    activeSteps:runs.filter(r=>['running','paused','unknown'].includes(r.status)).map(r=>({stepId:r.stepId,runId:r.id,status:r.status})),
+    queue:{ids:queued.slice(0,40).map(s=>s.id),total:queued.length,nextOffset:queued.length>40?40:null},
+    workers:runs.slice(-12).map(r=>({id:r.id,stepId:r.stepId,status:r.status,error:r.error,failureCode:r.failureCode})),totalRuns:runs.length}}
 }

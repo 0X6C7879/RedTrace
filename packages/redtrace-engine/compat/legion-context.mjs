@@ -19,6 +19,7 @@ export function mountLegionContext(scoped, ctx, { store, legion, run, task, mess
     if(event.type!=='compaction/end'||event.data?.error||!summary)return
     warned=false
     if(run){
+      if(run.activity==='plan'){legion.saveState(run.projectId,run.id,summary);summary=undefined;return}
       const step=store.node(run.projectId,run.stepId,'step')
       const state=JSON.stringify({source:'native-compaction',stepId:step.id,goalId:step.goalId,taskKey:step.taskKey,summary,predecessorRunId:run.id,sourceIds:step.sourceIds,factIds:step.factIds})
       legion.queueHandoff(run.id,state);legion.settleHandoff(run.id)

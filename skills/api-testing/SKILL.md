@@ -8,10 +8,10 @@ description: API security testing 接口安全测试：REST/GraphQL 面发现、
 ## RedTrace Workflow
 
 1. 读取当前 Step 的 FGS 契约及引用证据，复用同题已验证身份、Session、地址与已有成果。
-2. 用 `http_batch` 保存基线与变体请求；通过返回的 Session Resource 和 Request ID 调用 `http_replay`。请求默认并发；只有测试需要身份或状态隔离时才创建独立 Session。需要前序登录结果的请求，待登录完成后再发。
+2. 用 `http_session (action=batch)` 保存基线与变体请求；通过返回的 Session Resource 和 Request ID 调用 `http_session (action=replay)`。请求默认并发；只有测试需要身份或状态隔离时才创建独立 Session。需要前序登录结果的请求，待登录完成后再发。
 3. 需要爬取、fuzz 或专用协议时，用 `bash` 运行现有 `curl`、`ffuf`、`sqlmap` 或本 Skill 脚本；真实浏览器交互使用 `playwright-skill` 的脚本和独立 BrowserContext，不假定存在浏览器专用工具。显式向命令传递已验证 Cookie/Authorization，不假定 HTTP Resource 会自动向外部工具导出会话。
-4. 同一 Step 内并发测试独立输入；跨题调度交给 Commander；仅 General 可通过 legion_spawn 委派同题小队，Soldier/Scout 不自行派生 Agent。复用下方 Payload、打法和 references，按实际反馈深入验证。
-5. 保存完整请求/响应、对照与实际影响到证据文件。确认关键结论后 `submit_fact({description,evidence:[{description,path}]})`；真实可交付漏洞再 `submit_finding({title,description,factIds})` 引用 Fact。线索不冒充已确认漏洞。
+4. 同一 Step 内并发测试独立输入；跨题调度交给 Commander；仅 General 可通过 legion_task (action=spawn) 委派同题小队，Soldier/Scout 不自行派生 Agent。复用下方 Payload、打法和 references，按实际反馈深入验证。
+5. 保存完整请求/响应、对照与实际影响到证据文件。确认关键结论后 `fgs_publish({action:"fact",description,evidence:[{description,path}]})`；真实可交付漏洞再 `fgs_publish({action:"finding",title,description,factIds})` 引用 Fact。线索不冒充已确认漏洞。
 6. 当前 Step 结束前至少提交一条真实证据支持的汇总 Fact；无突破则如实汇总验证范围、失败或阻塞，再 `finish_step({summary})`。普通局部观察先留在证据文件。
 
 
@@ -63,7 +63,7 @@ description: API security testing 接口安全测试：REST/GraphQL 面发现、
 - [ ] 对象级越权（交叉 exploit-authz 打法）
 - [ ] GraphQL：introspection/字段建议/mutation 越权
 - [ ] 限流验证
-- [ ] 每个确认点：`http_batch` 归档的请求/响应文件 + `submit_fact` 后 `submit_finding`
+- [ ] 每个确认点：`http_session (action=batch)` 归档的请求/响应文件 + `fgs_publish (action=fact)` 后 `fgs_publish (action=finding)`
 
 ---
 

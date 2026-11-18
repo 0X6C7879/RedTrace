@@ -12,6 +12,7 @@ import { accessSync, constants, existsSync } from 'node:fs'
 import path from 'node:path'
 import type { CordisFiber, RuntimeTask, ScopedContext } from './types.js'
 import { load, mount } from './loader.js'
+import { TOOL_DOMAINS } from './tool-domains.js'
 import { TASK_PLUGINS } from './task-plugins.js'
 
 const VENDOR = 'vendor/deepseek-harness/packages'
@@ -254,6 +255,7 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
       await use(scope, `${VENDOR}/lsp/tool-lsp/lib/index.js`)
     }],
   ]
+  let familySettings=''
   let last = Promise.resolve()
   const refresh = () => {
     const next = last.catch(() => {}).then(async () => {
@@ -267,6 +269,8 @@ export async function mountExecutionTools(scoped: ScopedContext, config: Executi
         await setBackground(false)
         await remove('redtrace-jobs')
       }
+      const signature=JSON.stringify(['webshell_manage','c2_manage','c2_payload'].flatMap(domain=>[domain,...Object.values(TOOL_DOMAINS[domain])]).map(name=>[name,config.toolEnabled?.(name)??true]))
+      if(signature!==familySettings){await remove('redtrace-webshell');await remove('redtrace-c2');familySettings=signature}
       for (const [id, add] of stacks) {
         if (available(id)) await install(id, add)
         else await remove(id)

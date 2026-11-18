@@ -1,3 +1,4 @@
+import { domainAction } from '../../redtrace-dsh/src/tool-domains.ts'
 import { FIXED_ROLES, LEGACY_GENERAL_ROLES } from '../../redtrace-dsh/src/roles.ts'
 import { createHash, createHmac, createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'node:crypto'
 import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -9,7 +10,7 @@ import type { EngineConfig, Provider, Worker } from './types.ts'
 type RawModel = { id: string; context_window: number; max_tokens: number; reasoning?: string; reasoning_efforts?: Record<string, string | null> | boolean | null; thinking_format?: string }
 type RawProvider = { api: Provider['api']; base_url: string; api_key?: string; api_key_env?: string; models: RawModel[] }
 type RawWorker = { roles?: Worker['roles']; name: string; provider: string; model?: string; enabled?: boolean; bootstrap?: boolean; reason?: boolean; explore?: boolean; max_running?: number; priority?: number; backend?: Worker['backend'] | 'pi' }
-export interface RawConfig { providers?: Record<string, RawProvider>; workers: RawWorker[]; tool_settings?: Record<string, { enabled: boolean; roles?: Worker['roles']; workers?: string[] }>; runtime?: Record<string, unknown>; tasks?: Record<string, { timeout: number; conclude_timeout: number; max_intents?: number; max_benchmark_tasks?: number; inspection_interval?:number; idle_inspection_interval?:number }>; common_env?: Record<string, string>; llm_polling?: { enabled?: boolean; models?: Record<string, string[]> }; [key: string]: unknown }
+export interface RawConfig { providers?: Record<string, RawProvider>; workers: RawWorker[]; tool_settings?: Record<string, { enabled: boolean; roles?: Worker['roles']; workers?: string[]; actions?: Record<string,{enabled:boolean;roles?:Worker['roles']}> }>; runtime?: Record<string, unknown>; tasks?: Record<string, { timeout: number; conclude_timeout: number; max_intents?: number; max_benchmark_tasks?: number; inspection_interval?:number; idle_inspection_interval?:number }>; common_env?: Record<string, string>; llm_polling?: { enabled?: boolean; models?: Record<string, string[]> }; [key: string]: unknown }
 const secretPattern = /^\$\{REDTRACE_SECRET:([a-f0-9]{32})\}$/
 const sensitiveEnvironment = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD)$/
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
@@ -102,6 +103,13 @@ export class Configuration {
         delete raw.tasks.operator; delete raw.tasks.leader
       }
       raw.role_version = 3
+    }
+    for(const [name,setting] of Object.entries(raw.tool_settings??{})) {
+      const mapped=domainAction(name)
+      if(!mapped)continue
+      const domain=raw.tool_settings![mapped.domain]??={enabled:true}
+      ;(domain.actions??={})[mapped.action]={enabled:setting.enabled,...(setting.roles?{roles:setting.roles}:{})}
+      delete raw.tool_settings![name]
     }
     return { raw, revision: hash(content) }
   }

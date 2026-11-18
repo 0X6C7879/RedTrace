@@ -8,6 +8,7 @@ import type { LegionRole, Step, Goal } from './types.ts'
 export interface CommandCursor { delivered: number; acknowledged: number }
 export interface Campaign {
   projectId: string; sessionId: string; status: 'idle' | 'running' | 'stopped'; state: string
+  stateScope?: 'scheduling'
   nextInspectionAt?: number; restarts?: number; failureCode?: string; nativeCompactionSummary?: string; hasSession?: boolean; workerName?: string; usage?: {inputTokens:number;outputTokens:number;cacheReadTokens:number;cacheWriteTokens:number}; error?: string; endgame?: string; startedAt?: number; deadline?: number; pendingTools?: string[]; nextWorker?: string; reasoning?: string; previousSessionId?: string
   sessionHistory?: string[]
   cursors: Record<string, CommandCursor>
@@ -57,6 +58,10 @@ export class LegionStore {
     return JSON.parse(String(row.data))
   }
   campaigns(): Campaign[] { return this.store.projects().map(p=>this.campaign(p.id)) }
+  commanderState(projectId?:string) {
+    const c=this.campaign(projectId)
+    return this.store.project(c.projectId).mode==='benchmark'&&c.stateScope!=='scheduling'?'Legacy tactical STATE is archived, not scheduling authority. Rebuild allocation from current Board, live owners and unfinished user instructions.':c.state
+  }
   saveCampaign(campaign: Campaign) {
     const id=this.owner(campaign.projectId)
     this.store.db.prepare('UPDATE project_campaigns SET data=? WHERE project_id=?').run(JSON.stringify(campaign),id)
@@ -80,7 +85,7 @@ export class LegionStore {
     const graph=sourceTaskKey?this.store.projectGraphs(projectId).find(g=>g.taskKey===taskKey):undefined
     if(sourceTaskKey&&!graph)throw new HttpError(422,'Initialize the target task Graph before Scout reuse')
     const hint=graph?this.store.forGraph(projectId,graph.id).addInput(projectId,'hint','[Family Scout reuse] '+family+'; sibling='+sourceTaskKey+'; source Facts='+factIds.join(',')+'. UNVERIFIED IN THIS TARGET: read the sibling evidence, verify target product/version and family differences before exploiting.','commander'):undefined
-    const data={...(row?JSON.parse(String(row.data)):{}),difficulty,factIds:sourceTaskKey?[]:factIds,...(family?{family}:{}),...(sourceTaskKey?{sourceTaskKey,sourceFactIds:factIds,hintId:hint!.id}:{}),classifiedAt:now()};this.store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?) ON CONFLICT(project_id,task_key) DO UPDATE SET data=excluded.data').run(projectId,taskKey,JSON.stringify(data));this.store.event(projectId,'legion.classified',null,{taskKey,difficulty});return data
+    const data={...(row?JSON.parse(String(row.data)):{}),difficulty,factIds:sourceTaskKey?[]:factIds,...(family?{family}:{}),...(sourceTaskKey?{sourceTaskKey,sourceFactIds:factIds,hintId:hint!.id}:{}),classifiedAt:now()};if(!sourceTaskKey){delete data.sourceTaskKey;delete data.sourceFactIds;delete data.hintId}this.store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?) ON CONFLICT(project_id,task_key) DO UPDATE SET data=excluded.data').run(projectId,taskKey,JSON.stringify(data));this.store.event(projectId,'legion.classified',null,{taskKey,difficulty});return data
   }
   tactics(projectId:string,at=Date.now()) {
     const tasks=new Set([...this.store.projectGraphs(projectId).filter(g=>g.taskKey).map(g=>g.taskKey!),...this.store.nodes<Step>(projectId,['step']).filter(s=>!s.deleted).map(s=>s.taskKey??s.goalId)])
@@ -90,9 +95,9 @@ export class LegionStore {
     const observed=new Map(this.store.db.prepare("SELECT run_id,MAX(json_extract(data,'$.timestamp')) AS at FROM audit_events WHERE project_id=? AND json_extract(data,'$.kind') IN ('assistant.message','thinking.message','tool.completed','command.completed') GROUP BY run_id").all(projectId).map(row=>[String(row.run_id),String(row.at)]))
     const confirmedEnd=(run:import('./types.ts').Run,time:string)=>run.error?.startsWith('Process stopped')?new Date(Math.min(Date.parse(time),Date.parse(observed.get(run.id)??run.startedAt))).toISOString():time
     const intervals=new Map<string,import('./types.ts').Run[]>(),open=new Map<string,string>(),byRunId=new Map(runs.map(r=>[r.id,r]))
-    for(const row of this.store.db.prepare("SELECT type,created_at,json_extract(data,'$.runId') AS run_id FROM events WHERE project_id=? AND type IN ('execute.started','execute.paused','execute.succeeded','execute.failed','execute.unknown','execute.cancelled') ORDER BY id").all(projectId)) {
+    for(const row of this.store.db.prepare("SELECT type,created_at,json_extract(data,'$.runId') AS run_id FROM events WHERE project_id=? AND type IN ('execute.started','execute.paused','execute.succeeded','execute.failed','execute.unknown','execute.cancelled','planner.started','planner.paused','planner.succeeded','planner.failed','planner.unknown','planner.cancelled') ORDER BY id").all(projectId)) {
       const id=String(row.run_id),time=String(row.created_at)
-      if(row.type==='execute.started')open.set(id,time)
+      if(String(row.type).endsWith('.started'))open.set(id,time)
       else if(open.has(id)){const run=byRunId.get(id);if(run){const list=intervals.get(id)??[];list.push({...run,startedAt:open.get(id)!,endedAt:confirmedEnd(run,time)});intervals.set(id,list)}open.delete(id)}
     }
     for(const [id,time]of open){const run=byRunId.get(id);if(run?.status==='running')intervals.set(id,[...(intervals.get(id)??[]),{...run,startedAt:time}])}
@@ -105,11 +110,11 @@ export class LegionStore {
       const graph=this.store.projectGraphs(projectId).find(g=>g.taskKey===taskKey),lastEvidenceAt=evidence.get(graph?.id??steps[0]?.graphId??'')
       const running=taskRuns.filter(r=>r.status==='running'),stalledMinutes=running.length?executionTime(timedRuns,at,Math.max(Date.parse(lastEvidenceAt??'1970-01-01'),Date.parse(activeAt)))/60000:0
       const goalStatus=graph&&this.store.node<Goal>(projectId,graph.goalId,'goal').status,achieved=goalStatus==='achieved'
-      const live=steps.filter(s=>['pending','running','paused'].includes(s.status)),general=live.find(s=>s.role===senior),hasGeneral=!!general
-      const generalRuns=taskRuns.filter(r=>r.stepId===general?.id),generalMinutes=executionTime(generalRuns.flatMap(r=>intervals.get(r.id)??[{...r,endedAt:r.endedAt?confirmedEnd(r,r.endedAt):r.endedAt}]),at)/60000
-      const needsScout=live.some(s=>s.role==='scout')&&(!classification?.difficulty||classification.difficulty==='unclear')
-      const recommendation=achieved?'achieved':goalStatus==='cancelled'?'exhausted':steps.some(s=>s.status==='parked')?'parked':needsScout?running.length&&stalledMinutes>=10?'second-angle':running.length&&stalledMinutes>=5?'tactical':'scout':classification?.difficulty==='hard'&&!hasGeneral?'general':!running.length?'dispatch':hasGeneral&&stalledMinutes>=30&&(generalMinutes>=25||stalledMinutes>=45)?'park':hasGeneral?'working':stalledMinutes>=20?'general':stalledMinutes>=10?'second-angle':stalledMinutes>=5?'tactical':'working'
-      return{taskKey,elapsedMs,stalledMinutes,lastEvidenceAt,classification,recommendation:recommendation==='general'?senior:recommendation,stepIds:steps.map(s=>s.id),facts:steps.flatMap(s=>s.factIds),generals:live.filter(s=>s.role===senior).length}
+      const live=steps.filter(s=>['pending','running','paused'].includes(s.status)),general=graph?.planner,hasGeneral=!!general&&['pending','running','paused'].includes(general.status)
+      const generalRuns=runs.filter(r=>r.activity==='plan'&&r.graphId===graph?.id),generalMinutes=executionTime(generalRuns.flatMap(r=>intervals.get(r.id)??[{...r,endedAt:r.endedAt?confirmedEnd(r,r.endedAt):r.endedAt}]),at)/60000
+      const needsScout=!classification?.classifiedAt&&!steps.some(s=>s.role!=='scout')
+      const recommendation=classification?.platformCompleted===true||achieved?'achieved':goalStatus==='cancelled'?'exhausted':steps.some(s=>s.status==='parked')?'parked':needsScout?running.length&&stalledMinutes>=10?'second-angle':running.length&&stalledMinutes>=5?'tactical':'scout':classification?.difficulty==='hard'&&!hasGeneral?'general':!running.length?'dispatch':hasGeneral&&stalledMinutes>=30&&(generalMinutes>=25||stalledMinutes>=45)?'park':hasGeneral?'working':stalledMinutes>=20?'general':stalledMinutes>=10?'second-angle':stalledMinutes>=5?'tactical':'working'
+      return{taskKey,elapsedMs,stalledMinutes,lastEvidenceAt,classification,recommendation:recommendation==='general'?senior:recommendation,stepIds:steps.map(s=>s.id),facts:steps.flatMap(s=>s.factIds),generals:Number(hasGeneral)}
     })
   }
   /** Refresh durable handover data without replacing Commander-authored notes or copying FGS. */
@@ -117,14 +122,14 @@ export class LegionStore {
     const c=this.campaign(projectId)
     let notes=c.state
     if(notes.startsWith('{')){try{const saved=JSON.parse(notes);if(saved.source==='commander-checkpoint')notes=saved.notes}catch{ /* Commander STATE may be plain text. */ }}
-    const board=new LegionStore(this.store,projectId).boardSummary()
-    c.state=JSON.stringify({source:'commander-checkpoint',reason,notes,cursors:c.cursors,board:board.lines,allocation:this.store.nodes<Step>(projectId,['step']).filter(s=>!s.deleted).map(s=>({stepId:s.id,taskKey:s.taskKey,role:s.role,status:s.status,worker:s.worker,nextWorker:s.nextWorker,parkReason:s.parkReason,resumeCondition:s.resumeCondition,handoff:s.handoff,failure:s.failure})),tasks:this.tactics(projectId),graphs:this.store.projectGraphs(projectId).map(g=>({id:g.id,taskKey:g.taskKey,originId:g.originId,goalId:g.goalId}))})
+    c.state=JSON.stringify({source:'commander-checkpoint',reason,notes,cursors:c.cursors,board:'legion_inspect(action=board)'})
     this.saveCampaign(c)
     return c.state
   }
   assertInstanceClose(projectId:string,taskKey:string,exceptRun?:string) {
     this.store.project(projectId);const ids=new Set(this.steps(projectId,taskKey).map(s=>s.id))
-    if(this.store.runs(projectId).some(r=>r.id!==exceptRun&&ids.has(r.stepId??'')&&(['running','paused','unknown'].includes(r.status)||r.pendingTools.length)))throw new HttpError(409,'Confirm every task execution stopped and resolve unknown outcomes before closing its instance')
+    const graph=this.store.projectGraphs(projectId).find(g=>g.taskKey===taskKey)
+    if(this.store.runs(projectId).some(r=>r.id!==exceptRun&&(ids.has(r.stepId??'')||r.activity==='plan'&&r.graphId===graph?.id)&&(['running','paused','unknown'].includes(r.status)||r.pendingTools.length)))throw new HttpError(409,'Confirm every task execution stopped and resolve unknown outcomes before closing its instance')
     if(this.steps(projectId,taskKey).some(s=>s.status==='pending'))throw new HttpError(409,'Park pending task missions before closing its instance')
   }
   platformEvent(projectId:string,taskKey:string,action:string,response:unknown) {
@@ -161,9 +166,9 @@ export class LegionStore {
     return this.store.transaction(()=>{
       const c=this.campaign(projectId),cursor=c.cursors[projectId]??{delivered:0,acknowledged:0},start=after??cursor.acknowledged
       if(!Number.isSafeInteger(start)||start<0||start>cursor.delivered)throw new HttpError(422,'Cannot skip undelivered project events')
-      const events=this.store.events(projectId,start,limit),through=events.at(-1)?.id??start,graphs=this.store.projectGraphs(projectId)
+      const events=this.store.events(projectId,start,limit),through=events.at(-1)?.id??start,graphs=this.store.projectGraphs(projectId),runs=new Map(this.store.runs(projectId).map(r=>[r.id,r]))
       cursor.delivered=Math.max(cursor.delivered,through);c.cursors[projectId]=cursor;this.saveCampaign(c)
-      return{events:events.map(e=>({id:e.id,type:e.type,taskKey:graphs.find(g=>g.id===e.graphId)?.taskKey??(e.payload as Record<string,unknown>).taskKey??null,createdAt:e.createdAt})),cursor:through,hasMore:this.store.events(projectId,through,1).length>0}
+      return{events:events.map(e=>{const payload=e.payload as Record<string,unknown>,runId=typeof payload.runId==='string'?payload.runId:undefined,graphId=e.graphId??(runId?runs.get(runId)?.graphId:undefined);return{id:e.id,type:e.type,taskKey:graphs.find(g=>g.id===graphId)?.taskKey??payload.taskKey??null,...(runId?{runId}:{}),...(e.nodeId?{nodeId:e.nodeId}:{}),createdAt:e.createdAt}}),cursor:through,hasMore:this.store.events(projectId,through,1).length>0}
     })
   }
   boardSummary(taskKey?:string) {
@@ -185,18 +190,26 @@ export class LegionStore {
       const priority=messages.some(m=>m.type==='HELP'&&live.some(r=>r.id===m.sender))?0:live.some(r=>r.status==='unknown'||r.pendingTools.length)?1:live.length?2:goal?.status==='achieved'?3:own.some(s=>s.status==='parked')?4:5
       return{g,own,live,goal,tactic,priority}
     }).sort((a,b)=>a.priority-b.priority||(a.g.taskKey??a.g.id).localeCompare(b.g.taskKey??b.g.id))
+    const untouched=tasks.filter(t=>!t.own.length&&!t.g.planner&&t.tactic?.classification?.platformCompleted!==true)
+    lines.push(`Tasks=${tasks.length}; platformCompleted=${tasks.filter(t=>t.tactic?.classification?.platformCompleted===true).length}; internalAchieved=${tasks.filter(t=>t.goal?.status==='achieved').length}; untouched=${untouched.length}`)
+    const instances=this.store.db.prepare("SELECT task_key,json_extract(data,'$.platformInstance.status') AS status,json_extract(data,'$.platformCompleted') AS completed,json_extract(data,'$.platformObservedAt') AS observed FROM legion_tasks WHERE project_id=? AND json_extract(data,'$.platformInstance.status')!='stopped' ORDER BY task_key").all(id)
+    if(instances.length)lines.push('Platform instances (last refresh): '+instances.map(t=>`${t.task_key}=${t.status}${t.completed?'(completed)':''}@${t.observed}`).join(', '))
+    if(!taskKey&&untouched.length)lines.push('Scout queue: '+untouched.map(t=>t.g.taskKey).join(', '))
+    const selected=taskKey?tasks:tasks.filter(t=>!untouched.includes(t)&&t.tactic?.classification?.platformCompleted!==true)
     const capacity=Math.max(0,99-lines.length)
-    for(const task of tasks.slice(0,capacity))lines.push(`${task.g.taskKey} ${task.goal?.status==='achieved'?'goal-achieved':task.goal?.status==='cancelled'?'exhausted':task.own.some(s=>s.status==='parked')?'parked':task.live.length?'active':'pending'} submitted=${!!task.tactic?.classification?.submissionAttemptedAt} platform=${task.tactic?.classification?.platformCompleted===true?'confirmed':'unconfirmed'}; runs=${task.live.map(r=>r.id+':'+r.status).join(',')||'-'}; difficulty=${task.tactic?.classification?.difficulty??'unknown'} family=${task.tactic?.classification?.family??'-'}; workers=${task.own.filter(s=>!['done','cancelled'].includes(s.status)).map(s=>s.id+':'+s.role+':'+s.status+':'+s.description.slice(0,100)).join('|')||'-'}; stalled=${Math.floor(task.tactic?.stalledMinutes??0)}m; evidence=${task.tactic?.lastEvidenceAt??'-'}; next=${task.tactic?.recommendation??'scout'}`)
-    if(tasks.length>capacity)lines.push(`omitted=${tasks.length-capacity}; query a task Graph on demand`)
+    for(const task of selected.slice(0,capacity))lines.push(`${task.g.taskKey} ${task.tactic?.classification?.platformCompleted===true?'platform-completed':task.goal?.status==='achieved'?'goal-achieved':task.goal?.status==='cancelled'?'exhausted':task.own.some(s=>s.status==='parked')?'parked':task.live.length?'active':'pending'}; submitted=${!!task.tactic?.classification?.submissionAttemptedAt}; runs=${task.live.map(r=>r.id+':'+r.status+':'+(r.activity==='plan'?'general':steps.find(s=>s.id===r.stepId)?.role)).join(',')||'-'}; difficulty=${task.tactic?.classification?.difficulty??'unknown'}; stalled=${Math.floor(task.tactic?.stalledMinutes??0)}m; next=${task.tactic?.recommendation??'scout'}`)
+    if(selected.length>capacity)lines.push(`omitted=${selected.length-capacity}; query Board by taskKey`)
     return{projectId:id,sessionId:campaign.sessionId,cursors:campaign.cursors,budget,lines:lines.slice(0,100)}
   }
   questionCapacity(maxTasks: number | null = null) {
     const id = this.owner(), steps = this.store.nodes<Step>(id, ['step']).filter(s => !s.deleted)
     const graphs = this.store.projectGraphs(id).filter(g => g.type === 'benchmark_task')
     const active = new Set(steps.filter(s => ['pending','running','paused'].includes(s.status)).map(s => s.taskKey!))
+    for(const graph of graphs)if(graph.planner&&['pending','running','paused'].includes(graph.planner.status))active.add(graph.taskKey!)
     for (const run of this.store.runsByStatus('unknown', id)) {
       const step = steps.find(s => s.id === run.stepId)
       if (step?.taskKey) active.add(step.taskKey)
+      else if(run.activity==='plan'&&run.graphId)active.add(this.store.projectGraph(id,run.graphId).taskKey!)
     }
     const goals = new Map(this.store.nodes<Goal>(id, ['goal']).map(g => [g.id, g.status]))
     const parked = new Set(steps.filter(s => s.status === 'parked').map(s => s.taskKey))
@@ -233,9 +246,9 @@ export class LegionStore {
       for (const [projectId, through] of Object.entries(processed)) {
         if(projectId!==campaign.projectId) throw new HttpError(403,'Cannot acknowledge another Project')
         this.store.project(projectId)
-        const cursor = campaign.cursors[projectId]
-        if (!cursor || !Number.isSafeInteger(through) || through < cursor.acknowledged || through > cursor.delivered) throw new HttpError(422, 'Acknowledgement exceeds delivered project events')
-        cursor.acknowledged = through
+        const cursor = campaign.cursors[projectId]??{delivered:0,acknowledged:0}
+        if (!Number.isSafeInteger(through) || through < cursor.acknowledged || through > cursor.delivered) throw new HttpError(422, 'Acknowledgement exceeds delivered project events')
+        cursor.acknowledged = through;campaign.cursors[projectId]=cursor
       }
       if(state!==undefined)campaign.state = requiredText(state, 'state'); campaign.status = release ? 'idle' : 'running'; this.saveCampaign(campaign)
       return campaign
@@ -247,7 +260,7 @@ export class LegionStore {
   private steps(projectId: string, taskKey: string) {
     return this.store.nodes(projectId, ['step']).filter((node): node is Step => node.kind === 'step' && node.taskKey === taskKey && !node.deleted)
   }
-  spawn(projectId: string, mission: SpawnMission, maxSteps: number | null = null, maxBenchmarkTasks: number | null = null) {
+  spawn(projectId: string, mission: SpawnMission, maxBenchmarkTasks: number | null = null) {
     return this.store.transaction(() => {
       this.active(projectId)
       if (['submission','ended'].includes(this.budget(Date.now(),projectId).phase)) throw new HttpError(409, 'Campaign is in submission-only or ended phase; no new Missions')
@@ -263,31 +276,37 @@ export class LegionStore {
         const capacity = new LegionStore(this.store, projectId).questionCapacity(maxBenchmarkTasks)
         if (!capacity.activeTaskKeys.includes(mission.taskKey) && capacity.activeTasks >= maxBenchmarkTasks) throw new HttpError(409, 'Question concurrency limit reached', { code: 'QUESTION_LIMIT_REACHED', capacity })
       }
+      if (mode === 'benchmark') {
+        const record=this.store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(projectId,mission.taskKey)
+        const task=record?JSON.parse(String(record.data)):undefined
+        if(task?.platformCompleted===true&&!mission.parentRunId)throw new HttpError(409,'Task is already platform-completed')
+        if(mission.role!=='scout'&&!mission.parentRunId&&(!task?.classifiedAt||!task.factIds?.length||!!task.sourceTaskKey))throw new HttpError(409,'Complete this task Scout reconnaissance and evidence-backed classification before dispatching Soldier or General')
+      }
+      if (mission.role === 'general') return this.store.addPlanner(projectId,graph.id,mission)
       if (mode === 'general' && mission.role !== 'worker') throw new HttpError(422, 'General mode requires Worker')
       if (!mission.parentRunId) {
-        const task = this.tactics(projectId).find(t => t.taskKey === mission.taskKey)
         const active = this.steps(projectId, mission.taskKey).filter(s => ['pending','running','paused'].includes(s.status))
         if (active.some(s => s.role === mission.role && s.description === mission.description)) throw new HttpError(409, 'Assign a different angle from the active Worker')
-        if (mode === 'benchmark' && mission.role === 'general' && active.some(s => s.role === 'general')) throw new HttpError(409, 'General already active on this task')
+
       }
       if(graph.type==='benchmark_task'&&graph.taskKey!==mission.taskKey) throw new HttpError(422,'taskKey belongs to another Graph')
       const scoped=this.store.forGraph(projectId,graph.id)
       if (this.steps(projectId, mission.taskKey).some(s => s.status === 'parked')) throw new HttpError(409, 'Task is parked')
-      let parent: Step | undefined
       if (mission.parentRunId) {
         const run = this.store.run(mission.parentRunId)
-        if (run.projectId !== projectId || run.status !== 'running' || run.activity !== 'execute' || !run.stepId) throw new HttpError(403, 'Delegating Run is not active in this Project')
-        parent = this.store.node<Step>(projectId, run.stepId, 'step')
-        if (parent.role !== 'general' || parent.status !== 'running' || parent.taskKey !== mission.taskKey || !(mode === 'benchmark' ? ['soldier','scout'] : ['worker']).includes(mission.role)) throw new HttpError(403, 'General may delegate only same-task Soldier/Scout missions')
-        let goal = this.store.node<Goal>(projectId, mission.goalId ?? parent.goalId, 'goal')
-        while (goal.id !== parent.goalId && goal.parentId) goal = this.store.node<Goal>(projectId, goal.parentId, 'goal')
-        if (goal.id !== parent.goalId) throw new HttpError(403, 'Delegation escapes the assigned Goal')
-        if (parent.executionProfile === 'isolated' && mission.executionProfile === 'direct') throw new HttpError(403, 'Delegation cannot weaken execution isolation')
+        if (run.projectId !== projectId || run.status !== 'running' || run.activity !== 'plan') throw new HttpError(403, 'Delegating Run is not active in this Project')
+        const planner=this.store.assignment(run)
+        if(run.activity!=='plan'||planner?.role!=='general'||planner.status!=='running'||planner.taskKey!==mission.taskKey||!['soldier','scout'].includes(mission.role))throw new HttpError(403,'General may delegate only same-task Soldier/Scout missions')
+        let goal=this.store.node<Goal>(projectId,mission.goalId??planner.goalId,'goal')
+        while(goal.id!==planner.goalId&&goal.parentId)goal=this.store.node<Goal>(projectId,goal.parentId,'goal')
+        if(goal.id!==planner.goalId)throw new HttpError(403,'Delegation escapes the assigned Goal')
+        if(planner.executionProfile==='isolated'&&mission.executionProfile==='direct')throw new HttpError(403,'Delegation cannot weaken execution isolation')
+        mission={...mission,goalId:mission.goalId??planner.goalId,executionProfile:mission.executionProfile??planner.executionProfile}
         // Parallelism is governed by the existing worker and Max Step limits.
       }
       const { escalationReason, ...assignment } = mission
-      const step = scoped.addStep(projectId, { ...assignment, executionProfile: mission.executionProfile ?? parent?.executionProfile, goalId: mission.goalId ?? parent?.goalId,
-        parentStepId: parent?.id, creator: mission.parentRunId ?? coordinatorRole(mode) }, maxSteps)
+      const step = scoped.addStep(projectId, { ...assignment, executionProfile: mission.executionProfile, goalId: mission.goalId,
+        ...(mission.parentRunId?{plannerId:this.store.assignment(this.store.run(mission.parentRunId))!.id}:{}), creator: mission.parentRunId ?? coordinatorRole(mode) })
       if (escalationReason) this.store.event(projectId, 'legion.escalated', step, { reason: escalationReason })
       return step
     })
@@ -296,7 +315,9 @@ export class LegionStore {
     return this.store.transaction(() => {
       this.active(projectId); requiredText(reason, 'reason'); requiredText(resumeCondition, 'resumeCondition')
       const steps = this.steps(projectId, taskKey).filter(s => !['done', 'cancelled'].includes(s.status))
-      if (!steps.length) throw new HttpError(404, 'No unfinished task Steps')
+      const planner=this.store.projectGraphs(projectId).find(g=>g.taskKey===taskKey)?.planner
+      if(planner){planner.status='parked';planner.handoff=[planner.handoff,reason,'Resume: '+resumeCondition].filter(Boolean).join('\n');this.store.savePlanner(planner)}
+      if (!steps.length&&!planner) throw new HttpError(404, 'No unfinished task Steps')
       for (const step of steps) {
         step.status = 'parked'; step.parkReason = reason; step.resumeCondition = resumeCondition
         this.store.saveNode(step); this.store.event(projectId, 'step.parked', step, { reason })
@@ -307,13 +328,18 @@ export class LegionStore {
   reactivate(projectId: string, taskKey: string, reason: string) {
     return this.store.transaction(() => {
       this.active(projectId); requiredText(reason, 'reason')
+      const record=this.store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(projectId,taskKey)
+      const completed=!!record&&JSON.parse(String(record.data)).platformCompleted===true
       const steps = this.steps(projectId, taskKey).filter(s => s.status === 'parked')
-      if (!steps.length) throw new HttpError(404, 'Task is not parked')
+      const graph=this.store.projectGraphs(projectId).find(g=>g.taskKey===taskKey),planner=graph?.planner
+      if(completed&&!(planner?.status==='parked'&&this.store.node<Goal>(projectId,graph!.goalId,'goal').status==='open'))throw new HttpError(409,'Task is already platform-completed; only its existing Planner may resume cleanup before acceptance')
+      if (!steps.length&&planner?.status!=='parked') throw new HttpError(404, 'Task is not parked')
       const ids = new Set(steps.map(s => s.id))
-      if (steps.some(s => s.handoffPending) || this.store.runs(projectId).some(r => ids.has(r.stepId ?? '') && ['running', 'paused', 'unknown'].includes(r.status))) throw new HttpError(409, 'Confirm old executions stopped and resolve unknown results before reactivation')
+      if (steps.some(s => s.handoffPending) || this.store.runs(projectId).some(r => (ids.has(r.stepId ?? '')||r.activity==='plan'&&r.graphId===graph?.id) && ['running', 'paused', 'unknown'].includes(r.status))) throw new HttpError(409, 'Confirm old executions stopped and resolve unknown results before reactivation')
+      if(planner){planner.status='pending';this.store.savePlanner(planner);this.store.forGraph(projectId,graph!.id).event(projectId,'hint.added',null,{reason})}
       for (const step of steps) {
-        step.status = 'pending'; delete step.parkReason; delete step.resumeCondition
-        this.store.saveNode(step); this.store.event(projectId, 'step.reactivated', step, { reason })
+        step.status = completed?'cancelled':'pending'; delete step.parkReason; delete step.resumeCondition
+        this.store.saveNode(step); this.store.event(projectId, completed?'step.cancelled':'step.reactivated', step, { reason })
       }
       return steps
     })
@@ -321,23 +347,32 @@ export class LegionStore {
 
   saveState(projectId:string|undefined,actor:string,summary:string) {
     const text=requiredText(summary,'summary')
-    if(actor==='commander'){const c=this.campaign(projectId);c.state=text;this.saveCampaign(c);return{saved:true}}
-    const run=this.store.run(actor);if(run.projectId!==projectId||!run.stepId||run.status!=='running')throw new HttpError(409,'State actor is not active')
-    const step=this.store.node<Step>(projectId,run.stepId,'step');step.handoff=text;this.store.saveNode(step);return{saved:true}
+    if(actor==='commander'){const c=this.campaign(projectId);c.state=text;if(this.store.project(c.projectId).mode==='benchmark'){if(c.stateScope!=='scheduling')delete c.nativeCompactionSummary;c.stateScope='scheduling'}this.saveCampaign(c);return{saved:true}}
+    const run=this.store.run(actor);if(run.projectId!==projectId||run.status!=='running')throw new HttpError(409,'State actor is not active')
+    const assignment=this.store.assignment(run)!;assignment.handoff=text;if(run.activity==='plan')this.store.savePlanner(assignment as import('./types.ts').GraphPlanner);else this.store.saveNode(assignment as Step);return{saved:true}
   }
   queueHandoff(runId:string,summary:string,nextWorker?:string) {
-    const run=this.store.run(runId);if(!run.stepId||run.status!=='running')throw new HttpError(409,'Handoff actor is not running')
-    const step=this.store.node<Step>(run.projectId,run.stepId,'step');step.handoffRequest={summary:requiredText(summary,'summary'),...(nextWorker?{nextWorker}:{})};this.store.saveNode(step);return{requested:true,stopConfirmed:false}
+    const run=this.store.run(runId);if(run.status!=='running')throw new HttpError(409,'Handoff actor is not running')
+    if(run.activity==='plan'){const planner=this.store.assignment(run) as import('./types.ts').GraphPlanner;planner.handoffRequest={summary:requiredText(summary,'summary'),...(nextWorker?{nextWorker}:{})};this.store.savePlanner(planner);return{requested:true,stopConfirmed:false}}
+    const step=this.store.node<Step>(run.projectId,run.stepId!,'step');step.handoffRequest={summary:requiredText(summary,'summary'),...(nextWorker?{nextWorker}:{})};this.store.saveNode(step);return{requested:true,stopConfirmed:false}
   }
   settleHandoff(runId:string) {
-    const run=this.store.run(runId);if(!run.stepId||run.status!=='running'||run.pendingTools.length)return
-    const step=this.store.node<Step>(run.projectId,run.stepId,'step')
+    const run=this.store.run(runId);if(run.status!=='running'||run.pendingTools.length)return
+    if(run.activity==='plan'){const planner=this.store.assignment(run) as import('./types.ts').GraphPlanner;if(planner.handoffRequest)this.requestHandoff(runId,planner.handoffRequest.summary,planner.handoffRequest.nextWorker);return}
+    if(!run.stepId)return
+    const step=this.store.node<Step>(run.projectId,run.stepId!,'step')
     if(step.status==='running'&&step.handoffRequest)this.requestHandoff(runId,step.handoffRequest.summary,step.handoffRequest.nextWorker)
   }
 
   requestHandoff(runId: string, summary: string, nextWorker?: string) {
     return this.store.transaction(() => {
       const run = this.store.run(runId); this.active(run.projectId)
+      if (run.activity==='plan') {
+        if(!['running','paused'].includes(run.status)||run.pendingTools.length)throw new HttpError(409,'Planner handoff requires settled tool outcomes')
+        const planner=this.store.assignment(run) as import('./types.ts').GraphPlanner
+        delete planner.handoffRequest;planner.status='parked';planner.handoff=requiredText(summary,'summary');planner.nextWorker=nextWorker??run.worker;this.store.savePlanner(planner)
+        this.store.forGraph(run.projectId,run.graphId!).event(run.projectId,'planner.handoff_requested',null,{runId});return planner
+      }
       if (!run.stepId || run.activity !== 'execute' || !['running', 'paused'].includes(run.status)) throw new HttpError(409, 'Run cannot hand off')
       if (run.pendingTools.length) throw new HttpError(409, 'Unconfirmed tool results prevent handoff')
       const step = this.store.node<Step>(run.projectId, run.stepId, 'step')
@@ -364,18 +399,21 @@ export class LegionStore {
   message(projectId: string, sender: string, receiver: string, type: 'HELP' | 'REPORT' | 'MESSAGE', content: string) {
     if(sender==='commander'&&receiver==='commander'){if(this.store.project(projectId).status==='deleting')throw new HttpError(403,'Project is deleting')}else this.active(projectId)
     if (!['HELP', 'REPORT', 'MESSAGE'].includes(type)) throw new HttpError(422, 'Invalid message type')
-    for (const actor of [sender, receiver]) if (actor !== 'commander') {
+    for (const [actor,receiving] of [[sender,false],[receiver,true]] as const) if (actor !== 'commander') {
       const run = this.store.run(actor)
-      if (run.projectId !== projectId || !['running', 'paused'].includes(run.status)) throw new HttpError(409, 'Message actor is stopped or belongs to another Project')
+      const sleepingPlanner=receiving&&run.activity==='plan'&&run.status==='succeeded'&&this.store.assignment(run)?.status==='pending'&&this.store.runs(run.projectId).filter(r=>r.activity==='plan'&&r.graphId===run.graphId).at(-1)?.id===run.id
+      if (run.projectId !== projectId || !['running', 'paused'].includes(run.status)&&!sleepingPlanner) throw new HttpError(409, 'Message actor is stopped or belongs to another Project')
     }
     if(sender!=='commander'&&receiver!=='commander') {
       const from=this.store.run(sender),to=this.store.run(receiver)
       if(from.graphId!==to.graphId) throw new HttpError(403,'Workers cannot message another Graph')
-      const source=this.store.node<Step>(projectId,from.stepId!,'step'),target=this.store.node<Step>(projectId,to.stepId!,'step')
-      if(source.parentStepId!==target.id && target.parentStepId!==source.id) throw new HttpError(403,'Use the Commander for unrelated Agents')
+      const source=this.store.assignment(from)!,target=this.store.assignment(to)!
+      if(from.activity!=='plan'&&to.activity!=='plan'&&('parentStepId' in source?source.parentStepId:undefined)!==target.id&&('parentStepId' in target?target.parentStepId:undefined)!==source.id) throw new HttpError(403,'Use the Commander for unrelated Agents')
     }
     const message = { id: 'msg-' + randomUUID(), projectId, sender, receiver, type, content: requiredText(content, 'content'), status: 'pending', createdAt: now() }
     this.store.db.prepare('INSERT INTO legion_messages VALUES (?,?,?,?,?,?)').run(message.id, projectId, sender, receiver, JSON.stringify(message), message.createdAt)
+    const graphId=receiver!=='commander'?this.store.run(receiver).graphId:sender!=='commander'?this.store.run(sender).graphId:undefined
+    ;(graphId?this.store.forGraph(projectId,graphId):this.store).event(projectId,'legion.message',null,{messageId:message.id,type,sender,receiver})
     this.store.changes.emit('legion-message', projectId, receiver)
     return message
   }

@@ -1,3 +1,4 @@
+import { originalTool } from '../../redtrace-dsh/lib/tool-domains.js'
 import { executionRole, coordinatorRole } from '../../redtrace-dsh/lib/roles.js'
 import { toolAllowed } from '../src/console-api.ts'
 import { state } from '../../redtrace-dsh/lib/state.js'
@@ -49,7 +50,7 @@ export async function runtimeCatalog(ctx, engine, catalog = []) {
     tools: [...catalog, ...(await Promise.all(scopes.map(async ({scope,agent}) => {
       const run = engine?.store.db.prepare('SELECT data FROM runs WHERE id=?').get(scope)
       const record = run && JSON.parse(run.data)
-      const step = record?.stepId && engine.store.node(record.projectId, record.stepId, 'step')
+      const step = record && engine.store.assignment(record)
       const campaign = campaigns.find(c => c.sessionId === scope)
       const chat = chats.find(c => c.sessionId === scope)
       const role = step ? executionRole(engine.store.project(record.projectId).mode,step.role) : campaign ? coordinatorRole(engine.store.project(campaign.projectId).mode) : undefined
@@ -57,9 +58,9 @@ export async function runtimeCatalog(ctx, engine, catalog = []) {
       const mode = projectId ? engine.store.project(projectId).mode : undefined
       const selection = agent ? await registry.resolve({agent,modelSelection:agent.model.current(),signal:new AbortController().signal}) : undefined
       const visible = new Set(agent ? registry.schemas(agent,selection).map(t=>t.name) : [])
+      if(agent){const selectedSchemas=registry.schemas(agent,selection);const wire=JSON.stringify(selectedSchemas);runs.push({runId:scope,role,mode,visibleSchemas:visible.size,schemaBytes:Buffer.byteLength(wire),schemaEstimatedTokens:Math.ceil(wire.length/4),schemaTokenMethod:'ceil(serialized chars/4), not billing'})}
       selection?.dispose()
-      if(agent)runs.push({runId:scope,visibleSchemas:visible.size})
-      return (registry?.definitions(agent) ?? []).flatMap(tool => (tool.name.startsWith('mcp__')&&!agent?['general','soldier','scout','worker']:[role]).map(binding=>({ name: tool.name, description: tool.description, parameters: tool.parameters,
+      return (registry?.definitions(agent) ?? []).filter(tool=>agent||tool.name.startsWith('mcp__')).flatMap(tool => (tool.name.startsWith('mcp__')&&!agent?['general','soldier','scout','worker']:[role]).map(binding=>({ name: tool.name, description: tool.description, parameters: tool.parameters,
         scope, role:binding, mode, status: 'registered',
         enabled: toolAllowed(settings, tool.name, binding), visible: visible.has(tool.name),
         source: tool.name.startsWith('mcp__') ? 'MCP' : tool.redtrace ? 'RedTrace' : 'DSH' })))
@@ -72,6 +73,7 @@ export async function runtimeCatalog(ctx, engine, catalog = []) {
 function agentRole(engine, agent) {
   const id=String(agent?.session.id??'')
   const row=engine.store.db.prepare('SELECT data FROM runs WHERE id=?').get(id),run=row&&JSON.parse(row.data)
+  if(run?.activity==='plan')return 'general'
   if(run?.stepId)return executionRole(engine.store.project(run.projectId).mode,engine.store.node(run.projectId,run.stepId,'step').role)
   const campaign=engine.legion.campaigns().find(c=>c.sessionId===id)
   return campaign?coordinatorRole(engine.store.project(campaign.projectId).mode):undefined
@@ -87,7 +89,7 @@ export function mountToolSettings(ctx, engine) {
     }}
   }
   ctx.effect(()=>()=>{tools.resolve=nativeResolve})
-  tools.guard(exec=>toolAllowed(engine.configuration.resolvedSnapshot().raw.tool_settings,exec.name,agentRole(engine,exec.agent))?undefined:'工具已在管理配置中停用或未绑定此角色')
+  tools.guard(exec=>{const settings=engine.configuration.resolvedSnapshot().raw.tool_settings,role=agentRole(engine,exec.agent),original=originalTool(exec.name,exec.arguments?.action);return toolAllowed(settings,exec.name,role)&&(!original||toolAllowed(settings,original,role))?undefined:'工具已在管理配置中停用或未绑定此角色'})
 }
 
 /** Keep native MCP definitions/ownership; refresh scoped conditions with each native remount. */

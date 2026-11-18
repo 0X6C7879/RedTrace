@@ -10,17 +10,18 @@
  */
 
 import type { TaskType } from './types.js'
-import { query, register, request, serverOf, taskFor, text, type ToolContext } from './api-utils.js'
+import { query, registerDomain, request, serverOf, taskFor, text, type ToolContext } from './api-utils.js'
 
 export const name = 'redtrace-c2'
 export const inject = ['tools']
 
 export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnabled?: (name: string) => boolean } = {}): void {
-  const types: TaskType[] = config.types ?? ['general','soldier','scout']
+  const definitions: Parameters<typeof registerDomain>[1] = []
+  const types: TaskType[] = config.types ?? ['soldier','worker']
   const resourceBody = (task: ReturnType<typeof taskFor>, kind: string, name: string, rest: Record<string, unknown>) => ({
     kind, name, ...rest, actor_type: 'worker', actor: task.worker, worker: task.worker, ...(task.intentId === undefined ? {} : { intent_id: task.intentId }), publish_fact: false,
   })
-  register(ctx, {
+  definitions.push({
     name: 'c2_listener_create',
     description: 'Create a C2 listener as a shared resource. listener_type is one of http_beacon, https_beacon, tcp_reverse, tcp_bind, external_c2; TCP listeners take bind_host/bind_port, beacon listeners take callback_host, external_c2 only registers adapter_endpoint; read its sessions explicitly and use resource_register to register external sessions with connection_type=external_c2 and secret.endpoint=<adapter>/execute. TCP/beacon sessions become reusable remote.command channels when they connect.',
     parameters: {
@@ -62,8 +63,8 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
         ...(args.adapter_endpoint === undefined || args.adapter_endpoint === '' ? {} : { secret: { adapter_endpoint: String(args.adapter_endpoint), ...(args.adapter_token === undefined ? {} : { token: String(args.adapter_token) }) } }),
       }), execution.signal)
     },
-  }, config.toolEnabled)
-  register(ctx, {
+  })
+  definitions.push({
     name: 'c2_session_create',
     description: 'Register a direct-access session (SSH, Evil-WinRM, PsExec, WMI, or a custom command client) as a shared resource. Provide the target plus either secret_type material (password / hash / private_key_path) or a credential_id referencing a registered credential. Registration is not connection or authentication success. Register credentials with a concrete source for explicit verification/reuse, not batches of guessed usernames/passwords. Reuse the same resource for the same credentials; verify with remote_session_probe. AUTH_FAILED rejects these credentials: stop this authentication branch unless new credential evidence is obtained; renaming/re-registering is not a retry strategy.',
     parameters: {
@@ -103,8 +104,8 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
         ...(args.secret === undefined || args.secret === '' ? {} : { secret: { [String(args.secret_type ?? 'password')]: String(args.secret) } }),
       }), execution.signal)
     },
-  }, config.toolEnabled)
-  register(ctx, {
+  })
+  definitions.push({
     name: 'c2_credential_create',
     description: 'Register a credential (host, web, database, Active Directory, cloud, ssh_key, token, certificate, hash, ticket, or custom) as a shared resource. The secret value is stored server-side for terminal and Worker reuse; sessions can reference it by credential_id.',
     parameters: {
@@ -135,8 +136,8 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
         secret: { value: String(args.secret) },
       }), execution.signal)
     },
-  }, config.toolEnabled)
-  register(ctx, {
+  })
+  definitions.push({
     name: 'c2_profile_create',
     description: 'Register a malleable traffic profile (User-Agent, beacon URIs, jitter, response headers) as a shared resource; reference it from listeners via profile_id.',
     parameters: {
@@ -169,8 +170,8 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
         },
       }), execution.signal)
     },
-  }, config.toolEnabled)
-  register(ctx, {
+  })
+  definitions.push({
     name: 'c2_listener_kinds',
     description: 'List the one-liner payload kinds compatible with a C2 listener (shell and platform availability).',
     parameters: {
@@ -183,8 +184,8 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
       const task = taskFor(execution, types)
       return query(task, `/projects/${encodeURIComponent(task.projectId)}/c2/listeners/${encodeURIComponent(String(args.listener_id))}/oneliner-kinds`, execution.signal)
     },
-  }, config.toolEnabled)
-  register(ctx, {
+  })
+  definitions.push({
     name: 'c2_payload_oneliner',
     description: 'Generate a one-liner payload command for a C2 listener and register it as a payload resource. Discover valid kinds with c2_listener_kinds first.',
     parameters: {
@@ -201,8 +202,8 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
         ...(args.callback_host === undefined ? {} : { callback_host: String(args.callback_host) }),
       }, execution.signal)
     },
-  }, config.toolEnabled)
-  register(ctx, {
+  })
+  definitions.push({
     name: 'c2_payload_build',
     description: 'Compile the Go beacon binary for a C2 listener and register it as a payload resource. Requires the Go toolchain on the server.',
     parameters: {
@@ -225,8 +226,8 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
         ...(args.sleep_seconds === undefined ? {} : { sleep_seconds: Number(args.sleep_seconds) }),
       }, execution.signal)
     },
-  }, config.toolEnabled)
-  register(ctx, {
+  })
+  definitions.push({
     name: 'c2_payload_external',
     description: 'Generate a payload through an external_c2 listener\'s adapter framework and register it as a payload resource. The listener must carry an adapter endpoint.',
     parameters: {
@@ -243,5 +244,6 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
         ...(args.options === undefined ? {} : { options: args.options }),
       }, execution.signal)
     },
-  }, config.toolEnabled)
+  })
+  registerDomain(ctx,definitions,config.toolEnabled)
 }

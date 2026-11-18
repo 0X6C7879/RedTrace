@@ -76,3 +76,15 @@ test('Todo follows the actual planner conversation, clears on switches and refre
  assert.equal((html.match(/class="rt-todo-panel"/g)||[]).length,2);assert(!html.includes('fgs-todo-item'));assert(!html.includes('<h3>TodoList</h3>'));
  const css=readFileSync(new URL('../../../static/legion.css',import.meta.url),'utf8');assert.match(css,/width:20rem; max-height:20rem/);assert.match(css,/text-decoration:line-through/);assert.match(css,/focus-visible/);
 });
+
+test('platform-confirmed completion outranks Park without forging internal Goal acceptance',()=>{
+ const definition=html.match(/    taskGraphStatus\(p,g\)\{[^\n]+/)![0].trim().replace(/,$/,'')
+ const status=vm.runInNewContext('({'+definition+'})').taskGraphStatus
+ const graph={id:'G',taskKey:'T'},project={platform:{T:{confirmed:true}},goals:[{id:'goal-G',status:'open'}],steps:[{graphId:'G',status:'parked'}]}
+ assert.equal(status(project,graph),'completed');assert.equal(project.goals[0].status,'open')
+ project.platform.T.confirmed=false;assert.equal(status(project,graph),'parked')
+ const a=app();a.legionProjectId='P';a.legion={projects:[{id:'P',...project,platform:{T:{confirmed:true}}}]};a.workbench={graphs:[graph],conversations:[{id:'G',graphId:'G'}],project:{status:'stopped'},steps:project.steps};a.conversationId='G';assert.equal(a.conversationTaskState().label,'平台已完成')
+ assert(!html.includes('aria-label="Graph 执行容量"'));assert(!html.includes('class="wb-control-menu"'));assert(!html.includes('未绑定角色'))
+ assert(html.includes('系统上下文'));assert(html.includes('rt-token-dot'));assert(!html.includes('class="wb-token-scope"'))
+ assert(!html.includes("conversationWorkers().map(w=>w.label).join(' · ')"),'question heading must not repeat the role roster')
+})

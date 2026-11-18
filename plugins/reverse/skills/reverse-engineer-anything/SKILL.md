@@ -24,43 +24,17 @@ search, xrefs, pseudocode and instructions use path-based CLI commands:
 for arguments; do not call similarly named MCP tools described by upstream
 references unless actually advertised.
 
-Loading this Skill starts the existing Run-scoped MCP connection only for
-shared Program lifecycle, Hopper navigation/annotation, and retained Evidence
-workflows without equivalent CLI commands. `open_binary`, `binary_session`,
-`close_binary` preserve that live analysis state; composite navigation reads
-replace individual cursor/comment getters. Export Evidence before closing.
-Planner/Commander never load this execution plugin. Skill discovery remains
-DSH-native and on demand.
-
-## Connect only when needed
-
-Installing this skill supplies instructions; it does not register the REA MCP
-server, install analysis engines, or add tools to an already-running agent.
-
-If REA tools are available and their registration is not known to be stale,
-proceed directly to the target. Do not run diagnostics or setup before every
-investigation. Use the connected server's actual tool list and input schemas;
-a skill installed from repository main may describe capabilities absent from
-an older npm release. Keep complete inline Evidence when that server does not
-advertise retained references.
-
-If tools are absent, a call is blocked by the client, or a required provider is
-unavailable, read [connection and recovery](references/connection-and-recovery.md).
-Diagnose the observed blocker, continue useful supported work, and resume the
-original task after repair. Client approval, shell PATH, registration and engine
-availability have different remedies; avoid repeating setup for all of them.
-
-Use the pinned `rea` CLI already on PATH; report a missing deployment dependency rather than installing during a Mission.
-Configuration repair starts with a read-only setup plan; show paths, backups and
-skill replacement before applying authorized changes. Preserve existing approval
-and target-execution boundaries. REA setup never installs or upgrades unrelated
-software, including Node.js, npm, Homebrew, Java, Ghidra, IDA, JADX, Binwalk or Unblob.
+RedTrace is CLI-only. Loading this Skill never starts MCP or registers tools.
+Use only commands advertised by `rea --help` and each command's `--help`.
+Upstream references below describe additional MCP-only capabilities: those are
+not available here. Do not start `rea mcp` or attempt MCP calls. If a workflow
+has no CLI equivalent, record that limitation and use existing CTF tooling.
+Planner/Commander do not load this execution plugin. Skill discovery is native.
+Preserve authorization, target scope and complete retained evidence.
 
 ## Route the target first
 
-Choose the first tool from the target the user supplied. Use `open_binary` for
-active-target native or archive workflows; target-free tools take their own
-explicit path or endpoint and do not need it.
+Choose the CLI command from the supplied target using `rea --help`. The following upstream capability map is reference only, not a list of available tools.
 
 - ASAR or extracted JavaScript/Electron tree:
   `analyze_javascript_application`.

@@ -1,3 +1,4 @@
+import {scoutedSpawn} from './scout-fixture.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { promisify } from 'node:util'
@@ -17,8 +18,8 @@ function fixture(t: any) {
   const graphs=['A','B'].map(taskKey=>store.createGraph(p.id,{taskKey,title:taskKey,origin:'local',goal:'verify'}))
   const legion=new LegionStore(store);t.after(()=>store.close())
   const tools=(graph=graphs[0],role:'soldier'|'general'|'scout'='general')=>{
-    const step=store.forGraph(p.id,graph.id).addStep(p.id,{role,taskKey:graph.taskKey!,description:role+' fixture',sourceIds:[graph.originId],goalId:graph.goalId})
-    const run=store.claim(p.id,'execute',worker,step.id)
+    const step=role==='general'?store.addPlanner(p.id,graph.id,{description:'general fixture',sourceIds:[graph.originId]}):store.forGraph(p.id,graph.id).addStep(p.id,{role,taskKey:graph.taskKey!,description:role+' fixture',sourceIds:[graph.originId],goalId:graph.goalId})
+    const run=role==='general'?store.forGraph(p.id,graph.id).claim(p.id,'plan',worker):store.claim(p.id,'execute',worker,step.id)
     return legionTools(store,run.id,p.id,null,()=>{})
   }
   return {store,p,graphs,legion,tools}
@@ -94,13 +95,13 @@ test('Benchmark General owns task subgoals while Commander keeps global allocati
 
 test('Only Benchmark General prompt owns task planning while General mode Commander remains unchanged',()=>{
   const command=legionMission('commander','benchmark')
-  assert(!command.includes('TodoWrite'))
+  assert(!command.includes('legion_todo'))
   assert(command.includes('You never modify FGS'))
-  const prompt=legionMission('general','benchmark');assert(prompt.includes('TodoWrite({todos})'));assert(prompt.includes('verified FGS Facts'))
-  assert(legionMission('soldier','benchmark').includes('TodoWrite'));assert(!legionMission('scout','benchmark').includes('TodoWrite'))
+  const prompt=legionMission('general','benchmark');assert(prompt.includes('legion_todo({action:"write",todos})'));assert(prompt.includes('verified FGS Facts'))
+  assert(legionMission('soldier','benchmark').includes('legion_todo'));assert(!legionMission('scout','benchmark').includes('legion_todo'))
   const general=legionMission('planner','general')
-  for(const text of ['TodoWrite','full route once','actual prerequisite Fact IDs','Independent directions'])assert(general.includes(text),text)
-  for(const role of ['worker'] as const)assert(!legionMission(role,'general').includes('TodoWrite'))
+  for(const text of ['legion_todo','full route once','actual prerequisite Fact IDs','Independent directions'])assert(general.includes(text),text)
+  for(const role of ['worker'] as const)assert(!legionMission(role,'general').includes('legion_todo'))
 })
 
 test('native DSH wake-ups retain TodoLists, wait for Facts after failure, and dispatch only the next serial stage',{timeout:90000},async()=>{
@@ -126,8 +127,8 @@ test('project-detail HTTP snapshot reads current task Graph TodoList without cha
     const base='/v2/projects/'+p.id+'/graph?graphId='
     const a=base+graphs[0].id,b=base+graphs[1].id
     assert.deepEqual((await request(a)).body.planningTodos,[])
-    const step=engine.store.forGraph(p.id,graphs[0].id).addStep(p.id,{role:'general',taskKey:'A',description:'plan',sourceIds:[graphs[0].originId],goalId:graphs[0].goalId})
-    const run=engine.store.claim(p.id,'execute',worker,step.id)
+    const step=engine.store.addPlanner(p.id,graphs[0].id,{description:'plan',sourceIds:[graphs[0].originId]})
+    const run=engine.store.forGraph(p.id,graphs[0].id).claim(p.id,'plan',worker)
     const write=legionTools(engine.store,run.id,p.id,null,()=>{}).find(t=>t.name==='TodoWrite')!
     const before=JSON.stringify(engine.store.forGraph(p.id,graphs[0].id).graph(p.id))
     await write.execute('first',{todos:plan})
@@ -147,7 +148,7 @@ test('project-detail HTTP snapshot reads current task Graph TodoList without cha
 
 test('Benchmark launch and General reinforcement inherit only their assigned task planning memory',async t=>{
  const {store,p,graphs,legion}=fixture(t);legion.planningTodos(p.id).replace(graphs[0].id,plan);
- const spawn=(graph:any,role:'soldier'|'general'|'scout',description:string)=>{const step=legion.spawn(p.id,{graphId:graph.id,taskKey:graph.taskKey,role,description,sourceIds:[graph.originId]});return store.claim(p.id,'execute',worker,step.id)};
+ const spawn=(graph:any,role:'soldier'|'general'|'scout',description:string)=>{const step=scoutedSpawn(legion,p.id,{graphId:graph.id,taskKey:graph.taskKey,role,description,sourceIds:[graph.originId]});return role==='general'?store.forGraph(p.id,graph.id).claim(p.id,'plan',worker):store.claim(p.id,'execute',worker,step.id)};
  const first=spawn(graphs[0],'soldier','initial task planner');assert.deepEqual(launchContext(store,first.id).planningTodos,plan);
  const other=spawn(graphs[1],'soldier','another task planner');assert.deepEqual(launchContext(store,other.id).planningTodos,[{content:'verify',status:'pending'}]);
  const reinforcement=spawn(graphs[0],'general','new strategy reinforcement');assert.deepEqual(launchContext(store,reinforcement.id).planningTodos,plan);assert(!('planningTodos' in launchContext(store,first.id)));

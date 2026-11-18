@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { CONTEXT_FACT_SQL, factTitle, nodeContent } from './graph-content.ts'
 import { activeEvidence, HttpError, integer, now, requiredText, isScopeId } from './types.ts'
-import type { Activity, Evidence, Fact, Finding, Goal, Graph, GraphEvent, GraphNode, Input, Json, LegionAssignment, Project, ProjectGraph, Run, Step, Worker } from './types.ts'
+import type { Activity, Evidence, Fact, Finding, Goal, Graph, GraphEvent, GraphNode, Input, Json, LegionAssignment, Project, ProjectGraph, Run, Step, Worker, GraphPlanner, TaskAssignment } from './types.ts'
 
 export const ACTIVE_NODE_SQL = "COALESCE(json_extract(data,'$.deleted'),0)=0"
 export interface StepUpdate { description?: string; sourceIds?: string[]; goalId?: string; priority?: number; status?: 'cancelled' | 'pending'; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; expectedVersion?: number; mode?: 'amend' | 'replace' }
@@ -16,7 +16,7 @@ export interface StepUpdate { description?: string; sourceIds?: string[]; goalId
 function graphEventPayload(payload: unknown): Record<string, Json> {
   if (!payload || typeof payload !== 'object') return {}
   const values = payload as Record<string, unknown>, result: Record<string, Json> = {}
-  for (const key of ['runId', 'targetId', 'reason', 'mode', 'goalId', 'factSeq', 'endedSeq', 'evidenceSeq', 'hintSeq', 'criticalSeq', 'baseRevision', 'retryAfter', 'version', 'planVersion', 'taskKey', 'difficulty']) {
+  for (const key of ['runId', 'targetId', 'reason', 'mode', 'graphId', 'goalId', 'factSeq', 'endedSeq', 'evidenceSeq', 'hintSeq', 'criticalSeq', 'baseRevision', 'retryAfter', 'version', 'planVersion', 'taskKey', 'difficulty', 'messageId', 'type', 'sender', 'receiver']) {
     const value = values[key]
     if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) result[key] = value as Json
   }
@@ -167,6 +167,7 @@ export class Store {
     this.migrateFactTitles()
     this.migrateGeneralRoles()
     this.migrateTodoAcceptance()
+    this.migrateGraphPlanners()
     this.changes.setMaxListeners(0)
   }
   private migrateTodoAcceptance() {
@@ -313,12 +314,12 @@ export class Store {
     if (kind && value.kind !== kind) throw new HttpError(404, `${kind} not found`)
     return value
   }
-  nodes<T extends GraphNode = GraphNode>(projectId: string, kinds: T['kind'][], page?: { offset?: number; limit?: number; context?: boolean }): T[] {
+  nodes<T extends GraphNode = GraphNode>(projectId: string, kinds: T['kind'][], page?: { offset?: number; limit?: number; context?: boolean; order?: 'oldest'|'newest' }): T[] {
     this.project(projectId)
     if (!kinds.length) return []
     const placeholders = kinds.map(() => '?').join(',')
     const offset = integer(page?.offset ?? 0, 'node offset'), limit = page?.limit === undefined ? undefined : integer(page.limit, 'node limit', 1)
-    const sql = `SELECT data FROM nodes WHERE project_id=? AND kind IN (${placeholders}) AND ${ACTIVE_NODE_SQL}${this.graphFilter()}${page?.context ? ' AND '+CONTEXT_FACT_SQL : ''} ORDER BY rowid${limit === undefined ? '' : ' LIMIT ? OFFSET ?'}`
+    const sql = `SELECT data FROM nodes WHERE project_id=? AND kind IN (${placeholders}) AND ${ACTIVE_NODE_SQL}${this.graphFilter()}${page?.context ? ' AND '+CONTEXT_FACT_SQL : ''} ORDER BY rowid ${page?.order==='newest'?'DESC':'ASC'}${limit === undefined ? '' : ' LIMIT ? OFFSET ?'}`
     const params = [projectId, ...kinds, ...(page?.context ? [projectId, projectId] : [])]
     return (this.db.prepare(sql).all(...(limit === undefined ? params : [...params, limit, offset])) as { data: string }[])
       .map(row => ({ version: 1, ...JSON.parse(row.data) }))
@@ -327,8 +328,9 @@ export class Store {
     this.project(projectId)
     return Number((this.db.prepare(`SELECT COUNT(*) AS value FROM nodes WHERE project_id=? AND kind=? AND ${ACTIVE_NODE_SQL}${this.graphFilter()}${context ? ' AND '+CONTEXT_FACT_SQL : ''}`).get(projectId, kind, ...(context ? [projectId, projectId] : [])) as { value: number }).value)
   }
-  readNode(projectId: string, id: string, detail: 'summary' | 'doc' = 'summary') {
-    const node = this.node(projectId, id)
+  readNode(projectId: string, id: string, detail: 'summary' | 'doc' = 'summary'): ReturnType<typeof nodeContent> & {facts?:ReturnType<typeof nodeContent>[]} {
+    let node:GraphNode
+    try{node=this.node(projectId,id)}catch(error){if(!(error instanceof HttpError)||error.status!==404)throw error;const archived=this.projectGraphs(projectId).filter(g=>!this.graphScope||g.id===this.graphScope).flatMap(g=>g.planner?.legacyAssignments??[]).find(s=>s.id===id);if(!archived)throw error;node=archived}
     return { ...nodeContent(node, detail), ...(node.kind === 'finding' ? { facts: node.factIds.map(id => nodeContent(this.node<Fact>(projectId, id, 'fact'), detail)) } : {}) }
   }
   saveNode(node: GraphNode) {
@@ -355,7 +357,6 @@ export class Store {
         if(known&&!this.db.prepare('SELECT 1 FROM project_artifact_graphs WHERE project_id=? AND graph_id=? AND artifact_id=?').get(node.projectId,node.graphId??null,evidence.artifactId))throw new HttpError(422,'Cross-Graph artifact reference')
       }
     }
-    if(node.kind==='step' && previous?.kind==='step' && ['pending','running','paused'].includes(node.status) && !['pending','running','paused'].includes(previous.status) && this.planningCapacity(node.projectId,this.stepLimit(),node.graphId??undefined).remainingSteps===0)throw new HttpError(409,'Active Step limit reached')
     node.version = prior ? (JSON.parse(String(prior.data)).version ?? 1) + 1 : 1
     this.db.prepare('INSERT INTO nodes(project_id,id,kind,data,graph_id) VALUES (?,?,?,?,?) ON CONFLICT(project_id,id) DO UPDATE SET data=excluded.data')
       .run(node.projectId, node.id, node.kind, JSON.stringify(node), node.graphId ?? null)
@@ -461,7 +462,9 @@ export class Store {
       graphId ??= this.project(projectId).mode==='general'?this.projectGraphs(projectId)[0].id:undefined
       const hint=graphId?this.forGraph(projectId,graphId).addInput(projectId,'hint',content,creator):null
       const message={id:'msg-'+randomUUID(),projectId,graphId:graphId??null,sender:creator,receiver:'commander',type:'MESSAGE',attachments,content:JSON.stringify({source:'user',creator,graphId:graphId??null,hintId:hint?.id??null,content:requiredText(content,'content')}),status:'pending',createdAt:now()}
-      this.db.prepare('INSERT INTO legion_messages VALUES (?,?,?,?,?,?)').run(message.id,projectId,message.sender,message.receiver,JSON.stringify(message),message.createdAt)
+      this.event(projectId,'legion.instruction',null,{messageId:message.id})
+      const eventId=Number(this.db.prepare('SELECT MAX(id) AS id FROM events WHERE project_id=?').get(projectId)!.id)
+      this.db.prepare('INSERT INTO legion_messages VALUES (?,?,?,?,?,?)').run(message.id,projectId,message.sender,message.receiver,JSON.stringify({...message,eventId}),message.createdAt)
       queueMicrotask(()=>this.changes.emit('legion-message',projectId,'commander'))
       return { ...hint, message }
     })
@@ -541,28 +544,25 @@ export class Store {
     })
   }
   planningCapacity(id: string, maxSteps: number | null = this.stepLimit(), graphId = this.graphScope) {
-    const activeSteps = Number(this.db.prepare("SELECT COUNT(*) AS n FROM nodes WHERE project_id=? AND kind='step' AND (? IS NULL OR graph_id=?) AND COALESCE(json_extract(data,'$.deleted'),0)=0 AND json_extract(data,'$.status') IN ('pending','running','paused')").get(id, this.project(id).mode === 'benchmark' ? graphId ?? null : null, this.project(id).mode === 'benchmark' ? graphId ?? null : null)!.n)
-    return { maxSteps, activeSteps, remainingSteps: maxSteps === null ? null : Math.max(0, maxSteps - activeSteps) }
+    const project=this.project(id)
+    graphId??=project.mode==='general'?this.projectGraphs(id)[0]?.id:undefined
+    const activeSteps = Number(this.db.prepare("SELECT COUNT(DISTINCT step_id) AS n FROM runs WHERE project_id=? AND (? IS NULL OR graph_id=?) AND activity='execute' AND status IN ('running','paused','unknown')").get(id, graphId ?? null, graphId ?? null)!.n)
+    return { maxSteps, activeSteps, graphId:graphId??null, remainingSteps: maxSteps === null || !graphId ? null : Math.max(0, maxSteps - activeSteps) }
   }
   acknowledgementBoundary(runId: string) {
     const run = this.run(runId)
     return { throughEvidenceSeq: run.deliveredEvidenceSeq ?? run.planningEvidenceSeq ?? 0, throughHintSeq: run.deliveredHintSeq ?? run.planningHintSeq ?? 0 }
   }
-  addStep(id: string, input: { description: string; sourceIds: string[]; goalId?: string; creator?: string; priority?: number; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; bootstrap?: boolean; dependsOn?: string[] } & Pick<LegionAssignment, 'role' | 'taskKey' | 'parentStepId' | 'specialist' | 'reportFindingId'>, maxSteps: number | null = null): Step {
+  addStep(id: string, input: { description: string; sourceIds: string[]; goalId?: string; creator?: string; priority?: number; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; bootstrap?: boolean; dependsOn?: string[] } & Pick<LegionAssignment, 'role' | 'taskKey' | 'parentStepId' | 'specialist' | 'reportFindingId' | 'plannerId'>): Step {
     return this.transaction(() => {
       if (isReportStep(input)) this.project(id); else this.writable(id)
-      const configured = this.stepLimit()
-      const limit = configured === null ? maxSteps : maxSteps === null ? configured : Math.min(configured, maxSteps)
       const graphId = this.node<Goal>(id, input.goalId ?? this.rootGoalId(id), 'goal').graphId ?? undefined
-      const capacity = this.planningCapacity(id, limit, graphId)
-      if (capacity.remainingSteps === 0) throw new HttpError(409, 'Active Step limit reached', { code: 'STEP_LIMIT_REACHED', planningCapacity: capacity })
       const goalId = this.node<Goal>(id,input.goalId ?? this.rootGoalId(id),'goal').id; if (!isReportStep(input) && this.node<Goal>(id, goalId, 'goal').status !== 'open') throw new HttpError(409, 'Goal is closed')
       const profile = input.executionProfile ?? 'direct'; if (!['direct', 'isolated'].includes(profile)) throw new HttpError(422, 'Invalid execution profile')
       const mode = this.project(id).mode
       if (mode === 'general' && (input.specialist || input.parentStepId)) throw new HttpError(422, 'General mode has no specialist Agents or squads')
-      if (mode === 'benchmark' && input.role === 'general' && this.nodes<Step>(id, ['step']).some(s => s.graphId === graphId && s.role === 'general' && !s.deleted && !['done','cancelled'].includes(s.status))) throw new HttpError(409, 'General Planner already owns this task')
       if (input.specialist) input = {...input,role:executorRole(mode)}
-      if (input.role !== undefined && !(mode === 'benchmark' ? ['general','soldier','scout','reporter'] : ['worker']).includes(input.role)) throw new HttpError(422, `Invalid ${mode} role`)
+      if (input.role !== undefined && !(mode === 'benchmark' ? ['soldier','scout','reporter'] : ['worker']).includes(input.role)) throw new HttpError(422, `Invalid ${mode} role`)
       if (input.role !== undefined || input.taskKey !== undefined || input.parentStepId !== undefined) requiredText(input.taskKey, 'taskKey')
       if (input.parentStepId) {
         const parent = this.node<Step>(id, input.parentStepId, 'step')
@@ -579,7 +579,7 @@ export class Store {
         status: 'pending', factIds: [], worker: null, executionProfile: profile, attempts: 0,
         endedAt: null, failure: null, createdAt: now(), bootstrap: input.bootstrap ?? false, planVersion: 1,
         ...(input.specialist ? { specialist: { name: requiredText(input.specialist.name, 'specialist.name'), responsibilities: requiredText(input.specialist.responsibilities, 'specialist.responsibilities'), capabilities: input.specialist.capabilities.map(c => requiredText(c, 'capability')), scope: requiredText(input.specialist.scope, 'specialist.scope') } } : {}),
-        ...(input.reportFindingId ? { reportFindingId: input.reportFindingId } : {}), role: input.role ?? executorRole(mode), taskKey: input.taskKey ?? goalId, ...(input.parentStepId ? { parentStepId: input.parentStepId } : {}) }
+        ...(input.reportFindingId ? { reportFindingId: input.reportFindingId } : {}), ...(input.plannerId?{plannerId:input.plannerId}:{}), role: input.role ?? executorRole(mode), taskKey: input.taskKey ?? goalId, ...(input.parentStepId ? { parentStepId: input.parentStepId } : {}) }
       this.saveNode(step)
       this.initializeTaskTodos(step)
       this.event(id, 'step.added', step, step); return step
@@ -627,7 +627,7 @@ export class Store {
       if (definition && step.attempts && input.mode === 'replace') {
         if (step.bootstrap) throw new HttpError(409, 'Bootstrap cannot be replaced by a planning edit')
         if (input.status !== undefined) throw new HttpError(422, 'Replacement cannot include status')
-        const replacement = this.addStep(id, { description: next.description, sourceIds: next.sourceIds, goalId: next.goalId, priority: next.priority, executionProfile: next.executionProfile, creator: step.creator, dependsOn:step.dependsOn, role:step.role, taskKey:step.taskKey, parentStepId:step.parentStepId, specialist:step.specialist })
+        const replacement = this.addStep(id, { description: next.description, sourceIds: next.sourceIds, goalId: next.goalId, priority: next.priority, executionProfile: next.executionProfile, creator: step.creator, dependsOn:step.dependsOn, plannerId:step.plannerId, role:step.role, taskKey:step.taskKey, parentStepId:step.parentStepId, specialist:step.specialist })
         replacement.replaces = step.id; replacement.replacementPending = true; replacement.status = 'blocked'
         step.status = 'cancelled'; step.replacedBy = replacement.id; step.endedAt = now()
         this.saveNode(step); this.event(id, 'step.updated', step, step)
@@ -649,6 +649,7 @@ export class Store {
       }
       if (JSON.stringify(next) === JSON.stringify(step)) return step
       if (definition) next.planVersion = (step.planVersion ?? 1) + 1
+      if(input.status==='cancelled'){const prior=this.latestRun(id,step.id);if(prior?.status==='paused'){prior.status=prior.pendingTools.length?'unknown':'cancelled';prior.endedAt=now();this.saveRun(prior);this.event(id,`execute.${prior.status}`,next,{runId:prior.id})}}
       this.saveNode(next); this.initializeTaskTodos(next); this.event(id, definition ? 'step.revised' : 'step.updated', next, next); return next
     })
   }
@@ -666,7 +667,12 @@ export class Store {
       requiredText(resolution, 'resolution')
       run.status = 'cancelled'; run.pendingTools = []; run.error = resolution; this.saveRun(run)
       this.event(run.projectId, 'execute.resolved', null, { runId, resolution })
-      if (run.stepId) this.releaseReplacement(this.node<Step>(run.projectId, run.stepId, 'step'))
+      if(run.activity==='plan'){const planner=this.assignment(run) as GraphPlanner;planner.status='pending';this.savePlanner(planner);this.forGraph(run.projectId,run.graphId!).event(run.projectId,'hint.added',null,{reason:resolution})}
+      if (run.stepId) {
+        const step=this.node<Step>(run.projectId,run.stepId,'step')
+        if(step.status==='blocked'&&this.latestRun(run.projectId,step.id)?.id===run.id){step.status='cancelled';this.saveNode(step);this.event(run.projectId,'step.cancelled',step,{runId,resolution})}
+        this.releaseReplacement(step)
+      }
       return run
     })
   }
@@ -756,8 +762,7 @@ export class Store {
       if (input.assetIds !== undefined) node.assetIds = input.assetIds
       this.saveNode(node); this.event(id, 'finding.added', node, node)
       if (node.severity && this.project(id).mode==='benchmark') {
-        if(this.planningCapacity(id,this.stepLimit(),node.graphId??undefined).remainingSteps!==0)this.requestFindingReport(id,node.id)
-        else this.event(id,'finding.report_deferred',node,{reason:'Max Step reached; retain Finding and request its report after capacity is available'})
+        this.requestFindingReport(id,node.id)
       }
       return node
     })
@@ -861,7 +866,7 @@ export class Store {
     if(this.graphScope && run.graphId!==this.graphScope) throw new HttpError(422,'Cross-Graph Run')
     this.db.prepare('INSERT INTO runs(id,project_id,step_id,activity,status,data,graph_id) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,data=excluded.data').run(run.id, run.projectId, run.stepId, run.activity, run.status, JSON.stringify(run),run.graphId??null)
     const step = run.stepId ? this.node<Step>(run.projectId, run.stepId, 'step') : undefined
-    this.audit({ id: run.id, project_id: run.projectId, intent_id: run.stepId, task_type: step?.role ?? executorRole(this.project(run.projectId).mode), phase: run.activity,
+    this.audit({ id: run.id, project_id: run.projectId, intent_id: run.stepId, task_type: run.activity === 'plan' ? 'general' : step?.role ?? executorRole(this.project(run.projectId).mode), phase: run.activity,
       graph_id:run.graphId??null, worker: run.worker, provider: run.provider ?? run.backend, engine: run.backend, model: run.model ?? null, execution_profile: step?.executionProfile ?? 'direct', session_id: run.id,
       workspace_kind: 'local', workspace_ref: '', workspace_root: run.workspaceRoot ?? '', status: run.status === 'succeeded' ? 'completed' : run.status,
       started_at: run.startedAt, ended_at: run.endedAt, error: run.error, exit_code: run.status === 'succeeded' ? 0 : null, timed_out: false, cancelled: run.status === 'cancelled',
@@ -875,7 +880,7 @@ export class Store {
       const saved = row ? JSON.parse(String(row.data)) : null
       const result:Record<string,Json> = { ...metadata, graph_id:metadata.graph_id??(this.db.prepare('SELECT graph_id FROM runs WHERE id=?').get(id)?.graph_id as string|null|undefined)??null }
       if (saved) {
-        if (saved.status !== 'running' && metadata.status === 'running' && !(saved.status === 'paused' && this.db.prepare("SELECT 1 FROM runs WHERE id=? AND status='running'").get(id))) for (const key of ['status', 'ended_at', 'exit_code', 'timed_out', 'cancelled']) result[key] = saved[key] ?? null
+        if (saved.status !== 'running' && metadata.status === 'running' && !this.db.prepare("SELECT 1 FROM runs WHERE id=? AND status='running' AND (activity='plan' OR ?='paused')").get(id,saved.status)) for (const key of ['status', 'ended_at', 'exit_code', 'timed_out', 'cancelled']) result[key] = saved[key] ?? null
         for (const key of ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens']) result[key] = Math.max(Number(saved[key]) || 0, Number(metadata[key]) || 0)
         result.session_id ??= saved.session_id
       }
@@ -895,12 +900,87 @@ export class Store {
       return { accepted: events.length }
     })
   }
-  plannerWakeAt(step: Step): number {
-    const run = this.latestRun(step.projectId, step.id)
-    if (!run || run.status === 'paused') return step.retryAfter ?? 0
-    const event = this.db.prepare("SELECT created_at FROM events WHERE project_id=? AND (graph_id=? OR graph_id IS NULL) AND id>? AND (node_id IS NULL OR node_id<>?) AND type IN ('fact.added','finding.added','hint.added','execute.succeeded','execute.failed','execute.cancelled','execute.unknown','planning.capacity_changed') ORDER BY id LIMIT 1").get(step.projectId,step.graphId!,run.deliveredGraphCursor??0,step.id)
-    const heartbeat = Date.parse(run.endedAt ?? run.startedAt) + 15_000
-    return Math.max(step.retryAfter ?? 0, event ? Math.min(heartbeat,Date.parse(String(event.created_at))+800) : heartbeat)
+  savePlanner(planner: GraphPlanner) {
+    const graph = this.projectGraph(planner.projectId, planner.graphId)
+    graph.planner = planner
+    this.db.prepare('UPDATE project_graphs SET data=? WHERE project_id=? AND id=?').run(JSON.stringify(graph), graph.projectId, graph.id)
+  }
+  assignment(run: Run): TaskAssignment | undefined {
+    return run.activity === 'plan' ? this.projectGraph(run.projectId, run.graphId!).planner : run.stepId ? this.node<Step>(run.projectId, run.stepId, 'step') : undefined
+  }
+  addPlanner(projectId: string, graphId: string, input: {description:string; executionProfile?:'direct'|'isolated'; priority?:number; sourceIds:string[]}): GraphPlanner {
+    return this.transaction(() => {
+      const graph = this.projectGraph(projectId, graphId)
+      if (this.writable(projectId).mode !== 'benchmark') throw new HttpError(422, 'General mode is planned by Project Commander')
+      if (graph.planner) {
+        if(graph.planner.status!=='cancelled'||this.runs(projectId).some(r=>r.activity==='plan'&&r.graphId===graphId&&['running','paused','unknown'].includes(r.status)))throw new HttpError(409,'General Planner already owns this task')
+        graph.planner.status='pending';graph.planner.description=requiredText(input.description,'description');this.savePlanner(graph.planner);this.forGraph(projectId,graphId).event(projectId,'hint.added',null,{reason:'Planner reactivated'});return graph.planner
+      }
+      const planner: GraphPlanner = {id:'planner-'+graphId, projectId, graphId, role:'general', taskKey:graph.taskKey!, description:requiredText(input.description,'description'), goalId:graph.goalId,
+        sourceIds:this.forGraph(projectId,graphId).evidenceIds(projectId,input.sourceIds,true), executionProfile:input.executionProfile??'direct', priority:input.priority??0, status:'pending', cursor:{delivered:0,acknowledged:0},createdAt:now()}
+      this.savePlanner(planner)
+      new CommanderTodos(this,projectId).initialize(graphId,this.node<Goal>(projectId,graph.goalId,'goal').description)
+      this.forGraph(projectId,graphId).event(projectId,'planner.created',null,{})
+      return planner
+    })
+  }
+  private migrateGraphPlanners() {
+    this.transaction(() => {
+      for (const row of this.db.prepare("SELECT data FROM nodes WHERE kind='step' AND json_extract(data,'$.role')='general'").all()) {
+        const step = JSON.parse(String(row.data)) as Step
+        if (!step.graphId || this.project(step.projectId).mode !== 'benchmark') continue
+        const graph = this.projectGraph(step.projectId,step.graphId)
+        if (!graph.planner) this.savePlanner({id:'planner-'+graph.id,projectId:step.projectId,graphId:graph.id,role:'general',taskKey:graph.taskKey!,description:step.description,goalId:step.goalId,sourceIds:step.sourceIds,executionProfile:step.executionProfile,priority:step.priority,status:step.status==='running'?'paused':step.status,handoff:step.handoff,nextWorker:step.nextWorker,cursor:{delivered:0,acknowledged:0},createdAt:step.createdAt})
+        const planner=this.projectGraph(step.projectId,graph.id).planner!
+        planner.legacyAssignments=[...(planner.legacyAssignments??[]),step];this.savePlanner(planner)
+        for (const run of this.runs(step.projectId).filter(r=>r.stepId===step.id)) {
+          run.stepId=null;run.activity='plan'
+          this.db.prepare('UPDATE runs SET step_id=NULL,activity=?,data=? WHERE id=?').run('plan',JSON.stringify(run),run.id)
+        }
+        for (const child of this.nodes<Step>(step.projectId,['step']).filter(s=>s.parentStepId===step.id)) { delete child.parentStepId;child.plannerId=graph.planner?.id??'planner-'+graph.id;this.saveNode(child) }
+        this.db.prepare('DELETE FROM nodes WHERE project_id=? AND id=?').run(step.projectId,step.id)
+      }
+      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS one_graph_planner ON runs(project_id,graph_id) WHERE activity='plan' AND status IN ('running','paused','unknown')")
+    })
+  }
+  plannerEvents(planner: GraphPlanner, after = planner.cursor.acknowledged, limit = 100) {
+    const rows=this.db.prepare('SELECT * FROM events WHERE project_id=? AND (graph_id=? OR graph_id IS NULL) AND id>? ORDER BY id LIMIT ?').all(planner.projectId,planner.graphId,after,limit)
+    const events=rows.map(row=>({id:Number(row.id),graphId:row.graph_id,projectId:planner.projectId,type:String(row.type),nodeId:row.node_id,createdAt:String(row.created_at),payload:JSON.parse(String(row.data))}))
+    const cursor=events.at(-1)?.id??after
+    planner.cursor.delivered=Math.max(planner.cursor.delivered,cursor);this.savePlanner(planner)
+    return {events:events.map(event=>({...event,...(event.type==='legion.message'?{message:this.db.prepare('SELECT data FROM legion_messages WHERE project_id=? AND id=?').get(planner.projectId,event.payload.messageId)?.data}:{} )})),cursor,hasMore:!!this.db.prepare('SELECT 1 FROM events WHERE project_id=? AND (graph_id=? OR graph_id IS NULL) AND id>? LIMIT 1').get(planner.projectId,planner.graphId,cursor),acknowledged:planner.cursor.acknowledged}
+  }
+
+  completePlanning(runId: string, through: number, state: string) {
+    const run = this.run(runId), planner = this.assignment(run) as GraphPlanner
+    if (run.activity !== 'plan' || run.status !== 'running') throw new HttpError(409,'Planner is not running')
+    if (!Number.isSafeInteger(through) || through < planner.cursor.acknowledged || through > planner.cursor.delivered) throw new HttpError(422,'Acknowledgement exceeds delivered Graph events')
+    run.processedGraphCursor=through;this.saveRun(run)
+    planner.handoff=requiredText(state,'state');this.savePlanner(planner)
+    return {saved:true,through}
+  }
+  plannerWakeAt(planner: GraphPlanner): number {
+    const runs=this.runs(planner.projectId).filter(r=>r.activity==='plan'&&r.graphId===planner.graphId)
+    if(runs.some(r=>['running','unknown'].includes(r.status)))return Infinity
+    if(!runs.length||runs.some(r=>r.status==='paused'))return planner.retryAfter??0
+    const event=this.db.prepare("SELECT created_at FROM events WHERE project_id=? AND (graph_id=? OR graph_id IS NULL) AND id>? AND type IN ('fact.added','finding.added','hint.added','goal.updated','step.added','step.updated','step.revised','step.cancelled','step.handoff_ready','execute.succeeded','execute.failed','execute.cancelled','execute.unknown','legion.message','planning.capacity_changed','planner.stalled') ORDER BY id DESC LIMIT 1").get(planner.projectId,planner.graphId,planner.cursor.acknowledged)
+    if(runs.at(-1)?.status==='cancelled'&&planner.nextWorker)return planner.retryAfter??0
+    if(runs.at(-1)?.status==='failed')return planner.retryAfter??0
+    return event?Math.max(planner.retryAfter??0,Date.parse(String(event.created_at))+800):Infinity
+  }
+  private claimPlanner(id: string, worker: Pick<Worker,'name'|'backend'>): Run {
+    if(!this.graphScope)throw new HttpError(422,'Planner requires its Graph')
+    const graph=this.projectGraph(id,this.graphScope),planner=graph.planner
+    if(!planner||!['pending','paused'].includes(planner.status)||this.plannerWakeAt(planner)>Date.now()||this.node<Goal>(id,graph.goalId,'goal').status!=='open')throw new HttpError(409,'Planner is not ready')
+    this.active(id)
+    const paused=this.runsByStatus('paused',id).find(r=>r.activity==='plan'&&r.graphId===graph.id)
+    if(paused&&(paused.worker!==worker.name||paused.backend!==worker.backend||paused.pendingTools.length))throw new HttpError(409,'Planner resume must keep its route and settled tools')
+    const previous=this.runs(id).filter(r=>r.activity==='plan'&&r.graphId===graph.id).at(-1)
+    const reusable=previous&&previous.worker===worker.name&&previous.status!=='cancelled'?previous:undefined
+    const run:Run=paused??reusable??{id:'run-'+randomUUID(),projectId:id,graphId:graph.id,stepId:null,activity:'plan',worker:worker.name,backend:worker.backend,status:'running',startedAt:now(),endedAt:null,baseRevision:graph.revision,checkpoint:null,pendingTools:[],error:null,inputTokens:0,outputTokens:0,cacheReadTokens:0,cacheWriteTokens:0,...(previous?{predecessorRunId:previous.id}:{}),handoff:planner.handoff}
+    delete run.processedGraphCursor;delete run.failureCode;run.error=null;run.status='running';run.endedAt=null;planner.status='running';this.savePlanner(planner);this.saveRun(run)
+    this.event(id,'planner.started',null,{runId:run.id})
+    return run
   }
   stepReady(step: Step): boolean {
     return (step.dependsOn ?? []).every(id => {
@@ -910,6 +990,7 @@ export class Store {
   }
   claim(id: string, activity: Activity, worker: Pick<Worker, 'name' | 'backend'>, stepId: string | null = null): Run {
     return this.transaction(() => {
+      if (activity === 'plan') return this.claimPlanner(id, worker)
       if (activity !== 'execute') throw new HttpError(410, 'Independent Reason execution was replaced by Commander')
       const reporting = stepId !== null && isReportStep(this.node<Step>(id, stepId, 'step'))
       const p = reporting ? this.project(id) : this.active(id)
@@ -926,6 +1007,9 @@ export class Store {
       const paused = step?.status === 'paused' ? this.runsByStatus('paused', id).find(r => r.stepId === stepId) : undefined
       if (paused && (paused.worker !== worker.name || paused.backend !== worker.backend)) throw new HttpError(409, 'Resume must keep the original worker and backend')
       if (paused?.pendingTools.length) throw new HttpError(409, 'Unconfirmed tool results prevent automatic resume')
+      if (this.runs(id).some(r => r.stepId === stepId && ['running','unknown'].includes(r.status))) throw new HttpError(409, 'Step already has an unsettled execution')
+      const capacity = this.planningCapacity(id, this.stepLimit(), step!.graphId ?? undefined)
+      if (!paused && capacity.remainingSteps === 0) throw new HttpError(409, 'Graph execution Step limit reached', { code: 'STEP_LIMIT_REACHED', planningCapacity: capacity })
       const run: Run = paused ?? { id: `run-${randomUUID()}`, projectId: id, stepId, activity, worker: worker.name, backend: worker.backend, status: 'running', startedAt: now(), endedAt: null,
         ...(step?.predecessorRunId ? { predecessorRunId: step.predecessorRunId, handoff: step.handoff } : {}),
         baseRevision: p.planningRevision, deliveredGraphCursor: Number(this.db.prepare('SELECT COALESCE(MAX(id),0) AS value FROM events WHERE project_id=?').get(id)?.value ?? 0), checkpoint: null, pendingTools: [], error: null, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
@@ -941,9 +1025,22 @@ export class Store {
     return this.transaction(() => {
       const run = this.run(runId)
       if (run.status !== 'running') return run
+      if (run.activity === 'plan') {
+        const planner = this.assignment(run) as GraphPlanner
+        if(status==='succeeded'&&run.processedGraphCursor!==undefined)planner.cursor.acknowledged=Math.max(planner.cursor.acknowledged,run.processedGraphCursor)
+        delete run.processedGraphCursor
+        planner.failureCount=status==='failed'?(planner.failureCount??0)+1:status==='succeeded'?0:planner.failureCount
+        const relaying=planner.status==='parked'&&planner.nextWorker!==undefined
+        planner.status = planner.status==='done'?'done':planner.status==='cancelled'?'cancelled':status==='failed'&&(planner.failureCount??0)>=3?'blocked':relaying?'pending':planner.status==='parked'?'parked':status === 'succeeded' ? 'pending' : status === 'paused' ? 'paused' : status === 'unknown' ? 'blocked' : 'pending'
+        planner.retryAfter = status === 'failed' ? Date.now() + 5000 : status === 'paused' ? planner.retryAfter : 0
+        this.savePlanner(planner)
+        run.status = status; run.error = error; run.endedAt = status === 'paused' ? null : now(); this.saveRun(run)
+        this.forGraph(run.projectId,run.graphId!).event(run.projectId, `planner.${status}`, null, { runId })
+        return run
+      }
       if (run.stepId && status === 'succeeded') {
         const step = this.node<Step>(run.projectId, run.stepId, 'step')
-        if (step.role === 'general' ? false : isReportStep(step) ? this.node<Finding>(run.projectId, step.sourceIds[0], 'finding').report?.runId !== run.id : !step.factIds.length) {
+        if (isReportStep(step) ? this.node<Finding>(run.projectId, step.sourceIds[0], 'finding').report?.runId !== run.id : !step.factIds.length) {
           status = 'failed'
           error = isReportStep(step) ? 'Reporter must save the report Artifact before completing the Step' : step.bootstrap ? 'Initial Soldier Mission must return at least one Fact' : 'Legion Worker must return at least one Fact before completing the Step'
         }
@@ -951,7 +1048,7 @@ export class Store {
       run.status = status; run.error = error; run.endedAt = status === 'paused' ? null : now(); this.saveRun(run)
       if (run.stepId) {
         const step = this.node<Step>(run.projectId, run.stepId, 'step')
-        if (!['cancelled', 'parked'].includes(step.status)) step.status = status === 'succeeded' ? step.role === 'general' ? 'pending' : 'done' : status === 'paused' ? 'paused' : status === 'cancelled' ? 'cancelled' : 'blocked'
+        if (!['cancelled', 'parked'].includes(step.status)) step.status = status === 'succeeded' ? 'done' : status === 'paused' ? 'paused' : status === 'cancelled' ? 'cancelled' : 'blocked'
         step.failure = error; step.endedAt = run.endedAt; this.saveNode(step); this.initializeTaskTodos(step)
         this.event(run.projectId, `execute.${status}`, step, { runId, error })
         if (!['running', 'paused', 'unknown'].includes(status)) this.releaseReplacement(step)

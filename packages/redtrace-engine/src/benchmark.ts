@@ -26,7 +26,7 @@ async function tpctfQuery(config:EngineConfig,args:string[],signal?:AbortSignal)
 }
 export function recordBenchmarkSubmission(store:Store,projectId:string,taskKey:string,response:any) {
   const row=store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(projectId,taskKey)
-  const data={...(row?JSON.parse(String(row.data)):{}),submissionAttemptedAt:new Date().toISOString(),submissionAccepted:response?.correct===true}
+  const data={...(row?JSON.parse(String(row.data)):{}),submissionAttemptedAt:new Date().toISOString(),submissionAccepted:response?.correct===true,...(response?.correct===true&&Number(response.total_flag_count)>0&&Number(response.correct_flag_count)>=Number(response.total_flag_count)?{platformCompleted:true}:{})}
   store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?) ON CONFLICT(project_id,task_key) DO UPDATE SET data=excluded.data').run(projectId,taskKey,JSON.stringify(data))
   store.event(projectId,'legion.submission',null,{taskKey,accepted:data.submissionAccepted})
 }
@@ -77,8 +77,13 @@ export async function discoverBenchmarkTasks(store:Store,config:EngineConfig,pro
         if(typeof taskKey!=='string'||!taskKey)throw new HttpError(502,'Challenge is missing unique_code')
         const row=store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(projectId,taskKey)
         const data=row?JSON.parse(String(row.data)):{}
+        const previous=data.platformCompleted,previousInstance=JSON.stringify(data.platformInstance)
         data.platformCompleted=challenge.is_completed===true
+        data.platformInstance={status:challenge.container_status??'unknown',hosts:challenge.container_addr??[]}
+        data.platformObservedAt=new Date().toISOString()
         store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?) ON CONFLICT(project_id,task_key) DO UPDATE SET data=excluded.data').run(projectId,taskKey,JSON.stringify(data))
+        if(previous!==data.platformCompleted)store.event(projectId,'legion.platform_updated',null,{taskKey,completed:data.platformCompleted})
+        if(previousInstance!==JSON.stringify(data.platformInstance))store.event(projectId,'legion.instance_updated',null,{taskKey,...data.platformInstance})
         if(challenge.is_completed)continue
         if(store.projectGraphs(projectId).some(g=>g.taskKey===taskKey))continue
         store.createGraph(projectId,{taskKey,title:challenge.title??challenge.name??taskKey,origin:store.scopeFact(projectId).description+'\nPlatform task: '+JSON.stringify(challenge),goal:(store.project(projectId).objective??'Complete the authorized task')+' · '+taskKey})
@@ -88,11 +93,11 @@ export async function discoverBenchmarkTasks(store:Store,config:EngineConfig,pro
   return response
 }
 
-export async function benchmarkInstance(store:Store,config:EngineConfig,projectId:string,code:string,action:'start'|'close',signal?:AbortSignal) {
+export async function benchmarkInstance(store:Store,config:EngineConfig,projectId:string,code:string,action:'start'|'close',signal?:AbortSignal,exceptRun?:string) {
   const adapter=benchmarkAdapter(store,projectId)
   if(!adapter.instanceApi)return {supported:false,adapter:adapter.kind,action,taskKey:code}
   const legion=new LegionStore(store)
-  if(action==='close')legion.assertInstanceClose(projectId,code)
+  if(action==='close')legion.assertInstanceClose(projectId,code,exceptRun)
   const response=await tsecbenchQuery(config,[action,code],signal)
   if(action==='start') {
     if(response.unique_code!==code||!Array.isArray(response.container_addr)||!response.container_addr.length)throw new HttpError(502,'Platform returned an invalid challenge or target list')
@@ -100,7 +105,7 @@ export async function benchmarkInstance(store:Store,config:EngineConfig,projectI
     store.setBenchmarkHosts(projectId,code,hosts)
     const graph=store.projectGraphs(projectId).find(g=>g.taskKey===code)
     const scoped=graph?store.forGraph(projectId,graph.id):store
-    scoped.addInput(projectId,'observation','Platform started '+code+'; authorized targets: '+response.container_addr.join(', '),'commander')
+    scoped.addInput(projectId,'observation','Platform started '+code+'; authorized targets: '+response.container_addr.join(', '),exceptRun??'platform')
   }else { if(response?.closed!==true)throw new HttpError(502,'Platform close is unconfirmed; retain instance state and verify before retry',response);store.setBenchmarkHosts(projectId,code) }
   legion.platformEvent(projectId,code,action,response);return response
 }

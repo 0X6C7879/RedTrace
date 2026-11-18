@@ -1,3 +1,4 @@
+import {domainFixtureRequest} from './domain-fixture.mjs'
 import assert from 'node:assert/strict'
 import {createServer} from 'node:http'
 import {mkdtempSync,rmSync} from 'node:fs'
@@ -17,7 +18,7 @@ const calls=new Map(),counts=id=>calls.get(id)??0
 const patrolInputs=[]
 let ctx,controller,watchdogs=0,peak=0,requests=0,failProject
 const server=createServer(async(req,res)=>{
-  let text='';for await(const b of req)text+=b;const body=JSON.parse(text),id=store.projects().map(p=>p.id).find(id=>JSON.stringify(body.messages).includes(id));assert.ok(id)
+  let text='';for await(const b of req)text+=b;const body=domainFixtureRequest(JSON.parse(text),res),id=store.projects().map(p=>p.id).find(id=>JSON.stringify(body.messages).includes(id));assert.ok(id)
   requests++;peak=Math.max(peak,requests);await new Promise(r=>realTimeout(r,10));requests--
   if(failProject===id){res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({error:{message:'invalid fixture request'}}));return}
   const finish=body.messages.at(-1)?.tool_call_id?.startsWith('changes-');if(finish)calls.set(id,counts(id)+1)

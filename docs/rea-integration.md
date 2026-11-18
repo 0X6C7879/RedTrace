@@ -1,97 +1,18 @@
-# REA / redtrace-reverse
+# REA / redtrace-reverse（CLI-only）
 
-## 安装与启停
+锁定 `rea-agents@6.4.0`；部署使用现有 npm 依赖和 `npm run dsh:build`，运行任务期间不安装依赖。
 
-在项目根目录部署时执行 `npm ci`（锁定 `rea-agents@6.4.0`）、
-`npm run dsh:build`。`build-dsh.sh` / `build-dsh.cmd` 与三平台 CI 已包含
-根依赖安装。本次不构建 Docker。运行时不执行 npm/npx 下载或交互式 setup。
+- Soldier、Scout 和 General 模式 Worker 可按需加载 `reverse-engineer-anything` Skill，通过原生 Shell 调用 PATH 中的 `rea`。先读 `rea --help`，再读具体命令 `--help`。
+- Commander、纯 Planner、Reporter 不加载此执行插件。CLI Skill 不额外注册 Tool Schema。
+- **删除全部 29 个 REA MCP 注册和连接生命周期**；加载 Skill 不启动 MCP、也不启动分析引擎。旧 `mcp/rea.json` 不会被全局挂载；其他 MCP 保持原有契约。
+- REA 的 CLI 命令自行管理分析进程；RedTrace 不增加 MCP、代理、额外超时或重试。原生 DSH Shell、Jobs、Spill 和 Compaction 保留。
+- 管理端停用会撤销该 Skill，不取消 Step，也不是系统级禁用环境中已安装的 CLI。
+- 保留已有环境 `REA_*`、`GHIDRA_INSTALL_DIR`、`JAVA_HOME` 配置，不更换模型供应商或推理强度。Worker 只在授权目标范围执行。
+- MCP-only 的持久 Program、Hopper 导航/注释、内存 Evidence 等能力不再承诺提供。无 CLI 等价物时如实报告限制，使用已有 CTF 工具；不能自行启动 `rea mcp` 补回。
+- 保存 CLI 原始输出/导出文件并通过已有 Evidence/FGS 提交真实 Fact，不能把工具成功或候选漏洞当成验证结果。上游 references 作为参考，不意味着其中所有 MCP 工具可用。
 
-插件管理页中的 **Reverse Engineering** 对应 `redtrace-reverse`，默认启用、按需装载。
-REA 默认开启，由 Soldier / Scout / General / Operator / Leader 执行 Worker 按需加载，Commander / Planner 不获得分析工具。
-管理员明确停止会持久化禁用并撤销活动 Run 的本插件 Skill/MCP/分析能力，但不取消 Step 或阻止 Reason 规划。
-历史 Step 声明仅兼容读取，新 Step 不保存这些字段，也不因工具声明触发 Replace。
-每个启用插件的 Explore 都能发现官方 Skill 与 CLI；未加载 Skill 时 MCP 不连接、不启动分析引擎。
-Explore 调用原生 `skill({name:"reverse-engineer-anything"})`，自动创建
-该 Run 私有的 DSH MCP Client，不启动 Ghidra。
-加载 Skill 后注册 29 个无等价 CLI 的 Program 生命周期、Hopper 导航/注释和内存 Evidence 操作。
-静态分析、函数、字符串、反汇编和伪代码通过 PATH 中的 `rea --help` 查询并用原生 Shell 执行；
-不再注册 `reverse_tools` 或按目标自动扩展类别。上游 CLI 每次打开/关闭自己的分析会话，
-不能等价替换持久 Program、注释和内存 Evidence，因此这些 MCP 操作保留。
+## 测试
 
+`node --test packages/redtrace-dsh/test/reverse.test.mjs` 验证原生 Skill 加载/停用/恢复、反复加载后 REA Schema 仍为 0，以及真实 CLI 的 JavaScript、托管成员分析和可选引擎错误边界。
 
-本地 `mcp/rea.json` 的服务器名保留给该插件，不再被全局 Domain 重复挂载，
-其他 MCP 配置不变。已有 REA 配置不会被删除，其个性化引擎设置请放入
-`common_env`（或启动环境中的 `REA_*`、`GHIDRA_INSTALL_DIR`、`JAVA_HOME`）。
-CLI 由原生 shell 直接调用 `rea ...`（部署包的 node_modules/.bin 加入 PATH），无需分析代理。
-通用 shell 能访问系统安装的 rea，停用不是系统级执行禁止。
-
-## 引擎与边界
-
-遵循 [REA 官方实现](https://github.com/morluto/rea) 和锁定版本 npm 包；
-Skill 与六个上游 references 放在 `plugins/reverse/skills/`，不进入
-全局 managed Skill 根，不提前注入 Skill 正文。`plugins/reverse/upstream.json`
-记录版本、审阅提交和逐文件 SHA256；上游逐文件哈希保留，CLI-first 的本地 Skill 适配单列 redtraceOverrides；references 仍逐字节对照安装包验证。
-现有 [DSH 原生 MCP Client](https://github.com/deepseek-ai/deepseek-harness)
-负责通信、协议、输入校验、错误处理与连接关闭，没有第二套 MCP 协议。
-
-部署 Ghidra 12.1.x 和 Java 21 后设置 `GHIDRA_INSTALL_DIR`、`JAVA_HOME`；
-已有 Homebrew 安装自动检测，兼容已有 `GHIDRA_HOME`。按需要预装 JADX、
-APKTool/JEB、ILSpy、Binwalk/Unblob、pwntools、Playwright 浏览器和相关运行环境。
-IDA/Hopper 需要各自安装/许可证；设备、GUI 与权限由 REA 原生 Provider 检查。
-单个 Provider 不可用不影响其他 Provider；返回上游结构化错误与 remediation，
-不能在测评期间要求人安装、点击或批准。EVM、固件等仍受上游 OS/架构边界限制。
-
-Ghidra 真正初始化可能发生在首个函数查询，而不是 open_binary；冷启动和
-自动分析使用上游 330 秒启动预算，加 90 秒传输/清理余量，之后普通查询 120 秒。
-JS 分析和显式 `analysis_timeout_ms` / `timeout_ms` 同样留出上游工作预算。
-不改变 DSH 自动上下文压缩、Worker 并发、模型路由或 FGS 调度。
-
-Run 生命周期拥有私有 REA 服务，底层 Ghidra 私有 project/process group 由
-REA 原生监督器管理。DSH 关闭 stdio 后 REA 的 EOF/SIGTERM 流程释放分析
-资源；插件还取消自己的活动调用并清理分配的临时目录。不共享 Worker/Step
-Session 或缓存。保留的 MCP 复用同一 Run 的连接和 Program；CLI 是独立 one-shot，重复静态分析可使用上游 --snapshot，不伪装成与内存 Program 等价。Ghidra 不支持的 Hopper 注释操作按上游返回 capability_unavailable，不新增代理或降级。
-
-## Evidence 与零人工执行
-
-默认优先 `detail:summary`、`inspect_analysis_view`、Evidence ID 与局部查询。
-大于 8 KiB 的文本结果按 SHA256 保存于 Workspace `.rea/run-*/`，模型只接收
-1500 字符预览与真实路径/摘要；相同结果不重复保存。它是**不完整预览**，
-不是可当完整 JSON 解析的成功证据。完整原生值保留在工具结果中，图片走原生附件。
-显式 `export_evidence_bundle` 保存的 bundle 和结果文件在停用后不删除；
-**没有显式导出的 REA 内存证据不承诺跨 Run 持久化**。Fact/Finding 在现有
-Store 中保留，必须由 Explore 验证后提交，REA Evidence 不自动升级成事实。
-
-Explore 在 Skill 加载的同一调用内收到连接结果；缺依赖/启动错误返回
-`{status:"unavailable", component:"rea_mcp", reason, fallback}`。
-遇到 Provider 失败只尝试有意义的可用替代方案，输入/依赖没有变化时不重复
-安装或重试。候选解答仍走既有验证、Fact/Finding 和平台提交契约。
-
-## 旧能力处理
-
-REA 是可用时的默认静态分析入口。精简 `ctf-reverse/SKILL.md` 中重复的
-安装步骤和基础 Ghidra/radare2/IDA 命令，保留全部按需 CTF 解题 references。
-`ctf-pwn`、`ctf-forensics`、`ctf-crypto` 的逆向指引同步到新入口。
-不删除旧 `ghidra-headless` 批量导出脚本、Radare2/Rizin、GDB、angr、Z3、
-Unicorn、Frida、pwntools。当前小型真实样本不足以证明全部旧批量导出、
-平台/架构和解题行为等价，因此按硬约束保留，而非假称已完整替代。
-
-## 可复现验收
-
-```sh
-npm run dsh:build
-npm run dsh:test
-npm --prefix packages/redtrace-engine run check
-npm --prefix packages/redtrace-engine test
-REDTRACE_REA_REAL_TESTS=1 node --test packages/redtrace-dsh/test/reverse.test.mjs
-```
-
-普通套件使用真实 DSH fibers、原生 MCP 和 REA；真实 Ghidra 样本仅在已部署
-引擎时显式启用。测试自行生成已知返回 42 的 ELF/PE，不执行目标程序。
-覆盖启停/重启/持久化、无关 Run 隔离、工具 Schema 实际消失、同 Run 连接
-复用、大输出落盘与去重、保存证据保留、完整类别可访问，以及错误/取消清理。
-以 Ajv 对全部上游工具示例和负例比较 compact/full 校验结果。
-
-实际数据和环境限制记录在 `docs/rea-acceptance.md`；Mock/契约、原生引擎、
-实际模型测评分别报告，不互相替代。
-
-本次具体保留清单与 Schema 计数见 [角色与工具系统](role-tool-system.md)。
+CLI-only 迁移不再运行已删除的 MCP Program 复用/连接取消测试。没有在本轮证明所有可选原生引擎或硬件环境能力。当前测试与成本数据见 `/Users/lxy/Downloads/RedTrace/OPTIMIZATION-REPORT.md`；旧验收记录是历史结果，不是当前 MCP 可用性承诺。

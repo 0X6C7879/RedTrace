@@ -120,10 +120,10 @@ test('Skill entrypoints keep native submissions, unattended continuation and hea
  for(const name of ['targeted-pentest','recon-crawl','api-testing','exploit-file-upload','exploit-ssrf','exploit-smuggling','exploit-race','exploit-logic','exploit-sqli','exploit-xss','shell','tunnel','service-attack','privesc-linux','privesc-win','ad-attack']){
   const skill=readFileSync(new URL(`${name}/SKILL.md`,root),'utf8')
   assert.doesNotMatch(skill,/submit_sub_agent_output|record_finding|spawn_subagent|cookies_export|browser navigate|~\/\.claude\/skills\/(?:bin|shared)|等操作者选/)
-  assert.match(skill,/submit_fact/);assert.match(skill,/finish_step/)
+  assert.match(skill,/fgs_publish.*action[:=]"?fact/);assert.match(skill,/finish_step/)
  }
  const benchmark=readFileSync(new Capabilities(path.resolve(import.meta.dirname,'../../../.redtrace'),path.resolve(import.meta.dirname,'../../..')).directory('tsecbench-api')+'/SKILL.md','utf8')
- assert.doesNotMatch(benchmark,/活跃实例最多|取提示使用 CLI/);assert.match(benchmark,/由 Commander 决策/)
+ assert.doesNotMatch(benchmark,/活跃实例最多|取提示使用 CLI/);assert.match(benchmark,/Commander 只读平台状态并调度/)
  const playwright=readFileSync(new URL('playwright-skill/SKILL.md',root),'utf8')
  assert.doesNotMatch(playwright,/headless: false|visible browser by default/)
 })

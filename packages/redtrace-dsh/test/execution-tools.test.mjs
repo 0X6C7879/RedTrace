@@ -253,9 +253,9 @@ test('host plugin tools disappear from an already mounted Execute session', asyn
   t.after(async () => { await session.scope.dispose() })
   const fiber = host.plugin(webshell)
   await fiber.await()
-  assert.ok(host.tools.get('webshell_test', session.key))
+  assert.ok(host.tools.get('webshell_manage', session.key))
   await fiber.dispose()
-  assert.equal(host.tools.get('webshell_test', session.key), undefined)
+  assert.equal(host.tools.get('webshell_manage', session.key), undefined)
 })
 
 test('native Terminal retains state, isolates real Agents, and cleans up on close, disable and disposal', { timeout: 120000 }, async t => {
@@ -423,10 +423,10 @@ test('offline assets advertise skill resources only when present without inlinin
 
 test('platform family Schemas are scoped to General/Soldier and never become global or Scout tools', async t => {
   const host = await createHost(); t.after(() => host.fiber.dispose())
-  for (const type of ['general','soldier','scout']) {
+  for (const type of ['soldier','worker','scout']) {
     const session = await mountSession(host, {executionProfile:'direct',available:id=>['redtrace-c2','redtrace-webshell'].includes(id),type})
     t.after(async () => {await session.scope.dispose();rmSync(session.cwd,{recursive:true,force:true})})
-    for (const name of ['c2_listener_create','webshell_register']) {
+    for (const name of ['c2_manage','webshell_manage']) {
       assert.equal(!!host.tools.get(name,session.key),type!=='scout')
       assert.equal(host.tools.get(name),undefined)
     }

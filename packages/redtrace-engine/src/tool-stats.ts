@@ -1,9 +1,13 @@
+import { TOOL_DOMAINS } from '../../redtrace-dsh/src/tool-domains.ts'
 import { LEGACY_GENERAL_ROLES } from '../../redtrace-dsh/src/roles.ts'
 import type { Store } from './store.ts'
 import { queryNumber } from './http.ts'
 
 /** One row per native call, including PTC children; starts are not outcomes. */
 export function toolStatistics(store: Store, url: URL, names: string[]) {
+  const originalName="COALESCE(json_extract(s.data,'$.title'),json_extract(e.data,'$.title'))"
+  const aliases=Object.entries(TOOL_DOMAINS).flatMap(([name,actions])=>Object.entries(actions).map(([action,original])=>({name,action,original})))
+  const mapped=(field:'name'|'action')=>`CASE ${originalName} ${aliases.map(a=>`WHEN '${a.original}' THEN '${a[field]}'`).join(' ')} ELSE ${field==='name'?originalName:'NULL'} END`
   const query = `WITH calls AS (
     SELECT run_id, json_extract(data,'$.call_id') AS call_id,
       MIN(CASE WHEN json_extract(data,'$.kind')='tool.started' THEN id END) AS start_id,
@@ -13,7 +17,8 @@ export function toolStatistics(store: Store, url: URL, names: string[]) {
   ), paired AS (
     SELECT c.run_id,c.call_id,r.project_id,
       COALESCE(json_extract(r.data,'$.graph_id'),json_extract(s.data,'$.graph_id'),json_extract(e.data,'$.graph_id')) AS graph_id,
-      COALESCE(json_extract(s.data,'$.title'),json_extract(e.data,'$.title')) AS name,
+      ${mapped('name')} AS name,${originalName} AS original_name,
+      COALESCE(json_extract(s.data,'$.arguments.action'),${mapped('action')}) AS action,
       COALESCE(json_extract(s.data,'$.timestamp'),json_extract(e.data,'$.timestamp')) AS timestamp,
       json_extract(p.data,'$.title') AS project_title,json_extract(p.data,'$.mode') AS mode,
       CASE WHEN json_extract(p.data,'$.mode')='general' THEN
@@ -41,6 +46,7 @@ export function toolStatistics(store: Store, url: URL, names: string[]) {
   for (const tool of tools) for (const key of ['succeeded','failed','unfinished'] as const) stats[key]+=Number(tool[key])
   const name=url.searchParams.get('tool')??'',offset=queryNumber(url,'offset',0),limit=queryNumber(url,'limit',100,1,200)
   const history = name ? store.db.prepare(query+`SELECT * FROM filtered WHERE name=? ORDER BY timestamp DESC,run_id,call_id LIMIT ? OFFSET ?`).all(...params,name,limit,offset) : []
-  return { stats, tools:tools.map(t=>({...t,share:total?Number(t.calls)/total:0})), history,
+  return { stats, tools:tools.map(t=>({...t,name:t.name,share:total?Number(t.calls)/total:0})), history,
+    actions:store.db.prepare(query+`SELECT name,action,COUNT(*) AS calls FROM filtered GROUP BY name,action ORDER BY name,action`).all(...params),
     total:name?Number(tools.find(t=>t.name===name)?.calls??0):total,offset,limit }
 }

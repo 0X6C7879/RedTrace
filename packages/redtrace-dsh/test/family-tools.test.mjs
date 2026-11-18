@@ -1,3 +1,4 @@
+import {domainAction} from '../lib/tool-domains.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -28,22 +29,24 @@ function withEnv(probe) {
   }
 }
 
+function actionTool(tools,name){const {domain,action}=domainAction(name),tool=tools.find(t=>t.name===domain);return {...tool,parameters:{...tool.parameters,required:[...(tool.parameters.required||[]),...(tool.parameters.anyOf?.find(b=>b.properties.action.const===action||b.properties.action.enum?.includes(action))?.required||[])].filter(k=>k!=='action')},execute:(args,execution)=>tool.execute({action,...args},execution)}}
+
 test('webshell plugin registers structured registration and the connectivity probe', async () => {
   const { tools, ctx } = collector()
   await webshellApply(ctx, { types: ['explore'] })
-  assert.deepEqual(tools.map(tool => tool.name), ['webshell_register', 'webshell_test'])
+  assert.deepEqual(tools.map(tool => tool.name), ['webshell_manage'])
   for (const tool of tools) {
     assert.equal(tool.parameters.type, 'object')
     assert.ok(tool.description.length > 0)
   }
-  assert.deepEqual(tools.find(tool => tool.name === 'webshell_register').parameters.required, ['target'])
-  assert.deepEqual(tools.find(tool => tool.name === 'webshell_test').parameters.required, ['target'])
+  assert.deepEqual(actionTool(tools,'webshell_register').parameters.required, ['target'])
+  assert.deepEqual(actionTool(tools,'webshell_test').parameters.required, ['target'])
 })
 
 test('webshell_register posts the full connection form with its secret', async () => {
   const { tools, ctx } = collector()
   await webshellApply(ctx, { types: ['explore'] })
-  const register = tools.find(tool => tool.name === 'webshell_register')
+  const register = actionTool(tools,'webshell_register')
   const harness = withEnv(() => ({ resource: { id: 'ws_1' } }))
   try {
     const value = await register.execute(
@@ -83,30 +86,21 @@ test('webshell_register posts the full connection form with its secret', async (
 test('c2 plugin registers listener, session, credential, profile, payload and session tools', async () => {
   const { tools, ctx } = collector()
   await c2Apply(ctx, { types: ['explore'] })
-  assert.deepEqual(tools.map(tool => tool.name), [
-    'c2_listener_create',
-    'c2_session_create',
-    'c2_credential_create',
-    'c2_profile_create',
-    'c2_listener_kinds',
-    'c2_payload_oneliner',
-    'c2_payload_build',
-    'c2_payload_external',
-  ])
+  assert.deepEqual(tools.map(tool => tool.name), ['c2_manage','c2_payload'])
   for (const tool of tools) {
     assert.equal(tool.parameters.type, 'object')
     assert.ok(tool.description.length > 0)
   }
-  assert.deepEqual(tools.find(tool => tool.name === 'c2_listener_create').parameters.required, ['listener_type', 'name'])
-  assert.deepEqual(tools.find(tool => tool.name === 'c2_session_create').parameters.required, ['shell_type', 'target'])
-  assert.deepEqual(tools.find(tool => tool.name === 'c2_credential_create').parameters.required, ['name', 'secret'])
-  assert.deepEqual(tools.find(tool => tool.name === 'c2_payload_external').parameters.required, ['listener_id'])
+  assert.deepEqual(actionTool(tools,'c2_listener_create').parameters.required, ['listener_type', 'name'])
+  assert.deepEqual(actionTool(tools,'c2_session_create').parameters.required, ['shell_type', 'target'])
+  assert.deepEqual(actionTool(tools,'c2_credential_create').parameters.required, ['name', 'secret'])
+  assert.deepEqual(actionTool(tools,'c2_payload_external').parameters.required, ['listener_id'])
 })
 
 test('c2 listener creation posts the resource contract with worker provenance', async () => {
   const { tools, ctx } = collector()
   await c2Apply(ctx, { types: ['explore'] })
-  const create = tools.find(tool => tool.name === 'c2_listener_create')
+  const create = actionTool(tools,'c2_listener_create')
   const harness = withEnv(() => ({ resource: { id: 'lis_1' } }))
   try {
     const value = await create.execute(
@@ -136,7 +130,7 @@ test('c2 listener creation posts the resource contract with worker provenance', 
 test('c2 session creation carries the connection material into the secret', async () => {
   const { tools, ctx } = collector()
   await c2Apply(ctx, { types: ['explore'] })
-  const create = tools.find(tool => tool.name === 'c2_session_create')
+  const create = actionTool(tools,'c2_session_create')
   const harness = withEnv(() => ({ resource: { id: 'ses_1' } }))
   try {
     await create.execute(
@@ -160,4 +154,10 @@ test('c2 session creation carries the connection material into the secret', asyn
   } finally {
     harness.done()
   }
+})
+
+test('every family action is reachable and missing/wrong action fields fail before HTTP',async()=>{
+ const {tools,ctx}=collector();webshellApply(ctx,{types:['explore']});c2Apply(ctx,{types:['explore']});const harness=withEnv(()=>({ok:true,resource:{id:'fixture'}}))
+ const inputs={webshell_manage:{test:{target:'http://target.test/shell'},register:{target:'http://target.test/shell'}},c2_manage:{listener:{listener_type:'tcp_reverse',name:'local'},session:{shell_type:'ssh',target:'127.0.0.1'},credential:{name:'known',secret:'fixture'},profile:{name:'local'},kinds:{listener_id:'fixture'}},c2_payload:{oneliner:{listener_id:'fixture',kind:'bash'},build:{listener_id:'fixture',os:'linux',arch:'amd64'},external:{listener_id:'fixture'}}}
+ try{for(const tool of tools)for(const [action,args]of Object.entries(inputs[tool.name]))await tool.execute({action,...args},{});assert.equal(harness.observed.length,10);const before=harness.observed.length;for(const args of [{action:'session',target:'local'},{action:'session',target:3,shell_type:'ssh'},{action:'missing'},{action:'profile',name:'x',secret:'wrong-action'}])await assert.rejects(async()=>tools.find(t=>t.name==='c2_manage').execute(args,{}));assert.equal(harness.observed.length,before)}finally{harness.done()}
 })

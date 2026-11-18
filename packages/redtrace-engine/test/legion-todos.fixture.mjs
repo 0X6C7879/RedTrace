@@ -1,3 +1,4 @@
+import {domainFixtureRequest} from './domain-fixture.mjs'
 import assert from 'node:assert/strict'
 import {createServer} from 'node:http'
 import {mkdtempSync,rmSync} from 'node:fs'
@@ -23,7 +24,7 @@ const textOf=m=>typeof m.content==='string'?m.content:(m.content??[]).map(b=>b.t
 const model=createServer(async(req,res)=>{
  try{
   let text='';for await(const b of req)text+=b
-  const input=JSON.parse(text);requests++
+  const input=domainFixtureRequest(JSON.parse(text),res);requests++
   assert(input.tools.some(t=>t.function.name==='TodoWrite'))
   const injected=input.messages.map(textOf).map(s=>{try{return JSON.parse(s)}catch{return null}}).filter(s=>s?.instruction?.includes('relevant FGS deltas')).at(-1)
   assert(injected,'each wake must carry compact instructions and cursors')

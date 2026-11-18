@@ -77,7 +77,9 @@ export class ProjectEvidence {
     const root = this.projectRoot(projectId), filename = this.contained(root, path.resolve(cwd??root, evidence.path))
     if(cwd)this.contained(realpathSync(cwd),filename)
     evidence={...evidence,path:path.relative(root,filename)}
-    return this.publish(projectId, readFileSync(filename), evidence)
+    const bytes=readFileSync(filename)
+    if(evidence.artifactId?.startsWith('ev-')&&evidence.artifactId!=='ev-'+digest(bytes))throw new HttpError(409,'HTTP evidence hash mismatch')
+    return this.publish(projectId, bytes, evidence)
   }
   private promoteSource(projectId: string, source: Evidence): ProjectArtifact {
     if (source.artifactId) { this.verifyArtifact(projectId, source.artifactId); return this.artifact(projectId, source.artifactId) }
@@ -92,7 +94,7 @@ export class ProjectEvidence {
       const spillIds = [...new Set(JSON.stringify(records).match(/ev-[a-f0-9]{64}/g) ?? [])]
       const attachments: { id: string; artifactId: string }[] = []
       for (const id of spillIds) {
-        const filename = path.join(this.projectRoot(projectId), '.redtrace-output', 'evidence', run.id, id + '.json')
+        const filename = path.join(run.workspaceRoot??this.projectRoot(projectId), '.redtrace-output', 'evidence', run.id, id + '.json')
         if (!existsSync(filename)) throw new HttpError(404, 'Referenced spill evidence is missing: ' + id)
         const bytes = readFileSync(this.contained(this.projectRoot(projectId), filename))
         if (digest(bytes) !== id.slice(3)) throw new HttpError(409, 'Referenced spill evidence hash mismatch')

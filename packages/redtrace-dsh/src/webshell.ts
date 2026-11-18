@@ -9,14 +9,15 @@
  */
 
 import type { TaskType } from './types.js'
-import { register, request, serverOf, taskFor, type ToolContext } from './api-utils.js'
+import { registerDomain, request, serverOf, taskFor, type ToolContext } from './api-utils.js'
 
 export const name = 'redtrace-webshell'
 export const inject = ['tools']
 
 export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnabled?: (name: string) => boolean } = {}): void {
-  const types: TaskType[] = config.types ?? ['general','soldier','scout']
-  register(ctx, {
+  const definitions: Parameters<typeof registerDomain>[1] = []
+  const types: TaskType[] = config.types ?? ['soldier','worker']
+  definitions.push({
     name: 'webshell_register',
     description: 'Register a WebShell as a shared resource so remote.command / remote.file.* can reuse it. target is the shell URL; password and parameters must match how the shell is reached. Use webshell_test first to verify the connection. Register only an established endpoint with known configuration/credential evidence, not speculative endpoints or batches of guessed passwords. Registration alone is not connection success. Reuse an existing matching resource; renaming/re-registering does not repair authentication or protocol failures.',
     parameters: {
@@ -65,8 +66,8 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
         publish_fact: false,
       }, execution.signal)
     },
-  }, config.toolEnabled)
-  register(ctx, {
+  })
+  definitions.push({
     name: 'webshell_test',
     description: 'Probe a WebShell endpoint before registering it. A successful probe means webshell_register can reuse this configuration. Inspect failure details and check endpoint, protocol, parameters and credential evidence before retrying. Do not blindly repeat the same failed probe or register failed candidates as usable sessions.',
     parameters: {
@@ -101,5 +102,6 @@ export function apply(ctx: ToolContext, config: { types?: TaskType[]; toolEnable
         ...(args.verify_tls === undefined ? {} : { verify_tls: Boolean(args.verify_tls) }),
       }, execution.signal)
     },
-  }, config.toolEnabled)
+  })
+  registerDomain(ctx,definitions,config.toolEnabled)
 }

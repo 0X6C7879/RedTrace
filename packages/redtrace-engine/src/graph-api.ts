@@ -17,9 +17,9 @@ import path from 'node:path'
 const text = Type.String({ minLength: 1, pattern: '\\S' }), refs = Type.Array(text, { minItems: 1 })
 const profile = Type.Union([Type.Literal('direct'), Type.Literal('isolated')])
 const requires = Type.Array(Type.String(), { uniqueItems: true, maxItems: 16 })
-const stepSchema = Type.Object({ dependsOn:Type.Optional(Type.Array(text,{uniqueItems:true})), specialist:Type.Optional(specialistSchema), role: Type.Optional(Type.Union([Type.Literal('general'), Type.Literal('soldier'), Type.Literal('scout'), Type.Literal('worker'), Type.Literal('worker')])), taskKey: Type.Optional(text), parentStepId: Type.Optional(text), description: text, sourceIds: refs, goalId: Type.Optional(text), creator: Type.Optional(text), priority: Type.Optional(Type.Integer()), executionProfile: Type.Optional(profile), requires: Type.Optional(requires), plugins: Type.Optional(taskPluginsSchema) })
+const stepSchema = Type.Object({ dependsOn:Type.Optional(Type.Array(text,{uniqueItems:true})), specialist:Type.Optional(specialistSchema), role: Type.Optional(Type.Union([Type.Literal('soldier'), Type.Literal('scout'), Type.Literal('reporter'), Type.Literal('worker')])), taskKey: Type.Optional(text), parentStepId: Type.Optional(text), description: text, sourceIds: refs, goalId: Type.Optional(text), creator: Type.Optional(text), priority: Type.Optional(Type.Integer()), executionProfile: Type.Optional(profile), requires: Type.Optional(requires), plugins: Type.Optional(taskPluginsSchema) })
 
-export function graphRoutes(router: Router, store: Store, maxSteps: () => number | null = () => null, planningTodos?: (projectId: string, graphId: string) => Todo[], workspaceRoot?: string) {
+export function graphRoutes(router: Router, store: Store, planningTodos?: (projectId: string, graphId: string) => Todo[], workspaceRoot?: string) {
   const view = (c:RequestContext) => {
     if(!c.params.project)return store
     const id=c.params.project, graphId=c.url.searchParams.get('graphId')
@@ -84,7 +84,7 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
   })
   router.add('POST', '/v2/projects/:project/goals', async c => { const b = await body(c.req, Type.Object({ description: text, parentId: Type.Optional(text), creator: Type.Optional(text) })); send(c.res, view(c).addGoal(p(c), b.description, b.parentId, b.creator), 201) })
   router.add('PATCH', '/v2/projects/:project/goals/:node', async c => view(c).updateGoal(p(c), c.params.node, await body(c.req, goalUpdateSchema)))
-  router.add('POST', '/v2/projects/:project/steps', async c => send(c.res, view(c).addStep(p(c), await body(c.req, stepSchema), maxSteps()), 201))
+  router.add('POST', '/v2/projects/:project/steps', async c => send(c.res, view(c).addStep(p(c), await body(c.req, stepSchema)), 201))
   router.add('PATCH', '/v2/projects/:project/steps/:node', async c => view(c).updateStep(p(c), c.params.node, await body(c.req, stepUpdateSchema)))
   router.add('POST', '/v2/projects/:project/facts', async c => {
     const b = await body(c.req, Type.Object({ title: Type.Optional(text), description: text, doc: Type.Optional(text), creator: Type.Optional(text), evidence: Type.Array(Type.Object({ description: text, path: Type.Optional(text), artifactId: Type.Optional(text), runId: Type.Optional(text), toolCallId: Type.Optional(text) })) }))
@@ -111,7 +111,7 @@ export function graphRoutes(router: Router, store: Store, maxSteps: () => number
     if (b.from.includes('goal')) throw new HttpError(400, 'goal cannot be used in from')
     if (b.worker && b.worker !== b.creator) throw new HttpError(400, 'worker must be null or equal to creator')
     const bootstrap = b.creator === 'dispatcher.bootstrap' && b.description === 'bootstrap' && b.from.length === 1 && b.from[0] === 'origin'
-    const result = view(c).transaction(() => { const s = view(c).addStep(p(c), { description: b.description, sourceIds: b.from, creator: b.creator, executionProfile: b.execution_profile, requires: b.requires, plugins: b.plugins, bootstrap }, maxSteps()); if (b.worker) view(c).claim(p(c), 'execute', { name: b.worker, backend: 'dsh' }, s.id); return intent(p(c), s.id) })
+    const result = view(c).transaction(() => { const s = view(c).addStep(p(c), { description: b.description, sourceIds: b.from, creator: b.creator, executionProfile: b.execution_profile, requires: b.requires, plugins: b.plugins, bootstrap }); if (b.worker) view(c).claim(p(c), 'execute', { name: b.worker, backend: 'dsh' }, s.id); return intent(p(c), s.id) })
     send(c.res, result, 201)
   })
   router.add('PATCH', '/projects/:project/intents/:node/execution-profile', async c => {

@@ -1,3 +1,4 @@
+import {domainFixtureRequest} from './domain-fixture.mjs'
 import assert from 'node:assert/strict'
 import {createServer} from 'node:http'
 import {mkdtempSync,rmSync} from 'node:fs'
@@ -22,7 +23,7 @@ const model=createServer(async(req,res)=>{
  try{
   let raw='';for await(const b of req)raw+=b
   if(!throttled){throttled=true;res.writeHead(429,{'Content-Type':'application/json'});res.end(JSON.stringify({error:{message:'429 fixture throttled'}}));return}
-  const input=JSON.parse(raw),boundary=input.messages.findLastIndex(m=>m.role==='user'&&(()=>{try{return !!JSON.parse(textOf(m)).instruction}catch{return false}})())
+  const input=domainFixtureRequest(JSON.parse(raw),res),boundary=input.messages.findLastIndex(m=>m.role==='user'&&(()=>{try{return !!JSON.parse(textOf(m)).instruction}catch{return false}})())
   const tools=input.messages.slice(boundary+1).flatMap(m=>m.tool_calls??[])
   let name,args
   if(!tools.length){rounds++;name='legion_read_changes';args={projectId:p.id}}

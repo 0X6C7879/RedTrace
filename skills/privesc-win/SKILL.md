@@ -23,8 +23,8 @@ description: "Windows local privilege escalation from a low-privilege shell to A
 
 读取当前 Step 契约、引用的 Fact 与已有证据文件，只按已验证通道和凭据继续；按当前链路只加载必要 reference。
 监听、权限或认证失败时核对反馈与前置条件，尝试授权范围内的有效替代路径；不等待操作者选择模块，也不伪造成功。
-将关键命令、输出和可复用进展保存到工作目录证据文件；关键突破及时 `submit_fact`。当前目标仍有可执行路径时自动继续，跨题调度交给 Commander，同题协作交给 General。
-Step 结束前必须提交至少一条有真实证据的汇总 Fact；无突破则汇总已验证失败、限制和阻塞，再调用 `finish_step({summary})`。可交付成果通过 `submit_finding` 引用 Fact。
+将关键命令、输出和可复用进展保存到工作目录证据文件；关键突破及时 `fgs_publish (action=fact)`。当前目标仍有可执行路径时自动继续，跨题调度交给 Commander，同题协作交给 General。
+Step 结束前必须提交至少一条有真实证据的汇总 Fact；无突破则汇总已验证失败、限制和阻塞，再调用 `finish_step({summary})`。可交付成果通过 `fgs_publish (action=finding)` 引用 Fact。
 
 ---
 ## 0. 成功条件与攻击强度

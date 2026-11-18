@@ -4,14 +4,14 @@ import { LegionStore } from './legion-store.ts'
 import { Store, ACTIVE_NODE_SQL } from './store.ts'
 import path from 'node:path'
 import { HttpError } from './types.ts'
-import type { EngineConfig, Goal, Run, RunStatus, Worker, Step } from './types.ts'
+import type { EngineConfig, Goal, Run, RunStatus, Worker, Step, TaskAssignment, GraphPlanner } from './types.ts'
 import type { Operations } from './operations.ts'
 
 export interface ExploreNotice { stepId: string; message: string; sourceIds?: string[] }
 export interface ExploreNoticeResult { ok: boolean; status: 'queued' | 'duplicate' | 'rejected' | 'failed'; reason?: string; notificationId?: string; stepId?: string; runId?: string; sessionId?: string }
 export interface TaskContext { store: Store; run: Run; worker: Worker; config: EngineConfig; signal: AbortSignal; operations?: Operations; currentMaxSteps?: () => number | null; featureAvailable?: (id: string) => boolean; taskPluginAllowed?: (id: string) => boolean; notifyExplore?: (notice: ExploreNotice) => ExploreNoticeResult }
 export type RunTask = (context: TaskContext) => Promise<void>
-export type SelectWorker = (worker: Worker, activity: Run['activity'], step?: Step) => Worker | undefined
+export type SelectWorker = (worker: Worker, activity: Run['activity'], step?: TaskAssignment) => Worker | undefined
 type Active = { run: Run; abort: AbortController; completion: Promise<void> }
 
 export class Scheduler {
@@ -33,18 +33,20 @@ export class Scheduler {
   get activeRuns() { return this.store.runsByStatus('running') }
   get commanderRunning() { return this.legion.campaigns().some(c=>c.status==='running') }
   wake() { if (this.closed || this.scheduled) return; this.scheduled = true; queueMicrotask(() => { this.scheduled = false; if (!this.closed) this.dispatch() }) }
-  private select(resume: Run | undefined, step: Step, active: Run[]) {
+  private select(resume: Run | undefined, step: TaskAssignment, active: Run[]) {
     const commands=[...this.legion.campaigns().filter(c=>c.status==='running'),...chatSlots(this.store)]
     const count = (name: string) => active.filter(r => r.worker === name).length+commands.filter(c=>c.workerName===name).length
-    return this.config.workers.map(w => this.selectWorker(w, 'execute', step)).filter((w): w is Worker => !!w && w.enabled && (!step.nextWorker || w.name===step.nextWorker) && !!w.roles?.includes(executionRole(this.store.project(step.projectId).mode, step.role)) && (!resume || w.name === resume.worker && w.backend === resume.backend) && count(w.name) < w.maxRunning)
+    return this.config.workers.map(w => this.selectWorker(w, step.role==='general'?'plan':'execute', step)).filter((w): w is Worker => !!w && w.enabled && (!step.nextWorker || w.name===step.nextWorker) && !!w.roles?.includes(executionRole(this.store.project(step.projectId).mode, step.role)) && (!resume || w.name === resume.worker && w.backend === resume.backend) && count(w.name) < w.maxRunning)
       .sort((a,b) => a.priority-b.priority || count(a.name)-count(b.name) || a.name.localeCompare(b.name))[0]
   }
   private dispatch() {
     if (this.maintenance) return
     for (const task of this.running.values()) {
       try {
-        const project = this.store.project(task.run.projectId), step = this.store.node<Step>(project.id, task.run.stepId!, 'step')
-        if (this.store.run(task.run.id).status !== 'running' || !(isReportStep(step) ? ['active','completed'].includes(project.status) : project.status === 'active') || ['cancelled','parked'].includes(step.status) || !isReportStep(step) && this.store.node<Goal>(project.id,step.goalId,'goal').status !== 'open') task.abort.abort('Project or Step stopped')
+        const project = this.store.project(task.run.projectId), step = this.store.assignment(task.run)!
+        const goal=this.store.node<Goal>(project.id,step.goalId,'goal'),accepted=step.status==='done'&&goal.status==='achieved'
+        // An accepting owner still holds its Run slot until the final tool result is recorded.
+        if (this.store.run(task.run.id).status !== 'running' || !(isReportStep(step)||accepted ? ['active','completed'].includes(project.status) : project.status === 'active') || ['cancelled','parked'].includes(step.status) || !isReportStep(step)&&!accepted&&goal.status!=='open') task.abort.abort('Project or Step stopped')
       } catch (error) { if (error instanceof HttpError && error.status===404) task.abort.abort('Project deleted'); else throw error }
     }
     const commands=[...this.legion.campaigns().filter(c=>c.status==='running'),...chatSlots(this.store)], commandSlots=commands.length, active = this.activeRuns, projects = this.store.projects().filter(p=>['active','completed'].includes(p.status))
@@ -55,18 +57,21 @@ export class Scheduler {
         const project=projects[(this.cursor+i)%projects.length]
         if(active.filter(r=>r.projectId===project.id).length+commands.filter(c=>c.projectId===project.id).length>=this.config.maxProjectWorkers)continue
         if(!active.some(r=>r.projectId===project.id)&&!commands.some(c=>c.projectId===project.id)&&new Set([...active.map(r=>r.projectId),...commands.filter(c=>c.projectId).map(c=>c.projectId)]).size>=this.config.maxRunningProjects)continue
-        if(project.mode==='general' && this.config.maxSteps!==null && active.filter(r=>r.projectId===project.id).length>=this.config.maxSteps)continue
         const questionLimit = this.config.maxBenchmarkTasks ?? null
         const activeQuestions = new Set(project.mode==='benchmark' && questionLimit!==null ? [...active.filter(r=>r.projectId===project.id), ...this.store.runsByStatus('unknown',project.id)].map(r=>r.graphId) : [])
         const steps=this.store.nodes<Step>(project.id,['step']).filter(s=>!s.deleted&&!s.replacementPending&&['pending','paused'].includes(s.status)&&(isReportStep(s)||project.status==='active'&&this.store.node<Goal>(project.id,s.goalId,'goal').status==='open')).sort((a,b)=>(project.mode==='benchmark' && questionLimit!==null && activeQuestions.size<questionLimit ? Number(activeQuestions.has(a.graphId))-Number(activeQuestions.has(b.graphId)) : 0)||b.priority-a.priority||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id))
-        for(const step of steps) {
+        const planners=this.store.projectGraphs(project.id).map(g=>g.planner).filter((p):p is GraphPlanner=>!!p&&['pending','paused'].includes(p.status)&&this.store.node<Goal>(project.id,p.goalId,'goal').status==='open')
+        const queue:TaskAssignment[]=[...planners,...steps]
+        for(const step of queue) {
           if(project.mode==='benchmark' && questionLimit!==null && !activeQuestions.has(step.graphId) && activeQuestions.size>=questionLimit)continue
-          if(!this.store.stepReady(step))continue
-          const readyAt=step.role==='general'?this.store.plannerWakeAt(step):step.retryAfter??0
+          if(step.role!=='general'&&!this.store.stepReady(step as Step))continue
+          const reserved=this.store.runs(project.id).some(r=>r.stepId===step.id&&r.activity==='execute'&&r.status==='paused')
+          if(step.role!=='general'&&!reserved&&this.store.planningCapacity(project.id,this.config.maxSteps,step.graphId??undefined).remainingSteps===0)continue
+          const readyAt=step.role==='general'?this.store.plannerWakeAt(step as GraphPlanner):step.retryAfter??0
           if(readyAt>Date.now()){nextWakeAt=Math.min(nextWakeAt,readyAt);continue}
-          const resume=step.status==='paused'?this.store.runsByStatus('paused',project.id).find(r=>r.stepId===step.id):undefined
+          const resume=step.status==='paused'?this.store.runsByStatus('paused',project.id).find(r=>step.role==='general'?r.activity==='plan'&&r.graphId===step.graphId:r.stepId===step.id):undefined
           const worker=this.select(resume,step,active);if(!worker)continue
-          const run=this.store.claim(project.id,'execute',worker,step.id);active.push(run);this.launch(run,worker);progress=true;break
+          const run=step.role==='general'?this.store.forGraph(project.id,step.graphId!).claim(project.id,'plan',worker):this.store.claim(project.id,'execute',worker,step.id);active.push(run);this.launch(run,worker);progress=true;break
         }
       }
       if(projects.length)this.cursor=(this.cursor+1)%projects.length
@@ -94,11 +99,12 @@ export class Scheduler {
         try {
           if (abort.signal.aborted) {
             const project = this.store.project(run.projectId)
-            status = error ? 'unknown' : (this.closed || project.status === 'stopped') && run.activity === 'execute' ? 'paused' : 'cancelled'
+            status = error ? 'unknown' : (this.closed || project.status === 'stopped') && ['execute','plan'].includes(run.activity) ? 'paused' : 'cancelled'
           }
           if (this.store.run(run.id).pendingTools.length) { status = 'unknown'; error = 'Activity stopped with an unconfirmed tool result; verify before retrying' }
           const completed=this.store.finishRun(run.id, status, error)
-          const step = this.store.node<Step>(run.projectId, run.stepId!, 'step')
+          const step = this.store.assignment(run) as Step
+          if(run.activity==='plan'){if(this.store.project(run.projectId).mode==='benchmark')this.legion.completeBenchmark(run.projectId);return}
           if(completed.status==='succeeded'&&step.role==='scout'&&step.scoutVerdict)this.legion.classify(run.projectId,step.taskKey!,step.scoutVerdict.difficulty,step.factIds,step.scoutVerdict.family)
           if (step.handoffPending && status==='cancelled' && this.store.project(run.projectId).status==='active') this.resumeHandoff(run.projectId,step)
           if(this.store.project(run.projectId).mode==='benchmark')this.legion.completeBenchmark(run.projectId)
@@ -110,12 +116,22 @@ export class Scheduler {
   }
   private resumeHandoff(projectId: string, step: Step) {
     const old=step.predecessorRunId?this.store.run(step.predecessorRunId):undefined
-    if(old&&!['running','unknown'].includes(old.status)&&!old.pendingTools.length&&this.store.planningCapacity(projectId,this.config.maxSteps,step.graphId??undefined).remainingSteps!==0)this.legion.completeHandoff(projectId,step.id)
+    if(old&&!['running','unknown'].includes(old.status)&&!old.pendingTools.length)this.legion.completeHandoff(projectId,step.id)
   }
   /** Sapper's dead-worker recovery, bounded per native Session; strategy stays with Commander. */
   watchdog() {
     if(this.closed||this.maintenance)return
     for(const project of this.store.projects().filter(p=>p.status==='active'))for(const step of this.store.nodes<Step>(project.id,['step']).filter(s=>s.status==='parked'&&s.handoffPending))this.resumeHandoff(project.id,step)
+    // The existing five-minute tactical threshold wakes a task Planner only once per idle interval.
+    for(const project of this.store.projects().filter(p=>p.mode==='benchmark'&&p.status==='active'))for(const graph of this.store.projectGraphs(project.id)) {
+      if(!graph.planner||graph.planner.status!=='pending')continue
+      for(const run of this.activeRuns.filter(r=>r.graphId===graph.id&&r.activity==='execute'&&!r.pendingTools.length)) {
+        const activity=this.store.db.prepare("SELECT MAX(json_extract(data,'$.timestamp')) AS at FROM audit_events WHERE run_id=? AND json_extract(data,'$.kind') IN ('tool.started','tool.completed','command.completed')").get(run.id)?.at
+        const last=String(activity??run.startedAt)
+        if(Date.now()-Date.parse(last)<5*60_000||this.store.db.prepare("SELECT 1 FROM events WHERE project_id=? AND graph_id=? AND type='planner.stalled' AND json_extract(data,'$.runId')=? AND created_at>=? LIMIT 1").get(project.id,graph.id,run.id,last))continue
+        this.store.transaction(()=>this.store.forGraph(project.id,graph.id).event(project.id,'planner.stalled',null,{runId:run.id,reason:'No tool activity for the existing tactical interval'}))
+      }
+    }
     for(const run of this.store.runsByStatus('failed')) {
       if(this.running.has(run.id)||!run.stepId||run.pendingTools.length||this.store.project(run.projectId).status!=='active')continue
       if(!['PROCESS_EXIT','UNKNOWN','SERVER','TIMEOUT','TRANSPORT','STREAM_CLOSED','EMPTY_RESPONSE','RATE_LIMIT'].includes(run.failureCode??''))continue

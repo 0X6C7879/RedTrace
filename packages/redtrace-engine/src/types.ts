@@ -1,5 +1,5 @@
 import type { FixedRole } from '../../redtrace-dsh/src/roles.ts'
-export type Activity = 'decide' | 'execute'
+export type Activity = 'decide' | 'execute' | 'plan'
 export type ProjectStatus = 'active' | 'stopped' | 'completed' | 'deleting'
 export type StepStatus = 'pending' | 'running' | 'paused' | 'parked' | 'blocked' | 'done' | 'cancelled'
 export type RunStatus = 'running' | 'paused' | 'succeeded' | 'failed' | 'unknown' | 'cancelled'
@@ -20,14 +20,24 @@ export interface ProjectGraph {
   id: string; projectId: string; type: 'main' | 'benchmark_task'; taskKey: string | null; title: string
   status: 'active' | 'completed'; originId: string; goalId: string; createdAt: string; updatedAt: string
   revision: number; factSeq: number; evidenceSeq: number; hintSeq: number; endedSeq: number
+  planner?: GraphPlanner
 }
+/** Graph-owned planning actor, never an FGS execution node. */
+export interface GraphPlanner {
+  id: string; projectId: string; graphId: string; role: 'general'; taskKey: string; description: string
+  goalId: string; sourceIds: string[]; executionProfile: 'direct' | 'isolated'; priority: number
+  status: StepStatus; handoff?: string; nextWorker?: string; retryAfter?: number | null; failureCount?: number
+  handoffRequest?: {summary:string;nextWorker?:string}
+  cursor: { delivered: number; acknowledged: number }; createdAt: string; legacyAssignments?: Step[]
+}
+export type TaskAssignment = Step | GraphPlanner
 export type LegionRole = Exclude<FixedRole, 'commander' | 'planner'> | 'reporter'
 export interface Evidence { path?: string; artifactId?: string; runId?: string; toolCallId?: string; description: string }
 export interface Specialist { name: string; responsibilities: string; capabilities: string[]; scope: string }
 export interface LegionAssignment {
   specialist?: Specialist
   reportFindingId?: string
-  role?: LegionRole; taskKey?: string; parentStepId?: string
+  role?: LegionRole; taskKey?: string; parentStepId?: string; plannerId?: string
   parkReason?: string; resumeCondition?: string
   predecessorRunId?: string; handoff?: string; handoffPending?: boolean; nextWorker?: string
   handoffRequest?: { summary: string; nextWorker?: string }
@@ -60,6 +70,7 @@ export interface Run {
   planningCriticalSeq?: number
   planningEvidenceSeq?: number; processedEvidenceSeq?: number; deliveredEvidenceSeq?: number; boundStepVersion?: number
   planningHintSeq?: number; processedHintSeq?: number; deliveredHintSeq?: number
+  processedGraphCursor?: number
   deliveredGraphCursor?: number
   inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number
   failureCode?: string; heartbeatAt?: string; trigger?: string

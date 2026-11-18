@@ -1,3 +1,4 @@
+import {scoutedSpawn} from './scout-fixture.ts'
 import assert from 'node:assert/strict'
 import {test} from 'node:test'
 import type {Project,Worker,Goal} from '../src/types.ts'
@@ -18,7 +19,7 @@ test('three Benchmark Graphs isolate nodes, references, Run, events and completi
  const s=new Store(':memory:');try{const p=create(s,'Benchmark','benchmark'),legion=new LegionStore(s,p.id)
  const graphs=['A','B','C'].map(taskKey=>s.createGraph(p.id,{taskKey,title:taskKey,origin:'Local '+taskKey,goal:'Verify '+taskKey}))
  assert.equal(s.projectGraphs(p.id).length,3);assert.equal(new Set(graphs.map(g=>g.originId)).size,3);assert.equal(new Set(graphs.map(g=>g.goalId)).size,3)
- const runs=graphs.map(g=>{const v=s.forGraph(p.id,g.id),step=legion.spawn(p.id,{graphId:g.id,taskKey:g.taskKey!,role:'scout',description:'observe',sourceIds:[g.originId]});const run=v.claim(p.id,'execute',worker,step.id);const fact=v.addFact(p.id,'observed '+g.taskKey,{runId:run.id,evidence:[{description:'local fixture observation'}]});v.addFinding(p.id,{title:'result',description:'result',factIds:[fact.id],runId:run.id});v.finishRun(run.id,'succeeded');return{run,fact,step}})
+ const runs=graphs.map(g=>{const v=s.forGraph(p.id,g.id),step=scoutedSpawn(legion,p.id,{graphId:g.id,taskKey:g.taskKey!,role:'scout',description:'observe',sourceIds:[g.originId]});const run=v.claim(p.id,'execute',worker,step.id);const fact=v.addFact(p.id,'observed '+g.taskKey,{runId:run.id,evidence:[{description:'local fixture observation'}]});v.addFinding(p.id,{title:'result',description:'result',factIds:[fact.id],runId:run.id});v.finishRun(run.id,'succeeded');return{run,fact,step}})
  const a=s.forGraph(p.id,graphs[0].id),b=s.forGraph(p.id,graphs[1].id)
  const manualA=a.addFact(p.id,'manual A'),manualB=b.addFact(p.id,'manual B');assert.throws(()=>a.node(p.id,manualB.id),/another Graph/);assert.equal(a.node(p.id,manualA.id).id,manualA.id)
  assert.equal(a.graph(p.id).facts.length,3);assert.equal(a.nodes(p.id,['finding']).length,1)
@@ -43,9 +44,9 @@ test('General directly funds Soldier or General without Scout classification; sc
 
 test('Benchmark classification, same-Graph squads and durable HELP/REPORT preserve existing role rules',()=>{
  const s=new Store(':memory:');try{const p=create(s,'Benchmark roles','benchmark'),l=new LegionStore(s,p.id),graphs=['easy','hard'].map(taskKey=>s.createGraph(p.id,{taskKey,title:taskKey,origin:'local',goal:'verify'}))
- const first=l.spawn(p.id,{role:'soldier',taskKey:'easy',description:'initial independent exploration',sourceIds:[graphs[0].originId]});assert.equal(first.role,'soldier');s.updateStep(p.id,first.id,{status:'cancelled'})
+ assert.throws(()=>l.spawn(p.id,{role:'soldier',taskKey:'easy',description:'initial independent exploration',sourceIds:[graphs[0].originId]}),/Scout/)
  const facts=graphs.map((g,i)=>{const step=l.spawn(p.id,{role:'scout',taskKey:g.taskKey!,description:'observe',sourceIds:[g.originId]}),run=s.claim(p.id,'execute',worker,step.id),fact=s.addFact(p.id,'observed',{runId:run.id});s.finishRun(run.id,'succeeded');l.classify(p.id,g.taskKey!,i?'hard':'easy',[fact.id]);return fact})
- const soldier=l.spawn(p.id,{role:'soldier',taskKey:'easy',description:'solve easy',sourceIds:[facts[0].id]}),general=l.spawn(p.id,{role:'general',taskKey:'hard',description:'solve hard',sourceIds:[facts[1].id]}),a=s.claim(p.id,'execute',worker,soldier.id),b=s.claim(p.id,'execute',worker,general.id)
+ const soldier=l.spawn(p.id,{role:'soldier',taskKey:'easy',description:'solve easy',sourceIds:[facts[0].id]}),general=l.spawn(p.id,{role:'general',taskKey:'hard',description:'solve hard',sourceIds:[facts[1].id]}),a=s.claim(p.id,'execute',worker,soldier.id),b=s.forGraph(p.id,general.graphId!).claim(p.id,'plan',worker)
  const squads=['soldier','scout'].map(role=>l.spawn(p.id,{role:role as 'soldier'|'scout',taskKey:'hard',description:'specialist',sourceIds:[facts[1].id],parentRunId:b.id}))
  assert(squads.every(step=>step.graphId===general.graphId));assert.equal(l.spawn(p.id,{role:'soldier',taskKey:'hard',description:'third',sourceIds:[facts[1].id],parentRunId:b.id}).graphId,general.graphId)
  assert.throws(()=>l.spawn(p.id,{role:'soldier',taskKey:'easy',description:'cross',sourceIds:[facts[0].id],parentRunId:b.id}),/same-task/)

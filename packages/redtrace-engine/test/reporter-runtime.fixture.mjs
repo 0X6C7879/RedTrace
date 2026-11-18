@@ -1,3 +1,4 @@
+import {domainFixtureRequest} from './domain-fixture.mjs'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
@@ -24,7 +25,7 @@ const model = createServer(async (req, res) => {
   pending.add(res); res.on('close', () => pending.delete(res))
   try {
     let raw = ''; for await (const bytes of req) raw += bytes
-    const b = JSON.parse(raw), names = (b.tools ?? []).map(t => t.function.name), system = b.messages.filter(m => m.role === 'system').map(m => m.content).join('\n')
+    const b = domainFixtureRequest(JSON.parse(raw),res), names = (b.tools ?? []).map(t => t.function.name), system = b.messages.filter(m => m.role === 'system').map(m => m.content).join('\n')
     const calls = b.messages.flatMap(m => m.tool_calls ?? []), toolOutputs = b.messages.filter(m => m.role === 'tool').map(m => ({ call: calls.find(c => c.id === m.tool_call_id), value: output(m) }))
     const graph = await (await fetch(api+'/v2/projects/'+projectId)).json()
     const reporter = system.includes('漏洞报告撰写 agent')

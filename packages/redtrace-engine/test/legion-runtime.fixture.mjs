@@ -1,3 +1,4 @@
+import {domainFixtureRequest} from './domain-fixture.mjs'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
@@ -24,8 +25,8 @@ const model = createServer(async (req, res) => {
   pending.add(res); res.on('close', () => pending.delete(res))
   try {
     let raw = ''; for await (const chunk of req) raw += chunk
-    const b = JSON.parse(raw), names = (b.tools ?? []).map(t => t.function.name)
-    if(names.includes('legion_roster')){const live=await(await fetch(api+'/console/tools')).json();assert(!names.includes('legion_board'));assert(live.tools.some(t=>t.name==='legion_roster'&&t.roles.includes('planner')));assert(live.runs.some(r=>r.visibleSchemas===names.length),'Run visible count must match the actual provider Tool Schema list');liveSchemaChecked=true}
+    const b = domainFixtureRequest(JSON.parse(raw),res), names = (b.tools ?? []).map(t => t.function.name)
+    if(names.includes('legion_roster')){const live=await(await fetch(api+'/console/tools')).json();assert(!names.includes('legion_board'));assert(live.tools.some(t=>t.name==='legion_inspect'&&t.roles.includes('planner')));assert(live.runs.some(r=>r.visibleSchemas===b.wireTools.length),'Run visible count must match the actual provider Tool Schema list');liveSchemaChecked=true}
     requests.push(b)
     const system = b.messages.filter(m => m.role === 'system').map(m => m.content).join('\n')
     const role = ['PLANNER','WORKER'].find(role => system.includes('You are ' + role))
@@ -89,7 +90,7 @@ try {
   while(Date.now()<acceptedDeadline){const board=await call('/v2/legion?projectId='+projectId);if(board.campaign.status==='stopped')throw Error(JSON.stringify(board.campaign));if(board.projects[0]?.status==='completed'&&board.campaign.status==='idle')break;await delay(20)}
   const inventory=await call('/console/tools')
   assert(liveSchemaChecked,'Model and UI both observe the active Commander registry')
-  assert(inventory.tools.some(t=>t.name==='legion_roster'&&t.scopes.length===0),'Real Schema stays listed after session disposal without retaining the disposed scope')
+  assert(inventory.tools.some(t=>t.name==='legion_inspect'&&t.scopes.length===0),'Real Schema stays listed after session disposal without retaining the disposed scope')
   const result=(await call('/v2/legion?projectId='+projectId)).campaign
   assert.equal(result.status,'idle');assert.ok(result.state.includes('Fixture accepted'))
   const g=await call('/v2/projects/'+projectId), runs=await call('/v2/projects/'+projectId+'/runs')
@@ -127,7 +128,7 @@ try {
     assert.equal(store.run(runs[0].id).pendingTools.length,0)
     const campaign=JSON.parse(store.db.prepare('SELECT data FROM project_campaigns WHERE project_id=?').get(projectId).data)
     assert.ok(campaign.cursors[projectId].acknowledged>0)
-    console.log('RUN_VISIBLE_SCHEMAS='+JSON.stringify(Object.fromEntries(['PLANNER','WORKER'].map(role=>[role,[...new Set(requests.filter(b=>b.messages.some(m=>m.role==='system'&&String(m.content).includes('You are '+role))).map(b=>b.tools.length))]]))));
+    console.log('RUN_VISIBLE_SCHEMAS='+JSON.stringify(Object.fromEntries(['PLANNER','WORKER'].map(role=>[role,[...new Set(requests.filter(b=>b.messages.some(m=>m.role==='system'&&String(m.content).includes('You are '+role))).map(b=>b.wireTools?.length??b.tools.length))]]))));
   console.log('LEGION_RUNTIME_SUPPORTED=true; roles=Planner,Worker; specialist_workers=0; worker_has_no_plan_tools=true; serial_dependencies=true; shared_fgs=true; commander_acceptance=true; native_message_admission=true; state_and_cursor_persisted=true; commander_native_resume=true; help_reply_admitted=true; model=local-protocol-fixture; commander_native_log_read=true')
   } finally { store.close() }
 } catch (error) {

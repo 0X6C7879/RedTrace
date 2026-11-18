@@ -55,7 +55,7 @@ test('conversation token rows reflect selected task roles and cannot leak Comman
 
 test('native Commander patrol requests remain bounded while one Session retains complete raw tool audit',{timeout:40000},async()=>{
  const {execFile}=await import('node:child_process'),{promisify}=await import('node:util')
- const {stdout}=await promisify(execFile)(process.execPath,[new URL('./commander-patrol-boundary.fixture.mjs',import.meta.url).pathname],{timeout:30000,maxBuffer:1024*1024})
+ const {stdout}=await promisify(execFile)(process.execPath,[new URL('./commander-patrol-boundary.fixture.mjs',import.meta.url).pathname],{timeout:30000,maxBuffer:1024*1024,env:{...process.env,REDTRACE_LEGACY_STATE_PROBE:'1'}})
  const result=JSON.parse(stdout.trim().split('\n').at(-1)!);assert(result.native);assert.equal(result.requests,16);assert.equal(result.rawToolCalls,16);console.log(JSON.stringify(result))
 })
 

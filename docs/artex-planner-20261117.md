@@ -1,5 +1,8 @@
 # 题目级 ARTEX Planner 迁移
 
+> 当前契约（2026-11-18）覆盖下文历史记录：新 Benchmark 题目先完成 Scout 侦察与分类，再调度 Soldier 或 General；Commander 仅管理全局状态/资源、只读平台清单，不启停实例、不提交 flag、不读取原始攻击证据。REA 已迁为 CLI-only（0 MCP Schema）。工具目录每工具一行，保留角色 Schema 变体。详见 `OPTIMIZATION-REPORT.md` 和 `docs/rea-integration.md`。
+
+
 ## 参考与适配
 
 核对 ARTEX 提交 `6997a4661921395072290becc50380db8dacb04e`：

@@ -1,3 +1,5 @@
+import { domainTools, originalTool, rewriteToolNames } from '../../redtrace-dsh/lib/tool-domains.js'
+import { toolAllowed } from '../src/console-api.ts'
 import { closeRunHttpSessions } from '../src/http-tools.ts'
 import { executionRole, coordinatorRole, isReportStep } from '../../redtrace-dsh/lib/roles.js'
 import { runtimeCatalog, mountToolSettings, mountMcpRoleTools, platformToolOptions, mountSystemLogs } from './console.mjs'
@@ -13,7 +15,7 @@ import { mkdir, realpath } from 'node:fs/promises'
 import { watch, realpathSync } from 'node:fs'
 import { createEngine } from '../src/index.ts'
 import { createPlanGuard } from '../src/plan-guard.ts'
-import { TASK_PLANNING_TOOLS, taskTodoOwner } from '../src/legion-todos.ts'
+import { TASK_PLANNING_TOOLS, taskTodoOwner, taskTodoPlanner } from '../src/legion-todos.ts'
 import { legionTools } from '../src/legion-tools.ts'
 import { taskPlanningContext, efficiencyToolAvailable, graphTools, activityPrompt, activityLimits, graphUpdate, livePlan, launchContext, runMock } from '../src/runner.ts'
 import { verbTools, verbToolAvailable, channelsFor, resourceTools } from '../src/capability-verbs.ts'
@@ -227,9 +229,9 @@ export async function apply(ctx, options) {
   async function executeDsh(context) {
     await refresh()
     const { store, run, config, signal, worker } = context, shared = state()
-    if (run.activity !== 'execute') throw new Error('Independent Reason execution was removed')
+    if (!['execute','plan'].includes(run.activity)) throw new Error('Independent Reason execution was removed')
     if (!shared) throw new Error('Cordis domain service is unavailable')
-    const step = run.stepId ? store.node(run.projectId, run.stepId, 'step') : undefined
+    const step = store.assignment(run)
     const reporting = isReportStep(step), planning = step?.role === 'general'
     const task = { usage: { inputTokens: run.inputTokens, outputTokens: run.outputTokens, cacheReadTokens: run.cacheReadTokens, cacheWriteTokens: run.cacheWriteTokens }, type: executionRole(store.project(run.projectId).mode,step?.role), projectId: run.projectId, intentId: run.stepId ?? undefined,
       worker: worker.name, sessionId: run.id, runId: run.id, committed: false, notificationEpoch: randomUUID(), server: options.server, startedAt: Date.now(), executionProfile: step?.executionProfile ?? 'direct' }
@@ -273,9 +275,9 @@ export async function apply(ctx, options) {
         scoped.on('session/event', (session, event) => { if (String(session.id) === run.id && event.type === 'step/start') planGuard.beginTurn() })
         scoped.on('tools/result', exec => { if (!exec.parent) planGuard.settled(String(exec.rootCallId)) })
         // Native spill reads retain the existing archived-evidence recovery allowance.
-        scoped.tools.guard(exec => planGuard.check({ name: exec.name === 'read' && ownSpillRead(exec) === undefined ? 'evidence_read' : exec.name, rootCallId: String(exec.rootCallId) }))
+        scoped.tools.guard(exec => planGuard.check({ name: exec.name === 'read' && ownSpillRead(exec) === undefined ? 'evidence_read' : exec.name, rootCallId: String(exec.rootCallId),arguments:exec.arguments }))
       }
-      if (store.project(run.projectId).mode === 'benchmark') scoped.systemPrompt.context({ name: 'redtrace:task-planning', order: 3, required: true, interpolate: false, text: () => JSON.stringify(taskPlanningContext(store, step)) })
+      if (store.project(run.projectId).mode === 'benchmark') scoped.systemPrompt.context({ name: 'redtrace:task-planning', order: 3, required: true, interpolate: false, text: () => {const planner=taskTodoPlanner(step,store);return JSON.stringify({taskPlanner:planner?{id:planner.id,role:planner.role}:null})} })
       scoped.systemPrompt.context({ name: 'redtrace:live-plan', order: 2, required: true, interpolate: false,
         text: () => livePlan(store, run.id) })
       // The DSH tools runtime projects parameters as lossless JSON; the graph
@@ -285,25 +287,33 @@ export async function apply(ctx, options) {
         output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => value.content },
         async execute(args, execution) {
           if (finished || signal.aborted) throw new Error('Activity has stopped')
-          const { Check } = await import('typebox/value')
-          if (!Check(t.parameters, args)) throw new Error('Invalid tool arguments')
+          const { Check, Errors } = await import('typebox/value')
+          if (!Check(t.parameters, args)) throw new Error('Invalid tool arguments for '+t.name+': '+JSON.stringify([...Errors(t.parameters,args)].slice(0,6).map(e=>({path:e.instancePath,message:e.message}))))
           const result = await admitToolImages(ctx.get('attachments'), await t.execute(execution.callId ?? '', args, execution.signal))
           if (result.isError) throw new HarnessError(result.content.filter(block => block.type === 'text').map(block => block.text).join('\n'), result.details?.context?.code ?? 'REDTRACE_TOOL_ERROR')
           if (result.terminate) execution.concludeTurn?.()
           return result
         } }, platformToolOptions(engine, t.name, task.type))
-      const taskPlanning = store.project(run.projectId).mode === 'benchmark'
-      for (const t of [...tools.filter(t => !/^(?:knowledge_|http_)/.test(t.name) && !(taskPlanning && TASK_PLANNING_TOOLS.has(t.name))), ...(!reporting && !planning ? resourceTools(context, verbRuntime) : [])]) registerTool(t)
       const liveVerbs = !reporting && !planning ? verbTools(context, verbRuntime, step) : []
-      const refreshEfficiencyTools = refreshToolRegistrations(tools.filter(t => /^(?:knowledge_|http_)/.test(t.name)), t => efficiencyToolAvailable(context, t.name), registerTool)
-      const refreshVerbTools = refreshToolRegistrations(liveVerbs, t => verbToolAvailable(verbRuntime, t.name), registerTool)
-      const refreshPlanningTools = taskPlanning && !reporting ? refreshTaskPlanningTools(store, step, () => legionTools(store, run.id, run.projectId, (context.currentMaxSteps ? context.currentMaxSteps() : config.maxSteps), finishActivity, config, undefined, () => engine.configuration.resolvedSnapshot().config), registerTool) : () => {}
-      scoped.on('agent/request', (_request, next) => { refreshLiveTools(); return next() })
+      const resources = !reporting && !planning ? resourceTools(context,verbRuntime) : []
+      let registrations=[],signature=''
       refreshLiveTools = () => {
-        refreshPlanningTools()
-        refreshVerbTools()
-        refreshEfficiencyTools()
+        const raw=engine.configuration.resolvedSnapshot().raw
+        const owner=!!step&&taskTodoOwner(step,store)
+        const key=JSON.stringify([raw.tool_settings,owner,manager.list().map(p=>[p.id,p.status])])
+        if(key===signature)return
+        for(const dispose of registrations)dispose()
+        const fresh=graphTools(context,finishActivity)
+        const allowed=name=>toolAllowed(engine.configuration.resolvedSnapshot().raw.tool_settings,name,task.type)&&efficiencyToolAvailable(context,name)&&verbToolAvailable(verbRuntime,name)
+        const domains=domainTools([...fresh,...resources,...liveVerbs],allowed)
+        registrations=domains.map(t=>registerTool({...t,execute:(id,args,signal)=>{
+          const original=originalTool(t.name,args.action)
+          if(!toolAllowed(engine.configuration.resolvedSnapshot().raw.tool_settings,t.name,task.type)||original&&!allowed(original))throw new Error('Tool action is disabled')
+          return t.execute(id,args,signal)
+        }}))
+        signature=key
       }
+      scoped.on('agent/request', (_request, next) => { refreshLiveTools(); return next() })
       refreshLiveTools()
       scoped.tools.guard(exec => !verbToolAvailable(verbRuntime, exec.name) ? 'Capability adapter is disabled' : undefined)
     }
@@ -338,6 +348,7 @@ export async function apply(ctx, options) {
     let cursor = store.run(run.id).deliveredGraphCursor ?? 0
     const steer = projectId => {
       if (projectId !== run.projectId || finished || concludeOnly || signal.aborted || !handle) return
+      if(planning)return
       const update = graphUpdate(store, projectId, cursor, run.stepId, run.id, manager.running('redtrace-critical-events'))
       queueGraphNotice(handle.agent, update, message)
       cursor = update.cursor
@@ -364,9 +375,9 @@ export async function apply(ctx, options) {
       if(task.failure&&!signal.aborted)throw task.failure
       if (!finished && !task.committed && !signal.aborted) {
         task.concludeOnly = concludeOnly = true
-        prompt(planning ? '结束本轮规划：检查新 Fact、Worker Trace 和 Output，保持未获证据的 Todo 未完成，保存 STATE 并调用 legion_plan_done；不要等待 Worker，不要伪造 Fact。' : reporting ? '已进入超时收尾。只根据已读取的真实证据完成本漏洞报告，缺失内容明确标注未提供或未验证，调用 update_finding_report 保存；不得重新探测或伪造证据。' : run.activity === 'execute'
+        prompt(rewriteToolNames(planning ? '结束本轮规划：检查新 Fact、Worker Trace 和 Output，保持未获证据的 Todo 未完成，保存 STATE 并调用 legion_plan_done；不要等待 Worker，不要伪造 Fact。' : reporting ? '已进入超时收尾。只根据已读取的真实证据完成本漏洞报告，缺失内容明确标注未提供或未验证，调用 update_finding_report 保存；不得重新探测或伪造证据。' : run.activity === 'execute'
           ? '已进入超时收尾，必须调用 submit_fact 提交至少一条已有证据支持的汇总结论，再调用 finish_step。题目未解决时保留容器；没有成功成果时只提交有真实测试证据的否定结论，明确对象、方法、范围和观察结果；API、工具或执行故障不是攻击失败，没有证据时不得伪造 Fact，由系统按执行故障结算。'
-          : '仅处理已交付的证据并调用 finish_decide，不再执行外部操作。')
+          : '仅处理已交付的证据并调用 finish_decide，不再执行外部操作。'))
         await wait(limits.concludeTimeout)
       }
       if (!finished && !task.committed && !signal.aborted) { const current=store.run(run.id);current.failureCode=concludeOnly?'TIMEOUT':'PROCESS_EXIT';store.saveRun(current);throw new Error(concludeOnly ? 'Activity ended without a structured completion' : 'Agent execution failed') }

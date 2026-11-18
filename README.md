@@ -8,7 +8,7 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 
 ## 核心能力
 
-- **原生逆向插件**：执行 Worker 按需加载 REA 官方 Skill 与原生 MCP；管理端停用会撤销活跃工具并清理分析进程，保留已保存证据。Commander 不获取分析工具。见 [REA 集成说明](docs/rea-integration.md)。
+- **原生逆向插件**：执行 Worker 按需加载 REA Skill 并通过原生 Shell 使用 CLI；不注册 REA MCP 工具。管理端停用撤销 Skill，不取消 Step。Commander / 纯 Planner 不获取分析能力。见 [REA 集成说明](docs/rea-integration.md)。
 
 - **Project Commander 闭环**：Benchmark Commander / General Planner 各自拥有项目 Session / STATE / Board / 收件箱；多个项目协调者 与 Worker 共享原有容量并发运行，按所属项目事件唤醒。
 - **双模式 FGS**：General 项目一张主图，Benchmark 每题一张独立图；`Fact` 保存有来源的事实，`Goal` 保存完成条件和子目标，`Step` 保存行动与状态，`Finding` 保存可交付成果。`Hint` 与 `Observation` 保持人工输入和中间记录语义。

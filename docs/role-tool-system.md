@@ -1,5 +1,8 @@
 # 模式角色、工具绑定与调用统计
 
+> 当前契约（2026-11-18）覆盖下文历史记录：新 Benchmark 题目先完成 Scout 侦察与分类，再调度 Soldier 或 General；Commander 仅管理全局状态/资源、只读平台清单，不启停实例、不提交 flag、不读取原始攻击证据。REA 已迁为 CLI-only（0 MCP Schema）。工具目录每工具一行，保留角色 Schema 变体。详见 `OPTIMIZATION-REPORT.md` 和 `docs/rea-integration.md`。
+
+
 ## 身份与执行
 
 `Project.mode` 选择固定身份。共同定义位于 `packages/redtrace-dsh/src/roles.ts`，Engine 配置、Worker 调度、Mission、模板、实际工具注册和调用入口使用这份定义，不用 `角色:模式` 字符串。

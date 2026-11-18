@@ -1,5 +1,8 @@
 # 双模式工作台重构（2026-11-15）
 
+> 当前契约（2026-11-18）覆盖下文历史记录：新 Benchmark 题目先完成 Scout 侦察与分类，再调度 Soldier 或 General；Commander 仅管理全局状态/资源、只读平台清单，不启停实例、不提交 flag、不读取原始攻击证据。REA 已迁为 CLI-only（0 MCP Schema）。工具目录每工具一行，保留角色 Schema 变体。详见 `OPTIMIZATION-REPORT.md` 和 `docs/rea-integration.md`。
+
+
 ## 架构
 - 保留每 Project Commander、Project.mode、Graph、Scheduler、Worker、FGS 和唯一 DSH Harness。
 - Benchmark：独立题目图，首派 Soldier；可选 Scout，不再强制分类门槛。题目规划者接管阶段计划和 Goal 证据验收，General 增援时继承原列表。Commander 保持常驻原生会话和原有 60/90 秒巡检。

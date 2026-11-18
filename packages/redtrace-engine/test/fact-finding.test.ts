@@ -13,6 +13,7 @@ import type { EngineConfig, Fact, Finding, Step } from '../src/types.ts'
 import { serveEngine } from '../src/index.ts'
 import vm from 'node:vm'
 import { isUtf8 } from 'node:buffer'
+import { createHash } from 'node:crypto'
 
 const worker = { name: 'fixture', provider: 'mock', model: 'fixture', enabled: true, maxRunning: 4, priority: 0, backend: 'mock' as const, roles: ['soldier' as const] }
 function fixture(t: test.TestContext) {
@@ -51,6 +52,25 @@ test('Fact stores title/summary plus immutable external doc, file bytes and prod
   const delta = await call('read_graph_delta', { after: 0 })
   assert.equal(delta.nodes.find((n: any) => n.id === fact.id).description, undefined)
   assert.equal(new ProjectEvidence(store, root).promoteFacts(project.id).factsReady, true)
+})
+
+test('Fact promotes native HTTP evidence IDs and Run-local tool spills without losing Graph isolation', async t => {
+  const { root, store, project, config } = fixture(t)
+  const step=store.addStep(project.id,{description:'retain HTTP output',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id)
+  run.workspaceRoot=path.join(root,project.id,'agents',run.id);store.saveRun(run)
+  const bytes=Buffer.from('{"response":{"status":200,"bodyBase64":"cHJvb2Y="}}'),id='ev-'+createHash('sha256').update(bytes).digest('hex')
+  const directory=path.join(run.workspaceRoot,'.redtrace-output','evidence',run.id);mkdirSync(directory,{recursive:true})
+  const file=path.join(directory,id+'.json');writeFileSync(file,bytes)
+  const publish=graphTools({store,run,worker,config,signal:new AbortController().signal},()=>{}).find(t=>t.name==='submit_fact')!
+  const fact=(await publish.execute('',{title:'HTTP proof',description:'observed response',evidence:[{description:'HTTP record',path:file,artifactId:id}]})).details as Fact
+  assert.equal(fact.evidence[0].artifactId,'artifact-'+id.slice(3))
+  assert.equal(new ProjectEvidence(store,root).read(project.id,fact.evidence[0].artifactId!).content,bytes.toString())
+  writeFileSync(file,'tampered')
+  await assert.rejects(publish.execute('',{title:'bad proof',description:'bad',evidence:[{description:'tampered HTTP record',path:file,artifactId:id}]}),/hash mismatch/)
+  writeFileSync(file,bytes)
+  store.audit({id:run.id,project_id:project.id,graph_id:run.graphId!},[{kind:'tool.completed',call_id:'http-call',content:JSON.stringify({evidence:{id,file}})}])
+  store.addFact(project.id,'Audit-backed HTTP proof',{runId:run.id,evidence:[{description:'original HTTP call',runId:run.id,toolCallId:'http-call'}]})
+  assert.equal(new ProjectEvidence(store,root).promoteFacts(project.id).factsReady,true)
 })
 
 test('many-to-many Finding folding preserves raw Facts, active dependencies and SQL pagination', async t => {

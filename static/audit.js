@@ -573,7 +573,7 @@ function auditPage() {
     },
 
     toolTitle(event) {
-      if (event?.title) return event.title;
+      if (event?.title) {let args=event.arguments;try{if(typeof args==='string')args=JSON.parse(args)}catch{}return event.title+(typeof args?.action==='string'?' · '+args.action:'')}
       // Completions recorded before titles traveled on tool.completed can
       // still recover the tool name from their paired tool.started event.
       if (event?.kind !== 'tool.completed' || !event?.call_id) return '';
@@ -819,13 +819,13 @@ function runtimeLog() {
   return {
     ...auditPage(),
     init(){mountConsoleTemplate(this.$el,'runtime-log-events')},
-    runtimeScope:'',runtimeTail:'',
+    runtimeScope:'',runtimeTail:'',showRuntimeContext:false,
     setRuntimeEvents(events,runs,scope,projectId='',graphId=''){
       const scroller=this.$el?.closest('.wb-messages,.fgs-runtime-log'),changed=this.runtimeScope!==scope;
       const follow=changed||scroller&&scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<48,tail=events.at(-1)?.key||events.at(-1)?.event_uid||events.at(-1)?.id||'';
       const tailContent=events.at(-1)?.content||'';
       if(changed){this.runtimeScope=scope;this.selectedRun='all';this.selectedProvider='all';this._openThinking={};this.auditEvidence=null}
-      this.selectedTaskId=projectId;this.auditGraphId=graphId;this.events=events;this.runs=runs;this.renderWindow=events.length;this.reindexEvents();
+      this.selectedTaskId=projectId;this.auditGraphId=graphId;this.events=events.filter(e=>this.showRuntimeContext||!['session.context','system.prompt'].includes(e.kind));this.runs=runs;this.renderWindow=this.events.length;this.reindexEvents();
       if(scroller&&follow&&(changed||tail!==this.runtimeTail||tailContent!==this.runtimeTailContent))this.$nextTick(()=>{scroller.scrollTop=scroller.scrollHeight});this.runtimeTail=tail;this.runtimeTailContent=tailContent;
     },
     runtimeRoles(){return [...new Set(this.events.map(e=>this.eventAgent(e)))].filter(Boolean)},

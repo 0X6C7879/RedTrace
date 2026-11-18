@@ -6,6 +6,8 @@
  * @module redtrace-api-utils
  */
 
+import { domainTools } from './tool-domains.js'
+import { load } from './loader.js'
 import type { Json, RuntimeTask, TaskType } from './types.js'
 import { state } from './state.js'
 
@@ -111,4 +113,14 @@ export async function query(
 
 export function serverOf(task: RuntimeTask): string {
   return task.server ?? runtimeValue('REDTRACE_SERVER')
+}
+
+export function registerDomain(ctx:ToolContext, definitions:Omit<ToolDefinition,'output'>[], enabled?:(name:string)=>boolean) {
+  const actions=definitions.map(definition=>({...definition,async execute(args:Record<string,Json>,execution:ToolExecution){
+    const {validateJsonSchemaValue}=await load('vendor/deepseek-harness/packages/core/tools/lib/index.js')
+    const errors=validateJsonSchemaValue({...definition.parameters,additionalProperties:false},args,'arguments')
+    if(errors.length)throw new Error(errors.join('; '))
+    return definition.execute(args,execution)
+  }}))
+  for(const tool of domainTools(actions,enabled))register(ctx,tool,enabled)
 }
