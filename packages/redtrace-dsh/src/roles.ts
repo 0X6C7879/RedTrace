@@ -1,9 +1,9 @@
 /** Fixed identities are disjoint; Project.mode selects the vocabulary, not a role suffix. */
 export const MODE_ROLES = {
-  benchmark: ['commander', 'general', 'soldier', 'scout'],
+  benchmark: ['commander', 'general', 'soldier'],
   general: ['planner', 'worker'],
 } as const
-export const LEGACY_GENERAL_ROLES: Record<string, 'planner'|'worker'> = {commander:'planner',general:'worker',soldier:'worker',scout:'worker',reporter:'worker',leader:'worker',operator:'worker'}
+export const LEGACY_GENERAL_ROLES: Record<string, 'planner'|'worker'> = {commander:'planner',general:'worker',soldier:'worker',reporter:'worker',leader:'worker',operator:'worker'}
 export type ProjectMode = keyof typeof MODE_ROLES
 export type FixedRole = (typeof MODE_ROLES)[ProjectMode][number]
 export const FIXED_ROLES: FixedRole[] = [...MODE_ROLES.benchmark, ...MODE_ROLES.general]

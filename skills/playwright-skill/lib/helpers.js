@@ -5,14 +5,17 @@ const path = require('node:path');
 const { chromium, firefox, webkit } = require('playwright');
 
 function getExtraHeadersFromEnv() {
+  // The parent environment may be shared; cookies belong to the BrowserContext.
   const name = process.env.PW_HEADER_NAME;
   const value = process.env.PW_HEADER_VALUE;
-  if (name && value) return { [name]: value };
+  if (name && value) return name.toLowerCase() === 'cookie' ? null : { [name]: value };
 
   if (!process.env.PW_EXTRA_HEADERS) return null;
   try {
     const headers = JSON.parse(process.env.PW_EXTRA_HEADERS);
-    if (headers && typeof headers === 'object' && !Array.isArray(headers)) return headers;
+    if (headers && typeof headers === 'object' && !Array.isArray(headers)) {
+      return Object.fromEntries(Object.entries(headers).filter(([key]) => key.toLowerCase() !== 'cookie'));
+    }
     console.warn('PW_EXTRA_HEADERS must be a JSON object; ignoring it.');
   } catch (error) {
     console.warn(`Failed to parse PW_EXTRA_HEADERS: ${error.message}`);

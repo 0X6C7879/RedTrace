@@ -37,7 +37,7 @@ export interface Specialist { name: string; responsibilities: string; capabiliti
 export interface LegionAssignment {
   specialist?: Specialist
   reportFindingId?: string
-  role?: LegionRole; taskKey?: string; parentStepId?: string; plannerId?: string
+  role?: LegionRole | 'scout'; taskKey?: string; parentStepId?: string; plannerId?: string // Scout can occur in stored Steps only.
   parkReason?: string; resumeCondition?: string
   predecessorRunId?: string; handoff?: string; handoffPending?: boolean; nextWorker?: string
   handoffRequest?: { summary: string; nextWorker?: string }

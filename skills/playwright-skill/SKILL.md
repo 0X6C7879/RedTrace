@@ -208,6 +208,7 @@ authentication, tables, and retries.
 - `SLOW_MO`: action delay in milliseconds.
 - `PW_HEADER_NAME` and `PW_HEADER_VALUE`: one extra HTTP header.
 - `PW_EXTRA_HEADERS`: JSON object of extra HTTP headers.
+- Both environment-based header settings ignore `Cookie`. Login state stays in the current BrowserContext.
 - `PW_SCRIPT_DIR`: directory for preserving file-based scripts.
 - `PW_ARTIFACT_DIR`: directory for helper-generated screenshots.
 

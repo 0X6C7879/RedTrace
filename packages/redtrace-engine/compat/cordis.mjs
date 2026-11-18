@@ -1,6 +1,5 @@
 import { domainTools, originalTool, rewriteToolNames } from '../../redtrace-dsh/lib/tool-domains.js'
 import { toolAllowed } from '../src/console-api.ts'
-import { closeRunHttpSessions } from '../src/http-tools.ts'
 import { executionRole, coordinatorRole, isReportStep } from '../../redtrace-dsh/lib/roles.js'
 import { runtimeCatalog, mountToolSettings, mountMcpRoleTools, platformToolOptions, mountSystemLogs } from './console.mjs'
 import { inspectToolCatalog } from './tool-catalog.mjs'
@@ -17,8 +16,8 @@ import { createEngine } from '../src/index.ts'
 import { createPlanGuard } from '../src/plan-guard.ts'
 import { TASK_PLANNING_TOOLS, taskTodoOwner, taskTodoPlanner } from '../src/legion-todos.ts'
 import { legionTools } from '../src/legion-tools.ts'
-import { taskPlanningContext, efficiencyToolAvailable, graphTools, activityPrompt, activityLimits, graphUpdate, livePlan, launchContext, runMock } from '../src/runner.ts'
-import { verbTools, verbToolAvailable, channelsFor, resourceTools } from '../src/capability-verbs.ts'
+import { taskPlanningContext, efficiencyToolAvailable, graphTools, activityPrompt, activityLimits, graphUpdate, livePlan, launchContext, reportContext, runMock } from '../src/runner.ts'
+import { verbTools, verbToolAvailable, resourceTools } from '../src/capability-verbs.ts'
 import { PluginManager, registerPluginRoutes } from '../../redtrace-dsh/lib/plugins.js'
 import { load, mount, repoRoot } from '../../redtrace-dsh/lib/loader.js'
 import { mountExecutionTools } from '../../redtrace-dsh/lib/execution-tools.js'
@@ -277,8 +276,8 @@ export async function apply(ctx, options) {
         // Native spill reads retain the existing archived-evidence recovery allowance.
         scoped.tools.guard(exec => planGuard.check({ name: exec.name === 'read' && ownSpillRead(exec) === undefined ? 'evidence_read' : exec.name, rootCallId: String(exec.rootCallId),arguments:exec.arguments }))
       }
-      if (store.project(run.projectId).mode === 'benchmark') scoped.systemPrompt.context({ name: 'redtrace:task-planning', order: 3, required: true, interpolate: false, text: () => {const planner=taskTodoPlanner(step,store);return JSON.stringify({taskPlanner:planner?{id:planner.id,role:planner.role}:null})} })
-      scoped.systemPrompt.context({ name: 'redtrace:live-plan', order: 2, required: true, interpolate: false,
+      if (!reporting && store.project(run.projectId).mode === 'benchmark') scoped.systemPrompt.context({ name: 'redtrace:task-planning', order: 3, required: true, interpolate: false, text: () => {const planner=taskTodoPlanner(step,store);return JSON.stringify({taskPlanner:planner?{id:planner.id,role:planner.role}:null})} })
+      if (!reporting) scoped.systemPrompt.context({ name: 'redtrace:live-plan', order: 2, required: true, interpolate: false,
         text: () => livePlan(store, run.id) })
       // The DSH tools runtime projects parameters as lossless JSON; the graph
       // and verb tools carry typebox symbol annotations, so detach them into
@@ -348,7 +347,7 @@ export async function apply(ctx, options) {
     let cursor = store.run(run.id).deliveredGraphCursor ?? 0
     const steer = projectId => {
       if (projectId !== run.projectId || finished || concludeOnly || signal.aborted || !handle) return
-      if(planning)return
+      if(planning||reporting)return
       const update = graphUpdate(store, projectId, cursor, run.stepId, run.id, manager.running('redtrace-critical-events'))
       queueGraphNotice(handle.agent, update, message)
       cursor = update.cursor
@@ -365,8 +364,9 @@ export async function apply(ctx, options) {
       signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) { cancel(); return }
       store.checkpoint(run.id, { sessionId: run.id })
       cursor = Math.max(cursor, pendingGraphNotice(handle.agent)?.update.cursor ?? 0)
-      prompt(resume ? JSON.stringify({continue:true,...(planning ? launchContext(store,run.id,[],context.currentMaxSteps?context.currentMaxSteps():config.maxSteps) : step ? taskPlanningContext(store, step) : {})}) : JSON.stringify(launchContext(store, run.id,
-        planning ? [] : channelsFor(verbRuntime, [], 8, run.projectId), (context.currentMaxSteps ? context.currentMaxSteps() : config.maxSteps))))
+      if (reporting) prompt(JSON.stringify({ ...(resume ? { continue: true } : {}), ...reportContext(store, run, step.sourceIds[0]) }))
+      else prompt(resume ? JSON.stringify({continue:true,...(planning ? launchContext(store,run.id,[],context.currentMaxSteps?context.currentMaxSteps():config.maxSteps) : step ? taskPlanningContext(store, step) : {})}) : JSON.stringify(launchContext(store, run.id,
+        [], (context.currentMaxSteps ? context.currentMaxSteps() : config.maxSteps))))
        if (!reporting && step?.role) legionMailbox = attachLegionMailbox(ctx, engine.legion, { projectId: run.projectId, actor: run.id, sessionId: run.id, agent: handle.agent, message, closing: () => finished || signal.aborted })
       // Changes committed during activation remain in the event log until this scan.
       steer(run.projectId)
@@ -384,7 +384,7 @@ export async function apply(ctx, options) {
     } finally {
       signal.removeEventListener('abort', cancel); legionMailbox?.()
       try { if (handle) { cancel(); await handle.agent.whenIdle(); await ctx.get('sessions').flush(handle.agent.session); store.checkpoint(run.id, { sessionId: run.id }); await handle.dispose() } }
-      finally { try { await closeRunHttpSessions(store,run.id) } finally { sessionRefresh.delete(run.id); unlisten(); unlistenGraph(); shared.tasks.delete(run.id) } }
+      finally { sessionRefresh.delete(run.id); unlisten(); unlistenGraph(); shared.tasks.delete(run.id) }
     }
   }
 }

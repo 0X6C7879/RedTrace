@@ -15,9 +15,10 @@ export interface RuntimeCatalog {
   runs?: {runId:string;visibleSchemas:number}[]
   mcp: { name: string; state: string; toolCount?: number; lastError?: string }[]
 }
-export function toolAllowed(settings: RawConfig['tool_settings'], name: string, role?: FixedRole) {
+export function toolAllowed(settings: RawConfig['tool_settings'], name: string, role?: string) {
+  if (role && !FIXED_ROLES.some(value=>value===role)) return false
   const mapped=domainAction(name),setting=settings?.[mapped?.domain??name]
-  const allowed=(value?:{enabled:boolean;roles?:NonNullable<RawConfig['tool_settings']>[string]['roles']})=>value?.enabled!==false&&(value?.roles===undefined||!!role&&value.roles.includes(role))
+  const allowed=(value?:{enabled:boolean;roles?:NonNullable<RawConfig['tool_settings']>[string]['roles']})=>value?.enabled!==false&&(value?.roles===undefined||!!role&&value.roles.some(bound=>bound===role))
   if(!allowed(setting))return false
   return !mapped||allowed(setting?.actions?.[mapped.action])&&allowed(settings?.[name])
 }

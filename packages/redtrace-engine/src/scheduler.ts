@@ -102,10 +102,9 @@ export class Scheduler {
             status = error ? 'unknown' : (this.closed || project.status === 'stopped') && ['execute','plan'].includes(run.activity) ? 'paused' : 'cancelled'
           }
           if (this.store.run(run.id).pendingTools.length) { status = 'unknown'; error = 'Activity stopped with an unconfirmed tool result; verify before retrying' }
-          const completed=this.store.finishRun(run.id, status, error)
+          this.store.finishRun(run.id, status, error)
           const step = this.store.assignment(run) as Step
           if(run.activity==='plan'){if(this.store.project(run.projectId).mode==='benchmark')this.legion.completeBenchmark(run.projectId);return}
-          if(completed.status==='succeeded'&&step.role==='scout'&&step.scoutVerdict)this.legion.classify(run.projectId,step.taskKey!,step.scoutVerdict.difficulty,step.factIds,step.scoutVerdict.family)
           if (step.handoffPending && status==='cancelled' && this.store.project(run.projectId).status==='active') this.resumeHandoff(run.projectId,step)
           if(this.store.project(run.projectId).mode==='benchmark')this.legion.completeBenchmark(run.projectId)
           // Deleting a project mid-abort cascades its runs away; there is nothing left to finish.

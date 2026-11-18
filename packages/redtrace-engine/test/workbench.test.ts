@@ -15,7 +15,7 @@ test('Worker labels restart within each FGS and omit a singleton role suffix',()
  const store=new Store(':memory:');try{
   const p=store.createProject({mode:'benchmark',title:'local numbering',origin:'fixture',goal:'verify'}).project
   const graphs=['A','B'].map(taskKey=>store.createGraph(p.id,{taskKey,title:taskKey,origin:'fixture',goal:'verify'}))
-  for(const g of graphs){const scoped=store.forGraph(p.id,g.id);for(const role of ['scout','soldier','soldier'] as const){const step=scoped.addStep(p.id,{role,taskKey:g.taskKey!,description:role,sourceIds:[g.originId]}),run=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},step.id);store.finishRun(run.id,'succeeded')}store.addPlanner(p.id,g.id,{description:'plan',sourceIds:[g.originId]});const run=scoped.claim(p.id,'plan',{name:'fixture',backend:'mock'});store.finishRun(run.id,'succeeded')}
+  for(const g of graphs){const scoped=store.forGraph(p.id,g.id);for(const role of ['scout','soldier','soldier'] as const){const step=scoped.addStep(p.id,{role:'soldier',taskKey:g.taskKey!,description:role,sourceIds:[g.originId]}),run=store.claim(p.id,'execute',{name:'fixture',backend:'mock'},step.id);store.finishRun(run.id,'succeeded');if(role==='scout')scoped.saveNode({...scoped.node<Step>(p.id,step.id,'step'),role})}store.addPlanner(p.id,g.id,{description:'plan',sourceIds:[g.originId]});const run=scoped.claim(p.id,'plan',{name:'fixture',backend:'mock'});store.finishRun(run.id,'succeeded')}
   const workers=workerInstances(store,p.id)
   for(const g of graphs)assert.deepEqual(workers.filter(w=>w.graphId===g.id).map(w=>w.label),['Scout','Soldier1','Soldier2','General'])
   assert.equal(new Set(workers.map(w=>w.id)).size,8,'display labels never replace native Run identity')
@@ -33,7 +33,7 @@ for(const mode of ['benchmark','general'] as const)test(mode+(mode==='benchmark'
  const mission={role:(mode==='benchmark'?'soldier':'worker') as 'soldier'|'worker',taskKey:'a',graphId:graph.id,description:'first independent angle',sourceIds:[graph.originId],...(mode==='benchmark'?{specialist}:{})},a=scoutedSpawn(legion,p.id,mission),b=scoutedSpawn(legion,p.id,{...mission,description:'second independent angle',specialist:undefined})
  assert.deepEqual(store.node<Step>(p.id,a.id,'step').specialist,mode==='benchmark'?specialist:undefined)
  assert.throws(()=>scoutedSpawn(legion,p.id,mission),/different angle/)
- if(mode==='general')assert.throws(()=>scoutedSpawn(legion,p.id,{...mission,specialist:undefined,role:'scout'}),/Planner-assigned Worker/)
+ if(mode==='general')assert.throws(()=>legion.spawn(p.id,{...mission,specialist:undefined,role:'scout'}),/Scout is retired/)
  const r=store.claim(p.id,'execute',worker,a.id);store.addFact(p.id,'first run evidence',{runId:r.id,creator:worker.name});legion.requestHandoff(r.id,'confirmed source and failed angle');store.finishRun(r.id,'cancelled');legion.completeHandoff(p.id,a.id);const successor=store.claim(p.id,'execute',worker,a.id)
  store.addFact(p.id,'second run evidence',{runId:successor.id,creator:worker.name});assert.deepEqual(workerInstances(store,p.id).map(w=>w.facts),[1,1]);assert.equal(successor.predecessorRunId,r.id);assert.deepEqual(store.node<Step>(p.id,a.id,'step').specialist,mode==='benchmark'?specialist:undefined)
  const instances=workerInstances(store,p.id);assert.deepEqual(instances.map(w=>w.label),mode==='benchmark'?['CodeAudit1','CodeAudit2']:['Worker1','Worker2']);assert.equal(new Set(instances.map(w=>w.id)).size,2)
@@ -53,10 +53,10 @@ test('Benchmark ownership transfers from Soldier planner to General without dupl
  assert(!legionTools(store,r.id,q.id,null,()=>{}).some(t=>['TodoWrite','legion_goal','legion_accept'].includes(t.name)))
 })
 
-test('General Scout migration is idempotent and retains original native audit history and mission',()=>{
+test('Legacy General Scout identity and mission are left intact on reopen',()=>{
  const dir=mkdtempSync(path.join(os.tmpdir(),'workbench-migration-'));try{
   let s=new Store(dir+'/db'),p=s.createProject({mode:'general',title:'legacy',origin:'local',goal:'verify'}).project,step=s.addStep(p.id,{description:'existing recon',sourceIds:['origin']});step.role='scout';s.saveNode(step);s.close()
-  s=new Store(dir+'/db');assert.equal(s.node<Step>(p.id,step.id,'step').role,'worker');assert.equal(s.node<Step>(p.id,step.id,'step').description,'existing recon');assert.equal(s.events(p.id).filter(e=>e.type==='legion.role_migrated').length,1);s.close();s=new Store(dir+'/db');assert.equal(s.events(p.id).filter(e=>e.type==='legion.role_migrated').length,1);s.close()
+  s=new Store(dir+'/db');assert.equal(s.node<Step>(p.id,step.id,'step').role,'scout');assert.equal(s.node<Step>(p.id,step.id,'step').description,'existing recon');assert.equal(s.events(p.id).filter(e=>e.type==='legion.role_migrated').length,0);s.close();s=new Store(dir+'/db');assert.equal(s.events(p.id).filter(e=>e.type==='legion.role_migrated').length,0);s.close()
  }finally{rmSync(dir,{recursive:true,force:true})}
 })
 

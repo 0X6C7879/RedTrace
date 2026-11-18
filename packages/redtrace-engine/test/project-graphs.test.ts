@@ -19,7 +19,7 @@ test('three Benchmark Graphs isolate nodes, references, Run, events and completi
  const s=new Store(':memory:');try{const p=create(s,'Benchmark','benchmark'),legion=new LegionStore(s,p.id)
  const graphs=['A','B','C'].map(taskKey=>s.createGraph(p.id,{taskKey,title:taskKey,origin:'Local '+taskKey,goal:'Verify '+taskKey}))
  assert.equal(s.projectGraphs(p.id).length,3);assert.equal(new Set(graphs.map(g=>g.originId)).size,3);assert.equal(new Set(graphs.map(g=>g.goalId)).size,3)
- const runs=graphs.map(g=>{const v=s.forGraph(p.id,g.id),step=scoutedSpawn(legion,p.id,{graphId:g.id,taskKey:g.taskKey!,role:'scout',description:'observe',sourceIds:[g.originId]});const run=v.claim(p.id,'execute',worker,step.id);const fact=v.addFact(p.id,'observed '+g.taskKey,{runId:run.id,evidence:[{description:'local fixture observation'}]});v.addFinding(p.id,{title:'result',description:'result',factIds:[fact.id],runId:run.id});v.finishRun(run.id,'succeeded');return{run,fact,step}})
+ const runs=graphs.map(g=>{const v=s.forGraph(p.id,g.id),step=scoutedSpawn(legion,p.id,{graphId:g.id,taskKey:g.taskKey!,role:'soldier',description:'observe',sourceIds:[g.originId]});const run=v.claim(p.id,'execute',worker,step.id);const fact=v.addFact(p.id,'observed '+g.taskKey,{runId:run.id,evidence:[{description:'local fixture observation'}]});v.addFinding(p.id,{title:'result',description:'result',factIds:[fact.id],runId:run.id});v.finishRun(run.id,'succeeded');return{run,fact,step}})
  const a=s.forGraph(p.id,graphs[0].id),b=s.forGraph(p.id,graphs[1].id)
  const manualA=a.addFact(p.id,'manual A'),manualB=b.addFact(p.id,'manual B');assert.throws(()=>a.node(p.id,manualB.id),/another Graph/);assert.equal(a.node(p.id,manualA.id).id,manualA.id)
  assert.equal(a.graph(p.id).facts.length,3);assert.equal(a.nodes(p.id,['finding']).length,1)
@@ -59,8 +59,8 @@ test('Benchmark classification, same-Graph squads and durable HELP/REPORT preser
 test('three task Workers share Scheduler capacity concurrently and initial Hints stay graph-scoped',async()=>{
  const {Scheduler}=await import('../src/scheduler.ts'),{launchContext}=await import('../src/runner.ts'),s=new Store(':memory:')
  const p=create(s,'Concurrent tasks','benchmark'),l=new LegionStore(s,p.id),graphs=['A','B','C'].map(taskKey=>s.createGraph(p.id,{taskKey,title:taskKey,origin:'local',goal:'verify'}))
- for(const g of graphs){s.forGraph(p.id,g.id).addInput(p.id,'hint','private '+g.taskKey);l.spawn(p.id,{role:'scout',taskKey:g.taskKey!,description:'observe',sourceIds:[g.originId]})}
- const contexts:any[]=[],route:Worker={...worker,provider:'mock',model:'fixture',enabled:true,maxRunning:3,priority:0,roles:['scout']};let release!:()=>void;const held=new Promise<void>(resolve=>release=resolve)
+ for(const g of graphs){s.forGraph(p.id,g.id).addInput(p.id,'hint','private '+g.taskKey);scoutedSpawn(l,p.id,{role:'soldier',taskKey:g.taskKey!,description:'observe',sourceIds:[g.originId]})}
+ const contexts:any[]=[],route:Worker={...worker,provider:'mock',model:'fixture',enabled:true,maxRunning:3,priority:0,roles:['soldier']};let release!:()=>void;const held=new Promise<void>(resolve=>release=resolve)
  const scheduler=new Scheduler(s,{workers:[route],providers:{},maxWorkers:3,maxProjectWorkers:3,maxRunningProjects:1,maxSteps:null,workspaceRoot:'/tmp/redtrace-graph-workspaces'} as any,async context=>{contexts.push(context);await held;context.store.addFact(p.id,'verified',{runId:context.run.id})})
  try{scheduler.start();for(let i=0;i<100&&contexts.length<3;i++)await new Promise<void>(r=>setImmediate(r));assert.equal(contexts.length,3);assert.equal(new Set(contexts.map(c=>c.run.workspaceRoot)).size,3)
  for(const c of contexts){const launch=launchContext(s,c.run.id);assert.equal(launch.graphId,c.run.graphId);assert.equal(launch.hints?.items.length,1);assert(launch.hints?.items[0].content.includes(graphs.find(g=>g.id===c.run.graphId)!.taskKey!))}

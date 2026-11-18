@@ -149,6 +149,25 @@ test('removed PTC stays absent even when an older manifest enables it', async t 
   await assert.rejects(manager.start('redtrace-ptc'), /unknown plugin/)
 })
 
+test('boot removes retired HTTP plugin flags without touching other registrations', async t => {
+  const root = scratch('retired-http'), manifest = path.join(root, 'plugins.json')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const user = [{ id: 'fixture', module: 'plugins/fixture.js', enabled: false }]
+  writeFileSync(manifest, JSON.stringify({
+    version: 1, enabled: ['redtrace-browser-http', 'redtrace-file-references'],
+    disabled: ['redtrace-http', 'redtrace-web'], user,
+  }))
+  const { manager } = makeManager(root, manifest)
+  await manager.boot()
+  for (const id of ['redtrace-http', 'redtrace-browser-http']) {
+    assert.ok(!manager.list().some(entry => entry.id === id))
+    await assert.rejects(manager.start(id), /unknown plugin/)
+  }
+  assert.deepEqual(JSON.parse(readFileSync(manifest, 'utf8')), {
+    version: 1, enabled: ['redtrace-file-references'], disabled: ['redtrace-web'], user,
+  })
+})
+
 test('efficiency features boot enabled by default and remain explicitly switchable', async (t) => {
   const root = scratch('optin')
   t.after(() => rmSync(root, { recursive: true, force: true }))
@@ -162,7 +181,7 @@ test('efficiency features boot enabled by default and remain explicitly switchab
   await assert.rejects(first.manager.start('redtrace-ptc'), /unknown plugin/)
   assert.equal(first.manager.view('redtrace-file-references').status, 'stopped')
   assert.ok(!first.manager.list().some(p => ['redtrace-shell', 'redtrace-remote-terminal'].includes(p.id)))
-  for (const id of ['redtrace-knowledge', 'redtrace-http', 'redtrace-critical-events']) {
+  for (const id of ['redtrace-knowledge', 'redtrace-critical-events']) {
     assert.equal(first.manager.view(id).status, 'running')
   }
   assert.equal(first.manager.view('redtrace-pivot').status, 'running')
@@ -321,11 +340,13 @@ test('add validates id, module path, and plugin shape; uninstall removes files',
   const plain = await manager.add({ id: 'plain', module: 'plugins/good/index.js' })
   assert.equal(plain.description, '')
   assert.equal(plain.intro, null)
+  mkdirSync(path.join(root, 'plugins', 'good'), { recursive: true })
+  const moduleFile = path.join(root, 'plugins', 'good', 'index.js')
+  writeFileSync(moduleFile, 'export default { apply() {} }\n')
   await manager.uninstall('plain')
+  assert.ok(existsSync(moduleFile), 'uninstall must preserve files still used by good')
 
   // Uninstall disposes, clears the manifest, and deletes plugins/<id>/.
-  mkdirSync(path.join(root, 'plugins', 'good'), { recursive: true })
-  writeFileSync(path.join(root, 'plugins', 'good', 'index.js'), 'export default { apply() {} }\n')
   const userMount = ctx.mounts.find(({ module }) => module === modules.get('plugins/good/index.js'))
   await manager.uninstall('good')
   assert.equal(userMount.disposed, true)
@@ -370,14 +391,14 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const list = await call('GET', '/__redtrace/plugins')
   assert.equal(list.status, 200)
-  assert.equal(JSON.parse(list.body).plugins.length, 35)
-  for (const id of ['redtrace-trace-search', 'redtrace-repeat-reminder', 'redtrace-shell', 'redtrace-remote-terminal', 'redtrace-ptc']) {
+  assert.equal(JSON.parse(list.body).plugins.length, 33)
+  for (const id of ['redtrace-trace-search', 'redtrace-repeat-reminder', 'redtrace-shell', 'redtrace-remote-terminal', 'redtrace-ptc', 'redtrace-scout']) {
     assert.ok(!JSON.parse(list.body).plugins.some(plugin => plugin.id === id))
     assert.equal((await call('POST', `/__redtrace/plugins/${id}/start`)).status, 400)
   }
   assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === 'redtrace-file-references').status, 'stopped')
 
-  for (const id of ['redtrace-knowledge', 'redtrace-http', 'redtrace-critical-events']) {
+  for (const id of ['redtrace-knowledge', 'redtrace-critical-events']) {
     assert.equal(JSON.parse(list.body).plugins.find(plugin => plugin.id === id).status, 'running')
     const started = await call('POST', `/__redtrace/plugins/${id}/start`)
     assert.equal(JSON.parse(started.body).plugin.status, 'running')
@@ -404,6 +425,11 @@ test('HTTP API: list, add, start/stop, and unknown routes', async (t) => {
 
   const removed = await call('DELETE', '/__redtrace/plugins/my-plug')
   assert.equal(removed.status, 204)
+  assert.ok(!JSON.parse((await call('GET', '/__redtrace/plugins')).body).plugins.some(p => p.id === 'my-plug'))
+  for (const id of ['sessions', 'redtrace-core']) {
+    assert.equal((await call('DELETE', `/__redtrace/plugins/${id}`)).status, 400)
+    assert.equal(manager.view(id).canUninstall, false)
+  }
 
   const badId = await call('POST', '/__redtrace/plugins/nope/stop')
   assert.equal(badId.status, 400)
@@ -436,7 +462,7 @@ test('reverse plugin is default-on, explicit stop persists and can be restarted'
   assert.equal(second.manager.view('redtrace-reverse').status, 'running')
 })
 
-test('General exposes only Planner/Worker presets and migrates disabled v2 executor presets without touching Benchmark',async t=>{
+test('Planner/Worker keep their preset settings and the retired Scout ID is removed from the manifest',async t=>{
  const root=scratch('general-presets'),manifest=path.join(root,'plugins.json')
  t.after(()=>rmSync(root,{recursive:true,force:true}))
  writeFileSync(manifest,JSON.stringify({version:1,disabled:['redtrace-leader','redtrace-operator','redtrace-scout']}))
@@ -444,7 +470,8 @@ test('General exposes only Planner/Worker presets and migrates disabled v2 execu
  await manager.boot()
  try{
   assert.equal(manager.view('redtrace-worker').status,'stopped')
-  assert.equal(manager.view('redtrace-scout').status,'stopped')
+  assert.throws(()=>manager.view('redtrace-scout'),/unknown plugin/)
+  assert(!JSON.parse(readFileSync(manifest,'utf8')).disabled.includes('redtrace-scout'))
   assert.equal(manager.view('redtrace-planner').status,'running')
   assert.throws(()=>manager.view('redtrace-leader'))
   assert.throws(()=>manager.view('redtrace-operator'))

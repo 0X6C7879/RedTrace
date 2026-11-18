@@ -116,11 +116,9 @@
 .provider-commander { color:var(--rt-cyan)!important; }
 .provider-general { color:var(--rt-amber)!important; }
 .provider-soldier { color:var(--rt-violet)!important; }
-.provider-scout { color:var(--rt-green)!important; }
 .provider-dot-commander { background:var(--rt-cyan)!important; }
 .provider-dot-general { background:var(--rt-amber)!important; }
 .provider-dot-soldier { background:var(--rt-violet)!important; }
-.provider-dot-scout { background:var(--rt-green)!important; }
 
 /* One compact planning surface in conversations and FGS; never a second planner. */
 .rt-todo-bar { flex-shrink:0; padding:.35rem 1.25rem; border-top:1px solid var(--rt-border-soft); }

@@ -3,7 +3,7 @@ window.pluginsPage = function pluginsPage() {
     { key: 'kernel', label: '内核' },
     { key: 'core', label: '核心' },
     { key: 'feature', label: '功能' },
-    { key: 'preset', label: '任务预设' },
+    { key: 'preset', label: '角色预设' },
     { key: 'user', label: '自定义' },
   ];
   const STATUS_LABELS = {
@@ -16,7 +16,7 @@ window.pluginsPage = function pluginsPage() {
     kernel: '内核',
     core: '核心',
     feature: '功能',
-    preset: '任务预设',
+    preset: '角色预设',
     user: '自定义',
   };
 
@@ -53,7 +53,7 @@ window.pluginsPage = function pluginsPage() {
     async init() {
       await this.load();
       this.pollTimer = setInterval(() => {
-        if (!document.hidden && !this.addOpen) void this.load();
+        if (!document.hidden && !this.addOpen && !this.busyId) void this.load();
       }, 5000);
     },
 
@@ -96,6 +96,7 @@ window.pluginsPage = function pluginsPage() {
     },
 
     async load() {
+      if (this.loading) return;
       this.loading = true;
       try {
         const data = await pluginRequest('GET', '/__redtrace/plugins');
@@ -123,13 +124,17 @@ window.pluginsPage = function pluginsPage() {
         .filter((category) => category.items.length > 0);
     },
 
+    get pluginCount() {
+      return this.plugins.filter((plugin) => plugin.category !== 'preset').length;
+    },
+
     get runningCount() {
-      return this.plugins.filter((plugin) => this.isOn(plugin)).length;
+      return this.plugins.filter((plugin) => plugin.category !== 'preset' && plugin.status === 'running').length;
     },
 
     countText(group) {
-      const running = group.items.filter((plugin) => this.isOn(plugin)).length;
-      return `${running}/${group.items.length} 运行`;
+      const running = group.items.filter((plugin) => plugin.status === 'running').length;
+      return `${running}/${group.items.length} ${group.key === 'preset' ? '启用' : '运行'}`;
     },
 
     setMessage(text, type = 'info') {
@@ -199,13 +204,13 @@ window.pluginsPage = function pluginsPage() {
     },
 
     async uninstall(plugin) {
-      if (this.busyId) return;
+      if (this.busyId || this.loading || !plugin.canUninstall) return;
       this.busyId = plugin.id;
       this.resetUninstall();
       this.setMessage('');
       try {
         await pluginRequest('DELETE', `/__redtrace/plugins/${encodeURIComponent(plugin.id)}`);
-        await this.load();
+        this.plugins = this.plugins.filter((item) => item.id !== plugin.id);
         this.setMessage(`已卸载 ${plugin.id}`, 'success');
       } catch (error) {
         this.setMessage(error.message, 'error');

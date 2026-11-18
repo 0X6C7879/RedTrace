@@ -11,6 +11,7 @@ const html=readFileSync(path.join(root,'static/index.html'),'utf8')
 function page(){
   const context=vm.createContext({window:{},console,localStorage:{getItem(){return null},setItem(){}},location:{hash:'#/projects/p/commander'}})
   vm.runInContext(readFileSync(path.join(root,'static/fgs-view.js'),'utf8'),context)
+  vm.runInContext(readFileSync(path.join(root,'static/workbench.js'),'utf8'),context)
   vm.runInContext([...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].find(m=>m[1].includes('function redtraceApp()'))![1],context)
   const app=vm.runInContext('redtraceApp()',context)
   app.showToast=()=>{};app.legionProjectId='p';app.projects=[{id:'p',title:'Target'}]
@@ -126,10 +127,16 @@ test('benchmark deep link opens workspace overview and loads Commander status',a
   assert.doesNotMatch(html,/aria-label=\"军团\"/)
 })
 
-test('benchmark cards exclude the main graph and show runs from each task Step',async()=>{
+test('benchmark cards include platform-only completions, exclude the main Graph and show runs from each task Step',async()=>{
   const app=page(),calls:string[]=[]
   const graphs=[{id:'main',type:'main',title:'Main',taskKey:'main'},{id:'g1',type:'benchmark_task',title:'Task',taskKey:'task'}]
-  assert.equal(app.filteredTaskGraphs({graphs,steps:[]}).length,1)
+  const project={graphs,steps:[],goals:[],platform:{done:{title:'Completed',is_completed:true},submissionOnly:{title:null,submitted:true}}}
+  const tasks=app.filteredBenchmarkTasks(project)
+  assert.deepEqual(Array.from(tasks,(task:any)=>task.taskKey),['done','task'])
+  assert.equal(tasks[0].graph,undefined)
+  assert.match(app.benchmarkTaskSummary(project),/1 道平台已完成/)
+  app.graphStatusFilter='completed'
+  assert.deepEqual(Array.from(app.filteredBenchmarkTasks(project),(task:any)=>task.taskKey),['done'])
   app.selectedProjectId='p';app.selectedGraphId='g1';app.fgs={steps:[{id:'s1'},{id:'s2'}]}
   app.api=async(_method:string,url:string)=>{calls.push(url);return {workers:[{id:'r1',worker:'one',graphId:'g1'},{id:'r2',worker:'two',graphId:'g1'},{id:'foreign',worker:'other',graphId:'g2'}]}}
   app.loadGraphLog=async()=>{calls.push('events:'+app.selectedGraphId)}
@@ -139,7 +146,7 @@ test('benchmark cards exclude the main graph and show runs from each task Step',
 })
 
 
-test('worker snapshot exposes effective four-role defaults without inventing an unlimited Mission cap',async()=>{
+test('worker snapshot exposes effective active-role defaults without inventing an unlimited Mission cap',async()=>{
   const {Configuration}=await import('../src/config.ts'),{mkdtempSync,mkdirSync,writeFileSync,rmSync}=await import('node:fs'),os=await import('node:os')
   const dir=mkdtempSync(path.join(os.tmpdir(),'console-default-config-'))
   try{
@@ -147,8 +154,7 @@ test('worker snapshot exposes effective four-role defaults without inventing an 
     const snapshot=new Configuration(dir).snapshot(),app=page()
     app.applyWorkerSnapshot(snapshot)
     assert.equal(snapshot.tasks.commander.timeout,300)
-    assert.equal(snapshot.tasks.scout.timeout,240)
-    assert.equal(Object.keys(snapshot.tasks).sort().join(','),'commander,general,planner,scout,soldier,worker')
+    assert.equal(Object.keys(snapshot.tasks).sort().join(','),'commander,general,planner,soldier,worker')
     assert.equal(app.runtimeTaskPayload().tasks.commander.max_intents,undefined)
     app.runtimeTaskForm.tasks.commander.max_intents='';assert.equal(app.runtimeTaskPayload().tasks.commander.max_intents,undefined)
     app.runtimeTaskForm.tasks.commander.max_intents=7;assert.equal(app.runtimeTaskPayload().tasks.commander.max_intents,7)

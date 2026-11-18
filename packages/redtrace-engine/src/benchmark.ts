@@ -1,5 +1,6 @@
 import { Store } from './store.ts'
 import { LegionStore } from './legion-store.ts'
+import { benchmarkMetadata } from './benchmark-metadata.ts'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -60,10 +61,12 @@ export async function discoverBenchmarkTasks(store:Store,config:EngineConfig,pro
         const taskKey=challenge.id
         if(typeof taskKey!=='string'||!taskKey)throw new HttpError(502,'Challenge is missing id')
         const row=store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(projectId,taskKey)
-        const data={...(row?JSON.parse(String(row.data)):{}),platformCompleted:challenge.my_team_fully_solved===true,eligible:!challenge.my_team_authored&&challenge.scoring==='scored'&&!challenge.closed}
+        const data={...(row?JSON.parse(String(row.data)):{}),platformCompleted:challenge.my_team_fully_solved===true,eligible:!challenge.my_team_authored&&challenge.scoring==='scored'&&!challenge.closed,
+          platformMetadata:{...benchmarkMetadata({...challenge,is_completed:challenge.is_completed??challenge.my_team_fully_solved}),title:challenge.title??taskKey}}
         store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?) ON CONFLICT(project_id,task_key) DO UPDATE SET data=excluded.data').run(projectId,taskKey,JSON.stringify(data))
         if(store.project(projectId).mode!=='benchmark'||challenge.my_team_fully_solved||challenge.closed||challenge.my_team_authored||challenge.scoring!=='scored'||store.projectGraphs(projectId).some(g=>g.taskKey===taskKey))continue
-        store.createGraph(projectId,{taskKey,title:challenge.title??taskKey,origin:store.scopeFact(projectId).description+'\nPlatform task: '+JSON.stringify(challenge),goal:(store.project(projectId).objective??'Complete the authorized task')+' · '+taskKey})
+        const {id,title,description,category,attachments,questions,requires,launch_ttl_s}=challenge
+        store.createGraph(projectId,{taskKey,title:challenge.title??taskKey,origin:store.scopeFact(projectId).description+'\nPlatform task: '+JSON.stringify({id,title,description,category,attachments,questions,requires,launch_ttl_s}),goal:(store.project(projectId).objective??'Complete the authorized task')+' · '+taskKey})
       }
     })
     return response
@@ -81,12 +84,14 @@ export async function discoverBenchmarkTasks(store:Store,config:EngineConfig,pro
         data.platformCompleted=challenge.is_completed===true
         data.platformInstance={status:challenge.container_status??'unknown',hosts:challenge.container_addr??[]}
         data.platformObservedAt=new Date().toISOString()
+        data.platformMetadata={...benchmarkMetadata(challenge),title:challenge.title??challenge.name??taskKey}
         store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?) ON CONFLICT(project_id,task_key) DO UPDATE SET data=excluded.data').run(projectId,taskKey,JSON.stringify(data))
         if(previous!==data.platformCompleted)store.event(projectId,'legion.platform_updated',null,{taskKey,completed:data.platformCompleted})
         if(previousInstance!==JSON.stringify(data.platformInstance))store.event(projectId,'legion.instance_updated',null,{taskKey,...data.platformInstance})
         if(challenge.is_completed)continue
         if(store.projectGraphs(projectId).some(g=>g.taskKey===taskKey))continue
-        store.createGraph(projectId,{taskKey,title:challenge.title??challenge.name??taskKey,origin:store.scopeFact(projectId).description+'\nPlatform task: '+JSON.stringify(challenge),goal:(store.project(projectId).objective??'Complete the authorized task')+' · '+taskKey})
+        const {unique_code,description,level,container_status,container_addr}=challenge
+        store.createGraph(projectId,{taskKey,title:challenge.title??challenge.name??taskKey,origin:store.scopeFact(projectId).description+'\nPlatform task: '+JSON.stringify({unique_code,description,level,container_status,container_addr}),goal:(store.project(projectId).objective??'Complete the authorized task')+' · '+taskKey})
       }
     })
   }

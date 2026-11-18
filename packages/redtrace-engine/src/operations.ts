@@ -12,7 +12,7 @@ import { ExecutionError, commandFrame, errorResult, executionResult, parseComman
 import { PivotRuntime } from './pivot-runtime.ts'
 import { buildBeacon, compatibleOneliners, generateOneliner } from './c2-payloads.ts'
 
-export const resourceKinds = ['webshell', 'c2_listener', 'c2_session', 'c2_payload', 'c2_profile', 'proxy', 'host', 'entry', 'file', 'credential_ref', 'result', 'http_session']
+export const resourceKinds = ['webshell', 'c2_listener', 'c2_session', 'c2_payload', 'c2_profile', 'proxy', 'host', 'entry', 'file', 'credential_ref', 'result']
 export const terminalTasks = ['succeeded', 'failed', 'cancelled', 'rejected']
 export const digest = (s: string | Buffer) => createHash('sha256').update(s).digest('hex')
 const TASK_SUMMARY_LIMIT = 1000
@@ -328,7 +328,7 @@ export class Operations {
   create(project: string | null, input: any) {
     return this.store.transaction(() => {
       if (!resourceKinds.includes(input.kind)) throw new HttpError(400, 'Unsupported resource kind')
-      const prefixes: Record<string, string> = { webshell: 'ws', c2_listener: 'lis', c2_session: 'ses', c2_payload: 'pay', c2_profile: 'prf', proxy: 'prx', host: 'hst', entry: 'ent', file: 'fil', credential_ref: 'cred', result: 'res', http_session: 'http' }
+      const prefixes: Record<string, string> = { webshell: 'ws', c2_listener: 'lis', c2_session: 'ses', c2_payload: 'pay', c2_profile: 'prf', proxy: 'prx', host: 'hst', entry: 'ent', file: 'fil', credential_ref: 'cred', result: 'res' }
       const id = uid(prefixes[input.kind]), metadata = { ...input.metadata }, secret = { ...input.secret }, at = now()
       if(input.actor_type==='worker') for(const key of ['verified_capabilities','verified_at','verified_endpoint','runtime_verified','verification_version','conflict_key']) delete metadata[key]
       if (input.actor_type === 'worker' && input.kind === 'file') delete secret.artifact_path
@@ -541,8 +541,6 @@ export function operationRoutes(router: Router, ops: Operations) {
     if (db.prepare("SELECT 1 FROM operation_tasks WHERE resource_id=? AND status IN ('queued','running','awaiting_approval')").get(c.params.resource)) throw new HttpError(409, 'Cancel active tasks before deleting this resource')
     ops.stopListener(c.params.resource)
     if (r.kind === 'http_session') {
-      ops.updateResource(r.id, { status: 'retired' })
-      await import('./http-tools.ts').then(({ disposeHttpResource }) => disposeHttpResource(ops.store, r.id, true))
       rmSync(path.join(ops.outputRoot, 'http', 'sessions', `${r.id}.json`), { force: true })
     }
     if (r.kind === 'c2_payload') {
@@ -555,10 +553,8 @@ export function operationRoutes(router: Router, ops: Operations) {
     const fields: Record<string, import('typebox').TSchema> = action === 'worker-control' ? { paused: Type.Boolean() } : action === 'state' ? { status: Type.Union(['available', 'offline', 'degraded', 'retired'].map(v => Type.Literal(v))) } : { actor: text(), actor_type: optional(Type.Union(['human', 'worker'].map(v => Type.Literal(v)))) }
     const b = Object.assign({ actor_type: 'human', actor: 'admin' }, await body(c.req, Type.Object({ ...fields, actor: fields.actor ?? optional(text()) }))) as any
     const selectedResource = resource(c)
-    if (selectedResource.kind === 'http_session' && action === 'state' && b.status !== 'available') {
-      ops.updateResource(selectedResource.id, { status: b.status })
-      await import('./http-tools.ts').then(({ disposeHttpResource }) => disposeHttpResource(ops.store, selectedResource.id, b.status === 'retired'))
-      if (b.status === 'retired') rmSync(path.join(ops.outputRoot, 'http', 'sessions', `${selectedResource.id}.json`), { force: true })
+    if (selectedResource.kind === 'http_session' && action === 'state' && b.status === 'retired') {
+      rmSync(path.join(ops.outputRoot, 'http', 'sessions', `${selectedResource.id}.json`), { force: true })
     }
     return ops.store.transaction(() => {
       const r = resource(c); let update: Record<string, any>, event = action

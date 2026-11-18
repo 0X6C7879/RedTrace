@@ -19,11 +19,12 @@ test('tool settings persist global and Worker bindings, including Commander; res
   const save=async(revision:string,enabled:boolean,workers:string[])=>fetch(api+'/console/tools/fixture/settings',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({expected_revision:revision,enabled,roles:workers})})
   let data=await get();const revision=data.revision
   for(const name of ['unregistered-cli'])assert.equal((await fetch(api+'/console/tools/'+name+'/settings',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({expected_revision:revision,enabled:false,roles:[]})})).status,400)
-  assert.deepEqual(data.roleGroups.benchmark,['commander','general','soldier','scout']);assert.deepEqual(data.tools[0].parameters,schema)
+  assert.deepEqual(data.roleGroups.benchmark,['commander','general','soldier']);assert.deepEqual(data.tools[0].parameters,schema)
   assert.equal((await save(revision,false,['commander'])).status,200)
   data=await get();assert.equal(data.tools[0].enabled,false);assert.deepEqual(data.tools[0].roleBindings,['commander'])
   assert.equal((await save(revision,true,['commander'])).status,409)
   assert.equal((await save(data.revision,true,['missing'])).status,422)
+  assert.equal((await save(data.revision,true,['scout'])).status,422)
   assert.equal((await save(data.revision,true,['commander'])).status,200)
   assert.deepEqual(engine.configuration.read().raw.tool_settings,{fixture:{enabled:true,roles:['commander']}})
   data=await get();assert.equal((await save(data.revision,true,['commander','soldier'])).status,200)
@@ -104,8 +105,8 @@ test('tool table switches persist on/off while disabled Schemas remain in the li
 
 test('tool filters use actual registry roles and enabled state, not CLI inventory',()=>{
  const ctx=vm.createContext({window:{}});vm.runInContext(readFileSync(path.resolve(import.meta.dirname,'../../../static/console.js'),'utf8'),ctx)
- const page=ctx.window.toolsPage();page.data={roleGroups:{benchmark:['commander','general','soldier','scout'],general:['planner','worker']},tools:[{name:'submit_fact',description:'fact',source:'RedTrace',enabled:true,roles:['soldier']},{name:'legion_board',description:'board',source:'RedTrace',enabled:false,roles:['commander']}],calls:[],stats:{}}
- assert.deepEqual(Array.from(page.roles),['commander','general','soldier','scout','planner','worker'])
+ const page=ctx.window.toolsPage();page.data={roleGroups:{benchmark:['commander','general','soldier'],general:['planner','worker']},tools:[{name:'submit_fact',description:'fact',source:'RedTrace',enabled:true,roles:['soldier']},{name:'legion_board',description:'board',source:'RedTrace',enabled:false,roles:['commander']}],calls:[],stats:{}}
+ assert.deepEqual(Array.from(page.roles),['commander','general','soldier','planner','worker'])
  page.role='soldier';assert.deepEqual(Array.from(page.filtered,(t:any)=>t.name),['submit_fact'])
  page.role='';page.status='disabled';assert.deepEqual(Array.from(page.filtered,(t:any)=>t.name),['legion_board'])
  page.source='DSH';assert.equal(page.filtered.length,0)

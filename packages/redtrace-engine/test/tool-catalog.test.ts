@@ -22,13 +22,21 @@ test('idle tool page lists real role/native/REA Schemas, including disabled tool
     await inspectToolCatalog(ctx, engine, manager, { skillsDir: root + '/skills' })
     const get = async () => (await (await fetch('http://127.0.0.1:' + (engine.server.address() as any).port + '/console/tools')).json()) as any
     const first = await get(), find = (name: string) => first.tools.find((tool: any) => tool.name === name)
-    for (const name of ['read', 'bash', 'skill', 'terminal_open', 'legion_inspect', 'fgs_publish', 'resource_manage', 'c2_manage', 'tsecbench_task']) assert(find(name), name)
-    assert.equal(find('tsecbench_task').enabled, false, 'Disabled Skill keeps its Schema in the catalog without granting the tool')
+    for (const name of ['read', 'bash', 'skill', 'terminal_open', 'legion_inspect', 'fgs_publish', 'resource_manage', 'c2_manage']) assert(find(name), name)
+    for (const name of ['http_session', 'http_batch', 'http_replay', 'tsecbench_task', 'tsecbench_list', 'tsecbench_start', 'tsecbench_close', 'tsecbench_submit', 'tsecbench_hint']) assert(!find(name), name)
     assert.equal(find('c2_manage').enabled, false)
     assert.equal(find('web_search').enabled, false)
+    assert.equal(find('web_fetch').enabled, false)
     assert.equal(find('fgs_publish').enabled, true)
     assert.equal(find('legion_inspect').manageable, true)
     assert.equal(find('read').manageable, true)
+    assert.deepEqual(find('read').roles, ['soldier','planner','worker'])
+    assert.deepEqual(find('read').roleBindings, ['soldier','planner','worker'])
+    assert(!Object.values(first.roleGroups).flat().includes('scout'))
+    for (const tool of first.tools) {
+      assert.notEqual(tool.role, 'scout', tool.name)
+      assert(![...tool.roles, ...tool.roleBindings, ...tool.schemas.flatMap((schema: any) => schema.roles)].includes('scout'), tool.name)
+    }
     assert.equal(find('fgs_publish').scopes.length, 0)
     assert.equal(first.tools.filter((t: any) => t.name.startsWith('mcp__rea__')).length, 0)
     assert(!find('nmap')); assert(!find('reverse_tools'))

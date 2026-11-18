@@ -11,7 +11,7 @@ window.redtraceWorkbench = {
   changeComposerModel(target){this.reasoningSelections[this.composerChatId(target)]=''},
   resizeComposer(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,160)+'px'},
   submitComposer(event){if(event.shiftKey||event.isComposing||event.keyCode===229)return;event.preventDefault();const form=event.target.form;if(!form.querySelector('button[type=submit]').disabled)form.requestSubmit()},
-  conversationRole(row){if(row.actor==='Commander'||row.actor==='Planner')return this.workbench?.project?.mode==='general'?'planner':'commander';if(['参谋长','全局助手'].includes(row.actor))return 'chief';if(row.actor==='你')return 'user';const worker=this.workbench?.workers.find(w=>w.id===row.run_id||w.label===row.actor);return worker?.role||(['commander','general','soldier','scout','planner','worker'].includes(row.task_type)?row.task_type:'system')},
+  conversationRole(row){if(row.actor==='Commander'||row.actor==='Planner')return this.workbench?.project?.mode==='general'?'planner':'commander';if(['参谋长','全局助手'].includes(row.actor))return 'chief';if(row.actor==='你')return 'user';const worker=this.workbench?.workers.find(w=>w.id===row.run_id||w.label===row.actor);return worker?.role||(['commander','general','soldier','planner','worker'].includes(row.task_type)?row.task_type:'system')},
 
 
   graphLogEvents:[],graphLogHasMore:false,graphLogError:'',
@@ -29,9 +29,33 @@ window.redtraceWorkbench = {
   sendingWorkbench(){return !!this.chatSendingIds[this.composerChatId('workbench')]},
   canComposeWorkbench(){return this.conversationId==='chief'||this.conversationId==='commander'&&this.workbench?.project?.mode==='benchmark'},
   conversationUsage:null,conversationPlanner:null,
-  conversationTokenRows(){const usage=this.conversationId==='commander'?this.workbench?.usage:this.conversationUsage;const selected=this.conversationId==='commander'?[this.workbench?.project?.mode==='general'?'planner':'commander']:['general','soldier','scout','reporter','worker'];return selected.filter(role=>usage?.breakdown?.[role]?.total).map(role=>({role,...usage.breakdown[role]}))},
+  conversationTokenRows(){const usage=this.conversationId==='commander'?this.workbench?.usage:this.conversationUsage;const selected=this.conversationId==='commander'?[this.workbench?.project?.mode==='general'?'planner':'commander']:['general','soldier','reporter','worker'];return selected.filter(role=>usage?.breakdown?.[role]?.total).map(role=>({role,...usage.breakdown[role]}))},
   tokenDetail(row){return '输入 '+this.formatTokens(row.input)+' · 输出 '+this.formatTokens(row.output)+' · 缓存读取 '+this.formatTokens(row.cacheRead)+' · 缓存写入 '+this.formatTokens(row.cacheWrite)+'；Token 非费用'},
-  conversationTaskState(){const graph=this.conversationGraphId();if(!graph)return null;const own=this.legion?.projects?.find(p=>p.id===this.legionProjectId),task=this.workbench?.graphs?.find(g=>g.id===graph);if(own?.platform?.[task?.taskKey]?.confirmed)return{label:'平台已完成',reason:'平台已确认；内部 Goal 与证据验收单独保留。'};const steps=(this.workbench?.steps||[]).filter(s=>s.graphId===graph),parked=steps.find(s=>s.status==='parked'&&s.parkReason);if(parked)return{label:'Commander 已暂停该题',reason:parked.parkReason,resume:parked.resumeCondition};if(this.workbench?.project.status==='stopped')return{label:'项目已停止 · 进度保留'};const goal=this.workbench?.goals?.find(g=>g.graphId===graph&&!g.parentId);if(goal?.status==='achieved')return{label:'目标已验收'};if(goal?.status==='cancelled')return{label:'已结束 · 未宣称目标达成'};if(this.conversationWorkers().some(w=>w.status==='running'))return{label:'执行中'};return{label:'等待题目规划者继续',reason:steps.find(s=>s.failure)?.failure||'任务 Goal 尚未达成；Step 结束不代表题目完成。'}},
+  taskGraphStatus(p,g,taskKey=g?.taskKey){
+    if(p.platform?.[taskKey]?.is_completed===true)return 'completed';
+    if(!g)return 'untracked';
+    if(g.status==='completed'||p.goals.some(goal=>goal.id===g.goalId&&goal.status==='achieved'))return 'internal-achieved';
+    const steps=p.steps.filter(s=>s.graphId===g.id);
+    if(steps.some(s=>s.status==='parked'))return 'parked';
+    return steps.some(s=>s.status==='running')?'running':'pending';
+  },
+  benchmarkTasks(p){
+    const graphs=new Map(p.graphs.filter(g=>g.type==='benchmark_task').map(g=>[g.taskKey,g]));
+    const keys=new Set([...graphs.keys(),...Object.keys(p.platform||{}).filter(key=>p.platform[key].title!=null)]);
+    return [...keys].map(taskKey=>{const graph=graphs.get(taskKey),platform=p.platform?.[taskKey];return {taskKey,graph,platform,title:graph?.title??platform.title,status:this.taskGraphStatus(p,graph,taskKey)};});
+  },
+  benchmarkTaskSummary(p){
+    const tasks=this.benchmarkTasks(p);
+    return tasks.length+' 道题 · '+tasks.filter(task=>task.status==='completed').length+' 道平台已完成 · '+tasks.filter(task=>task.status==='internal-achieved').length+' 道仅内部目标达成 · '+tasks.filter(task=>task.platform?.submitted).length+' 道有提交记录';
+  },
+  filteredBenchmarkTasks(p){
+    const order={running:0,completed:1,'internal-achieved':1};
+    return this.benchmarkTasks(p).filter(task=>(!this.graphQuery||(task.title+' '+task.taskKey).toLowerCase().includes(this.graphQuery.toLowerCase()))&&(!this.graphStatusFilter||task.status===this.graphStatusFilter)).sort((a,b)=>(order[a.status]??2)-(order[b.status]??2)||(this.graphSort==='updatedAt'?(b.graph?.updatedAt??'').localeCompare(a.graph?.updatedAt??''):a.title.localeCompare(b.title)));
+  },
+  benchmarkMetadataText(meta){return 'Flag（正确 / 总数） '+(meta?.correct_flag_count??'未知')+' / '+(meta?.flag_count??'未知')+' · 难度 '+(meta?.difficulty??'未知')+' · 总分 '+(meta?.total_score??'未知')},
+  benchmarkPlatformStatus(meta){return meta?.is_completed===true?'平台已完成':meta?.is_completed===false?'平台未完成':'平台状态未知'},
+  conversationBenchmarkMetadata(){const task=this.workbench?.graphs?.find(g=>g.id===this.conversationGraphId());if(!task?.taskKey)return null;return this.legion?.projects?.find(p=>p.id===this.legionProjectId)?.platform?.[task.taskKey]??{}},
+  conversationTaskState(){const graph=this.conversationGraphId();if(!graph)return null;if(this.conversationBenchmarkMetadata()?.is_completed===true)return{label:'平台已完成',reason:'平台已确认；内部 Goal 与证据验收单独保留。'};const steps=(this.workbench?.steps||[]).filter(s=>s.graphId===graph),parked=steps.find(s=>s.status==='parked'&&s.parkReason);if(parked)return{label:'Commander 已暂停该题',reason:parked.parkReason,resume:parked.resumeCondition};if(this.workbench?.project.status==='stopped')return{label:'项目已停止 · 进度保留'};const goal=this.workbench?.goals?.find(g=>g.graphId===graph&&!g.parentId);if(goal?.status==='achieved')return{label:'目标已验收'};if(goal?.status==='cancelled')return{label:'已结束 · 未宣称目标达成'};if(this.conversationWorkers().some(w=>w.status==='running'))return{label:'执行中'};return{label:'等待题目规划者继续',reason:steps.find(s=>s.failure)?.failure||'任务 Goal 尚未达成；Step 结束不代表题目完成。'}},
   pendingForConversation(id){return(this.workbench?.pendingAgents||[]).filter(a=>a.graphId===id)},
   todoPlaceholder(){const list=this.conversationTodos()||[];const goal=this.workbench?.goals?.find(g=>g.graphId===this.conversationGraphId()&&!g.parentId);return list.length===1&&list[0].content===goal?.description&&!list[0].acceptance},
   todoOwnerLabel(){return this.conversationPlanner?.role==='general'?'General Planner':'自主 Soldier Planner'},

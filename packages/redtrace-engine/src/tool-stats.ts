@@ -7,6 +7,8 @@ import { queryNumber } from './http.ts'
 export function toolStatistics(store: Store, url: URL, names: string[]) {
   const originalName="COALESCE(json_extract(s.data,'$.title'),json_extract(e.data,'$.title'))"
   const aliases=Object.entries(TOOL_DOMAINS).flatMap(([name,actions])=>Object.entries(actions).map(([action,original])=>({name,action,original})))
+  // Retired tool names are grouped only when reading historical Audit events.
+  aliases.push({name:'http_session',action:'batch',original:'http_batch'},{name:'http_session',action:'replay',original:'http_replay'})
   const mapped=(field:'name'|'action')=>`CASE ${originalName} ${aliases.map(a=>`WHEN '${a.original}' THEN '${a[field]}'`).join(' ')} ELSE ${field==='name'?originalName:'NULL'} END`
   const query = `WITH calls AS (
     SELECT run_id, json_extract(data,'$.call_id') AS call_id,

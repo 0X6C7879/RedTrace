@@ -98,7 +98,7 @@ test('Only Benchmark General prompt owns task planning while General mode Comman
   assert(!command.includes('legion_todo'))
   assert(command.includes('You never modify FGS'))
   const prompt=legionMission('general','benchmark');assert(prompt.includes('legion_todo({action:"write",todos})'));assert(prompt.includes('verified FGS Facts'))
-  assert(legionMission('soldier','benchmark').includes('legion_todo'));assert(!legionMission('scout','benchmark').includes('legion_todo'))
+  assert(legionMission('soldier','benchmark').includes('legion_todo'));assert.throws(()=>legionMission('scout','benchmark'),/Invalid benchmark role/)
   const general=legionMission('planner','general')
   for(const text of ['legion_todo','full route once','actual prerequisite Fact IDs','Independent directions'])assert(general.includes(text),text)
   for(const role of ['worker'] as const)assert(!legionMission(role,'general').includes('legion_todo'))

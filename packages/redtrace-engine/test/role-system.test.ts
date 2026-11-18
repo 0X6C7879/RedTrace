@@ -14,15 +14,15 @@ import { toolStatistics } from '../src/tool-stats.ts'
 import { serveEngine } from '../src/index.ts'
 import type { EngineConfig, Worker, Step } from '../src/types.ts'
 
-const worker: Worker = { name:'shared',roles:['commander','general','soldier','scout','planner','worker'],provider:'mock',model:'mock',enabled:true,maxRunning:4,priority:0,backend:'mock' }
+const worker: Worker = { name:'shared',roles:['commander','general','soldier','planner','worker'],provider:'mock',model:'mock',enabled:true,maxRunning:4,priority:0,backend:'mock' }
 
 test('legacy Worker/config migration preserves Benchmark and adds only mapped General qualifications once',()=>{
   const root=mkdtempSync(path.join(os.tmpdir(),'role-migration-'))
   try {
-    mkdirSync(root+'/.redtrace');writeFileSync(root+'/.redtrace/redtrace.yaml',`workers:\n  - name: shared\n    provider: mock\n    roles: [commander, general, soldier, scout]\n  - name: recon\n    provider: mock\n    roles: [scout]\ntasks:\n  soldier: {timeout: 77, conclude_timeout: 9}\ntool_settings:\n  fixture: {enabled: true, workers: [shared]}\n`)
+    mkdirSync(root+'/.redtrace');writeFileSync(root+'/.redtrace/redtrace.yaml',`workers:\n  - name: shared\n    provider: mock\n    roles: [commander, general, soldier]\n  - name: unqualified\n    provider: mock\n    roles: []\ntasks:\n  soldier: {timeout: 77, conclude_timeout: 9}\ntool_settings:\n  fixture: {enabled: true, workers: [shared]}\n`)
     const config=new Configuration(root),first=config.read()
     assert.deepEqual(first.raw.workers[0].roles,[...MODE_ROLES.benchmark,...MODE_ROLES.general])
-    assert.deepEqual(first.raw.workers[1].roles,['scout'])
+    assert.deepEqual(first.raw.workers[1].roles,[])
     assert.deepEqual(first.raw.tool_settings?.fixture.roles,worker.roles)
     assert.equal(first.raw.tool_settings?.fixture.workers,undefined)
     assert.equal(config.resolve(first.raw).taskLimits?.worker.timeout,77)

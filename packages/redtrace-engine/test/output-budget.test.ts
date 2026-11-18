@@ -32,7 +32,7 @@ test('Explore receives knowledge tools and plugin disabling blocks previously ex
  try {
   const tools = graphTools(context,()=>{})
   assert.ok(tools.some(tool=>tool.name==='knowledge_search'))
-  assert.ok(tools.some(tool=>tool.name==='http_batch'))
+  for (const name of ['http_session', 'http_batch', 'http_replay']) assert.ok(!tools.some(tool=>tool.name===name), name)
   enabled=false
   assert.equal(efficiencyToolAvailable(context,'knowledge_search'),false)
   assert.equal(efficiencyToolAvailable(context,'evidence_read'),true)

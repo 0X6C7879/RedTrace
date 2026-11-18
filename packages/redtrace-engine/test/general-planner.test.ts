@@ -51,7 +51,7 @@ test('Planner TodoList survives Store reopen without FGS writes; Worker cannot r
   const context={store,run,worker,config:{workspaceRoot:root,maxSteps:null} as EngineConfig,signal:new AbortController().signal}
   const names=graphTools(context,()=>{}).map(t=>t.name)
   for(const name of ['TodoWrite','legion_todos','legion_spawn','legion_step','legion_update_step','legion_goal','legion_accept','legion_experience_search'])assert(!names.includes(name),name)
-  const launch=launchContext(store,run.id);assert(!('planningTodos' in launch));assert.equal(launch.step?.id,s.id);assert.equal(launch.dependencies?.length,1)
+  const launch=launchContext(store,run.id);assert(!('planningTodos' in launch));assert(!('planningCapacity' in launch));assert.equal(launch.step?.id,s.id);assert.equal(launch.dependencies?.length,1)
   const query=chatTools(store).find(t=>t.name==='project_query')!
   await assert.rejects(query.execute('read-plan',{projectId:p.id,kind:'plan'}),/only by Planner/)
   store.audit({id:'planner-session',project_id:p.id,graph_id:g.id,task_type:'planner'},[{kind:'tool.started',title:'TodoWrite',call_id:'plan',arguments:{todos}}])
@@ -64,9 +64,9 @@ test('Planner TodoList survives Store reopen without FGS writes; Worker cannot r
 test('v2 qualifications/tool bindings collapse Leader/Operator once and preserve Benchmark routes',()=>{
  const root=mkdtempSync(path.join(os.tmpdir(),'general-v3-'))
  try{
-  mkdirSync(path.join(root,'.redtrace'));writeFileSync(path.join(root,'.redtrace/redtrace.yaml'),'role_version: 2\nworkers:\n - {name: shared, provider: mock, roles: [commander, general, soldier, scout, planner, leader, operator]}\ntasks:\n operator: {timeout: 77, conclude_timeout: 9}\ntool_settings:\n fixture: {enabled: true, roles: [soldier, leader, operator]}\n')
+  mkdirSync(path.join(root,'.redtrace'));writeFileSync(path.join(root,'.redtrace/redtrace.yaml'),'role_version: 2\nworkers:\n - {name: shared, provider: mock, roles: [commander, general, soldier, planner, leader, operator]}\ntasks:\n operator: {timeout: 77, conclude_timeout: 9}\ntool_settings:\n fixture: {enabled: true, roles: [soldier, leader, operator]}\n')
   const c=new Configuration(root),first=c.read()
-  assert.deepEqual(first.raw.workers[0].roles,['commander','general','soldier','scout','planner','worker'])
+  assert.deepEqual(first.raw.workers[0].roles,['commander','general','soldier','planner','worker'])
   assert.deepEqual(first.raw.tool_settings?.fixture.roles,['soldier','worker']);assert.equal(first.raw.tasks?.worker.timeout,77)
   c.commit(first.revision,()=>{});assert.equal(c.read().raw.role_version,3);assert.equal(c.read().raw.tasks?.operator,undefined)
   assert.deepEqual(c.read().raw.workers[0].roles,first.raw.workers[0].roles)

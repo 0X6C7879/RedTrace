@@ -13,7 +13,7 @@ import { legionTools } from '../src/legion-tools.ts'
 import { Scheduler } from '../src/scheduler.ts'
 import type { EngineConfig, Fact, Goal, Step, Run, TaskAssignment, GraphPlanner } from '../src/types.ts'
 
-const worker = {name:'fixture',backend:'mock' as const,provider:'fixture',model:'fixture',enabled:true,roles:['general','soldier','scout'] as ('general'|'soldier'|'scout')[],priority:0,maxRunning:8}
+const worker = {name:'fixture',backend:'mock' as const,provider:'fixture',model:'fixture',enabled:true,roles:['general','soldier'] as ('general'|'soldier')[],priority:0,maxRunning:8}
 const settle = async () => { for(let i=0;i<15;i++) await new Promise<void>(r=>setImmediate(r)) }
 function fixture(t:any) {
   const root=mkdtempSync(path.join(os.tmpdir(),'artex-planner-')),store=new Store(root+'/engine.db'),legion=new LegionStore(store)

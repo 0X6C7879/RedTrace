@@ -1,6 +1,6 @@
 # 模式角色、工具绑定与调用统计
 
-> 当前契约（2026-11-18）覆盖下文历史记录：新 Benchmark 题目先完成 Scout 侦察与分类，再调度 Soldier 或 General；Commander 仅管理全局状态/资源、只读平台清单，不启停实例、不提交 flag、不读取原始攻击证据。REA 已迁为 CLI-only（0 MCP Schema）。工具目录每工具一行，保留角色 Schema 变体。详见 `OPTIMIZATION-REPORT.md` 和 `docs/rea-integration.md`。
+> 当前契约：Scout 已退出固定角色与工具绑定。Benchmark 缺少已有的证据分类时保持未分配，不自动转给其他角色；Commander 仅管理全局状态/资源、只读平台清单，不启停实例、不提交 flag、不读取原始攻击证据。REA 已迁为 CLI-only（0 MCP Schema）。工具目录每工具一行，保留角色 Schema 变体。详见 `OPTIMIZATION-REPORT.md` 和 `docs/rea-integration.md`。
 
 
 ## 身份与执行
@@ -9,7 +9,7 @@
 
 | 模式 | 固定角色 |
 | --- | --- |
-| Benchmark | Commander / General / Soldier / Scout |
+| Benchmark | Commander / General / Soldier |
 | General | Planner / Worker |
 
 General 的 Planner 是唯一规划者：独占主 FGS、Goal 验收、Step 创建和任务级 TodoList。Worker 仅领取执行 Step、调用执行工具并写回 Fact / Finding；没有 TodoList、建 Step、Goal 管理或验收工具。不创建动态 Agent、专业小队或 Sapper 式升级角色。Benchmark 专业 Agent 仍继承 Soldier；原有报告、单题规划、首派、巡检和交接保持。
@@ -30,9 +30,9 @@ General 的图状态变化、Worker 完成/失败和 Finding 写入通过现有�
 
 ## 配置迁移
 
-同一个 Worker 可同时具有 Benchmark 和 General 资格；Provider、Model、max_running、priority 不合并或复制。`role_version: 3` 标识当前配置。未版本化配置保留 Benchmark 资格，补上 commander→planner、general/soldier→worker；不把 scout 补为 General 资格。v2 的 leader/operator 及工具绑定合并为 worker；worker 超时优先继承旧 operator，否则 leader。新显式资格不再自动扩展。
+同一个 Worker 可同时具有 Benchmark 和 General 资格；Provider、Model、max_running、priority 不合并或复制。`role_version: 3` 标识当前配置。未版本化配置保留 Benchmark 资格，补上 commander→planner、general/soldier→worker；删除旧 Scout 资格，不补发其他资格。v2 的 leader/operator 及工具绑定合并为 worker；worker 超时优先继承旧 operator，否则 leader。新显式资格不再自动扩展。
 
-旧 Worker 实例工具绑定迁为固定角色集合。旧 General Step 的 general/soldier/scout/reporter/leader/operator 均迁为 worker，解除 specialist 和 parentStepId，保留报告 Finding 引用、Run/Session、交接和证据。原始审计不重写，查询按模式映射当前角色。
+旧 Worker 实例工具绑定迁为固定角色集合。旧 General Step 的 general/soldier/reporter/leader/operator 迁为 worker；历史 Scout Step 保持原角色，解除 specialist 和 parentStepId，保留报告 Finding 引用、Run/Session、交接和证据。原始审计不重写，查询按模式映射当前角色。
 
 ## 工具注册和权限
 
@@ -87,7 +87,7 @@ General 的图状态变化、Worker 完成/失败和 Finding 写入通过现有�
 
 ## 验证
 
-回归覆盖六角色路由、同 Worker 跨模式并发、旧配置/Step 迁移、Planner 规划权限、Benchmark 小队边界和动态模板、General 禁止动态编队、前置依赖、Debounce 事件触发、工具启停/固定角色绑定与 stale/PTC 调用、真实目录、502 次跨 Run 审计配对/分页与 API。Benchmark 的 General / Soldier / Scout / 内部报告 Mission 保持原文；Commander 按用户后续要求补充本地证据读写和交接约束，不改变首派、巡检、换人、止损或常驻 Session 调度。Commander 增加 evidence_read / read_run 检查工具，平台工具数由 20 变为 22；其他 Benchmark 执行权限不变。
+历史回归覆盖当时的六角色路由、同 Worker 跨模式并发、旧配置/Step 迁移、Planner 规划权限、Benchmark 小队边界和动态模板、General 禁止动态编队、前置依赖、Debounce 事件触发、工具启停/固定角色绑定与 stale/PTC 调用、真实目录、502 次跨 Run 审计配对/分页与 API。Benchmark 的 General / Soldier / Scout / 内部报告 Mission 保持原文；Commander 按用户后续要求补充本地证据读写和交接约束，不改变首派、巡检、换人、止损或常驻 Session 调度。Commander 增加 evidence_read / read_run 检查工具，平台工具数由 20 变为 22；其他 Benchmark 执行权限不变。
 
 原生 DSH 使用本地模拟 Provider 验证会话、并发、Goal、TodoList、报告与交接，不代表外部商业模型或真实 Benchmark 成绩。REA 使用真实 CLI 和本机 Ghidra 对 ELF / PE 反编译，验证同一 MCP Program 两次查询只保留一个 Java 进程，以及取消、超时和清理；Hopper GUI 没有实际设备/许可证验收。
 

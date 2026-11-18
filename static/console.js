@@ -46,7 +46,7 @@ window.filesPage = function () {
 };
 window.toolsPage = function () {
   return {
-    data:{tools:[],roleGroups:{benchmark:['commander','general','soldier','scout'],general:['planner','worker']},runs:[]},
+    data:{tools:[],roleGroups:{},runs:[]},
     query:'',source:'',mode:'',role:'',status:'',detail:null,draft:{enabled:true,roles:[],actions:{}},saving:false,saved:'',error:'',loading:false,active:false,
     usage:null,statsLoading:false,statsFilters:{projectId:'',mode:'',role:'',from:'',to:''},historyTool:'',historyOffset:0,
     get sources(){return [...new Set(this.data.tools.map(t=>t.source))].sort()},

@@ -1,5 +1,5 @@
 import { domainAction } from '../../redtrace-dsh/src/tool-domains.ts'
-import { FIXED_ROLES, LEGACY_GENERAL_ROLES } from '../../redtrace-dsh/src/roles.ts'
+import { FIXED_ROLES, LEGACY_GENERAL_ROLES, MODE_ROLES } from '../../redtrace-dsh/src/roles.ts'
 import { createHash, createHmac, createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'node:crypto'
 import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -74,7 +74,7 @@ export class Configuration {
         mkdirSync(this.secretRoot, { recursive: true }); copyFileSync(path.join(sourceSecrets, file), path.join(this.secretRoot, file))
       }
       atomicWrite(this.filename, readFileSync(source))
-    } else atomicWrite(this.filename, stringify({ providers: {}, workers: [], runtime: { max_workers: 4, max_project_workers: 4, max_running_projects: 1 }, tasks: { commander: { timeout: 300, conclude_timeout: 30, max_intents: 4 }, general: { timeout: 900, conclude_timeout: 30 }, soldier: { timeout: 900, conclude_timeout: 30 }, scout: { timeout: 240, conclude_timeout: 30 } } } satisfies RawConfig))
+    } else atomicWrite(this.filename, stringify({ providers: {}, workers: [], runtime: { max_workers: 4, max_project_workers: 4, max_running_projects: 1 }, tasks: { commander: { timeout: 300, conclude_timeout: 30, max_intents: 4 }, general: { timeout: 900, conclude_timeout: 30 }, soldier: { timeout: 900, conclude_timeout: 30 } } } satisfies RawConfig))
     this.commit(this.read().revision, () => {})
   }
   read(): { raw: RawConfig; revision: string } {
@@ -85,7 +85,7 @@ export class Configuration {
     if (raw.role_version !== 2 && raw.role_version !== 3) {
       const mapped = Object.fromEntries(['commander','general','soldier'].map(r=>[r,LEGACY_GENERAL_ROLES[r]]))
       for (const worker of raw.workers) {
-        const roles = worker.roles ?? ['commander','general','soldier','scout']
+        const roles = worker.roles ?? MODE_ROLES.benchmark
         worker.roles = [...new Set([...roles, ...roles.flatMap(role => mapped[role] ? [mapped[role] as NonNullable<Worker['roles']>[number]] : [])])]
       }
       for (const setting of Object.values(raw.tool_settings ?? {})) if (setting.workers !== undefined) {
@@ -149,7 +149,7 @@ export class Configuration {
         priority: integer(w.priority ?? 0, 'priority', -2147483648), maxRunning: integer(w.max_running ?? 1, 'max_running', 1), backend: w.provider === 'mock' ? 'mock' as const : 'dsh' as const }
     })
     if (new Set(workers.map(w => w.name)).size !== workers.length) throw new HttpError(422, 'Worker names must be unique')
-    return { workers, providers, llmPolling, commanderInspection:{active:integer(raw.tasks?.commander?.inspection_interval??60,'inspection_interval',1),idle:integer(raw.tasks?.commander?.idle_inspection_interval??90,'idle_inspection_interval',1)}, taskLimits: Object.fromEntries(FIXED_ROLES.map(role=>[role,{timeout:integer(raw.tasks?.[role]?.timeout??(role==='scout'?240:['commander','planner'].includes(role)?300:900),role+' timeout',1),concludeTimeout:integer(raw.tasks?.[role]?.conclude_timeout??30,role+' conclude timeout',1)}])), commonEnv: Object.fromEntries(Object.entries(raw.common_env ?? {}).map(([name, value]) => { if (!/^[A-Z][A-Z0-9_]*$/.test(name) || typeof value !== 'string') throw new HttpError(422, 'Invalid common environment'); return [name, resolve(value)!] })), maxWorkers: integer(raw.runtime?.max_workers ?? 4, 'max_workers', 1), maxProjectWorkers: integer(raw.runtime?.max_project_workers ?? 4, 'max_project_workers', 1), maxRunningProjects: integer(raw.runtime?.max_running_projects ?? 1, 'max_running_projects', 1),
+    return { workers, providers, llmPolling, commanderInspection:{active:integer(raw.tasks?.commander?.inspection_interval??60,'inspection_interval',1),idle:integer(raw.tasks?.commander?.idle_inspection_interval??90,'idle_inspection_interval',1)}, taskLimits: Object.fromEntries(FIXED_ROLES.map(role=>[role,{timeout:integer(raw.tasks?.[role]?.timeout??(['commander','planner'].includes(role)?300:900),role+' timeout',1),concludeTimeout:integer(raw.tasks?.[role]?.conclude_timeout??30,role+' conclude timeout',1)}])), commonEnv: Object.fromEntries(Object.entries(raw.common_env ?? {}).map(([name, value]) => { if (!/^[A-Z][A-Z0-9_]*$/.test(name) || typeof value !== 'string') throw new HttpError(422, 'Invalid common environment'); return [name, resolve(value)!] })), maxWorkers: integer(raw.runtime?.max_workers ?? 4, 'max_workers', 1), maxProjectWorkers: integer(raw.runtime?.max_project_workers ?? 4, 'max_project_workers', 1), maxRunningProjects: integer(raw.runtime?.max_running_projects ?? 1, 'max_running_projects', 1),
       maxBenchmarkTasks: raw.tasks?.commander?.max_benchmark_tasks === undefined ? null : integer(raw.tasks.commander.max_benchmark_tasks, 'max_benchmark_tasks', 1),
       maxSteps: raw.tasks?.commander?.max_intents === undefined ? null : integer(raw.tasks.commander.max_intents, 'max_intents', 1), decideTimeout: integer(raw.tasks?.commander?.timeout ?? 300, 'commander timeout', 1), executeTimeout: integer(raw.tasks?.soldier?.timeout ?? 900, 'execute timeout', 1), concludeTimeout: integer(raw.tasks?.soldier?.conclude_timeout ?? 30, 'conclude timeout', 1),
       bootstrapTimeout: integer(raw.tasks?.soldier?.timeout ?? 900, 'bootstrap timeout', 1), bootstrapConcludeTimeout: integer(raw.tasks?.soldier?.conclude_timeout ?? 30, 'bootstrap conclude timeout', 1), workspaceRoot: this.workspaceRoot }

@@ -8,13 +8,13 @@ import type {EngineConfig, Worker} from '../src/types.ts'
 test('Workers group by question title, keep run isolation and retain resumed paths', async()=>{
   const store=new Store(':memory:')
   const project=store.createProject({mode:'benchmark',title:'Benchmark task',origin:'local',goal:'verify'}).project
-  const route:Worker={name:'fixture',backend:'mock',provider:'mock',model:'fixture',enabled:true,maxRunning:3,priority:0,roles:['scout']}
+  const route:Worker={name:'fixture',backend:'mock',provider:'mock',model:'fixture',enabled:true,maxRunning:3,priority:0,roles:['soldier']}
   const cases=[['中文题目 · SQL injection','中文题目 · SQL injection'],['题目 / 路径\\测试?','题目 _ 路径_测试_'],['旧题目','existing-graph-id']]
   const expected=new Map<string,string>()
   let resumedId:string|undefined
   for(const [i,[title,directory]]of cases.entries()){
     const graph=store.createGraph(project.id,{taskKey:String(i),title,origin:'local',goal:'verify'})
-    const step=store.forGraph(project.id,graph.id).addStep(project.id,{role:'scout',taskKey:String(i),description:'verify cwd',sourceIds:[graph.originId]})
+    const step=store.forGraph(project.id,graph.id).addStep(project.id,{role:'soldier',taskKey:String(i),description:'verify cwd',sourceIds:[graph.originId]})
     expected.set(graph.id,directory)
     if(i===2){
       const run=store.claim(project.id,'execute',route,step.id)

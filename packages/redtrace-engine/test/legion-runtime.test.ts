@@ -77,11 +77,11 @@ test('Commander completion holds the existing campaign claim until native flush/
 
 test('role/model routes survive configuration snapshots and reject unknown roles', t => {
   const { root } = fixture(t), config = new Configuration(root); config.initialize()
-  config.commit(config.read().revision, raw => { raw.workers = [{ ...worker, roles: ['scout','soldier'] }] })
-  assert.deepEqual(config.resolvedSnapshot().config.workers[0].roles, ['scout','soldier'])
-  assert.deepEqual(config.snapshot().workers[0].roles, ['scout','soldier'])
+  config.commit(config.read().revision, raw => { raw.workers = [{ ...worker, roles: ['general','soldier'] }] })
+  assert.deepEqual(config.resolvedSnapshot().config.workers[0].roles, ['general','soldier'])
+  assert.deepEqual(config.snapshot().workers[0].roles, ['general','soldier'])
   assert.throws(() => config.commit(config.read().revision, raw => { raw.workers[0].roles = ['reason' as any] }), /Invalid Legion roles/)
-  for (const role of ['commander','general','soldier','scout'] as const) assert.ok(legionMission(role).includes(role.toUpperCase()))
+  for (const role of ['commander','general','soldier'] as const) assert.ok(legionMission(role).includes(role.toUpperCase()))
 })
 
 

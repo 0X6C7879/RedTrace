@@ -13,7 +13,7 @@
 <script src="/static/vendor/cytoscape-dagre.js"></script>
 <script defer src="/static/audit.js?v=20261116-role-tools-2"></script>
 <script defer src="/static/capabilities.js?v=20261115-console-1"></script>
-<script defer src="/static/plugins.js?v=20260825-plugins-2"></script>
+<script defer src="/static/plugins.js?v=20260825-plugins-3"></script>
 <!-- Previous cache key: operations.js?v=20260810-performance-1 -->
 <script defer src="/static/operations.js?v=20261015-c2-auth-1"></script>
 <script defer src="/static/console.js?v=20261116-role-tools-2"></script>
@@ -348,7 +348,7 @@
     <p class="console-error" role="alert" x-show="commanderError()" x-text="'调度已停止：'+commanderError()"></p>
     <div x-show="legionPanel==='commander'" class="wb-layout">
       <aside class="wb-sessions" aria-label="Project 会话列表"><button class="wb-session wb-pinned" x-show="workbench?.project.mode==='general'" :aria-current="conversationId==='chief'?'page':null" @click="selectConversation('chief')"><b>参谋长</b><small>项目主会话</small></button><button class="wb-session wb-pinned" :aria-current="conversationId==='commander'?'page':null" @click="selectConversation('commander')"><b x-text="workbench?.project.mode==='general'?'Planner':'Commander'"></b><small x-text="workbench?.project.mode==='general'?'只读 · FGS 与调度':'项目主会话'"></small></button><h2>Workers</h2><details class="wb-pending-group" x-show="workbench?.project.mode==='general'&&workbench?.pendingAgents?.length"><summary x-text="'待领取 Step · '+(workbench?.pendingAgents?.length||0)"></summary><template x-for="agent in workbench?.pendingAgents||[]" :key="agent.stepId"><div class="wb-pending-agent"><b x-text="agent.title"></b><small x-text="agent.waitingReason"></small><p x-text="agent.mission"></p></div></template></details><input class="wb-search" x-model="conversationQuery" placeholder="搜索会话" aria-label="搜索 Worker 会话"><template x-for="c in workbenchConversations()" :key="c.id"><button class="wb-session" :aria-current="conversationId===c.id?'page':null" @click="selectConversation(c.id)"><span class="wb-session-title"><b x-text="c.title"></b><i x-show="c.running" class="wb-running" aria-label="执行中"></i></span><small x-text="new Date(c.updatedAt).toLocaleTimeString()"></small><small class="wb-queue-status" x-show="pendingForConversation(c.graphId).length" x-text="pendingForConversation(c.graphId).map(a=>a.title+' · '+a.waitingReason).join('；')"></small></button></template><p class="wb-empty" x-show="!workbenchConversations().length">暂无 Worker 会话</p></aside>
-      <section class="wb-conversation" aria-label="会话消息流"><label class="wb-history-selector" x-show="conversationId==='commander'&&commanderSessions().length>1">会话历史<select aria-label="项目协调者历史会话" x-model="commanderLogSession" @change="selectCommanderHistory()"><option value="">当前会话</option><template x-for="(id,index) in commanderSessions()" :key="id"><option :value="id" x-text="'Session '+(index+1)+(id===legion?.campaign?.sessionId?' · 当前':' · 接力历史')"></option></template></select></label><header class="wb-conversation-heading"><div><h2 x-text="conversationTitle()"></h2><details class="wb-task-state" x-show="conversationTaskState()"><summary x-text="conversationTaskState()?.label"></summary><p x-text="conversationTaskState()?.reason||''"></p><p x-show="conversationTaskState()?.resume" x-text="'恢复条件：'+conversationTaskState()?.resume"></p></details></div><div class="wb-token-summary" aria-label="当前会话 Token 消耗" title="本题/当前角色累计，含缓存，非费用"><small>TOKEN</small><template x-for="row in conversationTokenRows()" :key="row.role"><span :class="'provider-'+row.role" :title="tokenDetail(row)" tabindex="0"><b class="rt-role-token-name" x-text="row.role"></b><i class="rt-token-dot" :class="'provider-dot-'+row.role" aria-hidden="true"></i><strong x-text="formatTokens(row.total)"></strong></span></template><small x-show="!conversationTokenRows().length">暂无记录</small></div><button class="legion-button" x-show="conversationId!=='commander'&&conversationId!=='chief'" @click="openProject(legionProjectId,workbench.conversations.find(c=>c.id===conversationId).graphId)">打开 FGS</button></header>
+      <section class="wb-conversation" aria-label="会话消息流"><label class="wb-history-selector" x-show="conversationId==='commander'&&commanderSessions().length>1">会话历史<select aria-label="项目协调者历史会话" x-model="commanderLogSession" @change="selectCommanderHistory()"><option value="">当前会话</option><template x-for="(id,index) in commanderSessions()" :key="id"><option :value="id" x-text="'Session '+(index+1)+(id===legion?.campaign?.sessionId?' · 当前':' · 接力历史')"></option></template></select></label><header class="wb-conversation-heading"><div><h2 x-text="conversationTitle()"></h2><small x-show="conversationBenchmarkMetadata()" x-text="benchmarkMetadataText(conversationBenchmarkMetadata())+' · '+benchmarkPlatformStatus(conversationBenchmarkMetadata())"></small><details class="wb-task-state" x-show="conversationTaskState()"><summary x-text="conversationTaskState()?.label"></summary><p x-text="conversationTaskState()?.reason||''"></p><p x-show="conversationTaskState()?.resume" x-text="'恢复条件：'+conversationTaskState()?.resume"></p></details></div><div class="wb-token-summary" aria-label="当前会话 Token 消耗" title="本题/当前角色累计，含缓存，非费用"><small>TOKEN</small><template x-for="row in conversationTokenRows()" :key="row.role"><span :class="'provider-'+row.role" :title="tokenDetail(row)" tabindex="0"><b class="rt-role-token-name" x-text="row.role"></b><i class="rt-token-dot" :class="'provider-dot-'+row.role" aria-hidden="true"></i><strong x-text="formatTokens(row.total)"></strong></span></template><small x-show="!conversationTokenRows().length">暂无记录</small></div><button class="legion-button" x-show="conversationId!=='commander'&&conversationId!=='chief'" @click="openProject(legionProjectId,workbench.conversations.find(c=>c.id===conversationId).graphId)">打开 FGS</button></header>
         <p class="console-error" role="alert" x-show="inputErrors[workbench?.input?.id]||conversationError||workbench?.chief?.error" x-text="inputErrors[workbench?.input?.id]||conversationError||workbench?.chief?.error"></p>
         <div class="wb-messages" role="log" aria-label="Project 消息"><button class="wb-history" x-show="conversationId==='chief'?chiefHasMore:conversationId==='commander'?commanderHasMore:conversationHasMore" @click="loadConversation(true)" :disabled="conversationLoading">更多记录</button><p class="wb-empty" x-show="!conversationRows().length" x-text="conversationLoading?'读取中…':'暂无记录'"></p><div x-data="runtimeLog()" x-effect="setRuntimeEvents(conversationRows(),conversationWorkers(),legionProjectId+':'+conversationId,legionProjectId,conversationGraphId())"><div class="runtime-log-controls"><label class="runtime-context-toggle"><input type="checkbox" x-model="showRuntimeContext">系统上下文</label><div class="runtime-role-filters"><button type="button" @click="selectedProvider='all'" :aria-pressed="selectedProvider==='all'">全部</button><template x-for="role in runtimeRoles()" :key="role"><button type="button" @click="selectedProvider=role" :aria-pressed="selectedProvider===role" :class="providerClass(role)" x-text="providerLabel(role)"></button></template></div><select x-model="selectedRun" aria-label="筛选成员"><option value="all">全部成员</option><template x-for="run in runs" :key="run.id"><option :value="run.id" x-text="(run.label||run.worker)+' · '+runStatusLabel(run.status)"></option></template></select></div></div></div>
         <div class="rt-todo-bar" x-show="conversationTodos()!==null"><details class="rt-todo rt-todo-up" x-effect="conversationId;legionProjectId;$el.open=false" @click.outside="$el.open=false" @keydown.escape.prevent.stop="$el.open=false">
@@ -389,9 +389,23 @@
 
     </div>
     <div class="wb-page-content" x-show="legionPanel==='tasks'"><template x-for="p in legion?.projects||[]" :key="p.id"><div>            <section class="benchmark-task-section" aria-label="题目状态" x-show="p.mode==='benchmark'">
-              <div class="benchmark-task-heading"><div><h3>全部题目</h3><p class="legion-muted" x-text="benchmarkTaskGraphs(p).length+' 道题 · '+benchmarkTaskGraphs(p).filter(g=>taskGraphStatus(p,g)==='completed').length+' 道已完成 · '+benchmarkTaskGraphs(p).filter(g=>p.platform?.[g.taskKey]?.submitted).length+' 道有提交记录 · '+benchmarkTaskGraphs(p).filter(g=>p.platform?.[g.taskKey]?.confirmed).length+' 道平台确认'"></p></div><div class="benchmark-task-filters"><input x-model="graphQuery" aria-label="搜索题目" placeholder="搜索题目"><select x-model="graphStatusFilter" aria-label="筛选题目状态"><option value="">全部状态</option><option value="pending">待处理</option><option value="scouting">侦察中</option><option value="running">执行中</option><option value="completed">已完成</option><option value="parked">已搁置</option></select></div></div>
-              <div class="benchmark-task-grid"><template x-for="g in filteredTaskGraphs(p)" :key="g.id"><article class="benchmark-task-card" :data-state="taskGraphStatus(p,g)"><button type="button" class="benchmark-task-open" @click="openProject(p.id,g.id)" :aria-label="'查看 '+g.title+' 的 FGS 图与 Worker 日志'"><span class="benchmark-task-key" x-text="g.taskKey||'题目'"></span><strong x-text="g.title"></strong><span class="legion-badge" :data-state="taskGraphStatus(p,g)" x-text="taskGraphStatus(p,g)==='completed'?(p.platform?.[g.taskKey]?.confirmed?'平台已完成':'内部目标达成'):legionStatus(taskGraphStatus(p,g))"></span><small x-text="'Goal '+p.goals.filter(goal=>goal.graphId===g.id&&goal.status==='achieved').length+'/'+p.goals.filter(goal=>goal.graphId===g.id).length+' · 执行中 '+p.runs.filter(r=>r.graphId===g.id&&r.status==='running').length+' · '+(p.platform?.[g.taskKey]?.confirmed?'平台已确认':p.platform?.[g.taskKey]?.submitted?'已提交待复核':'平台状态未确认')"></small></button><div class="benchmark-task-actions" x-show="taskGraphStatus(p,g)!=='completed'"><button type="button" x-show="taskGraphStatus(p,g)!=='parked'" :disabled="p.status!=='active'||!p.steps.some(s=>s.graphId===g.id&&!['done','cancelled'].includes(s.status))" @click="openLegionEditor('park',p,{taskKey:g.taskKey})">搁置</button><button type="button" x-show="taskGraphStatus(p,g)==='parked'" :disabled="!!legionResumeBlock(p,g.taskKey)" @click="openLegionEditor('resume',p,{taskKey:g.taskKey})">恢复</button></div></article></template></div>
-              <p class="legion-muted" x-show="!filteredTaskGraphs(p).length">没有符合条件的题目。</p>
+              <div class="benchmark-task-heading"><div><h3>全部题目</h3><p class="legion-muted" x-text="benchmarkTaskSummary(p)"></p></div><div class="benchmark-task-filters"><input x-model="graphQuery" aria-label="搜索题目" placeholder="搜索题目"><select x-model="graphStatusFilter" aria-label="筛选题目状态"><option value="">全部状态</option><option value="pending">待处理</option><option value="running">执行中</option><option value="completed">平台已完成</option><option value="internal-achieved">仅内部目标达成</option><option value="parked">已搁置</option></select></div></div>
+              <div class="benchmark-task-grid">
+                <template x-for="task in filteredBenchmarkTasks(p)" :key="task.taskKey">
+                  <article class="benchmark-task-card" :data-state="task.status">
+                    <button type="button" class="benchmark-task-open" :disabled="!task.graph" @click="openProject(p.id,task.graph.id)" :aria-label="task.graph?'查看 '+task.title+' 的 FGS 图与 Worker 日志':null">
+                      <span class="benchmark-task-key" x-text="task.taskKey"></span><strong x-text="task.title"></strong>
+                      <span class="legion-badge" :data-state="task.status" x-text="task.status==='completed'?'平台已完成':task.status==='internal-achieved'?'内部目标达成':task.graph?legionStatus(task.status):'无本地图'"></span>
+                      <small><span class="block" x-text="benchmarkMetadataText(task.platform)"></span><span x-text="benchmarkPlatformStatus(task.platform)+(task.platform?.submitted?' · 有提交记录':'')"></span><span class="block" x-show="task.graph" x-text="task.graph ? 'Goal '+p.goals.filter(goal=>goal.graphId===task.graph.id&&goal.status==='achieved').length+'/'+p.goals.filter(goal=>goal.graphId===task.graph.id).length+' · 执行中 '+p.runs.filter(r=>r.graphId===task.graph.id&&r.status==='running').length : ''"></span></small>
+                    </button>
+                    <div class="benchmark-task-actions" x-show="task.graph&&!['completed','internal-achieved'].includes(task.status)">
+                      <button type="button" x-show="task.status!=='parked'" :disabled="p.status!=='active'||!p.steps.some(s=>s.graphId===task.graph?.id&&!['done','cancelled'].includes(s.status))" @click="openLegionEditor('park',p,{taskKey:task.taskKey})">搁置</button>
+                      <button type="button" x-show="task.status==='parked'" :disabled="!!legionResumeBlock(p,task.taskKey)" @click="openLegionEditor('resume',p,{taskKey:task.taskKey})">恢复</button>
+                    </div>
+                  </article>
+                </template>
+              </div>
+              <p class="legion-muted" x-show="!filteredBenchmarkTasks(p).length">没有符合条件的题目。</p>
             </section></div></template></div>
     <section x-show="legionPanel==='findings'" class="wb-page-content project-findings" data-findings-view x-data="findingsPage()" x-effect="setScope(legionProjectId,'',appPage==='workspace'&&view==='benchmark'&&legionPanel==='findings')"></section>
     <div class="wb-page-content" x-show="legionPanel==='knowledge'"><section class="wb-review"><h2>成果与执行复盘</h2><template x-for="finding in workbench?.findings||[]" :key="finding.id"><details><summary x-text="finding.title"></summary><p x-text="finding.description"></p><button class="legion-button" @click="openProject(legionProjectId,finding.graphId)">查看证据图</button></details></template><template x-for="w in (workbench?.workers||[]).filter(w=>w.status!=='running'||w.handoff)" :key="w.id"><details><summary><b x-text="w.label"></b> · <span x-text="legionStatus(w.status)"></span> · <span x-text="w.tokens+' Token · '+w.facts+' 证据'"></span></summary><p x-text="w.mission"></p><p x-show="w.error" x-text="w.error"></p><pre x-show="w.handoff" x-text="w.handoff"></pre><small x-show="w.predecessorRunId" x-text="'接力自 '+workerLabel(w.predecessorRunId)"></small></details></template><p x-show="!workbench?.workers.length&&!workbench?.findings.length">暂无复盘</p></section>        <section x-show="legionPanel==='knowledge'" class="legion-card" aria-labelledby="legion-knowledge-title">
@@ -609,9 +623,9 @@
       <span class="font-semibold text-slate-700 tracking-tight">RedTrace</span>
     </div>
     <div class="flex shrink-0 items-center gap-2 text-[11px] text-slate-400 tabular-nums"
-      title="全局累计用量：Commander / General / Soldier / Scout；不代表当前上下文压力">
+      title="全局累计用量：按历史会话角色汇总；不代表当前上下文压力">
       <span class="font-medium uppercase tracking-[0.12em] text-slate-400">Token</span>
-      <template x-for="role in ['commander','general','soldier','scout','planner','worker','reporter'].filter(role=>globalUsage?.[role])" :key="role"><span class="flex items-center gap-1" :class="'provider-'+role" :title="globalUsage?.breakdown?.[role]?tokenDetail(globalUsage.breakdown[role]):role"><b class="rt-role-token-name" x-text="role"></b><span class="h-1.5 w-1.5 rounded-full" :class="'provider-dot-'+role"></span><span x-text="formatTokens(globalUsage?.[role])"></span></span></template>
+      <template x-for="role in ['commander','general','soldier','planner','worker','reporter'].filter(role=>globalUsage?.[role])" :key="role"><span class="flex items-center gap-1" :class="'provider-'+role" :title="globalUsage?.breakdown?.[role]?tokenDetail(globalUsage.breakdown[role]):role"><b class="rt-role-token-name" x-text="role"></b><span class="h-1.5 w-1.5 rounded-full" :class="'provider-dot-'+role"></span><span x-text="formatTokens(globalUsage?.[role])"></span></span></template>
       <span class="flex items-center gap-1 font-semibold text-slate-600" title="总计">
         共 <span x-text="formatTokens(globalUsage?.total)"></span>
       </span>
@@ -781,7 +795,7 @@
     <div class="flex-1"></div>
     <div class="flex shrink-0 items-center gap-2.5 text-xs tabular-nums"
       title="当前 FGS 累计用量">
-      <template x-for="role in (project?.project.mode==='general'?['planner','worker']:['general','soldier','scout','reporter'])" :key="role"><span class="flex items-center gap-1" :class="'provider-'+role" :title="role.charAt(0).toUpperCase()+role.slice(1)"><span class="h-1.5 w-1.5 rounded-full" :class="'provider-dot-'+role"></span><span x-text="formatTokens(tokenUsage?.[role])"></span></span></template>
+      <template x-for="role in (project?.project.mode==='general'?['planner','worker']:['general','soldier','reporter'])" :key="role"><span class="flex items-center gap-1" :class="'provider-'+role" :title="role.charAt(0).toUpperCase()+role.slice(1)"><span class="h-1.5 w-1.5 rounded-full" :class="'provider-dot-'+role"></span><span x-text="formatTokens(tokenUsage?.[role])"></span></span></template>
       <span class="font-medium text-slate-500" title="总计">
         共 <span x-text="formatTokens(tokenUsage?.total)"></span>
       </span>
@@ -1932,7 +1946,7 @@
     </div>
   </div>
 </section>
-<section x-show="appPage === 'plugins'" x-cloak class="h-full min-h-0 overflow-y-auto bg-slate-50/60" x-data="pluginsPage()" x-init="init()">
+<section x-show="appPage === 'plugins'" x-cloak class="h-full min-h-0 overflow-y-auto bg-slate-50/60" x-data="pluginsPage()">
   <div class="mx-auto max-w-5xl px-4 py-5 sm:px-8 sm:py-7">
     <div class="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
       <div class="flex items-center gap-3">
@@ -1952,7 +1966,7 @@
     </div>
 
     <div class="mt-4 flex items-center gap-2 border-y border-slate-100 py-2.5 text-xs text-slate-400">
-      <span x-text="`${plugins.length} 个插件`"></span><span>·</span>
+      <span x-text="`${pluginCount} 个插件`"></span><span>·</span>
       <span x-text="`${runningCount} 个运行中`"></span>
     </div>
 
@@ -1989,7 +2003,7 @@
                 'text-slate-300': plugin.status === 'stopped',
                 'text-red-500': plugin.status === 'error',
               }" x-text="statusLabel(plugin)"></span>
-              <button x-show="plugin.canUninstall" type="button" @click="uninstallArmedId === plugin.id ? uninstall(plugin) : armUninstall(plugin)" class="capability-press h-8 shrink-0 rounded-lg px-2.5 text-xs transition" :class="uninstallArmedId === plugin.id ? 'bg-red-500 font-medium text-white' : 'text-red-500 hover:bg-red-50'" x-text="uninstallArmedId === plugin.id ? '确认卸载' : '卸载'"></button>
+              <button x-show="plugin.canUninstall" type="button" :disabled="loading || Boolean(busyId)" @click="uninstallArmedId === plugin.id ? uninstall(plugin) : armUninstall(plugin)" class="capability-press h-8 shrink-0 rounded-lg px-2.5 text-xs transition" :class="uninstallArmedId === plugin.id ? 'bg-red-500 font-medium text-white' : 'text-red-500 hover:bg-red-50'" x-text="uninstallArmedId === plugin.id ? '确认卸载' : '卸载'"></button>
               <button x-show="plugin.canStop" type="button" role="switch" :aria-checked="String(isOn(plugin))" :aria-label="isOn(plugin) ? `停止 ${plugin.label}` : `启动 ${plugin.label}`" :disabled="busyId === plugin.id" @click="toggle(plugin)" class="capability-press relative h-6 w-11 shrink-0 rounded-full transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40" :class="{
                 'bg-teal-500': plugin.status === 'running',
                 'bg-amber-400': plugin.status === 'pending',
@@ -2251,7 +2265,7 @@
 
         <div class="runtime-inspection-grid"><label class="mt-2 block text-xs">Commander 巡检（秒）<input aria-label="Benchmark Commander 巡检间隔（秒）" x-model.number="runtimeTaskForm.tasks.commander.inspection_interval" type="number" min="1" required class="mt-2 h-9 w-full rounded border p-2"></label><label class="mt-2 block text-xs">Commander 空闲巡检（秒）<input aria-label="Benchmark Commander 空闲巡检间隔（秒）" x-model.number="runtimeTaskForm.tasks.commander.idle_inspection_interval" type="number" min="1" required class="mt-2 h-9 w-full rounded border p-2"></label></div>
         <div class="runtime-task-grid mt-5 grid gap-3 border-t border-slate-100 pt-5 lg:grid-cols-4">
-          <template x-for="role in ['commander','general','soldier','scout','planner','worker']" :key="role"><fieldset class="rounded-xl bg-slate-50/70 p-4"><legend class="px-1 text-xs font-semibold text-slate-600" x-text="workerTaskLabel(role)"></legend><label class="block text-xs">任务超时（秒）<input x-model.number="runtimeTaskForm.tasks[role].timeout" type="number" min="5" class="mt-2 h-9 w-full rounded border p-2"></label><label class="mt-2 block text-xs">收尾超时（秒）<input x-model.number="runtimeTaskForm.tasks[role].conclude_timeout" type="number" min="5" class="mt-2 h-9 w-full rounded border p-2"></label></fieldset></template>
+          <template x-for="role in ['commander','general','soldier','planner','worker']" :key="role"><fieldset class="rounded-xl bg-slate-50/70 p-4"><legend class="px-1 text-xs font-semibold text-slate-600" x-text="workerTaskLabel(role)"></legend><label class="block text-xs">任务超时（秒）<input x-model.number="runtimeTaskForm.tasks[role].timeout" type="number" min="5" class="mt-2 h-9 w-full rounded border p-2"></label><label class="mt-2 block text-xs">收尾超时（秒）<input x-model.number="runtimeTaskForm.tasks[role].conclude_timeout" type="number" min="5" class="mt-2 h-9 w-full rounded border p-2"></label></fieldset></template>
         </div>
       </div>
     <div x-show="runtimeSettingsError" class="runtime-config-error" role="alert"><p x-text="runtimeSettingsError"></p><button type="button" @click="reloadRuntimeTaskDraft()">载入服务器配置（放弃草稿）</button></div></form>
@@ -2478,7 +2492,7 @@
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">模型</span><select x-model="workerForm.model" x-effect="if (!workerModelOptions().includes(workerForm.model)) workerForm.model = workerModelOptions()[0] || ''" class="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"><template x-for="model in workerModelOptions()" :key="model"><option :value="model" x-text="model"></option></template><template x-if="!workerModelOptions().length"><option value="" disabled>该 Provider 未配置模型</option></template></select></label>
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">优先级（小者优先）</span><input x-model.number="workerForm.priority" type="number" min="0" max="1000" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
       <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">最大并发数</span><input x-model.number="workerForm.max_running" type="number" min="1" :max="workerConfig.runtime_max_workers || 1" required class="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
-      <div class="sm:col-span-2"><span class="mb-2 block text-[11px] font-medium text-slate-500">模式角色资格（Benchmark / General）</span><div class="flex flex-wrap gap-4"><template x-for="taskType in ['commander','general','soldier','scout','planner','worker']" :key="taskType"><label class="inline-flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" :value="taskType" x-model="workerForm.task_types" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span x-text="workerTaskLabel(taskType)"></span></label></template></div></div>
+      <div class="sm:col-span-2"><span class="mb-2 block text-[11px] font-medium text-slate-500">模式角色资格（Benchmark / General）</span><div class="flex flex-wrap gap-4"><template x-for="taskType in ['commander','general','soldier','planner','worker']" :key="taskType"><label class="inline-flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" :value="taskType" x-model="workerForm.task_types" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span x-text="workerTaskLabel(taskType)"></span></label></template></div></div>
       <label class="inline-flex items-center gap-2 sm:col-span-2"><input type="checkbox" x-model="workerForm.enabled" class="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"><span class="text-xs text-slate-600">启用并允许接收新任务</span></label>
       <div x-show="workerTestResult" class="sm:col-span-2 rounded-xl px-3 py-2 text-xs" :class="workerTestResult?.ok ? 'bg-teal-50 text-teal-700' : 'bg-rose-50 text-rose-700'"><span x-text="workerTestResult?.detail"></span><span x-show="workerTestResult?.duration_ms != null" class="ml-2 opacity-70" x-text="`${workerTestResult?.duration_ms} ms`"></span></div>
     </div>
@@ -2777,7 +2791,7 @@ function redtraceApp() {
         commander: { inspection_interval:60, idle_inspection_interval:90, timeout: 300, conclude_timeout: 30, max_intents: 4 },
         general: { timeout: 900, conclude_timeout: 30 },
         soldier: { timeout: 900, conclude_timeout: 30 },
-        scout: { timeout: 240, conclude_timeout: 30 }, planner:{timeout:300,conclude_timeout:30},worker:{timeout:900,conclude_timeout:30},
+        planner:{timeout:300,conclude_timeout:30},worker:{timeout:900,conclude_timeout:30},
       },
     },
     runtimeSettingsError: '',
@@ -2792,7 +2806,7 @@ function redtraceApp() {
     workerSaveBusy: false,
     workerTestBusy: false,
     workerTestResult: null,
-    workerForm: { name: '', provider: '', model: '', enabled: true, task_types: ['commander', 'general', 'soldier', 'scout', 'planner', 'worker'], priority: 0, max_running: 1 },
+    workerForm: { name: '', provider: '', model: '', enabled: true, task_types: ['commander', 'general', 'soldier', 'planner', 'worker'], priority: 0, max_running: 1 },
     pollingSaveBusy: false,
     pollingForm: { enabled: true, groups: [] },
     showProviderEditor: false,
@@ -2829,11 +2843,9 @@ function redtraceApp() {
     legionProjectTitle(id) { return this.legionProject(id)?.title || id || '未选择项目'; },
     legionTaskTitle(project, key) { return project?.steps.find(s => s.taskKey === key && !s.parentStepId)?.description || project?.steps.find(s => s.taskKey === key)?.description || key || '—'; },
     legionTaskFinished(project, key) { const steps = project.steps.filter(s => s.taskKey === key); return steps.length > 0 && steps.every(s => ['done', 'cancelled'].includes(s.status)); },
-    legionRole(role) { return ({ planner:'Planner', worker:'Worker', commander: 'Commander', general: 'General', soldier: 'Soldier', scout: 'Scout', reporter: 'Reporter' })[role] || '未标注角色'; },
-    legionStatus(status) { return ({ idle: '待命', running: '执行中', scouting:'侦察中', completed:'已完成', stopped: '执行已停止', active: '进行中', pending: '待执行', paused: '执行暂停（非 Park）', parked: '已搁置 · Park', unknown: '结果待核验', done: '已完成', succeeded:'执行成功', success: '成功', failed: '失败', cancelled: '已取消', queued: '已排队，未入模', admitted: '已入模', uncertain: '交付不确定', delivered: '已交付', acknowledged: '已确认', 'needs-reverification': '待目标复验', 'target-verified': '目标已复验' })[status] || status || '未知'; },
+    legionRole(role) { return ({ planner:'Planner', worker:'Worker', commander: 'Commander', general: 'General', soldier: 'Soldier', reporter: 'Reporter' })[role] || '未标注角色'; },
+    legionStatus(status) { return ({ idle: '待命', running: '执行中', completed:'已完成', stopped: '执行已停止', active: '进行中', pending: '待执行', paused: '执行暂停（非 Park）', parked: '已搁置 · Park', unknown: '结果待核验', done: '已完成', succeeded:'执行成功', success: '成功', failed: '失败', cancelled: '已取消', queued: '已排队，未入模', admitted: '已入模', uncertain: '交付不确定', delivered: '已交付', acknowledged: '已确认', 'needs-reverification': '待目标复验', 'target-verified': '目标已复验' })[status] || status || '未知'; },
     legionPhase(phase) { return ({ open: '未设时限', campaign: '推进中', endgame: '收尾', submission: '仅提交', ended: '已截止' })[phase] || phase || '—'; },
-    legionDifficulty(value) { return ({ easy: 'Scout：简单', medium: 'Scout：中等', hard: 'Scout：困难', unclear: 'Scout：尚不明确' })[value] || '待 Scout 分类'; },
-    legionRecommendation(value) { return ({ scout: '建议 Scout 分类', general: '建议 General 协调', park: '建议搁置', parked: '已搁置', tactical: '建议战术纠偏', 'second-angle': '建议第二视角' })[value] || value; },
     legionRecipients(projectId) { return (this.legionProject(projectId)?.runs || []).filter(r => ['running', 'paused'].includes(r.status)); },
     legionRunLabel(projectId, run) { const p = this.legionProject(projectId), step = p?.steps.find(s => s.id === run.stepId); return this.legionRole(step?.role) + ' · ' + (step?.description || run.worker) + ' · ' + this.legionStatus(run.status) + ' · ' + run.id; },
     legionWorkers(project, run) { if (!project || !run)
@@ -3506,7 +3518,7 @@ function redtraceApp() {
           max_running_projects: Number(value.runtime.max_running_projects),
           max_project_workers: Number(value.runtime.max_project_workers),
         },
-        tasks: Object.fromEntries(['commander','general','soldier','scout','planner','worker'].map(role => [role,{ timeout:Number(value.tasks[role].timeout), conclude_timeout:Number(value.tasks[role].conclude_timeout), ...(role==='commander'?{inspection_interval:Number(value.tasks.commander.inspection_interval),idle_inspection_interval:Number(value.tasks.commander.idle_inspection_interval)}:{}), ...(role==='commander'&&value.tasks.commander.max_intents!=null&&value.tasks.commander.max_intents!==''?{max_intents:Number(value.tasks.commander.max_intents)}:{}), ...(role==='commander'&&value.tasks.commander.max_benchmark_tasks!=null&&value.tasks.commander.max_benchmark_tasks!==''?{max_benchmark_tasks:Number(value.tasks.commander.max_benchmark_tasks)}:{}) }])),
+        tasks: Object.fromEntries(['commander','general','soldier','planner','worker'].map(role => [role,{ timeout:Number(value.tasks[role].timeout), conclude_timeout:Number(value.tasks[role].conclude_timeout), ...(role==='commander'?{inspection_interval:Number(value.tasks.commander.inspection_interval),idle_inspection_interval:Number(value.tasks.commander.idle_inspection_interval)}:{}), ...(role==='commander'&&value.tasks.commander.max_intents!=null&&value.tasks.commander.max_intents!==''?{max_intents:Number(value.tasks.commander.max_intents)}:{}), ...(role==='commander'&&value.tasks.commander.max_benchmark_tasks!=null&&value.tasks.commander.max_benchmark_tasks!==''?{max_benchmark_tasks:Number(value.tasks.commander.max_benchmark_tasks)}:{}) }])),
       };
     },
 
@@ -3706,7 +3718,7 @@ function redtraceApp() {
     },
 
     workerTaskLabel(taskType) {
-      return { planner:'General · Planner', worker:'General · Worker', commander:'Benchmark · Commander', general:'Benchmark · General', soldier:'Benchmark · Soldier', scout:'Benchmark · Scout' }[taskType] || taskType;
+      return { planner:'General · Planner', worker:'General · Worker', commander:'Benchmark · Commander', general:'Benchmark · General', soldier:'Benchmark · Soldier' }[taskType] || taskType;
     },
 
     async testProvider(provider) {
@@ -3931,7 +3943,7 @@ function redtraceApp() {
           provider,
           model: '',
           enabled: true,
-          task_types: ['commander', 'general', 'soldier', 'scout', 'planner', 'worker'],
+          task_types: ['commander', 'general', 'soldier', 'planner', 'worker'],
           priority: 0,
           max_running: 1,
         };
@@ -4583,9 +4595,6 @@ function redtraceApp() {
       }
     },
 
-    taskGraphStatus(p,g){if(p.platform?.[g.taskKey]?.confirmed||g.status==='completed'||p.goals.some(goal=>goal.id===g.goalId&&goal.status==='achieved'))return 'completed';const steps=p.steps.filter(s=>s.graphId===g.id);if(steps.some(s=>s.status==='parked'))return 'parked';if(steps.some(s=>s.status==='running'&&s.role==='scout'))return 'scouting';if(steps.some(s=>s.status==='running'))return 'running';return 'pending';},
-    benchmarkTaskGraphs(p){return p.graphs.filter(g=>g.type!=='main');},
-    filteredTaskGraphs(p){return this.benchmarkTaskGraphs(p).filter(g=>(!this.graphQuery||(g.title+' '+g.taskKey).toLowerCase().includes(this.graphQuery.toLowerCase()))&&(!this.graphStatusFilter||this.taskGraphStatus(p,g)===this.graphStatusFilter)).sort((a,b)=>({running:0,scouting:0,completed:1}[this.taskGraphStatus(p,a)]??2)-({running:0,scouting:0,completed:1}[this.taskGraphStatus(p,b)]??2)||(this.graphSort==='updatedAt'?b.updatedAt.localeCompare(a.updatedAt):a.title.localeCompare(b.title)));},
     async openCommander(id){
       this.teardownAutoFit();if(this.cy){this.cy.destroy();this.cy=null;}
       this.selectedProjectId=id;this.selectedGraphId='';this.legionProjectId=id;this.view='benchmark';this.appPage='workspace';this.legionPanel='commander';

@@ -12,6 +12,7 @@
  * @module redtrace-plugins
  */
 
+import { FIXED_ROLES } from './roles.js'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { CordisFiber, RuntimeConfig, RuntimeContext, TaskType } from './types.js'
@@ -147,7 +148,6 @@ const MANAGED: readonly ManagedEntry[] = [
   ...TASK_PLUGINS.map(entry => ({ ...entry, category: 'feature' as const })),
   { id: 'redtrace-critical-events', label: '关键事件调度', category: 'feature', modulePath: 'packages/redtrace-engine/src/scheduler.ts', description: '运行时验证的关键事件提前规划', intro: '只消费平台确认或运行时验证的能力、路由及失效信号；停用后保留原 Fact＋Step 结束契约，不删除证据。' },
   { id: 'redtrace-knowledge', label: '离线知识检索', category: 'feature', modulePath: 'packages/redtrace-engine/src/knowledge.ts', description: '主动查询离线 CVE、组件版本与本地模板/PoC', intro: '模型按需调用 knowledge_search：query 为 CVE 或组件名，可传 version/vendor/cpe；knowledge_read 读详情。工具描述显示库的绝对路径；无版本可查相关漏洞，不被动检索、不下载、不扫描、不自动执行 PoC。' },
-  { id: 'redtrace-http', label: 'HTTP', category: 'feature', modulePath: 'packages/redtrace-engine/src/http-tools.ts', description: '独立 HTTP 批量验证与请求重放（无浏览器）', intro: 'Project 内共享 HTTP 身份与会话 Resource；默认串行，完整请求响应私有归档，不加载浏览器。' },
 
   {
     id: 'redtrace-core', label: 'RedTrace Core', category: 'core', module: core, protectStop: true,
@@ -207,7 +207,7 @@ const MANAGED: readonly ManagedEntry[] = [
     id: 'redtrace-spill', label: '大结果落盘', category: 'feature',
     modulePath: 'vendor/deepseek-harness/packages/spill/spill-policy/lib/index.js',
     description: '超大工具结果落盘预览',
-    intro: 'General / Soldier / Scout 使用 DSH 原生 Spill：先保存原文，仅折叠连续完全相同的行并标注次数；不改 Payload、错误或独有线索。保留 12500 token 预算与原文回读指引，读取原文不再次去重。Commander 不挂载执行工具。',
+    intro: 'General / Soldier 使用 DSH 原生 Spill：先保存原文，仅折叠连续完全相同的行并标注次数；不改 Payload、错误或独有线索。保留 12500 token 预算与原文回读指引，读取原文不再次去重。Commander 不挂载执行工具。',
   },
   {
     id: 'redtrace-tool-timeout', label: '工具超时', category: 'feature',
@@ -253,7 +253,7 @@ const MANAGED: readonly ManagedEntry[] = [
   },
 ]
 
-const PRESETS: readonly PresetEntry[] = (['commander','general','soldier','scout','planner','worker'] as const).map(role => ({ id: 'redtrace-' + role, label: role + ' 预设', category: 'preset', preset: role, description: 'Legion ' + role + ' Mission', intro: role === 'commander' ? 'Benchmark 全局题目状态与资源调度；不参与实例、解题或 flag 提交生命周期。' : '共享 FGS 的独立 DSH 角色会话，保留原生工具与执行隔离。' }))
+const PRESETS: readonly PresetEntry[] = FIXED_ROLES.map(role => ({ id: 'redtrace-' + role, label: role + ' 预设', category: 'preset', preset: role, description: 'Legion ' + role + ' Mission', intro: role === 'commander' ? 'Benchmark 全局题目状态与资源调度；不参与实例、解题或 flag 提交生命周期。' : '共享 FGS 的独立 DSH 角色会话，保留原生工具与执行隔离。' }))
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,47}$/
 const SETTLE_TIMEOUT_SECONDS = 10
@@ -313,6 +313,12 @@ export class PluginManager {
    * blocking boot. */
   async boot(): Promise<void> {
     await this.readManifest()
+    const retired = new Set(['redtrace-http', 'redtrace-browser-http', 'redtrace-scout'])
+    if ([...(this.manifest.disabled ?? []), ...(this.manifest.enabled ?? [])].some(id => retired.has(id))) {
+      this.manifest.disabled = (this.manifest.disabled ?? []).filter(id => !retired.has(id))
+      this.manifest.enabled = (this.manifest.enabled ?? []).filter(id => !retired.has(id))
+      await this.writeManifest()
+    }
     const disabled = new Set(this.manifest.disabled ?? [])
     const enabled = new Set(this.manifest.enabled ?? [])
     // Preset gates are computed before any plugin mounts: the scheduler
@@ -356,8 +362,8 @@ export class PluginManager {
       if (hasList) {
         this.manifest = {
           version: 1,
-          disabled: Array.isArray(parsed.disabled) ? [...new Set(parsed.disabled.filter(v => typeof v === 'string').map(v => v === 'redtrace-browser-http' ? 'redtrace-http' : v))] : [],
-          enabled: Array.isArray(parsed.enabled) ? [...new Set(parsed.enabled.filter(v => typeof v === 'string').map(v => v === 'redtrace-browser-http' ? 'redtrace-http' : v))] : [],
+          disabled: Array.isArray(parsed.disabled) ? [...new Set(parsed.disabled.filter(v => typeof v === 'string'))] : [],
+          enabled: Array.isArray(parsed.enabled) ? [...new Set(parsed.enabled.filter(v => typeof v === 'string'))] : [],
           user: Array.isArray(parsed.user) ? parsed.user : [],
         }
         const oldExecutors = ['redtrace-leader','redtrace-operator']
@@ -675,6 +681,10 @@ export class PluginManager {
     const parent = path.dirname(target)
     const victim = parent !== this.userPluginsDir
       && path.dirname(parent) === this.userPluginsDir ? parent : target
+    if (this.manifest.user?.some(entry => {
+      const module = path.resolve(this.root, entry.module)
+      return module === victim || module.startsWith(victim + path.sep)
+    })) return
     await rm(victim, { recursive: true, force: true })
   }
 

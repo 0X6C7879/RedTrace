@@ -187,7 +187,7 @@ export class Store {
   private migrateGeneralRoles() {
     this.transaction(()=>{
       const roles = LEGACY_GENERAL_ROLES
-      for(const row of this.db.prepare("SELECT n.data FROM nodes n JOIN projects p ON p.id=n.project_id WHERE n.kind='step' AND json_extract(p.data,'$.mode')='general' AND (json_extract(n.data,'$.role') IN ('general','soldier','scout','reporter','leader','operator') OR json_extract(n.data,'$.role') IS NULL)").all()) {
+      for(const row of this.db.prepare("SELECT n.data FROM nodes n JOIN projects p ON p.id=n.project_id WHERE n.kind='step' AND json_extract(p.data,'$.mode')='general' AND (json_extract(n.data,'$.role') IN ('general','soldier','reporter','leader','operator') OR json_extract(n.data,'$.role') IS NULL)").all()) {
         const step=JSON.parse(String(row.data)) as Step
         if(step.role==='reporter') step.reportFindingId=step.sourceIds[0]
         step.role=(step.role?roles[step.role]:'worker') as Step['role']
@@ -560,9 +560,10 @@ export class Store {
       const goalId = this.node<Goal>(id,input.goalId ?? this.rootGoalId(id),'goal').id; if (!isReportStep(input) && this.node<Goal>(id, goalId, 'goal').status !== 'open') throw new HttpError(409, 'Goal is closed')
       const profile = input.executionProfile ?? 'direct'; if (!['direct', 'isolated'].includes(profile)) throw new HttpError(422, 'Invalid execution profile')
       const mode = this.project(id).mode
+      if (input.role === 'scout') throw new HttpError(422, `Invalid ${mode} role`)
       if (mode === 'general' && (input.specialist || input.parentStepId)) throw new HttpError(422, 'General mode has no specialist Agents or squads')
       if (input.specialist) input = {...input,role:executorRole(mode)}
-      if (input.role !== undefined && !(mode === 'benchmark' ? ['soldier','scout','reporter'] : ['worker']).includes(input.role)) throw new HttpError(422, `Invalid ${mode} role`)
+      if (input.role !== undefined && !(mode === 'benchmark' ? ['soldier','reporter'] : ['worker']).includes(input.role)) throw new HttpError(422, `Invalid ${mode} role`)
       if (input.role !== undefined || input.taskKey !== undefined || input.parentStepId !== undefined) requiredText(input.taskKey, 'taskKey')
       if (input.parentStepId) {
         const parent = this.node<Step>(id, input.parentStepId, 'step')
@@ -983,7 +984,7 @@ export class Store {
     return run
   }
   stepReady(step: Step): boolean {
-    return (step.dependsOn ?? []).every(id => {
+    return step.role !== 'scout' && (step.dependsOn ?? []).every(id => {
       const dependency = this.node<Step>(step.projectId, id, 'step')
       return !dependency.deleted && dependency.status === 'done' && dependency.factIds.length > 0
     })

@@ -60,7 +60,7 @@ test('domain Schemas validate action requirements and preserve role/config denia
  const tools=domainTools(original,name=>name!=='resource_register'||enabled),tool=tools[0]
  assert.equal(tool.name,'resource_manage');assert(!Check(tool.parameters,{action:'register',kind:'file'}));assert(Check(tool.parameters,{action:'register',kind:'file',name:'proof'}));assert(!Check(tool.parameters,{action:'nope'}));await tool.execute('id',{action:'list'});enabled=false;await assert.rejects(async()=>tool.execute('id',{action:'register',kind:'file',name:'proof'}),/disabled/);assert.equal(calls,1)
  const readonly=domainTools(original.slice(0,1))[0];assert.deepEqual((readonly.parameters as any).properties.action.enum,['list']);assert(!Object.keys(readonly.parameters.properties).includes('name'),'role aggregation cannot grant missing write action')
- const settings={resource_manage:{enabled:true,actions:{register:{enabled:false}}}};assert(toolAllowed(settings,'resource_list','scout'));assert(!toolAllowed(settings,'resource_register','soldier'));assert(!domainAction('bash'));assert(Object.keys(TOOL_DOMAINS).length>10)
+ const settings={resource_manage:{enabled:true,actions:{register:{enabled:false}}}};assert(!toolAllowed(settings,'resource_list','scout'));assert(toolAllowed(settings,'resource_list','soldier'));assert(!toolAllowed(settings,'resource_register','soldier'));assert(!domainAction('bash'));assert(Object.keys(TOOL_DOMAINS).length>10)
 })
 
 test('legacy per-tool settings migrate to domain action policy without enabling denied actions',()=>{

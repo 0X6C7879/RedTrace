@@ -9,15 +9,12 @@ import path from 'node:path'
 import os from 'node:os'
 import { Store } from '../src/store.ts'
 import { graphTools, graphUpdate } from '../src/runner.ts'
+import { tsecbenchQuery } from '../src/benchmark.ts'
 import type { EngineConfig, Worker, Step, Input } from '../src/types.ts'
 
 test('Commander only reads task list; platform lifecycle, hints and raw evidence are unavailable',async()=>{const root=mkdtempSync(path.join(os.tmpdir(),'legion-platform-')),skill=path.join(root,'skills/tsecbench-api');mkdirSync(skill+'/scripts',{recursive:true});writeFileSync(skill+'/scripts/tsecbench.py','import json,sys\nprint(json.dumps({"args":sys.argv[1:]}))\n');const store=new Store(':memory:');try{const p=store.createProject({mode:'benchmark',title:'Benchmark',origin:'TSecBench authorized fixture',goal:'verify'}).project;new LegionStore(store).claimCommand();const tools=legionTools(store,'commander',store.projects()[0].id,null,()=>{},{workspaceRoot:root+'/workspaces'} as EngineConfig);assert((await tools.find(t=>t.name==='legion_platform_list')!.execute('list',{})).details);for(const name of ['legion_instance','legion_platform_hint','legion_read_run','legion_evidence_read','tsecbench_submit'])assert(!tools.some(t=>t.name===name));assert.equal(store.nodeCount(p.id,'fact'),1)}finally{store.close();rmSync(root,{recursive:true,force:true})}})
 
-test('Soldier uses CLI listing and keeps platform-tracked submission but cannot start or close shared instances; SDK submission never publishes a Fact',async()=>{const root=mkdtempSync(path.join(os.tmpdir(),'legion-platform-worker-')),skill=path.join(root,'skills/tsecbench-api');mkdirSync(skill+'/scripts',{recursive:true});writeFileSync(skill+'/SKILL.md','fixture');writeFileSync(skill+'/scripts/tsecbench.py','import json,sys\nprint(json.dumps({"ok":True,"submit":{"correct":True,"awarded":300}}))\n');const store=new Store(':memory:'),worker={name:'soldier',backend:'mock' as const,provider:'mock',model:'mock',enabled:true,maxRunning:1,priority:0};try{const p=store.createProject({title:'Benchmark',origin:'TSecBench authorized fixture',goal:'verify'}).project,step=store.addStep(p.id,{description:'submit',sourceIds:['origin']}),run=store.claim(p.id,'execute',worker,step.id),tools=graphTools({store,run,worker,config:{workspaceRoot:root+'/workspaces',maxSteps:null} as EngineConfig,signal:new AbortController().signal},()=>{});assert.deepEqual(tools.filter(t=>t.name.startsWith('tsecbench_')).map(t=>t.name),['tsecbench_submit']);const result=await tools.find(t=>t.name==='tsecbench_submit')!.execute('submit',{unique_code:'a',flag:'flag{fixture}'});assert.equal((result.details as any).correct,true);assert.equal(store.nodeCount(p.id,'fact'),1);const submission=(new LegionStore(store,p.id).board().projects[0] as any).platform.a;assert.equal(submission.submitted,true);assert.equal(submission.accepted,true);assert.equal(submission.confirmed,false);assert.ok(!JSON.stringify(submission).includes('flag{fixture}'));await tools.find(t=>t.name==='submit_fact')!.execute('proof',{title:'Submission verified',description:'SDK confirmed fixture submission correct; 300 awarded',evidence:[{description:'actual SDK response correct=true, awarded=300'}]});assert.equal(store.nodeCount(p.id,'fact'),2)}finally{store.close();rmSync(root,{recursive:true,force:true})}})
-
-
-
-test('Explore has no redundant list Schema and preserves submission SDK business errors before target validation', async () => {
+test('TSecBench CLI adapter preserves SDK business errors without registering Worker platform tools', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'tsecbench-errors-')), skill = path.join(root, 'skills', 'tsecbench-api')
   mkdirSync(path.join(skill, 'scripts'), { recursive: true })
   writeFileSync(path.join(skill, 'SKILL.md'), 'fixture')
@@ -27,12 +24,12 @@ test('Explore has no redundant list Schema and preserves submission SDK business
   try {
     const project=store.createProject({title:'fixture',origin:'TSecBench',goal:'check',bootstrap:false}).project
     const step=store.addStep(project.id,{description:'check',sourceIds:['origin']}),run=store.claim(project.id,'execute',worker,step.id)
-    const tools=graphTools({store,run,worker,config:{workspaceRoot:path.join(root,'workspaces'),maxSteps:null} as EngineConfig,signal:new AbortController().signal},()=>{})
-    assert.ok(!tools.some(tool=>tool.name==='tsecbench_list'))
-    const result:any=await tools.find(tool=>tool.name==='tsecbench_submit')!.execute('submit',{unique_code:'fixture',flag:'fixture'})
-    assert.equal(result.isError,true)
-    assert.equal(result.details.error,'VPN fixture returned 502')
-    assert.equal(result.details.context.code,'vpn_check_failed')
+    const config={workspaceRoot:path.join(root,'workspaces'),maxSteps:null} as EngineConfig
+    const tools=graphTools({store,run,worker,config,signal:new AbortController().signal},()=>{})
+    assert.ok(!tools.some(tool=>tool.name.startsWith('tsecbench_')))
+    await assert.rejects(tsecbenchQuery(config,['list']), {
+      message:'VPN fixture returned 502', details:{ok:false,error:'VpnCheckError',message:'VPN fixture returned 502',code:'vpn_check_failed'},
+    })
     assert.equal(store.project(project.id).factSeq,0)
     assert.equal(store.project(project.id).benchmarkHosts,undefined)
   } finally {store.close();rmSync(root,{recursive:true,force:true})}
@@ -84,7 +81,6 @@ test('TSecBench uses the configured Python even when python3 is absent from Work
     const id = store.createProject({ title: 'Interpreter', origin: 'TSecBench', goal: 'Use configured interpreter' }).project.id
     const run = store.claim(id,'execute',worker,store.addStep(id,{description:'Read SDK fixture',sourceIds:['origin']}).id)
     const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 1, maxProjectWorkers: 1, maxRunningProjects: 1, maxSteps: null, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: path.join(root, 'workspaces'), commonEnv: { PATH: root } }
-    const { tsecbenchQuery } = await import('../src/benchmark.ts')
     assert.deepEqual(await tsecbenchQuery(config, ['list']), { args: ['list'] })
   } finally {
     if (previous === undefined) delete process.env.REDTRACE_BENCHMARK_PYTHON

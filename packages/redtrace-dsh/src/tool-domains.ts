@@ -1,6 +1,5 @@
 /** Domain aggregation changes only model-facing names; original action bodies retain their contracts. */
 export const TOOL_DOMAINS: Record<string, Record<string,string>> = {
-  tsecbench_task: {list:'tsecbench_list',start:'tsecbench_start',close:'tsecbench_close',submit:'tsecbench_submit',hint:'tsecbench_hint'},
   webshell_manage: {test:'webshell_test',register:'webshell_register'},
   c2_manage: {listener:'c2_listener_create',session:'c2_session_create',credential:'c2_credential_create',profile:'c2_profile_create',kinds:'c2_listener_kinds'},
   c2_payload: {oneliner:'c2_payload_oneliner',build:'c2_payload_build',external:'c2_payload_external'},
@@ -14,7 +13,6 @@ export const TOOL_DOMAINS: Record<string, Record<string,string>> = {
   legion_models_manage: {list:'legion_models',select:'legion_commander_model'},
   legion_platform: {list:'legion_platform_list',hint:'legion_platform_hint'},
   legion_experience: {search:'legion_experience_search',capture:'legion_experience_capture',transfer:'legion_transfer',confirm:'legion_confirm_transfer'},
-  http_session: {batch:'http_batch',replay:'http_replay'},
   knowledge_query: {search:'knowledge_search',match:'knowledge_match',read:'knowledge_read'},
   resource_manage: {list:'resource_list',get:'resource_get',register:'resource_register'},
   remote_files: Object.fromEntries(['read','write','list','mkdir','touch','stat','hash','move','delete','upload','download'].map(action=>[action,'remote_file_'+action])),
@@ -32,7 +30,6 @@ export function rewriteToolNames(text:string):string {
   return text
 }
 const descriptions:Record<string,string>={
- tsecbench_task:'Assigned task only. list: statement/status; start: retain authorized targets; submit: verify platform response; close: settle peer executions first; hint: explicit score-penalty confirmation.',
  webshell_manage:'test: probe a known endpoint; register: share verified configuration. Registration is not connection success. Never guess credentials.',
  c2_manage:'listener: create; session: register direct access; credential/profile: store; kinds: list listener types. Registration is not authentication success; retain source evidence.',
  c2_payload:'oneliner: command stager; build: Go beacon; external: adapter payload. Use the assigned authorized listener and target.',
@@ -46,7 +43,6 @@ const descriptions:Record<string,string>={
  legion_models_manage:'list configured model routes; select route for the next cycle. No provider or reasoning configuration is changed.',
  legion_platform:'list: refresh tasks/outcomes; hint: paid hint only with explicit score-penalty confirmation.',
  legion_experience:'search/capture confirmed source experience; transfer as unverified target intel; confirm using actual target Facts.',
- http_session:'batch: concurrent explicit requests with Run-scoped cookies; replay: explicit archived-request variants. No hidden baseline, automatic retries or cross-Run cookie sharing. Full evidence retained.',
  knowledge_query:'search offline CVE/templates; match component/version prerequisites; read full source by ID with byte pagination. Candidate matches are not vulnerability proof.',
  resource_manage:'list/get shared Project resources; register established channels or materials with known configuration and source evidence. Secrets remain server-side; no speculative credential batches.',
  remote_files:'Read/write/list/mkdir/touch/stat/hash/move/delete/upload/download through an existing authorized channel. Source and destination scope and risk checks remain enforced.',

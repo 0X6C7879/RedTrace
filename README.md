@@ -12,9 +12,9 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 
 - **Project Commander 闭环**：Benchmark Commander / General Planner 各自拥有项目 Session / STATE / Board / 收件箱；多个项目协调者 与 Worker 共享原有容量并发运行，按所属项目事件唤醒。
 - **双模式 FGS**：General 项目一张主图，Benchmark 每题一张独立图；`Fact` 保存有来源的事实，`Goal` 保存完成条件和子目标，`Step` 保存行动与状态，`Finding` 保存可交付成果。`Hint` 与 `Observation` 保持人工输入和中间记录语义。
-- **异构 Worker 协同（Worker 即路由）**：任意数量 Worker 各自声明 Provider、模型、模式角色资格（Benchmark：commander/general/soldier/scout；General：planner/worker）、并发与优先级。调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务——路由完全由 Worker 派生，而非按任务类型写死。
+- **异构 Worker 协同（Worker 即路由）**：任意数量 Worker 各自声明 Provider、模型、模式角色资格（Benchmark：commander/general/soldier；General：planner/worker）、并发与优先级。调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务——路由完全由 Worker 派生，而非按任务类型写死。
 - **Node 24 Agent 运行时**：DSH 原生 Agent Loop 是唯一真实模型执行器；`dsh-llm-pi-ai` 仅适配模型协议。FGS 调度器与 Cordis 插件保持单实例、原生生命周期。
-- **运行中知识同步**：证据图谱修订会通过 `agent.inject()` 增量送达正在运行的 Agent；共享 Resource 摘要随上下文注入，完整信息按需查询。
+- **运行中知识同步**：证据图谱修订会通过 `agent.inject()` 增量送达正在运行的 Agent；不随执行上下文推送资源清单；按权限查询所需资源。
 - **上下文与证据**：按 DSH 当前请求的原生 Token Meter 测量压力，85% 提醒保存 STATE，原生自动压缩后以新 Run/Session 接力；不使用累计 Token 代替压力。Worker 的 Spill/文件证据按哈希保留；Commander 只读项目级证据，不读取任意宿主路径。
 - **DSH 原生执行工具链**：Execute Worker 直接获得 DSH 原生能力——`web_search` / `web_fetch`、后台任务（`job_output` / `job_list` / `job_kill`，bash `run_in_background`）、持久 PTY 终端、`glob` / `grep`、工具超时与重复调用防护；LSP 代码导航与 `run_code` 程序化调用按需开启。全部在插件管理页热启停，仅对新会话生效，不自研重复 Skill/MCP。
 - **资源与操作面**：统一管理 WebShell、C2 Listener、Session、Payload、凭证、外部插件和操作结果；MSF、Sliver、Cobalt Strike 与自定义 C2 通过同一个 Adapter 合约接入。Resource 保留可变运行状态，不会隐式生成 Fact。
@@ -31,9 +31,9 @@ flowchart LR
     N <--> DB[(SQLite<br/>FGS + Finding + Audit)]
     DB --> D[项目协调者 × 每项目一个]
     D --> B{Project 模式}
-    B -->|benchmark| SC[每题 Graph / Scout 分类]
+    B -->|benchmark| SC[每题 Graph / 已有证据分类]
     B -->|general| M[唯一 Main Graph / 自主规划]
-    SC --> G[General / Soldier / Scout Mission]
+    SC --> G[General / Soldier Mission]
     M --> L[Planner 创建 Step → Worker Pool]
     L --> S
     G --> S[待执行 Step]
@@ -45,7 +45,7 @@ flowchart LR
 一次典型任务会经历：
 
 1. 用户创建 Project，必须选择 benchmark 或 general，提供 Scope、任务目标与可选 Hint；创建后模式固定。
-2. 所属 Commander / Planner 读取自己的 Board、STATE 和增量。Benchmark 使用 Commander、General、Soldier、Scout，保留原有首派、可选侦察和巡检行为。General 只使用 Planner、Worker：Planner 独占唯一主 FGS、任务级 TodoList、Step 创建、调度和验收；Worker 从 Frontier 原子领取可执行 Step，写回 Fact / Finding。第一项 Step 同样由 Planner 创建，不自动启动 Bootstrap 或报告 Worker。
+2. 所属 Commander / Planner 读取自己的 Board、STATE 和增量。Benchmark 固定角色为 Commander、General、Soldier。Scout 已退役；没有既有证据分类的题目保持未分配，不改派其他角色补齐。General 只使用 Planner、Worker：Planner 独占唯一主 FGS、任务级 TodoList、Step 创建、调度和验收；Worker 从 Frontier 原子领取可执行 Step，写回 Fact / Finding。第一项 Step 同样由 Planner 创建，不自动启动 Bootstrap 或报告 Worker。
 3. Benchmark 简单题由 Soldier 自主规划和执行；困难题或升级后由唯一 General 进入 ARTEX Planner 模式，只规划、调度和分析证据，Specialist 继承 Soldier 执行工具，每次执行一个 Step。General 项目模式仍只调度现有 Worker Pool。调度器按模式角色资格、模型路线与既有全局/项目/Worker 配额原子领取 Step，DSH 在独立 Run / Session / Agent Workspace 执行；历史 Workspace 不搬移。
 4. Worker 通过 Fact/Finding 共享确认结论，HELP/REPORT 经原生收件箱实际交付；queued 不代表已入模。Planner / Benchmark 单题规划者对证据验收，不把消息或 Step 结束当成果。
 5. Stop/同 Session 恢复、任务 Park 与新 Run 接力分别建模。只有原执行停止、工具结果明确后才能恢复或换模型；未知操作不自动重放。
@@ -119,11 +119,11 @@ cp redtrace.local.example.yaml redtrace.yaml
 
 启动后只有一个 Node 进程：Cordis Web 服务直接调用 Node 请求处理器并提供 Web UI（默认监听 `127.0.0.1:8000`），没有 FastAPI 反代。`mock` Worker 走进程内确定性执行器，用于开发、持久化测试和性能对照。
 
-Worker 声明逻辑路由：每个 Worker 独立声明 `provider`、`model`、`roles` 中的模式角色资格（`commander/general/soldier/scout` 或 `planner/worker`，可同时选择）、`max_running` 并发与 `priority`；调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务。同一 Worker 可同时承担两种模式的角色，不需要复制；Provider、Model、并发和优先级不变。旧资格保留 Benchmark；Commander→Planner，General / Soldier→Worker。上一轮 Leader / Operator 资格合并为 Worker，Scout 不补入通用模式。Worker 修改后对新任务自动生效，无需重启——设置页与直改配置文件都走同一条热加载链路，任何配置变更都不要求重启进程。
+Worker 声明逻辑路由：每个 Worker 独立声明 `provider`、`model`、`roles` 中的模式角色资格（`commander/general/soldier` 或 `planner/worker`，可同时选择）、`max_running` 并发与 `priority`；调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务。同一 Worker 可同时承担两种模式的角色，不需要复制；Provider、Model、并发和优先级不变。旧资格保留 Benchmark；Commander→Planner，General / Soldier→Worker。上一轮 Leader / Operator 资格合并为 Worker，历史配置若还含 `scout`，需先删除该角色及对应配置；不会自动转授资格。Worker 修改后对新任务自动生效，无需重启——设置页与直改配置文件都走同一条热加载链路，任何配置变更都不要求重启进程。
 
 #### 工具与调用统计
 
-工具按六个固定角色绑定，不绑定 Worker 或动态 Agent。启用状态与角色绑定同时控制下一模型步骤及新调用，不取消进行中的调用；Commander 可读写项目证据/交接文档并查询 Worker 原始输出，但不获得 Shell 或 REA 执行权限；Planner 对齐 ARTEX 的文件、Bash、Skill 和可用 Web 基础工具。DSH 原生 Schema 与执行实现不改，原生工具同样支持角色绑定、启停热加载；新模型步骤和新调用生效，不取消进行中的调用。REA 优先通过 PATH 中的 `rea` CLI 和按需 Skill 使用，仅保留无等价 CLI 的共享 Program / Hopper / Evidence MCP 操作。
+工具按五个固定角色绑定，不绑定 Worker 或动态 Agent。启用状态与角色绑定同时控制下一模型步骤及新调用，不取消进行中的调用；Commander 可读写项目证据/交接文档并查询 Worker 原始输出，但不获得 Shell 或 REA 执行权限；Planner 对齐 ARTEX 的文件、Bash、Skill 和可用 Web 基础工具。DSH 原生 Schema 与执行实现不改，原生工具同样支持角色绑定、启停热加载；新模型步骤和新调用生效，不取消进行中的调用。REA 优先通过 PATH 中的 `rea` CLI 和按需 Skill 使用，仅保留无等价 CLI 的共享 Program / Hopper / Evidence MCP 操作。
 
 工具页只展示真实 Schema（含已停用项），区分 DSH / RedTrace / MCP；不计 CLI、Skill 或历史工具。全局目录与活动 Run 当前模型可见数量分别统计。「调用统计」打开后才查询原 SQLite 审计，用 `run_id + call_id` 合并开始/完成事件，支持 Project、模式、固定角色和时间筛选；未完成调用不算失败，汇总不受历史分页影响。实现与验收见 [角色与工具系统](docs/role-tool-system.md)。
 

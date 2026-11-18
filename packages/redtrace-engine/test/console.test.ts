@@ -7,6 +7,38 @@ import { serveEngine } from '../src/index.ts'
 import vm from 'node:vm'
 
 const source = path.resolve(import.meta.dirname, '../../..')
+test('plugin page updates the list and non-preset totals after confirmed uninstall', async () => {
+  const fixture = { id: 'fixture', category: 'user', status: 'running', canUninstall: true }
+  const kernel = { id: 'sessions', category: 'kernel', status: 'running', canUninstall: false }
+  const plugins = [kernel, fixture, { id: 'preset', category: 'preset', status: 'running' }, { id: 'pending', category: 'feature', status: 'pending' }]
+  let deleted = false
+  const context = vm.createContext({
+    window: {}, clearTimeout,
+    fetch: async (url: string, { method }: RequestInit) => {
+      if (method === 'DELETE') {
+        assert.equal(url, '/__redtrace/plugins/fixture')
+        deleted = true
+        return new Response(null, { status: 204 })
+      }
+      if (deleted) throw new Error('list unavailable')
+      return Response.json({ plugins })
+    },
+  })
+  vm.runInContext(readFileSync(source+'/static/plugins.js', 'utf8'), context)
+  const page = context.window.pluginsPage()
+  await page.load()
+  assert.equal(page.pluginCount, 3)
+  assert.equal(page.runningCount, 2)
+  await page.uninstall(kernel)
+  assert.equal(deleted, false)
+  await page.uninstall(fixture)
+  assert.equal(deleted, true)
+  assert.equal(page.plugins.some((plugin: { id: string }) => plugin.id === fixture.id), false)
+  assert.equal(page.pluginCount, 2)
+  assert.equal(page.runningCount, 1)
+  assert.equal(page.message, '已卸载 fixture')
+})
+
 test('console reads General and Benchmark Findings from the original graph and preserves evidence', async () => {
   const root=mkdtempSync(path.join(os.tmpdir(),'console-api-'))
   const engine=await serveEngine({root,autoStart:false,port:0})

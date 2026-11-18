@@ -28,11 +28,15 @@ test('workspace roots use task names, isolate identical paths and remove deleted
  await a.select(a.rows[0]);await a.select(a.rows.find((e:any)=>e.root&&e.projectId==='proj_002'));const files=a.rows.filter((e:any)=>!e.root);assert.equal(files.length,2);assert.notEqual(files[0].key,files[1].key);assert.equal(a.projectId,'proj_002');projects=projects.slice(0,1);await a.refresh();assert.equal(a.projectId,'');assert(!a.rows.some((e:any)=>e.projectId==='proj_002'));assert(!Object.keys(a.directories).some(k=>k.startsWith('proj_002:')))
  assert(!html.includes('aria-label="工作空间任务"'))
 })
-test('running and scouting questions precede completed questions, then ordinary sorting applies',()=>{
- const match=html.match(/filteredTaskGraphs\(p\)\{return ([\s\S]*?)\},\n    async openCommander/);assert(match)
- const sort=new Function('p','return '+match[1]),a={benchmarkTaskGraphs:(p:any)=>p.graphs,taskGraphStatus:(_p:any,g:any)=>g.status,graphQuery:'',graphStatusFilter:'',graphSort:'title'}
- const graphs=['pending','completed','running','parked','scouting'].map((status,i)=>({id:status,status,title:String(i),taskKey:String(i)}));assert.deepEqual(sort.call(a,{graphs}).map((g:any)=>g.id),['running','scouting','completed','pending','parked'])
- a.graphStatusFilter='completed';assert.deepEqual(sort.call(a,{graphs}).map((g:any)=>g.id),['completed'])
+test('running questions precede completed questions, then ordinary sorting applies',()=>{
+ const a={...ui().window.redtraceWorkbench,graphQuery:'',graphStatusFilter:'',graphSort:'title'}
+ const graphs=['pending','completed','running','parked','also-running'].map((id,i)=>({id,type:'benchmark_task',title:String(i),taskKey:id}))
+ const p={graphs,goals:[],platform:{completed:{is_completed:true}},steps:[
+   {graphId:'running',role:'soldier',status:'running'},{graphId:'also-running',role:'soldier',status:'running'},{graphId:'parked',status:'parked'},
+ ]}
+ const order=()=>Array.from(a.filteredBenchmarkTasks(p),(task:any)=>task.taskKey)
+ assert.deepEqual(order(),['running','also-running','completed','pending','parked'])
+ a.graphStatusFilter='completed';assert.deepEqual(order(),['completed'])
 })
 test('project/FGS Finding tabs and token usage stay inside their requested graph',async()=>{
  const dir=mkdtempSync(path.join(os.tmpdir(),'ui-scope-')),e=await serveEngine({root:dir,port:0,autoStart:false}),url='http://127.0.0.1:'+(e.server.address() as {port:number}).port

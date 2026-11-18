@@ -15,7 +15,6 @@ tasks:
   commander: { timeout: 300, conclude_timeout: 30, max_intents: 4 }
   general: { timeout: 1800, conclude_timeout: 300 }
   soldier: { timeout: 1800, conclude_timeout: 300 }
-  scout: { timeout: 240, conclude_timeout: 30 }
   planner: { timeout: 300, conclude_timeout: 30 }
   worker: { timeout: 1800, conclude_timeout: 300 }
 
@@ -68,7 +67,7 @@ workers:
   - name: "local-workers"
     provider: "deepseek"
     model: "deepseek-chat"
-    roles: [general, soldier, scout, worker]
+    roles: [general, soldier, worker]
     max_running: 2
     priority: 1
 

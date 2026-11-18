@@ -65,7 +65,7 @@ test('resident planning tools enforce live Max Step in both project modes and qu
 test('Scheduler fills question slots first, refills on completion and hot-loads without cancelling running work', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'question-dispatch-')), c = new Configuration(root); c.initialize()
   let config = { ...c.resolvedSnapshot().config, maxWorkers: 20, maxProjectWorkers: 10, maxRunningProjects: 5, maxBenchmarkTasks: 2, maxSteps: 2,
-    workers: [{ name: 'pool', enabled: true, priority: 0, maxRunning: 20, backend: 'mock' as const, provider: 'mock', model: 'mock', roles: ['soldier' as const, 'scout' as const, 'worker' as const] }] }
+    workers: [{ name: 'pool', enabled: true, priority: 0, maxRunning: 20, backend: 'mock' as const, provider: 'mock', model: 'mock', roles: ['soldier' as const, 'worker' as const] }] }
   const store = new Store(':memory:'), legion = new LegionStore(store), done = new Map<string, () => void>()
   const scheduler = new Scheduler(store, config, async ({ run, signal }) => new Promise<void>(resolve => { done.set(run.id, resolve); signal.addEventListener('abort', () => resolve(), { once: true }) }))
   const p = store.createProject({ mode: 'benchmark', title: 'questions', origin: 'local fixture', goal: 'verify' }).project
@@ -113,7 +113,7 @@ test('General Max Step limits execution of existing queued directions, excludes 
 
 test('unknown outcomes retain a question slot and are never replayed to fill concurrency', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'unknown-question-')), c = new Configuration(root); c.initialize()
-  const config = { ...c.resolvedSnapshot().config, maxBenchmarkTasks: 1, workers: [{ name: 'pool', enabled: true, priority: 0, maxRunning: 4, backend: 'mock' as const, provider: 'mock', model: 'mock', roles: ['scout' as const] }] }
+  const config = { ...c.resolvedSnapshot().config, maxBenchmarkTasks: 1, workers: [{ name: 'pool', enabled: true, priority: 0, maxRunning: 4, backend: 'mock' as const, provider: 'mock', model: 'mock', roles: ['soldier' as const] }] }
   const store = new Store(':memory:'), p = store.createProject({ mode: 'benchmark', title: 'unknown', origin: 'local fixture', goal: 'verify' }).project, legion = new LegionStore(store, p.id)
   for (const taskKey of ['A','B']) store.createGraph(p.id, { taskKey, title: taskKey, origin: 'local fixture', goal: 'verify' })
   const first = legion.spawn(p.id, mission(store, p.id, 'A')), run = store.claim(p.id, 'execute', config.workers[0], first.id)

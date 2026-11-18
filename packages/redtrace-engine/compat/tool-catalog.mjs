@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { Store } from '../src/store.ts'
-import { graphTools, efficiencyToolAvailable, tsecbenchSubmitTool } from '../src/runner.ts'
+import { graphTools, efficiencyToolAvailable } from '../src/runner.ts'
 import { legionTools } from '../src/legion-tools.ts'
 import { CommanderTodos } from '../src/legion-todos.ts'
 import { chatTools, ChatStore } from '../src/chat.ts'
@@ -17,7 +17,7 @@ import { toolAllowed } from '../src/console-api.ts'
 export async function inspectToolCatalog(ctx, engine, manager, runtime) {
   const { config, raw } = engine.configuration.resolvedSnapshot()
   const available = id => manager.availableForTask(id)
-  const executionRoles = ['worker','soldier','scout']
+  const executionRoles = ['worker','soldier']
   const rows = [], store = new Store(':memory:')
   const add = (tools, role, enabled = () => true) => {
     for (const tool of domainTools(tools)) rows.push({ name: tool.name, description: tool.description, parameters: JSON.parse(JSON.stringify(tool.parameters)),
@@ -35,8 +35,7 @@ export async function inspectToolCatalog(ctx, engine, manager, runtime) {
     await mountExecutionTools(scope.ctx, { task: { type: 'soldier', executionProfile: 'direct' }, cwd,
       sessionRoot: cwd, skillsDir: runtime.skillsDir, available: () => true,
       onSchemas(plugin, tools) {
-        const roles = ['redtrace-c2', 'redtrace-webshell'].includes(plugin) ? executionRoles.filter(role => role!=='scout') : executionRoles
-        for (const role of roles) add(tools.map(tool => ({ ...tool, redtrace: !!tool.redtrace })), role,
+        for (const role of executionRoles) add(tools.map(tool => ({ ...tool, redtrace: !!tool.redtrace })), role,
           () => plugin === 'redtrace-core' || available(plugin))
       } })
     for(const role of ['planner']) {
@@ -56,7 +55,6 @@ export async function inspectToolCatalog(ctx, engine, manager, runtime) {
         const graphSchemas = graphTools(context, () => {})
         add(graphSchemas, role==='reporter'?'soldier':role, tool => efficiencyToolAvailable(context, tool.name))
         if (role !== 'reporter' && role !== 'general') {
-          if (role!=='scout'&&!graphSchemas.some(tool => tool.name === 'tsecbench_submit')) add([tsecbenchSubmitTool(context)], role==='reporter'?'soldier':role, () => false)
           add(resourceTools(context, verbs), role==='reporter'?'soldier':role)
           add(verbTools(context, verbs, step), role==='reporter'?'soldier':role, tool => verbToolAvailable(verbs, tool.name))
         }

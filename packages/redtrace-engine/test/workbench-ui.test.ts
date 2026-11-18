@@ -78,13 +78,26 @@ test('Todo follows the actual planner conversation, clears on switches and refre
 });
 
 test('platform-confirmed completion outranks Park without forging internal Goal acceptance',()=>{
- const definition=html.match(/    taskGraphStatus\(p,g\)\{[^\n]+/)![0].trim().replace(/,$/,'')
- const status=vm.runInNewContext('({'+definition+'})').taskGraphStatus
- const graph={id:'G',taskKey:'T'},project={platform:{T:{confirmed:true}},goals:[{id:'goal-G',status:'open'}],steps:[{graphId:'G',status:'parked'}]}
+ const status=app().taskGraphStatus
+ const graph={id:'G',taskKey:'T',goalId:'goal-G'},project={platform:{T:{is_completed:true}},goals:[{id:'goal-G',status:'open'}],steps:[{graphId:'G',status:'parked'}]}
  assert.equal(status(project,graph),'completed');assert.equal(project.goals[0].status,'open')
- project.platform.T.confirmed=false;assert.equal(status(project,graph),'parked')
- const a=app();a.legionProjectId='P';a.legion={projects:[{id:'P',...project,platform:{T:{confirmed:true}}}]};a.workbench={graphs:[graph],conversations:[{id:'G',graphId:'G'}],project:{status:'stopped'},steps:project.steps};a.conversationId='G';assert.equal(a.conversationTaskState().label,'平台已完成')
+ project.platform.T.is_completed=false;assert.equal(status(project,graph),'parked')
+ project.goals[0].status='achieved';assert.equal(status(project,graph),'internal-achieved')
+ const a=app();a.legionProjectId='P';a.legion={projects:[{id:'P',...project}]};a.workbench={graphs:[graph],conversations:[{id:'G',graphId:'G'}],project:{mode:'benchmark',status:'active'},steps:[],goals:[{graphId:'G',status:'achieved'}]};a.conversationId='G'
+ assert.equal(a.conversationTaskState().label,'目标已验收')
+ assert.equal(a.benchmarkPlatformStatus(a.conversationBenchmarkMetadata()),'平台未完成')
+ project.platform.T.is_completed=true;assert.equal(a.conversationTaskState().label,'平台已完成')
+ assert.equal(a.benchmarkPlatformStatus(a.conversationBenchmarkMetadata()),'平台已完成')
  assert(!html.includes('aria-label="Graph 执行容量"'));assert(!html.includes('class="wb-control-menu"'));assert(!html.includes('未绑定角色'))
  assert(html.includes('系统上下文'));assert(html.includes('rt-token-dot'));assert(!html.includes('class="wb-token-scope"'))
  assert(!html.includes("conversationWorkers().map(w=>w.label).join(' · ')"),'question heading must not repeat the role roster')
+})
+
+test('Benchmark task panel shows counts, zero and missing fields without guessing',()=>{
+ const a=app(),meta={correct_flag_count:2,flag_count:3,difficulty:'medium',total_score:90,is_completed:false}
+ assert.equal(a.benchmarkMetadataText(meta),'Flag（正确 / 总数） 2 / 3 · 难度 medium · 总分 90')
+ assert.equal(a.benchmarkMetadataText({correct_flag_count:0,total_score:0}),'Flag（正确 / 总数） 0 / 未知 · 难度 未知 · 总分 0')
+ assert.equal(a.benchmarkPlatformStatus({}),'平台状态未知')
+ assert.match(html,/benchmarkMetadataText\(task.platform\)/)
+ assert.match(html,/benchmarkMetadataText\(conversationBenchmarkMetadata\(\)\)/)
 })

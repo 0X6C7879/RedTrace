@@ -1,4 +1,5 @@
 import type { Json, MessageFactory, RuntimeOptions, RuntimeSnapshot, RuntimeTask, TaskType } from './types.js'
+import { MODE_ROLES } from './roles.js'
 
 /**
  * State shared by the RedTrace Cordis plugins of the one long-lived runtime:
@@ -10,7 +11,7 @@ import type { Json, MessageFactory, RuntimeOptions, RuntimeSnapshot, RuntimeTask
 export class RedTraceState {
   readonly tasks = new Map<string, RuntimeTask>()
   /** Task presets cleared for dispatch; the plugin manager toggles members live. */
-  readonly presets = new Set<TaskType>(['commander','general','soldier','scout'])
+  readonly presets = new Set<TaskType>(MODE_ROLES.benchmark)
   snapshot?: RuntimeSnapshot
   messages?: MessageFactory
   /** Signature of the currently mounted MCP configs; the domain plugin owns

@@ -51,6 +51,7 @@ export async function runtimeCatalog(ctx, engine, catalog = []) {
       const run = engine?.store.db.prepare('SELECT data FROM runs WHERE id=?').get(scope)
       const record = run && JSON.parse(run.data)
       const step = record && engine.store.assignment(record)
+      if (step?.role === 'scout') return []
       const campaign = campaigns.find(c => c.sessionId === scope)
       const chat = chats.find(c => c.sessionId === scope)
       const role = step ? executionRole(engine.store.project(record.projectId).mode,step.role) : campaign ? coordinatorRole(engine.store.project(campaign.projectId).mode) : undefined
@@ -60,7 +61,7 @@ export async function runtimeCatalog(ctx, engine, catalog = []) {
       const visible = new Set(agent ? registry.schemas(agent,selection).map(t=>t.name) : [])
       if(agent){const selectedSchemas=registry.schemas(agent,selection);const wire=JSON.stringify(selectedSchemas);runs.push({runId:scope,role,mode,visibleSchemas:visible.size,schemaBytes:Buffer.byteLength(wire),schemaEstimatedTokens:Math.ceil(wire.length/4),schemaTokenMethod:'ceil(serialized chars/4), not billing'})}
       selection?.dispose()
-      return (registry?.definitions(agent) ?? []).filter(tool=>agent||tool.name.startsWith('mcp__')).flatMap(tool => (tool.name.startsWith('mcp__')&&!agent?['general','soldier','scout','worker']:[role]).map(binding=>({ name: tool.name, description: tool.description, parameters: tool.parameters,
+      return (registry?.definitions(agent) ?? []).filter(tool=>agent||tool.name.startsWith('mcp__')).flatMap(tool => (tool.name.startsWith('mcp__')&&!agent?['general','soldier','worker']:[role]).map(binding=>({ name: tool.name, description: tool.description, parameters: tool.parameters,
         scope, role:binding, mode, status: 'registered',
         enabled: toolAllowed(settings, tool.name, binding), visible: visible.has(tool.name),
         source: tool.name.startsWith('mcp__') ? 'MCP' : tool.redtrace ? 'RedTrace' : 'DSH' })))
@@ -74,7 +75,10 @@ function agentRole(engine, agent) {
   const id=String(agent?.session.id??'')
   const row=engine.store.db.prepare('SELECT data FROM runs WHERE id=?').get(id),run=row&&JSON.parse(row.data)
   if(run?.activity==='plan')return 'general'
-  if(run?.stepId)return executionRole(engine.store.project(run.projectId).mode,engine.store.node(run.projectId,run.stepId,'step').role)
+  if(run?.stepId){
+    const role=engine.store.node(run.projectId,run.stepId,'step').role
+    return role==='scout'?role:executionRole(engine.store.project(run.projectId).mode,role)
+  }
   const campaign=engine.legion.campaigns().find(c=>c.sessionId===id)
   return campaign?coordinatorRole(engine.store.project(campaign.projectId).mode):undefined
 }

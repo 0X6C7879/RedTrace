@@ -431,7 +431,7 @@ export function resourceTools(context: TaskContext, runtime: VerbRuntime): Agent
       }),
   ]
   const step = context.run.stepId ? context.store.node<Step>(context.run.projectId, context.run.stepId, 'step') : undefined
-  return step?.role === 'scout' ? tools.filter(tool => tool.name !== 'resource_register') : tools
+  return step?.role === 'scout' ? [] : tools
 }
 
 // ─── HTTP API ─────────────────────────────────────────────────────────────────

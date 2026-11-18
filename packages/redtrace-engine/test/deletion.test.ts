@@ -21,6 +21,7 @@ test('single-use deletion removes only project data and keeps durable shared res
     const chief=engine.chats.chief(project.id),chiefDir=path.join(root,'.redtrace/sessions/project-fixture',chief.sessionId);mkdirSync(chiefDir,{recursive:true});writeFileSync(path.join(chiefDir,'session.jsonl'),'{}');const global=engine.chats.create('keep global'),globalDir=path.join(root,'.redtrace/sessions/project-fixture',global.sessionId);mkdirSync(globalDir,{recursive:true});writeFileSync(path.join(globalDir,'session.jsonl'),'{}')
     const durable = engine.operations.create(project.id, { kind: 'webshell', name: 'keep', actor: 'human' }).resource.id
     const disposable = engine.operations.create(project.id, { kind: 'file', name: 'drop', actor: 'human' }).resource.id
+    assert.throws(() => engine.operations.create(project.id, { kind: 'http_session', name: 'retired', actor: 'human' }), /Unsupported resource kind/)
     assert.equal((await call(`/projects/${project.id}`, 'DELETE')).status, 403)
     const token = (await call(`/projects/${project.id}/deletion/confirmation`, 'POST')).data.confirmationToken
     assert.equal((await call(`/projects/${project.id}`, 'DELETE', { confirmation_token: token, actor: 'human-ui' })).status, 202)
