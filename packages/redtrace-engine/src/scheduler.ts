@@ -1,4 +1,5 @@
 import { executionRole, isReportStep } from '../../redtrace-dsh/src/roles.ts'
+import { recoverableModelFailure, modelRecoveryDelay, recoveryWorker } from './model-recovery.ts'
 import { chatSlots } from './chat.ts'
 import { LegionStore } from './legion-store.ts'
 import { Store, ACTIVE_NODE_SQL } from './store.ts'
@@ -36,8 +37,9 @@ export class Scheduler {
   private select(resume: Run | undefined, step: TaskAssignment, active: Run[]) {
     const commands=[...this.legion.campaigns().filter(c=>c.status==='running'),...chatSlots(this.store)]
     const count = (name: string) => active.filter(r => r.worker === name).length+commands.filter(c=>c.workerName===name).length
-    const preferred=step.role==='general'?this.store.forGraph(step.projectId,step.graphId!).runs(step.projectId,{activity:'plan',limit:1})[0]?.worker:undefined
-    return this.config.workers.map(w => this.selectWorker(w, step.role==='general'?'plan':'execute', step)).filter((w): w is Worker => !!w && w.enabled && (!step.nextWorker || w.name===step.nextWorker) && !!w.roles?.includes(executionRole(this.store.project(step.projectId).mode, step.role)) && (!resume || w.name === resume.worker && w.backend === resume.backend) && count(w.name) < w.maxRunning)
+    const previous=step.role==='general'?this.store.forGraph(step.projectId,step.graphId!).runs(step.projectId,{activity:'plan',limit:1})[0]:undefined
+    const preferred=previous?.worker
+    return this.config.workers.map(w => this.selectWorker(w, step.role==='general'?'plan':'execute', step)).map(w => !w ? w : resume?.provider && this.config.providers?.[resume.provider]?.models.some(m=>m.id===resume.model) ? {...w, provider:resume.provider, model:resume.model} : previous?.status==='failed' && recoverableModelFailure(previous.failureCode) ? recoveryWorker(this.config,w,previous) : w).filter((w): w is Worker => !!w && w.enabled && (!step.nextWorker || w.name===step.nextWorker) && !!w.roles?.includes(executionRole(this.store.project(step.projectId).mode, step.role)) && (!resume || w.name === resume.worker && w.backend === resume.backend) && count(w.name) < w.maxRunning)
       .sort((a,b) => a.priority-b.priority || Number(b.name===preferred)-Number(a.name===preferred) || count(a.name)-count(b.name) || a.name.localeCompare(b.name))[0]
   }
   private dispatch() {
@@ -134,12 +136,14 @@ export class Scheduler {
     }
     for(const run of this.store.runsByStatus('failed')) {
       if(this.running.has(run.id)||!run.stepId||run.pendingTools.length||this.store.project(run.projectId).status!=='active')continue
-      if(!['PROCESS_EXIT','UNKNOWN','SERVER','TIMEOUT','TRANSPORT','STREAM_CLOSED','EMPTY_RESPONSE','RATE_LIMIT'].includes(run.failureCode??''))continue
+      if(!recoverableModelFailure(run.failureCode))continue
       const step=this.store.node<Step>(run.projectId,run.stepId,'step')
-      if(this.store.planningCapacity(run.projectId,this.config.maxSteps,step.graphId??undefined).remainingSteps===0||(step.failureCount??0)>=3||step.status!=='blocked'||this.store.latestRun(run.projectId,step.id)?.id!==run.id||this.legion.budget(Date.now(),run.projectId).phase==='ended')continue
+      if(this.store.planningCapacity(run.projectId,this.config.maxSteps,step.graphId??undefined).remainingSteps===0||step.status!=='blocked'||this.store.latestRun(run.projectId,step.id)?.id!==run.id||this.legion.budget(Date.now(),run.projectId).phase==='ended')continue
       this.store.transaction(()=>{
+        const worker=this.config.workers.find(w=>w.name===run.worker)
+        if(worker){const next=recoveryWorker(this.config,worker,run);run.provider=next.provider;run.model=next.model}
         step.failureCount=(step.failureCount??0)+1;run.status='paused';run.endedAt=null;run.error=null;delete run.failureCode
-        step.status='paused';step.failure=null;step.endedAt=null;step.retryAfter=Date.now()+1000*2**(step.failureCount-1)
+        step.status='paused';step.failure=null;step.endedAt=null;step.retryAfter=Date.now()+modelRecoveryDelay(step.failureCount)
         this.store.saveRun(run);this.store.saveNode(step)
         this.store.event(run.projectId,'legion.worker_restarted',step,{runId:run.id,restarts:step.failureCount})
       })

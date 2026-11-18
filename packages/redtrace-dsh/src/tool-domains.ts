@@ -67,8 +67,8 @@ export function domainTools<T extends Tool>(tools:T[], allowed:(name:string)=>bo
     }
     const common=(members[0].tool.parameters.required??[]).filter((key:string)=>members.every(m=>(m.tool.parameters.required??[]).includes(key)))
     const branches=new Map<string,{actions:string[];properties:Record<string,any>;required:string[]}>()
-    for(const {action,tool} of members){const fields=Object.fromEntries([...conflicts].filter(k=>tool.parameters.properties?.[k]).map(k=>[k,tool.parameters.properties[k]])),required=(tool.parameters.required??[]).filter((key:string)=>!common.includes(key)),key=JSON.stringify([fields,required]);const branch=branches.get(key);if(branch)branch.actions.push(action);else branches.set(key,{actions:[action],properties:fields,required})}
-    const anyOf=[...branches.values()].map(branch=>({properties:{action:branch.actions.length===1?{const:branch.actions[0]}:{enum:branch.actions},...branch.properties},...(branch.required.length?{required:branch.required}:{})}))
+    for(const {action,tool} of members){const fields=Object.fromEntries(Object.entries(tool.parameters.properties??{}).map(([k,v])=>[k,conflicts.has(k)?v:{}])),required=(tool.parameters.required??[]).filter((key:string)=>!common.includes(key)),key=JSON.stringify([fields,required]);const branch=branches.get(key);if(branch)branch.actions.push(action);else branches.set(key,{actions:[action],properties:fields,required})}
+    const anyOf=[...branches.values()].map(branch=>({type:'object',additionalProperties:false,properties:{action:branch.actions.length===1?{const:branch.actions[0]}:{enum:branch.actions},...branch.properties},...(branch.required.length?{required:branch.required}:{})}))
     const parameters={type:'object',properties,required:['action',...common],additionalProperties:false,...(branches.size>1||conflicts.size?{anyOf}:{})}
     result.push({...members[0].tool,name,label:name,parameters,
       description:descriptions[name]??'',

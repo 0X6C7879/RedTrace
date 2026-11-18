@@ -1,3 +1,4 @@
+import { recoverableModelFailure } from './model-recovery.ts'
 import {readRunTrace} from './run-trace.ts'
 import { coordinatorRole, executionRole } from '../../redtrace-dsh/src/roles.ts'
 import { specialistSchema } from './graph-contracts.ts'
@@ -94,6 +95,12 @@ export function legionTools(store: Store, actor: string, projectId: string | und
     }
     if (!fact.evidence.some(e => e.runId && e.toolCallId && store.db.prepare("SELECT 1 FROM audit_events WHERE project_id=? AND run_id=? AND json_extract(data,'$.graph_id')=? AND json_extract(data,'$.kind')='tool.completed' AND (json_extract(data,'$.tool_call_id')=? OR json_extract(data,'$.call_id')=?)").get(projectId!,e.runId,fact.graphId!,e.toolCallId,e.toolCallId))) throw new HttpError(422, 'Fact '+fact.id+' has no retained evidence or real tool result; publish a linked correction with evidence.path or runId+toolCallId before acceptance')
   }
+  const verifyGoalEvidence = (scoped: Store, ids: string[]) => {
+    for (const id of ids) {
+      const node = scoped.node(projectId!, id)
+      for (const factId of node.kind === 'finding' ? node.factIds : [id]) verifyFact(scoped.node(projectId!, factId, 'fact'))
+    }
+  }
   if (commander && !benchmark && todos) tools.push(tool('TodoWrite', "替换本 Graph 完整 TodoList；General 模式仅 Planner 维护。", Type.Object({projectId:text,graphId:text,todos:todoItems},{additionalProperties:false}), args => {
     store.projectGraph(project(args), args.graphId)
     todos.replace(args.graphId, args.todos, verifyFact)
@@ -104,9 +111,9 @@ export function legionTools(store: Store, actor: string, projectId: string | und
     const graphId=step.graphId!,scoped=store.forGraph(projectId!,graphId)
     tools.push(
       tool('legion_goal',"在分配的任务 Graph 内新建证据驱动阶段 Goal。",Type.Object({description:text,parentId:Type.Optional(text)},{additionalProperties:false}),args=>scoped.addGoal(projectId!,args.description,args.parentId??step.goalId,actor)),
-      tool('legion_update_goal',"在本任务 Graph 内修订、凭证验收或放弃阶段 Goal。",Type.Object({id:text,expectedVersion:Type.Integer({minimum:1}),description:Type.Optional(text),status:Type.Optional(Type.Union([Type.Literal('open'),Type.Literal('achieved'),Type.Literal('cancelled')])),evidenceIds:Type.Optional(Type.Array(text,{minItems:1}))},{additionalProperties:false}),args=>{if(args.status==='achieved')for(const id of args.evidenceIds??scoped.node<Goal>(projectId!,args.id,'goal').evidenceIds){const node=scoped.node(projectId!,id);for(const fid of node.kind==='finding'?node.factIds:[id])verifyFact(scoped.node(projectId!,fid,'fact'))}return scoped.updateGoal(projectId!,args.id,args)}),
+      tool('legion_update_goal',"在本任务 Graph 内修订、凭证验收或放弃阶段 Goal。",Type.Object({id:text,expectedVersion:Type.Integer({minimum:1}),description:Type.Optional(text),status:Type.Optional(Type.Union([Type.Literal('open'),Type.Literal('achieved'),Type.Literal('cancelled')])),evidenceIds:Type.Optional(Type.Array(text,{minItems:1}))},{additionalProperties:false}),args=>{if(args.status==='achieved')verifyGoalEvidence(scoped,args.evidenceIds??scoped.node<Goal>(projectId!,args.id,'goal').evidenceIds);return scoped.updateGoal(projectId!,args.id,args)}),
       tool('legion_accept',"以确证目标证据验收并结束；托管实例清理未确认时 General 不可验收。",Type.Object({expectedVersion:Type.Integer({minimum:1}),evidenceIds:Type.Array(text,{minItems:1})},{additionalProperties:false}),async(args,signal)=>{
-        for(const id of args.evidenceIds){const node=scoped.node(projectId!,id);for(const factId of node.kind==='finding'?node.factIds:[id])verifyFact(scoped.node(projectId!,factId,'fact'))}
+        verifyGoalEvidence(scoped,args.evidenceIds)
         const current=scoped.node<Goal>(projectId!,step.goalId,'goal')
         if(current.version!==args.expectedVersion)throw new HttpError(409,'Goal version changed; read the current Goal before acceptance')
         if(benchmarkAdapter(store,projectId!).instanceApi){
@@ -181,13 +188,13 @@ export function legionTools(store: Store, actor: string, projectId: string | und
     ...(!benchmark ? [tool('legion_todos', "General 模式按需读单 Graph TodoList。", Type.Object({projectId:text,graphId:text}),args=>{store.projectGraph(project(args),args.graphId);return todos?.list(args.graphId)??[]})] : []),
     tool('legion_read_changes', "分页读 Project FGS 增量；legion_finish 仅可确认已交付 cursor，读取≠处理。", Type.Object({ projectId: text, graphId:Type.Optional(text), after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), args => args.graphId ? store.forGraph(project(args),args.graphId).graphDelta(project(args),args.after,args.limit) : legion.readChanges(project(args), args.after, args.limit)),
     tool('legion_read_node', "读当前 FGS 节点/关联 Fact 摘要；detail=doc 展开 Doc/Evidence/Report 引用，legion_evidence_read 读原字节。", Type.Object({ projectId: text, id: text, detail: Type.Optional(Type.Union([Type.Literal('summary'), Type.Literal('doc')])) }), args => store.readNode(args.projectId, args.id, args.detail)),
-    tool('legion_accept', "以当前确证 Fact/Finding 和实际 expectedVersion 验收 Goal；Step/消息完成不是证明。", Type.Object({ projectId: text, goalId: text, expectedVersion: Type.Integer({ minimum: 1 }), evidenceIds: Type.Array(text, { minItems: 1 }) }), args => store.updateGoal(args.projectId, args.goalId, { status: 'achieved', expectedVersion: args.expectedVersion, evidenceIds: args.evidenceIds })),
+    tool('legion_accept', "以当前确证 Fact/Finding 和实际 expectedVersion 验收 Goal；Step/消息完成不是证明。", Type.Object({ projectId: text, goalId: text, expectedVersion: Type.Integer({ minimum: 1 }), evidenceIds: Type.Array(text, { minItems: 1 }) }), args => {verifyGoalEvidence(store,args.evidenceIds);return store.updateGoal(args.projectId, args.goalId, { status: 'achieved', expectedVersion: args.expectedVersion, evidenceIds: args.evidenceIds })}),
     tool('legion_park', "以明确阻塞/恢复条件 Park 任务；只请求停止，不证明已停。", Type.Object({ projectId: text, taskKey: text, reason: text, resumeCondition: text }), args => legion.park(args.projectId, args.taskKey, args.reason, args.resumeCondition)),
     tool('legion_reactivate', "仅旧执行已停、未知结果已结清后恢复任务。", Type.Object({ projectId: text, taskKey: text, reason: text }), args => legion.reactivate(args.projectId, args.taskKey, args.reason)),
     ...(!benchmark && commander ? [tool('legion_stop', "合理方向耗尽且无 pending/running/paused/恢复中/unknown 工作才停止 Project，不宣称成功；保留 TodoList/FGS，用户 Hint/手动恢复可继续。", Type.Object({reason:text,state:text},{additionalProperties:false}), args => {
       const steps=store.nodes<Step>(projectId!,['step'])
       if(steps.some(s=>!s.deleted&&(['pending','running','paused'].includes(s.status)||s.handoffPending||s.replacementPending))||store.runsByStatus('unknown',projectId!).length)throw new HttpError(409,'Unsettled work prevents Project stop')
-      if(store.runsByStatus('failed',projectId!).some(r=>r.stepId&&!r.pendingTools.length&&['PROCESS_EXIT','UNKNOWN','SERVER','TIMEOUT','TRANSPORT','STREAM_CLOSED','EMPTY_RESPONSE','RATE_LIMIT'].includes(r.failureCode??'')&&(store.node<Step>(projectId!,r.stepId,'step').failureCount??0)<3))throw new HttpError(409,'Recoverable work prevents Project stop')
+      if(store.runsByStatus('failed',projectId!).some(r=>r.stepId&&!r.pendingTools.length&&recoverableModelFailure(r.failureCode)))throw new HttpError(409,'Recoverable work prevents Project stop')
       legion.saveState(projectId,'commander',args.state)
       legion.saveCampaign({...legion.campaign(),endgame:args.reason})
       store.setStatus(projectId!,'stopped');finish();return{status:'stopped',reason:args.reason}

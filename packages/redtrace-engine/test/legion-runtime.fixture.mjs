@@ -57,7 +57,8 @@ const model = createServer(async (req, res) => {
     }else{
       for(const forbidden of ['legion_spawn','legion_step','legion_goal','legion_accept','TodoWrite','legion_todos','legion_experience_capture'])assert(!names.includes(forbidden),'Worker has no planning or squad tool: '+forbidden)
       if(!calls.includes('skill')){name='skill';args={name:'console-native'}}
-      else if(!calls.includes('submit_fact')){name='submit_fact';args={title:'Worker verified',description:'Worker verified its assigned local fixture evidence',evidence:[{description:'Deterministic authorized local protocol fixture; not live-target proof'}]}}
+      else if(!calls.includes('bash')){name='bash';args={command:"printf '%s\\n' 'Deterministic authorized local protocol fixture; not live-target proof' > proof.txt",description:'Write local fixture evidence'}}
+      else if(!calls.includes('submit_fact')){name='submit_fact';args={title:'Worker verified',description:'Worker verified its assigned local fixture evidence',evidence:[{path:'proof.txt',description:'Deterministic authorized local protocol fixture; not live-target proof'}]}}
       else if(!calls.includes('legion_message')){name='legion_message';args={receiver:'commander',type:'HELP',content:'Worker needs Planner acknowledgement of the verified fixture evidence.'}}
       else if(!admittedText.includes('PLANNER_ACK')){
         if(last==='read_graph_delta'){name='legion_wait';args={after:lastOutput(b).cursor}}
@@ -95,6 +96,7 @@ try {
   assert.equal(result.status,'idle');assert.ok(result.state.includes('Fixture accepted'))
   const g=await call('/v2/projects/'+projectId), runs=await call('/v2/projects/'+projectId+'/runs')
   assert.equal(g.project.status,'completed');assert.equal(g.steps.length,3);assert.ok(g.steps.every(s=>s.status==='done'));assert.ok(runs.every(r=>r.status==='succeeded')); for (const run of runs) assert.equal(run.worker, g.steps.find(s=>s.id===run.stepId).role)
+  assert(g.facts.filter(f=>f.id!=='origin').every(f=>f.evidence.some(e=>e.artifactId)),'Goal acceptance must use retained fixture bytes, not description-only claims')
   assert.deepEqual([...roles].sort(),['GENERAL','SOLDIER'])
   const resumed=await call('/v2/legion/command',{projectId,worker:'commander'});assert.equal(resumed.sessionId,result.sessionId);assert.equal(resumed.status,'idle');assert.equal((await call('/v2/projects/'+projectId)).steps.length,3)
   const usage=await call('/audit/usage');assert.ok(usage.general>0,'Global Commander usage must come from actual native assistant messages');assert.ok(usage.total>=usage.general)

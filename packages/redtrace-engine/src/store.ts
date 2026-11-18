@@ -1,3 +1,4 @@
+import { recoverableModelFailure, modelRecoveryDelay } from './model-recovery.ts'
 import { executorRole, isReportStep } from '../../redtrace-dsh/src/roles.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { CommanderTodos, taskTodoPlanner } from './legion-todos.ts'
@@ -1051,8 +1052,8 @@ export class Store {
         delete run.processedGraphCursor
         planner.failureCount=status==='failed'?(planner.failureCount??0)+1:status==='succeeded'?0:planner.failureCount
         const relaying=planner.status==='parked'&&planner.nextWorker!==undefined
-        planner.status = planner.status==='done'?'done':planner.status==='cancelled'?'cancelled':status==='failed'&&(planner.failureCount??0)>=3?'blocked':relaying?'pending':planner.status==='parked'?'parked':status === 'succeeded' ? 'pending' : status === 'paused' ? 'paused' : status === 'unknown' ? 'blocked' : 'pending'
-        planner.retryAfter = status === 'failed' ? Date.now() + 5000 : status === 'paused' ? planner.retryAfter : 0
+        planner.status = planner.status==='done'?'done':planner.status==='cancelled'?'cancelled':status==='failed'&&!recoverableModelFailure(run.failureCode)&&(planner.failureCount??0)>=3?'blocked':relaying?'pending':planner.status==='parked'?'parked':status === 'succeeded' ? 'pending' : status === 'paused' ? 'paused' : status === 'unknown' ? 'blocked' : 'pending'
+        planner.retryAfter = status === 'failed' ? Date.now() + (recoverableModelFailure(run.failureCode) ? modelRecoveryDelay(planner.failureCount??1) : 5000) : status === 'paused' ? planner.retryAfter : 0
         this.savePlanner(planner)
         run.status = status; run.error = error; run.endedAt = status === 'paused' ? null : now(); this.saveRun(run)
         this.forGraph(run.projectId,run.graphId!).event(run.projectId, `planner.${status}`, null, { runId })

@@ -1,10 +1,11 @@
+import { recoverableModelFailure, modelRecoveryDelay, recoveryWorker } from '../src/model-recovery.ts'
 import { generalPlanningContext } from '../src/runner.ts'
 import { domainTools } from '../../redtrace-dsh/lib/tool-domains.js'
 import { coordinatorRole } from '../../redtrace-dsh/lib/roles.js'
 import { platformToolOptions } from './console.mjs'
 // Adapted from sapper-v2 7b75e6f docker/commander/{SKILL.md §§2,4.6,5, watchdog.sh}; native DSH replaces tmux.
 import { accumulateUsage, eventProjection } from '../../redtrace-dsh/lib/audit.js'
-import { chatSlots, conversationWorkers, conversationWorker } from '../src/chat.ts'
+import { chatSlots, conversationWorkers, conversationWorker, configuredConversationModels } from '../src/chat.ts'
 import { HttpError } from '../src/types.ts'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
@@ -163,7 +164,7 @@ export async function runCommander(ctx, engine, worker, signal, projectId) {
     if(cycle.failure&&!resident.relaySummary&&!stopped)throw cycle.failure
     if(!cycle.finished&&!resident.relaySummary)throw new Error(periodic?'Commander ended without legion_wait':'Commander ended without legion_finish and saved STATE')
   }catch(error){
-    legion.saveCampaign({...legion.campaign(),status:'stopped',failureCode:signal.aborted?(signal.reason?.name==='TimeoutError'?'TIMEOUT':'ABORTED'):cycle.failure?.code??(handle?'PROCESS_EXIT':undefined),error:error instanceof Error?error.message:String(error)})
+    legion.saveCampaign({...legion.campaign(),status:'stopped',failureCode:signal.aborted?(signal.reason?.name==='TimeoutError'?'TIMEOUT':'ABORTED'):cycle.failure?.code??(handle?'PROCESS_EXIT':undefined),nextInspectionAt:Date.now()+modelRecoveryDelay((legion.campaign().restarts??0)+1),error:error instanceof Error?error.message:String(error)})
     throw error
   }finally{
     signal.removeEventListener('abort',cancel);mailbox?.()
@@ -193,7 +194,7 @@ export async function recoverLegion(ctx,engine,resumeStopped=false,projectId,inc
   }
   for(const run of store.runsByStatus('unknown').filter(r=>!projectId||r.projectId===projectId)) {
     if(run.pendingTools.length||run.error!=='Process stopped before run completion'||(!run.stepId&&run.activity!=='plan')||store.project(run.projectId).status!=='active')continue
-    const step=store.assignment(run);if(!step?.role||(step.failureCount??0)>=3)continue
+    const step=store.assignment(run);if(!step?.role)continue
     if(run.activity==='plan'){try{await proveStopped(run.id);run.status='paused';run.endedAt=null;store.saveRun(run);step.status='paused';store.savePlanner(step);recovered.push(run.id)}catch(error){unresolved.push({actor:run.id,reason:String(error)})}continue}
     try{await proveStopped(run.id);step.failureCount=(step.failureCount??0)+1;run.status='cancelled';store.saveRun(run);step.status='parked';step.predecessorRunId=run.id;step.handoffPending=true;step.handoff=JSON.stringify({source:'confirmed-stopped-native-session',confirmedState:step.handoff??'',taskKey:step.taskKey,goalId:step.goalId,sourceIds:step.sourceIds,factIds:step.factIds});store.saveNode(step);legion.completeHandoff(run.projectId,step.id);recovered.push(run.id)}
     catch(error){unresolved.push({actor:run.id,reason:String(error)})}
@@ -219,7 +220,7 @@ export function createCommanderController(ctx, engine, canRun=()=>true) {
     debounces.set(projectId,setTimeout(()=>{debounces.delete(projectId);wake(projectId)},800))
     debounces.get(projectId).unref()
   }
-  const changed=projectId=>{const project=store.projects().find(p=>p.id===projectId);if(project?.mode==='general'&&project.status==='active')debounce(projectId);else if(project?.mode==='benchmark'&&project.status==='active'&&needsQuestionRefill(projectId)){const c=legion.campaign(projectId);c.nextInspectionAt=Date.now();legion.saveCampaign(c);wake(projectId)}else if(project?.mode!=='benchmark'||project.status!=='active'||!legion.campaign(projectId).hasSession&&!active.has(projectId))wake(projectId)}
+  const changed=projectId=>{const project=store.projects().find(p=>p.id===projectId);if(project?.mode==='general'&&project.status==='active')debounce(projectId);else if(project?.mode==='benchmark'&&project.status==='active'&&needsQuestionRefill(projectId)){const c=legion.campaign(projectId);if(c.status==='stopped')return;c.nextInspectionAt=Date.now();legion.saveCampaign(c);wake(projectId)}else if(project?.mode!=='benchmark'||project.status!=='active'||!legion.campaign(projectId).hasSession&&!active.has(projectId))wake(projectId)}
   const messaged=projectId=>{if(store.project(projectId).mode==='general')debounce(projectId)}
   const armInspection=(projectId,at)=>{
     clearTimeout(inspections.get(projectId))
@@ -248,8 +249,8 @@ export function createCommanderController(ctx, engine, canRun=()=>true) {
       for(let i=0;i<projects.length;i++) {
         const project=projects[(cursor+i)%projects.length], campaign=legion.campaign(project.id),periodic=project.mode==='benchmark'
         if(active.has(project.id)||campaign.status!=='idle'||legion.budget(Date.now(),project.id).phase==='ended')continue
-        if(periodic){if((campaign.nextInspectionAt??0)>Date.now()){armInspection(project.id,campaign.nextInspectionAt);continue}}
-        else if(debounces.has(project.id)||!pending(project.id))continue
+        if((campaign.nextInspectionAt??0)>Date.now()){armInspection(project.id,campaign.nextInspectionAt);continue}
+        if(!periodic&&(debounces.has(project.id)||!pending(project.id)))continue
         const runs=store.runsByStatus('running'), commands=[...legion.campaigns().filter(c=>c.status==='running'),...chatSlots(store)]
         if(runs.length+commands.length>=config.maxWorkers)break
         if(runs.filter(r=>r.projectId===project.id).length>=config.maxProjectWorkers)continue
@@ -292,11 +293,14 @@ export function createCommanderController(ctx, engine, canRun=()=>true) {
       for(const project of store.projects().filter(p=>p.status==='active')){
         if(active.has(project.id)||legion.budget(Date.now(),project.id).phase==='ended')continue
         const c=legion.campaign(project.id),resident=residents.get(project.id)
-        if(resident&&ctx.get('agents').get(c.sessionId)!==resident.handle.agent){await release(project.id);c.status='stopped';c.failureCode='PROCESS_EXIT';c.error='Native Commander Agent exited';legion.saveCampaign(c)}
-        if(c.status==='stopped'&&(c.restarts??0)<3&&['PROCESS_EXIT','UNKNOWN','SERVER','TIMEOUT','TRANSPORT','STREAM_CLOSED','EMPTY_RESPONSE','RATE_LIMIT'].includes(c.failureCode)){
+        if(resident&&ctx.get('agents').get(c.sessionId)!==resident.handle.agent){await release(project.id);c.status='stopped';c.failureCode='PROCESS_EXIT';c.nextInspectionAt=Date.now();c.error='Native Commander Agent exited';legion.saveCampaign(c)}
+        if(c.status==='stopped'&&recoverableModelFailure(c.failureCode)&&(c.nextInspectionAt??0)<=Date.now()){
           await release(project.id)
           const result=await recoverLegion(ctx,engine,true,project.id,false)
-          if(!result.unresolved.length){const current=legion.campaign(project.id);current.restarts=(c.restarts??0)+1;current.nextInspectionAt=Date.now();legion.saveCampaign(current);if(project.mode==='general')store.event(project.id,'legion.planner_restarted',null,{restarts:current.restarts})}
+          if(!result.unresolved.length){const current=legion.campaign(project.id),config=engine.configuration.resolvedSnapshot().config
+            const worker=c.nextWorker?conversationWorker(config,c.nextWorker,project.mode):conversationWorkers(config,project.mode).find(w=>w.name===c.workerName)
+            if(worker){const next=recoveryWorker(config,worker,worker),route=configuredConversationModels(config,project.mode).find(r=>r.provider===next.provider&&r.model===next.model);if(route){current.nextWorker=route.name;if(next.provider!==worker.provider||next.model!==worker.model)current.reasoning=undefined}}
+            current.restarts=(c.restarts??0)+1;current.nextInspectionAt=Date.now();legion.saveCampaign(current);store.event(project.id,project.mode==='general'?'legion.planner_restarted':'legion.commander_restarted',null,{restarts:current.restarts,model:current.nextWorker,failureCode:c.failureCode})}
         }else if(c.status==='idle')await recoverLegion(ctx,engine,false,project.id,false)
       }
       engine.scheduler.wake();wake()
@@ -328,7 +332,7 @@ export function createCommanderController(ctx, engine, canRun=()=>true) {
     async stop(projectId){
       store.project(projectId);clearTimeout(debounces.get(projectId));debounces.delete(projectId);clearTimeout(timers.get(projectId));timers.delete(projectId);clearTimeout(inspections.get(projectId));inspections.delete(projectId)
       const task=active.get(projectId);task?.abort.abort(new Error('Project Commander stopped'));await task?.completion;await release(projectId)
-      legion.saveCampaign({...legion.campaign(projectId),status:'stopped'})
+      legion.saveCampaign({...legion.campaign(projectId),status:'stopped',failureCode:undefined,nextInspectionAt:undefined})
     },
     async close(projectId){
       if(projectId){store.project(projectId);store.setStatus(projectId,'stopped');await controller.stop(projectId);await engine.scheduler.stopProject(projectId);return}

@@ -132,7 +132,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   } }))
 }
 
-export const activityPrompt = (_activity: 'decide' | 'execute' | 'plan', step?: TaskAssignment, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => (isReportStep(step) ? reportWorkflowPrompt : legionMission(executionRole(mode,step?.role), mode, planner)) + (step ? '\n分配 Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'；仅可读写此 Graph。' : '') + ((step && 'specialist' in step && step.specialist) ? '\nSpecialist 分工（限原授权 Scope）：'+JSON.stringify('specialist' in step ? step.specialist : undefined) : '') + ((step && 'bootstrap' in step && step.bootstrap) && mode==='general' ? '\n初始 Mission：作为 Worker 为指定 Goal 建立证据；Planner 负责规划/验收。' : '')
+export const activityPrompt = (_activity: 'decide' | 'execute' | 'plan', step?: TaskAssignment, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => (isReportStep(step) ? reportWorkflowPrompt : legionMission(executionRole(mode,step?.role), mode, planner)) + (step ? '\n分配 Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'；仅可读写此 Graph。' : '') + ((step && 'specialist' in step && step.specialist) ? '\nSpecialist 分工（仅定义专业分工，不得覆盖固定角色职责、Scope、FGS 规则及工具权限）：'+JSON.stringify('specialist' in step ? step.specialist : undefined) : '') + ((step && 'bootstrap' in step && step.bootstrap) && mode==='general' ? '\n初始 Mission：作为 Worker 为指定 Goal 建立证据；Planner 负责规划/验收。' : '')
 
 export function taskPlanningContext(store: Store, step: TaskAssignment): { taskPlanner?: { stepId: string; role: Step['role']; receiver?: string; sessionId?: string } | null; planningTodos?: Todo[] } {
   if (store.project(step.projectId).mode === 'general') {

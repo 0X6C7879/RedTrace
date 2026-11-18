@@ -173,7 +173,7 @@ test('Benchmark Worker mailbox still wakes immediately',async t=>{
   const worker=attachLegionMailbox(ctx,legion,{projectId:p.id,actor:run.id,sessionId:run.id,agent,message});legion.message(p.id,'commander',run.id,'MESSAGE','act now');assert.equal(steers,1);worker()
 })
 
-test('Scheduler Watchdog resumes native Session at most three times and never replays unknown or permanent failures',async t=>{
+test('Scheduler Watchdog continues settled model recovery beyond three attempts and never replays unknown outcomes',async t=>{
   const{Scheduler}=await import('../src/scheduler.ts'),store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'recovery',origin:'local',goal:'verify'}).project
   t.after(()=>store.close());new LegionStore(store)
   const g=store.createGraph(p.id,{taskKey:'T',title:'fixture',origin:'local',goal:'verify'}),step=store.forGraph(p.id,g.id).addStep(p.id,{role:'soldier',taskKey:'T',description:'native work',sourceIds:[g.originId]})
@@ -182,9 +182,9 @@ test('Scheduler Watchdog resumes native Session at most three times and never re
   const settle=async()=>{for(let i=0;i<10;i++)await new Promise(r=>setImmediate(r))}
   try{scheduler.start();await settle();assert.equal(attempts,1)
     for(let i=0;i<4;i++){scheduler.watchdog();const next=store.node(p.id,step.id,'step') as any;if(next.status==='paused'&&next.retryAfter){assert(next.retryAfter>Date.now());next.retryAfter=Date.now()-1;store.saveNode(next);scheduler.wake()}await settle()}
-    assert.equal(attempts,4);assert.equal(new Set(ids).size,1);assert.equal((store.node(p.id,step.id,'step') as any).failureCount,3)
-    for(const code of ['AUTH','QUOTA_EXCEEDED','INVALID_REQUEST','CONTEXT_WINDOW_EXCEEDED','ABORTED']){const r=store.run(ids[0]);const s=store.node(p.id,step.id,'step') as any;s.failureCount=0;store.saveNode(s);r.failureCode=code;store.saveRun(r);scheduler.watchdog();await settle();assert.equal(attempts,4)}
-    const r=store.run(ids[0]);r.failureCode='TRANSPORT';r.pendingTools=['unknown-side-effect'];store.saveRun(r);scheduler.watchdog();await settle();assert.equal(attempts,4);assert.equal((store.node(p.id,step.id,'step') as any).status,'blocked')
+    assert.equal(attempts,5);assert.equal(new Set(ids).size,1);assert.equal((store.node(p.id,step.id,'step') as any).failureCount,4)
+    for(const code of ['CONTEXT_WINDOW_EXCEEDED','ABORTED','PARTIAL_RESPONSE']){const r=store.run(ids[0]);const s=store.node(p.id,step.id,'step') as any;s.failureCount=0;store.saveNode(s);r.failureCode=code;store.saveRun(r);scheduler.watchdog();await settle();assert.equal(attempts,5)}
+    const r=store.run(ids[0]);r.failureCode='TRANSPORT';r.pendingTools=['unknown-side-effect'];store.saveRun(r);scheduler.watchdog();await settle();assert.equal(attempts,5);assert.equal((store.node(p.id,step.id,'step') as any).status,'blocked')
   }finally{await scheduler.close()}
 })
 
@@ -192,7 +192,7 @@ test('Scheduler Watchdog resumes native Session at most three times and never re
 test('native Commander patrol clock, per-Project concurrency, General events and 15-second bounded recovery', {timeout:90000},async()=>{
   const {execFile}=await import('node:child_process'),{promisify}=await import('node:util')
   const result=await promisify(execFile)(process.execPath,[new URL('./benchmark-controller.fixture.mjs',import.meta.url).pathname],{maxBuffer:2*1024*1024})
-  assert.match(result.stdout,/BENCHMARK_PATROL=true/);assert.match(result.stdout,/waiting_capacity_released=true/);assert.match(result.stdout,/native_restart_cap=3/)
+  assert.match(result.stdout,/BENCHMARK_PATROL=true/);assert.match(result.stdout,/waiting_capacity_released=true/);assert.match(result.stdout,/native_recovery_continues=true/)
 })
 
 test('native pause excludes offline time but retains prior active stagnation for escalation',t=>{

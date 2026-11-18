@@ -20,7 +20,7 @@ let ctx,controller,watchdogs=0,peak=0,requests=0,failProject
 const server=createServer(async(req,res)=>{
   let text='';for await(const b of req)text+=b;const body=domainFixtureRequest(JSON.parse(text),res),id=store.projects().map(p=>p.id).find(id=>JSON.stringify(body.messages).includes(id));assert.ok(id)
   requests++;peak=Math.max(peak,requests);await new Promise(r=>realTimeout(r,10));requests--
-  if(failProject===id){res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({error:{message:'invalid fixture request'}}));return}
+  if(failProject===id&&body.model==='fixture'){res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({error:{message:'invalid fixture request'}}));return}
   const finish=body.messages.at(-1)?.tool_call_id?.startsWith('changes-');if(finish)calls.set(id,counts(id)+1)
   const bench=id!==general.id
   const delta={tool_calls:[{index:0,id:(finish?'finish-':'changes-')+counts(id),type:'function',function:finish?{name:bench?'legion_wait':'legion_finish',arguments:JSON.stringify(bench?{through:legion.campaign(id).cursors[id].delivered}:{processed:{[id]:legion.campaign(id).cursors[id].delivered},state:'full STATE for '+id+'; next patrol'})}:{name:'legion_read_changes',arguments:JSON.stringify(bench?{}:{projectId:id})}}]}
@@ -35,6 +35,7 @@ const advance=async(ms)=>{const end=clock+ms;while(true){const due=[...timers].f
 try{
   await new Promise(r=>server.listen(0,'127.0.0.1',r))
   config.commit(config.read().revision,raw=>{raw.runtime={max_workers:4,max_project_workers:3,max_running_projects:4};raw.providers={fixture:{api:'openai-completions',base_url:'http://127.0.0.1:'+server.address().port+'/v1',api_key:'fixture',models:[{id:'fixture',context_window:20000,max_tokens:512,reasoning:'off',reasoning_efforts:false}]}};raw.workers=[{name:'commander',roles:['commander','general'],provider:'fixture',model:'fixture',max_running:4}]})
+  config.commit(config.read().revision,raw=>{raw.providers.fixture.models.push({...raw.providers.fixture.models[0],id:'alternate'})})
   const{Context}=await load('vendor/deepseek-harness/vendor/cordis/lib/index.js');ctx=new Context()
   for(const file of ['vendor/deepseek-harness/packages/session/session-projection/lib/index.js','packages/redtrace-dsh/lib/core.js']){const m=await load(file);await ctx.plugin(m.default??m).await()}
   const persist=await load('vendor/deepseek-harness/packages/session/session-persistence-jsonl/lib/index.js');await ctx.plugin(persist,{root:work+'/sessions'}).await()
@@ -64,14 +65,14 @@ try{
   store.forGraph(general.id,store.projectGraphs(general.id)[0].id).addInput(general.id,'hint','General mode remains event-driven');await settle(()=>counts(general.id)===2&&legion.campaign(general.id).status==='idle')
   await engine.commanderSessions.get(busy.id).handle.dispose();await advance(15000);await settle(()=>legion.campaign(busy.id).restarts===1&&legion.campaign(busy.id).status==='idle');assert.notEqual(ctx.get('agents').get(busySession),busyAgent,'15-second Watchdog restores a natively exited resident Agent')
   for(let i=2;i<=3;i++){
-    const c=legion.campaign(busy.id);legion.saveCampaign({...c,status:'stopped',failureCode:'TRANSPORT'})
+    const c=legion.campaign(busy.id);legion.saveCampaign({...c,status:'stopped',nextInspectionAt:Date.now(),failureCode:'TRANSPORT'})
     await advance(15000);await settle(()=>legion.campaign(busy.id).restarts===i&&legion.campaign(busy.id).status==='idle')
   }
-  const capped=counts(busy.id);legion.saveCampaign({...legion.campaign(busy.id),status:'stopped',failureCode:'TRANSPORT'})
-  await advance(15000);assert.equal(counts(busy.id),capped);assert.equal(legion.campaign(busy.id).restarts,3)
+  const capped=counts(busy.id);legion.saveCampaign({...legion.campaign(busy.id),status:'stopped',nextInspectionAt:Date.now(),failureCode:'TRANSPORT'})
+  await advance(15000);await settle(()=>counts(busy.id)>capped&&legion.campaign(busy.id).status==='idle');assert.equal(legion.campaign(busy.id).restarts,4)
   assert.equal(legion.campaign(busy.id).sessionId,busySession,'recovery reuses native history and persisted STATE')
   assert.match(legion.campaign(busy.id).state,/full STATE/)
-  failProject=idle.id;await advance(30000);await settle(()=>legion.campaign(idle.id).status==='stopped');assert.equal(legion.campaign(idle.id).failureCode,'INVALID_REQUEST');const permanent=counts(idle.id);await advance(15000);assert.equal(counts(idle.id),permanent);assert.equal(legion.campaign(idle.id).restarts,undefined)
+  failProject=idle.id;await advance(30000);await settle(()=>legion.campaign(idle.id).status==='stopped');assert.equal(legion.campaign(idle.id).failureCode,'INVALID_REQUEST');const permanent=counts(idle.id);for(let i=0;i<4&&counts(idle.id)===permanent;i++){await advance(15000);await new Promise(r=>realTimeout(r,100))}await settle(()=>legion.campaign(idle.id).restarts>=1&&legion.campaign(idle.id).status==='idle'&&counts(idle.id)>permanent);assert(counts(idle.id)>permanent,'model request rejection remains recoverable')
   const waiting=store.createProject({mode:'benchmark',title:'waiting reload',origin:'local',goal:'verify'}).project;legion.saveCampaign({...legion.campaign(waiting.id),status:'idle',hasSession:true,nextInspectionAt:Date.now()+60000});controller.wake(waiting.id);await settle()
   const inspectionBefore=legion.campaign(waiting.id).nextInspectionAt,callCount=counts(waiting.id)
   config.commit(config.read().revision,raw=>{raw.tasks={...raw.tasks,commander:{...raw.tasks.commander,timeout:300,conclude_timeout:30,inspection_interval:60,idle_inspection_interval:90}}});controller.rescheduleInspections();assert.equal(legion.campaign(waiting.id).nextInspectionAt,inspectionBefore,'unrelated saves do not reset the clock')
@@ -81,9 +82,11 @@ try{
   await settle(()=>counts(general.id)===beforeLimit+1&&legion.campaign(general.id).status==='idle')
   assert(store.events(general.id).some(e=>e.type==='planning.capacity_changed'),'hot-loaded Max Step wakes General without waiting for a new target Fact')
   controller.rescheduleInspections();await settle();assert.equal(counts(general.id),beforeLimit+1,'unchanged limits never cause a planning loop')
+  await controller.stop(idle.id);const manual=counts(idle.id);await advance(120000);assert.equal(counts(idle.id),manual,'explicit user stop must not auto-resume');assert.equal(legion.campaign(idle.id).failureCode,undefined)
+  console.log('COMMANDER_MODEL_FAILOVER=true; MANUAL_STOP_PRESERVED=true')
   console.log('PLANNING_LIMIT_HOT_RELOAD=true; CAPACITY_CHANGE_WAKES_GENERAL=true; UNCHANGED_LIMIT_NO_SPIN=true')
   console.log('PATROL_INTERVAL_HOT_RELOAD=true; DEFAULT_60_90_PRESERVED=true; GENERAL_EVENT_DRIVEN=true')
-  console.log('BENCHMARK_PATROL=true; normal=60000; idle=90000; watchdog=15000; event_wake=false; general_event_wake=true; concurrent_projects=true; waiting_capacity_released=true; native_restart_cap=3; STATE_continuity=true; same_native_agent=true; subsequent_patrol_is_delta_only=true')
+  console.log('BENCHMARK_PATROL=true; normal=60000; idle=90000; watchdog=15000; event_wake=false; general_event_wake=true; concurrent_projects=true; waiting_capacity_released=true; native_recovery_continues=true; STATE_continuity=true; same_native_agent=true; subsequent_patrol_is_delta_only=true')
 }finally{
   await controller?.close();Date.now=realNow;globalThis.setTimeout=realTimeout;globalThis.setInterval=realInterval;globalThis.clearTimeout=realClear;globalThis.clearInterval=realClearInterval
   await ctx?.fiber.dispose();store.close();server.closeAllConnections();await new Promise(r=>server.close(r));rmSync(work,{recursive:true,force:true})

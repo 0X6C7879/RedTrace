@@ -19,7 +19,7 @@ test('General-mode planning, pure Executors and report-only delivery stay distin
     for (const rule of [/Step Executor/, /taskPlanner.receiver/, /不用 legion_inspect \(action=roster\)/, /仅指定 Planner 维护 Todo\/验收/, /不委派\/全局调度/, /job_output\(wait:true\)/]) assert.match(executor, rule)
     assert.doesNotMatch(executor, /action=write|action=accept/)
   }
-  for (const rule of [/不是 Reporter 角色/, /不重新探测/, /run_id\+event_id/, /expectedVersion/, /report-only Step 保存后结束/, /原 Worker 继续其他任务/, /## 摘要/, /## 内容/]) assert.match(reportWorkflowPrompt, rule)
+  for (const rule of [/不是 Reporter 角色/, /不重新探测/, /run_id\+event_id/, /expectedVersion/, /## 摘要/, /## 内容/]) assert.match(reportWorkflowPrompt, rule)
 })
 
 test('domain descriptions do not restate required fields; action schemas enforce them', async () => {
