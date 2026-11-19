@@ -302,6 +302,17 @@ export class Store {
       this.saveProject(project)
     })
   }
+  setCtfyCompetition(id: string, competitionId: string) {
+    return this.transaction(() => {
+      const project = this.writable(id)
+      if (project.ctfyCompetitionId === competitionId) return project
+      if (project.ctfyCompetitionId && this.projectGraphs(id).length) throw new HttpError(409, 'Project already has tasks from another competition; use a separate Project')
+      project.ctfyCompetitionId = requiredText(competitionId, 'competition_id')
+      this.saveProject(project)
+      this.event(id, 'project.platform_selected', null, { competition_id: competitionId })
+      return this.project(id)
+    })
+  }
   private saveProject(p: Project) { this.db.prepare('UPDATE projects SET data=? WHERE id=?').run(JSON.stringify(p), p.id) }
   node<T extends GraphNode = GraphNode>(projectId: string, id: string, kind?: T['kind']): T {
     this.project(projectId)

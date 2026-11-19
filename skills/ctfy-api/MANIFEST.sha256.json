@@ -1,0 +1,11 @@
+{
+  "README.md": "f93a087231214370eea8e11a76d5eefaf12af3c6e2bc1aeb863d58b63ee8ddab",
+  "SKILL.md": "612aa065bb85a5d2ecccffa5d9c7dba6485f09b22c3e32eed7117a672bcbc174",
+  "examples/START_TASK.md": "9d8009150470d8e8d52de625c76bf010799d7c31d2d08f569c916420169bd81d",
+  "references/contest-rules.md": "351b1eea14fd61a233006eabf972ead43137083aeb5e81b3ef6c75b434b13f9b",
+  "references/originals/CCF-TPCTF赛事规则手册-v2.6.pdf": "8d4ca015acf712bef1afeed7642c3f92fe9a575451490ad23a8a2ba431f6013e",
+  "references/originals/TPCTF2026-参赛接口文档-v1.0.pdf": "8e984830666e69cbfd96e60ea302c2eba3ea82ba88ac074abac7b8e91914bbe9",
+  "references/platform-contract.md": "e4610f11f2c01a9dd9dd6b3b51dbcda53d9423082198acefd6bebf997d6bf62b",
+  "scripts/tpctf.py": "4b6acf913d4f1c1a6fa93fb89445c3284389d10d26e94cdf68e4c1364a185990",
+  "tests/test_tpctf.py": "e6cb49685008e2d8f210be8ed79320a0ef93b7d1110a34abad8ccca6ac197392"
+}

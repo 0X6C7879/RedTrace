@@ -90,7 +90,7 @@ test('TPCTF adapter discovers scored tasks through its existing CLI without taki
   const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'fixture',origin:'TPCTF authorized fixture',goal:'verify'}).project
   new LegionStore(store)
   try {
-    const config={workspaceRoot:work+'/workspaces'} as any
+    const config={workspaceRoot:work+'/workspaces',commonEnv:{CTFY_COMPETITION_ID:'fixture-event'}} as any
     assert.equal(benchmarkAdapter(store,p.id).kind,'tpctf')
     const result=await discoverBenchmarkTasks(store,config,p.id)
     assert.equal(result.items[0].id,'challenge-1')

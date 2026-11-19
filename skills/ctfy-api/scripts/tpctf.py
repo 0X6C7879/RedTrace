@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TPCTF 2026 CTFy platform CLI for RedTrace workers. No third-party Python deps.
+"""CTFy platform CLI for RedTrace workers. No third-party Python deps.
 
 This controls authorized contest API and WireGuard instance access only;
 RedTrace's existing agents solve the actual challenge.
@@ -74,9 +74,9 @@ def load_vpn_state() -> dict[str, Any]:
 
 def require_token(kind: str) -> str:
     key = "CTFY_PLAY_TOKEN" if kind == "play" else "CTFY_AUTHOR_TOKEN"
-    value = os.environ.get(key, "").strip()
+    value = os.environ.get(key, "").strip() or os.environ.get("CTFY_TOKEN", "").strip()
     if not value:
-        raise PlatformError("missing_token", f"Set {key} in RedTrace worker environment")
+        raise PlatformError("missing_token", f"Set CTFY_TOKEN or {key} in RedTrace worker environment")
     return value
 
 
@@ -86,11 +86,14 @@ class API:
         parts = urllib.parse.urlparse(self.base)
         if parts.scheme not in ("https", "http") or not parts.netloc:
             raise PlatformError("bad_base_url", "CTFY_BASE_URL must be an HTTP(S) URL")
+        self.mcp_session = ""
+        self.mcp_version = "2025-03-26"
 
     def call(
         self, method: str, path: str, *, token_kind: str = "play", body: Any = None,
         query: dict[str, Any] | None = None, binary: bool = False,
         multipart: tuple[dict[str, str], pathlib.Path] | None = None,
+        rpc: bool = False,
     ) -> Any:
         # Paths are built internally, never from arbitrary contestant-provided URLs.
         endpoint = self.base + "/" + path.lstrip("/")
@@ -99,6 +102,11 @@ class API:
             if q:
                 endpoint += "?" + urllib.parse.urlencode(q)
         headers = {"Authorization": "Bearer " + require_token(token_kind), "Accept": "application/json"}
+        if rpc:
+            headers["Accept"] = "application/json, text/event-stream"
+            headers["MCP-Protocol-Version"] = self.mcp_version
+            if self.mcp_session:
+                headers["Mcp-Session-Id"] = self.mcp_session
         content = None
         if multipart is not None:
             fields, archive = multipart
@@ -121,12 +129,31 @@ class API:
         req = urllib.request.Request(endpoint, method=method, headers=headers, data=content)
         try:
             with urllib.request.urlopen(req, timeout=30) as response:
+                if rpc:
+                    self.mcp_session = response.headers.get("Mcp-Session-Id", self.mcp_session)
                 raw = response.read()
                 if binary:
                     return raw
                 if not raw:
                     return {}
-                return json.loads(raw.decode("utf-8"))
+                text = raw.decode("utf-8")
+                if rpc and not text.lstrip().startswith("{"):
+                    # SSE may include progress events before the matching JSON-RPC reply.
+                    messages = [json.loads("\n".join(line[5:].lstrip() for line in event.splitlines() if line.startswith("data:")))
+                                for event in text.replace("\r\n", "\n").split("\n\n") if any(line.startswith("data:") for line in event.splitlines())]
+                    payload = next((m for m in messages if m.get("id") == body.get("id")), None)
+                    if payload is None:
+                        raise PlatformError("mcp_missing_response", "No matching JSON-RPC response")
+                else:
+                    payload = json.loads(text)
+                if rpc:
+                    if "error" in payload:
+                        raise PlatformError("mcp_error", payload["error"])
+                    result = payload["result"]
+                    if result.get("isError"):
+                        raise PlatformError("mcp_tool_error", result.get("content", []))
+                    return result
+                return payload
         except urllib.error.HTTPError as exc:
             raw = exc.read()
             try:
@@ -141,15 +168,22 @@ class API:
         except (ValueError, UnicodeDecodeError):
             raise PlatformError("invalid_json", "Platform returned invalid JSON") from None
 
+    def mcp(self, method: str, params: dict[str, Any]) -> Any:
+        result = self.call("POST", "mcp/", rpc=True, body={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": self.mcp_version, "capabilities": {}, "clientInfo": {"name": "redtrace-ctfy-skill", "version": "1"}}})
+        self.mcp_version = result["protocolVersion"]
+        self.call("POST", "mcp/", rpc=True, body={"jsonrpc": "2.0", "method": "notifications/initialized"})
+        return self.call("POST", "mcp/", rpc=True, body={"jsonrpc": "2.0", "id": 2, "method": method, "params": params})
+
     def competition(self) -> str:
         explicit = os.environ.get("CTFY_COMPETITION_ID", "").strip()
         if explicit:
             return field_id(explicit)
         data = self.call("GET", "competitions")
         items = data.get("items", []) if isinstance(data, dict) else []
-        candidates = [x for x in items if x.get("is_registered") and ("智能体" in x.get("title", "") or "agent" in x.get("title", "").lower())]
+        candidates = [x for x in items if x.get("is_registered") and x.get("phase") != "past" and x.get("play_open", True)]
         if len(candidates) != 1:
-            raise PlatformError("competition_ambiguous", "Set CTFY_COMPETITION_ID using the ID from `competitions`: expected one registered intelligent-agent competition; found " + str(len(candidates)))
+            raise PlatformError("competition_ambiguous", "Use --competition or CTFY_COMPETITION_ID with the intended ID from `competitions`: expected one registered open competition; found " + str(len(candidates)))
         return field_id(candidates[0]["id"])
 
 
@@ -235,18 +269,28 @@ def require_archive(filename: str) -> pathlib.Path:
 
 def run(args: argparse.Namespace) -> Any:
     if args.command == "doctor":
-        status = {"ok": bool(os.environ.get("CTFY_PLAY_TOKEN")), "play_token_configured": bool(os.environ.get("CTFY_PLAY_TOKEN")), "author_token_configured": bool(os.environ.get("CTFY_AUTHOR_TOKEN")), "competition_id_configured": bool(os.environ.get("CTFY_COMPETITION_ID")), "python": sys.version.split()[0], "wg_quick_available": bool(shutil.which("wg-quick")), "wg_available": bool(shutil.which("wg")), "vpn_active": tunnel_is_up()}
+        play = bool(os.environ.get("CTFY_PLAY_TOKEN", "").strip() or os.environ.get("CTFY_TOKEN", "").strip())
+        author = bool(os.environ.get("CTFY_AUTHOR_TOKEN", "").strip() or os.environ.get("CTFY_TOKEN", "").strip())
+        status = {"ok": play, "play_token_configured": play, "author_token_configured": author, "competition_id_configured": bool(os.environ.get("CTFY_COMPETITION_ID")), "python": sys.version.split()[0], "wg_quick_available": bool(shutil.which("wg-quick")), "wg_available": bool(shutil.which("wg")), "vpn_active": tunnel_is_up()}
         if args.online:
             try:
                 c = API().call("GET", "competitions")
                 status["platform_api_reachable"] = True
                 status["visible_competitions"] = len(c.get("items", []))
             except PlatformError as exc:
+                status["ok"] = False
                 status["platform_api_reachable"] = False
                 status["platform_error"] = {"code": exc.code, "detail": exc.detail}
         return status
     api = API()
     cmd = args.command
+    if cmd == "mcp":
+        if args.mcp_action == "tools":
+            return api.mcp("tools/list", {})
+        arguments = json.load(sys.stdin) if args.arguments_stdin else json.loads(args.arguments)
+        if not isinstance(arguments, dict):
+            raise PlatformError("invalid_arguments", "MCP arguments must be a JSON object")
+        return api.mcp("tools/call", {"name": args.tool, "arguments": arguments})
     if cmd == "competitions":
         response = api.call("GET", "competitions")
         if args.registered:
@@ -255,7 +299,7 @@ def run(args: argparse.Namespace) -> Any:
     if cmd == "challenges":
         response = api.call("GET", f"competitions/{cid(api,args)}/challenges", query={"limit": args.limit, "offset": args.offset})
         if args.unsolved:
-            response["items"] = [x for x in response.get("items", []) if not x.get("my_team_fully_solved") and not x.get("closed") and x.get("scoring") == "scored" and not x.get("my_team_authored")]
+            response["items"] = [x for x in response.get("items", []) if not x.get("my_team_fully_solved") and not x.get("closed") and x.get("scoring") != "closed" and not x.get("my_team_authored")]
         return response
     if cmd == "detail":
         return api.call("GET", f"challenges/{field_id(args.challenge)}", query={"competition_id": cid(api,args)})
@@ -326,10 +370,18 @@ def run(args: argparse.Namespace) -> Any:
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="TPCTF 2026 platform CLI for RedTrace; returns JSON. No Python packages required.")
+    p = argparse.ArgumentParser(description="CTFy platform CLI for RedTrace; returns JSON. No Python packages required.")
     sub = p.add_subparsers(dest="command", required=True)
     d = sub.add_parser("doctor", help="Check local prerequisites; optional API connectivity")
     d.add_argument("--online", action="store_true")
+    m = sub.add_parser("mcp", help="Use the platform's current MCP tools and schemas")
+    ms = m.add_subparsers(dest="mcp_action", required=True)
+    ms.add_parser("tools")
+    mc = ms.add_parser("call")
+    mc.add_argument("tool")
+    mg = mc.add_mutually_exclusive_group()
+    mg.add_argument("--arguments", default="{}", help="JSON object; use stdin for secrets")
+    mg.add_argument("--arguments-stdin", action="store_true")
     c = sub.add_parser("competitions")
     c.add_argument("--registered", action="store_true")
     for name in ("challenges", "detail", "start", "close", "scoreboard"):
@@ -396,7 +448,7 @@ def main() -> int:
     try:
         payload = run(parser().parse_args())
         out(payload)
-        return 0
+        return 1 if isinstance(payload, dict) and payload.get("ok") is False else 0
     except PlatformError as exc:
         return err(exc.code, exc.detail, exc.status)
     except (OSError, ValueError, json.JSONDecodeError) as exc:

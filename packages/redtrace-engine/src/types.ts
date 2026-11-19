@@ -13,6 +13,7 @@ export interface Project {
   hintSeq?: number; acknowledgedHintSeq?: number
   criticalSeq?: number; acknowledgedCriticalSeq?: number
   benchmarkHosts?: Record<string,string[]>
+  ctfyCompetitionId?: string
   initialPlanningPending: boolean; planningRetryPending: boolean
   failureCount?: number; failureSignature?: string | null; circuitOpen?: boolean; contextRevision?: number
 }

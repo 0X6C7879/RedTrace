@@ -52,21 +52,29 @@ export async function tsecbenchQuery(config: EngineConfig, args: string[], signa
 
 
 /** Platform discovery only supplies task parameters; FGS ownership remains generic. */
-export async function discoverBenchmarkTasks(store:Store,config:EngineConfig,projectId:string,signal?:AbortSignal){
+export async function discoverBenchmarkTasks(store:Store,config:EngineConfig,projectId:string,signal?:AbortSignal,competitionId?:string){
   const adapter=benchmarkAdapter(store,projectId)
   if(adapter.kind==='tpctf') {
-    const response=await tpctfQuery(config,['challenges'],signal)
+    competitionId ??= store.project(projectId).ctfyCompetitionId ?? config.commonEnv?.CTFY_COMPETITION_ID
+    if(!competitionId) {
+      const response=await tpctfQuery(config,['competitions'],signal)
+      if(!Array.isArray(response?.items))throw new HttpError(502,'CTFy competition list is missing items')
+      return {selectionRequired:true,competitions:response.items.map(({id,title,kind,phase,play_open,is_registered,can_participate,my_review_status,max_instances_per_team_effective}:any)=>({id,title,kind,phase,play_open,is_registered,can_participate,my_review_status,max_instances_per_team_effective})),notice:'按用户任务选择 competition_id，再调用 legion_platform_list；选择保存在当前 Project，无需配置全局环境变量。'}
+    }
+    const response=await tpctfQuery(config,['challenges','--competition',competitionId],signal)
+    if(!Array.isArray(response?.items))throw new HttpError(502,'CTFy challenge list is missing items')
     store.transaction(()=>{
+      store.setCtfyCompetition(projectId,competitionId!)
       for(const challenge of response.items??[]) {
         const taskKey=challenge.id
         if(typeof taskKey!=='string'||!taskKey)throw new HttpError(502,'Challenge is missing id')
         const row=store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(projectId,taskKey)
         const data={...(row?JSON.parse(String(row.data)):{}),platformCompleted:challenge.my_team_fully_solved===true,eligible:!challenge.my_team_authored&&challenge.scoring==='scored'&&!challenge.closed,
-          platformMetadata:{...benchmarkMetadata({...challenge,is_completed:challenge.is_completed??challenge.my_team_fully_solved}),title:challenge.title??taskKey}}
+          platformMetadata:{...benchmarkMetadata({...challenge,is_completed:challenge.is_completed??challenge.my_team_fully_solved}),title:challenge.title??challenge.name??taskKey}}
         store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?) ON CONFLICT(project_id,task_key) DO UPDATE SET data=excluded.data').run(projectId,taskKey,JSON.stringify(data))
         if(store.project(projectId).mode!=='benchmark'||challenge.my_team_fully_solved||challenge.closed||challenge.my_team_authored||challenge.scoring!=='scored'||store.projectGraphs(projectId).some(g=>g.taskKey===taskKey))continue
-        const {id,title,description,category,attachments,questions,requires,launch_ttl_s}=challenge
-        store.createGraph(projectId,{taskKey,title:challenge.title??taskKey,origin:store.scopeFact(projectId).description+'\nPlatform task: '+JSON.stringify({id,title,description,category,attachments,questions,requires,launch_ttl_s}),goal:(store.project(projectId).objective??'Complete the authorized task')+' · '+taskKey})
+        const {id,title,name,description,category,attachments,questions,requires,launch_ttl_s}=challenge
+        store.createGraph(projectId,{taskKey,title:title??name??taskKey,origin:store.scopeFact(projectId).description+'\nPlatform task: '+JSON.stringify({competition_id:competitionId,id,title,name,description,category,attachments,questions,requires,launch_ttl_s}),goal:(store.project(projectId).objective??'Complete the authorized task')+' · '+taskKey})
       }
     })
     return response

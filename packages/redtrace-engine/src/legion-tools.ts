@@ -64,11 +64,12 @@ export function legionTools(store: Store, actor: string, projectId: string | und
     tool('legion_models',"列出配置内角色模型/容量，不含凭据。",Type.Object({},{additionalProperties:false}),()=>config?.workers.map(w=>({name:w.name,roles:w.roles,enabled:w.enabled,provider:w.provider,model:w.model,maxRunning:w.maxRunning,priority:w.priority}))??[]),
     tool('legion_commander_model',"选择下轮巡检的配置内 Commander 模型。",Type.Object({worker:text},{additionalProperties:false}),args=>{if(!config?.workers.some(w=>w.name===args.worker&&w.enabled&&w.roles?.includes(coordinatorRole(benchmark?'benchmark':'general'))))throw new HttpError(422,'Invalid Commander route');const c=legion.campaign();c.nextWorker=args.worker;legion.saveCampaign(c);return{nextWorker:args.worker}}),
     tool('legion_deadline',"显式设置 epoch 毫秒截止时间。",Type.Object({deadline:Type.Integer({minimum:1})},{additionalProperties:false}),args=>legion.setDeadline(args.deadline)),
-    tool('legion_platform_list',"通过既有 adapter 刷新平台结果、初始化缺失任务，返回精简 Board。",Type.Object({},{additionalProperties:false}),async(_args,signal)=>{
-      if(!config)throw Error('Runtime configuration unavailable')
-      await discoverBenchmarkTasks(store,config,projectId!,signal)
+    tool('legion_platform_list',"刷新平台并初始化任务；CTFy 未绑定时返回比赛列表，按用户目标传 competition_id 再调用，选择保存在当前 Project。",Type.Object({competition_id:Type.Optional(Type.String({minLength:1,maxLength:128,pattern:'^[A-Za-z0-9_-]+$'}))},{additionalProperties:false}),async(args,signal)=>{
+      const runtime=settings()
+      if(!runtime)throw Error('Runtime configuration unavailable')
+      const discovery=await discoverBenchmarkTasks(store,runtime,projectId!,signal,args.competition_id)
       const adapter=benchmarkAdapter(store,projectId!)
-      return {...legion.boardSummary(),adapter,...(adapter.kind==='manual'?{notice:'本 Project Scope 无匹配的平台 adapter；仅列本地任务 Graph，非远端平台清单。'}:{})}
+      return {...legion.boardSummary(),adapter,...(discovery.selectionRequired?discovery:adapter.kind==='tpctf'?{competition_id:store.project(projectId!).ctfyCompetitionId}:{}),...(adapter.kind==='manual'?{notice:'本 Project Scope 无匹配的平台 adapter；仅列本地任务 Graph，非远端平台清单。'}:{})}
     }),
     tool('legion_state',"仅交接时读调度 STATE；summary 保存分配、阻塞、未完指令，不存解题情报。",Type.Object({summary:Type.Optional(text)},{additionalProperties:false}),args=>args.summary?legion.saveState(projectId,'commander',args.summary):{state:legion.commanderState()}),
     tool('legion_wait',"through=已处理增量 cursor；无新增沿用已确认值。结束本轮，保留 Session；60 秒后巡检（空闲 90 秒），释放执行槽。",Type.Object({through:Type.Integer({minimum:0})},{additionalProperties:false}),args=>{legion.finishCommand({[projectId!]:args.through},undefined,false);legion.checkpointState(projectId!,'patrol-sleep');finish();return{sleepSeconds:legion.inspectionDelay(projectId!)/1000}},true),
