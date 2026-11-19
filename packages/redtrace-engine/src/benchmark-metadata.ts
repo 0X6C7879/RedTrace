@@ -23,13 +23,15 @@ const unknownMetadata = benchmarkMetadata({})
 
 /** Read the last listing observation, not the runtime's completion or classification. */
 export function benchmarkPlatformView(store: Store, projectId: string) {
+  const competitionId=store.project(projectId).ctfyCompetitionId
   return Object.fromEntries(store.db.prepare('SELECT task_key,data FROM legion_tasks WHERE project_id=?').all(projectId).map(row => {
     const data = JSON.parse(String(row.data))
+    if(competitionId&&data.competitionId&&data.competitionId!==competitionId)return null
     const listed: (BenchmarkMetadata & { title: string }) | undefined = data.platformMetadata
     return [String(row.task_key), {
       ...(listed ?? { ...unknownMetadata, title: null }),
       submitted: !!data.submissionAttemptedAt,
       accepted: data.submissionAccepted === true,
     }] as const
-  }))
+  }).filter(row=>row!==null))
 }

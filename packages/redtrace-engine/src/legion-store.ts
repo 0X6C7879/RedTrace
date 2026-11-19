@@ -134,7 +134,8 @@ export class LegionStore {
   completeBenchmark(projectId:string) {
     if(this.store.project(projectId).mode!=='benchmark'||this.store.project(projectId).status!=='active')return false
     const graphs=this.store.projectGraphs(projectId).filter(g=>g.type==='benchmark_task')
-    const records=new Map<string,any>(this.store.db.prepare('SELECT task_key,data FROM legion_tasks WHERE project_id=?').all(projectId).map(r=>[String(r.task_key),JSON.parse(String(r.data))]))
+    const competitionId=this.store.project(projectId).ctfyCompetitionId
+    const records=new Map<string,any>(this.store.db.prepare('SELECT task_key,data FROM legion_tasks WHERE project_id=?').all(projectId).map(r=>[String(r.task_key),JSON.parse(String(r.data))] as [string,any]).filter(([,data])=>!competitionId||!data.competitionId||data.competitionId===competitionId))
     const keys=new Set([...graphs.map(g=>g.taskKey!),...[...records].filter(([,v])=>v.eligible!==false).map(([key])=>key)])
     if(!keys.size||[...keys].some(key=>{
       const record=records.get(key),graph=graphs.find(g=>g.taskKey===key)

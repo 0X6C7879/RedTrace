@@ -134,7 +134,7 @@ test('benchmark cards include platform-only completions, exclude the main Graph 
   const tasks=app.filteredBenchmarkTasks(project)
   assert.deepEqual(Array.from(tasks,(task:any)=>task.taskKey),['done','task'])
   assert.equal(tasks[0].graph,undefined)
-  assert.match(app.benchmarkTaskSummary(project),/1 道平台已完成/)
+  assert.match(app.benchmarkTaskSummary(project),/1 道已完成/)
   app.graphStatusFilter='completed'
   assert.deepEqual(Array.from(app.filteredBenchmarkTasks(project),(task:any)=>task.taskKey),['done'])
   app.selectedProjectId='p';app.selectedGraphId='g1';app.fgs={steps:[{id:'s1'},{id:'s2'}]}
@@ -301,4 +301,24 @@ test('FGS Todo stays read-only in a compact anchored popover, not a full detail 
   const popover=layout.slice(layout.indexOf('<details class="rt-todo"'),layout.indexOf('</details>')+10);
   assert.match(popover,/x-text="todo.content"/);assert.match(popover,/暂无待办/);assert.match(popover,/不代表 Goal 验收/);
   assert.doesNotMatch(popover,/x-model="todo|contenteditable|TodoWrite/);assert.doesNotMatch(layout,/sideTab === 'todos'/);
+})
+
+test('task overview has exactly four statuses; internal achievement alone is unfinished',()=>{
+ const steps:{graphId:string;status:string}[]=[],app=page(),p={graphs:[{id:'g',type:'benchmark_task',taskKey:'T',title:'Task',goalId:'goal',status:'completed'}],goals:[{id:'goal',status:'achieved'}],steps,runs:[],platform:{T:{is_completed:false},U:{title:'Untracked',is_completed:false}}}
+ assert.equal(app.taskGraphStatus(p,p.graphs[0]),'pending')
+ assert.equal(app.taskGraphStatus(p,undefined,'U'),'pending')
+ assert.match(app.benchmarkTaskSummary(p),/2 道未完成/)
+ p.steps.push({graphId:'g',status:'parked'},{graphId:'g',status:'running'})
+ assert.equal(app.taskGraphStatus(p,p.graphs[0]),'running')
+ p.steps.pop();assert.equal(app.taskGraphStatus(p,p.graphs[0]),'parked')
+ p.platform.T.is_completed=true;assert.equal(app.taskGraphStatus(p,p.graphs[0]),'completed')
+ const select=html.match(/<select x-model="graphStatusFilter"[^>]*>(.*?)<\/select>/s)![1]
+ assert.deepEqual([...select.matchAll(/<option value="[^"]*">(.*?)<\/option>/g)].map(v=>v[1]),['全部状态','已完成','执行中','未完成','已搁置'])
+ app.graphStatusFilter='pending';assert.deepEqual(Array.from(app.filteredBenchmarkTasks(p),(t:any)=>t.taskKey),['U'])
+})
+
+test('manual Benchmark completion uses its evidence-accepted Goal when no platform result exists',()=>{
+ const app=page(),graph={id:'manual',taskKey:'M',goalId:'goal',status:'active'},p={platform:{},goals:[{id:'goal',status:'achieved'}],steps:[],runs:[]}
+ assert.equal(app.taskGraphStatus(p,graph),'completed')
+ p.goals[0].status='open';assert.equal(app.taskGraphStatus(p,graph),'pending')
 })

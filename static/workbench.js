@@ -33,11 +33,12 @@ window.redtraceWorkbench = {
   tokenDetail(row){return '输入 '+this.formatTokens(row.input)+' · 输出 '+this.formatTokens(row.output)+' · 缓存读取 '+this.formatTokens(row.cacheRead)+' · 缓存写入 '+this.formatTokens(row.cacheWrite)+'；Token 非费用'},
   taskGraphStatus(p,g,taskKey=g?.taskKey){
     if(p.platform?.[taskKey]?.is_completed===true)return 'completed';
-    if(!g)return 'untracked';
-    if(g.status==='completed'||p.goals.some(goal=>goal.id===g.goalId&&goal.status==='achieved'))return 'internal-achieved';
+    if(!g)return 'pending';
+    if(!p.platform?.[taskKey]&&(g.status==='completed'||p.goals.some(goal=>goal.id===g.goalId&&goal.status==='achieved')))return 'completed';
     const steps=p.steps.filter(s=>s.graphId===g.id);
+    if(steps.some(s=>s.status==='running')||(p.runs||[]).some(r=>r.graphId===g.id&&r.status==='running'))return 'running';
     if(steps.some(s=>s.status==='parked'))return 'parked';
-    return steps.some(s=>s.status==='running')?'running':'pending';
+    return 'pending';
   },
   benchmarkTasks(p){
     const graphs=new Map(p.graphs.filter(g=>g.type==='benchmark_task').map(g=>[g.taskKey,g]));
@@ -46,10 +47,10 @@ window.redtraceWorkbench = {
   },
   benchmarkTaskSummary(p){
     const tasks=this.benchmarkTasks(p);
-    return tasks.length+' 道题 · '+tasks.filter(task=>task.status==='completed').length+' 道平台已完成 · '+tasks.filter(task=>task.status==='internal-achieved').length+' 道仅内部目标达成 · '+tasks.filter(task=>task.platform?.submitted).length+' 道有提交记录';
+    return tasks.length+' 道题 · '+[['completed','已完成'],['running','执行中'],['pending','未完成'],['parked','已搁置']].map(([status,label])=>tasks.filter(task=>task.status===status).length+' 道'+label).join(' · ');
   },
   filteredBenchmarkTasks(p){
-    const order={running:0,completed:1,'internal-achieved':1};
+    const order={running:0,completed:1};
     return this.benchmarkTasks(p).filter(task=>(!this.graphQuery||(task.title+' '+task.taskKey).toLowerCase().includes(this.graphQuery.toLowerCase()))&&(!this.graphStatusFilter||task.status===this.graphStatusFilter)).sort((a,b)=>(order[a.status]??2)-(order[b.status]??2)||(this.graphSort==='updatedAt'?(b.graph?.updatedAt??'').localeCompare(a.graph?.updatedAt??''):a.title.localeCompare(b.title)));
   },
   benchmarkMetadataText(meta){return 'Flag（正确 / 总数） '+(meta?.correct_flag_count??'未知')+' / '+(meta?.flag_count??'未知')+' · 难度 '+(meta?.difficulty??'未知')+' · 总分 '+(meta?.total_score??'未知')},

@@ -79,8 +79,8 @@ export class Store {
   }
   private graphFilter() { return this.graphScope ? " AND graph_id='" + this.graphScope.replaceAll("'", "''") + "'" : '' }
   projectGraphs(projectId: string): ProjectGraph[] {
-    this.project(projectId)
-    return this.db.prepare('SELECT data FROM project_graphs WHERE project_id=? ORDER BY rowid').all(projectId).map(r => JSON.parse(String(r.data)))
+    const competitionId=this.project(projectId).ctfyCompetitionId
+    return this.db.prepare('SELECT data FROM project_graphs WHERE project_id=? ORDER BY rowid').all(projectId).map(r => JSON.parse(String(r.data))).filter(g=>!competitionId||!g.competitionId||g.competitionId===competitionId)
   }
   projectGraph(projectId: string, graphId: string): ProjectGraph {
     this.project(projectId)
@@ -94,13 +94,14 @@ export class Store {
   }
   private rootGoalId(projectId: string) { return this.graphScope ? this.projectGraph(projectId, this.graphScope).goalId : 'goal' }
   private originId(projectId: string) { return this.graphScope ? this.projectGraph(projectId, this.graphScope).originId : 'origin' }
-  createGraph(projectId: string, input: {taskKey: string; title: string; origin: string; goal: string}): ProjectGraph {
+  createGraph(projectId: string, input: {taskKey: string; title: string; origin: string; goal: string; competitionId?: string}): ProjectGraph {
     return this.transaction(() => {
       if (this.writable(projectId).mode !== 'benchmark') throw new HttpError(409, 'General has exactly one main Graph')
       requiredText(input.taskKey, 'taskKey')
       if (this.projectGraphs(projectId).some(g => g.taskKey === input.taskKey)) throw new HttpError(409, 'taskKey already has a Graph')
       const id = 'graph-' + randomUUID(), createdAt = now()
       const graph: ProjectGraph = {id, projectId, type:'benchmark_task', taskKey:input.taskKey, title:requiredText(input.title,'title'), status:'active', originId:'origin-'+id, goalId:'goal-'+id, createdAt, updatedAt:createdAt, revision:0, factSeq:0, evidenceSeq:0, hintSeq:0, endedSeq:0}
+      if(input.competitionId)graph.competitionId=input.competitionId
       this.db.prepare('INSERT INTO project_graphs VALUES (?,?,?)').run(id, projectId, JSON.stringify(graph))
       this.saveNode({id:graph.originId, graphId:id, projectId, kind:'fact', title:factTitle(input.origin), description:requiredText(input.origin,'origin'), creator:'commander', createdAt, stepId:null, evidence:[]})
       this.saveNode({id:graph.goalId, graphId:id, projectId, kind:'goal', description:requiredText(input.goal,'goal'), creator:'commander', createdAt, parentId:null, status:'open', evidenceIds:[]})

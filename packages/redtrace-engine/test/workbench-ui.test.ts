@@ -82,7 +82,7 @@ test('platform-confirmed completion outranks Park without forging internal Goal 
  const graph={id:'G',taskKey:'T',goalId:'goal-G'},project={platform:{T:{is_completed:true}},goals:[{id:'goal-G',status:'open'}],steps:[{graphId:'G',status:'parked'}]}
  assert.equal(status(project,graph),'completed');assert.equal(project.goals[0].status,'open')
  project.platform.T.is_completed=false;assert.equal(status(project,graph),'parked')
- project.goals[0].status='achieved';assert.equal(status(project,graph),'internal-achieved')
+ project.goals[0].status='achieved';assert.equal(status(project,graph),'parked');project.steps=[];assert.equal(status(project,graph),'pending')
  const a=app();a.legionProjectId='P';a.legion={projects:[{id:'P',...project}]};a.workbench={graphs:[graph],conversations:[{id:'G',graphId:'G'}],project:{mode:'benchmark',status:'active'},steps:[],goals:[{graphId:'G',status:'achieved'}]};a.conversationId='G'
  assert.equal(a.conversationTaskState().label,'目标已验收')
  assert.equal(a.benchmarkPlatformStatus(a.conversationBenchmarkMetadata()),'平台未完成')

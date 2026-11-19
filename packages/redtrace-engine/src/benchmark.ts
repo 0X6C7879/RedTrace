@@ -55,12 +55,21 @@ export async function tsecbenchQuery(config: EngineConfig, args: string[], signa
 export async function discoverBenchmarkTasks(store:Store,config:EngineConfig,projectId:string,signal?:AbortSignal,competitionId?:string){
   const adapter=benchmarkAdapter(store,projectId)
   if(adapter.kind==='tpctf') {
-    competitionId ??= store.project(projectId).ctfyCompetitionId ?? config.commonEnv?.CTFY_COMPETITION_ID
-    if(!competitionId) {
+    const bound=store.project(projectId).ctfyCompetitionId
+    if(!bound) {
       const response=await tpctfQuery(config,['competitions'],signal)
       if(!Array.isArray(response?.items))throw new HttpError(502,'CTFy competition list is missing items')
-      return {selectionRequired:true,competitions:response.items.map(({id,title,kind,phase,play_open,is_registered,can_participate,my_review_status,max_instances_per_team_effective}:any)=>({id,title,kind,phase,play_open,is_registered,can_participate,my_review_status,max_instances_per_team_effective})),notice:'按用户任务选择 competition_id，再调用 legion_platform_list；选择保存在当前 Project，无需配置全局环境变量。'}
+      const normalize=(value:string)=>value.normalize('NFKC').toLowerCase().replace(/\s+/g,'')
+      const scope=normalize(store.scopeFact(projectId).description+' '+(store.project(projectId).objective??''))
+      const matches=response.items.filter((c:any)=>[c.title,...Object.values(c.title_i18n??{})].some(title=>typeof title==='string'&&title.trim()&&scope.includes(normalize(title))))
+      if(matches.length===1) {
+        if(competitionId&&competitionId!==matches[0].id)throw new HttpError(422,'competition_id conflicts with the competition named in Project Scope')
+        competitionId=matches[0].id
+      }
+      competitionId ??= config.commonEnv?.CTFY_COMPETITION_ID
+      if(!competitionId)return {selectionRequired:true,competitions:response.items.map(({id,title,title_i18n,kind,phase,play_open,is_registered,can_participate,my_review_status,max_instances_per_team_effective}:any)=>({id,title,title_i18n,kind,phase,play_open,is_registered,can_participate,my_review_status,max_instances_per_team_effective})),notice:'按用户任务的中英文名称选择 competition_id，再调用 legion_platform_list；不按 suite/event 类型替代用户指定目标。'}
     }
+    competitionId ??= bound!
     const response=await tpctfQuery(config,['challenges','--competition',competitionId],signal)
     if(!Array.isArray(response?.items))throw new HttpError(502,'CTFy challenge list is missing items')
     store.transaction(()=>{
@@ -69,12 +78,12 @@ export async function discoverBenchmarkTasks(store:Store,config:EngineConfig,pro
         const taskKey=challenge.id
         if(typeof taskKey!=='string'||!taskKey)throw new HttpError(502,'Challenge is missing id')
         const row=store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(projectId,taskKey)
-        const data={...(row?JSON.parse(String(row.data)):{}),platformCompleted:challenge.my_team_fully_solved===true,eligible:!challenge.my_team_authored&&challenge.scoring==='scored'&&!challenge.closed,
+        const data={...(row?JSON.parse(String(row.data)):{}),competitionId,platformCompleted:challenge.my_team_fully_solved===true,eligible:!challenge.my_team_authored&&challenge.scoring==='scored'&&!challenge.closed,
           platformMetadata:{...benchmarkMetadata({...challenge,is_completed:challenge.is_completed??challenge.my_team_fully_solved}),title:challenge.title??challenge.name??taskKey}}
         store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?) ON CONFLICT(project_id,task_key) DO UPDATE SET data=excluded.data').run(projectId,taskKey,JSON.stringify(data))
         if(store.project(projectId).mode!=='benchmark'||challenge.my_team_fully_solved||challenge.closed||challenge.my_team_authored||challenge.scoring!=='scored'||store.projectGraphs(projectId).some(g=>g.taskKey===taskKey))continue
         const {id,title,name,description,category,attachments,questions,requires,launch_ttl_s}=challenge
-        store.createGraph(projectId,{taskKey,title:title??name??taskKey,origin:store.scopeFact(projectId).description+'\nPlatform task: '+JSON.stringify({competition_id:competitionId,id,title,name,description,category,attachments,questions,requires,launch_ttl_s}),goal:(store.project(projectId).objective??'Complete the authorized task')+' · '+taskKey})
+        store.createGraph(projectId,{taskKey,title:title??name??taskKey,competitionId,origin:store.scopeFact(projectId).description+'\nPlatform task: '+JSON.stringify({competition_id:competitionId,id,title,name,description,category,attachments,questions,requires,launch_ttl_s}),goal:(store.project(projectId).objective??'Complete the authorized task')+' · '+taskKey})
       }
     })
     return response

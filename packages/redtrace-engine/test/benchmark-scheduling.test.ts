@@ -109,7 +109,7 @@ test('TodoList survives database reopen and static UI follows source code, not d
     const reopened=new Store(work+'/engine.db')
     assert.deepEqual(new LegionStore(reopened).planningTodos(p.id).list(graph.id),[{content:'next',status:'pending'}]);reopened.close()
     const engine=await serveEngine({root:work,port:0,autoStart:false})
-    try { const response=await fetch('http://127.0.0.1:'+(engine.server.address() as any).port+'/');assert.equal(response.status,200);assert.match(await response.text(),/内部目标达成/) }
+    try { const response=await fetch('http://127.0.0.1:'+(engine.server.address() as any).port+'/');assert.equal(response.status,200);assert.match(await response.text(),/<option value="pending">未完成<\/option>/) }
     finally { await engine.close() }
   } finally { rmSync(work,{recursive:true,force:true}) }
 })

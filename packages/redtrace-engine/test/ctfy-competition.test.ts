@@ -26,7 +26,7 @@ else:
  print(json.dumps({'items':[{'id':'T1','name':'Task '+cid,'scoring':'scored','my_team_fully_solved':False,'questions':[{'id':'flag'}]}]}))
 `)
  const db=path.join(root,'engine.db'),store=new Store(db)
- const project=store.createProject({mode:'benchmark',title:'ctfy',origin:'CTFy authorized fixture',goal:'Complete CYBENCH'}).project
+ const project=store.createProject({mode:'benchmark',title:'ctfy',origin:'CTFy authorized fixture',goal:'Complete selected tasks'}).project
  new LegionStore(store,project.id).claimCommand()
  const commonEnv:Record<string,string>={CTFY_PLAY_TOKEN:'fixture-token'}
  const config={workers:[],providers:{},maxWorkers:4,maxProjectWorkers:4,maxRunningProjects:1,maxSteps:null,decideTimeout:30,executeTimeout:30,concludeTimeout:5,bootstrapTimeout:30,bootstrapConcludeTimeout:5,workspaceRoot:path.join(root,'workspaces'),commonEnv} satisfies EngineConfig
@@ -81,7 +81,52 @@ test('malformed CTFy responses do not silently become an empty successful discov
  const f=fixture(t),script=path.join(f.root,'skills/tpctf-api/scripts/tpctf.py')
  writeFileSync(script,'import json\nprint(json.dumps({"unexpected":[]}))\n')
  await assert.rejects(discoverBenchmarkTasks(f.store,f.config,f.project.id),/competition list is missing items/)
+ writeFileSync(script,"import json,sys\nprint(json.dumps({'items':[]} if sys.argv[1]=='competitions' else {'unexpected':[]}))\n")
  await assert.rejects(discoverBenchmarkTasks(f.store,f.config,f.project.id,undefined,'suite-b'),/challenge list is missing items/)
  assert.equal(f.store.project(f.project.id).ctfyCompetitionId,undefined)
  assert.equal(f.store.projectGraphs(f.project.id).length,0)
+})
+
+test('explicit Chinese Scope selects localized Playground instead of a generic suite or global default',async t=>{
+ const f=fixture(t),script=path.join(f.root,'skills/tpctf-api/scripts/tpctf.py')
+ writeFileSync(script,`import json,sys
+args=sys.argv[1:]
+if args[0]=='competitions':
+ print(json.dumps({'items':[{'id':'play','title':'Platform Playground','title_i18n':{'zh-CN':'平台练习场'},'kind':'event','play_open':True},{'id':'cy','title':'CYBENCH','kind':'suite','play_open':True}]}))
+else:
+ print(json.dumps({'items':[{'id':'SAMPLE-001','name':'Sample','scoring':'scored'}]}))
+`)
+ const p=f.store.createProject({mode:'benchmark',title:'ctfy',origin:'在ctfy上完成“平台练习场”的测评',goal:'完成所有题目'}).project
+ f.config.commonEnv.CTFY_COMPETITION_ID='cy'
+ await assert.rejects(discoverBenchmarkTasks(f.store,f.config,p.id,undefined,'cy'),/conflicts.*Scope/)
+ assert.equal(f.store.projectGraphs(p.id).length,0)
+ await discoverBenchmarkTasks(f.store,f.config,p.id)
+ assert.equal(f.store.project(p.id).ctfyCompetitionId,'play')
+ assert.equal(f.store.projectGraphs(p.id)[0].competitionId,'play')
+ assert.equal(JSON.parse(String(f.store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=?').get(p.id)!.data)).competitionId,'play')
+})
+
+test('localized titles remain in ambiguous competition choices',async t=>{
+ const f=fixture(t),script=path.join(f.root,'skills/tpctf-api/scripts/tpctf.py')
+ writeFileSync(script,`import json
+print(json.dumps({'items':[{'id':'play','title':'Platform Playground','title_i18n':{'zh-CN':'平台练习场'}}]}))
+`)
+ const r=await discoverBenchmarkTasks(f.store,f.config,f.project.id)
+ assert.equal(r.selectionRequired,true)
+ assert.equal(r.competitions[0].title_i18n['zh-CN'],'平台练习场')
+})
+
+test('wrong-competition history is preserved without polluting active tasks or campaign completion',async t=>{
+ const f=fixture(t)
+ const old=f.store.createGraph(f.project.id,{taskKey:'OLD',title:'Old',origin:'Old',goal:'Old',competitionId:'suite-a'})
+ f.store.db.prepare('INSERT INTO legion_tasks VALUES (?,?,?)').run(f.project.id,'OLD',JSON.stringify({competitionId:'suite-a',eligible:true,platformCompleted:false,platformMetadata:{title:'Old',is_completed:false}}))
+ await discoverBenchmarkTasks(f.store,f.config,f.project.id,undefined,'suite-b')
+ assert.equal(f.store.projectGraphs(f.project.id).length,1)
+ assert.equal(f.store.projectGraph(f.project.id,old.id).taskKey,'OLD')
+ const {benchmarkPlatformView}=await import('../src/benchmark-metadata.ts')
+ assert.deepEqual(Object.keys(benchmarkPlatformView(f.store,f.project.id)),['T1'])
+ f.store.db.prepare("UPDATE legion_tasks SET data=json_set(data,'$.platformCompleted',json('true')) WHERE task_key='T1'").run()
+ assert.equal(new LegionStore(f.store,f.project.id).completeBenchmark(f.project.id),true)
+ assert.equal(f.store.project(f.project.id).status,'completed')
+ assert.equal(f.store.projectGraph(f.project.id,old.id).taskKey,'OLD')
 })

@@ -19,6 +19,7 @@ export interface Project {
 }
 export interface ProjectGraph {
   id: string; projectId: string; type: 'main' | 'benchmark_task'; taskKey: string | null; title: string
+  competitionId?: string
   status: 'active' | 'completed'; originId: string; goalId: string; createdAt: string; updatedAt: string
   revision: number; factSeq: number; evidenceSeq: number; hintSeq: number; endedSeq: number
   planner?: GraphPlanner

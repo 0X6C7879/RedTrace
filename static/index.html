@@ -17,7 +17,7 @@
 <!-- Previous cache key: operations.js?v=20260810-performance-1 -->
 <script defer src="/static/operations.js?v=20261015-c2-auth-1"></script>
 <script defer src="/static/console.js?v=20261116-role-tools-2"></script>
-<script defer src="/static/workbench.js?v=20261116-role-tools-2"></script>
+<script defer src="/static/workbench.js?v=20261118-ctfy-status-2"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
 <style>
   dialog::backdrop { background: rgb(15 23 42 / 55%); }
@@ -389,16 +389,16 @@
 
     </div>
     <div class="wb-page-content" x-show="legionPanel==='tasks'"><template x-for="p in legion?.projects||[]" :key="p.id"><div>            <section class="benchmark-task-section" aria-label="题目状态" x-show="p.mode==='benchmark'">
-              <div class="benchmark-task-heading"><div><h3>全部题目</h3><p class="legion-muted" x-text="benchmarkTaskSummary(p)"></p></div><div class="benchmark-task-filters"><input x-model="graphQuery" aria-label="搜索题目" placeholder="搜索题目"><select x-model="graphStatusFilter" aria-label="筛选题目状态"><option value="">全部状态</option><option value="pending">待处理</option><option value="running">执行中</option><option value="completed">平台已完成</option><option value="internal-achieved">仅内部目标达成</option><option value="parked">已搁置</option></select></div></div>
+              <div class="benchmark-task-heading"><div><h3>全部题目</h3><p class="legion-muted" x-text="benchmarkTaskSummary(p)"></p></div><div class="benchmark-task-filters"><input x-model="graphQuery" aria-label="搜索题目" placeholder="搜索题目"><select x-model="graphStatusFilter" aria-label="筛选题目状态"><option value="">全部状态</option><option value="completed">已完成</option><option value="running">执行中</option><option value="pending">未完成</option><option value="parked">已搁置</option></select></div></div>
               <div class="benchmark-task-grid">
                 <template x-for="task in filteredBenchmarkTasks(p)" :key="task.taskKey">
                   <article class="benchmark-task-card" :data-state="task.status">
                     <button type="button" class="benchmark-task-open" :disabled="!task.graph" @click="openProject(p.id,task.graph.id)" :aria-label="task.graph?'查看 '+task.title+' 的 FGS 图与 Worker 日志':null">
                       <span class="benchmark-task-key" x-text="task.taskKey"></span><strong x-text="task.title"></strong>
-                      <span class="legion-badge" :data-state="task.status" x-text="task.status==='completed'?'平台已完成':task.status==='internal-achieved'?'内部目标达成':task.graph?legionStatus(task.status):'无本地图'"></span>
-                      <small><span class="block" x-text="benchmarkMetadataText(task.platform)"></span><span x-text="benchmarkPlatformStatus(task.platform)+(task.platform?.submitted?' · 有提交记录':'')"></span><span class="block" x-show="task.graph" x-text="task.graph ? 'Goal '+p.goals.filter(goal=>goal.graphId===task.graph.id&&goal.status==='achieved').length+'/'+p.goals.filter(goal=>goal.graphId===task.graph.id).length+' · 执行中 '+p.runs.filter(r=>r.graphId===task.graph.id&&r.status==='running').length : ''"></span></small>
+                      <span class="legion-badge" :data-state="task.status" x-text="({completed:'已完成',running:'执行中',pending:'未完成',parked:'已搁置'})[task.status]"></span>
+                      <small><span class="block" x-text="benchmarkMetadataText(task.platform)"></span><span x-show="task.platform?.submitted">有提交记录</span><span class="block" x-show="task.graph" x-text="task.graph ? 'Goal '+p.goals.filter(goal=>goal.graphId===task.graph.id&&goal.status==='achieved').length+'/'+p.goals.filter(goal=>goal.graphId===task.graph.id).length+' · 执行中 '+p.runs.filter(r=>r.graphId===task.graph.id&&r.status==='running').length : ''"></span></small>
                     </button>
-                    <div class="benchmark-task-actions" x-show="task.graph&&!['completed','internal-achieved'].includes(task.status)">
+                    <div class="benchmark-task-actions" x-show="task.graph&&task.status!=='completed'">
                       <button type="button" x-show="task.status!=='parked'" :disabled="p.status!=='active'||!p.steps.some(s=>s.graphId===task.graph?.id&&!['done','cancelled'].includes(s.status))" @click="openLegionEditor('park',p,{taskKey:task.taskKey})">搁置</button>
                       <button type="button" x-show="task.status==='parked'" :disabled="!!legionResumeBlock(p,task.taskKey)" @click="openLegionEditor('resume',p,{taskKey:task.taskKey})">恢复</button>
                     </div>
