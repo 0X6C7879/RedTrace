@@ -1,7 +1,0 @@
-{
-  "command": "/opt/homebrew/opt/node@24/bin/node /Users/lxy/Downloads/RedTrace/docs/fact-finding-migration-20261113/perf.mjs /Users/lxy/Downloads/RedTrace",
-  "cwd": "/Users/lxy/Downloads/RedTrace",
-  "stdout": "{\"fixture\":{\"facts\":2000,\"findings\":200,\"supportingFactsPerFinding\":10,\"activeIndependentDependencies\":1},\"medianMs\":12.809959000000049,\"contextBytes\":34413,\"factPage\":2,\"findingPage\":100,\"retainsActiveDependency\":true}\n",
-  "stderr": "",
-  "exit": 0
-}

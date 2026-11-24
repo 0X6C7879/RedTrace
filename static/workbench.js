@@ -11,7 +11,7 @@ window.redtraceWorkbench = {
   changeComposerModel(target){this.reasoningSelections[this.composerChatId(target)]=''},
   resizeComposer(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,160)+'px'},
   submitComposer(event){if(event.shiftKey||event.isComposing||event.keyCode===229)return;event.preventDefault();const form=event.target.form;if(!form.querySelector('button[type=submit]').disabled)form.requestSubmit()},
-  conversationRole(row){if(row.actor==='Commander'||row.actor==='Planner')return this.workbench?.project?.mode==='general'?'general':'commander';if(['参谋长','全局助手'].includes(row.actor))return 'chief';if(row.actor==='你')return 'user';const worker=this.workbench?.workers.find(w=>w.id===row.run_id||w.label===row.actor);return worker?.role||(['commander','general','soldier'].includes(row.task_type)?row.task_type:'system')},
+  conversationRole(row){if(row.actor==='Commander'||row.actor==='Planner')return this.workbench?.project?.mode==='general'?'general':'commander';if(['参谋长','全局助手'].includes(row.actor))return 'chief';if(row.actor==='你')return 'user';const match=w=>w.id===row.run_id||w.label===row.actor;const worker=this.workbench?.workers.find(match)||(this.workerHistoryProject===this.legionProjectId?this.workerHistory.find(match):null);return worker?.role||(['commander','general','soldier'].includes(row.task_type)?row.task_type:'system')},
 
 
   graphLogEvents:[],graphLogHasMore:false,graphLogError:'',
@@ -32,9 +32,10 @@ window.redtraceWorkbench = {
   conversationTokenRows(){const usage=this.conversationId==='commander'?this.workbench?.usage:this.conversationUsage;const selected=this.conversationId==='commander'?[this.workbench?.project?.mode==='general'?'general':'commander']:['general','soldier','reporter','worker'];return selected.filter(role=>usage?.breakdown?.[role]?.total).map(role=>({role,...usage.breakdown[role]}))},
   tokenDetail(row){return '输入 '+this.formatTokens(row.input)+' · 输出 '+this.formatTokens(row.output)+' · 缓存读取 '+this.formatTokens(row.cacheRead)+' · 缓存写入 '+this.formatTokens(row.cacheWrite)+'；Token 非费用'},
   taskGraphStatus(p,g,taskKey=g?.taskKey){
-    if(p.platform?.[taskKey]?.is_completed===true)return 'completed';
+    const completed=p.platform?.[taskKey]?.is_completed;
+    if(completed===true)return 'completed';
     if(!g)return 'pending';
-    if(!p.platform?.[taskKey]&&(g.status==='completed'||p.goals.some(goal=>goal.id===g.goalId&&goal.status==='achieved')))return 'completed';
+    if(completed==null&&(g.status==='completed'||p.goals.some(goal=>goal.id===g.goalId&&goal.status==='achieved')))return 'completed';
     const steps=p.steps.filter(s=>s.graphId===g.id);
     if(steps.some(s=>s.status==='running')||(p.runs||[]).some(r=>r.graphId===g.id&&r.status==='running'))return 'running';
     if(steps.some(s=>s.status==='parked'))return 'parked';
@@ -72,42 +73,75 @@ window.redtraceWorkbench = {
   async selectCommanderHistory(){this.commanderHistory=[];this.commanderOffset=0;this.commanderSession='';await this.loadConversation();},
   commanderOffset:0,commanderHistory:[],commanderSession:'',commanderHasMore:false,conversationLoading:false,conversationError:'',conversationQuery:'',workbenchCommand:'',workbenchSending:false,
   chats:[],chatId:'',chat:null,chatQuery:'',chatDraft:'',chatEvents:[],chatOffset:0,chatHasMore:false,chatLoading:false,chatSendingIds:{},chatError:'',newChatTitle:'',
-  workbenchConversations(){return (this.workbench?.conversations||[]).filter(c=>!this.conversationQuery||c.title.toLowerCase().includes(this.conversationQuery.toLowerCase())).sort((a,b)=>Number(b.running)-Number(a.running)||b.updatedAt.localeCompare(a.updatedAt)||a.id.localeCompare(b.id));},
+  transferTaskKeys(project){return project?.mode==='benchmark'?[...new Set([...project.graphs.map(g=>g.taskKey).filter(Boolean),...project.steps.map(s=>s.taskKey??s.goalId)])]:[]},
+  workerHistory:[],workerHistoryProject:'',workerHistoryBefore:undefined,workerHistoryLoading:false,
+  displayedWorkers(){return [...new Map([...(this.workerHistoryProject===this.legionProjectId?this.workerHistory:[]),...(this.workbench?.workers||[])].map(w=>[w.id,w])).values()]},
+  workerHistoryCursor(){return this.workerHistoryProject===this.legionProjectId&&this.workerHistoryBefore!==undefined?this.workerHistoryBefore:this.workbench?.workerNextBefore},
+  async loadWorkerHistory(){
+    const project=this.legionProjectId,before=this.workerHistoryCursor(),anchor=this.workbench?.workerNextBefore;
+    if(before==null||this.workerHistoryLoading)return;
+    this.workerHistoryLoading=true;
+    try{
+      const page=await this.api('GET','/v2/projects/'+encodeURIComponent(project)+'/workbench/workers?before='+before);
+      if(project!==this.legionProjectId||anchor!==this.workbench?.workerNextBefore)return;
+      this.workerHistory=page.workers.concat(this.workerHistoryProject===project?this.workerHistory:[]);
+      this.workerHistoryProject=project;this.workerHistoryBefore=page.nextBefore;
+    }catch(e){if(project===this.legionProjectId)this.conversationError=e.message;}finally{this.workerHistoryLoading=false;}
+  },
+  conversationChoices(){
+    if(this.workbench?.project.mode!=='general')return this.workbench?.conversations||[];
+    return this.displayedWorkers().map(w=>({id:w.id,title:w.label,runId:w.id,graphId:w.graphId,running:w.status==='running',updatedAt:w.endedAt??w.startedAt}));
+  },
+  workbenchConversations(){return this.conversationChoices().filter(c=>!this.conversationQuery||c.title.toLowerCase().includes(this.conversationQuery.toLowerCase())).sort((a,b)=>Number(b.running)-Number(a.running)||b.updatedAt.localeCompare(a.updatedAt)||a.id.localeCompare(b.id));},
   async selectConversation(id){this.conversationId=id;this.conversationUsage=null;this.conversationPlanner=null;this.conversationPlanningTodos=[];this.conversationEvents=[];this.conversationMessages=[];this.conversationGraphEvents=[];this.conversationCursor=0;this.conversationBefore=null;this.conversationEventCursor=0;this.conversationHasMore=false;this.conversationError='';localStorage.setItem('redtrace-conversation-'+this.legionProjectId,id);await this.loadConversation();},
-  conversationTitle(){return this.conversationId==='chief'?'会话':this.conversationId==='commander'?(this.workbench?.project?.mode==='general'?'Planner':'Commander'):this.workbench?.conversations.find(c=>c.id===this.conversationId)?.title||'Worker';},
-  conversationUrl(){const c=this.workbench?.conversations.find(c=>c.id===this.conversationId);if(!c)return '';return '/v2/projects/'+encodeURIComponent(this.legionProjectId)+'/conversation?'+(c.runId?'runId='+encodeURIComponent(c.runId):'graphId='+encodeURIComponent(c.graphId));},
+  conversationTitle(){return this.conversationId==='chief'?'会话':this.conversationId==='commander'?(this.workbench?.project?.mode==='general'?'Planner':'Commander'):this.activeConversation()?.title||'Worker';},
+  activeConversation(){return this.conversationChoices().find(c=>c.id===this.conversationId)},
+  conversationUrl(){const c=this.activeConversation();if(!c)return '';return '/v2/projects/'+encodeURIComponent(this.legionProjectId)+'/conversation?'+(c.runId?'runId='+encodeURIComponent(c.runId):'graphId='+encodeURIComponent(c.graphId));},
   async loadConversation(older=false){
     this.syncComposerModel('workbench');if(this.conversationModels===null||this.conversationModelsMode!==(this.workbench?.project?.mode??null))void this.loadConversationModels('workbench');
-    if(this.conversationLoading)return;const projectId=this.legionProjectId,id=this.conversationId;this.conversationLoading=true;
+    const projectId=this.legionProjectId,id=this.conversationId,session=this.commanderLogSession;
+    const requestKey=JSON.stringify([projectId,id,id==='commander'?session:'']);
+    if(this.conversationRequest?.key===requestKey)return;
+    const nonce=(this.conversationRequestNonce||0)+1;
+    this.conversationRequestNonce=nonce;
+    this.conversationRequest={key:requestKey,nonce};
+    const current=()=>this.conversationRequest?.nonce===nonce&&projectId===this.legionProjectId&&id===this.conversationId&&(id!=='commander'||session===this.commanderLogSession);
+    this.conversationLoading=true;
     try{
       if(this.workbench?.input?.id)await this.loadUploads(this.workbench.input.id);
-      if(projectId!==this.legionProjectId||id!==this.conversationId)return;
+      if(!current())return;
       if(id==='chief'){
         const chat=this.workbench?.chief;if(!chat)return;
         const page=await this.api('GET','/v2/chats/'+chat.id+'/events?offset='+this.chiefOffset+'&limit=100');
-        if(projectId!==this.legionProjectId||id!==this.conversationId)return;
+        if(!current())return;
         this.chiefEvents.push(...page.events);if(!this.chatSendingIds[chat.id]&&!page.hasMore)delete this.liveChatEvents[chat.id];this.chiefOffset=page.nextOffset;this.chiefHasMore=page.hasMore;
       }else if(id==='commander'){
-        const page=await this.api('GET','/v2/legion/session/events?projectId='+encodeURIComponent(projectId)+'&offset='+this.commanderOffset+'&limit=100'+(this.commanderLogSession?'&sessionId='+encodeURIComponent(this.commanderLogSession):''));
-        if(projectId!==this.legionProjectId||id!==this.conversationId)return;
-        if(this.commanderSession&&this.commanderSession!==page.sessionId){this.commanderOffset=0;this.commanderSession=page.sessionId;return;}
+        const url='/v2/legion/session/events?projectId='+encodeURIComponent(projectId)+'&limit=100'+(session?'&sessionId='+encodeURIComponent(session):'');
+        const offset=this.commanderOffset;
+        let page=await this.api('GET',url+'&offset='+offset);
+        if(!current())return;
+        if(this.commanderSession&&this.commanderSession!==page.sessionId){
+          this.commanderHistory=[];this.commanderOffset=0;this.commanderSession='';this.commanderHasMore=false;
+          if(offset){page=await this.api('GET',url+'&offset=0');if(!current())return;}
+        }
         this.commanderHistory.push(...page.events);this.commanderSession=page.sessionId;this.commanderOffset=page.nextOffset;this.commanderHasMore=page.hasMore;
       }else{
         const url=this.conversationUrl();if(!url)return;const initial=!this.conversationCursor;
         const page=await this.api('GET',url+(older?'&before='+this.conversationBefore:initial?'&before='+Number.MAX_SAFE_INTEGER:'&after='+this.conversationCursor)+'&eventAfter='+this.conversationEventCursor);
-        if(projectId!==this.legionProjectId||id!==this.conversationId)return;
+        if(!current())return;
         this.conversationEvents=[...new Map([...this.conversationEvents,...page.events].map(e=>[e.event_uid||e.id,e])).values()];
         if(!older)this.conversationCursor=Math.max(this.conversationCursor,page.cursor);
         if(initial||older){this.conversationBefore=page.before;this.conversationHasMore=page.hasMore;}
         this.conversationPlanningTodos=page.todos||[];this.conversationUsage=page.usage||null;this.conversationPlanner=page.taskPlanner||null;
         this.conversationMessages=page.messages;this.conversationGraphEvents=[...new Map([...this.conversationGraphEvents,...page.graphEvents].map(e=>[e.id,e])).values()];this.conversationEventCursor=page.eventCursor;
       }this.conversationError='';
-    }catch(e){if(projectId===this.legionProjectId&&id===this.conversationId)this.conversationError=e.message;}finally{this.conversationLoading=false;}
+    }catch(e){if(current())this.conversationError=e.message;}
+    finally{if(this.conversationRequest?.nonce===nonce){this.conversationRequest=null;this.conversationLoading=false;}}
   },
-  workerLabel(runId){return this.workbench?.workers.find(w=>w.id===runId)?.label||runId||'Worker';},
+  workerLabel(runId){return this.workbench?.workers.find(w=>w.id===runId)?.label||(this.workerHistoryProject===this.legionProjectId?this.workerHistory.find(w=>w.id===runId)?.label:null)||runId||'Worker';},
   messageText(content){try{const m=JSON.parse(content);return m.content??content}catch{return content}},
-  conversationGraphId(){return this.workbench?.conversations?.find(c=>c.id===this.conversationId)?.graphId||''},
-  conversationWorkers(){const c=this.workbench?.conversations?.find(c=>c.id===this.conversationId);return (this.workbench?.workers||[]).filter(w=>c&&(c.runId?w.id===c.runId:w.graphId===c.graphId))},
+  conversationGraphId(){return this.activeConversation()?.graphId||''},
+  conversationWorkers(){const c=this.activeConversation();return c ? this.displayedWorkers().filter(w=>c.runId?w.id===c.runId:w.graphId===c.graphId) : []},
   visibleChatEvents(events){return events.filter(e=>!['system.prompt','session.context'].includes(e.kind)&&!(e.kind==='user.message'&&e.source?.kind&&e.source.kind!=='user'))},
   liveChatEvents:{},
   chatRows(events,id){const live=this.liveChatEvents[id]||[],seen=new Set(events.map(e=>e.event_uid));return this.visibleChatEvents([...events,...live.filter(e=>!seen.has(e.event_uid))])},

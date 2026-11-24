@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Store } from '../src/store.ts'
@@ -208,6 +208,20 @@ test('REST accepts Markdown Doc before any Run, keeps legacy clients and exposes
     assert.equal(summary.facts[0].description, 'Original summary'); assert.equal(summary.facts[0].evidence, undefined)
     const doc = await call(prefix+'/nodes/'+fact.id+'?detail=doc')
     assert.match((await call(prefix+'/evidence/'+doc.doc.artifactId)).content, /Literal stdout: proof/)
+    const data = Buffer.alloc(8 * 1024 * 1024, 'A')
+    data.write('BC', 65_535)
+    const artifact = engine.evidence.publish(created.project.id, data, { description: 'Oversized evidence fixture' })
+    const endpoint = `${prefix}/evidence/${artifact.id}?offset=65535&length=2`
+    const page = await call(endpoint)
+    assert.equal(page.content, 'BC')
+    assert.equal(page.nextOffset, 65_537)
+    assert.equal(page.totalBytes, data.length)
+    const filename = path.join(engine.configuration.workspaceRoot, created.project.id, artifact.path)
+    const { atime, mtime } = statSync(filename)
+    data[data.length - 1] = 0
+    writeFileSync(filename, data)
+    utimesSync(filename, atime, mtime)
+    assert.equal((await fetch(base + endpoint)).status, 409)
     assert.equal(engine.store.nodes<Step>(created.project.id, ['step']).length, 0)
   } finally { await engine.close(); rmSync(root, { recursive: true, force: true }) }
 })

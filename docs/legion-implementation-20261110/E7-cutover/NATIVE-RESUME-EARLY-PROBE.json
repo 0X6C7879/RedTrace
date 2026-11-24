@@ -1,9 +1,0 @@
-{
-  "readinessProbe": "/v2/legion",
-  "resumeStatus": 404,
-  "body": {
-    "detail": "Not Found"
-  },
-  "exitStatus": 0,
-  "reason": "Base graph router appears before native routes; corrected probe to /runtime/config. The attempted process was stopped."
-}

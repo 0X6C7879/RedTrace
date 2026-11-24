@@ -1,5 +1,0 @@
-{
-  "attempt": "resume previous browser TaskSpace 1",
-  "result": "task space not found: 1",
-  "consequence": "No fallback browser or new task space used. Prior desktop rendered search/preview/message proof remains; mobile/renewed-console check unverified."
-}

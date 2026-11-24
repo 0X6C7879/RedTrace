@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { isUtf8 } from 'node:buffer'
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { Store } from './store.ts'
 import { HttpError, integer } from './types.ts'
@@ -299,15 +299,34 @@ export class ProjectEvidence {
     if (!row) throw new HttpError(404, 'Project evidence artifact not found')
     return JSON.parse(String(row.data))
   }
-  read(projectId: string, id: string, offset = 0, length = 7600) {
+  private readTarget(projectId: string, id: string, offset: number, length: number) {
     integer(offset, 'offset'); integer(length, 'length', 1)
     if (length > 7600) throw new HttpError(422, 'Evidence read length exceeds 7600 bytes')
     const artifact = this.artifact(projectId, id), root = this.projectRoot(projectId)
-    const bytes = readFileSync(this.contained(root, path.resolve(root, artifact.path)))
-    if (digest(bytes) !== artifact.sha256 || bytes.length !== artifact.bytes) throw new HttpError(409, 'Project evidence hash mismatch')
-    if (offset > bytes.length) throw new HttpError(422, 'Offset is outside this artifact')
-    const end = Math.min(bytes.length, offset + length), chunk = bytes.subarray(offset, end), text = isUtf8(chunk)
-    return { id, sha256: artifact.sha256, offset, bytes: end - offset, totalBytes: bytes.length,
-      nextOffset: end < bytes.length ? end : null, content: chunk.toString(text ? 'utf8' : 'base64'), ...(text ? {} : { encoding: 'base64' as const }) }
+    return { artifact, filename: this.contained(root, path.resolve(root, artifact.path)) }
+  }
+  read(projectId: string, id: string, offset = 0, length = 7600) {
+    const { artifact, filename } = this.readTarget(projectId, id, offset, length)
+    const bytes = readFileSync(filename)
+    return this.checkedPage(artifact, digest(bytes), bytes.length, offset, bytes.subarray(offset, offset + length))
+  }
+  async readPage(projectId: string, id: string, offset = 0, length = 7600, signal?: AbortSignal) {
+    const { artifact, filename } = this.readTarget(projectId, id, offset, length)
+    const hash = createHash('sha256'), page = Buffer.alloc(length)
+    let totalBytes = 0
+    for await (const chunk of createReadStream(filename, { signal })) {
+      hash.update(chunk)
+      const start = Math.max(offset, totalBytes), end = Math.min(offset + length, totalBytes + chunk.length)
+      if (start < end) chunk.copy(page, start - offset, start - totalBytes, end - totalBytes)
+      totalBytes += chunk.length
+    }
+    return this.checkedPage(artifact, hash.digest('hex'), totalBytes, offset, page.subarray(0, Math.max(0, totalBytes - offset)))
+  }
+  private checkedPage(artifact: ProjectArtifact, sha256: string, totalBytes: number, offset: number, chunk: Buffer) {
+    if (sha256 !== artifact.sha256 || totalBytes !== artifact.bytes) throw new HttpError(409, 'Project evidence hash mismatch')
+    if (offset > totalBytes) throw new HttpError(422, 'Offset is outside this artifact')
+    const end = offset + chunk.length, text = isUtf8(chunk)
+    return { id: artifact.id, sha256, offset, bytes: chunk.length, totalBytes,
+      nextOffset: end < totalBytes ? end : null, content: chunk.toString(text ? 'utf8' : 'base64'), ...(text ? {} : { encoding: 'base64' as const }) }
   }
 }

@@ -1,3 +1,0 @@
-Initial exec command was not spawned: RTK hook error: unrecognized subcommand codex. Switched to Node file/process tools.
-A Node edit cell failed to parse (Expected closing parenthesis), no writes in that cell; corrected code succeeded.
-Final orchestration cell exceeded 30s and Node kernel reset; no production stop/restart had occurred. Durable command wrappers now write exit statuses independently.

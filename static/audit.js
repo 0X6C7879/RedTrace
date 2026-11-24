@@ -10,6 +10,7 @@ function auditPage() {
     selectedScope: 'project',
     selectedRun: 'all',
     commanderCampaign: null, commanderCursor: 0, commanderAvailable: false, commanderHasMore: false,
+    loadSequence: 0,
     streamState: 'idle', workspaceError: '',
     taskUsage: null,
     selectedProvider: 'all',
@@ -93,6 +94,7 @@ function auditPage() {
     async selectTask(projectId) {
       if (!projectId) return;
       const switching = this.selectedScope !== 'project' || this.selectedTaskId !== projectId;
+      const request = ++this.loadSequence;
       this.disconnectStream();
       this.loading = true;
       this.selectedScope = 'project';
@@ -120,7 +122,7 @@ function auditPage() {
         this.loadWorkspace(''),
         this.request('/v2/projects/'+encodeURIComponent(projectId)+'/graphs'),
       ]);
-      if (this.selectedScope !== 'project' || this.selectedTaskId !== projectId) return;
+      if (request !== this.loadSequence || this.selectedScope !== 'project' || this.selectedTaskId !== projectId) return;
       if(results[4].status==='fulfilled')this.auditGraphs=results[4].value;
       if (results[0].status === 'fulfilled') this.runs = results[0].value;
       if (results[1].status === 'fulfilled') {
@@ -147,23 +149,24 @@ function auditPage() {
       await this.loadCommanderLog(true);
     },
     async loadCommanderLog(reset = false) {
+      const project = this.commanderProjectId, request = ++this.loadSequence;
+      const current = () => request === this.loadSequence && this.selectedScope === 'commander' && project === this.commanderProjectId;
       this.loading = true; this.error = '';
       try {
-        const board = await this.request('/v2/projects/'+encodeURIComponent(this.commanderProjectId)+'/commander');
-        if (this.selectedScope !== 'commander') return;
+        const board = await this.request('/v2/projects/'+encodeURIComponent(project)+'/commander?summary=1');
+        if (!current()) return;
         if (reset || this.commanderCampaign?.sessionId !== board.campaign.sessionId) {
           this.commanderCursor = 0; this.events = []; this.reindexEvents();
         }
         this.commanderCampaign = board.campaign;
-        const page = await this.request('/v2/legion/session/events?projectId='+encodeURIComponent(this.commanderProjectId)+'&offset=' + this.commanderCursor + '&limit=100');
-        if (this.selectedScope !== 'commander') return;
+        const page = await this.request('/v2/legion/session/events?projectId='+encodeURIComponent(project)+'&offset=' + this.commanderCursor + '&limit=100');
+        if (!current()) return;
         if (page.sessionId !== this.commanderCampaign.sessionId) throw Error('Commander 会话已切换，请刷新当前会话');
         for (const event of page.events) if (!this._eventKeys.has(this.eventKey(event))) { this.events.push(event); this.indexEvent(event); }
         this.commanderCursor = page.nextOffset; this.commanderAvailable = page.available; this.commanderHasMore = page.hasMore;
-        this.renderWindow = this.events.length;
         if (this.autoFollow) this.$nextTick(() => this.scrollToBottom());
-      } catch (error) { if (this.selectedScope === 'commander') this.error = 'Commander 原生日志读取失败：' + error.message; }
-      finally { if (this.selectedScope === 'commander') this.loading = false; }
+      } catch (error) { if (current()) this.error = 'Commander 原生日志读取失败：' + error.message; }
+      finally { if (current()) this.loading = false; }
     },
     commanderTokens() {
       const usage = this.commanderCampaign?.usage;
@@ -819,13 +822,20 @@ function runtimeLog() {
   return {
     ...auditPage(),
     init(){mountConsoleTemplate(this.$el,'runtime-log-events')},
-    runtimeScope:'',runtimeTail:'',showRuntimeContext:false,
+    runtimeScope:'',runtimeTail:'',showRuntimeContext:false,runtimePage:0,
+    runtimeVisibleEvents(){return this.events.filter(event=>this.eventVisible(event))},
+    runtimeLastPage(){return Math.max(0,Math.ceil(this.runtimeVisibleEvents().length/this.renderWindow)-1)},
+    visibleEvents(){
+      const rows=this.runtimeVisibleEvents();
+      const page=Math.min(this.runtimePage,Math.max(0,Math.ceil(rows.length/this.renderWindow)-1)),end=rows.length-page*this.renderWindow;
+      return rows.slice(Math.max(0,end-this.renderWindow),end);
+    },
     setRuntimeEvents(events,runs,scope,projectId='',graphId=''){
       const scroller=this.$el?.closest('.wb-messages,.fgs-runtime-log'),changed=this.runtimeScope!==scope;
-      const follow=changed||scroller&&scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<48,tail=events.at(-1)?.key||events.at(-1)?.event_uid||events.at(-1)?.id||'';
+      const follow=changed||(!this.runtimePage&&scroller&&scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<48),tail=events.at(-1)?.key||events.at(-1)?.event_uid||events.at(-1)?.id||'';
       const tailContent=events.at(-1)?.content||'';
-      if(changed){this.runtimeScope=scope;this.selectedRun='all';this.selectedProvider='all';this._openThinking={};this.auditEvidence=null}
-      this.selectedTaskId=projectId;this.auditGraphId=graphId;this.events=events.filter(e=>this.showRuntimeContext||!['session.context','system.prompt'].includes(e.kind));this.runs=runs;this.renderWindow=this.events.length;this.reindexEvents();
+      if(changed){this.runtimeScope=scope;this.runtimePage=0;this.selectedRun='all';this.selectedProvider='all';this._openThinking={};this.auditEvidence=null}
+      this.selectedTaskId=projectId;this.auditGraphId=graphId;this.events=events.filter(e=>this.showRuntimeContext||!['session.context','system.prompt'].includes(e.kind));this.runs=runs;this.reindexEvents();
       if(scroller&&follow&&(changed||tail!==this.runtimeTail||tailContent!==this.runtimeTailContent))this.$nextTick(()=>{scroller.scrollTop=scroller.scrollHeight});this.runtimeTail=tail;this.runtimeTailContent=tailContent;
     },
     runtimeRoles(){return [...new Set(this.events.map(e=>this.eventAgent(e)))].filter(Boolean)},

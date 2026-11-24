@@ -1,1 +1,0 @@
-REPORTER_RUNTIME_OK=true; sessions=2; real_loopback_baseline=401; real_loopback_proof=200; facts=2; finding=1; original_audit_read=true; retained_evidence_read=true; artex_sections=8; report_artifact_linked=true; raw_facts_preserved=true; model=local-protocol-fixture; live_model=false

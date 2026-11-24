@@ -1,5 +1,0 @@
-Observed and corrected:
-1. rg discovery used an unescaped '('; process exit=2, 'error: unclosed group'. Continued with simpler patterns and direct source reads.
-2. REPL top-level previewProcess redeclaration made the previous handle undefined; TypeError: Cannot read properties of undefined (reading 'send'). No production process was affected. Stopped only the known disposable preview PID 60541 (kill exit 0).
-3. Restarting the disposable preview hit symlink EEXIST in /tmp/redtrace-todo-ui-30GIar/preview.mjs; child exit=1. Removed the duplicate symlink setup from that temporary fixture and recreated only its disposable database.
-4. During the preview restart the built-in browser received ERR_CONNECTION_REFUSED, then its data: error document blocked reuse of that tab. After the same local server was ready, created a fresh tab in the same IAB browser; no external browser or Playwright CLI fallback was used. Final preview console contains no errors, only the pre-existing Tailwind vendor warning.

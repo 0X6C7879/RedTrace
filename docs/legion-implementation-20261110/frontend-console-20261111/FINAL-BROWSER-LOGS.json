@@ -1,8 +1,0 @@
-[
-  {
-    "level": "warn",
-    "message": "cdn.tailwindcss.com should not be used in production. To use Tailwind CSS in production, install it as a PostCSS plugin or use the Tailwind CLI: https://tailwindcss.com/docs/installation",
-    "timestamp": "2026-11-11T08:37:07.526Z",
-    "url": "http://127.0.0.1:8000/static/vendor/tailwindcss.js"
-  }
-]

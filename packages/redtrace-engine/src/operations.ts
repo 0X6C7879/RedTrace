@@ -174,9 +174,9 @@ export class Operations {
   }
   scope(id: string) { if (id !== '_global') this.store.project(id); return id === '_global' ? null : id }
   resource(id: string): any { const r = this.store.db.prepare('SELECT * FROM shared_resources WHERE id=?').get(id); if (!r) throw new HttpError(404, 'Shared resource not found'); return r }
-  ownedResource(project: string, id: string) {
+  ownedResource(project: string | null, id: string, includeGlobal = false) {
     const row = this.resource(id)
-    if (row.project_id !== project) throw new HttpError(404, 'Resource not found in this Project')
+    if (row.project_id !== project && !(includeGlobal && row.project_id === null)) throw new HttpError(404, 'Resource not found in this Project')
     return row
   }
   ownedTask(project: string, id: string) {
@@ -345,7 +345,7 @@ export class Operations {
         const connection = metadata.connection_type ?? 'beacon'
         if (['reverse', 'reverse_shell'].includes(connection) && !input.parent_resource_id) throw new HttpError(400, 'Reverse sessions require a listener')
         if (metadata.credential_id) {
-          const credential = this.resource(metadata.credential_id)
+          const credential = this.ownedResource(project, metadata.credential_id, true)
           if (credential.kind !== 'credential_ref') throw new HttpError(400, 'Credential resource not found')
           Object.assign(metadata, { ...JSON.parse(credential.metadata_json), ...metadata }); Object.assign(secret, { ...JSON.parse(credential.secret_json), ...secret })
         }
@@ -526,7 +526,9 @@ export function operationRoutes(router: Router, ops: Operations) {
     if (!row || c.params.project !== '_global' && row.project_id !== c.params.project) throw new HttpError(404, 'Payload not found')
     const root = path.resolve(ops.outputRoot, 'c2', 'payloads'), artifact = path.resolve(String(JSON.parse(row.secret_json).artifact_path ?? ''))
     if (path.dirname(artifact) !== root || !statSync(artifact, { throwIfNoEntry: false })?.isFile()) throw new HttpError(404, 'Payload not found')
-    const metadata = JSON.parse(row.metadata_json), bytes = readFileSync(artifact); c.res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': bytes.length, 'Content-Disposition': `attachment; filename="${String(metadata.original_filename ?? filename).replaceAll('"', '')}"` }); c.res.end(bytes)
+    const metadata = JSON.parse(row.metadata_json), bytes = readFileSync(artifact)
+    c.res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': bytes.length, 'Content-Disposition': "attachment; filename*=UTF-8''" + encodeURIComponent(metadata.original_filename ?? filename).replace(/['()*]/g, char => '%' + char.charCodeAt(0).toString(16).toUpperCase()) })
+    c.res.end(bytes)
   })
   add('GET', '/resources/:resource', c => { ops.expireStale(c.params.project === '_global' ? undefined : c.params.project); return { resource: ops.publicResource(resource(c)), tasks: db.prepare('SELECT * FROM operation_tasks WHERE resource_id=? AND (?=1 OR project_id=?) ORDER BY created_at DESC LIMIT 50').all(c.params.resource, c.params.project === '_global' ? 1 : 0, c.params.project).map(t => ops.publicTask(t)), audit: auditRows(db.prepare('SELECT * FROM resource_audit_events WHERE resource_id=? AND (?=1 OR project_id=?) ORDER BY id DESC LIMIT 100').all(c.params.resource, c.params.project === '_global' ? 1 : 0, c.params.project)) } })
   add('POST', '/resources/:resource/material', c => {

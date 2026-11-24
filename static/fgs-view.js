@@ -17,7 +17,8 @@ window.redtraceFgsView = {
     if (this.fgsShownGraph !== this.fgs?.graph?.id) {
       this.fgsShownGraph = this.fgs?.graph?.id; this.fgsShownFacts = []; this.fgsNodeDetail = null; this.fgsArtifactPreview = null; this.fgsDocumentLoaded = false;
     }
-    if (this.fgsSelection && !this.fgs?.[this.fgsSelection.type === 'fact' || this.fgsSelection.type === 'scope' ? 'facts' : this.fgsSelection.type === 'finding' ? 'findings' : this.fgsSelection.type === 'step' ? 'steps' : 'goals']?.some(n => n.id === this.fgsSelection.id)) {
+    const selected = this.fgsSelection;
+    if (selected && !(selected.type === 'step' ? this.fgsReferenceSteps() : this.fgs?.[selected.type === 'fact' || selected.type === 'scope' ? 'facts' : selected.type === 'finding' ? 'findings' : 'goals'])?.some(n => n.id === selected.id)) {
       this.fgsSelection = null; this.fgsRuns = []; this.fgsRunId = ''; this.fgsRunEvents = []; this.fgsRunHasMore = false;
     }
     if (this.fgsEdgeSelection && !this.fgs?.edges?.some(e => e.id === this.fgsEdgeSelection.id)) this.fgsEdgeSelection = null;
@@ -203,12 +204,13 @@ window.redtraceFgsView = {
     const id = this.fgsSelection?.id;
     return id ? (this.fgs?.edges || []).filter(e => e.source === id || e.target === id) : this.fgsEdgeSelection ? [this.fgsEdgeSelection] : [];
   },
+  fgsReferenceSteps() { return [...(this.fgs?.steps || []), ...(this.fgs?.graph?.planner?.legacyAssignments || [])]; },
   fgsRelatedSteps() {
-    const id = this.fgsSelection?.id, edgeSteps = this.fgsEdgeSelection?.stepIds || [];
-    return (this.fgs?.steps || []).filter(s => !s.deleted && (edgeSteps.includes(s.id) || s.goalId === id || s.sourceIds.includes(id) || s.factIds.includes(id) || this.fgs?.findings.find(f => f.id === id)?.stepId === s.id));
+    const id = this.fgsSelection?.id, edgeSteps = this.fgsRelatedEdges().flatMap(edge => edge.stepIds);
+    return this.fgsReferenceSteps().filter(s => !s.deleted && (edgeSteps.includes(s.id) || s.goalId === id || s.sourceIds.includes(id) || s.factIds.includes(id)));
   },
   fgsVisibleSteps() { return (this.fgs?.steps || []).filter(s => !s.deleted && (!this.fgsStepFilter || s.goalId === this.fgsStepFilter)); },
-  fgsOpenReference(id) { const n = this.fgs?.nodes.find(n => n.id === id); if (n) this.selectFgsNode(n.nodeType, id); else if ((this.fgs?.steps || []).some(s => s.id === id && !s.deleted)) this.selectFgsNode('step', id); },
+  fgsOpenReference(id) { const n = this.fgs?.nodes.find(n => n.id === id); if (n) this.selectFgsNode(n.nodeType, id); else if (this.fgsReferenceSteps().some(s => s.id === id && !s.deleted)) this.selectFgsNode('step', id); },
   nativeProject(graph) {
     return { project: { ...graph.project, bootstrap_enabled: graph.project.bootstrap, created_at: graph.project.createdAt }, facts: [...graph.facts, ...graph.goals.filter(g => !g.parentId)], hints: graph.hints.map(h => ({ ...h, created_at: h.createdAt })),
       intents: graph.steps.filter(s => !s.deleted).map(s => ({ ...s, from: s.sourceIds, to: s.status === 'done' ? s.resultGoalId || s.factIds.at(-1) || null : null, state: { pending: 'open', running: 'working', paused: 'open', parked: 'parked', blocked: 'blocked', done: 'concluded', cancelled: 'dropped' }[s.status], worker: s.status === 'paused' ? null : s.worker, role: s.role ?? 'soldier', initial_mission: !!s.bootstrap, execution_profile: s.executionProfile, created_at: s.createdAt, concluded_at: s.endedAt, failure_count: s.failureCount || 0, failure_signature: s.failure, retry_after: s.retryAfter, circuit_open: s.circuitOpen, attempt_count: s.attempts, cumulative_runtime_ms: s.runtimeMs || 0, fact_yield: s.factIds.length })) };

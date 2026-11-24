@@ -20,30 +20,18 @@ window.pluginsPage = function pluginsPage() {
     user: '自定义',
   };
 
-  async function pluginRequest(method, path, body) {
-    const options = { method, headers: { 'Content-Type': 'application/json' } };
-    if (body !== undefined) options.body = JSON.stringify(body);
-    const response = await fetch(path, options);
-    if (response.status === 204) return null;
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const detail = typeof data.detail === 'string' ? data.detail : `HTTP ${response.status}`;
-      throw new Error(detail);
-    }
-    return data;
-  }
-
   return {
     plugins: [],
     loading: false,
     query: '',
     busyId: '',
-    uninstallArmedId: '',
-    uninstallTimer: null,
+    uninstallId: '',
+    uninstallOpen: false,
     pollTimer: null,
     message: '',
     messageType: 'info',
     addOpen: false,
+    addMode: 'custom',
     addBusy: false,
     addForm: { id: '', label: '', description: '', module: '', config: '' },
     detailId: '',
@@ -53,13 +41,12 @@ window.pluginsPage = function pluginsPage() {
     async init() {
       await this.load();
       this.pollTimer = setInterval(() => {
-        if (!document.hidden && !this.addOpen && !this.busyId) void this.load();
+        if (!document.hidden && !this.addOpen && !this.uninstallOpen && !this.busyId) void this.load();
       }, 5000);
     },
 
     destroy() {
       clearInterval(this.pollTimer);
-      clearTimeout(this.uninstallTimer);
       clearTimeout(this.detailTimer);
     },
 
@@ -99,7 +86,7 @@ window.pluginsPage = function pluginsPage() {
       if (this.loading) return;
       this.loading = true;
       try {
-        const data = await pluginRequest('GET', '/__redtrace/plugins');
+        const data = await capabilityRequest('GET', '/__redtrace/plugins');
         this.plugins = data.plugins ?? [];
       } catch (error) {
         this.setMessage(error.message, 'error');
@@ -108,10 +95,15 @@ window.pluginsPage = function pluginsPage() {
       }
     },
 
+    get available() {
+      return this.plugins.filter((plugin) => plugin.source === 'builtin' && plugin.installed === false);
+    },
+
     get filtered() {
+      const installed = this.plugins.filter((plugin) => plugin.installed !== false);
       const needle = this.query.trim().toLowerCase();
-      if (!needle) return this.plugins;
-      return this.plugins.filter((plugin) =>
+      if (!needle) return installed;
+      return installed.filter((plugin) =>
         `${plugin.id} ${plugin.label} ${plugin.description} ${plugin.module ?? ''}`
           .toLowerCase()
           .includes(needle),
@@ -125,11 +117,11 @@ window.pluginsPage = function pluginsPage() {
     },
 
     get pluginCount() {
-      return this.plugins.filter((plugin) => plugin.category !== 'preset').length;
+      return this.plugins.filter((plugin) => plugin.installed !== false && plugin.category !== 'preset').length;
     },
 
     get runningCount() {
-      return this.plugins.filter((plugin) => plugin.category !== 'preset' && plugin.status === 'running').length;
+      return this.plugins.filter((plugin) => plugin.installed !== false && plugin.category !== 'preset' && plugin.status === 'running').length;
     },
 
     countText(group) {
@@ -148,7 +140,7 @@ window.pluginsPage = function pluginsPage() {
       this.setMessage('');
       const action = this.isOn(plugin) ? 'stop' : 'start';
       try {
-        await pluginRequest('POST', `/__redtrace/plugins/${encodeURIComponent(plugin.id)}/${action}`);
+        await capabilityRequest('POST', `/__redtrace/plugins/${encodeURIComponent(plugin.id)}/${action}`);
         await this.load();
       } catch (error) {
         this.setMessage(error.message, 'error');
@@ -159,12 +151,28 @@ window.pluginsPage = function pluginsPage() {
 
     openAdd() {
       this.addForm = { id: '', label: '', description: '', module: '', config: '' };
+      this.addMode = this.available.length ? 'builtin' : 'custom';
       this.addOpen = true;
       this.setMessage('');
     },
 
     closeAdd() {
-      this.addOpen = false;
+      if (!this.addBusy && !this.busyId) this.addOpen = false;
+    },
+
+    async install(plugin) {
+      if (this.busyId || this.addBusy || plugin.installed !== false) return;
+      this.busyId = plugin.id;
+      this.setMessage('');
+      try {
+        await capabilityRequest('POST', `/__redtrace/plugins/${encodeURIComponent(plugin.id)}/start`);
+        await this.load();
+        this.setMessage(`已安装 ${plugin.label}`, 'success');
+      } catch (error) {
+        this.setMessage(error.message, 'error');
+      } finally {
+        this.busyId = '';
+      }
     },
 
     async add() {
@@ -180,7 +188,7 @@ window.pluginsPage = function pluginsPage() {
         if (this.addForm.config.trim()) {
           body.config = JSON.parse(this.addForm.config);
         }
-        await pluginRequest('POST', '/__redtrace/plugins', body);
+        await capabilityRequest('POST', '/__redtrace/plugins', body);
         this.addOpen = false;
         await this.load();
         this.setMessage(`已安装 ${body.id}`, 'success');
@@ -191,27 +199,36 @@ window.pluginsPage = function pluginsPage() {
       }
     },
 
-    armUninstall(plugin) {
-      if (this.uninstallArmedId && this.uninstallArmedId !== plugin.id) this.resetUninstall();
-      this.uninstallArmedId = plugin.id;
-      clearTimeout(this.uninstallTimer);
-      this.uninstallTimer = setTimeout(() => { this.uninstallArmedId = ''; }, 4000);
+    get uninstallTarget() {
+      return this.plugins.find((plugin) => plugin.id === this.uninstallId) ?? null;
     },
 
-    resetUninstall() {
-      this.uninstallArmedId = '';
-      clearTimeout(this.uninstallTimer);
-    },
-
-    async uninstall(plugin) {
+    openUninstall(plugin) {
       if (this.busyId || this.loading || !plugin.canUninstall) return;
+      this.uninstallId = plugin.id;
+      this.uninstallOpen = true;
+      this.setMessage('');
+    },
+
+    closeUninstall() {
+      if (this.busyId) return;
+      this.uninstallOpen = false;
+      this.uninstallId = '';
+    },
+
+    async uninstall(plugin = this.uninstallTarget) {
+      if (this.busyId || this.loading || !plugin?.canUninstall) return;
       this.busyId = plugin.id;
-      this.resetUninstall();
       this.setMessage('');
       try {
-        await pluginRequest('DELETE', `/__redtrace/plugins/${encodeURIComponent(plugin.id)}`);
-        this.plugins = this.plugins.filter((item) => item.id !== plugin.id);
-        this.setMessage(`已卸载 ${plugin.id}`, 'success');
+        await capabilityRequest('DELETE', `/__redtrace/plugins/${encodeURIComponent(plugin.id)}`);
+        this.plugins = plugin.source === 'builtin'
+          ? this.plugins.map((item) => item.id === plugin.id ? { ...item, installed: false, status: 'stopped', canStop: false, canUninstall: false, error: null } : item)
+          : this.plugins.filter((item) => item.id !== plugin.id);
+        this.uninstallOpen = false;
+        this.uninstallId = '';
+        await this.load();
+        this.setMessage(`已卸载 ${plugin.label || plugin.id}`, 'success');
       } catch (error) {
         this.setMessage(error.message, 'error');
       } finally {

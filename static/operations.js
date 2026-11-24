@@ -1202,6 +1202,12 @@ function operationsPage() {
       return item.metadata?.external ? '外部 C2' : 'Payload 生成器';
     },
 
+    payloadDownloadUrl(item) {
+      if (!item.target) return null;
+      const url = URL.parse(item.target, location.href);
+      return url && (url.protocol === 'https:' || url.protocol === 'http:') ? url.href : null;
+    },
+
     payloadListenerName(item) {
       const id = item.metadata?.listener_id;
       return this.c2Listeners().find((listener) => listener.id === id)?.name || (id ? id : '未绑定');

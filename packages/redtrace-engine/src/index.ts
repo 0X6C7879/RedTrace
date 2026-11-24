@@ -57,7 +57,11 @@ export async function createEngine(options: { root: string; database?: string; c
   store.stepLimit = () => configuration.resolvedSnapshot().config.maxSteps
   const experience = new LegionExperience(store,configuration.workspaceRoot)
   router.add('GET', '/v2/legion', c => {const id=c.url.searchParams.get('projectId');return id?{...new LegionStore(store,id).board(),transfers:experience.transfers(id)}:{projects:store.projects().map(p=>({id:p.id,title:p.title,mode:p.mode,status:p.status}))}})
-  router.add('GET','/v2/projects/:project/commander',c=>({...new LegionStore(store,c.params.project).board(),workbench:{...projectWorkbench(store,legion,c.params.project),input:chats.entry(c.params.project),...(store.project(c.params.project).mode==='general'?{chief:chats.chief(c.params.project)}:{})},transfers:experience.transfers(c.params.project)}))
+  router.add('GET','/v2/projects/:project/commander',c=>{
+    const id=c.params.project, summary=c.url.searchParams.get('summary')==='1'
+    const workbench=projectWorkbench(store,legion,id,summary,c.url.searchParams.get('selectedRun')??undefined)
+    return {...new LegionStore(store,id).board(summary?workbench:undefined),workbench:{...workbench,input:chats.entry(id),...(workbench.project.mode==='general'?{chief:chats.chief(id)}:{})},transfers:experience.transfers(id)}
+  })
   router.add('GET','/v2/legion/session/events',c=>{const id=c.url.searchParams.get('projectId')??undefined,campaign=legion.campaign(id);if(options.commanderEvents)return options.commanderEvents(queryNumber(c.url,'offset',0),queryNumber(c.url,'limit',100,1,500),c.signal,id,c.url.searchParams.get('sessionId')??undefined);if(campaign.hasSession)throw new HttpError(503,'Commander history requires the DSH host');return {sessionId:campaign.sessionId,available:false,events:[],nextOffset:0,hasMore:false}})
   workbenchRoutes(router,store,legion)
   const chats=new ChatStore(store);chatRoutes(router,chats,()=>configuration.resolvedSnapshot().config)
@@ -82,7 +86,7 @@ export async function createEngine(options: { root: string; database?: string; c
   router.add('POST','/v2/legion/reassign',async c=>{const b=await body(c.req,Type.Object({projectId:text,runId:text,nextWorker:text,summary:text})),run=store.run(b.runId);if(run.projectId!==b.projectId||!run.stepId)throw new HttpError(403,'Run does not belong to Project');const step=store.node<import('./types.ts').Step>(b.projectId,run.stepId,'step');if(!configuration.resolvedSnapshot().config.workers.some(w=>w.name===b.nextWorker&&w.enabled&&w.roles?.includes(executionRole(store.project(step.projectId).mode,step.role))))throw new HttpError(422,'Model route does not support the same role');return legion.requestHandoff(run.id,b.summary,b.nextWorker)})
   router.add('GET','/v2/legion/experience',c=>experience.search(c.url.searchParams.get('query')??'',c.url.searchParams.get('family')??undefined))
   graphRoutes(router, store, (projectId, graphId) => legion.planningTodos(projectId).list(graphId), configuration.workspaceRoot)
-  router.add('GET', '/v2/projects/:project/evidence/:artifact', c => new ProjectEvidence(c.url.searchParams.has('graphId')?store.forGraph(c.params.project,c.url.searchParams.get('graphId')!):store.forProject(c.params.project),configuration.workspaceRoot).read(c.params.project, c.params.artifact, queryNumber(c.url, 'offset', 0), queryNumber(c.url, 'length', 7600, 1, 7600)))
+  router.add('GET', '/v2/projects/:project/evidence/:artifact', c => new ProjectEvidence(c.url.searchParams.has('graphId')?store.forGraph(c.params.project,c.url.searchParams.get('graphId')!):store.forProject(c.params.project),configuration.workspaceRoot).readPage(c.params.project, c.params.artifact, queryNumber(c.url, 'offset', 0), queryNumber(c.url, 'length', 7600, 1, 7600), c.signal))
   router.add('GET', '/health', () => ({ status: 'ok', engine: 'fgs', node: process.versions.node, schema: 2 }))
   configRoutes(router, configuration, options.probeModel)
   const dshUpdate = await dshUpdateRoutes(router, path.resolve(process.env.REDTRACE_SOURCE_ROOT || root), scheduler)
@@ -117,7 +121,7 @@ export async function createEngine(options: { root: string; database?: string; c
     send(res, { detail: 'Not Found' }, 404)
   }
   if (options.autoStart !== false) scheduler.start()
-  return { store, legion, chats, evidence, scheduler, configuration, capabilities, operations, deletion, router, handler, async close() { watcher.close(); await dshUpdate.close(); await scheduler.close(); await operations.close(); store.close() } }
+  return { store, legion, chats, evidence, scheduler, configuration, capabilities, operations, deletion, router, handler, async close() { watcher.close(); await dshUpdate.close(); await scheduler.close(); await operations.close(); await deletion.settle(); store.close() } }
 }
 export async function serveEngine(options: Parameters<typeof createEngine>[0] & { host?: string; port?: number }) {
   const engine = await createEngine(options)

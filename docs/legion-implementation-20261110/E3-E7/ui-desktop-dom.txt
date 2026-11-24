@@ -1,6 +1,0 @@
-Error: task space not found: 1
-    at resolveTaskSpace (file:////[eval1]:21653:19)
-    at async taskSpace (file:////[eval1]:21705:44)
-    at async file:////[eval2]:1:12
-
-ego's nodejs process exited with code 1.

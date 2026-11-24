@@ -1,7 +1,0 @@
-{
-  "command": "/opt/homebrew/opt/node@24/bin/node --test packages/redtrace-engine/test/fact-finding.test.ts",
-  "cwd": "/Users/lxy/Downloads/RedTrace",
-  "stdout": "✔ Fact stores title/summary plus immutable external doc, file bytes and producer provenance (26.428125ms)\n✔ many-to-many Finding folding preserves raw Facts, active dependencies and SQL pagination (7.159083ms)\n✔ structured Finding auto-registers one independent Reporter, saves/updates a report Artifact and never produces Facts (10.452125ms)\n✔ legacy migration is once-only, preserves descriptions/details/factIds and never invents reports (9.300833ms)\n✔ Reporter rejects incomplete completion; retained Doc corruption is visible (5.617708ms)\n✔ Fact Doc and Reporter evidence retain existing cross-Graph boundaries (5.722416ms)\n✔ runtime prompt preserves ARTEX report sections and adapts only the data interfaces (0.491417ms)\nℹ tests 7\nℹ suites 0\nℹ pass 7\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 688.803084\n",
-  "stderr": "",
-  "exit": 0
-}

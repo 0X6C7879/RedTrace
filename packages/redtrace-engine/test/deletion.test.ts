@@ -23,6 +23,7 @@ test('single-use deletion removes only project data and keeps durable shared res
     const disposable = engine.operations.create(project.id, { kind: 'file', name: 'drop', actor: 'human' }).resource.id
     assert.throws(() => engine.operations.create(project.id, { kind: 'http_session', name: 'retired', actor: 'human' }), /Unsupported resource kind/)
     assert.equal((await call(`/projects/${project.id}`, 'DELETE')).status, 403)
+    await call(`/projects/${project.id}/deletion/confirmation`, 'POST')
     const token = (await call(`/projects/${project.id}/deletion/confirmation`, 'POST')).data.confirmationToken
     assert.equal((await call(`/projects/${project.id}`, 'DELETE', { confirmation_token: token, actor: 'human-ui' })).status, 202)
     assert.equal((await call(`/projects/${project.id}`, 'DELETE', { confirmation_token: token, actor: 'human-ui' })).status, 403)
@@ -31,6 +32,44 @@ test('single-use deletion removes only project data and keeps durable shared res
     assert.equal(engine.operations.resource(durable).project_id, null)
     assert.throws(() => engine.operations.resource(disposable), /not found/i)
   } finally { await engine.close(); rmSync(root, { recursive: true, force: true }) }
+})
+
+test('concurrent confirmations share cleanup and stale results cannot change a reused project', async t => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-delete-race-'))
+  const engine = await serveEngine({ root, port: 0, autoStart: false })
+  const releases = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>()
+  t.after(async () => {
+    for (const release of releases.values()) release.resolve()
+    await engine.close()
+    rmSync(root, { recursive: true, force: true })
+  })
+  const { deletion, store } = engine
+  const create = (title: string) => store.createProject({ title, origin: 'fixture', goal: 'retain evidence' }).project
+  const remove = (id: string) => deletion.request(id, deletion.confirmation(id).confirmationToken, 'human-ui')!
+  let stops = 0
+  const entered = Promise.withResolvers<void>()
+  deletion.stopRuntime = async id => { stops++; entered.resolve(); await releases.get(id)?.promise }
+  const first = create('original'), independent = create('independent')
+  releases.set(first.id, Promise.withResolvers<void>())
+  const original = remove(first.id)
+  assert.equal(remove(first.id), original)
+  await entered.promise
+  assert.equal(stops, 1)
+  assert.equal(await deletion.complete(independent.id, remove(independent.id), true), true)
+  releases.get(first.id)!.resolve()
+  assert.equal(await deletion.complete(first.id, original, true), true)
+
+  const replacement = create('replacement')
+  assert.equal(replacement.id, first.id)
+  releases.set(replacement.id, Promise.withResolvers<void>())
+  const current = remove(replacement.id)
+  assert.notEqual(current, original)
+  assert.equal(await deletion.complete(replacement.id, original, true), false)
+  assert.equal(await deletion.complete(replacement.id, original, false, 'late failure'), false)
+  assert.equal(deletion.status(replacement.id)?.state, 'pending')
+  assert.equal(store.project(replacement.id).title, 'replacement')
+  releases.get(replacement.id)!.resolve()
+  assert.equal(await deletion.complete(replacement.id, current, true), true)
 })
 
 test('project ids reuse the smallest free number and deletion leaves no counter or session residue', async () => {

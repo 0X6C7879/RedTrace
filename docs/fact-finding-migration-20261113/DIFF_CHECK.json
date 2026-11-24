@@ -1,7 +1,0 @@
-{
-  "command": "git diff --check",
-  "cwd": "/Users/lxy/Downloads/RedTrace",
-  "stdout": "",
-  "stderr": "",
-  "exit": 0
-}

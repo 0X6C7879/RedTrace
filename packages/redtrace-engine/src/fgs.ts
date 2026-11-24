@@ -27,8 +27,18 @@ export function projectFgs(graph: Graph) {
   }
   const root = graph.goals.find(g => !g.parentId)
   if (root) add(origin, root.id, 'scope')
-  // Manual/imported facts have scope membership, never an invented producing Step.
-  for (const fact of graph.facts) if (fact.id !== origin && !fact.stepId && !graph.steps.some(s => s.factIds.includes(fact.id))) add(origin, fact.id, 'scope')
+  const producers = new Map([...(graph.graph?.planner?.legacyAssignments ?? []), ...graph.steps].map(step => [step.id, step]))
+  const linkedFacts = new Set([...producers.values()].flatMap(step => step.factIds))
+  const outputs = new Map<string, Set<string>>()
+  for (const fact of graph.facts) {
+    const producerIds = [...(fact.producerStepIds ?? []), ...(fact.stepId ? [fact.stepId] : [])]
+    for (const id of producerIds) {
+      const facts = outputs.get(id) ?? new Set<string>()
+      facts.add(fact.id)
+      outputs.set(id, facts)
+    }
+    if (fact.id !== origin && !producerIds.length && !linkedFacts.has(fact.id)) add(origin, fact.id, 'scope')
+  }
   for (const goal of graph.goals) {
     if (goal.parentId) {
       add(goal.id, goal.parentId, 'subgoal')
@@ -37,10 +47,9 @@ export function projectFgs(graph: Graph) {
     }
     for (const fact of goal.evidenceIds) add(fact, goal.id, 'evidence')
   }
-  for (const step of graph.steps) {
-    // Cancelled/failed steps still own their committed facts. Deleted facts stay hidden.
-    const outputs = new Set([...step.factIds, ...graph.facts.filter(f => f.stepId === step.id).map(f => f.id)])
-    for (const output of outputs) {
+  for (const step of producers.values()) {
+    const facts = new Set([...step.factIds, ...(outputs.get(step.id) ?? [])])
+    for (const output of facts) {
       if (!ids.has(output)) continue
       for (const source of step.sourceIds) add(source, output, 'derived', step.id)
       add(output, step.goalId, 'pursues', step.id)
@@ -49,7 +58,7 @@ export function projectFgs(graph: Graph) {
   for (const finding of graph.findings) {
     for (const fact of finding.factIds) add(fact, finding.id, 'supports')
     for (const stepId of new Set([...(finding.producerStepIds ?? []), ...(finding.stepId ? [finding.stepId] : [])])) {
-      const step = graph.steps.find(s => s.id === stepId)
+      const step = producers.get(stepId)
       if (step) add(finding.id, step.goalId, 'pursues', step.id)
     }
   }

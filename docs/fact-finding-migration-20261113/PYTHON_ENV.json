@@ -1,7 +1,0 @@
-{
-  "command": "/opt/homebrew/bin/python3.13 -c \"import yaml; print(yaml.__version__)\"",
-  "cwd": "/Users/lxy/Downloads/RedTrace",
-  "stdout": "",
-  "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    import yaml; print(yaml.__version__)\n    ^^^^^^^^^^^\nModuleNotFoundError: No module named 'yaml'\n",
-  "exit": 1
-}

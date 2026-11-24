@@ -17,6 +17,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { CordisFiber, RuntimeConfig, RuntimeContext, TaskType } from './types.js'
 import { load, repoRoot } from './loader.js'
+import { userPluginFiles } from './plugin-files.js'
 import { state } from './state.js'
 import { TASK_PLUGINS } from './task-plugins.js'
 import * as core from './core.js'
@@ -88,6 +89,8 @@ export interface PluginManifest {
   disabled?: string[]
   /** Ids of default-off catalog plugins the user opted into. */
   enabled?: string[]
+  /** Optional bundled plugins removed from the installed catalog. */
+  removed?: string[]
   user?: UserEntry[]
 }
 
@@ -99,6 +102,7 @@ export interface PluginView {
   intro: string | null
   category: PluginCategory
   source: PluginSource
+  installed: boolean
   status: PluginStatus
   module: string | null
   config: Record<string, unknown> | null
@@ -321,6 +325,7 @@ export class PluginManager {
     }
     const disabled = new Set(this.manifest.disabled ?? [])
     const enabled = new Set(this.manifest.enabled ?? [])
+    const removed = new Set(this.manifest.removed ?? [])
     // Preset gates are computed before any plugin mounts: the scheduler
     // replacement dispatches during boot and must not bypass a disabled
     // preset in the window before the post-loop sync.
@@ -328,7 +333,7 @@ export class PluginManager {
       this.statuses.set(entry.id, disabled.has(entry.id) ? 'stopped' : 'running')
     }
     for (const entry of MANAGED) {
-      if (entry.protectStop !== true && (disabled.has(entry.id) || (entry.defaultOff === true && !enabled.has(entry.id)))) {
+      if (removed.has(entry.id) || (entry.protectStop !== true && (disabled.has(entry.id) || (entry.defaultOff === true && !enabled.has(entry.id))))) {
         this.statuses.set(entry.id, 'stopped')
         continue
       }
@@ -358,13 +363,15 @@ export class PluginManager {
       const raw = await readFile(this.manifestPath, 'utf8')
       const parsed = JSON.parse(raw) as PluginManifest
       const hasList = parsed !== null && typeof parsed === 'object'
-        && (Array.isArray(parsed.disabled) || Array.isArray(parsed.enabled) || Array.isArray(parsed.user))
+        && (Array.isArray(parsed.disabled) || Array.isArray(parsed.enabled) || Array.isArray(parsed.user) || Array.isArray(parsed.removed))
       if (hasList) {
         this.manifest = {
           version: 1,
           disabled: Array.isArray(parsed.disabled) ? [...new Set(parsed.disabled.filter(v => typeof v === 'string'))] : [],
           enabled: Array.isArray(parsed.enabled) ? [...new Set(parsed.enabled.filter(v => typeof v === 'string'))] : [],
           user: Array.isArray(parsed.user) ? parsed.user : [],
+          ...(Array.isArray(parsed.removed) ? { removed: [...new Set(parsed.removed.filter(id =>
+            MANAGED.some(entry => entry.id === id && entry.protectStop !== true)))] } : {}),
         }
         const aliases: Record<string,string> = {'redtrace-planner':'redtrace-general','redtrace-worker':'redtrace-soldier','redtrace-leader':'redtrace-soldier','redtrace-operator':'redtrace-soldier'}
         for(const key of ['disabled','enabled'] as const)this.manifest[key]=[...new Set(this.manifest[key]!.map(id=>aliases[id]??id))]
@@ -376,12 +383,13 @@ export class PluginManager {
     this.manifest = { version: 1 }
   }
 
-  private async writeManifest(): Promise<void> {
+  private async writeManifest(next: PluginManifest = this.manifest): Promise<void> {
     const target = this.manifestPath
     const tmp = `${target}.tmp`
     await mkdir(path.dirname(target), { recursive: true })
-    await writeFile(tmp, `${JSON.stringify(this.manifest, null, 2)}\n`, 'utf8')
+    await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
     await rename(tmp, target)
+    this.manifest = next
   }
 
   private async mountManaged(entry: ManagedEntry, awaitSettle: boolean): Promise<void> {
@@ -410,9 +418,10 @@ export class PluginManager {
     const fiber = this.ctx.plugin(module, config)
     const settled = Promise.resolve(fiber.await()).then(
       () => {
-        if (this.statuses.get(id) === 'pending') this.statuses.set(id, 'running')
+        if (this.mounted.get(id)?.fiber === fiber && this.statuses.get(id) === 'pending') this.statuses.set(id, 'running')
       },
       error => {
+        if (this.mounted.get(id)?.fiber !== fiber) return
         this.statuses.set(id, 'error')
         this.errors.set(id, message(error))
       },
@@ -444,6 +453,7 @@ export class PluginManager {
       intro: entry.intro,
       category: 'kernel',
       source: 'kernel',
+      installed: true,
       status: 'running',
       module: null,
       config: null,
@@ -452,6 +462,7 @@ export class PluginManager {
       error: null,
     }))
     for (const entry of MANAGED) {
+      const installed = !(this.manifest.removed ?? []).includes(entry.id)
       views.push({
         id: entry.id,
         label: entry.label,
@@ -459,11 +470,12 @@ export class PluginManager {
         intro: entry.intro,
         category: entry.category,
         source: 'builtin',
-        status: this.statuses.get(entry.id) ?? 'stopped',
+        installed,
+        status: installed ? (this.statuses.get(entry.id) ?? 'stopped') : 'stopped',
         module: entry.modulePath,
         config: null,
-        canStop: entry.protectStop !== true,
-        canUninstall: false,
+        canStop: installed && entry.protectStop !== true,
+        canUninstall: installed && entry.protectStop !== true,
         error: this.errors.get(entry.id) ?? null,
 
       })
@@ -476,6 +488,7 @@ export class PluginManager {
         intro: entry.intro,
         category: 'preset',
         source: 'builtin',
+        installed: true,
         status: this.statuses.get(entry.id) ?? 'running',
         module: `packages/redtrace-dsh/lib/${entry.preset}.js`,
         config: null,
@@ -492,6 +505,7 @@ export class PluginManager {
         intro: user.description ?? null,
         category: 'user',
         source: 'user',
+        installed: true,
         status: this.statuses.get(user.id) ?? 'stopped',
         module: user.module,
         config: user.config ?? null,
@@ -516,7 +530,8 @@ export class PluginManager {
 
   /** Management stop remains a persistent veto; Reason declarations do not grant tools. */
   taskPluginAllowed(id: string): boolean {
-    return TASK_PLUGINS.some(p => p.id === id) && !(this.manifest.disabled ?? []).includes(id) && this.statuses.get(id) !== 'error'
+    return TASK_PLUGINS.some(p => p.id === id) && !(this.manifest.removed ?? []).includes(id)
+      && !(this.manifest.disabled ?? []).includes(id) && this.statuses.get(id) !== 'error'
   }
 
   availableForTask(id: string, _legacyPlugins: readonly string[] = []): boolean {
@@ -527,13 +542,14 @@ export class PluginManager {
   async start(id: string): Promise<PluginView> {
     const managed = MANAGED.find(entry => entry.id === id)
     if (managed !== undefined) {
-      if (this.mounted.has(id)) return this.view(id)
-      this.manifest.disabled = (this.manifest.disabled ?? []).filter(item => item !== id)
-      if (managed.defaultOff === true) {
-        this.manifest.enabled = [...new Set([...(this.manifest.enabled ?? []), id])]
+      const next = {
+        ...this.manifest,
+        disabled: (this.manifest.disabled ?? []).filter(item => item !== id),
+        ...(managed.defaultOff === true ? { enabled: [...new Set([...(this.manifest.enabled ?? []), id])] } : {}),
+        ...(this.manifest.removed ? { removed: this.manifest.removed.filter(item => item !== id) } : {}),
       }
       await this.mountManaged(managed, true)
-      await this.writeManifest()
+      await this.writeManifest(next)
       await this.syncPresets()
       return this.view(id)
     }
@@ -556,6 +572,7 @@ export class PluginManager {
   }
 
   async stop(id: string): Promise<PluginView> {
+    if ((this.manifest.removed ?? []).includes(id)) throw new PluginError('插件未安装，请先安装')
     const managed = MANAGED.find(entry => entry.id === id)
     if (managed?.protectStop === true) throw new PluginError('受保护插件:关闭会失去 Web 管理入口')
     if (managed !== undefined) {
@@ -588,13 +605,15 @@ export class PluginManager {
       this.statuses.set(id, 'stopped')
       return
     }
-    this.mounted.delete(id)
     try {
       await mounted.fiber.dispose()
+      this.mounted.delete(id)
       this.statuses.set(id, 'stopped')
+      this.errors.delete(id)
     } catch (error) {
       this.statuses.set(id, 'error')
       this.errors.set(id, message(error))
+      throw error
     }
   }
 
@@ -658,32 +677,35 @@ export class PluginManager {
     return this.view(id)
   }
 
-  /** Uninstall a user plugin: dispose, drop from the manifest, delete files
-   * that live inside the managed plugins/ directory. */
+  /** Bundled source stays shared; custom packages own only their plugins/ subtree. */
   async uninstall(id: string): Promise<void> {
+    const managed = MANAGED.find(entry => entry.id === id)
+    if (managed !== undefined && managed.protectStop !== true) {
+      await this.dispose(id)
+      await this.writeManifest({
+        ...this.manifest,
+        removed: [...new Set([...(this.manifest.removed ?? []), id])],
+        disabled: (this.manifest.disabled ?? []).filter(item => item !== id),
+        enabled: (this.manifest.enabled ?? []).filter(item => item !== id),
+      })
+      this.statuses.delete(id)
+      this.errors.delete(id)
+      await this.syncPresets()
+      return
+    }
     const user = this.manifest.user?.find(entry => entry.id === id)
-    if (user === undefined) throw new PluginError('仅自定义插件可卸载')
+    if (user === undefined) throw new PluginError('受保护的内置插件与角色预设不可卸载')
+    const files = await userPluginFiles(this.root, user.module,
+      (this.manifest.user ?? []).filter(entry => entry.id !== id).map(entry => entry.module), this.manifestPath)
+      .catch(error => { throw new PluginError(message(error)) })
     await this.dispose(id)
-    this.manifest.user = (this.manifest.user ?? []).filter(entry => entry.id !== id)
+    // A failed cleanup remains stopped and registered so it can be retried.
+    await this.writeManifest({ ...this.manifest, user: (this.manifest.user ?? []).map(entry =>
+      entry.id === id ? { ...entry, enabled: false } : entry) })
+    if (files !== null) await rm(files, { recursive: true, force: true })
+    await this.writeManifest({ ...this.manifest, user: (this.manifest.user ?? []).filter(entry => entry.id !== id) })
     this.statuses.delete(id)
     this.errors.delete(id)
-    await this.writeManifest()
-    await this.removeUserFiles(user.module)
-  }
-
-  private async removeUserFiles(relative: string): Promise<void> {
-    const target = path.resolve(this.root, relative)
-    if (!target.startsWith(`${this.userPluginsDir}${path.sep}`)) return
-    // plugins/<id>/index.js removes the whole plugin directory; a file
-    // directly under plugins/ removes itself.
-    const parent = path.dirname(target)
-    const victim = parent !== this.userPluginsDir
-      && path.dirname(parent) === this.userPluginsDir ? parent : target
-    if (this.manifest.user?.some(entry => {
-      const module = path.resolve(this.root, entry.module)
-      return module === victim || module.startsWith(victim + path.sep)
-    })) return
-    await rm(victim, { recursive: true, force: true })
   }
 
   /** Resolve a module path to a repo-relative one; absolute paths and `..`

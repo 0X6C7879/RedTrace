@@ -340,9 +340,20 @@ export class Store {
     this.project(projectId)
     return Number((this.db.prepare(`SELECT COUNT(*) AS value FROM nodes WHERE project_id=? AND kind=? AND ${ACTIVE_NODE_SQL}${this.graphFilter()}${context ? ' AND '+CONTEXT_FACT_SQL : ''}${statuses.length ? " AND json_extract(data,'$.status') IN ("+statuses.map(()=>'?').join(',')+")" : ''}`).get(projectId, kind, ...(context ? [projectId, projectId] : []),...statuses) as { value: number }).value)
   }
+  private nodeWithArchivedProducer(projectId: string, id: string): GraphNode {
+    try { return this.node(projectId, id) }
+    catch (error) {
+      if (!(error instanceof HttpError) || error.status !== 404) throw error
+      const graphs = this.graphScope ? [this.projectGraph(projectId, this.graphScope)] : this.projectGraphs(projectId)
+      for (const graph of graphs) {
+        const archived = graph.planner?.legacyAssignments?.find(step => step.id === id)
+        if (archived) return archived
+      }
+      throw error
+    }
+  }
   readNode(projectId: string, id: string, detail: 'summary' | 'doc' = 'summary'): ReturnType<typeof nodeContent> & {facts?:ReturnType<typeof nodeContent>[]} {
-    let node:GraphNode
-    try{node=this.node(projectId,id)}catch(error){if(!(error instanceof HttpError)||error.status!==404)throw error;const archived=this.projectGraphs(projectId).filter(g=>!this.graphScope||g.id===this.graphScope).flatMap(g=>g.planner?.legacyAssignments??[]).find(s=>s.id===id);if(!archived)throw error;node=archived}
+    const node = this.nodeWithArchivedProducer(projectId, id)
     return { ...nodeContent(node, detail), ...(node.kind === 'finding' ? { facts: node.factIds.map(id => nodeContent(this.node<Fact>(projectId, id, 'fact'), detail)) } : {}) }
   }
   saveNode(node: GraphNode) {
@@ -354,8 +365,9 @@ export class Store {
     }
     const prior = this.db.prepare('SELECT data FROM nodes WHERE project_id=? AND id=?').get(node.projectId, node.id)
     const previous = prior ? JSON.parse(String(prior.data)) as GraphNode : undefined
-    const refs = node.kind === 'step' ? [node.goalId, ...node.sourceIds, ...node.factIds, ...(node.parentStepId ? [node.parentStepId] : [])] : node.kind === 'goal' ? [...(node.parentId ? [node.parentId] : []), ...node.evidenceIds] : node.kind === 'finding' ? node.factIds : node.stepId ? [node.stepId] : []
-    const referenced = [...refs,...('producerStepIds' in node?node.producerStepIds??[]:[])].map(id => this.node(node.projectId,id))
+    const refs = node.kind === 'step' ? [node.goalId, ...node.sourceIds, ...node.factIds, ...(node.parentStepId ? [node.parentStepId] : [])] : node.kind === 'goal' ? [...(node.parentId ? [node.parentId] : []), ...node.evidenceIds] : node.kind === 'finding' ? node.factIds : node.kind !== 'fact' && node.stepId ? [node.stepId] : []
+    const producerIds = node.kind === 'fact' || node.kind === 'finding' ? new Set([...(node.producerStepIds ?? []), ...(node.stepId ? [node.stepId] : [])]) : []
+    const referenced = [...refs.map(id => this.node(node.projectId, id)), ...[...producerIds].map(id => this.nodeWithArchivedProducer(node.projectId, id))]
     const main = this.projectGraphs(node.projectId).find(g => g.type === 'main')
     node.graphId ??= this.graphScope ?? referenced.find(n => n.graphId)?.graphId ?? main?.id ?? null
     if (previous && previous.graphId !== node.graphId || this.graphScope && node.graphId !== this.graphScope) throw new HttpError(422,'Cannot move a node between Graphs')

@@ -18,19 +18,21 @@ export async function inspectToolCatalog(ctx, engine, manager, runtime) {
   const { config, raw } = engine.configuration.resolvedSnapshot()
   const available = id => manager.availableForTask(id)
   const executionRoles = ['soldier']
-  const rows = [], store = new Store(':memory:')
+  const rows = []
   const add = (tools, role, enabled = () => true) => {
     for (const tool of domainTools(tools)) rows.push({ name: tool.name, description: tool.description, parameters: JSON.parse(JSON.stringify(tool.parameters)),
       source: tool.name.startsWith('mcp__') ? 'MCP' : tool.redtrace === false ? 'DSH' : 'RedTrace', role, scope: role?'catalog':'assistant', status: 'available',
       enabled: enabled(tool) && toolAllowed(raw.tool_settings, tool.name, role) })
   }
   const verbs = { operations: engine.operations, isAdapterAvailable: id => manager.running(id) }
-  const cwd = await mkdtemp(path.join(os.tmpdir(), 'redtrace-schema-'))
-  const { createScope } = await load('vendor/deepseek-harness/packages/core/scope/lib/index.js')
-  const carrier = ctx.plugin({ inject: ['tools', 'systemPrompt'], apply() {} })
-  await carrier.await()
-  const scope = createScope(carrier.ctx, {})
+  let store, cwd, carrier, scope
   try {
+    store = new Store(':memory:')
+    cwd = await mkdtemp(path.join(os.tmpdir(), 'redtrace-schema-'))
+    const { createScope } = await load('vendor/deepseek-harness/packages/core/scope/lib/index.js')
+    carrier = ctx.plugin({ inject: ['tools', 'systemPrompt'], apply() {} })
+    await carrier.await()
+    scope = createScope(carrier.ctx, {})
     // This mounts definitions only; no Agent, model call, CLI or REA backend is started.
     await mountExecutionTools(scope.ctx, { task: { type: 'soldier', executionProfile: 'direct' }, cwd,
       sessionRoot: cwd, skillsDir: runtime.skillsDir, available: () => true,
@@ -67,6 +69,13 @@ export async function inspectToolCatalog(ctx, engine, manager, runtime) {
     add(chatTools(store, { id: 'schema' }, new ChatStore(store)), undefined)
     return rows
   } finally {
-    try { await scope.dispose(); await carrier.dispose() } finally { store.close(); await rm(cwd, { recursive: true, force: true }) }
+    try { await scope?.dispose() }
+    finally {
+      try { await carrier?.dispose() }
+      finally {
+        try { store?.close() }
+        finally { if (cwd) await rm(cwd, { recursive: true, force: true }) }
+      }
+    }
   }
 }

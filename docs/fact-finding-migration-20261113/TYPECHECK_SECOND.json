@@ -1,9 +1,0 @@
-{
-  "command": "npm run check --prefix packages/redtrace-engine",
-  "cwd": "/Users/lxy/Downloads/RedTrace",
-  "stdout": "\n> @redtrace/engine@0.4.0 check\n> tsc --noEmit\n\nsrc/graph-api.ts(106,104): error TS2345: Argument of type '{ creator?: string | undefined; type?: string | undefined; details?: string | number | boolean | unknown[] | Record<string, unknown> | null | undefined; severity?: undefined; assetIds?: string[] | undefined; description: string; factIds: string[]; title: string; }' is not assignable to parameter of type '{ title: string; description: string; type?: string | undefined; factIds: string[]; details?: Json | undefined; severity?: \"critical\" | \"high\" | \"medium\" | \"low\" | undefined; assetIds?: string[] | undefined; creator?: string | undefined; runId?: string | undefined; }'.\n  Types of property 'details' are incompatible.\n    Type 'string | number | boolean | unknown[] | Record<string, unknown> | null | undefined' is not assignable to type 'Json | undefined'.\n      Type 'unknown[]' is not assignable to type 'Json | undefined'.\n        Type 'unknown[]' is not assignable to type 'Json[]'.\n          Type 'unknown' is not assignable to type 'Json'.\n",
-  "stderr": "",
-  "exit": 2,
-  "launcherError": "Error: Command failed: /bin/zsh -lc npm run check --prefix packages/redtrace-engine\n",
-  "captureNote": "Original capture helper used String(error) when literal stderr was empty; retained separately as launcherError."
-}

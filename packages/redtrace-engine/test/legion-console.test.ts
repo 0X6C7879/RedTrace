@@ -190,7 +190,7 @@ test('audit completion cards use actual failed, paused, cancelled and unknown ou
 
 test('Commander log UI consumes native offsets without creating a project Run or mixing global usage into project usage',async()=>{
   const app=auditApp(),requests:string[]=[];app.tasks=[{id:'p',title:'project'}];let page=0
-  app.request=async(url:string)=>{requests.push(url);if(url.endsWith('/commander'))return{campaign:{sessionId:'command-a',usage:{inputTokens:7,outputTokens:3}}};return {sessionId:'command-a',available:true,events:[{event_uid:'event-'+(++page),kind:'assistant.message',content:'Native log '+page,task_type:'commander'}],nextOffset:page*100,hasMore:page===1}}
+  app.request=async(url:string)=>{requests.push(url);if(url.includes('/commander?'))return{campaign:{sessionId:'command-a',usage:{inputTokens:7,outputTokens:3}}};return {sessionId:'command-a',available:true,events:[{event_uid:'event-'+(++page),kind:'assistant.message',content:'Native log '+page,task_type:'commander'}],nextOffset:page*100,hasMore:page===1}}
   await app.selectCommander();await app.loadCommanderLog()
   assert.equal(app.selectedScope,'commander');assert.equal(app.selectedTaskId,'');assert.equal(app.runs.length,0);assert.equal(app.taskUsage,null)
   assert.equal(app.events.length,2);assert.match(requests.at(-1)!,/offset=100/);assert.equal(app.commanderTokens(),10)
@@ -254,7 +254,7 @@ test('initial project loading cannot clear the loading state or selection of a u
   const app=auditApp(),projectReads:Array<(v:any)=>void>=[];let finishLog!:(v:any)=>void
   app.request=async(url:string)=>{
     if(url==='/audit/tasks')return[{id:'p',title:'project'}]
-    if(url.endsWith('/commander'))return{campaign:{sessionId:'command-selected'}}
+    if(url.includes('/commander?'))return{campaign:{sessionId:'command-selected'}}
     if(url.startsWith('/v2/legion/session/events'))return new Promise(resolve=>{finishLog=resolve})
     return new Promise(resolve=>projectReads.push(resolve))
   }

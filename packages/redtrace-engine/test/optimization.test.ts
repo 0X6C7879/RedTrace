@@ -5,6 +5,7 @@ import {mkdtempSync,rmSync} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {Store} from '../src/store.ts'
+import {projectFgs} from '../src/fgs.ts'
 import {LegionStore} from '../src/legion-store.ts'
 import {Scheduler} from '../src/scheduler.ts'
 import {launchContext} from '../src/runner.ts'
@@ -74,8 +75,18 @@ test('legacy per-tool settings migrate to domain action policy without enabling 
 test('legacy General Step migrates once into Graph actor without losing Session, STATE, Todos, evidence or delegation lineage',()=>{
  const root=mkdtempSync(path.join(os.tmpdir(),'planner-migration-'));let store=new Store(root+'/db')
  try{const p=store.createProject({mode:'benchmark',title:'legacy',origin:'local',goal:'verify'}).project,g=store.createGraph(p.id,{taskKey:'A',title:'A',origin:'local',goal:'verify'}),scope=store.forGraph(p.id,g.id)
- const legacy=scope.addStep(p.id,{role:'soldier',taskKey:'A',description:'legacy General',sourceIds:[g.originId]}),run=store.claim(p.id,'execute',worker,legacy.id);const child=scope.addStep(p.id,{role:'soldier',taskKey:'A',description:'delegate',sourceIds:[g.originId],parentStepId:legacy.id});legacy.role='general';legacy.handoff='retain exact next action';store.saveNode(legacy);new LegionStore(store).planningTodos(p.id).replace(g.id,[{content:'multi-stage chain',status:'in_progress',stepIds:[legacy.id,child.id]}]);store.close()
+ const legacy=scope.addStep(p.id,{role:'soldier',taskKey:'A',description:'legacy General',sourceIds:[g.originId]}),run=store.claim(p.id,'execute',worker,legacy.id);const child=scope.addStep(p.id,{role:'soldier',taskKey:'A',description:'delegate',sourceIds:[g.originId],parentStepId:legacy.id});
+ const fact=scope.addFact(p.id,'Retained observation',{runId:run.id});
+ const finding=scope.addFinding(p.id,{title:'Retained finding',description:'Fixture record',factIds:[fact.id],runId:run.id});
+ legacy.role='general';legacy.handoff='retain exact next action';store.saveNode(legacy);new LegionStore(store).planningTodos(p.id).replace(g.id,[{content:'multi-stage chain',status:'in_progress',stepIds:[legacy.id,child.id]}]);store.close()
  store=new Store(root+'/db');const planner=store.projectGraph(p.id,g.id).planner!
+ const reopened = store.forGraph(p.id,g.id)
+ const retained = reopened.node(p.id,fact.id,'fact')
+ reopened.saveNode(retained)
+ reopened.saveNode(reopened.node(p.id,finding.id,'finding'))
+ const edges=projectFgs(reopened.graph(p.id)).edges
+ assert(edges.some(edge => edge.target===fact.id && edge.relation==='derived' && edge.stepIds.includes(legacy.id)))
+ assert(edges.some(edge => edge.source===finding.id && edge.relation==='pursues' && edge.stepIds.includes(legacy.id)))
  assert.equal(planner.handoff,'retain exact next action');assert.equal(store.run(run.id).id,run.id);assert.equal(store.run(run.id).activity,'plan');assert.equal(store.run(run.id).stepId,null);assert.equal(store.forGraph(p.id,g.id).nodeCount(p.id,'step'),1);assert.equal(store.node<Step>(p.id,child.id).plannerId,planner.id);assert.equal(store.readNode(p.id,legacy.id,'doc').description,'legacy General');assert.equal(store.planningCapacity(p.id,1,g.id).activeSteps,0)
  const todos=new LegionStore(store).planningTodos(p.id);todos.replace(g.id,todos.list(g.id));assert.deepEqual(todos.list(g.id)[0].stepIds,[legacy.id,child.id]);store.close();store=new Store(root+'/db');assert.equal(store.projectGraph(p.id,g.id).planner!.legacyAssignments!.length,1)
  }finally{store.close();rmSync(root,{recursive:true,force:true})}

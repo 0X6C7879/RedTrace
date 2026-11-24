@@ -78,6 +78,27 @@ test('real API conversation scopes, stable instance labels, paging, human sender
  }finally{await engine.close();const reopened=new Store(dir+'/.redtrace/engine.db');assert.equal(new ChatStore(reopened).list().length,2);reopened.close();rmSync(dir,{recursive:true,force:true})}
 })
 
+test('overview bounds recent workers and history keeps stable labels without checkpoint data', async t => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'workbench-history-'))
+  const engine = await serveEngine({ root, port: 0, autoStart: false })
+  t.after(async () => { await engine.close(); rmSync(root, { recursive: true, force: true }) })
+  const store = engine.store
+  const project = store.createProject({ title: 'History', origin: 'fixture', goal: 'review' }).project
+  const step = store.addStep(project.id, { description: 'fixture assignment', sourceIds: ['origin'] })
+  const run = store.claim(project.id, 'execute', worker, step.id)
+  store.finishRun(run.id, 'succeeded')
+  const finished = store.run(run.id)
+  for (let i = 1; i < 105; i++) store.saveRun({ ...finished, id: `history-${i}`, checkpoint: { state: 'large'.repeat(1000) } })
+  const base = `http://127.0.0.1:${(engine.server.address() as { port: number }).port}/v2/projects/${project.id}`
+  const board = await (await fetch(base + '/commander?summary=1')).json() as any
+  assert.equal(board.workbench.workers.length, 100)
+  assert.equal(board.workbench.workers[0].label, 'Soldier6')
+  assert.equal(board.workbench.workers[0].checkpoint, undefined)
+  const older = await (await fetch(base + '/workbench/workers?before=' + board.workbench.workerNextBefore)).json() as any
+  assert.deepEqual(older.workers.map((item: { label: string }) => item.label), ['Soldier1', 'Soldier2', 'Soldier3', 'Soldier4', 'Soldier5'])
+  assert.equal(older.nextBefore, null)
+})
+
 test('global DSH chats consume existing global and route capacity without serializing Workers',async t=>{
  const store=new Store(':memory:');t.after(()=>store.close());const p=store.createProject({mode:'general',title:'parallel',origin:'local',goal:'verify'}).project,legion=new LegionStore(store),chats=new ChatStore(store),chat=chats.create('occupied');chats.save({...chat,status:'running',workerName:worker.name})
  for(let i=0;i<3;i++)spawnTask(legion,p.id,{role:'soldier',taskKey:'angle-'+i,description:'work '+i,sourceIds:['origin']})

@@ -4,7 +4,7 @@ import { CommanderTodos } from './legion-todos.ts'
 import { benchmarkPlatformView } from './benchmark-metadata.ts'
 import { Store } from './store.ts'
 import { HttpError, now, requiredText } from './types.ts'
-import type { Step, Goal, LegionRole } from './types.ts'
+import type { Step, Goal, LegionRole, Project, ProjectGraph } from './types.ts'
 
 export interface CommandCursor { delivered: number; acknowledged: number }
 export interface Campaign {
@@ -123,9 +123,18 @@ export class LegionStore {
     this.store.db.prepare('INSERT INTO legion_platform_events(project_id,task_key,action,data,created_at) VALUES (?,?,?,?,?)').run(projectId,taskKey,action,JSON.stringify(response),now())
   }
 
-  board() {
-    const store = this.store
-    return { campaign: this.projectId || store.projects().length===1 ? { ...this.campaign(), ...this.budget() } : null, messages:this.store.db.prepare('SELECT data FROM legion_messages'+(this.projectId?' WHERE project_id=?':'')+' ORDER BY created_at DESC LIMIT 100').all(...(this.projectId?[this.projectId]:[])).map(r=>JSON.parse(String(r.data))), projects: store.projects().map(p => ({ id:p.id,title:p.title,mode:p.mode,objective:p.objective,status:p.status,revision:p.revision,campaign:this.campaign(p.id),graphs:store.projectGraphs(p.id),decisions:store.db.prepare("SELECT e.id,e.type,e.node_id,e.graph_id,e.created_at,json_extract(n.data,'$.description') AS description FROM events e LEFT JOIN nodes n ON n.project_id=e.project_id AND n.id=e.node_id WHERE e.project_id=? AND (e.type LIKE 'legion.%' OR e.type IN ('step.added','step.parked','step.reactivated','step.handoff_requested','step.handoff_ready','goal.updated','execute.started')) ORDER BY e.id DESC LIMIT 20").all(p.id).map(e=>({id:Number(e.id),type:String(e.type),nodeId:e.node_id,graphId:e.graph_id,createdAt:String(e.created_at),description:e.description})),runs:(['running','paused','unknown'] as const).flatMap(status=>store.runsByStatus(status,p.id)).map(r=>({id:r.id,graphId:r.graphId,stepId:r.stepId,status:r.status,worker:r.worker,provider:r.provider,model:r.model,contextPressure:r.contextPressure,inputTokens:r.inputTokens,outputTokens:r.outputTokens,cacheReadTokens:r.cacheReadTokens,cacheWriteTokens:r.cacheWriteTokens,pendingTools:r.pendingTools.length})),tactics:this.tactics(p.id),instances:p.benchmarkHosts??{},platform:benchmarkPlatformView(store,p.id),scopeId:'origin', goals:store.nodes<Goal>(p.id,['goal']).map(g=>({id:g.id,graphId:g.graphId,description:g.description,status:g.status,version:g.version,evidenceIds:g.evidenceIds})), steps:store.nodes<Step>(p.id,['step']).map(s=>({id:s.id,graphId:s.graphId,description:s.description,taskKey:s.taskKey,role:s.role,specialist:s.specialist,status:s.status,parentStepId:s.parentStepId,parkReason:s.parkReason,resumeCondition:s.resumeCondition,handoffPending:s.handoffPending,predecessorRunId:s.predecessorRunId,goalId:s.goalId,factIds:s.factIds,initialMission:s.bootstrap})) })) }
+  board(snapshot?: { project: Project; graphs: ProjectGraph[]; goals: Goal[]; steps: Step[] }) {
+    const store = this.store, projects = snapshot ? [snapshot.project] : store.projects()
+    return {
+      campaign: this.projectId || projects.length === 1 ? { ...this.campaign(), ...this.budget() } : null,
+      messages: store.db.prepare('SELECT data FROM legion_messages'+(this.projectId?' WHERE project_id=?':'')+' ORDER BY created_at DESC LIMIT 100').all(...(this.projectId?[this.projectId]:[])).map(r=>JSON.parse(String(r.data))),
+      projects: projects.map(p => ({ id:p.id,title:p.title,mode:p.mode,objective:p.objective,status:p.status,revision:p.revision,campaign:this.campaign(p.id),graphs:snapshot?.graphs??store.projectGraphs(p.id),
+        decisions:store.db.prepare("SELECT e.id,e.type,e.node_id,e.graph_id,e.created_at,json_extract(n.data,'$.description') AS description FROM events e LEFT JOIN nodes n ON n.project_id=e.project_id AND n.id=e.node_id WHERE e.project_id=? AND (e.type LIKE 'legion.%' OR e.type IN ('step.added','step.parked','step.reactivated','step.handoff_requested','step.handoff_ready','goal.updated','execute.started')) ORDER BY e.id DESC LIMIT 20").all(p.id).map(e=>({id:Number(e.id),type:String(e.type),nodeId:e.node_id,graphId:e.graph_id,createdAt:String(e.created_at),description:e.description})),
+        runs:(['running','paused','unknown'] as const).flatMap(status=>store.runsByStatus(status,p.id)).map(r=>({id:r.id,graphId:r.graphId,stepId:r.stepId,status:r.status,worker:r.worker,provider:r.provider,model:r.model,contextPressure:r.contextPressure,inputTokens:r.inputTokens,outputTokens:r.outputTokens,cacheReadTokens:r.cacheReadTokens,cacheWriteTokens:r.cacheWriteTokens,pendingTools:r.pendingTools.length})),
+        tactics:snapshot?[]:this.tactics(p.id),instances:p.benchmarkHosts??{},platform:benchmarkPlatformView(store,p.id),scopeId:'origin',
+        goals:(snapshot?.goals??store.nodes<Goal>(p.id,['goal'])).map(g=>({id:g.id,graphId:g.graphId,description:g.description,status:g.status,version:g.version,evidenceIds:g.evidenceIds})),
+        steps:(snapshot?.steps??store.nodes<Step>(p.id,['step'])).map(s=>({id:s.id,graphId:s.graphId,description:s.description,taskKey:s.taskKey,role:s.role,specialist:s.specialist,status:s.status,parentStepId:s.parentStepId,parkReason:s.parkReason,resumeCondition:s.resumeCondition,handoffPending:s.handoffPending,predecessorRunId:s.predecessorRunId,goalId:s.goalId,factIds:s.factIds,initialMission:s.bootstrap})) }))
+    }
   }
   inspectionDelay(projectId:string,interval={active:60,idle:90}) {
     return this.tactics(projectId).some(task=>!['achieved','parked'].includes(task.recommendation))?interval.active*1000:interval.idle*1000

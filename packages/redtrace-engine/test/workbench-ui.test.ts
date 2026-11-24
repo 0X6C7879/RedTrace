@@ -6,17 +6,17 @@ const source=readFileSync(new URL('../../../static/workbench.js',import.meta.url
 function app(){const context=vm.createContext({window:{},localStorage:{getItem(){return null},setItem(){}},console});vm.runInContext(source,context);return {...context.window.redtraceWorkbench,streamChat(id:string,payload:any){return this.api('POST','/v2/chats/'+id+'/messages',payload)},conversationModels:[],legionProjectId:'p',legionPanel:'commander',legion:{messages:[]},api:async()=>({}),showToast(){},legionStatus:(s:string)=>s}}
 
 test('Worker messages preserve actual instance attribution, Commander direction, centered events and recent running order',()=>{
- const a=app();a.workbench={workers:[{id:'r1',label:'Soldier1'},{id:'r2',label:'Audit1'}],conversations:[{id:'a',title:'a',updatedAt:'2026-01-01',running:false},{id:'b',title:'b',updatedAt:'2025-01-01',running:true}]};a.conversationId='a'
+ const a=app();a.workbench={project:{mode:'benchmark'},workers:[{id:'r1',label:'Soldier1'},{id:'r2',label:'Audit1'}],conversations:[{id:'a',title:'a',updatedAt:'2026-01-01',running:false},{id:'b',title:'b',updatedAt:'2025-01-01',running:true}]};a.conversationId='a'
  a.conversationEvents=[{id:1,event_uid:'one',kind:'assistant.message',run_id:'r1',content:'confirmed',timestamp:'1'}];a.conversationMessages=[{id:'m',sender:'commander',receiver:'r1',content:'do this',createdAt:'2',type:'MESSAGE',status:'queued'},{id:'report',sender:'r2',receiver:'commander',content:'report',createdAt:'3',type:'REPORT',status:'admitted'}];a.conversationGraphEvents=[{id:5,type:'step.handoff_ready',createdAt:'4'}]
  const rows=a.conversationRows();assert.equal(rows[0].actor,'Soldier1');assert.equal(rows[0].task_type,'system');assert.equal(rows[1].actor,'Commander');assert.equal(rows[2].actor,'Audit1');assert.equal(rows.length,3);assert.equal(a.workbenchConversations()[0].id,'b')
 })
 test('incremental Worker history and older pages use independent cursors and never duplicate native rows',async()=>{
- const a=app();a.conversationId='g';a.workbench={conversations:[{id:'g',graphId:'g'}]};const urls:string[]=[];let n=0
+ const a=app();a.conversationId='g';a.conversationModelsMode='benchmark';a.workbench={project:{mode:'benchmark'},conversations:[{id:'g',graphId:'g'}]};const urls:string[]=[];let n=0
  a.api=async(_method:string,url:string)=>{urls.push(url);n++;return {events:[{id:n===1?2:1,event_uid:n===1?'two':'one',kind:'assistant.message'}],messages:[],graphEvents:[],eventCursor:0,cursor:n===1?2:1,before:n===1?2:1,hasMore:n===1}}
  await a.loadConversation();await a.loadConversation(true);assert.equal(a.conversationCursor,2);assert.equal(a.conversationBefore,1);assert.equal(a.conversationEvents.length,2);assert(urls[0].includes('before=9007199254740991'));assert(urls[1].includes('before=2'));await a.loadConversation();assert(urls[2].includes('after=2'));assert.equal(a.conversationEvents.length,2)
 })
 test('slow previous Project response cannot enter the new conversation',async()=>{
- const a=app();a.conversationId='g';a.workbench={conversations:[{id:'g',graphId:'g'}]};let finish!:(v:unknown)=>void;a.api=()=>new Promise(r=>finish=r);const work=a.loadConversation();a.legionProjectId='new';finish({events:[{id:1,content:'foreign'}],messages:[],graphEvents:[],cursor:1});await work;assert.equal(a.conversationEvents.length,0)
+ const a=app();a.conversationId='g';a.conversationModelsMode='benchmark';a.workbench={project:{mode:'benchmark'},conversations:[{id:'g',graphId:'g'}]};let finish!:(v:unknown)=>void;a.api=()=>new Promise(r=>finish=r);const work=a.loadConversation();a.legionProjectId='new';finish({events:[{id:1,content:'foreign'}],messages:[],graphEvents:[],cursor:1});await work;assert.equal(a.conversationEvents.length,0)
 })
 test('Commander input remains visibly pending in durable inbox; patrol payloads do not masquerade as human messages',()=>{
  const a=app();a.workbench={workers:[]};a.commanderHistory=[{kind:'user.message',event_uid:'patrol',content:'internal patrol',timestamp:'1'},{kind:'assistant.message',event_uid:'reply',content:'status',timestamp:'3'}];a.legion.messages=[{id:'human',sender:'human',receiver:'commander',type:'MESSAGE',content:JSON.stringify({source:'user',content:'adjust plan'}),createdAt:'2',status:'pending'}];const rows=a.conversationRows();assert.equal(rows.length,3);assert.equal(rows[0].kind,'session.context');assert.equal(rows[1].content,'adjust plan');assert.equal(rows[1].status,'pending');assert.notEqual(rows[0].actor,'你')
@@ -83,6 +83,7 @@ test('platform-confirmed completion outranks Park without forging internal Goal 
  assert.equal(status(project,graph),'completed');assert.equal(project.goals[0].status,'open')
  project.platform.T.is_completed=false;assert.equal(status(project,graph),'parked')
  project.goals[0].status='achieved';assert.equal(status(project,graph),'parked');project.steps=[];assert.equal(status(project,graph),'pending')
+ assert.equal(status({...project,platform:{T:{is_completed:null}}},graph),'completed')
  const a=app();a.legionProjectId='P';a.legion={projects:[{id:'P',...project}]};a.workbench={graphs:[graph],conversations:[{id:'G',graphId:'G'}],project:{mode:'benchmark',status:'active'},steps:[],goals:[{graphId:'G',status:'achieved'}]};a.conversationId='G'
  assert.equal(a.conversationTaskState().label,'目标已验收')
  assert.equal(a.benchmarkPlatformStatus(a.conversationBenchmarkMetadata()),'平台未完成')

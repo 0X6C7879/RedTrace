@@ -1,9 +1,0 @@
-{
-  "label": "REPORTER_NATIVE_FIRST",
-  "command": "/opt/homebrew/opt/node@24/bin/node packages/redtrace-engine/test/reporter-runtime.fixture.mjs",
-  "cwd": "/Users/lxy/Downloads/RedTrace",
-  "pid": 99320,
-  "stdout": "",
-  "stderr": "==> first run: importing Skills and MCP configuration\nRedTrace ready at http://127.0.0.1:61151\n\nfile:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/reporter-runtime.fixture.mjs:83\n  const until = async (fn, ready) => { const deadline = Date.now()+45000; while (Date.now()<deadline) { if (ended || modelErrors.length) throw Error(logs+'\\n'+modelErrors.join('\\n')); const value = await fn(); if (ready(value)) return value; await delay(40) }; throw Error('Fixture timed out\\n'+logs) }\n                                                                                                                                               ^\n\nError: ==> first run: importing Skills and MCP configuration\nRedTrace ready at http://127.0.0.1:61151\n\nSyntaxError: Unexpected token 'H', \"HTTP/1.1 4\"... is not valid JSON\n    at JSON.parse (<anonymous>)\n    at output (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/reporter-runtime.fixture.mjs:16:15)\n    at file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/reporter-runtime.fixture.mjs:28:187\n    at Array.map (<anonymous>)\n    at Server.<anonymous> (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/reporter-runtime.fixture.mjs:28:120)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at until (file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/reporter-runtime.fixture.mjs:83:144)\n    at async file:///Users/lxy/Downloads/RedTrace/packages/redtrace-engine/test/reporter-runtime.fixture.mjs:88:17\n\nNode.js v24.21.0\n",
-  "exit": 1
-}

@@ -11,13 +11,13 @@
 <script src="/static/vendor/dagre.min.js"></script>
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/vendor/cytoscape-dagre.js"></script>
-<script defer src="/static/audit.js?v=20261116-role-tools-2"></script>
+<script defer src="/static/audit.js?v=20261124-readpaths-1"></script>
 <script defer src="/static/capabilities.js?v=20261115-console-1"></script>
-<script defer src="/static/plugins.js?v=20260825-plugins-3"></script>
+<script defer src="/static/plugins.js?v=20261124-readpaths-1"></script>
 <!-- Previous cache key: operations.js?v=20260810-performance-1 -->
-<script defer src="/static/operations.js?v=20261015-c2-auth-1"></script>
-<script defer src="/static/console.js?v=20261116-role-tools-2"></script>
-<script defer src="/static/workbench.js?v=20261118-ctfy-status-2"></script>
+<script defer src="/static/operations.js?v=20261124-readpaths-1"></script>
+<script defer src="/static/console.js?v=20261124-readpaths-1"></script>
+<script defer src="/static/workbench.js?v=20261124-readpaths-1"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
 <style>
   dialog::backdrop { background: rgb(15 23 42 / 55%); }
@@ -347,10 +347,10 @@
     <p class="console-error" role="alert" x-show="legionError" x-text="legionError"></p>
     <p class="console-error" role="alert" x-show="commanderError()" x-text="'调度已停止：'+commanderError()"></p>
     <div x-show="legionPanel==='commander'" class="wb-layout">
-      <aside class="wb-sessions" aria-label="Project 会话列表"><button class="wb-session wb-pinned" x-show="workbench?.project.mode==='general'" :aria-current="conversationId==='chief'?'page':null" @click="selectConversation('chief')"><b>参谋长</b><small>项目主会话</small></button><button class="wb-session wb-pinned" :aria-current="conversationId==='commander'?'page':null" @click="selectConversation('commander')"><b x-text="workbench?.project.mode==='general'?'Planner':'Commander'"></b><small x-text="workbench?.project.mode==='general'?'只读 · FGS 与调度':'项目主会话'"></small></button><h2>Workers</h2><details class="wb-pending-group" x-show="workbench?.project.mode==='general'&&workbench?.pendingAgents?.length"><summary x-text="'待领取 Step · '+(workbench?.pendingAgents?.length||0)"></summary><template x-for="agent in workbench?.pendingAgents||[]" :key="agent.stepId"><div class="wb-pending-agent"><b x-text="agent.title"></b><small x-text="agent.waitingReason"></small><p x-text="agent.mission"></p></div></template></details><input class="wb-search" x-model="conversationQuery" placeholder="搜索会话" aria-label="搜索 Worker 会话"><template x-for="c in workbenchConversations()" :key="c.id"><button class="wb-session" :aria-current="conversationId===c.id?'page':null" @click="selectConversation(c.id)"><span class="wb-session-title"><b x-text="c.title"></b><i x-show="c.running" class="wb-running" aria-label="执行中"></i></span><small x-text="new Date(c.updatedAt).toLocaleTimeString()"></small><small class="wb-queue-status" x-show="pendingForConversation(c.graphId).length" x-text="pendingForConversation(c.graphId).map(a=>a.title+' · '+a.waitingReason).join('；')"></small></button></template><p class="wb-empty" x-show="!workbenchConversations().length">暂无 Worker 会话</p></aside>
-      <section class="wb-conversation" aria-label="会话消息流"><label class="wb-history-selector" x-show="conversationId==='commander'&&commanderSessions().length>1">会话历史<select aria-label="项目协调者历史会话" x-model="commanderLogSession" @change="selectCommanderHistory()"><option value="">当前会话</option><template x-for="(id,index) in commanderSessions()" :key="id"><option :value="id" x-text="'Session '+(index+1)+(id===legion?.campaign?.sessionId?' · 当前':' · 接力历史')"></option></template></select></label><header class="wb-conversation-heading"><div><h2 x-text="conversationTitle()"></h2><small x-show="conversationBenchmarkMetadata()" x-text="benchmarkMetadataText(conversationBenchmarkMetadata())+' · '+benchmarkPlatformStatus(conversationBenchmarkMetadata())"></small><details class="wb-task-state" x-show="conversationTaskState()"><summary x-text="conversationTaskState()?.label"></summary><p x-text="conversationTaskState()?.reason||''"></p><p x-show="conversationTaskState()?.resume" x-text="'恢复条件：'+conversationTaskState()?.resume"></p></details></div><div class="wb-token-summary" aria-label="当前会话 Token 消耗" title="本题/当前角色累计，含缓存，非费用"><small>TOKEN</small><template x-for="row in conversationTokenRows()" :key="row.role"><span :class="'provider-'+row.role" :title="tokenDetail(row)" tabindex="0"><b class="rt-role-token-name" x-text="row.role"></b><i class="rt-token-dot" :class="'provider-dot-'+row.role" aria-hidden="true"></i><strong x-text="formatTokens(row.total)"></strong></span></template><small x-show="!conversationTokenRows().length">暂无记录</small></div><button class="legion-button" x-show="conversationId!=='commander'&&conversationId!=='chief'" @click="openProject(legionProjectId,workbench.conversations.find(c=>c.id===conversationId).graphId)">打开 FGS</button></header>
+      <aside class="wb-sessions" aria-label="Project 会话列表"><button class="wb-session wb-pinned" x-show="workbench?.project.mode==='general'" :aria-current="conversationId==='chief'?'page':null" @click="selectConversation('chief')"><b>参谋长</b><small>项目主会话</small></button><button class="wb-session wb-pinned" :aria-current="conversationId==='commander'?'page':null" @click="selectConversation('commander')"><b x-text="workbench?.project.mode==='general'?'Planner':'Commander'"></b><small x-text="workbench?.project.mode==='general'?'只读 · FGS 与调度':'项目主会话'"></small></button><h2>Workers</h2><details class="wb-pending-group" x-show="workbench?.project.mode==='general'&&workbench?.pendingAgents?.length"><summary x-text="'待领取 Step · '+(workbench?.pendingAgents?.length||0)"></summary><template x-for="agent in workbench?.pendingAgents||[]" :key="agent.stepId"><div class="wb-pending-agent"><b x-text="agent.title"></b><small x-text="agent.waitingReason"></small><p x-text="agent.mission"></p></div></template></details><input class="wb-search" x-model="conversationQuery" placeholder="搜索会话" aria-label="搜索 Worker 会话"><template x-for="c in workbenchConversations()" :key="c.id"><button class="wb-session" :aria-current="conversationId===c.id?'page':null" @click="selectConversation(c.id)"><span class="wb-session-title"><b x-text="c.title"></b><i x-show="c.running" class="wb-running" aria-label="执行中"></i></span><small x-text="new Date(c.updatedAt).toLocaleTimeString()"></small><small class="wb-queue-status" x-show="pendingForConversation(c.graphId).length" x-text="pendingForConversation(c.graphId).map(a=>a.title+' · '+a.waitingReason).join('；')"></small></button></template><p class="wb-empty" x-show="!workbenchConversations().length">暂无 Worker 会话</p><button class="wb-history" x-show="workbench?.project.mode==='general'&&workerHistoryCursor()!=null" :disabled="workerHistoryLoading" @click="loadWorkerHistory()">更早 Worker</button></aside>
+      <section class="wb-conversation" aria-label="会话消息流"><label class="wb-history-selector" x-show="conversationId==='commander'&&commanderSessions().length>1">会话历史<select aria-label="项目协调者历史会话" x-model="commanderLogSession" @change="selectCommanderHistory()"><option value="">当前会话</option><template x-for="(id,index) in commanderSessions()" :key="id"><option :value="id" x-text="'Session '+(index+1)+(id===legion?.campaign?.sessionId?' · 当前':' · 接力历史')"></option></template></select></label><header class="wb-conversation-heading"><div><h2 x-text="conversationTitle()"></h2><small x-show="conversationBenchmarkMetadata()" x-text="benchmarkMetadataText(conversationBenchmarkMetadata())+' · '+benchmarkPlatformStatus(conversationBenchmarkMetadata())"></small><details class="wb-task-state" x-show="conversationTaskState()"><summary x-text="conversationTaskState()?.label"></summary><p x-text="conversationTaskState()?.reason||''"></p><p x-show="conversationTaskState()?.resume" x-text="'恢复条件：'+conversationTaskState()?.resume"></p></details></div><div class="wb-token-summary" aria-label="当前会话 Token 消耗" title="本题/当前角色累计，含缓存，非费用"><small>TOKEN</small><template x-for="row in conversationTokenRows()" :key="row.role"><span :class="'provider-'+row.role" :title="tokenDetail(row)" tabindex="0"><b class="rt-role-token-name" x-text="row.role"></b><i class="rt-token-dot" :class="'provider-dot-'+row.role" aria-hidden="true"></i><strong x-text="formatTokens(row.total)"></strong></span></template><small x-show="!conversationTokenRows().length">暂无记录</small></div><button class="legion-button" x-show="conversationId!=='commander'&&conversationId!=='chief'" @click="openProject(legionProjectId,conversationGraphId())">打开 FGS</button></header>
         <p class="console-error" role="alert" x-show="inputErrors[workbench?.input?.id]||conversationError||workbench?.chief?.error" x-text="inputErrors[workbench?.input?.id]||conversationError||workbench?.chief?.error"></p>
-        <div class="wb-messages" role="log" aria-label="Project 消息"><button class="wb-history" x-show="conversationId==='chief'?chiefHasMore:conversationId==='commander'?commanderHasMore:conversationHasMore" @click="loadConversation(true)" :disabled="conversationLoading">更多记录</button><p class="wb-empty" x-show="!conversationRows().length" x-text="conversationLoading?'读取中…':'暂无记录'"></p><div x-data="runtimeLog()" x-effect="setRuntimeEvents(conversationRows(),conversationWorkers(),legionProjectId+':'+conversationId,legionProjectId,conversationGraphId())"><div class="runtime-log-controls"><label class="runtime-context-toggle"><input type="checkbox" x-model="showRuntimeContext">系统上下文</label><div class="runtime-role-filters"><button type="button" @click="selectedProvider='all'" :aria-pressed="selectedProvider==='all'">全部</button><template x-for="role in runtimeRoles()" :key="role"><button type="button" @click="selectedProvider=role" :aria-pressed="selectedProvider===role" :class="providerClass(role)" x-text="providerLabel(role)"></button></template></div><select x-model="selectedRun" aria-label="筛选成员"><option value="all">全部成员</option><template x-for="run in runs" :key="run.id"><option :value="run.id" x-text="(run.label||run.worker)+' · '+runStatusLabel(run.status)"></option></template></select></div></div></div>
+        <div class="wb-messages" role="log" aria-label="Project 消息"><button class="wb-history" x-show="conversationId==='chief'?chiefHasMore:conversationId==='commander'?commanderHasMore:conversationHasMore" @click="loadConversation(true)" :disabled="conversationLoading">更多记录</button><p class="wb-empty" x-show="!conversationRows().length" x-text="conversationLoading?'读取中…':'暂无记录'"></p><div x-data="runtimeLog()" x-effect="setRuntimeEvents(conversationRows(),conversationWorkers(),legionProjectId+':'+conversationId+(conversationId==='commander'?':'+commanderSession:''),legionProjectId,conversationGraphId())"><div class="runtime-log-controls"><label class="runtime-context-toggle"><input type="checkbox" x-model="showRuntimeContext">系统上下文</label><div class="runtime-role-filters"><button type="button" @click="selectedProvider='all'" :aria-pressed="selectedProvider==='all'">全部</button><template x-for="role in runtimeRoles()" :key="role"><button type="button" @click="selectedProvider=role" :aria-pressed="selectedProvider===role" :class="providerClass(role)" x-text="providerLabel(role)"></button></template></div><select x-model="selectedRun" aria-label="筛选成员"><option value="all">全部成员</option><template x-for="run in runs" :key="run.id"><option :value="run.id" x-text="(run.label||run.worker)+' · '+runStatusLabel(run.status)"></option></template></select></div></div></div>
         <div class="rt-todo-bar" x-show="conversationTodos()!==null"><details class="rt-todo rt-todo-up" x-effect="conversationId;legionProjectId;$el.open=false" @click.outside="$el.open=false" @keydown.escape.prevent.stop="$el.open=false">
           <summary aria-label="查看当前对话 Todo" title="查看最近 Todo"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="m1 4 1 1 2-2M6 4h8M1 8l1 1 2-2M6 8h8M1 12l1 1 2-2M6 12h8"/></svg>Todo</summary>
           <div class="rt-todo-panel" role="region" aria-label="当前对话待办" tabindex="0">
@@ -408,7 +408,7 @@
               <p class="legion-muted" x-show="!filteredBenchmarkTasks(p).length">没有符合条件的题目。</p>
             </section></div></template></div>
     <section x-show="legionPanel==='findings'" class="wb-page-content project-findings" data-findings-view x-data="findingsPage()" x-effect="setScope(legionProjectId,'',appPage==='workspace'&&view==='benchmark'&&legionPanel==='findings')"></section>
-    <div class="wb-page-content" x-show="legionPanel==='knowledge'"><section class="wb-review"><h2>成果与执行复盘</h2><template x-for="finding in workbench?.findings||[]" :key="finding.id"><details><summary x-text="finding.title"></summary><p x-text="finding.description"></p><button class="legion-button" @click="openProject(legionProjectId,finding.graphId)">查看证据图</button></details></template><template x-for="w in (workbench?.workers||[]).filter(w=>w.status!=='running'||w.handoff)" :key="w.id"><details><summary><b x-text="w.label"></b> · <span x-text="legionStatus(w.status)"></span> · <span x-text="w.tokens+' Token · '+w.facts+' 证据'"></span></summary><p x-text="w.mission"></p><p x-show="w.error" x-text="w.error"></p><pre x-show="w.handoff" x-text="w.handoff"></pre><small x-show="w.predecessorRunId" x-text="'接力自 '+workerLabel(w.predecessorRunId)"></small></details></template><p x-show="!workbench?.workers.length&&!workbench?.findings.length">暂无复盘</p></section>        <section x-show="legionPanel==='knowledge'" class="legion-card" aria-labelledby="legion-knowledge-title">
+    <div class="wb-page-content" x-show="legionPanel==='knowledge'"><section class="wb-review"><h2>成果与执行复盘</h2><template x-for="finding in workbench?.findings||[]" :key="finding.id"><details><summary x-text="finding.title"></summary><p x-text="finding.description"></p><button class="legion-button" @click="openProject(legionProjectId,finding.graphId)">查看证据图</button></details></template><template x-for="w in displayedWorkers().filter(w=>w.status!=='running'||w.handoff)" :key="w.id"><details><summary><b x-text="w.label"></b> · <span x-text="legionStatus(w.status)"></span> · <span x-text="w.tokens+' Token · '+w.facts+' 证据'"></span></summary><p x-text="w.mission"></p><p x-show="w.error" x-text="w.error"></p><pre x-show="w.handoff" x-text="w.handoff"></pre><small x-show="w.predecessorRunId" x-text="'接力自 '+workerLabel(w.predecessorRunId)"></small></details></template><p x-show="!workbench?.workers.length&&!workbench?.findings.length">暂无复盘</p><button class="wb-history" x-show="workerHistoryCursor()!=null" :disabled="workerHistoryLoading" @click="loadWorkerHistory()">更早复盘</button></section>        <section x-show="legionPanel==='knowledge'" class="legion-card" aria-labelledby="legion-knowledge-title">
       <h2 id="legion-knowledge-title">经验与目标复验</h2>
       <p class="legion-muted">经验迁移后需重新验证。</p>
       <form class="legion-form legion-inline-form" @submit.prevent="searchLegionExperience()">
@@ -503,8 +503,8 @@
       </label>
       <label>目标题目<select x-model="legionTransfer.taskKey" required :disabled="!legionTransfer.targetProject">
       <option value="">选择题目</option>
-      <template x-for="t in legionProject(legionTransfer.targetProject)?.tactics||[]" :key="t.taskKey">
-      <option :value="t.taskKey" x-text="legionTaskTitle(legionProject(legionTransfer.targetProject),t.taskKey)">
+      <template x-for="taskKey in transferTaskKeys(legionProject(legionTransfer.targetProject))" :key="taskKey">
+      <option :value="taskKey" x-text="legionTaskTitle(legionProject(legionTransfer.targetProject),taskKey)">
       </option>
       </template>
       </select>
@@ -1080,19 +1080,19 @@
                 <p x-show="fgsSelectionRecord()?.severity" class="text-xs text-violet-600" x-text="'Severity: '+fgsSelectionRecord()?.severity+' · Assets: '+(fgsSelectionRecord()?.assetIds || []).join(', ')"></p>
                 <p x-show="fgsDocumentLoaded && fgsSelection?.type === 'fact' && !fgsSelectionRecord()?.doc" class="text-xs text-slate-400">未提供独立 Doc；可查现有 Evidence 与产出 Step 执行记录。</p>
               </div>
-              <div class="flex flex-wrap gap-1.5" x-show="!replay.active && project.project.status === 'active'">
+              <div class="flex flex-wrap gap-1.5" x-show="!replay.active && project.project.status === 'active' && (fgsSelection?.type !== 'step' || fgs.steps.some(s => s.id === fgsSelection.id))">
                 <button x-show="fgsSelection?.type === 'goal' && fgsSelectionRecord()?.status === 'open'" @click="setFgsStatus('achieved')" class="px-2.5 py-1 rounded-lg border border-teal-200 text-xs text-teal-600 hover:bg-teal-50 transition">验收目标</button>
                 <button x-show="['goal', 'step'].includes(fgsSelection?.type) && fgsSelection?.id !== 'goal' && !['achieved', 'done', 'cancelled'].includes(fgsSelectionRecord()?.status)" @click="setFgsStatus('cancelled')" class="px-2.5 py-1 rounded-lg border border-slate-200 text-xs text-slate-500 hover:bg-slate-50 transition">Cancel</button>
                 <button x-show="fgsSelection?.type === 'step' && ['blocked', 'cancelled'].includes(fgsSelectionRecord()?.status)" @click="setFgsStatus('pending')" title="未知结果未核验时，服务端会拒绝重试" class="px-2.5 py-1 rounded-lg border border-amber-200 text-xs text-amber-700 hover:bg-amber-50 transition">核验后重试</button>
               </div>
               <template x-if="fgsSelection?.type === 'step'">
                 <div class="space-y-2">
-                  <div class="flex flex-wrap gap-1.5" x-show="!replay.active && projectIsActive()">
+                  <div class="flex flex-wrap gap-1.5" x-show="!replay.active && projectIsActive() && fgs.steps.some(s => s.id === fgsSelection.id)">
                     <button @click="selectedOpenIntentRecord() && openConclude(selectedOpenIntentRecord())" :disabled="!selectedOpenIntentRecord()" class="px-2.5 py-1 rounded-lg border border-teal-200 text-xs text-teal-600 hover:bg-teal-50 transition disabled:opacity-30 disabled:cursor-not-allowed">结论</button>
                     <button @click="toggleSelectedIntentExecutionProfile()" :disabled="!selectedEditableIntentProfileRecord()" class="px-2.5 py-1 rounded-lg border border-violet-200 text-xs text-violet-700 hover:bg-violet-50 transition disabled:opacity-30 disabled:cursor-not-allowed">隔离设置</button>
                     <button @click="cancelSelectedIntent()" :disabled="!selectedCancellableIntentRecord()" class="px-2.5 py-1 rounded-lg border border-rose-200 text-xs text-rose-600 hover:bg-rose-50 transition disabled:opacity-30 disabled:cursor-not-allowed">取消</button>
                   </div>
-                  <div class="space-y-2" x-show="!replay.active">
+                  <div class="space-y-2" x-show="!replay.active && fgs.steps.some(s => s.id === fgsSelection.id)">
                     <button @click="openIntentLog(fgsSelection?.id)" class="px-2.5 py-1 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50 transition">执行日志</button>
                     <select x-show="fgsRuns.length" aria-label="执行会话" x-model="fgsRunId" @change="loadFgsRunLog()" class="w-full border rounded-lg px-2 py-1.5 text-xs"><template x-for="run in fgsRuns" :key="run.id"><option :value="run.id" x-text="`${run.worker} · ${legionStatus(run.status)} · ${run.id}`"></option></template></select>
                     <button x-show="fgsRunHasMore" @click="loadFgsRunLog(true)" class="text-xs text-sky-600 underline underline-offset-2">更早日志</button>
@@ -1339,7 +1339,7 @@
                 <div><label>绑定监听器</label><p x-text="payloadListenerName(item)"></p></div>
                 <div><label>证据校验</label><p class="font-mono" x-text="item.metadata?.sha256 ? `SHA-256 ${item.metadata.sha256}` : '来源已记录，未提供文件校验值'"></p></div>
                 <div class="operations-payload-actions">
-                  <a x-show="item.target" :href="item.target" download>下载</a>
+                  <a x-show="payloadDownloadUrl(item)" :href="payloadDownloadUrl(item)" download>下载</a>
                   <button x-show="item.metadata?.payload_type === 'command'" @click="copyPayload(item)" x-text="payloadCopiedId === item.id ? '已复制' : '复制命令'"></button>
                   <span>Worker 可用</span>
                   <button class="is-danger" @click="removePayload(item)">删除</button>
@@ -1960,7 +1960,7 @@
         </label>
         <button type="button" @click="openAdd()" class="capability-press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-slate-800 px-4 text-xs font-medium text-white shadow-sm transition hover:bg-slate-900 active:scale-[.98]">
           <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-          新增插件
+          安装插件
         </button>
       </div>
     </div>
@@ -1968,6 +1968,7 @@
     <div class="mt-4 flex items-center gap-2 border-y border-slate-100 py-2.5 text-xs text-slate-400">
       <span x-text="`${pluginCount} 个插件`"></span><span>·</span>
       <span x-text="`${runningCount} 个运行中`"></span>
+      <button x-show="available.length" type="button" @click="openAdd()" class="capability-press ml-auto text-xs text-brand-600 hover:text-brand-700" x-text="`${available.length} 个可安装`"></button>
     </div>
 
     <template x-for="group in groups" :key="group.key">
@@ -2003,8 +2004,10 @@
                 'text-slate-300': plugin.status === 'stopped',
                 'text-red-500': plugin.status === 'error',
               }" x-text="statusLabel(plugin)"></span>
-              <button x-show="plugin.canUninstall" type="button" :disabled="loading || Boolean(busyId)" @click="uninstallArmedId === plugin.id ? uninstall(plugin) : armUninstall(plugin)" class="capability-press h-8 shrink-0 rounded-lg px-2.5 text-xs transition" :class="uninstallArmedId === plugin.id ? 'bg-red-500 font-medium text-white' : 'text-red-500 hover:bg-red-50'" x-text="uninstallArmedId === plugin.id ? '确认卸载' : '卸载'"></button>
-              <button x-show="plugin.canStop" type="button" role="switch" :aria-checked="String(isOn(plugin))" :aria-label="isOn(plugin) ? `停止 ${plugin.label}` : `启动 ${plugin.label}`" :disabled="busyId === plugin.id" @click="toggle(plugin)" class="capability-press relative h-6 w-11 shrink-0 rounded-full transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40" :class="{
+              <button x-show="plugin.canUninstall" type="button" :aria-label="`卸载 ${plugin.label}`" :title="`卸载 ${plugin.label}`" :disabled="loading || Boolean(busyId)" @click="openUninstall(plugin)" class="capability-press flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-300 transition hover:bg-red-50 hover:text-red-500 focus-visible:ring-2 focus-visible:ring-red-200 disabled:opacity-40">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button x-show="plugin.canStop" type="button" role="switch" :aria-checked="String(isOn(plugin))" :aria-label="isOn(plugin) ? `停止 ${plugin.label}` : `启动 ${plugin.label}`" :disabled="loading || Boolean(busyId)" @click="toggle(plugin)" class="capability-press relative h-6 w-11 shrink-0 rounded-full transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40" :class="{
                 'bg-teal-500': plugin.status === 'running',
                 'bg-amber-400': plugin.status === 'pending',
                 'bg-slate-200': plugin.status === 'stopped' || plugin.status === 'error',
@@ -2024,11 +2027,32 @@
     <div class="mt-5 h-5 text-[11px]" :class="{ 'text-red-500': messageType === 'error', 'text-teal-600': messageType === 'success' }"><span x-text="message"></span></div>
   </div>
 
-  <div x-show="addOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4">
+  <div x-show="addOpen" x-cloak role="dialog" aria-modal="true" aria-labelledby="plugins-install-title" class="fixed inset-0 z-50 flex items-center justify-center p-4" @keydown.escape.window="addOpen && closeAdd()">
     <div class="overlay absolute inset-0" @click="closeAdd()"></div>
-    <form @submit.prevent="add()" class="relative w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
-      <h3 class="text-sm font-semibold text-slate-800">新增插件</h3>
-      <div class="mt-4 grid gap-3.5">
+    <form @submit.prevent="addMode === 'custom' && add()" class="relative flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+      <div class="flex shrink-0 items-center justify-between gap-3">
+        <h3 id="plugins-install-title" class="text-sm font-semibold text-slate-800">安装插件</h3>
+        <button type="button" @click="closeAdd()" :disabled="addBusy || Boolean(busyId)" aria-label="关闭安装" class="capability-press flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 disabled:opacity-40"><svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div role="tablist" aria-label="安装来源" class="mt-4 flex shrink-0 gap-1 rounded-xl bg-slate-100 p-1">
+        <button type="button" role="tab" :aria-selected="String(addMode === 'builtin')" :disabled="addBusy || Boolean(busyId)" @click="addMode = 'builtin'; setMessage('')" class="capability-press h-8 flex-1 rounded-lg text-xs font-medium transition" :class="addMode === 'builtin' ? 'bg-white text-slate-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'">内置插件</button>
+        <button type="button" role="tab" :aria-selected="String(addMode === 'custom')" :disabled="addBusy || Boolean(busyId)" @click="addMode = 'custom'; setMessage('')" class="capability-press h-8 flex-1 rounded-lg text-xs font-medium transition" :class="addMode === 'custom' ? 'bg-white text-slate-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'">本地插件</button>
+      </div>
+      <div class="min-h-0 overflow-y-auto">
+      <div x-show="addMode === 'builtin'" class="mt-4">
+        <p class="text-[11px] leading-5 text-slate-400">重新安装已卸载的内置插件，即时生效，无需重启。</p>
+        <div class="mt-3 max-h-[45vh] overflow-y-auto rounded-xl border border-slate-200">
+          <template x-for="plugin in available" :key="plugin.id">
+            <div class="flex items-center gap-3 border-b border-slate-100 p-3 last:border-b-0">
+              <div class="min-w-0 flex-1"><p class="text-xs font-medium text-slate-700" x-text="plugin.label"></p><p class="mt-1 text-[11px] leading-5 text-slate-400" x-text="plugin.description"></p></div>
+              <button type="button" @click="install(plugin)" :disabled="Boolean(busyId) || loading" :aria-label="`安装 ${plugin.label}`" class="capability-press h-8 shrink-0 rounded-lg bg-slate-800 px-3 text-xs font-medium text-white transition hover:bg-slate-900 disabled:opacity-40" x-text="busyId === plugin.id ? '安装中…' : '安装'"></button>
+            </div>
+          </template>
+          <p x-show="!available.length" class="px-4 py-9 text-center text-xs text-slate-400">所有内置插件均已安装</p>
+        </div>
+      </div>
+      <div x-show="addMode === 'custom'" class="mt-4 grid gap-3.5">
+        <p class="text-[11px] leading-5 text-slate-400">模块需先放入项目目录。建议每个插件独占 plugins/&lt;插件名&gt;/，便于完整清理。</p>
         <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">插件 ID</span>
           <input x-model="addForm.id" placeholder="plugin-name" class="h-10 w-full rounded-xl border border-slate-200 px-3 font-mono text-xs text-slate-700 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-50"></label>
         <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">显示名</span>
@@ -2040,14 +2064,33 @@
         <label class="block"><span class="mb-1.5 block text-[11px] font-medium text-slate-500">配置 JSON</span>
           <textarea x-model="addForm.config" rows="3" spellcheck="false" placeholder='{"key": "value"}' class="w-full resize-none rounded-xl border border-slate-200 bg-slate-950 p-3 font-mono text-[12px] leading-5 text-slate-200 outline-none transition focus:border-brand-400"></textarea></label>
       </div>
-      <div class="mt-5 flex items-center justify-between gap-3">
-        <span class="h-4 truncate text-[11px] text-red-500" x-text="addOpen && messageType === 'error' ? message : ''"></span>
+      </div>
+      <div class="mt-5 flex shrink-0 items-center justify-between gap-3">
+        <span role="status" class="min-h-4 text-[11px]" :class="messageType === 'error' ? 'text-red-500' : 'text-teal-600'" x-text="addOpen ? message : ''"></span>
         <div class="flex shrink-0 gap-2">
-          <button type="button" @click="closeAdd()" class="capability-press h-9 rounded-xl px-4 text-xs font-medium text-slate-500 hover:bg-slate-100">取消</button>
-          <button type="submit" :disabled="addBusy || !addForm.id.trim() || !addForm.module.trim()" class="capability-press h-9 rounded-xl bg-slate-800 px-4 text-xs font-medium text-white shadow-sm transition hover:bg-slate-900 active:scale-[.98] disabled:opacity-40" x-text="addBusy ? '安装中…' : '安装'"></button>
+          <button type="button" @click="closeAdd()" :disabled="addBusy || Boolean(busyId)" class="capability-press h-9 rounded-xl px-4 text-xs font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-40" x-text="addMode === 'builtin' ? '完成' : '取消'"></button>
+          <button x-show="addMode === 'custom'" type="submit" :disabled="addBusy || Boolean(busyId) || !addForm.id.trim() || !addForm.module.trim()" class="capability-press h-9 rounded-xl bg-slate-800 px-4 text-xs font-medium text-white shadow-sm transition hover:bg-slate-900 active:scale-[.98] disabled:opacity-40" x-text="addBusy ? '安装中…' : '安装'"></button>
         </div>
       </div>
     </form>
+  </div>
+
+  <div x-show="uninstallOpen" x-cloak role="dialog" aria-modal="true" aria-labelledby="plugins-uninstall-title" aria-describedby="plugins-uninstall-description" class="fixed inset-0 z-50 flex items-center justify-center p-4" @keydown.escape.window="uninstallOpen && closeUninstall()">
+    <div class="overlay absolute inset-0" @click="closeUninstall()"></div>
+    <template x-if="uninstallTarget">
+      <div class="relative w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+        <div class="flex items-center gap-3"><span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-500"><svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div class="min-w-0"><h3 id="plugins-uninstall-title" class="truncate text-sm font-semibold text-slate-800" x-text="`卸载 ${uninstallTarget.label}？`"></h3><p class="mt-1 font-mono text-[10px] text-slate-400" x-text="uninstallTarget.id"></p></div></div>
+        <div id="plugins-uninstall-description" class="mt-4 space-y-2 text-xs leading-6 text-slate-500">
+          <p x-text="uninstallTarget.source === 'builtin' ? '将停止插件并从已安装列表移除，之后可在「安装插件」中重新安装。' : '将停止插件、清除注册与配置，并删除 plugins/ 内的独占文件或完整插件目录。'"></p>
+          <p class="text-[11px] text-slate-400" x-text="uninstallTarget.source === 'builtin' ? '内置共享代码、凭据与历史数据会保留，不删除其他插件文件。' : '共用文件及 plugins/ 之外的源代码会保留。删除的文件无法恢复。'"></p>
+        </div>
+        <p x-show="messageType === 'error' && message" role="alert" class="mt-3 break-words text-[11px] text-red-500" x-text="message"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button type="button" @click="closeUninstall()" :disabled="Boolean(busyId)" class="capability-press h-9 rounded-xl px-4 text-xs font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-40">取消</button>
+          <button type="button" @click="uninstall()" :disabled="Boolean(busyId) || loading" class="capability-press h-9 rounded-xl bg-red-500 px-4 text-xs font-medium text-white transition hover:bg-red-600 disabled:opacity-40" x-text="busyId ? '卸载中…' : '确认卸载'"></button>
+        </div>
+      </div>
+    </template>
   </div>
 
   <div x-show="detailOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4" @keydown.escape.window="detailOpen && closeDetail()">
@@ -2688,7 +2731,7 @@
   <span x-text="toast.message"></span>
 </div>
 
-<script src="/static/fgs-view.js?v=20261013-jev-removed-1"></script>
+<script src="/static/fgs-view.js?v=20261124-readpaths-1"></script>
 <script>
 // Common-env row drag reordering. Module-level state keeps the per-frame hot
 // path (1:1 pointer tracking, gap transforms, spring settle) off Alpine's
@@ -2854,25 +2897,31 @@ function redtraceApp() {
         return '项目不在进行中'; const steps = project.steps.filter(s => s.taskKey === taskKey); if (steps.some(s => s.handoffPending))
         return '交接尚未确认旧执行停止'; if (project.runs.some(r => steps.some(s => s.id === r.stepId) && ['running', 'paused', 'unknown'].includes(r.status)))
         return '旧执行仍运行、暂停或结果未知，请先核验停止'; return ''; },
-    async loadLegion() { this.legionLoading = true; try {
-        if(!this.legionProjectId)this.legionProjectId=this.selectedProjectId||this.projects[0]?.id||'';
-        if(!this.legionProjectId){this.legion=null;return;}
-        const id=this.legionProjectId, board=await this.api('GET','/v2/projects/'+encodeURIComponent(id)+'/commander');
-        if(id!==this.legionProjectId)return;
+    legionRequest: 0,
+    async loadLegion() {
+      if(!this.legionProjectId)this.legionProjectId=this.selectedProjectId||this.projects[0]?.id||'';
+      const id=this.legionProjectId, request=++this.legionRequest;
+      const current=()=>id===this.legionProjectId&&request===this.legionRequest;
+      this.legionLoading = true;
+      try {
+        if(!id){this.legion=null;return;}
+        const board=await this.api('GET','/v2/projects/'+encodeURIComponent(id)+'/commander?summary=1&selectedRun='+encodeURIComponent(this.conversationId));
+        if(!current())return;
+        if(this.workerHistoryProject===id&&this.workbench?.workerNextBefore!==board.workbench.workerNextBefore){this.workerHistory=[];this.workerHistoryBefore=undefined;}
         this.legion=board;
         this.workbench=board.workbench;
         if(!this.conversationId)this.conversationId=this.workbench.project.mode==='general'?'chief':'commander';
         if(this.legionPanel==='commander')await this.loadConversation();
+        if(!current())return;
         this.legionMessage.projectId=id;this.legionMessage.receiver='commander';
         this.legionUpdatedAt = Date.now();
         this.legionError = '';
-    }
-    catch (error) {
-        this.legionError = '状态更新失败，显示的可能是旧快照：' + error.message;
-    }
-    finally {
-        this.legionLoading = false;
-    } },
+      } catch (error) {
+        if(current())this.legionError = '状态更新失败，显示的可能是旧快照：' + error.message;
+      } finally {
+        if(current())this.legionLoading = false;
+      }
+    },
     async legionAction(path, body, message = '已保存') {
         this.legionPending[path] = true;
         this.legionErrors[path] = '';
@@ -4087,7 +4136,7 @@ function redtraceApp() {
     fgsSelectionRecord() {
       if (!this.fgsSelection || !this.fgs) return null;
       if (this.fgsNodeDetail?.id === this.fgsSelection.id) return this.fgsNodeDetail;
-      const source = this.fgsSelection.type === 'goal' ? this.fgs.goals : this.fgsSelection.type === 'step' ? this.fgs.steps : this.fgsSelection.type === 'finding' ? this.fgs.findings : this.fgs.facts;
+      const source = this.fgsSelection.type === 'goal' ? this.fgs.goals : this.fgsSelection.type === 'step' ? this.fgsReferenceSteps() : this.fgsSelection.type === 'finding' ? this.fgs.findings : this.fgs.facts;
       return source?.find(item => item.id === this.fgsSelection.id) || null;
     },
     async createFgs(type) {
@@ -4597,6 +4646,7 @@ function redtraceApp() {
 
     async openCommander(id){
       this.teardownAutoFit();if(this.cy){this.cy.destroy();this.cy=null;}
+      if(this.legionProjectId!==id){this.workerHistory=[];this.workerHistoryBefore=undefined;this.workerHistoryProject='';}
       this.selectedProjectId=id;this.selectedGraphId='';this.legionProjectId=id;this.view='benchmark';this.appPage='workspace';this.legionPanel='commander';
       this.workbench=null;this.conversationPlanningTodos=[];this.commanderLogSession='';this.commanderHistory=[];this.commanderOffset=0;this.commanderSession='';this.workbenchCommand='';this.chiefEvents=[];this.chiefOffset=0;this.chiefHasMore=false;this.conversationId=localStorage.getItem('redtrace-conversation-'+id)||'';this.conversationEvents=[];this.conversationMessages=[];this.conversationGraphEvents=[];this.conversationCursor=0;this.conversationBefore=null;this.conversationEventCursor=0;
       location.hash='/projects/'+id+'/commander';await this.loadLegion();await this.loadWorkerConfig();
@@ -5955,6 +6005,10 @@ function redtraceApp() {
 }
 </script>
 <template id="runtime-log-events">        <div class="mx-auto max-w-4xl space-y-4">
+          <div x-show="runtimeScope && (runtimePage > 0 || runtimeLastPage() > 0)" class="flex gap-2">
+            <button type="button" class="wb-history" :disabled="runtimePage >= runtimeLastPage()" @click="runtimePage++">更早日志</button>
+            <button type="button" class="wb-history" :disabled="Math.min(runtimePage,runtimeLastPage())===0" @click="runtimePage=Math.min(runtimePage,runtimeLastPage())-1">较新日志</button>
+          </div>
           <template x-for="event in visibleEvents()" :key="event.key || event.event_uid || event.id">
             <article x-show="eventVisible(event)" :data-side="event.kind==='user.message'&&event.actor==='你'?'right':null" class="audit-event min-h-10">
               <time class="absolute left-0 top-0.5 w-16 text-right text-[10px] tabular-nums text-slate-400" x-text="formatTime(event.timestamp)"></time>

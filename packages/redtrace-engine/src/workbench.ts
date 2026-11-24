@@ -2,36 +2,81 @@ import { tokenUsage } from './token-usage.ts'
 import { taskTodoPlanner } from './legion-todos.ts'
 import type { Store } from './store.ts'
 import { HttpError } from './types.ts'
-import type { Step, Finding } from './types.ts'
+import type { Step, Finding, Goal, Run, GraphPlanner } from './types.ts'
 import { conversationAuditEvents } from './store.ts'
 import { LegionStore } from './legion-store.ts'
 import type { Router } from './http.ts'
 import { queryNumber } from './http.ts'
 
-/** Labels use persisted execution order within each Graph, never the visible subset. */
-export function workerInstances(store: Store, projectId: string) {
-  const evidence=new Map(store.db.prepare("SELECT json_extract(data,'$.producerRunId') AS producer,COUNT(*) AS n FROM nodes WHERE project_id=? AND kind IN ('fact','finding') GROUP BY producer").all(projectId).map(r=>[String(r.producer),Number(r.n)]))
-  const instances=store.runs(projectId).filter(r=>r.stepId||r.activity==='plan').map(run=>{
-    const step=store.assignment(run)!, role=('specialist' in step?step.specialist?.name:undefined) ?? ({soldier:'Soldier',general:'General',scout:'Scout',reporter:'Reporter',worker:'Worker'}[step.role??'soldier'])
-    const tokens=run.inputTokens+run.outputTokens+run.cacheReadTokens+run.cacheWriteTokens
-    const facts=evidence.get(run.id)??0
-    return {...run,role:step.role,label:role,specialist:'specialist' in step?step.specialist:undefined,mission:step.description,taskKey:step.taskKey,handoff:run.handoff??step.handoff,facts,tokens,elapsedMs:Math.max(0,Date.parse(run.endedAt??new Date().toISOString())-Date.parse(run.startedAt))}
+interface WorkerPageOptions { before?: number; limit: number; includeActive?: boolean; selectedRun?: string }
+
+/** Label every run from its persisted position; load full records only for the requested page. */
+function readWorkerInstances(store: Store, projectId: string, page?: WorkerPageOptions) {
+  store.project(projectId)
+  const scope = store.graphScope
+  const planners = new Map(store.db.prepare("SELECT id,json_extract(data,'$.planner') AS planner FROM project_graphs WHERE project_id=? AND json_extract(data,'$.planner') IS NOT NULL").all(projectId)
+    .map(row => [String(row.id), JSON.parse(String(row.planner)) as GraphPlanner]))
+  const steps = new Map([...planners.values()].flatMap(planner => planner.legacyAssignments ?? []).map(step => [step.id, step]))
+  for (const row of store.db.prepare("SELECT id,data FROM nodes WHERE project_id=? AND kind='step'").all(projectId)) {
+    steps.set(String(row.id), JSON.parse(String(row.data)) as Step)
+  }
+  const positions = store.db.prepare("SELECT rowid,id,graph_id,step_id,activity,status FROM runs WHERE project_id=? AND (step_id IS NOT NULL OR activity='plan')"+(scope?' AND graph_id=?':'')+' ORDER BY rowid').all(...(scope?[projectId,scope]:[projectId]))
+  const counts = new Map<string, number>()
+  const indexed = positions.map(row => {
+    const step = row.activity === 'plan' ? planners.get(String(row.graph_id)) : steps.get(String(row.step_id))
+    if (!step) throw new HttpError(404, 'Run assignment not found')
+    const specialist = 'specialist' in step ? step.specialist : undefined
+    const label = specialist?.name ?? ({soldier:'Soldier',general:'General',scout:'Scout',reporter:'Reporter',worker:'Worker'}[step.role??'soldier'])
+    const key = JSON.stringify([row.graph_id, label]), ordinal = (counts.get(key) ?? 0) + 1
+    counts.set(key, ordinal)
+    return { id: String(row.id), cursor: Number(row.rowid), status: row.status, step, specialist, label, key, ordinal }
   })
-  const totals=new Map<string,number>(),counts=new Map<string,number>(),key=(w:typeof instances[number])=>JSON.stringify([w.graphId,w.label])
-  for(const w of instances)totals.set(key(w),(totals.get(key(w))??0)+1)
-  return instances.map(w=>{const id=key(w),n=(counts.get(id)??0)+1;counts.set(id,n);return{...w,label:totals.get(id)!>1?w.label+n:w.label}})
+  const recent = page ? indexed.filter(w => w.cursor < (page.before ?? Number.MAX_SAFE_INTEGER)).slice(-(page.limit + 1)) : indexed
+  const hasMore = !!page && recent.length > page.limit, entries = hasMore ? recent.slice(1) : recent
+  const nextBefore = hasMore ? entries[0].cursor : null
+  const first = entries[0]?.cursor ?? Number.MAX_SAFE_INTEGER
+  const visible = page?.includeActive ? indexed.filter(w => w.cursor >= first || ['running','paused','unknown'].includes(String(w.status)) || w.id === page.selectedRun) : entries
+  if (!visible.length) return { workers: [], nextBefore }
+
+  const evidence = new Map(store.db.prepare("SELECT json_extract(data,'$.producerRunId') AS producer,COUNT(*) AS n FROM nodes WHERE project_id=? AND kind IN ('fact','finding') GROUP BY producer").all(projectId).map(r => [String(r.producer), Number(r.n)]))
+  const details = new Map(store.db.prepare("SELECT id,json_remove(data,'$.checkpoint') AS data FROM runs WHERE id IN (SELECT value FROM json_each(?))").all(JSON.stringify(visible.map(w => w.id)))
+    .map(row => [String(row.id), JSON.parse(String(row.data)) as Omit<Run, 'checkpoint'>]))
+  const at = Date.now()
+  const workers = visible.map(w => {
+    const run = details.get(w.id)!, step = w.step
+    const label = counts.get(w.key)! > 1 ? w.label + w.ordinal : w.label
+    return { ...run, cursor: w.cursor, role: step.role, label, specialist: w.specialist, mission: step.description, taskKey: step.taskKey,
+      handoff: run.handoff ?? step.handoff, facts: evidence.get(run.id) ?? 0,
+      tokens: run.inputTokens + run.outputTokens + run.cacheReadTokens + run.cacheWriteTokens,
+      elapsedMs: Math.max(0, (run.endedAt ? Date.parse(run.endedAt) : at) - Date.parse(run.startedAt)) }
+  })
+  return { workers, nextBefore }
 }
 
-export function projectWorkbench(store:Store,legion:LegionStore,id:string) {
-    const project=store.project(id),graphs=store.projectGraphs(id),workers=workerInstances(store,id)
-    const goals=store.nodes(id,['goal']),steps=store.nodes<Step>(id,['step'])
+export function workerInstances(store: Store, projectId: string) {
+  return readWorkerInstances(store, projectId).workers
+}
+
+export function projectWorkbench(store:Store,legion:LegionStore,id:string,summary=false,selectedRun?:string) {
+    const project=store.project(id),graphs=store.projectGraphs(id)
+    const { workers, nextBefore } = readWorkerInstances(store, id, summary ? { limit: 100, includeActive: true, selectedRun } : undefined)
+    const active = workers.filter(w => w.status === 'running')
+    const activeSteps = new Set(active.map(w => w.stepId))
+    const activeGraphs = new Set(active.map(w => w.graphId))
+    const titles = new Map(graphs.map(g => [g.id, g.title]))
+    const stepLimit = store.stepLimit()
+    const goals=store.nodes<Goal>(id,['goal']),steps=store.nodes<Step>(id,['step'])
     const findings=store.nodes<Finding>(id,['finding'])
-    return {project,graphs,workers,capacity:graphs.map(g=>store.planningCapacity(id,store.stepLimit(),g.id)),planners:graphs.flatMap(g=>g.planner?[g.planner]:[]),usage:tokenUsage(store,id),pendingAgents:steps.filter(s=>s.status==='pending'&&!workers.some(w=>w.stepId===s.id&&w.status==='running')).map(s=>({stepId:s.id,graphId:s.graphId,role:s.role,specialist:s.specialist,title:s.specialist?.name??s.role??'Soldier',taskTitle:graphs.find(g=>g.id===s.graphId)?.title,waitingReason:store.stepReady(s)?'等待执行额度':'等待前置证据',mission:s.description})),goals,steps,findings,todos:project.mode==='general'?legion.planningTodos(id).list(graphs[0].id):[],
-      conversations:project.mode==='benchmark'?graphs.filter(g=>g.type==='benchmark_task').map(g=>({id:g.id,title:g.title,graphId:g.id,running:workers.some(w=>w.graphId===g.id&&w.status==='running'),updatedAt:g.updatedAt})):workers.map(w=>({id:w.id,title:w.label,runId:w.id,graphId:w.graphId,running:w.status==='running',updatedAt:w.endedAt??w.startedAt})),
+    return {project,graphs,workers,...(summary?{workerNextBefore:nextBefore}:{}),capacity:graphs.map(g=>store.planningCapacity(id,stepLimit,g.id)),planners:graphs.flatMap(g=>g.planner?[g.planner]:[]),usage:tokenUsage(store,id),pendingAgents:steps.filter(s=>s.status==='pending'&&!activeSteps.has(s.id)).map(s=>({stepId:s.id,graphId:s.graphId,role:s.role,specialist:s.specialist,title:s.specialist?.name??s.role??'Soldier',taskTitle:titles.get(s.graphId!),waitingReason:store.stepReady(s)?'等待执行额度':'等待前置证据',mission:s.description})),goals,steps,findings,todos:project.mode==='general'?legion.planningTodos(id).list(graphs[0].id):[],
+      conversations:project.mode==='benchmark'?graphs.filter(g=>g.type==='benchmark_task').map(g=>({id:g.id,title:g.title,graphId:g.id,running:activeGraphs.has(g.id),updatedAt:g.updatedAt})):workers.map(w=>({id:w.id,title:w.label,runId:w.id,graphId:w.graphId,running:w.status==='running',updatedAt:w.endedAt??w.startedAt})),
       anomalies:workers.filter(w=>['failed','unknown'].includes(w.status)).map(w=>({runId:w.id,label:w.label,error:w.error,status:w.status}))}
 }
 export function workbenchRoutes(router:Router,store:Store,legion:LegionStore) {
-  router.add('GET','/v2/projects/:project/workbench',c=>projectWorkbench(store,legion,c.params.project))
+  router.add('GET','/v2/projects/:project/workbench',c=>projectWorkbench(store,legion,c.params.project,c.url.searchParams.get('summary')==='1'))
+  router.add('GET','/v2/projects/:project/workbench/workers',c=>{
+    const id=c.params.project,graph=c.url.searchParams.get('graphId')
+    return readWorkerInstances(graph?store.forGraph(id,graph):store,id,{before:queryNumber(c.url,'before',Number.MAX_SAFE_INTEGER),limit:queryNumber(c.url,'limit',100,1,500)})
+  })
   router.add('GET','/v2/projects/:project/conversation',c=>{
     const id=c.params.project;store.project(id)
     const graph=c.url.searchParams.get('graphId'),runId=c.url.searchParams.get('runId')

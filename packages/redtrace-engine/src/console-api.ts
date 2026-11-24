@@ -50,7 +50,10 @@ export function consoleRoutes(router: Router, store: Store, configuration: Confi
     const finding = store.forProject(c.params.project).node<Finding>(c.params.project, c.params.finding, 'finding')
     return store.forGraph(c.params.project, finding.graphId!).readNode(c.params.project, finding.id, 'doc')
   })
-  router.add('GET','/console/tool-stats',async c=>{const live=await runtime();return {...toolStatistics(store,c.url,[...new Set(live.tools.map(t=>t.name))]),projects:store.projects().map(p=>({id:p.id,title:p.title,mode:p.mode}))}})
+  router.add('GET','/console/tool-stats',async c=>{
+    const names = c.url.searchParams.has('names') ? c.url.searchParams.getAll('names').filter(Boolean) : [...new Set((await runtime()).tools.map(tool => tool.name))]
+    return {...toolStatistics(store,c.url,names),projects:store.projects().map(p=>({id:p.id,title:p.title,mode:p.mode}))}
+  })
   router.add('GET', '/console/tools', async () => {
     const live = await runtime()
     const {raw, revision} = configuration.resolvedSnapshot()

@@ -70,6 +70,10 @@ Worker 用 `sync_step({planVersion})` 接收当前 Step、祖先 Goal 和有效�
 
 manifest 语义:默认开启的插件用 `disabled` 记录停用;默认关闭的用 `enabled` 记录开启,重启后按 manifest 恢复。PTC 不再注册、挂载或恢复；上游 vendor 中的代码保留，不属于 RedTrace 可启用插件。
 
+插件页的垃圾桶入口需确认后卸载；「安装插件」提供内置插件恢复与本地 Cordis 模块注册，后者不会下载或复制模块文件。可选内置插件卸载后用 `removed` 记录未安装状态，并清除其 `enabled` / `disabled` 标记；从已安装列表隐藏，重启后也不会挂载或向任务授予能力。安装面板仍可发现并重新安装它们（复用 `POST /__redtrace/plugins/:id/start`）。内核、Core、Domain、Attachment 与角色预设不可卸载。共享内置代码、凭据、附件和历史记录不会被删除。
+
+自定义插件先成功释放 Fiber，再持久化停用状态，清理文件，最后移除注册及配置。`plugins/foo/dist/index.js` 等模块独占顶层 `plugins/foo/` 时会删除整个目录（含包内依赖与资源）；`plugins/foo.js` 只删除该文件。其他注册仍引用的共用目录与仓库其他位置的模块源代码保留。目录联接、符号链接根目录或包含管理配置的目录不会被递归删除。释放或清理失败会明确报错并保留注册供重试，不报告虚假的卸载成功；不保证清理插件自行写到其他位置的文件或外部副作用。
+
 ## 兼容层
 
 `/v2/projects/:id/graph`、Goal、Step 与 Finding API 直接操作 FGS。旧 Project/Fact/Intent/Reason/Explore/Hint、审计、Worker 配置、Skill/MCP、Resource、WebShell/C2、Workspace 与导出 API 投影到同一份状态。旧 conclude 在一个事务中完成 Step 与 Fact 提交。Cordis 插件继续使用真实 `apply(ctx)`、服务注入、Fiber 生命周期和管理 API。

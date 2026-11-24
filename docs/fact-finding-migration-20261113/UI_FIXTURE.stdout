@@ -1,2 +1,0 @@
-UI_READY {"api":"http://127.0.0.1:61421","work":"/var/folders/l0/qt5vh8dd3mj49wyzx0c5xpww0000gp/T/redtrace-reporter-native-HYTuup","projectId":"proj_001","findingId":"finding_001","reportArtifactId":"artifact-22cebf4877cc7fd5fd736b854ac29ffd6361904ab2b821a577d91a396f6fe3fd"}
-REPORTER_RUNTIME_OK=true; sessions=2; real_loopback_baseline=401; real_loopback_proof=200; facts=2; finding=1; original_audit_read=true; retained_evidence_read=true; artex_sections=8; report_artifact_linked=true; raw_facts_preserved=true; model=local-protocol-fixture; live_model=false

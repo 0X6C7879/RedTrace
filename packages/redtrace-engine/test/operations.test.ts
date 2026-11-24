@@ -10,6 +10,36 @@ import { serveEngine } from '../src/index.ts'
 import { executionResult } from '../src/execution-result.ts'
 import { fixtureFrame } from './execution-fixture.ts'
 
+test('local resource ownership and Unicode downloads', async t => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-ownership-'))
+  const engine = await serveEngine({ root, port: 0, autoStart: false })
+  t.after(async () => { await engine.close(); rmSync(root, { recursive: true, force: true }) })
+  const url = `http://127.0.0.1:${(engine.server.address() as { port: number }).port}`
+  const project = engine.store.createProject({ title: 'File owner', origin: 'Fixture', goal: 'Verify storage' }).project
+  const other = engine.store.createProject({ title: 'Separate owner', origin: 'Fixture', goal: 'Verify isolation' }).project
+  const credential = (scope: string) => engine.operations.create(scope === '_global' ? null : scope, { kind: 'credential_ref', name: 'Fixture credential', metadata: { username: 'fixture-user' } }).resource.id
+  const attach = (scope: string, credential_id: string) => fetch(`${url}/projects/${scope}/resources`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'c2_session', name: 'Local fixture reference', metadata: { connection_type: 'direct', credential_id } }) })
+  const scoped = credential(project.id), shared = credential('_global')
+  for (const [scope, id, expected] of [[project.id, scoped, 201], [other.id, shared, 201], [other.id, scoped, 404], ['_global', scoped, 404]] as const) {
+    const response = await attach(scope, id)
+    assert.equal(response.status, expected)
+    await response.json()
+  }
+  assert.equal(engine.store.db.prepare("SELECT COUNT(*) AS count FROM shared_resources WHERE kind='c2_session'").get()!.count, 2)
+
+  for (const filename of ['fixture.bin', "证据'附件.bin"]) {
+    const upload = await fetch(`${url}/projects/${project.id}/c2/payloads/upload?filename=${encodeURIComponent(filename)}`, { method: 'POST', body: 'fixture bytes' })
+    assert.equal(upload.status, 201)
+    const { payload } = await upload.json() as { payload: { target: string } }
+    const download = await fetch(url + payload.target)
+    assert.equal(download.status, 200)
+    const header = download.headers.get('content-disposition')!
+    assert.match(header, /^attachment; filename\*=UTF-8''[^']+$/)
+    assert.equal(decodeURIComponent(header.split("''")[1]), filename)
+    assert.equal(await download.text(), 'fixture bytes')
+  }
+})
+
 test('resource operations use real HTTP, keep global provenance and enforce existing ownership contracts', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-operations-')), wire: string[] = []
   const remote = createServer(async (req, res) => {

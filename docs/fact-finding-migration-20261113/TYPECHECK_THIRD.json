@@ -1,7 +1,0 @@
-{
-  "command": "npm run check --prefix packages/redtrace-engine",
-  "cwd": "/Users/lxy/Downloads/RedTrace",
-  "stdout": "\n> @redtrace/engine@0.4.0 check\n> tsc --noEmit\n\n",
-  "stderr": "",
-  "exit": 0
-}

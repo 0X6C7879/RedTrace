@@ -94,16 +94,24 @@ test('tool audit pairs Run+Call, counts all filtered data before history paginat
   } finally {store.close()}
 })
 
-test('tool statistics endpoint is lazy, registry-only and independent of catalog loading',async()=>{
-  const root=mkdtempSync(path.join(os.tmpdir(),'tool-stat-api-')),engine=await serveEngine({root,autoStart:false,port:0,runtimeCatalog:()=>({tools:[{name:'bash',source:'DSH',scope:'catalog',status:'available',role:'soldier'}],mcp:[]})})
+test('tool statistics use supplied catalog names without inspecting the live catalog',async()=>{
+  let catalogReads=0
+  const root=mkdtempSync(path.join(os.tmpdir(),'tool-stat-api-')),engine=await serveEngine({root,autoStart:false,port:0,runtimeCatalog:()=>{
+    catalogReads++
+    return {tools:[{name:'bash',source:'DSH',scope:'catalog',status:'available',role:'soldier'}],mcp:[]}
+  }})
   try {
     const p=engine.store.createProject({title:'fixture',origin:'fixture',goal:'verify'}).project
     engine.store.audit({id:'run',project_id:p.id,task_type:'soldier'},[{kind:'tool.started',title:'bash',call_id:'one',timestamp:'2026-11-16T00:00:00Z'},{kind:'tool.completed',title:'bash',call_id:'one',error:false,timestamp:'2026-11-16T00:00:01Z'},{kind:'tool.started',title:'retired-tool',call_id:'two'}])
     const base='http://127.0.0.1:'+(engine.server.address() as {port:number}).port
     const catalog=await(await fetch(base+'/console/tools')).json() as any
     assert.equal(catalog.stats,undefined);assert.equal(catalog.tools.length,1)
-    const stats=await(await fetch(base+'/console/tool-stats?tool=bash')).json() as any
+    const stats=await(await fetch(base+'/console/tool-stats?tool=bash&names=bash&to=2026-11-16T00:00:00Z')).json() as any
     assert.equal(stats.stats.calls,1);assert.equal(stats.history[0].role,'soldier');assert.equal(stats.history[0].duration_ms,1000)
+    assert.equal(catalogReads,1)
+    const legacy=await(await fetch(base+'/console/tool-stats')).json() as any
+    assert.equal(legacy.stats.calls,1)
+    assert.equal(catalogReads,2)
     assert.equal(stats.projects[0].id,p.id)
   } finally {await engine.close();rmSync(root,{recursive:true,force:true})}
 })

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, symlinkSync } from 'node:fs'
+import fs from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -476,4 +478,277 @@ test('General/Soldier inherit retired preset settings and the retired Scout ID i
   assert.throws(()=>manager.view('redtrace-leader'))
   assert.throws(()=>manager.view('redtrace-operator'))
  }finally{await manager.stop('redtrace-soldier')}
+})
+
+function uninstallFile(root, relative, text = 'fixture') {
+  const target = path.join(root, relative)
+  mkdirSync(path.dirname(target), { recursive: true })
+  writeFileSync(target, text)
+  return target
+}
+
+async function uninstallFixture(t, seed = {}, relative = 'plugins.json') {
+  const root = scratch('uninstall-regression')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const manifest = uninstallFile(root, relative, JSON.stringify({ version: 1, ...seed }))
+  const setup = makeManager(root, manifest, async () => ({ apply() {} }))
+  await setup.manager.boot()
+  return { root, manifest, ...setup }
+}
+
+function uninstallLink(t, target, link) {
+  try { symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir'); return true }
+  catch (error) {
+    if (!['EPERM', 'EACCES', 'ENOSYS', 'ENOTSUP'].includes(error.code)) throw error
+    t.skip(`directory links unavailable: ${error.code}`)
+    return false
+  }
+}
+
+test('installed views expose uninstall only for optional managed plugins', async t => {
+  const { manager } = await uninstallFixture(t)
+  const protectedIds = new Set(['redtrace-core', 'redtrace-domain', 'redtrace-attachment'])
+  for (const view of manager.list()) {
+    assert.equal(view.installed, true, view.id)
+    assert.equal(view.canUninstall, view.source === 'builtin' && view.category !== 'preset' && !protectedIds.has(view.id), view.id)
+  }
+  assert.equal((await manager.add({ id: 'fixture', module: 'plugins/foo.js', enabled: false })).installed, true)
+})
+
+test('HTTP DELETE uninstalls an optional builtin and start reinstalls without deleting sources', async t => {
+  const id = 'redtrace-lsp', user = [{ id: 'fixture', module: 'plugins/foo.js', enabled: false }]
+  const { root, manifest, manager } = await uninstallFixture(t, {
+    enabled: [id, 'redtrace-file-references'], disabled: [id, 'redtrace-web'], removed: ['redtrace-reverse'], user,
+  })
+  const source = uninstallFile(root, manager.view(id).module, 'vendor source')
+  const routes = []
+  registerPluginRoutes({ webServer: { register: route => routes.push(route) } }, manager)
+  const call = (method, url) => new Promise(resolve => {
+    const res = fakeResponse(), end = res.end
+    res.end = body => { end(body); resolve(res) }
+    routes[0].handler({ method, url }, res)
+  })
+  const count = manager.list().length
+  assert.equal((await call('DELETE', `/__redtrace/plugins/${id}`)).status, 204)
+  assert.equal(manager.list().length, count)
+  assert.deepEqual([manager.view(id).installed, manager.view(id).status, manager.view(id).canStop, manager.view(id).canUninstall], [false, 'stopped', false, false])
+  const saved = JSON.parse(readFileSync(manifest, 'utf8'))
+  assert.deepEqual(saved.enabled, ['redtrace-file-references'])
+  assert.deepEqual(saved.disabled, ['redtrace-web'])
+  assert.deepEqual(new Set(saved.removed), new Set(['redtrace-reverse', id]))
+  assert.deepEqual(saved.user, user)
+  const response = await call('POST', `/__redtrace/plugins/${id}/start`)
+  assert.equal(response.status, 200)
+  const view = JSON.parse(response.body).plugin
+  assert.deepEqual([view.installed, view.status, view.canStop, view.canUninstall], [true, 'running', true, true])
+  const next = makeManager(root, manifest, async () => ({ apply() {} })).manager
+  await next.boot()
+  assert.equal(next.running(id), true)
+  assert.deepEqual(JSON.parse(readFileSync(manifest, 'utf8')).removed, ['redtrace-reverse'])
+  assert.equal(readFileSync(source, 'utf8'), 'vendor source')
+})
+
+for (const enabled of [undefined, ['redtrace-reverse', 'redtrace-credentials']]) {
+  test(`removed ${enabled ? 'overrides enabled flags' : 'works in a removed-only manifest'} at boot`, async t => {
+    const ids = ['redtrace-reverse', 'redtrace-credentials']
+    const { root, manifest, ctx, manager } = await uninstallFixture(t, { removed: ids, ...(enabled ? { enabled } : {}) })
+    assert.equal(manager.taskPluginAllowed('redtrace-reverse'), false)
+    assert.equal(manager.availableForTask('redtrace-reverse'), false)
+    for (const id of ids) {
+      const view = manager.view(id)
+      assert.deepEqual([view.installed, view.status, view.canStop, view.canUninstall], [false, 'stopped', false, false], id)
+    }
+    assert.ok(ctx.mounts.every(({ module }) => module.name !== 'redtrace-credentials'))
+    assert.equal((await manager.start('redtrace-credentials')).installed, true)
+    const next = makeManager(root, manifest, async () => ({ apply() {} })).manager
+    await next.boot()
+    assert.equal(next.running('redtrace-credentials'), true)
+    assert.equal(next.taskPluginAllowed('redtrace-reverse'), false)
+  })
+}
+
+test('builtin uninstall disposes its live fiber and stays removed after reboot', async t => {
+  const { root, manifest, ctx, manager } = await uninstallFixture(t)
+  await manager.start('redtrace-credentials')
+  const mount = ctx.mounts.at(-1)
+  await manager.uninstall('redtrace-credentials')
+  assert.equal(mount.disposed, true)
+  assert.equal(manager.running('redtrace-credentials'), false)
+  const next = makeManager(root, manifest, async () => ({ apply() {} })).manager
+  await next.boot()
+  assert.equal(next.view('redtrace-credentials').installed, false)
+  assert.equal(next.running('redtrace-credentials'), false)
+})
+
+test('removed ignores protected and unknown ids; kernel and presets cannot be uninstalled', async t => {
+  const ids = ['sessions', 'redtrace-core', 'redtrace-domain', 'redtrace-attachment', 'redtrace-commander', 'redtrace-general', 'redtrace-soldier']
+  const user = [{ id: 'fixture', module: 'plugins/foo.js' }]
+  const { manager } = await uninstallFixture(t, { removed: [...ids, 'not-a-plugin', 'fixture'], user })
+  for (const id of ids) {
+    await assert.rejects(manager.uninstall(id), PluginError)
+    assert.equal(manager.view(id).status, 'running', id)
+    assert.equal(manager.view(id).canUninstall, false, id)
+  }
+  assert.equal(manager.running('fixture'), true, 'removed only applies to optional managed entries')
+  assert.ok(!manager.list().some(view => view.id === 'not-a-plugin'))
+})
+
+for (const [name, module, owned] of [
+  ['nested entry owns its top-level directory', 'plugins/foo/dist/index.js', 'plugins/foo'],
+  ['top-level file owns only that file', 'plugins/foo.js', 'plugins/foo.js'],
+  ['outside plugins only unregisters', 'vendor/foo/index.js', null],
+]) {
+  test(`custom uninstall: ${name}`, async t => {
+    const { root, manifest, ctx, manager } = await uninstallFixture(t)
+    const entry = uninstallFile(root, module), sibling = uninstallFile(root, 'plugins/keep.js')
+    const asset = uninstallFile(root, 'plugins/foo/assets/data.txt')
+    await manager.add({ id: 'fixture', module })
+    const mount = ctx.mounts.at(-1)
+    await manager.uninstall('fixture')
+    assert.equal(mount.disposed, true)
+    assert.deepEqual(JSON.parse(readFileSync(manifest, 'utf8')).user, [])
+    assert.ok(!manager.list().some(view => view.id === 'fixture'))
+    assert.equal(existsSync(owned ? path.join(root, owned) : entry), owned === null)
+    assert.equal(existsSync(asset), owned !== 'plugins/foo')
+    assert.ok(existsSync(sibling))
+  })
+}
+
+for (const alias of [false, true]) {
+  test(`custom uninstall preserves a directory shared by ${alias ? 'realpath aliases' : 'another registration'}`, async t => {
+    const { root, manifest, manager } = await uninstallFixture(t)
+    const entry = uninstallFile(root, 'plugins/foo/index.js')
+    const other = uninstallFile(root, 'plugins/foo/other.js')
+    if (alias && !uninstallLink(t, path.join(root, 'plugins/foo'), path.join(root, 'plugins/alias'))) return
+    await manager.add({ id: 'fixture', module: 'plugins/foo/index.js' })
+    await manager.add({ id: 'keeper', module: `plugins/${alias ? 'alias' : 'foo'}/other.js`, enabled: false })
+    await manager.uninstall('fixture')
+    assert.ok(existsSync(entry))
+    assert.ok(existsSync(other))
+    assert.deepEqual(JSON.parse(readFileSync(manifest, 'utf8')).user.map(user => user.id), ['keeper'])
+  })
+}
+
+for (const unsafe of ['top-level junction', 'symlinked plugins root', 'manifest inside owned directory']) {
+  test(`custom uninstall rejects ${unsafe} without dropping registration or files`, async t => {
+    const { root, manifest, manager } = await uninstallFixture(t, {}, unsafe.startsWith('manifest') ? 'plugins/foo/settings/plugins.json' : 'plugins.json')
+    const external = scratch('external-guard')
+    t.after(() => rmSync(external, { recursive: true, force: true }))
+    const sentinel = uninstallFile(external, 'sentinel.txt', 'external data')
+    if (unsafe === 'top-level junction' && !uninstallLink(t, external, path.join(root, 'plugins/foo'))) return
+    if (unsafe === 'symlinked plugins root') {
+      rmSync(path.join(root, 'plugins'), { recursive: true })
+      if (!uninstallLink(t, external, path.join(root, 'plugins'))) return
+    }
+    const entry = uninstallFile(root, 'plugins/foo/index.js')
+    await manager.add({ id: 'fixture', module: 'plugins/foo/index.js' })
+    await assert.rejects(manager.uninstall('fixture'))
+    assert.equal(manager.view('fixture').module, 'plugins/foo/index.js')
+    assert.ok(JSON.parse(readFileSync(manifest, 'utf8')).user.some(user => user.id === 'fixture'))
+    assert.ok(existsSync(entry))
+    assert.equal(readFileSync(sentinel, 'utf8'), 'external data')
+  })
+}
+
+test('custom package cleanup removes nested links without touching their external targets', async t => {
+  const { root, manager } = await uninstallFixture(t)
+  const external = scratch('nested-link-target')
+  t.after(() => rmSync(external, { recursive: true, force: true }))
+  const sentinel = uninstallFile(external, 'sentinel.txt', 'external data')
+  uninstallFile(root, 'plugins/foo/dist/index.js')
+  if (!uninstallLink(t, external, path.join(root, 'plugins/foo/assets'))) return
+  await manager.add({ id: 'fixture', module: 'plugins/foo/dist/index.js' })
+  await manager.uninstall('fixture')
+  assert.equal(existsSync(path.join(root, 'plugins/foo')), false)
+  assert.equal(readFileSync(sentinel, 'utf8'), 'external data')
+})
+
+for (const action of ['stop', 'uninstall']) {
+  test(`failed fiber dispose rejects ${action} and retains registration, files and mount`, async t => {
+    const { root, manifest, ctx, manager } = await uninstallFixture(t)
+    const entry = uninstallFile(root, 'plugins/foo/index.js'), plugin = ctx.plugin.bind(ctx)
+    t.mock.method(ctx, 'plugin', (...args) => ({ ...plugin(...args), async dispose() { throw new Error('dispose blocked') } }))
+    await manager.add({ id: 'fixture', module: 'plugins/foo/index.js' })
+    const count = ctx.mounts.length
+    await assert.rejects(manager[action]('fixture'), /dispose blocked/)
+    assert.ok(manager.list().some(view => view.id === 'fixture'))
+    assert.ok(JSON.parse(readFileSync(manifest, 'utf8')).user.some(user => user.id === 'fixture' && user.enabled !== false))
+    assert.ok(existsSync(entry))
+    await manager.start('fixture')
+    assert.equal(ctx.mounts.length, count, 'failed disposal must not allow a duplicate fiber')
+  })
+}
+
+test('cleanup failure persists a stopped disabled registration before rm and remains retryable', async t => {
+  const { root, manifest, ctx, manager } = await uninstallFixture(t)
+  const entry = uninstallFile(root, 'plugins/foo/index.js'), plugin = ctx.plugin.bind(ctx)
+  let releaseDispose, enterDispose
+  const entered = new Promise(resolve => { enterDispose = resolve })
+  const disposed = new Promise(resolve => { releaseDispose = resolve })
+  t.mock.method(ctx, 'plugin', (...args) => {
+    const fiber = plugin(...args)
+    return { ...fiber, async dispose() { enterDispose(); await disposed; await fiber.dispose() } }
+  })
+  t.after(() => releaseDispose())
+  await manager.add({ id: 'fixture', module: 'plugins/foo/index.js' })
+  const mount = ctx.mounts.at(-1)
+  let observed
+  const stub = t.mock.method(fs, 'rm', async () => {
+    observed = { disposed: mount.disposed, user: JSON.parse(readFileSync(manifest, 'utf8')).user.find(user => user.id === 'fixture'), view: manager.list().find(view => view.id === 'fixture') }
+    throw new Error('cleanup blocked')
+  })
+  syncBuiltinESMExports()
+  t.after(() => { stub.mock.restore(); syncBuiltinESMExports() })
+  const removing = assert.rejects(manager.uninstall('fixture'), /cleanup blocked/)
+  await entered
+  assert.equal(stub.mock.calls.length, 0, 'rm must wait for successful disposal')
+  assert.ok(JSON.parse(readFileSync(manifest, 'utf8')).user.some(user => user.id === 'fixture' && user.enabled !== false))
+  releaseDispose()
+  await removing
+  assert.equal(observed.disposed, true)
+  assert.equal(observed.user?.enabled, false, 'persist disabled before attempting rm')
+  assert.equal(observed.view?.status, 'stopped')
+  assert.equal(manager.statuses.get('fixture'), 'stopped', 'retain lifecycle maps until cleanup succeeds')
+  assert.ok(existsSync(entry))
+  stub.mock.restore()
+  syncBuiltinESMExports()
+  await manager.uninstall('fixture')
+  assert.ok(!existsSync(path.join(root, 'plugins/foo')))
+  assert.deepEqual(JSON.parse(readFileSync(manifest, 'utf8')).user, [])
+  assert.equal(manager.statuses.has('fixture'), false)
+  assert.equal(manager.errors.has('fixture'), false)
+  assert.equal(manager.mounted.has('fixture'), false)
+})
+
+test('reinstall retries manifest persistence without mounting a duplicate fiber', async t => {
+  const { manifest, ctx, manager } = await uninstallFixture(t)
+  await manager.uninstall('redtrace-credentials')
+  const stub = t.mock.method(fs, 'rename', async () => { throw new Error('manifest blocked') })
+  syncBuiltinESMExports()
+  t.after(() => { stub.mock.restore(); syncBuiltinESMExports() })
+  await assert.rejects(manager.start('redtrace-credentials'), /manifest blocked/)
+  const count = ctx.mounts.length
+  stub.mock.restore()
+  syncBuiltinESMExports()
+  const view = await manager.start('redtrace-credentials')
+  assert.equal(view.installed, true)
+  assert.equal(view.status, 'running')
+  assert.equal(ctx.mounts.length, count)
+  assert.ok(!JSON.parse(readFileSync(manifest, 'utf8')).removed.includes('redtrace-credentials'))
+})
+
+test('late failed activation cannot recreate lifecycle state after custom uninstall', async t => {
+  const { root, ctx, manager } = await uninstallFixture(t)
+  uninstallFile(root, 'plugins/foo/index.js')
+  const plugin = ctx.plugin.bind(ctx)
+  let rejectActivation
+  const activation = new Promise((resolve, reject) => { rejectActivation = reject })
+  t.mock.method(ctx, 'plugin', (...args) => ({ ...plugin(...args), await: () => activation }))
+  await manager.add({ id: 'fixture', module: 'plugins/foo/index.js' })
+  assert.equal(manager.view('fixture').status, 'pending')
+  await manager.uninstall('fixture')
+  rejectActivation(new Error('late activation failure'))
+  await tick()
+  assert.equal(manager.statuses.has('fixture'), false)
+  assert.equal(manager.errors.has('fixture'), false)
 })
