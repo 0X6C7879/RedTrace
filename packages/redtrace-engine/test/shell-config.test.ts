@@ -17,7 +17,7 @@ test('native shell captures output, cancels process trees and protects provider 
     assert.equal(result.exitCode, 0); assert.match(result.text, /shell-ok/); assert.match(raw.toString(), /shell-ok/)
     assert.equal(result.bytes, raw.length); assert.equal(result.sha256, createHash('sha256').update(raw).digest('hex'))
     if (process.platform !== 'win32') {
-      const failure = await runShell("printf error >&2; exit 7", root), failedOutput = readFileSync(failure.outputPath)
+      const failure = await runShell("printf error >&2; exit 7", root), failedOutput = Buffer.concat([readFileSync(failure.stdoutPath),readFileSync(failure.stderrPath)])
       assert.equal(failure.exitCode, 7); assert.equal(failure.text, 'error'); assert.equal(failure.bytes, 5)
       assert.equal(failure.sha256, createHash('sha256').update(failedOutput).digest('hex'))
     }
@@ -48,7 +48,7 @@ test('authenticated secrets and revision conflicts preserve independent configur
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('shell retains stdout and stderr separately as well as the ordered full log', async()=>{
+test('shell retains stdout and stderr separately with outputPath pointing to stdout', async()=>{
  const root=mkdtempSync(path.join(os.tmpdir(),'redtrace-streams-'))
  try {
   const output=await runShell(process.platform === 'win32'
@@ -57,6 +57,6 @@ test('shell retains stdout and stderr separately as well as the ordered full log
   assert.equal(output.exitCode,7)
   assert.equal(readFileSync(output.stdoutPath,'utf8'),'fixture-out')
   assert.equal(readFileSync(output.stderrPath,'utf8'),'fixture-error')
-  assert.equal(createHash('sha256').update(readFileSync(output.outputPath)).digest('hex'),output.sha256)
+  assert.equal(output.outputPath,output.stdoutPath)
  } finally {rmSync(root,{recursive:true,force:true})}
 })

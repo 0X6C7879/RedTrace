@@ -6,6 +6,9 @@ import { Store, ACTIVE_NODE_SQL } from './store.ts'
 import { HttpError, now, requiredText } from './types.ts'
 import type { Step, Goal, LegionRole, Project, ProjectGraph } from './types.ts'
 
+// Change terminal recommendation rules only here; tactics and inspection share them.
+const TACTIC_RECOMMENDATION_SQL = "CASE WHEN json_extract(l.data,'$.platformCompleted') IS 1 OR goal.status='achieved' THEN 'achieved' WHEN goal.status='cancelled' THEN 'exhausted' WHEN s.parked=1 THEN 'parked' END"
+
 export interface CommandCursor { delivered: number; acknowledged: number }
 export interface Campaign {
   projectId: string; sessionId: string; status: 'idle' | 'running' | 'stopped'; state: string
@@ -76,8 +79,11 @@ export class LegionStore {
     if(!Number.isFinite(deadline)||deadline<=Date.now())throw new HttpError(422,'Deadline must be a future epoch in milliseconds')
     const c=this.campaign(projectId);c.startedAt=Date.now();c.deadline=deadline;this.saveCampaign(c);this.store.changes.emit('legion-budget',c.projectId);return this.budget(Date.now(),c.projectId)
   }
+  private stepFields<K extends keyof Step>(projectId:string,fields:K[]):Pick<Step,K>[] {
+    return this.store.db.prepare(`SELECT ${fields.map(f=>"data -> '$."+f+"' AS \""+f+'"').join(',')} FROM nodes WHERE project_id=? AND kind='step' AND ${ACTIVE_NODE_SQL}${this.store.graphScope?' AND graph_id=?':''} ORDER BY rowid`).all(projectId,...(this.store.graphScope?[this.store.graphScope]:[])).map(row=>Object.fromEntries(fields.map(f=>[f,row[f]===null?undefined:JSON.parse(String(row[f]))])) as Pick<Step,K>)
+  }
   tactics(projectId:string,at=Date.now(),boardGraphs?:ProjectGraph[]) {
-    const projectGraphs=boardGraphs??this.store.projectGraphs(projectId),projectSteps=this.store.nodes<Step>(projectId,['step']).filter(s=>!s.deleted)
+    const projectGraphs=boardGraphs??this.store.projectGraphs(projectId),projectSteps=this.stepFields(projectId,['id','graphId','status','factIds','taskKey','goalId'])
     const tasks=new Set([...projectGraphs.filter(g=>g.taskKey).map(g=>g.taskKey!),...projectSteps.map(s=>s.taskKey??s.goalId)])
     if(this.store.project(projectId).mode==='general') return []
     const senior='general'
@@ -96,17 +102,16 @@ export class LegionStore {
       const list=intervals.get(id)??[];list.push({...run,startedAt:String(row.created_at),endedAt:row.ended_at===null?null:confirmedEnd(run,String(row.ended_at))});intervals.set(id,list)
     }
     const evidence=new Map<string,string>(this.store.db.prepare("SELECT graph_id,MAX(created_at) AS at FROM events WHERE project_id=? AND type IN ('fact.added','finding.added') GROUP BY graph_id").all(projectId).map(r=>[String(r.graph_id),String(r.at)]))
-    const classifications=new Map(this.store.db.prepare('SELECT task_key,data FROM legion_tasks WHERE project_id=?').all(projectId).map(r=>[String(r.task_key),r.data]))
+    const recommendations=new Map(this.recommendationTasks(projectId,false).map(r=>[String(r.task_key),r]))
     return [...tasks].map(taskKey=>{
       const steps=stepsByTask.get(taskKey)??[]
       const taskRuns=steps.flatMap(s=>runsByStep.get(s.id)??[]),timedRuns=taskRuns.flatMap(r=>intervals.get(r.id)??[{...r,endedAt:r.endedAt?confirmedEnd(r,r.endedAt):r.endedAt}]),elapsedMs=executionTime(timedRuns,at)
-      const data=classifications.get(taskKey),classification=data===undefined?null:JSON.parse(String(data))
+      const task=recommendations.get(taskKey),classification=task?.data==null?null:JSON.parse(String(task.data))
       const graph=projectGraphs.find(g=>g.taskKey===taskKey),lastEvidenceAt=evidence.get(graph?.id??steps[0]?.graphId??'')
       const running=taskRuns.filter(r=>r.status==='running'),stalledMinutes=running.length?executionTime(timedRuns,at,Date.parse(lastEvidenceAt??'1970-01-01'))/60000:0
-      const goalStatus=graph&&this.store.node<Goal>(projectId,graph.goalId,'goal').status,achieved=goalStatus==='achieved'
       const live=steps.filter(s=>['pending','running','paused'].includes(s.status)),general=graph?.planner,hasGeneral=!!general&&['pending','running','paused'].includes(general.status)
       const generalRuns=plannerRuns.get(graph?.id)??[],generalMinutes=executionTime(generalRuns.flatMap(r=>intervals.get(r.id)??[{...r,endedAt:r.endedAt?confirmedEnd(r,r.endedAt):r.endedAt}]),at)/60000
-      const recommendation=classification?.platformCompleted===true||achieved?'achieved':goalStatus==='cancelled'?'exhausted':steps.some(s=>s.status==='parked')?'parked':!running.length?'dispatch':hasGeneral&&stalledMinutes>=30&&(generalMinutes>=25||stalledMinutes>=45)?'park':hasGeneral?'working':stalledMinutes>=20?'general':stalledMinutes>=10?'second-angle':stalledMinutes>=5?'tactical':'working'
+      const recommendation=task?.recommendation??(!running.length?'dispatch':hasGeneral&&stalledMinutes>=30&&(generalMinutes>=25||stalledMinutes>=45)?'park':hasGeneral?'working':stalledMinutes>=20?'general':stalledMinutes>=10?'second-angle':stalledMinutes>=5?'tactical':'working')
       return{taskKey,elapsedMs,stalledMinutes,lastEvidenceAt,classification,recommendation:recommendation==='general'?senior:recommendation,stepIds:steps.map(s=>s.id),facts:steps.flatMap(s=>s.factIds),generals:Number(hasGeneral)}
     })
   }
@@ -139,21 +144,24 @@ export class LegionStore {
         runs:(['running','paused','unknown'] as const).flatMap(status=>store.runsByStatus(status,p.id)).map(r=>({id:r.id,graphId:r.graphId,stepId:r.stepId,status:r.status,worker:r.worker,provider:r.provider,model:r.model,contextPressure:r.contextPressure,inputTokens:r.inputTokens,outputTokens:r.outputTokens,cacheReadTokens:r.cacheReadTokens,cacheWriteTokens:r.cacheWriteTokens,pendingTools:r.pendingTools.length})),
         tactics:snapshot?[]:this.tactics(p.id,undefined,graphs),instances:p.benchmarkHosts??{},platform:benchmarkPlatformView(store,p.id),scopeId:'origin',
         goals:(snapshot?.goals??store.nodes<Goal>(p.id,['goal'])).map(g=>({id:g.id,graphId:g.graphId,description:g.description,status:g.status,version:g.version,evidenceIds:g.evidenceIds})),
-        steps:(snapshot?.steps??store.nodes<Step>(p.id,['step'])).map(s=>({id:s.id,graphId:s.graphId,description:s.description,taskKey:s.taskKey,role:s.role,specialist:s.specialist,status:s.status,parentStepId:s.parentStepId,parkReason:s.parkReason,resumeCondition:s.resumeCondition,handoffPending:s.handoffPending,predecessorRunId:s.predecessorRunId,goalId:s.goalId,factIds:s.factIds,initialMission:s.bootstrap})) } })
+        steps:(snapshot?.steps??this.stepFields(p.id,['id','graphId','description','taskKey','role','specialist','status','parentStepId','parkReason','resumeCondition','handoffPending','predecessorRunId','goalId','factIds','bootstrap'])).map(s=>({id:s.id,graphId:s.graphId,description:s.description,taskKey:s.taskKey,role:s.role,specialist:s.specialist,status:s.status,parentStepId:s.parentStepId,parkReason:s.parkReason,resumeCondition:s.resumeCondition,handoffPending:s.handoffPending,predecessorRunId:s.predecessorRunId,goalId:s.goalId,factIds:s.factIds,initialMission:s.bootstrap})) } })
     }
   }
   inspectionDelay(projectId:string,interval={active:60,idle:90}) {
     const project=this.store.project(projectId)
     if(project.mode==='general')return interval.idle*1000
-    const active=this.store.db.prepare(`WITH graphs AS (
+    return this.recommendationTasks(projectId,true).length?interval.active*1000:interval.idle*1000
+  }
+  private recommendationTasks(projectId:string,activeOnly:boolean) {
+    const project=this.store.project(projectId)
+    return this.store.db.prepare(`WITH graphs AS (
       SELECT json_extract(data,'$.taskKey') AS task_key,json_extract(data,'$.goalId') AS goal_id FROM project_graphs WHERE project_id=? AND (? IS NULL OR COALESCE(json_extract(data,'$.competitionId'),'') IN ('',?))
     ), steps AS (
-      SELECT COALESCE(json_extract(data,'$.taskKey'),json_extract(data,'$.goalId')) AS task_key,MAX(status='parked' AND json_extract(data,'$.taskKey') IS NOT NULL) AS parked FROM nodes WHERE project_id=? AND kind='step' AND ${ACTIVE_NODE_SQL}${this.store.graphScope?' AND graph_id=?':''} GROUP BY COALESCE(json_extract(data,'$.taskKey'),json_extract(data,'$.goalId'))
+      SELECT COALESCE(task_key,goal_id) AS task_key,MAX(status='parked' AND task_key IS NOT NULL) AS parked FROM nodes WHERE project_id=? AND kind='step' AND ${ACTIVE_NODE_SQL}${this.store.graphScope?' AND graph_id=?':''} GROUP BY COALESCE(task_key,goal_id)
     ), tasks AS (
       SELECT task_key FROM graphs WHERE task_key IS NOT NULL AND task_key<>'' UNION SELECT task_key FROM steps
-    ) SELECT 1 FROM tasks t LEFT JOIN graphs g ON g.task_key=t.task_key LEFT JOIN steps s ON s.task_key=t.task_key LEFT JOIN nodes goal ON goal.project_id=? AND goal.id=g.goal_id LEFT JOIN legion_tasks l ON l.project_id=? AND l.task_key=t.task_key
-    WHERE json_extract(l.data,'$.platformCompleted') IS NOT 1 AND goal.status IS NOT 'achieved' AND (goal.status='cancelled' OR s.parked IS NOT 1) LIMIT 1`).get(projectId,project.ctfyCompetitionId||null,project.ctfyCompetitionId||null,projectId,...(this.store.graphScope?[this.store.graphScope]:[]),projectId,projectId)
-    return active?interval.active*1000:interval.idle*1000
+    ) SELECT t.task_key,l.data,${TACTIC_RECOMMENDATION_SQL} AS recommendation FROM tasks t LEFT JOIN graphs g ON g.task_key=t.task_key LEFT JOIN steps s ON s.task_key=t.task_key LEFT JOIN nodes goal ON goal.project_id=? AND goal.id=g.goal_id LEFT JOIN legion_tasks l ON l.project_id=? AND l.task_key=t.task_key
+    ${activeOnly?"WHERE COALESCE(("+TACTIC_RECOMMENDATION_SQL+"),'') NOT IN ('achieved','parked') LIMIT 1":''}`).all(projectId,project.ctfyCompetitionId||null,project.ctfyCompetitionId||null,projectId,...(this.store.graphScope?[this.store.graphScope]:[]),projectId,projectId)
   }
   /** All task outcomes, not a Commander Goal mutation, decide the campaign result. */
   completeBenchmark(projectId:string) {
@@ -271,7 +279,7 @@ export class LegionStore {
     if (this.store.project(projectId).status !== 'active') throw new HttpError(409, 'Project is not active')
   }
   private steps(projectId: string, taskKey: string) {
-    return this.store.nodes(projectId, ['step']).filter((node): node is Step => node.kind === 'step' && node.taskKey === taskKey && !node.deleted)
+    return this.store.db.prepare(`SELECT data FROM nodes WHERE project_id=? AND kind='step' AND task_key=? AND ${ACTIVE_NODE_SQL}${this.store.graphScope?' AND graph_id=?':''} ORDER BY rowid`).all(projectId,taskKey,...(this.store.graphScope?[this.store.graphScope]:[])).map(row=>({version:1,...JSON.parse(String(row.data))}) as Step)
   }
   spawn(projectId: string, mission: SpawnMission, maxBenchmarkTasks: number | null = null) {
     if (String(mission.role) === 'scout') throw new HttpError(422, 'Scout is retired')

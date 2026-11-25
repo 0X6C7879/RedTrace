@@ -170,9 +170,11 @@ export class Store {
     this.migrateProjectGraphs()
     if(!this.db.prepare('PRAGMA table_info(global_chats)').all().some(c=>c.name==='project_id'))this.db.exec('ALTER TABLE global_chats ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE CASCADE')
     const nodeColumns=this.db.prepare('PRAGMA table_xinfo(nodes)').all()
-    for(const column of ['status','role'])if(!nodeColumns.some(c=>c.name===column))this.db.exec("ALTER TABLE nodes ADD COLUMN "+column+" TEXT GENERATED ALWAYS AS (json_extract(data,'$."+column+"')) VIRTUAL")
+    for(const [column,field] of [['status','status'],['role','role'],['task_key','taskKey'],['goal_id','goalId']])if(!nodeColumns.some(c=>c.name===column))this.db.exec("ALTER TABLE nodes ADD COLUMN "+column+" TEXT GENERATED ALWAYS AS (json_extract(data,'$."+field+"')) VIRTUAL")
     this.db.exec(`CREATE INDEX IF NOT EXISTS nodes_active_status ON nodes(project_id,kind,status) WHERE ${ACTIVE_NODE_SQL};
       CREATE INDEX IF NOT EXISTS nodes_graph_role_status ON nodes(project_id,graph_id,role,status) WHERE ${ACTIVE_NODE_SQL};
+      CREATE INDEX IF NOT EXISTS nodes_active_task ON nodes(project_id,kind,task_key) WHERE ${ACTIVE_NODE_SQL};
+      CREATE INDEX IF NOT EXISTS events_evidence ON events(project_id,graph_id,created_at) WHERE type IN ('fact.added','finding.added');
       CREATE INDEX IF NOT EXISTS global_chats_status ON global_chats(json_extract(data,'$.status'));
       CREATE INDEX IF NOT EXISTS events_execution_run ON events(project_id,json_extract(data,'$.runId'),id)
         WHERE type IN ('execute.started','execute.paused','execute.succeeded','execute.failed','execute.unknown','execute.cancelled','planner.started','planner.paused','planner.succeeded','planner.failed','planner.unknown','planner.cancelled');`)

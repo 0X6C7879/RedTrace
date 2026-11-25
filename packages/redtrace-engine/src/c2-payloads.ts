@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { Buffer } from 'node:buffer'
 import { runProcess } from './shell.ts'
@@ -69,7 +69,7 @@ export async function buildBeacon(outputDir: string, input: { listenerId: string
   try {
     await writeFile(path.join(work, 'main.go'), source)
     const built = await runProcess('go', ['build', '-trimpath', '-ldflags=-s -w -buildid=', '-o', output, 'main.go'], work, { timeout: 180, env: { GOOS: input.os, GOARCH: input.arch, CGO_ENABLED: '0' } })
-    if (built.exitCode) throw new Error(built.text.trim() || `Go build exited with ${built.exitCode}`)
+    if (built.exitCode) throw new Error(((await readFile(built.stdoutPath,'utf8'))+(await readFile(built.stderrPath,'utf8'))).trim() || `Go build exited with ${built.exitCode}`)
     return output
   } finally { await rm(work, { recursive: true, force: true }) }
 }

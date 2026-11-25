@@ -131,9 +131,9 @@ export async function apply(ctx, options) {
   let commanderController, closeGlobalChat, inspectedCatalog = {}
   const engine = await createEngine({ root, database: options.database, configuration: options.configuration, autoStart: false, runtimeCatalog: async namesOnly => {
     await refresh()
-    const { revision } = engine.configuration.resolvedSnapshot(), cached = inspectedCatalog
-    const rows = cached.revision === revision ? cached.rows : await inspectToolCatalog(ctx, engine, manager, runtime)
-    if (inspectedCatalog === cached && cached.revision !== revision) inspectedCatalog = { revision, rows }
+    const { revision } = engine.configuration.resolvedSnapshot(), key = revision+':'+manager.list().map(p=>p.id+'='+p.status).join(','), cached = inspectedCatalog
+    const rows = cached.key === key ? cached.rows : namesOnly ? [] : await inspectToolCatalog(ctx, engine, manager, runtime)
+    if (!namesOnly && inspectedCatalog === cached && cached.key !== key) inspectedCatalog = { key, rows }
     return runtimeCatalog(ctx, engine, rows, namesOnly)
   }, commanderEvents: (offset,limit,signal,projectId,sessionId) => readCommanderLog(ctx,engine,offset,limit,signal,projectId,sessionId),
     // The gate is created before the manager exists; it only dereferences it

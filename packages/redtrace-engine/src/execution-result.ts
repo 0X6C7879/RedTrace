@@ -43,13 +43,13 @@ export class ExecutionError extends Error {
 }
 export function errorResult(error: unknown): ExecutionResult {
   if (error instanceof ExecutionError) return error.result
-  const value = error as Error & { stdout?: string; stderr?: string; outputPath?: string }
+  const value = error as Error & { stdout?: string; stderr?: string; outputPath?: string; stderrPath?: string; truncated?: boolean }
   const message = value?.message ?? String(error)
   const code = /cancel|abort/i.test(message) ? 'CANCELLED' : /timed? out|timeout/i.test(message) ? 'TIMEOUT' : /authentication|permission denied \(publickey/i.test(message) ? 'AUTH_FAILED' : 'TRANSPORT_ERROR'
   let output = [value?.stdout, value?.stderr].filter(Boolean).join('') || message
-  if (value?.outputPath) { try { output = readFileSync(value.outputPath, 'utf8') } catch { /* Keep the observed partial output if the log is unavailable. */ } }
+  if (value?.outputPath) { try { output = readFileSync(value.outputPath, 'utf8')+(value.stderrPath?readFileSync(value.stderrPath,'utf8'):'') } catch { /* Keep the observed partial output if the log is unavailable. */ } }
   return executionResult(output, null,
-    { error_code: code, stdout: value?.stdout ?? null, stderr: value?.stderr ?? null, output_ref: value?.outputPath ?? null })
+    { error_code: code, stdout: value?.stdout ?? null, stderr: value?.stderr ?? null, output_ref: value?.outputPath ?? null, ...(value?.truncated?{truncated:true,execution_context:{truncated:true}}:{}) })
 }
 export const quoteShell = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'"
 export function commandFrame(command: string, os = 'linux', cwd?: string) {

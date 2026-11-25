@@ -15,6 +15,17 @@ export type RunTask = (context: TaskContext) => Promise<void>
 export type SelectWorker = (worker: Worker, activity: Run['activity'], step?: TaskAssignment) => Worker | undefined
 type Active = { run: Run; abort: AbortController; completion: Promise<void> }
 
+export function capacityFull(config:EngineConfig,worker:Pick<Worker,'name'|'maxRunning'>|undefined,projectId:string|undefined,runs:Pick<Run,'worker'|'projectId'>[],commands:{workerName?:string;projectId:string}[]):'workers'|'worker'|'project'|'projects'|null {
+  if(runs.length+commands.length>=config.maxWorkers)return 'workers'
+  if(worker&&runs.filter(r=>r.worker===worker.name).length+commands.filter(c=>c.workerName===worker.name).length>=worker.maxRunning)return 'worker'
+  if(projectId!==undefined) {
+    if(runs.filter(r=>r.projectId===projectId).length+commands.filter(c=>c.projectId===projectId).length>=config.maxProjectWorkers)return 'project'
+    const projects=new Set([...runs.map(r=>r.projectId),...commands.filter(c=>c.projectId).map(c=>c.projectId)])
+    if(!projects.has(projectId)&&projects.size>=config.maxRunningProjects)return 'projects'
+  }
+  return null
+}
+
 export class Scheduler {
   maintenance = false
   private readonly legion: LegionStore
@@ -38,7 +49,7 @@ export class Scheduler {
     const count = (name: string) => active.filter(r => r.worker === name).length+commands.filter(c=>c.workerName===name).length
     const previous=step.role==='general'?this.store.forGraph(step.projectId,step.graphId!).runs(step.projectId,{activity:'plan',limit:1})[0]:undefined
     const preferred=previous?.worker
-    return this.config.workers.map(w => this.selectWorker(w, step.role==='general'?'plan':'execute', step)).map(w => !w ? w : resume?.provider && this.config.providers?.[resume.provider]?.models.some(m=>m.id===resume.model) ? {...w, provider:resume.provider, model:resume.model} : previous?.status==='failed' && recoverableModelFailure(previous.failureCode) ? recoveryWorker(this.config,w,previous) : w).filter((w): w is Worker => !!w && w.enabled && (!step.nextWorker || w.name===step.nextWorker) && !!w.roles?.includes(executionRole(this.store.project(step.projectId).mode, step.role)) && (!resume || w.name === resume.worker && w.backend === resume.backend) && count(w.name) < w.maxRunning)
+    return this.config.workers.map(w => this.selectWorker(w, step.role==='general'?'plan':'execute', step)).map(w => !w ? w : resume?.provider && this.config.providers?.[resume.provider]?.models.some(m=>m.id===resume.model) ? {...w, provider:resume.provider, model:resume.model} : previous?.status==='failed' && recoverableModelFailure(previous.failureCode) ? recoveryWorker(this.config,w,previous) : w).filter((w): w is Worker => !!w && w.enabled && (!step.nextWorker || w.name===step.nextWorker) && !!w.roles?.includes(executionRole(this.store.project(step.projectId).mode, step.role)) && (!resume || w.name === resume.worker && w.backend === resume.backend) && !capacityFull(this.config,w,undefined,active,commands))
       .sort((a,b) => a.priority-b.priority || Number(b.name===preferred)-Number(a.name===preferred) || count(a.name)-count(b.name) || a.name.localeCompare(b.name))[0]
   }
   private dispatch() {
@@ -51,14 +62,13 @@ export class Scheduler {
         if (this.store.run(task.run.id).status !== 'running' || !(isReportStep(step)||accepted ? ['active','completed'].includes(project.status) : project.status === 'active') || ['cancelled','parked'].includes(step.status) || !isReportStep(step)&&!accepted&&goal.status!=='open') task.abort.abort('Project or Step stopped')
       } catch (error) { if (error instanceof HttpError && error.status===404) task.abort.abort('Project deleted'); else throw error }
     }
-    const commands=[...this.legion.campaigns().filter(c=>c.status==='running'),...chatSlots(this.store)], commandSlots=commands.length, active = this.activeRuns, projects = this.store.projects().filter(p=>['active','completed'].includes(p.status))
+    const commands=[...this.legion.campaigns().filter(c=>c.status==='running'),...chatSlots(this.store)], active = this.activeRuns, projects = this.store.projects().filter(p=>['active','completed'].includes(p.status))
     let progress = true, nextWakeAt = Infinity
-    while(progress && active.length+commandSlots < this.config.maxWorkers) {
+    while(progress && !capacityFull(this.config,undefined,undefined,active,commands)) {
       progress = false
-      for(let i=0;i<projects.length && active.length+commandSlots<this.config.maxWorkers;i++) {
+      for(let i=0;i<projects.length && !capacityFull(this.config,undefined,undefined,active,commands);i++) {
         const project=projects[(this.cursor+i)%projects.length]
-        if(active.filter(r=>r.projectId===project.id).length+commands.filter(c=>c.projectId===project.id).length>=this.config.maxProjectWorkers)continue
-        if(!active.some(r=>r.projectId===project.id)&&!commands.some(c=>c.projectId===project.id)&&new Set([...active.map(r=>r.projectId),...commands.filter(c=>c.projectId).map(c=>c.projectId)]).size>=this.config.maxRunningProjects)continue
+        if(capacityFull(this.config,undefined,project.id,active,commands))continue
         const questionLimit = this.config.maxBenchmarkTasks ?? null
         const activeQuestions = new Set(project.mode==='benchmark' && questionLimit!==null ? [...active.filter(r=>r.projectId===project.id), ...this.store.runsByStatus('unknown',project.id)].map(r=>r.graphId) : [])
         const steps=this.store.nodes<Step>(project.id,['step'],{statuses:['pending','paused']}).filter(s=>!s.deleted&&!s.replacementPending&&(isReportStep(s)||project.status==='active'&&this.store.node<Goal>(project.id,s.goalId,'goal').status==='open')).sort((a,b)=>(project.mode==='benchmark' && questionLimit!==null && activeQuestions.size<questionLimit ? Number(activeQuestions.has(a.graphId))-Number(activeQuestions.has(b.graphId)) : 0)||b.priority-a.priority||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id))
@@ -128,10 +138,11 @@ export class Scheduler {
     const active=this.activeRuns
     // The existing five-minute tactical threshold wakes a task Planner only once per idle interval.
     for(const project of projects.filter(p=>p.mode==='benchmark')) {
-      const runs=active.filter(r=>r.projectId===project.id&&r.activity==='execute'&&!r.pendingTools.length)
-      const activity=new Map(this.store.db.prepare("SELECT run_id,MAX(json_extract(data,'$.timestamp')) AS at FROM audit_events WHERE project_id=? AND run_id IN (SELECT value FROM json_each(?)) AND json_extract(data,'$.kind') IN ('tool.started','tool.completed','command.completed') GROUP BY run_id").all(project.id,JSON.stringify(runs.map(r=>r.id))).map(row=>[String(row.run_id),row.at]))
-      for(const graph of this.store.projectGraphs(project.id)) {
-        if(!graph.planner||graph.planner.status!=='pending')continue
+      const graphs=this.store.projectGraphs(project.id).filter(g=>g.planner?.status==='pending'),graphIds=new Set(graphs.map(g=>g.id))
+      const runs=active.filter(r=>r.projectId===project.id&&r.activity==='execute'&&!r.pendingTools.length&&graphIds.has(r.graphId!))
+      if(!runs.length)continue
+      const activity=new Map(this.store.db.prepare("SELECT value AS run_id,(SELECT json_extract(data,'$.timestamp') FROM audit_events INDEXED BY audit_events_run WHERE run_id=ids.value AND project_id=? AND json_extract(data,'$.kind') IN ('tool.started','tool.completed','command.completed') ORDER BY id DESC LIMIT 1) AS at FROM json_each(?) ids").all(project.id,JSON.stringify(runs.map(r=>r.id))).map(row=>[String(row.run_id),row.at]))
+      for(const graph of graphs) {
         for(const run of runs.filter(r=>r.graphId===graph.id)) {
           const last=String(activity.get(run.id)??run.startedAt)
           if(Date.now()-Date.parse(last)<5*60_000||this.store.db.prepare("SELECT 1 FROM events WHERE project_id=? AND graph_id=? AND type='planner.stalled' AND json_extract(data,'$.runId')=? AND created_at>=? LIMIT 1").get(project.id,graph.id,run.id,last))continue
