@@ -22,14 +22,14 @@ export async function runProcess(executable: string, args: string[], cwd: string
   const seconds = options.timeout ?? 120
   if (!Number.isFinite(seconds) || seconds <= 0 || seconds * 1000 > 2147483647) throw new Error('Invalid command timeout')
   const dir = path.join(cwd, '.redtrace-output'); await mkdir(dir, { recursive: true })
-  const base = path.join(dir, randomUUID()), stdoutPath=base+'.stdout', stderrPath=base+'.stderr', outputPath=stdoutPath
-  return await new Promise<{ text: string; outputPath: string; exitCode: number; bytes: number; sha256: string; stdoutPath:string; stderrPath:string; truncated:boolean }>((resolve, reject) => {
+  const base = path.join(dir, randomUUID()), stdoutPath=base+'.stdout', stderrPath=base+'.stderr'
+  return await new Promise<{ text: string; exitCode: number; bytes: number; stdoutSha256:string; stderrSha256:string; stdoutBytes:number; stderrBytes:number; stdoutPath:string; stderrPath:string; truncated:boolean }>((resolve, reject) => {
     const windows = process.platform === 'win32'
     const child = spawn(executable, args, { cwd, env: toolEnvironment(options.env), windowsHide: true, detached: !windows, stdio: ['pipe', 'pipe', 'pipe'] })
     child.stdin.on('error', () => {}); child.stdin.end(options.input)
     const stdout=createWriteStream(stdoutPath,{flags:'wx',mode:0o600}), stderr=createWriteStream(stderrPath,{flags:'wx',mode:0o600})
-    let tail: Buffer = Buffer.alloc(0), outputBytes = 0, failure: Error | undefined, stopped = false, truncated = false
-    const outputHash = createHash('sha256'), tailLimit = 64 * 1024
+    let tail: Buffer = Buffer.alloc(0), failure: Error | undefined, stopped = false, truncated = false
+    const stdoutHash = createHash('sha256'), stderrHash = createHash('sha256'), sizes={stdoutBytes:0,stderrBytes:0}, tailLimit = 64 * 1024
     const retain = (file: ReturnType<typeof createWriteStream>) => {
       let remaining = 16 * 1024 * 1024
       return (stream: NodeJS.ReadableStream, chunk: Buffer) => {
@@ -53,11 +53,11 @@ export async function runProcess(executable: string, args: string[], cwd: string
     const timer = setTimeout(() => { failure = new Error('Command timed out; external side effects may have occurred'); kill() }, seconds * 1000)
     options.signal?.addEventListener('abort', abort, { once: true })
     for (const file of [stdout,stderr]) file.on('error', error => { failure = error; child.stdout.resume(); child.stderr.resume(); kill() })
-    for (const [stream,file] of [[child.stdout,stdout],[child.stderr,stderr]] as const) {
+    for (const [stream,file,hash,key] of [[child.stdout,stdout,stdoutHash,'stdoutBytes'],[child.stderr,stderr,stderrHash,'stderrBytes']] as const) {
       const separate = retain(file)
       stream.on('data', (chunk: Buffer) => {
         separate(stream, chunk)
-        outputBytes += chunk.length; outputHash.update(chunk)
+        sizes[key] += chunk.length; hash.update(chunk)
         tail = chunk.length >= tailLimit ? chunk.subarray(-tailLimit) : Buffer.concat([tail.subarray(Math.max(0, tail.length + chunk.length - tailLimit)), chunk])
       })
     }
@@ -65,10 +65,10 @@ export async function runProcess(executable: string, args: string[], cwd: string
     child.on('close', code => {
       clearTimeout(timer); options.signal?.removeEventListener('abort', abort)
       const done = () => {
-        const sha256 = outputHash.digest('hex')
         let start=0;while(start<tail.length&&tail[start]>=0x80&&tail[start]<=0xbf)start++
-        if (failure) reject(Object.assign(failure, {outputPath,stdoutPath,stderrPath,bytes:outputBytes,sha256,exitCode:code??-1,completion:'unknown',truncated}))
-        else resolve({ text:tail.subarray(start).toString('utf8'),outputPath,stdoutPath,stderrPath,exitCode: code ?? -1, bytes: outputBytes, sha256, truncated })
+        const result={text:tail.subarray(start).toString('utf8'),stdoutPath,stderrPath,bytes:sizes.stdoutBytes+sizes.stderrBytes,...sizes,stdoutSha256:stdoutHash.digest('hex'),stderrSha256:stderrHash.digest('hex'),exitCode:code??-1,truncated}
+        if (failure) reject(Object.assign(failure, {...result,completion:'unknown'}))
+        else resolve(result)
       }
       Promise.all([stdout,stderr].map(file=>new Promise<void>(resolve=>{if(file.destroyed)resolve();else file.end(resolve)}))).then(done)
     })

@@ -69,17 +69,22 @@ export class Scheduler {
       for(let i=0;i<projects.length && !capacityFull(this.config,undefined,undefined,active,commands);i++) {
         const project=projects[(this.cursor+i)%projects.length]
         if(capacityFull(this.config,undefined,project.id,active,commands))continue
+        const openGoals=new Set(this.store.db.prepare(`SELECT id FROM nodes WHERE project_id=? AND kind='goal' AND status='open' AND ${ACTIVE_NODE_SQL}`).all(project.id).map(r=>String(r.id)))
         const questionLimit = this.config.maxBenchmarkTasks ?? null
         const activeQuestions = new Set(project.mode==='benchmark' && questionLimit!==null ? [...active.filter(r=>r.projectId===project.id), ...this.store.runsByStatus('unknown',project.id)].map(r=>r.graphId) : [])
-        const steps=this.store.nodes<Step>(project.id,['step'],{statuses:['pending','paused']}).filter(s=>!s.deleted&&!s.replacementPending&&(isReportStep(s)||project.status==='active'&&this.store.node<Goal>(project.id,s.goalId,'goal').status==='open')).sort((a,b)=>(project.mode==='benchmark' && questionLimit!==null && activeQuestions.size<questionLimit ? Number(activeQuestions.has(a.graphId))-Number(activeQuestions.has(b.graphId)) : 0)||b.priority-a.priority||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id))
-        const planners=this.store.projectGraphs(project.id).map(g=>g.planner).filter((p):p is GraphPlanner=>!!p&&['pending','paused'].includes(p.status)&&this.store.node<Goal>(project.id,p.goalId,'goal').status==='open')
+        const steps=this.store.nodes<Step>(project.id,['step'],{statuses:['pending','paused']}).filter(s=>!s.deleted&&!s.replacementPending&&(isReportStep(s)||project.status==='active'&&openGoals.has(s.goalId))).sort((a,b)=>(project.mode==='benchmark' && questionLimit!==null && activeQuestions.size<questionLimit ? Number(activeQuestions.has(a.graphId))-Number(activeQuestions.has(b.graphId)) : 0)||b.priority-a.priority||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id))
+        const planners=this.store.projectGraphs(project.id).map(g=>g.planner).filter((p):p is GraphPlanner=>!!p&&['pending','paused'].includes(p.status)&&openGoals.has(p.goalId))
         const queue:TaskAssignment[]=[...planners,...steps]
         const runs=this.store.runs(project.id,{statuses:['paused']})
+        const capacities=new Map<Step['graphId'],ReturnType<Store['planningCapacity']>>()
         for(const step of queue) {
           if(project.mode==='benchmark' && questionLimit!==null && !activeQuestions.has(step.graphId) && activeQuestions.size>=questionLimit)continue
           if(step.role!=='general'&&!this.store.stepReady(step as Step))continue
           const reserved=runs.some(r=>r.stepId===step.id&&r.activity==='execute')
-          if(step.role!=='general'&&!reserved&&this.store.planningCapacity(project.id,this.config.maxSteps,step.graphId??undefined).remainingSteps===0)continue
+          if(step.role!=='general'&&!reserved) {
+            if(!capacities.has(step.graphId))capacities.set(step.graphId,this.store.planningCapacity(project.id,this.config.maxSteps,step.graphId??undefined))
+            if(capacities.get(step.graphId)!.remainingSteps===0)continue
+          }
           const readyAt=step.role==='general'?this.store.plannerWakeAt(step as GraphPlanner):step.retryAfter??0
           if(readyAt>Date.now()){nextWakeAt=Math.min(nextWakeAt,readyAt);continue}
           const resume=step.status==='paused'?runs.find(r=>step.role==='general'?r.activity==='plan'&&r.graphId===step.graphId:r.stepId===step.id):undefined
@@ -141,7 +146,7 @@ export class Scheduler {
       const graphs=this.store.projectGraphs(project.id).filter(g=>g.planner?.status==='pending'),graphIds=new Set(graphs.map(g=>g.id))
       const runs=active.filter(r=>r.projectId===project.id&&r.activity==='execute'&&!r.pendingTools.length&&graphIds.has(r.graphId!))
       if(!runs.length)continue
-      const activity=new Map(this.store.db.prepare("SELECT value AS run_id,(SELECT json_extract(data,'$.timestamp') FROM audit_events INDEXED BY audit_events_run WHERE run_id=ids.value AND project_id=? AND json_extract(data,'$.kind') IN ('tool.started','tool.completed','command.completed') ORDER BY id DESC LIMIT 1) AS at FROM json_each(?) ids").all(project.id,JSON.stringify(runs.map(r=>r.id))).map(row=>[String(row.run_id),row.at]))
+      const activity=new Map(this.store.db.prepare("SELECT value AS run_id,(SELECT json_extract(data,'$.timestamp') FROM audit_events WHERE run_id=ids.value AND kind IN ('tool.started','tool.completed','command.completed') ORDER BY id DESC LIMIT 1) AS at FROM json_each(?) ids").all(JSON.stringify(runs.map(r=>r.id))).map(row=>[String(row.run_id),row.at]))
       for(const graph of graphs) {
         for(const run of runs.filter(r=>r.graphId===graph.id)) {
           const last=String(activity.get(run.id)??run.startedAt)

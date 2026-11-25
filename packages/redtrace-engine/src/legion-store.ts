@@ -1,10 +1,11 @@
 import { executorRole, coordinatorRole } from '../../redtrace-dsh/src/roles.ts'
 import { randomUUID } from 'node:crypto'
+import type { SQLInputValue } from 'node:sqlite'
 import { CommanderTodos } from './legion-todos.ts'
 import { benchmarkPlatformView } from './benchmark-metadata.ts'
 import { Store, ACTIVE_NODE_SQL } from './store.ts'
 import { HttpError, now, requiredText } from './types.ts'
-import type { Step, Goal, LegionRole, Project, ProjectGraph } from './types.ts'
+import type { Step, Goal, Run, LegionRole, Project, ProjectGraph } from './types.ts'
 
 // Change terminal recommendation rules only here; tactics and inspection share them.
 const TACTIC_RECOMMENDATION_SQL = "CASE WHEN json_extract(l.data,'$.platformCompleted') IS 1 OR goal.status='achieved' THEN 'achieved' WHEN goal.status='cancelled' THEN 'exhausted' WHEN s.parked=1 THEN 'parked' END"
@@ -23,7 +24,7 @@ export interface SpawnMission {
 }
 
 /** Union actual execution intervals; wall-clock pauses/offline gaps are not attack stagnation. */
-export function executionTime(runs: import('./types.ts').Run[], at: number, after=0) {
+export function executionTime(runs: Pick<Run,'startedAt'|'endedAt'|'status'>[], at: number, after=0) {
   const spans=runs.map(r=>[Math.max(after,Date.parse(r.startedAt)),r.endedAt?Date.parse(r.endedAt):r.status==='running'?at:Date.parse(r.startedAt)]).filter(([a,b])=>b>a).sort((a,b)=>a[0]-b[0])
   let total=0,end=after
   for(const [a,b]of spans){total+=Math.max(0,b-Math.max(a,end));end=Math.max(end,b)}
@@ -79,19 +80,22 @@ export class LegionStore {
     if(!Number.isFinite(deadline)||deadline<=Date.now())throw new HttpError(422,'Deadline must be a future epoch in milliseconds')
     const c=this.campaign(projectId);c.startedAt=Date.now();c.deadline=deadline;this.saveCampaign(c);this.store.changes.emit('legion-budget',c.projectId);return this.budget(Date.now(),c.projectId)
   }
-  private stepFields<K extends keyof Step>(projectId:string,fields:K[]):Pick<Step,K>[] {
-    return this.store.db.prepare(`SELECT ${fields.map(f=>"data -> '$."+f+"' AS \""+f+'"').join(',')} FROM nodes WHERE project_id=? AND kind='step' AND ${ACTIVE_NODE_SQL}${this.store.graphScope?' AND graph_id=?':''} ORDER BY rowid`).all(projectId,...(this.store.graphScope?[this.store.graphScope]:[])).map(row=>Object.fromEntries(fields.map(f=>[f,row[f]===null?undefined:JSON.parse(String(row[f]))])) as Pick<Step,K>)
+  private nodeFields<N extends 'step'|'goal',K extends keyof Extract<Step|Goal,{kind:N}> & string>(projectId:string,kind:N,fields:K[]):Pick<Extract<Step|Goal,{kind:N}>,K>[] {
+    return this.store.db.prepare(`SELECT ${fields.map(f=>"data -> '$."+f+"' AS \""+f+'"').join(',')} FROM nodes WHERE project_id=? AND kind=? AND ${ACTIVE_NODE_SQL}${this.store.graphScope?' AND graph_id=?':''} ORDER BY rowid`).all(projectId,kind,...(this.store.graphScope?[this.store.graphScope]:[])).map(row=>Object.fromEntries(fields.map(f=>[f,row[f]===null?(f==='version'?1:undefined):JSON.parse(String(row[f]))])) as Pick<Extract<Step|Goal,{kind:N}>,K>)
+  }
+  private runFields<K extends keyof Run>(projectId:string,fields:K[],where:string,params:SQLInputValue[],order='rowid'):Pick<Run,K>[] {
+    return this.store.db.prepare(`SELECT ${fields.map(f=>"data -> '$."+f+"' AS \""+f+'"').join(',')} FROM runs WHERE project_id=? AND (${where})${this.store.graphScope?' AND graph_id=?':''} ORDER BY ${order}`).all(projectId,...params,...(this.store.graphScope?[this.store.graphScope]:[])).map(row=>Object.fromEntries(fields.map(f=>[f,row[f]===null?undefined:JSON.parse(String(row[f]))])) as Pick<Run,K>)
   }
   tactics(projectId:string,at=Date.now(),boardGraphs?:ProjectGraph[]) {
-    const projectGraphs=boardGraphs??this.store.projectGraphs(projectId),projectSteps=this.stepFields(projectId,['id','graphId','status','factIds','taskKey','goalId'])
+    const projectGraphs=boardGraphs??this.store.projectGraphs(projectId),projectSteps=this.nodeFields(projectId,'step',['id','graphId','status','factIds','taskKey','goalId'])
     const tasks=new Set([...projectGraphs.filter(g=>g.taskKey).map(g=>g.taskKey!),...projectSteps.map(s=>s.taskKey??s.goalId)])
     if(this.store.project(projectId).mode==='general') return []
     const senior='general'
     const stepsByTask=Map.groupBy(projectSteps,s=>s.taskKey),stepIds=new Set(projectSteps.filter(s=>s.taskKey!=null).map(s=>s.id))
-    const runs=this.store.runs(projectId).filter(r=>r.activity==='plan'||stepIds.has(r.stepId??'')),runsByStep=Map.groupBy(runs,r=>r.stepId),plannerRuns=Map.groupBy(runs.filter(r=>r.activity==='plan'),r=>r.graphId)
-    const observed=new Map(this.store.db.prepare("SELECT run_id,MAX(json_extract(data,'$.timestamp')) AS at FROM audit_events WHERE project_id=? AND run_id IN (SELECT value FROM json_each(?)) AND json_extract(data,'$.kind') IN ('assistant.message','thinking.message','tool.completed','command.completed') GROUP BY run_id").all(projectId,JSON.stringify(runs.filter(r=>r.error?.startsWith('Process stopped')).map(r=>r.id))).map(row=>[String(row.run_id),String(row.at)]))
-    const confirmedEnd=(run:import('./types.ts').Run,time:string)=>run.error?.startsWith('Process stopped')?new Date(Math.min(Date.parse(time),Date.parse(observed.get(run.id)??run.startedAt))).toISOString():time
-    const intervals=new Map<string,import('./types.ts').Run[]>(),byRunId=new Map(runs.map(r=>[r.id,r]))
+    const runs=this.runFields(projectId,['id','stepId','graphId','activity','status','startedAt','endedAt','error','worker'],"activity='plan' OR step_id IN (SELECT value FROM json_each(?))",[JSON.stringify([...stepIds])]),runsByStep=Map.groupBy(runs,r=>r.stepId),plannerRuns=Map.groupBy(runs.filter(r=>r.activity==='plan'),r=>r.graphId)
+    const observed=new Map(this.store.db.prepare("SELECT run_id,MAX(json_extract(data,'$.timestamp')) AS at FROM audit_events WHERE project_id=? AND run_id IN (SELECT value FROM json_each(?)) AND kind IN ('assistant.message','thinking.message','tool.completed','command.completed') GROUP BY run_id").all(projectId,JSON.stringify(runs.filter(r=>r.error?.startsWith('Process stopped')).map(r=>r.id))).map(row=>[String(row.run_id),String(row.at)]))
+    const confirmedEnd=(run:typeof runs[number],time:string)=>run.error?.startsWith('Process stopped')?new Date(Math.min(Date.parse(time),Date.parse(observed.get(run.id)??run.startedAt))).toISOString():time
+    const intervals=new Map<string,typeof runs>(),byRunId=new Map(runs.map(r=>[r.id,r]))
     for(const row of this.store.db.prepare(`WITH timeline AS (
       SELECT json_extract(data,'$.runId') AS run_id,type,created_at,LEAD(type) OVER execution AS next_type,LEAD(created_at) OVER execution AS ended_at
       FROM events WHERE project_id=? AND json_extract(data,'$.runId') IN (SELECT value FROM json_each(?)) AND type IN ('execute.started','execute.paused','execute.succeeded','execute.failed','execute.unknown','execute.cancelled','planner.started','planner.paused','planner.succeeded','planner.failed','planner.unknown','planner.cancelled')
@@ -141,10 +145,10 @@ export class LegionStore {
       messages: store.db.prepare('SELECT data FROM legion_messages'+(this.projectId?' WHERE project_id=?':'')+' ORDER BY created_at DESC LIMIT 100').all(...(this.projectId?[this.projectId]:[])).map(r=>JSON.parse(String(r.data))),
       projects: projects.map(p => { const graphs=snapshot?.graphs??store.projectGraphs(p.id);return { id:p.id,title:p.title,mode:p.mode,objective:p.objective,status:p.status,revision:p.revision,campaign:this.campaign(p.id),graphs,
         decisions:store.db.prepare("SELECT e.id,e.type,e.node_id,e.graph_id,e.created_at,json_extract(n.data,'$.description') AS description FROM events e LEFT JOIN nodes n ON n.project_id=e.project_id AND n.id=e.node_id WHERE e.project_id=? AND (e.type LIKE 'legion.%' OR e.type IN ('step.added','step.parked','step.reactivated','step.handoff_requested','step.handoff_ready','goal.updated','execute.started')) ORDER BY e.id DESC LIMIT 20").all(p.id).map(e=>({id:Number(e.id),type:String(e.type),nodeId:e.node_id,graphId:e.graph_id,createdAt:String(e.created_at),description:e.description})),
-        runs:(['running','paused','unknown'] as const).flatMap(status=>store.runsByStatus(status,p.id)).map(r=>({id:r.id,graphId:r.graphId,stepId:r.stepId,status:r.status,worker:r.worker,provider:r.provider,model:r.model,contextPressure:r.contextPressure,inputTokens:r.inputTokens,outputTokens:r.outputTokens,cacheReadTokens:r.cacheReadTokens,cacheWriteTokens:r.cacheWriteTokens,pendingTools:r.pendingTools.length})),
+        runs:this.runFields(p.id,['id','graphId','stepId','status','worker','provider','model','contextPressure','inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','pendingTools'],"status IN ('running','paused','unknown')",[],"CASE status WHEN 'running' THEN 0 WHEN 'paused' THEN 1 ELSE 2 END,rowid").map(r=>({id:r.id,graphId:r.graphId,stepId:r.stepId,status:r.status,worker:r.worker,provider:r.provider,model:r.model,contextPressure:r.contextPressure,inputTokens:r.inputTokens,outputTokens:r.outputTokens,cacheReadTokens:r.cacheReadTokens,cacheWriteTokens:r.cacheWriteTokens,pendingTools:r.pendingTools.length})),
         tactics:snapshot?[]:this.tactics(p.id,undefined,graphs),instances:p.benchmarkHosts??{},platform:benchmarkPlatformView(store,p.id),scopeId:'origin',
-        goals:(snapshot?.goals??store.nodes<Goal>(p.id,['goal'])).map(g=>({id:g.id,graphId:g.graphId,description:g.description,status:g.status,version:g.version,evidenceIds:g.evidenceIds})),
-        steps:(snapshot?.steps??this.stepFields(p.id,['id','graphId','description','taskKey','role','specialist','status','parentStepId','parkReason','resumeCondition','handoffPending','predecessorRunId','goalId','factIds','bootstrap'])).map(s=>({id:s.id,graphId:s.graphId,description:s.description,taskKey:s.taskKey,role:s.role,specialist:s.specialist,status:s.status,parentStepId:s.parentStepId,parkReason:s.parkReason,resumeCondition:s.resumeCondition,handoffPending:s.handoffPending,predecessorRunId:s.predecessorRunId,goalId:s.goalId,factIds:s.factIds,initialMission:s.bootstrap})) } })
+        goals:(snapshot?.goals??this.nodeFields(p.id,'goal',['id','graphId','description','status','version','evidenceIds'])).map(g=>({id:g.id,graphId:g.graphId,description:g.description,status:g.status,version:g.version,evidenceIds:g.evidenceIds})),
+        steps:(snapshot?.steps??this.nodeFields(p.id,'step',['id','graphId','description','taskKey','role','specialist','status','parentStepId','parkReason','resumeCondition','handoffPending','predecessorRunId','goalId','factIds','bootstrap'])).map(s=>({id:s.id,graphId:s.graphId,description:s.description,taskKey:s.taskKey,role:s.role,specialist:s.specialist,status:s.status,parentStepId:s.parentStepId,parkReason:s.parkReason,resumeCondition:s.resumeCondition,handoffPending:s.handoffPending,predecessorRunId:s.predecessorRunId,goalId:s.goalId,factIds:s.factIds,initialMission:s.bootstrap})) } })
     }
   }
   inspectionDelay(projectId:string,interval={active:60,idle:90}) {

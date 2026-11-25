@@ -13,13 +13,13 @@ test('native shell captures output, cancels process trees and protects provider 
   try {
     assert.equal(toolEnvironment().REDTRACE_TEST_API_KEY, undefined)
     const result = await runShell(process.platform === 'win32' ? "[Console]::Write('shell-ok')" : "printf 'shell-ok'", root)
-    const raw = readFileSync(result.outputPath)
+    const raw = readFileSync(result.stdoutPath)
     assert.equal(result.exitCode, 0); assert.match(result.text, /shell-ok/); assert.match(raw.toString(), /shell-ok/)
-    assert.equal(result.bytes, raw.length); assert.equal(result.sha256, createHash('sha256').update(raw).digest('hex'))
+    assert.equal(result.bytes, raw.length); assert.equal(result.stdoutSha256, createHash('sha256').update(raw).digest('hex')); assert.equal(result.stderrSha256, createHash('sha256').update(readFileSync(result.stderrPath)).digest('hex'))
     if (process.platform !== 'win32') {
-      const failure = await runShell("printf error >&2; exit 7", root), failedOutput = Buffer.concat([readFileSync(failure.stdoutPath),readFileSync(failure.stderrPath)])
+      const failure = await runShell("printf error >&2; exit 7", root)
       assert.equal(failure.exitCode, 7); assert.equal(failure.text, 'error'); assert.equal(failure.bytes, 5)
-      assert.equal(failure.sha256, createHash('sha256').update(failedOutput).digest('hex'))
+      assert.equal(failure.stdoutSha256, createHash('sha256').update(readFileSync(failure.stdoutPath)).digest('hex')); assert.equal(failure.stderrSha256, createHash('sha256').update(readFileSync(failure.stderrPath)).digest('hex'))
     }
     const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 400)
     const start = Date.now()
@@ -48,7 +48,7 @@ test('authenticated secrets and revision conflicts preserve independent configur
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('shell retains stdout and stderr separately with outputPath pointing to stdout', async()=>{
+test('shell retains stdout and stderr separately with independent hashes', async()=>{
  const root=mkdtempSync(path.join(os.tmpdir(),'redtrace-streams-'))
  try {
   const output=await runShell(process.platform === 'win32'
@@ -57,6 +57,7 @@ test('shell retains stdout and stderr separately with outputPath pointing to std
   assert.equal(output.exitCode,7)
   assert.equal(readFileSync(output.stdoutPath,'utf8'),'fixture-out')
   assert.equal(readFileSync(output.stderrPath,'utf8'),'fixture-error')
-  assert.equal(output.outputPath,output.stdoutPath)
+  assert.equal(output.stdoutSha256,createHash('sha256').update(readFileSync(output.stdoutPath)).digest('hex'))
+  assert.equal(output.stderrSha256,createHash('sha256').update(readFileSync(output.stderrPath)).digest('hex'))
  } finally {rmSync(root,{recursive:true,force:true})}
 })

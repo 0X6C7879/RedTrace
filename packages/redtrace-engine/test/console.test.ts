@@ -24,6 +24,7 @@ test('plugin page updates the list and non-preset totals after confirmed uninsta
       return Response.json({ plugins })
     },
   })
+  vm.runInContext(readFileSync(source+'/static/capabilities.js', 'utf8'), context)
   vm.runInContext(readFileSync(source+'/static/plugins.js', 'utf8'), context)
   const page = context.window.pluginsPage()
   await page.load()
