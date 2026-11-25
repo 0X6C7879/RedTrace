@@ -55,7 +55,7 @@ export function taskTodoPlanner(step: TaskAssignment, store: Store): TaskAssignm
   if (!step.graphId || store.project(step.projectId).mode === 'general') return undefined
   const planner = store.projectGraph(step.projectId,step.graphId).planner
   if (planner) return planner
-  const row=store.db.prepare("SELECT data FROM nodes WHERE project_id=? AND graph_id=? AND kind='step' AND json_extract(data,'$.role')='soldier' AND COALESCE(json_extract(data,'$.deleted'),0)=0 AND json_extract(data,'$.parentStepId') IS NULL AND json_extract(data,'$.specialist') IS NULL AND json_extract(data,'$.status')!='cancelled' ORDER BY (json_extract(data,'$.status')='done'),rowid LIMIT 1").get(step.projectId,step.graphId)
+  const row=store.db.prepare("SELECT data FROM nodes WHERE project_id=? AND graph_id=? AND kind='step' AND role='soldier' AND COALESCE(json_extract(data,'$.deleted'),0)=0 AND json_extract(data,'$.parentStepId') IS NULL AND json_extract(data,'$.specialist') IS NULL AND status!='cancelled' ORDER BY (status='done'),rowid LIMIT 1").get(step.projectId,step.graphId)
   return row?JSON.parse(String(row.data)) as Step:undefined
 }
 

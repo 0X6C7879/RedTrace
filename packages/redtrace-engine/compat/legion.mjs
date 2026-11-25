@@ -92,7 +92,7 @@ export async function runCommander(ctx, engine, worker, signal, projectId) {
   signal.throwIfAborted()
   const config=configuration.resolvedSnapshot().config,activeRuns=engine.store.runsByStatus('running'),commands=[...engine.legion.campaigns().filter(c=>c.status==='running'),...chatSlots(store)]
   if(!['active','completed'].includes(store.project(projectId).status))throw new HttpError(409,'Project is not active')
-  if(activeRuns.length+commands.length>=config.maxWorkers||activeRuns.filter(r=>r.worker===worker.name).length+commands.filter(c=>c.workerName===worker.name).length>=worker.maxRunning||activeRuns.filter(r=>r.projectId===projectId).length>=config.maxProjectWorkers)throw new HttpError(409,'Commander capacity is full')
+  if(activeRuns.length+commands.length>=config.maxWorkers||activeRuns.filter(r=>r.worker===worker.name).length+commands.filter(c=>c.workerName===worker.name).length>=worker.maxRunning||activeRuns.filter(r=>r.projectId===projectId).length+commands.filter(c=>c.projectId===projectId).length>=config.maxProjectWorkers)throw new HttpError(409,'Commander capacity is full')
   const activeProjects=new Set([...activeRuns.map(r=>r.projectId),...commands.filter(c=>c.projectId).map(c=>c.projectId)])
   if(!activeProjects.has(projectId)&&activeProjects.size>=config.maxRunningProjects)throw new HttpError(409,'Project capacity is full')
   const campaign=legion.claimCommand();legion.saveCampaign({...campaign,workerName:worker.name})
@@ -246,14 +246,14 @@ export function createCommanderController(ctx, engine, canRun=()=>true) {
       const config=engine.configuration.resolvedSnapshot().config
       planningLimits??=config
       inspectionIntervals=config.commanderInspection??{active:60,idle:90}
+      const runs=store.runsByStatus('running'), commands=[...legion.campaigns().filter(c=>c.status==='running'),...chatSlots(store)]
       for(let i=0;i<projects.length;i++) {
         const project=projects[(cursor+i)%projects.length], campaign=legion.campaign(project.id),periodic=project.mode==='benchmark'
         if(active.has(project.id)||campaign.status!=='idle'||legion.budget(Date.now(),project.id).phase==='ended')continue
         if((campaign.nextInspectionAt??0)>Date.now()){armInspection(project.id,campaign.nextInspectionAt);continue}
         if(!periodic&&(debounces.has(project.id)||!pending(project.id)))continue
-        const runs=store.runsByStatus('running'), commands=[...legion.campaigns().filter(c=>c.status==='running'),...chatSlots(store)]
         if(runs.length+commands.length>=config.maxWorkers)break
-        if(runs.filter(r=>r.projectId===project.id).length>=config.maxProjectWorkers)continue
+        if(runs.filter(r=>r.projectId===project.id).length+commands.filter(c=>c.projectId===project.id).length>=config.maxProjectWorkers)continue
         const owners=new Set([...runs.map(r=>r.projectId),...commands.filter(c=>c.projectId).map(c=>c.projectId)])
         if(!owners.has(project.id)&&owners.size>=config.maxRunningProjects)continue
         const selected=campaign.nextWorker?conversationWorker(config,campaign.nextWorker,project.mode):undefined
@@ -271,6 +271,7 @@ export function createCommanderController(ctx, engine, canRun=()=>true) {
           }else if(!periodic&&task.dirty)wake(project.id)
           engine.scheduler.wake()
         })
+        const current=legion.campaign(project.id);if(current.status==='running')commands.push(current)
       }
       if(projects.length)cursor=(cursor+1)%projects.length
     })

@@ -1,7 +1,8 @@
 import type { EngineConfig, Worker } from './types.ts'
 
 // Model failures may outlast a short retry burst; task deadlines still end recovery.
-export const recoverableModelFailure = (code?: string) => ['PROCESS_EXIT','UNKNOWN','SERVER','TIMEOUT','TRANSPORT','STREAM_CLOSED','EMPTY_RESPONSE','RATE_LIMIT','AUTH','QUOTA_EXCEEDED','MISSING_CREDENTIAL','INVALID_CREDENTIAL','INVALID_REQUEST','PI_AI_ERROR'].includes(code ?? '')
+export const RECOVERABLE_MODEL_FAILURES = ['PROCESS_EXIT','UNKNOWN','SERVER','TIMEOUT','TRANSPORT','STREAM_CLOSED','EMPTY_RESPONSE','RATE_LIMIT','AUTH','QUOTA_EXCEEDED','MISSING_CREDENTIAL','INVALID_CREDENTIAL','INVALID_REQUEST','PI_AI_ERROR']
+export const recoverableModelFailure = (code?: string) => RECOVERABLE_MODEL_FAILURES.includes(code ?? '')
 export const modelRecoveryDelay = (failures: number) => Math.min(60_000, 1000 * 2 ** Math.min(6, Math.max(0, failures - 1)))
 
 /** Keep role, capacity and tools on the same Worker; change only its declared model route. */

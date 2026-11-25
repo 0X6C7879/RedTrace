@@ -56,7 +56,7 @@ export class ChatStore {
   async remove(id:string) {const chat=this.get(id);if(chat.projectId)throw new HttpError(422,'Project conversations are deleted with their Project');if(chat.status==='running')throw new HttpError(409,'Wait for the response before deleting this conversation');if(!this.removeSession)throw new HttpError(503,'Native conversation cleanup requires the DSH host');this.deleting.add(id);try{await this.removeSession(chat);this.store.db.prepare('DELETE FROM global_chats WHERE id=?').run(id);return {deleted:true,id}}finally{this.deleting.delete(id)}}
   create(title:string) {const id='chat-'+randomUUID();return this.save({id,title:requiredText(title,'title'),sessionId:id,createdAt:now(),updatedAt:now(),status:'idle',hasSession:false})}
 }
-export function chatSlots(store:Store): {projectId:string;workerName?:string}[] { return store.db.prepare("SELECT data FROM global_chats WHERE json_extract(data,'$.status')='running'").all().map(r=>{const c=JSON.parse(String(r.data));return{projectId:c.projectId??'',workerName:c.workerName}}) }
+export function chatSlots(store:Store): {projectId:string;workerName?:string}[] { return store.db.prepare("SELECT COALESCE(json_extract(data,'$.projectId'),'') AS project_id,json_extract(data,'$.workerName') AS worker_name FROM global_chats WHERE json_extract(data,'$.status')='running' ORDER BY rowid").all().map(r=>({projectId:String(r.project_id),workerName:r.worker_name===null?undefined:String(r.worker_name)})) }
 export function chatRoutes(router:Router,chats:ChatStore,configuration:()=>EngineConfig) {
   const text=Type.String({minLength:1})
   router.add('GET','/v2/projects/:project/chief',c=>chats.chief(c.params.project))

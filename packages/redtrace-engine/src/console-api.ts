@@ -22,7 +22,7 @@ export function toolAllowed(settings: RawConfig['tool_settings'], name: string, 
   if(!allowed(setting))return false
   return !mapped||allowed(setting?.actions?.[mapped.action])&&allowed(settings?.[name])
 }
-export function consoleRoutes(router: Router, store: Store, configuration: Configuration, runtime: () => RuntimeCatalog | Promise<RuntimeCatalog> = () => ({ tools: [], mcp: [] })) {
+export function consoleRoutes(router: Router, store: Store, configuration: Configuration, runtime: (namesOnly?: boolean) => RuntimeCatalog | Promise<RuntimeCatalog> = () => ({ tools: [], mcp: [] })) {
   router.add('PUT', '/console/tools/:tool/settings', async c => {
     const b = await body(c.req, Type.Object({ expected_revision: Type.String({minLength:64,maxLength:64}), enabled: Type.Boolean(), roles: Type.Array(Type.Union(FIXED_ROLES.map(role=>Type.Literal(role))), {uniqueItems:true}), actions:Type.Optional(Type.Record(Type.String(),Type.Object({enabled:Type.Boolean(),roles:Type.Optional(Type.Array(Type.Union(FIXED_ROLES.map(role=>Type.Literal(role))),{uniqueItems:true}))},{additionalProperties:false}))) }))
     const registered = (await runtime()).tools.filter(tool => tool.name === c.params.tool)
@@ -40,7 +40,7 @@ export function consoleRoutes(router: Router, store: Store, configuration: Confi
   router.add('GET', '/console/findings', c => {
     const projects = new Map(store.projects().map(p => [p.id, p]))
     const project=c.url.searchParams.get('projectId'),graph=c.url.searchParams.get('graphId');if(project){store.project(project);if(graph)store.projectGraph(project,graph)}
-    return store.db.prepare("SELECT data FROM nodes WHERE kind='finding' AND COALESCE(json_extract(data,'$.deleted'),0)=0 AND COALESCE(json_extract(data,'$.lifecycle'),'active')='active'"+(project?" AND project_id=?":"")+(graph?" AND json_extract(data,'$.graphId')=?":"")+" ORDER BY rowid DESC").all(...(project?[project]:[]),...(graph?[graph]:[])).map(row => {
+    return store.db.prepare("SELECT data FROM nodes WHERE kind='finding' AND COALESCE(json_extract(data,'$.deleted'),0)=0 AND COALESCE(json_extract(data,'$.lifecycle'),'active')='active'"+(project?" AND project_id=?":"")+(graph?" AND graph_id=?":"")+" ORDER BY rowid DESC").all(...(project?[project]:[]),...(graph?[graph]:[])).map(row => {
       const f = JSON.parse(String(row.data)) as Finding, p = projects.get(f.projectId)!
       const { details: _, report: __, ...summary } = f
       return { ...summary, hasReport: !!f.report, projectTitle: p.title, projectStatus: p.status, mode: p.mode, graphTitle: f.graphId ? store.projectGraph(p.id, f.graphId).title : p.title }
@@ -51,7 +51,7 @@ export function consoleRoutes(router: Router, store: Store, configuration: Confi
     return store.forGraph(c.params.project, finding.graphId!).readNode(c.params.project, finding.id, 'doc')
   })
   router.add('GET','/console/tool-stats',async c=>{
-    const names = c.url.searchParams.has('names') ? c.url.searchParams.getAll('names').filter(Boolean) : [...new Set((await runtime()).tools.map(tool => tool.name))]
+    const names = c.url.searchParams.has('names') ? c.url.searchParams.getAll('names').filter(Boolean) : [...new Set((await runtime(true)).tools.map(tool => tool.name))]
     return {...toolStatistics(store,c.url,names),projects:store.projects().map(p=>({id:p.id,title:p.title,mode:p.mode}))}
   })
   router.add('GET', '/console/tools', async () => {

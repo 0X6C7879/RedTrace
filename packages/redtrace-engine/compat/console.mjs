@@ -40,9 +40,11 @@ export function platformToolOptions(engine, name, role) {
   return { when: () => toolAllowed(engine.configuration.resolvedSnapshot().raw.tool_settings, name, role) }
 }
 
-export async function runtimeCatalog(ctx, engine, catalog = []) {
+export async function runtimeCatalog(ctx, engine, catalog = [], namesOnly = false) {
   const registry = ctx.get('tools'), agents = ctx.get('agents')?.list() ?? []
-  const campaigns = engine?.legion.campaigns() ?? [], chats = engine?.chats.all() ?? []
+  const campaigns = namesOnly ? [] : engine?.legion.campaigns() ?? [], chats = namesOnly ? [] : engine?.chats.all() ?? []
+  const definitions = agent => (registry?.definitions(agent) ?? []).filter(tool=>agent||tool.name.startsWith('mcp__'))
+  const source = tool => tool.name.startsWith('mcp__') ? 'MCP' : tool.redtrace ? 'RedTrace' : 'DSH'
   const settings = engine?.configuration.resolvedSnapshot().raw.tool_settings
   const scopes = [{ scope: 'global', agent: undefined }, ...agents.map(agent => ({ scope: String(agent.session.id), agent }))]
   const runs=[]
@@ -52,6 +54,7 @@ export async function runtimeCatalog(ctx, engine, catalog = []) {
       const record = run && JSON.parse(run.data)
       const step = record && engine.store.assignment(record)
       if (step?.role === 'scout') return []
+      if (namesOnly) return definitions(agent).map(tool=>({ name:tool.name, scope, status:'registered', source:source(tool) }))
       const campaign = campaigns.find(c => c.sessionId === scope)
       const chat = chats.find(c => c.sessionId === scope)
       const role = step ? executionRole(engine.store.project(record.projectId).mode,step.role) : campaign ? coordinatorRole(engine.store.project(campaign.projectId).mode) : undefined
@@ -61,10 +64,10 @@ export async function runtimeCatalog(ctx, engine, catalog = []) {
       const visible = new Set(agent ? registry.schemas(agent,selection).map(t=>t.name) : [])
       if(agent){const selectedSchemas=registry.schemas(agent,selection);const wire=JSON.stringify(selectedSchemas);runs.push({runId:scope,role,mode,visibleSchemas:visible.size,schemaBytes:Buffer.byteLength(wire),schemaEstimatedTokens:Math.ceil(wire.length/4),schemaTokenMethod:'ceil(serialized chars/4), not billing'})}
       selection?.dispose()
-      return (registry?.definitions(agent) ?? []).filter(tool=>agent||tool.name.startsWith('mcp__')).flatMap(tool => (tool.name.startsWith('mcp__')&&!agent?['soldier']:[role]).map(binding=>({ name: tool.name, description: tool.description, parameters: tool.parameters,
+      return definitions(agent).flatMap(tool => (tool.name.startsWith('mcp__')&&!agent?['soldier']:[role]).map(binding=>({ name: tool.name, description: tool.description, parameters: tool.parameters,
         scope, role:binding, mode, status: 'registered',
         enabled: toolAllowed(settings, tool.name, binding), visible: visible.has(tool.name),
-        source: tool.name.startsWith('mcp__') ? 'MCP' : tool.redtrace ? 'RedTrace' : 'DSH' })))
+        source: source(tool) })))
     }))).flat()],
     runs,
     mcp: state()?.mcpStatuses?.() ?? [],

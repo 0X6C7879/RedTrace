@@ -128,8 +128,14 @@ export async function apply(ctx, options) {
   const root = path.resolve(options.root), managed = path.dirname(options.configuration)
   const { createUserMessage, HarnessError } = await load('vendor/deepseek-harness/packages/llm/llm/lib/index.js')
   const { SessionId } = await load('vendor/deepseek-harness/packages/core/session/lib/index.js')
-  let commanderController, closeGlobalChat
-  const engine = await createEngine({ root, database: options.database, configuration: options.configuration, autoStart: false, runtimeCatalog: async () => { await refresh(); return runtimeCatalog(ctx, engine, await inspectToolCatalog(ctx, engine, manager, runtime)) }, commanderEvents: (offset,limit,signal,projectId,sessionId) => readCommanderLog(ctx,engine,offset,limit,signal,projectId,sessionId),
+  let commanderController, closeGlobalChat, inspectedCatalog = {}
+  const engine = await createEngine({ root, database: options.database, configuration: options.configuration, autoStart: false, runtimeCatalog: async namesOnly => {
+    await refresh()
+    const { revision } = engine.configuration.resolvedSnapshot(), cached = inspectedCatalog
+    const rows = cached.revision === revision ? cached.rows : await inspectToolCatalog(ctx, engine, manager, runtime)
+    if (inspectedCatalog === cached && cached.revision !== revision) inspectedCatalog = { revision, rows }
+    return runtimeCatalog(ctx, engine, rows, namesOnly)
+  }, commanderEvents: (offset,limit,signal,projectId,sessionId) => readCommanderLog(ctx,engine,offset,limit,signal,projectId,sessionId),
     // The gate is created before the manager exists; it only dereferences it
     // when a request or dispatch actually asks, long after boot settles.
     adapterAvailability: () => pluginId => manager.running(pluginId),
@@ -189,6 +195,7 @@ export async function apply(ctx, options) {
   }
   const sessionRefresh = new Map()
   const manager = new PluginManager(ctx, runtime, repoRoot, load, replacements, async () => {
+    inspectedCatalog = {}
     await engine.operations.synchronizeAdapters()
     ctx.logger.info('Plugin settings synchronized: '+manager.list().filter(p=>['stopped','error'].includes(p.status)).map(p=>p.id+'='+p.status).join(', '))
     await Promise.all([...sessionRefresh.values()].map(refresh => refresh()))

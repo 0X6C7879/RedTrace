@@ -1,5 +1,5 @@
 import { executionRole, isReportStep } from '../../redtrace-dsh/src/roles.ts'
-import { recoverableModelFailure, modelRecoveryDelay, recoveryWorker } from './model-recovery.ts'
+import { RECOVERABLE_MODEL_FAILURES, recoverableModelFailure, modelRecoveryDelay, recoveryWorker } from './model-recovery.ts'
 import { chatSlots } from './chat.ts'
 import { LegionStore } from './legion-store.ts'
 import { Store, ACTIVE_NODE_SQL } from './store.ts'
@@ -34,8 +34,7 @@ export class Scheduler {
   get activeRuns() { return this.store.runsByStatus('running') }
   get commanderRunning() { return this.legion.campaigns().some(c=>c.status==='running') }
   wake() { if (this.closed || this.scheduled) return; this.scheduled = true; queueMicrotask(() => { this.scheduled = false; if (!this.closed) this.dispatch() }) }
-  private select(resume: Run | undefined, step: TaskAssignment, active: Run[]) {
-    const commands=[...this.legion.campaigns().filter(c=>c.status==='running'),...chatSlots(this.store)]
+  private select(resume: Run | undefined, step: TaskAssignment, active: Run[], commands: ReturnType<typeof chatSlots>) {
     const count = (name: string) => active.filter(r => r.worker === name).length+commands.filter(c=>c.workerName===name).length
     const previous=step.role==='general'?this.store.forGraph(step.projectId,step.graphId!).runs(step.projectId,{activity:'plan',limit:1})[0]:undefined
     const preferred=previous?.worker
@@ -62,18 +61,19 @@ export class Scheduler {
         if(!active.some(r=>r.projectId===project.id)&&!commands.some(c=>c.projectId===project.id)&&new Set([...active.map(r=>r.projectId),...commands.filter(c=>c.projectId).map(c=>c.projectId)]).size>=this.config.maxRunningProjects)continue
         const questionLimit = this.config.maxBenchmarkTasks ?? null
         const activeQuestions = new Set(project.mode==='benchmark' && questionLimit!==null ? [...active.filter(r=>r.projectId===project.id), ...this.store.runsByStatus('unknown',project.id)].map(r=>r.graphId) : [])
-        const steps=this.store.nodes<Step>(project.id,['step']).filter(s=>!s.deleted&&!s.replacementPending&&['pending','paused'].includes(s.status)&&(isReportStep(s)||project.status==='active'&&this.store.node<Goal>(project.id,s.goalId,'goal').status==='open')).sort((a,b)=>(project.mode==='benchmark' && questionLimit!==null && activeQuestions.size<questionLimit ? Number(activeQuestions.has(a.graphId))-Number(activeQuestions.has(b.graphId)) : 0)||b.priority-a.priority||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id))
+        const steps=this.store.nodes<Step>(project.id,['step'],{statuses:['pending','paused']}).filter(s=>!s.deleted&&!s.replacementPending&&(isReportStep(s)||project.status==='active'&&this.store.node<Goal>(project.id,s.goalId,'goal').status==='open')).sort((a,b)=>(project.mode==='benchmark' && questionLimit!==null && activeQuestions.size<questionLimit ? Number(activeQuestions.has(a.graphId))-Number(activeQuestions.has(b.graphId)) : 0)||b.priority-a.priority||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id))
         const planners=this.store.projectGraphs(project.id).map(g=>g.planner).filter((p):p is GraphPlanner=>!!p&&['pending','paused'].includes(p.status)&&this.store.node<Goal>(project.id,p.goalId,'goal').status==='open')
         const queue:TaskAssignment[]=[...planners,...steps]
+        const runs=this.store.runs(project.id,{statuses:['paused']})
         for(const step of queue) {
           if(project.mode==='benchmark' && questionLimit!==null && !activeQuestions.has(step.graphId) && activeQuestions.size>=questionLimit)continue
           if(step.role!=='general'&&!this.store.stepReady(step as Step))continue
-          const reserved=this.store.runs(project.id).some(r=>r.stepId===step.id&&r.activity==='execute'&&r.status==='paused')
+          const reserved=runs.some(r=>r.stepId===step.id&&r.activity==='execute')
           if(step.role!=='general'&&!reserved&&this.store.planningCapacity(project.id,this.config.maxSteps,step.graphId??undefined).remainingSteps===0)continue
           const readyAt=step.role==='general'?this.store.plannerWakeAt(step as GraphPlanner):step.retryAfter??0
           if(readyAt>Date.now()){nextWakeAt=Math.min(nextWakeAt,readyAt);continue}
-          const resume=step.status==='paused'?this.store.runsByStatus('paused',project.id).find(r=>step.role==='general'?r.activity==='plan'&&r.graphId===step.graphId:r.stepId===step.id):undefined
-          const worker=this.select(resume,step,active);if(!worker)continue
+          const resume=step.status==='paused'?runs.find(r=>step.role==='general'?r.activity==='plan'&&r.graphId===step.graphId:r.stepId===step.id):undefined
+          const worker=this.select(resume,step,active,commands);if(!worker)continue
           const run=step.role==='general'?this.store.forGraph(project.id,step.graphId!).claim(project.id,'plan',worker):this.store.claim(project.id,'execute',worker,step.id);active.push(run);this.launch(run,worker);progress=true;break
         }
       }
@@ -123,21 +123,26 @@ export class Scheduler {
   /** Sapper's dead-worker recovery, bounded per native Session; strategy stays with Commander. */
   watchdog() {
     if(this.closed||this.maintenance)return
-    for(const project of this.store.projects().filter(p=>p.status==='active'))for(const step of this.store.nodes<Step>(project.id,['step']).filter(s=>s.status==='parked'&&s.handoffPending))this.resumeHandoff(project.id,step)
+    const projects=this.store.projects().filter(p=>p.status==='active')
+    for(const project of projects)for(const row of this.store.db.prepare(`SELECT data FROM nodes WHERE project_id=? AND kind='step' AND status='parked' AND json_extract(data,'$.handoffPending')=1 AND ${ACTIVE_NODE_SQL} ORDER BY rowid`).all(project.id))this.resumeHandoff(project.id,{version:1,...JSON.parse(String(row.data))})
+    const active=this.activeRuns
     // The existing five-minute tactical threshold wakes a task Planner only once per idle interval.
-    for(const project of this.store.projects().filter(p=>p.mode==='benchmark'&&p.status==='active'))for(const graph of this.store.projectGraphs(project.id)) {
-      if(!graph.planner||graph.planner.status!=='pending')continue
-      for(const run of this.activeRuns.filter(r=>r.graphId===graph.id&&r.activity==='execute'&&!r.pendingTools.length)) {
-        const activity=this.store.db.prepare("SELECT MAX(json_extract(data,'$.timestamp')) AS at FROM audit_events WHERE run_id=? AND json_extract(data,'$.kind') IN ('tool.started','tool.completed','command.completed')").get(run.id)?.at
-        const last=String(activity??run.startedAt)
-        if(Date.now()-Date.parse(last)<5*60_000||this.store.db.prepare("SELECT 1 FROM events WHERE project_id=? AND graph_id=? AND type='planner.stalled' AND json_extract(data,'$.runId')=? AND created_at>=? LIMIT 1").get(project.id,graph.id,run.id,last))continue
-        this.store.transaction(()=>this.store.forGraph(project.id,graph.id).event(project.id,'planner.stalled',null,{runId:run.id,reason:'No tool activity for the existing tactical interval'}))
+    for(const project of projects.filter(p=>p.mode==='benchmark')) {
+      const runs=active.filter(r=>r.projectId===project.id&&r.activity==='execute'&&!r.pendingTools.length)
+      const activity=new Map(this.store.db.prepare("SELECT run_id,MAX(json_extract(data,'$.timestamp')) AS at FROM audit_events WHERE project_id=? AND run_id IN (SELECT value FROM json_each(?)) AND json_extract(data,'$.kind') IN ('tool.started','tool.completed','command.completed') GROUP BY run_id").all(project.id,JSON.stringify(runs.map(r=>r.id))).map(row=>[String(row.run_id),row.at]))
+      for(const graph of this.store.projectGraphs(project.id)) {
+        if(!graph.planner||graph.planner.status!=='pending')continue
+        for(const run of runs.filter(r=>r.graphId===graph.id)) {
+          const last=String(activity.get(run.id)??run.startedAt)
+          if(Date.now()-Date.parse(last)<5*60_000||this.store.db.prepare("SELECT 1 FROM events WHERE project_id=? AND graph_id=? AND type='planner.stalled' AND json_extract(data,'$.runId')=? AND created_at>=? LIMIT 1").get(project.id,graph.id,run.id,last))continue
+          this.store.transaction(()=>this.store.forGraph(project.id,graph.id).event(project.id,'planner.stalled',null,{runId:run.id,reason:'No tool activity for the existing tactical interval'}))
+        }
       }
     }
-    for(const run of this.store.runsByStatus('failed')) {
-      if(this.running.has(run.id)||!run.stepId||run.pendingTools.length||this.store.project(run.projectId).status!=='active')continue
-      if(!recoverableModelFailure(run.failureCode))continue
-      const step=this.store.node<Step>(run.projectId,run.stepId,'step')
+    const failed=this.store.db.prepare("SELECT r.data FROM runs r JOIN projects p ON p.id=r.project_id WHERE r.status='failed' AND r.step_id<>'' AND json_array_length(r.data,'$.pendingTools')=0 AND json_extract(p.data,'$.status')='active' AND json_extract(r.data,'$.failureCode') IN (SELECT value FROM json_each(?)) AND r.id NOT IN (SELECT value FROM json_each(?)) ORDER BY r.rowid").all(JSON.stringify(RECOVERABLE_MODEL_FAILURES),JSON.stringify([...this.running.keys()]))
+    for(const row of failed) {
+      const run=JSON.parse(String(row.data)) as Run
+      const step=this.store.node<Step>(run.projectId,run.stepId!,'step')
       if(this.store.planningCapacity(run.projectId,this.config.maxSteps,step.graphId??undefined).remainingSteps===0||step.status!=='blocked'||this.store.latestRun(run.projectId,step.id)?.id!==run.id||this.legion.budget(Date.now(),run.projectId).phase==='ended')continue
       this.store.transaction(()=>{
         const worker=this.config.workers.find(w=>w.name===run.worker)

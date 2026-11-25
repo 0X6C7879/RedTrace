@@ -32,5 +32,5 @@ export const CONTEXT_FACT_SQL = `(kind!='fact' OR id NOT IN (
 ) OR id IN (
   SELECT ref.value FROM nodes step, json_each(step.data,'$.sourceIds') ref
   WHERE step.project_id=? AND step.kind='step'
-  AND COALESCE(json_extract(step.data,'$.deleted'),0)=0 AND json_extract(step.data,'$.status') NOT IN ('done','cancelled')
+  AND COALESCE(json_extract(step.data,'$.deleted'),0)=0 AND step.status NOT IN ('done','cancelled')
 ))`

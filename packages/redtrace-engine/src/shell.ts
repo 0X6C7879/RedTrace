@@ -28,8 +28,18 @@ export async function runProcess(executable: string, args: string[], cwd: string
     const child = spawn(executable, args, { cwd, env: toolEnvironment(options.env), windowsHide: true, detached: !windows, stdio: ['pipe', 'pipe', 'pipe'] })
     child.stdin.on('error', () => {}); child.stdin.end(options.input)
     const output = createWriteStream(outputPath,{flags:'wx',mode:0o600}), stdout=createWriteStream(stdoutPath,{flags:'wx',mode:0o600}), stderr=createWriteStream(stderrPath,{flags:'wx',mode:0o600})
-    let tail = '', outputBytes = 0, failure: Error | undefined, stopped = false
-    const outputHash = createHash('sha256')
+    let tail: Buffer = Buffer.alloc(0), outputBytes = 0, failure: Error | undefined, stopped = false
+    const outputHash = createHash('sha256'), tailLimit = 64 * 1024
+    const retain = (file: ReturnType<typeof createWriteStream>) => {
+      let remaining = 16 * 1024 * 1024
+      return (stream: NodeJS.ReadableStream, chunk: Buffer) => {
+        if (!remaining || file.destroyed) return
+        const kept = chunk.subarray(0, remaining)
+        remaining -= kept.length
+        if (!file.write(kept)) { stream.pause(); file.once('drain', () => stream.resume()) }
+      }
+    }
+    const merged = retain(output)
     const kill = () => {
       if (stopped || !child.pid) return
       stopped = true
@@ -44,11 +54,12 @@ export async function runProcess(executable: string, args: string[], cwd: string
     options.signal?.addEventListener('abort', abort, { once: true })
     for (const file of [output,stdout,stderr]) file.on('error', error => { failure = error; child.stdout.resume(); child.stderr.resume(); kill() })
     for (const [stream,file] of [[child.stdout,stdout],[child.stderr,stderr]] as const) {
+      const separate = retain(file)
       stream.on('data', (chunk: Buffer) => {
-        if (!file.destroyed && !file.write(chunk)) {stream.pause();file.once('drain',()=>stream.resume())}
+        separate(stream, chunk)
         outputBytes += chunk.length; outputHash.update(chunk)
-        tail = (tail + chunk.toString('utf8')).slice(-64 * 1024)
-        if (!output.destroyed && !output.write(chunk)) { stream.pause(); output.once('drain', () => stream.resume()) }
+        tail = chunk.length >= tailLimit ? chunk.subarray(-tailLimit) : Buffer.concat([tail.subarray(Math.max(0, tail.length + chunk.length - tailLimit)), chunk])
+        merged(stream, chunk)
       })
     }
     child.on('error', error => { failure = error })
@@ -57,7 +68,7 @@ export async function runProcess(executable: string, args: string[], cwd: string
       const done = () => {
         const sha256 = outputHash.digest('hex')
         if (failure) reject(Object.assign(failure, {outputPath,stdoutPath,stderrPath,bytes:outputBytes,sha256,exitCode:code??-1,completion:'unknown'}))
-        else resolve({ text:tail,outputPath,stdoutPath,stderrPath,exitCode: code ?? -1, bytes: outputBytes, sha256 })
+        else resolve({ text:tail.toString('utf8'),outputPath,stdoutPath,stderrPath,exitCode: code ?? -1, bytes: outputBytes, sha256 })
       }
       Promise.all([output,stdout,stderr].map(file=>new Promise<void>(resolve=>{if(file.destroyed)resolve();else file.end(resolve)}))).then(done)
     })

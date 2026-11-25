@@ -155,6 +155,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS audit_events(id INTEGER PRIMARY KEY AUTOINCREMENT, event_uid TEXT UNIQUE,
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES audit_runs(id) ON DELETE CASCADE, data TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS audit_events_project ON audit_events(project_id,id);
+      CREATE INDEX IF NOT EXISTS audit_events_run ON audit_events(run_id,id);
+      CREATE INDEX IF NOT EXISTS audit_events_tool_calls ON audit_events(project_id,run_id)
+        WHERE json_extract(data,'$.kind') IN ('tool.started','tool.completed') AND COALESCE(json_extract(data,'$.call_id'),'')<>'';
       CREATE TABLE IF NOT EXISTS critical_keys(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,key TEXT NOT NULL,PRIMARY KEY(project_id,key));
       CREATE TABLE IF NOT EXISTS run_metrics(run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,call_id TEXT NOT NULL,kind TEXT NOT NULL,started INTEGER NOT NULL,ended INTEGER,PRIMARY KEY(run_id,call_id));
     `)
@@ -166,6 +169,13 @@ export class Store {
     this.db.prepare('DELETE FROM counters WHERE scope NOT IN (SELECT id FROM projects)').run()
     this.migrateProjectGraphs()
     if(!this.db.prepare('PRAGMA table_info(global_chats)').all().some(c=>c.name==='project_id'))this.db.exec('ALTER TABLE global_chats ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE CASCADE')
+    const nodeColumns=this.db.prepare('PRAGMA table_xinfo(nodes)').all()
+    for(const column of ['status','role'])if(!nodeColumns.some(c=>c.name===column))this.db.exec("ALTER TABLE nodes ADD COLUMN "+column+" TEXT GENERATED ALWAYS AS (json_extract(data,'$."+column+"')) VIRTUAL")
+    this.db.exec(`CREATE INDEX IF NOT EXISTS nodes_active_status ON nodes(project_id,kind,status) WHERE ${ACTIVE_NODE_SQL};
+      CREATE INDEX IF NOT EXISTS nodes_graph_role_status ON nodes(project_id,graph_id,role,status) WHERE ${ACTIVE_NODE_SQL};
+      CREATE INDEX IF NOT EXISTS global_chats_status ON global_chats(json_extract(data,'$.status'));
+      CREATE INDEX IF NOT EXISTS events_execution_run ON events(project_id,json_extract(data,'$.runId'),id)
+        WHERE type IN ('execute.started','execute.paused','execute.succeeded','execute.failed','execute.unknown','execute.cancelled','planner.started','planner.paused','planner.succeeded','planner.failed','planner.unknown','planner.cancelled');`)
     this.migrateFactTitles()
     this.migrateGeneralRoles()
     this.migrateTodoAcceptance()
@@ -188,7 +198,7 @@ export class Store {
   }
   private migrateGeneralRoles() {
     this.transaction(()=>{
-      for(const row of this.db.prepare("SELECT n.data FROM nodes n JOIN projects p ON p.id=n.project_id WHERE n.kind='step' AND (json_extract(n.data,'$.role')='reporter' OR json_extract(p.data,'$.mode')='general' AND (json_extract(n.data,'$.role') IN ('general','worker','leader','operator') OR json_extract(n.data,'$.role') IS NULL))").all()) {
+      for(const row of this.db.prepare("SELECT n.data FROM nodes n JOIN projects p ON p.id=n.project_id WHERE n.kind='step' AND (n.role='reporter' OR json_extract(p.data,'$.mode')='general' AND (n.role IN ('general','worker','leader','operator') OR n.role IS NULL))").all()) {
         const step=JSON.parse(String(row.data)) as Step
         if(step.role==='reporter') { step.reportFindingId=step.sourceIds[0]; if(this.project(step.projectId).mode==='benchmark'&&step.status==='pending'&&!step.attempts&&step.creator==='report_finding')step.status='cancelled' }
         step.role='soldier'
@@ -331,14 +341,14 @@ export class Store {
     if (!kinds.length) return []
     const placeholders = kinds.map(() => '?').join(',')
     const offset = integer(page?.offset ?? 0, 'node offset'), limit = page?.limit === undefined ? undefined : integer(page.limit, 'node limit', 1)
-    const sql = `SELECT data FROM nodes WHERE project_id=? AND kind IN (${placeholders}) AND ${ACTIVE_NODE_SQL}${this.graphFilter()}${page?.context ? ' AND '+CONTEXT_FACT_SQL : ''}${page?.statuses?.length ? " AND json_extract(data,'$.status') IN ("+page.statuses.map(()=>'?').join(',')+")" : ''} ORDER BY rowid ${page?.order==='newest'?'DESC':'ASC'}${limit === undefined ? '' : ' LIMIT ? OFFSET ?'}`
+    const sql = `SELECT data FROM nodes WHERE project_id=? AND kind IN (${placeholders}) AND ${ACTIVE_NODE_SQL}${this.graphFilter()}${page?.context ? ' AND '+CONTEXT_FACT_SQL : ''}${page?.statuses?.length ? " AND status IN ("+page.statuses.map(()=>'?').join(',')+")" : ''} ORDER BY rowid ${page?.order==='newest'?'DESC':'ASC'}${limit === undefined ? '' : ' LIMIT ? OFFSET ?'}`
     const params = [projectId, ...kinds, ...(page?.context ? [projectId, projectId] : []),...(page?.statuses??[])]
     return (this.db.prepare(sql).all(...(limit === undefined ? params : [...params, limit, offset])) as { data: string }[])
       .map(row => ({ version: 1, ...JSON.parse(row.data) }))
   }
   nodeCount(projectId: string, kind: GraphNode['kind'], context = false, statuses: string[] = []): number {
     this.project(projectId)
-    return Number((this.db.prepare(`SELECT COUNT(*) AS value FROM nodes WHERE project_id=? AND kind=? AND ${ACTIVE_NODE_SQL}${this.graphFilter()}${context ? ' AND '+CONTEXT_FACT_SQL : ''}${statuses.length ? " AND json_extract(data,'$.status') IN ("+statuses.map(()=>'?').join(',')+")" : ''}`).get(projectId, kind, ...(context ? [projectId, projectId] : []),...statuses) as { value: number }).value)
+    return Number((this.db.prepare(`SELECT COUNT(*) AS value FROM nodes WHERE project_id=? AND kind=? AND ${ACTIVE_NODE_SQL}${this.graphFilter()}${context ? ' AND '+CONTEXT_FACT_SQL : ''}${statuses.length ? " AND status IN ("+statuses.map(()=>'?').join(',')+")" : ''}`).get(projectId, kind, ...(context ? [projectId, projectId] : []),...statuses) as { value: number }).value)
   }
   private nodeWithArchivedProducer(projectId: string, id: string): GraphNode {
     try { return this.node(projectId, id) }
@@ -971,7 +981,7 @@ export class Store {
   }
   private migrateGraphPlanners() {
     this.transaction(() => {
-      for (const row of this.db.prepare("SELECT data FROM nodes WHERE kind='step' AND json_extract(data,'$.role')='general'").all()) {
+      for (const row of this.db.prepare("SELECT data FROM nodes WHERE kind='step' AND role='general'").all()) {
         const step = JSON.parse(String(row.data)) as Step
         if (!step.graphId || this.project(step.projectId).mode !== 'benchmark') continue
         const graph = this.projectGraph(step.projectId,step.graphId)

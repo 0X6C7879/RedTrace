@@ -23,8 +23,8 @@ export function legacyProject(store: Store, id: string) {
 export function legacySummary(store: Store, id: string) {
   const project = legacyProjectInfo(store.project(id), store.runsByStatus('running', id).find(r => r.activity === 'decide'))
   const counts = store.db.prepare(`SELECT SUM(kind='fact') AS facts, SUM(kind='step') AS steps,
-    SUM(kind='step' AND json_extract(data,'$.status')='running') AS working,
-    SUM(kind='step' AND json_extract(data,'$.status') IN ('pending','paused')) AS unclaimed,
+    SUM(kind='step' AND status='running') AS working,
+    SUM(kind='step' AND status IN ('pending','paused')) AS unclaimed,
     SUM(kind='hint') AS hints FROM nodes WHERE project_id=? AND ${ACTIVE_NODE_SQL}`).get(id)!
   return { ...project, fact_count: Number(counts.facts ?? 0) + 1, intent_count: Number(counts.steps ?? 0),
     working_intent_count: Number(counts.working ?? 0), unclaimed_intent_count: Number(counts.unclaimed ?? 0), hint_count: Number(counts.hints ?? 0) }
