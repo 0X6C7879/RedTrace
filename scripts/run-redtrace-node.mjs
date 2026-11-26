@@ -8,7 +8,7 @@ import { Configuration } from '../packages/redtrace-engine/src/config.ts'
 // the network); pass a concrete local address via --host for LAN access.
 const { values } = parseArgs({ options: { root: { type: 'string', default: process.cwd() }, host: { type: 'string', default: '127.0.0.1' }, port: { type: 'string', default: '8000' }, config: { type: 'string' }, 'copy-config': { type: 'string' }, compat: { type: 'boolean', default: false }, mock: { type: 'boolean', default: false }, help: { type: 'boolean', default: false } } })
 const [major, minor] = process.versions.node.split('.').map(Number)
-if (major !== 24 || minor < 15) throw new Error('Node 24.15+ required')
+if (major < 24 || major === 25 || (major === 24 && minor < 11)) throw new Error('Node 24.11+ or 26+ required')
 if (values.help) { console.log('RedTrace Node: --root DIR --host 127.0.0.1 --port 8000 --config SOURCE --copy-config SOURCE --mock [--compat]'); process.exit(0) }
 {
   const root = path.resolve(values.root), managed = path.resolve(process.env.REDTRACE_DATA_ROOT || path.join(root, '.redtrace'))

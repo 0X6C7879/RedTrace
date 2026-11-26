@@ -35,7 +35,7 @@ export type { TaskContext, RunTask } from './scheduler.ts'
 
 export async function createEngine(options: { root: string; database?: string; configuration?: string; runTask?: RunTask; selectWorker?: SelectWorker; autoStart?: boolean; probeModel?: ProbeModel; runtimeCatalog?: (namesOnly?: boolean) => RuntimeCatalog | Promise<RuntimeCatalog>; commanderEvents?: (offset:number,limit:number,signal:AbortSignal,projectId?:string,sessionId?:string)=>Promise<unknown>; adapterAvailability?: () => (adapter: string) => boolean }) {
   const [major, minor] = process.versions.node.split('.').map(Number)
-  if (major !== 24 || minor < 15) throw new Error('RedTrace requires Node 24.15 or newer in the Node 24 LTS line')
+  if (major < 24 || major === 25 || (major === 24 && minor < 11)) throw new Error('RedTrace requires Node 24.11+ or 26+')
   const root = path.resolve(options.root), configuration = new Configuration(root, options.configuration)
   const managed = path.dirname(configuration.filename), staticRoot = path.resolve(import.meta.dirname, '../../../static')
   configuration.initialize()

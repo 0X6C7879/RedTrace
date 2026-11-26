@@ -13,7 +13,7 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 - **Project Commander 闭环**：Benchmark Commander / General Planner 各自拥有项目 Session / STATE / Board / 收件箱；多个项目协调者 与 Worker 共享原有容量并发运行，按所属项目事件唤醒。
 - **双模式 FGS**：General 项目一张主图，Benchmark 每题一张独立图；`Fact` 保存有来源的事实，`Goal` 保存完成条件和子目标，`Step` 保存行动与状态，`Finding` 保存可交付成果。`Hint` 与 `Observation` 保持人工输入和中间记录语义。
 - **异构 Worker 协同（Worker 即路由）**：任意数量 Worker 各自声明 Provider、模型、模式角色资格（Benchmark：commander/general/soldier；General：planner/worker）、并发与优先级。调度器按资格、容量、优先级与负载公平性选择 Worker，并用该 Worker 的模型配置创建任务——路由完全由 Worker 派生，而非按任务类型写死。
-- **Node 24 Agent 运行时**：DSH 原生 Agent Loop 是唯一真实模型执行器；`dsh-llm-pi-ai` 仅适配模型协议。FGS 调度器与 Cordis 插件保持单实例、原生生命周期。
+- **Node.js Agent 运行时**：DSH 原生 Agent Loop 是唯一真实模型执行器；`dsh-llm-pi-ai` 仅适配模型协议。FGS 调度器与 Cordis 插件保持单实例、原生生命周期。
 - **运行中知识同步**：证据图谱修订会通过 `agent.inject()` 增量送达正在运行的 Agent；不随执行上下文推送资源清单；按权限查询所需资源。
 - **上下文与证据**：按 DSH 当前请求的原生 Token Meter 测量压力，85% 提醒保存 STATE，原生自动压缩后以新 Run/Session 接力；不使用累计 Token 代替压力。Worker 的 Spill/文件证据按哈希保留；Commander 只读项目级证据，不读取任意宿主路径。
 - **DSH 原生执行工具链**：Execute Worker 直接获得 DSH 原生能力——`web_search` / `web_fetch`、后台任务（`job_output` / `job_list` / `job_kill`，bash `run_in_background`）、持久 PTY 终端、`glob` / `grep`、工具超时与重复调用防护；LSP 代码导航与 `run_code` 程序化调用按需开启。全部在插件管理页热启停，仅对新会话生效，不自研重复 Skill/MCP。
@@ -23,7 +23,7 @@ RedTrace 关注的不是一次对话能否给出答案，而是一个长任务�
 
 ## 工作方式
 
-系统分为三层：**内核**是 TypeScript + Node 24 + 内置 SQLite，负责 FGS、事务、调度、审计与配置；**执行面**按 Worker 路由模型，由 DSH 原生 Agent Loop 执行，并保持 Step 独立会话；**能力层**由 Cordis 插件、Skill、MCP、Resource、浏览器与安全工具组成，按任务装载。
+系统分为三层：**内核**是 TypeScript + Node.js + 内置 SQLite，负责 FGS、事务、调度、审计与配置；**执行面**按 Worker 路由模型，由 DSH 原生 Agent Loop 执行，并保持 Step 独立会话；**能力层**由 Cordis 插件、Skill、MCP、Resource、浏览器与安全工具组成，按任务装载。
 
 ```mermaid
 flowchart LR
@@ -77,8 +77,8 @@ FGS Store 负责唯一持久状态，Scheduler 只领取 Step 和分配配额，
 
 ### 环境要求
 
-- Node.js 24.15 或更高版本，且保持在 Node 24 LTS 主版本
-- npm（仅首次安装锁定的 Node 依赖时使用）
+- Node.js 24.11–24.x 或 26 及更高版本；Node 20–23 和 25 暂不支持，锁定的 DSH/REA 依赖使用较新的 Node API，且 REA 未声明兼容 Node 25
+- npm（首次安装锁定的 Node 依赖时使用；Corepack 随项目依赖安装，不依赖 Node 自带版本）
 - 一个 OpenAI 兼容或 Anthropic 兼容的模型 API 端点与密钥
 
 Windows、macOS 和 Linux 均可原生运行，无需 Docker 与 WSL。
@@ -252,7 +252,7 @@ docker compose config -q
 
 Node 测试覆盖 FGS 事务、并发领取、事实触发规划、暂停恢复、旧 API 投影、配置密钥、外围能力、Cordis 生命周期、启动脚本和 Mock 端到端流程；DSH 扩展继续用 `node:test` 覆盖插件与旧 Agent 钩子。
 
-CI 在 Windows、macOS 与 Ubuntu 三个平台上运行 Node 24.21：内核类型检查与测试 → DSH 构建、测试与探针 → 启动脚本冒烟。
+CI 在 Windows、macOS 与 Ubuntu 三个平台上运行 Node 24.x / 26.x：内核类型检查与测试 → DSH 构建、测试与探针 → 启动脚本冒烟。
 
 ## 安全边界
 

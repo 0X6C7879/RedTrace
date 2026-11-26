@@ -1,27 +1,22 @@
 @echo off
-rem RedTrace Node launcher (Windows). Node 24.15+ is the only runtime required.
+rem RedTrace Node launcher (Windows). Node 24.11+ or 26+ is required.
 setlocal EnableExtensions EnableDelayedExpansion
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 
-rem Prefer the repository-pinned runtime used by this checkout when present.
-if exist "%ROOT%\.redtrace\tools\node-v24.21.0-win-x64\node.exe" set "PATH=%ROOT%\.redtrace\tools\node-v24.21.0-win-x64;%PATH%"
-where node >nul 2>nul || (
-  echo error: Node.js 24.15 or newer from the Node 24 line is required 1>&2
-  echo   install: https://nodejs.org/ 1>&2
-  exit /b 1
+rem Prefer a compatible system Node; use the bundled Node 24 runtime only as fallback.
+set "BUNDLED_NODE=%ROOT%\.redtrace\tools\node-v24.21.0-win-x64"
+call :checkNode
+if "!NODE_SUPPORTED!"=="1" goto :nodeOk
+if exist "%BUNDLED_NODE%\node.exe" (
+  set "PATH=%BUNDLED_NODE%;%PATH%"
+  call :checkNode
+  if "!NODE_SUPPORTED!"=="1" goto :nodeOk
 )
-for /f "tokens=1,2,3 delims=v." %%a in ('node --version') do (
-  set "NODE_MAJOR=%%a"
-  set "NODE_MINOR=%%b"
-  set "NODE_PATCH=%%c"
-)
-if not "!NODE_MAJOR!"=="24" goto :nodeUnsupported
-if !NODE_MINOR! LSS 15 goto :nodeUnsupported
-goto :nodeOk
-
 :nodeUnsupported
-for /f "delims=" %%v in ('node --version') do echo error: Node.js 24.15+ ^(^<25^) is required; found %%v 1>&2
+set "NODE_FOUND=none"
+for /f "delims=" %%v in ('node --version 2^>nul') do set "NODE_FOUND=%%v"
+echo error: Node.js 24.11+ or 26+ is required; found !NODE_FOUND! 1>&2
 exit /b 1
 
 :nodeOk
@@ -52,3 +47,14 @@ call "%ROOT%\build-dsh.cmd" || exit /b 1
 :run
 node "%ROOT%\scripts\run-redtrace-node.mjs" --root "%ROOT%" %*
 exit /b %errorlevel%
+
+:checkNode
+set "NODE_SUPPORTED=0"
+where node >nul 2>nul || exit /b 0
+for /f "tokens=1,2,3 delims=v." %%a in ('node --version') do (
+  set "NODE_MAJOR=%%a"
+  set "NODE_MINOR=%%b"
+)
+if !NODE_MAJOR! GTR 25 set "NODE_SUPPORTED=1"
+if !NODE_MAJOR! EQU 24 if !NODE_MINOR! GEQ 11 set "NODE_SUPPORTED=1"
+exit /b 0

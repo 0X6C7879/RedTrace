@@ -1,4 +1,4 @@
-FROM node:24.21.0-bookworm-slim
+FROM node:24-bookworm-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
@@ -10,7 +10,6 @@ COPY . .
 RUN python3 -m venv /opt/redtrace/benchmark-venv \
     && /opt/redtrace/benchmark-venv/bin/python3 -m pip install --no-cache-dir -r skills/tsecbench-api/requirements.txt
 RUN npm ci --prefix packages/redtrace-engine \
-    && corepack enable \
     && chmod +x build-dsh.sh start-redtrace.sh \
     && ./build-dsh.sh
 

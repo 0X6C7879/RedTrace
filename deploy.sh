@@ -253,17 +253,17 @@ ensure_node() {
     major="$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/' || true)"
     minor="$(node --version 2>/dev/null | cut -d. -f2 | tr -cd '0-9' || true)"
   fi
-  if has npm && [[ "$major" == 24 && "$minor" =~ ^[0-9]+$ ]] && ((minor >= 15)); then
+  if has npm && ((major > 25 || (major == 24 && minor >= 11))); then
     log "Node.js $(node --version) and npm are already installed"
     return
   fi
   if [[ "$OS" == "Darwin" ]]; then
-    log "installing/upgrading Node.js 24 through Homebrew"
-    brew list --formula node@24 >/dev/null 2>&1 && brew upgrade node@24 || brew install node@24
-    export PATH="$(brew --prefix node@24)/bin:$PATH"
+    log "installing/upgrading Node.js through Homebrew"
+    brew list --formula node >/dev/null 2>&1 && brew upgrade node || brew install node
+    export PATH="$(brew --prefix node)/bin:$PATH"
   else
     if ldd --version 2>&1 | grep -qi musl; then
-      die "Node.js 24.15+ is required on musl Linux; install a Node 24 package"
+      die "Node.js 24.11+ or 26+ is required on musl Linux; install a compatible Node package"
     fi
     local machine node_arch version=v24.21.0 archive base temp_dir node_dir
     machine="$(uname -m)"
@@ -293,8 +293,8 @@ ensure_node() {
   hash -r
   major="$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/' || true)"
   minor="$(node --version 2>/dev/null | cut -d. -f2 | tr -cd '0-9' || true)"
-  has npm && has npx && [[ "$major" == 24 && "$minor" =~ ^[0-9]+$ ]] && ((minor >= 15)) \
-    || die "Node.js 24.15+ (<25) with npm/npx is required"
+  has npm && has npx && ((major > 25 || (major == 24 && minor >= 11))) \
+    || die "Node.js 24.11+ or 26+ with npm/npx is required"
 }
 
 ensure_java() {

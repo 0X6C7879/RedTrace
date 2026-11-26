@@ -12,7 +12,7 @@ set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 
 where node >nul 2>nul || (
-  echo error: Node.js ^>= 22.19 is required 1>&2
+  echo error: Node.js 24.11+ or 26+ is required 1>&2
   exit /b 1
 )
 where npm >nul 2>nul || (

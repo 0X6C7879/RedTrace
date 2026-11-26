@@ -28,7 +28,7 @@ else
 fi
 
 command -v node >/dev/null 2>&1 || {
-  printf 'error: Node.js >= 22.19 is required\n' >&2
+  printf 'error: Node.js 24.11+ or 26+ is required\n' >&2
   exit 1
 }
 command -v npm >/dev/null 2>&1 || {

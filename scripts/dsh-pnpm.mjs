@@ -5,6 +5,8 @@ import { delimiter, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repositoryRoot = new URL('..', import.meta.url)
+const corepack = fileURLToPath(new URL('node_modules/corepack/dist/corepack.js', repositoryRoot))
+const managerBin = fileURLToPath(new URL('node_modules/.bin/', repositoryRoot))
 const dshRoot = process.env.REDTRACE_DSH_ROOT
   ? resolve(process.env.REDTRACE_DSH_ROOT)
   : resolve(fileURLToPath(new URL('vendor/deepseek-harness', repositoryRoot)))
@@ -20,8 +22,8 @@ try {
   const command = process.argv[2]
   const pnpmOptions = command === 'install' ? [] : ['--config.frozen-lockfile=false']
   result = spawnSync(
-    'corepack',
-    [manager, ...pnpmOptions, '--dir', dshRoot, ...process.argv.slice(2)],
+    process.execPath,
+    [corepack, manager, ...pnpmOptions, '--dir', dshRoot, ...process.argv.slice(2)],
     {
       cwd: dshRoot,
       env: {
@@ -30,10 +32,9 @@ try {
         ...(command === 'install'
           ? {}
           : { PNPM_CONFIG_FROZEN_LOCKFILE: 'false', npm_config_frozen_lockfile: 'false' }),
-        PATH: `${shimDir}${delimiter}${process.env.PATH ?? ''}`,
+        PATH: `${shimDir}${delimiter}${managerBin}${delimiter}${process.env.PATH ?? ''}`,
       },
       stdio: 'inherit',
-      shell: process.platform === 'win32',
     },
   )
 } finally {

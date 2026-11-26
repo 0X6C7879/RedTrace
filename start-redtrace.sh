@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RedTrace Node launcher (Linux/macOS). Node 24.15+ is the only runtime required.
+# RedTrace Node launcher (Linux/macOS). Node 24.11+ is the minimum supported runtime.
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -17,28 +17,28 @@ fi
 export REDTRACE_PARENT_PATH="${REDTRACE_PARENT_PATH:-$PATH}"
 export REDTRACE_PARENT_VIRTUAL_ENV="${REDTRACE_PARENT_VIRTUAL_ENV-${VIRTUAL_ENV-}}"
 
-# Node 24.15+ is required. The PATH node wins normally, but competing installs
-# keep hijacking it (e.g. ~/.local/bin/node symlinking to a bundled node 22),
-# so fall back to a Homebrew node@24 keg when the PATH node is another line.
-node_is_24() {
+# Node 24.11+ (except 25.x) is required by the vendored DSH runtime and dependencies.
+# New supported majors are accepted; use Homebrew Node if PATH is too old or 25.x.
+node_is_supported() {
   [[ -n "$1" ]] || return 1
   local major minor _
   IFS=. read -r major minor _ <<<"$("$1" --version 2>/dev/null | sed 's/^v//')"
-  [[ "$major" == 24 && "$minor" -ge 15 ]]
+  [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
+  (( major > 25 || (major == 24 && minor >= 11) ))
 }
 NODE_BIN="$(command -v node || true)"
-if ! node_is_24 "$NODE_BIN"; then
-  for NODE_CAND in /opt/homebrew/opt/node@24/bin /usr/local/opt/node@24/bin; do
-    if node_is_24 "$NODE_CAND/node"; then
+if ! node_is_supported "$NODE_BIN"; then
+  for NODE_CAND in /opt/homebrew/opt/node/bin /usr/local/opt/node/bin; do
+    if node_is_supported "$NODE_CAND/node"; then
       export PATH="$NODE_CAND:$PATH"
       NODE_BIN="$NODE_CAND/node"
-      printf '==> PATH node is not from the 24 line; using node %s from %s\n' "$("$NODE_CAND/node" --version)" "$NODE_CAND" >&2
+      printf '==> PATH node is older than 24.11; using node %s from %s\n' "$("$NODE_CAND/node" --version)" "$NODE_CAND" >&2
       break
     fi
   done
 fi
-node_is_24 "$NODE_BIN" || {
-  printf 'error: Node.js 24.15+ (<25) is required; found %s\n' "$("${NODE_BIN:-node}" --version 2>/dev/null || echo none)" >&2
+node_is_supported "$NODE_BIN" || {
+  printf 'error: Node.js 24.11+ or 26+ is required; found %s\n' "$("${NODE_BIN:-node}" --version 2>/dev/null || echo none)" >&2
   printf '  install: https://nodejs.org/\n' >&2
   exit 1
 }
