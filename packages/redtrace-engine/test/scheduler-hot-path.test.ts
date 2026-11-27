@@ -10,7 +10,7 @@ import { graphUpdate } from '../src/runner.ts'
 import type { EngineConfig, Worker } from '../src/types.ts'
 
 const worker: Worker = { name: 'hot-path', backend: 'mock', provider: 'mock', model: '', enabled: true, roles: ['soldier'], reason: true, explore: true, bootstrap: false, maxRunning: 8, priority: 0 }
-const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 8, maxProjectWorkers: 8, maxRunningProjects: 2, maxSteps: null,
+const config: EngineConfig = { workers: [worker], providers: {}, maxProjectWorkers: 8, maxRunningProjects: 2, maxSteps: null,
   decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: os.tmpdir() }
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
 async function until(predicate: () => boolean) { for (let i = 0; i < 200; i++) { if (predicate()) return; await turn() } assert.fail('Condition did not settle') }
@@ -23,6 +23,24 @@ test('schema 2 rejects an old engine database instead of migrating it implicitly
     const unchanged = new DatabaseSync(filename, { readOnly: true })
     assert.equal(unchanged.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='nodes_project_kind'").get(), undefined); unchanged.close()
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('opening an up-to-date database leaves its audit indexes and history unchanged', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'redtrace-reopen-')), filename = path.join(root, 'engine.db')
+  let store: Store | undefined
+  try {
+    store = new Store(filename)
+    const project = store.createProject({ title: 'Reopen', origin: 'Local fixture', goal: 'Retain history' }).project
+    store.audit({ id: 'historical', project_id: project.id }, [{ kind: 'assistant.message', content: 'retained' }])
+    const version = store.db.prepare('PRAGMA schema_version').get()!.schema_version
+    store.close(); store = new Store(filename)
+    assert.equal(store.db.prepare('PRAGMA schema_version').get()!.schema_version, version)
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM audit_events').get()!.n, 1)
+    store.db.exec('DROP INDEX audit_events_run; CREATE INDEX audit_events_run ON audit_events(run_id,id)')
+    store.close(); store = new Store(filename)
+    assert.deepEqual(store.db.prepare('PRAGMA index_info(audit_events_run)').all().map(row => row.name), ['run_id', 'id', 'kind'])
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM audit_events').get()!.n, 1)
+  } finally { store?.close(); rmSync(root, { recursive: true, force: true }) }
 })
 
 test('Step and Goal selection uses the project-kind index', () => {

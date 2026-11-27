@@ -17,9 +17,9 @@ export function benchmarkAdapter(store:Store,projectId:string) {
   return {kind:tsec?'tsecbench':/(?:tpctf|ctfy)/i.test(description)?'tpctf':'manual',instanceApi:tsec,submissionApi:tsec}
 }
 async function tpctfQuery(config:EngineConfig,args:string[],signal?:AbortSignal) {
-  const script=path.join(path.dirname(config.workspaceRoot),'skills','tpctf-api','scripts','tpctf.py')
+  const script=path.join(path.dirname(config.workspaceRoot),'skills','tpctf-api','scripts','tpctf.py'),env=toolEnvironment(config.commonEnv)
   let stdout:string
-  try { stdout=(await execFileAsync(process.env.REDTRACE_BENCHMARK_PYTHON||'python3',[script,...args],{cwd:path.dirname(script),env:toolEnvironment(config.commonEnv),signal,timeout:45_000,maxBuffer:2*1024*1024})).stdout }
+  try { stdout=(await execFileAsync(env.REDTRACE_BENCHMARK_PYTHON||'python3',[script,...args],{cwd:path.dirname(script),env,signal,timeout:45_000,maxBuffer:2*1024*1024})).stdout }
   catch(error) { const output=(error as {stdout?:string}).stdout;if(!output)throw error;stdout=output }
   const response=JSON.parse(stdout)
   if(response?.ok===false)throw new HttpError(502,String(response.detail??response.code??'TPCTF API failure'),response)
@@ -32,10 +32,10 @@ export function recordBenchmarkSubmission(store:Store,projectId:string,taskKey:s
   store.event(projectId,'legion.submission',null,{taskKey,accepted:data.submissionAccepted})
 }
 export async function tsecbenchQuery(config: EngineConfig, args: string[], signal?: AbortSignal) {
-  const script = path.join(path.dirname(config.workspaceRoot), 'skills', 'tsecbench-api', 'scripts', 'tsecbench.py')
+  const script = path.join(path.dirname(config.workspaceRoot), 'skills', 'tsecbench-api', 'scripts', 'tsecbench.py'), env = toolEnvironment(config.commonEnv)
   try {
-    const { stdout } = await execFileAsync(process.env.REDTRACE_BENCHMARK_PYTHON || 'python3', [script, ...args], {
-      cwd: path.dirname(script), env: toolEnvironment(config.commonEnv), signal, timeout: 45_000, maxBuffer: 2 * 1024 * 1024,
+    const { stdout } = await execFileAsync(env.REDTRACE_BENCHMARK_PYTHON || 'python3', [script, ...args], {
+      cwd: path.dirname(script), env, signal, timeout: 45_000, maxBuffer: 2 * 1024 * 1024,
     })
     const response = JSON.parse(stdout)
     if (response?.ok === false) throw new HttpError(502, response.message ?? response.error ?? 'TSecBench SDK failure', response)

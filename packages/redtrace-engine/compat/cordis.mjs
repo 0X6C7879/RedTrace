@@ -5,6 +5,7 @@ import { runtimeCatalog, mountToolSettings, mountMcpRoleTools, platformToolOptio
 import { inspectToolCatalog } from './tool-catalog.mjs'
 import { mountLegionContext } from './legion-context.mjs'
 import { Type } from 'typebox'
+import { validateToolArguments } from '../src/tool-validation.ts'
 import { body, queryNumber } from '../src/http.ts'
 import { mountGlobalChat } from './chat.mjs'
 import { attachLegionMailbox, runCommander, createCommanderController, readCommanderLog } from './legion.mjs'
@@ -24,13 +25,12 @@ import { mountExecutionTools } from '../../redtrace-dsh/lib/execution-tools.js'
 import { activateAgent, resolveReasoningEffort } from '../../redtrace-dsh/lib/agent.js'
 import { state } from '../../redtrace-dsh/lib/state.js'
 import { apply as applyDomain, applyCommonEnv, mcpSignature } from '../../redtrace-dsh/lib/domain.js'
-import { accumulateUsage, eventProjection } from '../../redtrace-dsh/lib/audit.js'
+import { recordRunEvent } from './run-audit.mjs'
 import { providerProfiles } from '../src/models.ts'
 import { probeModel, admitToolImages } from './llm.mjs'
 
 export const name = 'redtrace-node'
 export const inject = ['webServer']
-const json = value => JSON.parse(JSON.stringify(value))
 
 export function executionEvidenceReadGuard(directory, cwd) {
   return exec => {
@@ -183,7 +183,7 @@ export async function apply(ctx, options) {
     await adapter.update({ config: { providers, polling: config.llmPolling, credentialSource: { root: engine.configuration.root, filename: engine.configuration.filename, revision } } })
     await adapter.fiber.await()
     if (shared) shared.snapshot = { revision, workers: config.workers.map(w => ({ ...w })), providers, env: {}, commonEnv: config.commonEnv, tasks: raw.tasks, mcpConfigs,
-      limits: { maxWorkers: config.maxWorkers, maxProjectWorkers: config.maxProjectWorkers, maxRunningProjects: config.maxRunningProjects, interval: 0 } }
+      limits: { maxProjectWorkers: config.maxProjectWorkers, maxRunningProjects: config.maxRunningProjects, interval: 0 } }
     ctx.logger.info('Configuration reloaded: revision='+revision.slice(0,12)+' workers='+config.workers.length)
     await Promise.all([...sessionRefresh.values()].map(refresh=>refresh()))
     profileRevision = revision; profileSignature = signature
@@ -283,7 +283,7 @@ export async function apply(ctx, options) {
         // Native spill reads retain the existing archived-evidence recovery allowance.
         scoped.tools.guard(exec => planGuard.check({ name: exec.name === 'read' && ownSpillRead(exec) === undefined ? 'evidence_read' : exec.name, rootCallId: String(exec.rootCallId),arguments:exec.arguments }))
       }
-      if (!reporting) scoped.systemPrompt.context({ name: 'redtrace:task-planning', order: 3, required: true, interpolate: false, text: () => {return JSON.stringify({taskPlanner:taskPlanningContext(store,step).taskPlanner})} })
+      if (!reporting) scoped.systemPrompt.context({ name: 'redtrace:task-planning', order: 3, required: true, interpolate: false, text: () => {const {coordinator,taskPlanner}=taskPlanningContext(store,step);return JSON.stringify({coordinator,taskPlanner})} })
       if (!reporting) scoped.systemPrompt.context({ name: 'redtrace:live-plan', order: 2, required: true, interpolate: false,
         text: () => livePlan(store, run.id) })
       // The DSH tools runtime projects parameters as lossless JSON; the graph
@@ -293,8 +293,7 @@ export async function apply(ctx, options) {
         output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => value.content },
         async execute(args, execution) {
           if (finished || signal.aborted) throw new Error('Activity has stopped')
-          const { Check, Errors } = await import('typebox/value')
-          if (!Check(t.parameters, args)) throw new Error('Invalid tool arguments for '+t.name+': '+JSON.stringify([...Errors(t.parameters,args)].slice(0,6).map(e=>({path:e.instancePath,message:e.message}))))
+          validateToolArguments(t.name, t.parameters, args)
           const result = await admitToolImages(ctx.get('attachments'), await t.execute(execution.callId ?? '', args, execution.signal))
           if (result.isError) throw new HarnessError(result.content.filter(block => block.type === 'text').map(block => block.text).join('\n'), result.details?.context?.code ?? 'REDTRACE_TOOL_ERROR')
           if (result.terminate) execution.concludeTurn?.()
@@ -325,26 +324,7 @@ export async function apply(ctx, options) {
     }
     const unlisten = ctx.on('session/event', (session, event) => {
       if (String(session.id) !== run.id) return
-      const data = event.data ?? {}
-      if (event.type === 'assistant/chunk' && ['text-delta', 'reasoning-delta'].includes(data.chunk?.type)) {
-        for (const projected of eventProjection(task, event)) store.changes.emit('audit', run.projectId, { ...projected, project_id: run.projectId, graph_id:run.graphId, run_id: run.id })
-        return
-      }
-      if (event.type === 'step/start') store.metricStart(run.id, `model-${data.turn}-${data.step}`, 'model')
-      if (event.type === 'assistant/message' || event.type === 'step/end') store.metricEnd(run.id, `model-${data.turn}-${data.step}`)
-      store.transaction(() => {
-        // DSH's projected tool/call is the canonical audit row. The lifecycle
-        // tracker still owns pendingTools, but must not emit a second started
-        // row through Store.runEvent.
-        if (event.type === 'tool/call' && data.callId) {
-          store.toolStarted(run.id, String(data.callId), json(data), false)
-        }
-        if (event.type === 'tool/result' && data.message?.source?.callId) store.toolEnded(run.id, String(data.message.source.callId), json(data))
-        accumulateUsage(task, event)
-        if (task.usage) { const current = store.run(run.id); Object.assign(current, task.usage); store.saveRun(current) }
-        const metadata = JSON.parse(store.db.prepare('SELECT data FROM audit_runs WHERE id=?').get(run.id).data)
-        store.audit(metadata, json(eventProjection(task, event)))
-      })
+      recordRunEvent(store, run, task, event)
       if(event.type==='tool/result')engine.legion.settleHandoff(run.id)
     })
     const cancel = () => { task.cancelled = true; if (handle) { handle.agent.cancel({ kind: 'hook', reason: 'FGS activity paused or cancelled' }) } }
@@ -390,7 +370,7 @@ export async function apply(ctx, options) {
       if (!finished && !task.committed && !signal.aborted) { const current=store.run(run.id);current.failureCode=concludeOnly?'TIMEOUT':'PROCESS_EXIT';store.saveRun(current);throw new Error(concludeOnly ? 'Activity ended without a structured completion' : 'Agent execution failed') }
     } finally {
       signal.removeEventListener('abort', cancel); legionMailbox?.()
-      try { if (handle) { cancel(); await handle.agent.whenIdle(); await ctx.get('sessions').flush(handle.agent.session); store.checkpoint(run.id, { sessionId: run.id }); await handle.dispose() } }
+      try { if (handle) { cancel(); await handle.agent.whenIdle(); await handle.dispose(); store.checkpoint(run.id, { sessionId: run.id }) } }
       finally { sessionRefresh.delete(run.id); unlisten(); unlistenGraph(); shared.tasks.delete(run.id) }
     }
   }

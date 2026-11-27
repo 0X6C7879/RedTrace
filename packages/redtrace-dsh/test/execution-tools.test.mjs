@@ -213,6 +213,16 @@ test('Spill is Execute-only, session-isolated, hot-reloadable and preserves evid
       const read = await call('read', { file_path: file, offset: 20007, limit: 1 })
       assert.equal(read.isError, false); assert.match(read.content[0].text, /TAIL/)
       if (type === 'soldier') {
+        scoped.tools.register({ name: 'fixture_blocks', description: 'Batched text retention fixture', parameters: {},
+          output: { schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }, render: (_args, value) => [{ type: 'text', text: value.text.slice(0, value.text.indexOf(clue)) }, { type: 'text', text: value.text.slice(value.text.indexOf(clue)) }] },
+          execute: async () => ({ text }) })
+        const multi = await call('fixture_blocks', {}), shown = multi.content.map(block => block.text ?? '').join('')
+        assert.equal(multi.value.text, text)
+        assert.ok(shown.includes(clue))
+        assert.equal((shown.match(/上一行另重复 9999 次/g) ?? []).length, 2)
+        const archived = shown.match(/Full formatted result stored at: (.*?)\. Use read/s)?.[1]
+        assert.ok(archived)
+        assert.equal(readFileSync(archived, 'utf8'), text)
         const store = new Store(':memory:')
         try {
           const project = store.createProject({ title: 'Spill recovery', origin: 'Local fixture', goal: 'Read existing evidence' }).project

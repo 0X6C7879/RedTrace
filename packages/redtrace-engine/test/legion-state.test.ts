@@ -23,7 +23,7 @@ function fixture(t: any) {
 }
 const mission = { role: 'soldier' as const, taskKey: 'challenge-a', description: 'fixture task', sourceIds: ['origin'] }
 const worker = { name: 'fixture', backend: 'mock' as const, provider: 'mock', model: 'mock', enabled: true, reason: false, explore: true, bootstrap: true, maxRunning: 4, priority: 0 }
-const config = (root: string): EngineConfig => ({ workers: [worker], providers: {}, maxWorkers: 4, maxProjectWorkers: 4, maxRunningProjects: 2, maxSteps: null, decideTimeout: 5, executeTimeout: 5, concludeTimeout: 1, bootstrapTimeout: 5, bootstrapConcludeTimeout: 1, workspaceRoot: root })
+const config = (root: string): EngineConfig => ({ workers: [worker], providers: {}, maxProjectWorkers: 4, maxRunningProjects: 2, maxSteps: null, decideTimeout: 5, executeTimeout: 5, concludeTimeout: 1, bootstrapTimeout: 5, bootstrapConcludeTimeout: 1, workspaceRoot: root })
 
 test('Campaign is a singleton control record, not a Project; acknowledgements cannot skip delivery', t => {
   const { store, legion, project } = fixture(t)

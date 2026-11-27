@@ -57,7 +57,7 @@ function upstreamTypeScript() {
 
 export async function prepareRuntime(source, destination) {
   await mkdir(destination, { recursive: true })
-  for (const name of ['packages', 'vendor', 'native', 'patches']) await cp(path.join(source, name), path.join(destination, name), { recursive: true, verbatimSymlinks: true, filter: filename => !['tests', 'test', 'docs', '.agents', '.claude'].includes(path.basename(filename)) && !/^README(?:\.|$)/.test(path.basename(filename)) })
+  for (const name of ['packages', 'vendor', 'native', 'patches']) await cp(path.join(source, name), path.join(destination, name), { recursive: true, verbatimSymlinks: true, filter: filename => !['tests', 'test', 'docs', '.agents', '.claude', 'lib', 'node_modules'].includes(path.basename(filename)) && !/^README(?:\.|$)/.test(path.basename(filename)) && !filename.endsWith('.tsbuildinfo') })
   await cp(path.join(source, 'scripts/types'), path.join(destination, 'scripts/types'), { recursive: true })
   for (const name of ['client-build-environment.ts', 'experimental-package-policy.ts', 'bundle-input-isolation.ts', 'typert-faces.ts', 'workspace-package-globs.ts']) {
     if (existsSync(path.join(source, 'scripts', name))) await cp(path.join(source, 'scripts', name), path.join(destination, 'scripts', name))

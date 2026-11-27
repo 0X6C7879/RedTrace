@@ -11,7 +11,7 @@ import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { mountLegionContext } from './legion-context.mjs'
-import { Check, Errors } from 'typebox/value'
+import { validateToolArguments } from '../src/tool-validation.ts'
 import { legionTools } from '../src/legion-tools.ts'
 import { LegionStore } from '../src/legion-store.ts'
 import { capacityFull } from '../src/scheduler.ts'
@@ -134,13 +134,13 @@ export async function runCommander(ctx, engine, worker, signal, projectId) {
         scoped.on('agent/error',({error})=>{resident.cycle.failure=error})
         scoped.tools.restrict({allow:[]})
         scoped.systemPrompt.section({name:'redtrace:planning-capacity',order:1,text:()=>{const current=configuration.resolvedSnapshot().config;return '当前规划容量：'+JSON.stringify(periodic?{...legion.questionCapacity(current.maxBenchmarkTasks??null),maxSteps:current.maxSteps}:store.planningCapacity(projectId,current.maxSteps))}})
-        scoped.systemPrompt.section({name:'redtrace:commander',order:0,text:()=>legionMission(role,store.project(projectId).mode)+'\n分配 Project='+projectId+(periodic?'':'；读 FGS 增量/相关节点，按需查 Worker。')})
+        scoped.systemPrompt.section({name:'redtrace:commander',order:0,text:()=>legionMission(role,store.project(projectId).mode)+'\n分配 Project='+projectId+(periodic?'\n用户任务：'+JSON.stringify({scope:store.scopeFact(projectId).description,objective:store.project(projectId).objective}):'；读 FGS 增量/相关节点，按需查 Worker。')})
         let domainRegistrations=[],domainRevision=''
         const refreshDomains=()=>{const revision=configuration.resolvedSnapshot().revision;if(revision===domainRevision)return;for(const dispose of domainRegistrations)dispose();domainRegistrations=domainTools(originalTools,name=>platformToolOptions(engine,name,role).when()).map(tool=>scoped.tools.register({redtrace:true,name:tool.name,description:tool.description,parameters:JSON.parse(JSON.stringify(tool.parameters)),
           output:{schema:{type:'object',additionalProperties:true},render:(_args,value)=>value.content},
           async execute(args,execution){
             if(resident.cycle.finished||resident.cycle.signal.aborted)throw new Error('Commander has stopped')
-            if(!Check(tool.parameters,args))throw new Error('Invalid tool arguments for '+tool.name+': '+JSON.stringify([...Errors(tool.parameters,args)].slice(0,6).map(e=>({path:e.instancePath,message:e.message}))))
+            validateToolArguments(tool.name, tool.parameters, args)
             const result=await tool.execute(execution.callId??'',args,execution.signal)
             if(result.terminate)execution.concludeTurn?.()
             return result
@@ -170,7 +170,7 @@ export async function runCommander(ctx, engine, worker, signal, projectId) {
     signal.removeEventListener('abort',cancel);mailbox?.()
     if(handle){
       let retire=!residents||signal.aborted||cycle.failure||!cycle.finished||resident.relaySummary
-      try{if(retire){cancel();await handle.agent.whenIdle();unread.push(...handle.agent.inbox.nextStep.map(m=>m.source?.redtraceLegionMessage).filter(Boolean))}await ctx.get('sessions').flush(handle.agent.session)}
+      try{if(retire){cancel();await handle.agent.whenIdle();unread.push(...handle.agent.inbox.nextStep.map(m=>m.source?.redtraceLegionMessage).filter(Boolean))}else await ctx.get('sessions').flush(handle.agent.session)}
       catch(error){retire=true;legion.saveCampaign({...legion.campaign(),status:'stopped',error:String(error)});throw error}
       finally{if(retire){residents?.delete(projectId);engine.sessionRefresh?.delete(campaign.sessionId);await handle.dispose()}}
     }
@@ -252,9 +252,7 @@ export function createCommanderController(ctx, engine, canRun=()=>true) {
         if(active.has(project.id)||campaign.status!=='idle'||legion.budget(Date.now(),project.id).phase==='ended')continue
         if((campaign.nextInspectionAt??0)>Date.now()){armInspection(project.id,campaign.nextInspectionAt);continue}
         if(!periodic&&(debounces.has(project.id)||!pending(project.id)))continue
-        const capacity=capacityFull(config,undefined,project.id,runs,commands)
-        if(capacity==='workers')break
-        if(capacity)continue
+        if(capacityFull(config,undefined,project.id,runs,commands))continue
         const selected=campaign.nextWorker?conversationWorker(config,campaign.nextWorker,project.mode):undefined
         const worker=(campaign.nextWorker?(selected?[selected]:[]):conversationWorkers(config,project.mode)).filter(w=>!capacityFull(config,w,undefined,runs,commands)).sort((a,b)=>a.priority-b.priority||a.name.localeCompare(b.name))[0]
         if(!worker)continue

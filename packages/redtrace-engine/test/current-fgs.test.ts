@@ -5,11 +5,29 @@ import path from 'node:path'
 import os from 'node:os'
 import { Store } from '../src/store.ts'
 import { graphTools } from '../src/runner.ts'
-import { projectFgs } from '../src/fgs.ts'
+import { projectFgs, liveSteps } from '../src/fgs.ts'
 import { serveEngine } from '../src/index.ts'
 import type { EngineConfig, Step } from '../src/types.ts'
 
 const worker = { name: 'fixture', backend: 'mock' as const, provider: 'mock', model: '', enabled: true, maxRunning: 4, priority: 0 }
+
+test('graph projection counts only active nondeleted Steps per Goal and emits each live edge once', () => {
+  const store = new Store(':memory:')
+  try {
+    const id = store.createProject({title:'Counts',origin:'Local fixture',goal:'Render'}).project.id
+    const step = store.addStep(id,{description:'Fixture',sourceIds:['origin']})
+    const graph = store.graph(id), goal = graph.goals[0]
+    graph.goals.push({...goal,id:'second',parentId:goal.id})
+    graph.steps = ['pending','running','paused','blocked','done','cancelled'].map((status,index)=>({...step,id:'step-'+index,status:status as Step['status'],sourceIds:['origin','origin'],goalId:index===3?'second':goal.id}))
+    graph.steps.push({...step,id:'deleted',deleted:true})
+    const view = projectFgs(graph), live = liveSteps(graph)
+    assert.equal(view.nodes.find(node=>node.id===goal.id)!.activeSteps,3)
+    assert.equal(view.nodes.find(node=>node.id==='second')!.activeSteps,1)
+    assert.equal(live.nodes.length,4)
+    assert.equal(live.edges.length,8)
+    assert.equal(new Set(live.edges.map(edge=>JSON.stringify([edge.source,edge.target]))).size,8)
+  } finally {store.close()}
+})
 
 test('corrections retain original bytes, producer and multi-stage dependencies while indexes stay compact', async () => {
   const s = new Store(':memory:')

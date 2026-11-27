@@ -11,6 +11,7 @@ const [major, minor] = process.versions.node.split('.').map(Number)
 if (major < 24 || major === 25 || (major === 24 && minor < 11)) throw new Error('Node 24.11+ or 26+ required')
 if (values.help) { console.log('RedTrace Node: --root DIR --host 127.0.0.1 --port 8000 --config SOURCE --copy-config SOURCE --mock [--compat]'); process.exit(0) }
 {
+  await import('./build-native.mjs')
   const root = path.resolve(values.root), managed = path.resolve(process.env.REDTRACE_DATA_ROOT || path.join(root, '.redtrace'))
   const config = new Configuration(root, path.join(managed, 'redtrace.yaml'))
   const runtimeRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)))

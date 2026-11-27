@@ -10,7 +10,7 @@ import { benchmarkAdapter, benchmarkInstance, discoverBenchmarkTasks } from './b
 import type { EngineConfig } from './types.ts'
 import { Type } from 'typebox'
 import type { TSchema } from 'typebox'
-import { Check, Errors } from 'typebox/value'
+import { validateToolArguments } from './tool-validation.ts'
 import type { AgentTool } from './tool-types.ts'
 import type { Store } from './store.ts'
 import type { Step, Goal, GraphPlanner } from './types.ts'
@@ -23,10 +23,10 @@ export function legionTools(store: Store, actor: string, projectId: string | und
   const settings = () => currentConfig ? currentConfig() : config
   const stepLimit = () => currentConfig ? currentConfig().maxSteps : maxSteps
   if(commander&&!benchmark)todos ??= legion.planningTodos(projectId!)
-  const tool = (name: string, description: string, parameters: any, execute: (args: any, signal?: AbortSignal) => unknown, terminate = false): AgentTool => ({
+  const tool = (name: string, description: string, parameters: any, execute: (args: any, signal?: AbortSignal) => unknown, terminate: boolean | ((args: any) => boolean) = false): AgentTool => ({
     name, label: name, description, parameters, executionMode: 'sequential',
     async execute(_id, args, signal) {
-      if (!Check(parameters, args)) throw new HttpError(422, 'Invalid tool arguments for '+name+': '+JSON.stringify([...Errors(parameters,args)].map(e=>({path:e.instancePath,message:e.message}))))
+      validateToolArguments(name, parameters, args)
       if(commander) {
         if(!projectId) throw new HttpError(422,'Commander requires its Project')
         for(const key of ['projectId','targetProject']) if((args as Record<string,unknown>)[key]!==undefined && (args as Record<string,unknown>)[key]!==projectId) throw new HttpError(403,'Commander cannot access another Project')
@@ -35,7 +35,7 @@ export function legionTools(store: Store, actor: string, projectId: string | und
       if(benchmark&&!commander&&TASK_PLANNING_TOOLS.has(name)&&step&&(!taskTodoOwner(step,store)||store.assignment(store.run(actor))?.status!=='running'))throw new HttpError(409,'Planning ownership transferred to another task Agent')
       const result = await execute(args, signal)
       if(commander&&benchmark&&['legion_spawn','legion_park','legion_reactivate','legion_reassign','legion_commander_model','legion_adjust','legion_transfer'].includes(name))legion.checkpointState(projectId!,name)
-      const value = JSON.parse(JSON.stringify(result)); return { content: [{ type: 'text', text: JSON.stringify(value) }], details: value, ...(terminate ? { terminate: true } : {}) } },
+      const value = JSON.parse(JSON.stringify(result)); return { content: [{ type: 'text', text: JSON.stringify(value) }], details: value, ...((typeof terminate === 'function' ? terminate(args) : terminate) ? { terminate: true } : {}) } },
   })
   const project = (args: any) => { if (commander) { store.project(projectId!); return projectId! }; return projectId! }
   const scope: Record<string, TSchema> = commander ? { projectId: Type.String() } : {}
@@ -48,7 +48,7 @@ export function legionTools(store: Store, actor: string, projectId: string | und
     tool('legion_read_run',"先读 Audit 摘要索引；query 搜索，after/before 分页，eventId 展开单条原文。默认不含 Thinking/重复参数。",Type.Object({...(!benchmark?scope:{}),runId:text,after:Type.Optional(Type.Integer({minimum:0})),before:Type.Optional(Type.Integer({minimum:1})),limit:Type.Optional(Type.Integer({minimum:1,maximum:100})),query:Type.Optional(text),eventId:Type.Optional(Type.Integer({minimum:1})),includeThinking:Type.Optional(Type.Boolean())},{additionalProperties:false}),args=>readRunTrace(store,project(args),args.runId,args,undefined)),
   ] : []
   if(commander&&benchmark) return [roster,...inspection,
-    tool('legion_board',"精简 Board；taskKey 聚焦单题，不含 FGS 正文。",Type.Object({taskKey:Type.Optional(text)},{additionalProperties:false}),args=>({...legion.boardSummary(args.taskKey),capacity:{...legion.questionCapacity(settings()?.maxBenchmarkTasks ?? null),maxWorkers:settings()?.maxWorkers,maxProjectWorkers:settings()?.maxProjectWorkers,maxRunningProjects:settings()?.maxRunningProjects,runningWorkers:Number(store.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE status='running'").get()!.n),runningCommanders:Number(store.db.prepare("SELECT COUNT(*) AS n FROM project_campaigns WHERE json_extract(data,'$.status')='running'").get()!.n)}})),
+    tool('legion_board',"精简 Board；taskKey 聚焦单题，不含 FGS 正文。",Type.Object({taskKey:Type.Optional(text)},{additionalProperties:false}),args=>({...legion.boardSummary(args.taskKey),capacity:{...legion.questionCapacity(settings()?.maxBenchmarkTasks ?? null),maxProjectWorkers:settings()?.maxProjectWorkers,maxRunningProjects:settings()?.maxRunningProjects,runningWorkers:Number(store.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE status='running'").get()!.n),runningCommanders:Number(store.db.prepare("SELECT COUNT(*) AS n FROM project_campaigns WHERE json_extract(data,'$.status')='running'").get()!.n)}})),
     tool('legion_read_changes',"分页读调度增量至 hasMore=false；处理后在 legion_wait 确认 cursor。",Type.Object({after:Type.Optional(Type.Integer({minimum:0})),limit:Type.Optional(Type.Integer({minimum:1,maximum:100}))},{additionalProperties:false}),args=>legion.readCommandChanges(projectId!,args.after,args.limit)),
     tool('legion_inbox',"读未处理持久消息；送达不等于证据。",Type.Object({},{additionalProperties:false}),()=>legion.messages(projectId!,'commander').filter(m=>m.status!=='admitted')),
     tool('legion_message',"原文转发用户指令，或给活动任务所有者发资源/归属通知；不提供攻击策略。",Type.Object({receiver:text,type:Type.Union(['HELP','REPORT','MESSAGE'].map(v=>Type.Literal(v))),content:text},{additionalProperties:false}),args=>legion.message(projectId!,'commander',args.receiver,args.type,args.content)),
@@ -110,10 +110,7 @@ export function legionTools(store: Store, actor: string, projectId: string | und
   if(commander&&!benchmark)tools.push(tool('legion_report',"按需请求确证 Finding 报告，优先原 Worker/Session；上下文不可用才增 report-only Soldier。确需独立整合才用 independent=true。",Type.Object({projectId:text,findingId:text,independent:Type.Optional(Type.Boolean())},{additionalProperties:false}),args=>store.requestFindingReport(project(args),args.findingId,args.independent)))
   if(benchmark&&step&&taskTodoOwner(step,store)) {
     const graphId=step.graphId!,scoped=store.forGraph(projectId!,graphId)
-    tools.push(
-      tool('legion_goal',"在分配的任务 Graph 内新建证据驱动阶段 Goal。",Type.Object({description:text,parentId:Type.Optional(text)},{additionalProperties:false}),args=>scoped.addGoal(projectId!,args.description,args.parentId??step.goalId,actor)),
-      tool('legion_update_goal',"在本任务 Graph 内修订、凭证验收或放弃阶段 Goal。",Type.Object({id:text,expectedVersion:Type.Integer({minimum:1}),description:Type.Optional(text),status:Type.Optional(Type.Union([Type.Literal('open'),Type.Literal('achieved'),Type.Literal('cancelled')])),evidenceIds:Type.Optional(Type.Array(text,{minItems:1}))},{additionalProperties:false}),args=>{if(args.status==='achieved')verifyGoalEvidence(scoped,args.evidenceIds??scoped.node<Goal>(projectId!,args.id,'goal').evidenceIds);return scoped.updateGoal(projectId!,args.id,args)}),
-      tool('legion_accept',"以确证目标证据验收并结束；托管实例清理未确认时 General 不可验收。",Type.Object({expectedVersion:Type.Integer({minimum:1}),evidenceIds:Type.Array(text,{minItems:1})},{additionalProperties:false}),async(args,signal)=>{
+    const accept = async(args: {expectedVersion:number;evidenceIds:string[]}, signal?:AbortSignal) => {
         verifyGoalEvidence(scoped,args.evidenceIds)
         const current=scoped.node<Goal>(projectId!,step.goalId,'goal')
         if(current.version!==args.expectedVersion)throw new HttpError(409,'Goal version changed; read the current Goal before acceptance')
@@ -134,7 +131,11 @@ export function legionTools(store: Store, actor: string, projectId: string | und
           if(owner.role==='general')store.savePlanner(owner as GraphPlanner);else store.saveNode(owner as Step)
           const goal=scoped.updateGoal(projectId!,step.goalId,{status:'achieved',expectedVersion:args.expectedVersion,evidenceIds:args.evidenceIds});finish();return goal
         })
-      },true),
+      }
+    tools.push(
+      tool('legion_accept',"验收本任务根 Goal 并结束；先留证据/结清同伴，由本任务释放已完成实例。只传 expectedVersion,evidenceIds。",Type.Object({expectedVersion:Type.Integer({minimum:1}),evidenceIds:Type.Array(text,{minItems:1})},{additionalProperties:false}),accept,true),
+      tool('legion_goal',"在分配的任务 Graph 内新建证据驱动阶段 Goal。",Type.Object({description:text,parentId:Type.Optional(text)},{additionalProperties:false}),args=>scoped.addGoal(projectId!,args.description,args.parentId??step.goalId,actor)),
+      tool('legion_update_goal',"修订/验收本任务阶段 Goal；根 Goal 达成自动走 accept 的收尾，不取消自身。",Type.Object({id:text,expectedVersion:Type.Integer({minimum:1}),description:Type.Optional(text),status:Type.Optional(Type.Union([Type.Literal('open'),Type.Literal('achieved'),Type.Literal('cancelled')])),evidenceIds:Type.Optional(Type.Array(text,{minItems:1}))},{additionalProperties:false}),async(args,signal)=>{if(args.id===step.goalId&&args.status==='achieved'){const goal=scoped.node<Goal>(projectId!,args.id,'goal');if(args.description!==undefined&&args.description!==goal.description)throw new HttpError(422,'Root goal description is immutable');return accept({expectedVersion:args.expectedVersion,evidenceIds:args.evidenceIds??goal.evidenceIds},signal)}if(args.status==='achieved')verifyGoalEvidence(scoped,args.evidenceIds??scoped.node<Goal>(projectId!,args.id,'goal').evidenceIds);return scoped.updateGoal(projectId!,args.id,args)},args=>args.id===step.goalId&&args.status==='achieved'),
       tool('legion_confirm_transfer',"用本任务 Fact 确认已重验的转移经验。",Type.Object({id:text,factIds:Type.Array(text,{minItems:1})},{additionalProperties:false}),args=>experience().confirm(args.id,projectId!,args.factIds)),
     )
   }

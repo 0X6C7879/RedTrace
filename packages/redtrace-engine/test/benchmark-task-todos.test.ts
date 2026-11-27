@@ -106,7 +106,7 @@ test('Scheduler repairs legacy missing lists before executing concurrent questio
   spawnTask(f.legion,f.p.id, { graphId: b.id, taskKey: 'B', role: 'soldier', description: 'B', sourceIds: [b.originId] })
   f.legion.planningTodos(f.p.id).replace(b.id, [])
   f.store.db.prepare('DELETE FROM commander_todos WHERE project_id=? AND graph_id=?').run(f.p.id, f.graph.id)
-  const launched: string[] = [], scheduler = new Scheduler(f.store, { workers: [{ ...worker, enabled: true, roles: ['soldier'], maxRunning: 2, priority: 0 }], maxWorkers: 2, maxProjectWorkers: 2, maxRunningProjects: 1, maxSteps: null, workspaceRoot: '/tmp/task-todos' } as EngineConfig, async ({ run, signal }) => {
+  const launched: string[] = [], scheduler = new Scheduler(f.store, { workers: [{ ...worker, enabled: true, roles: ['soldier'], maxRunning: 2, priority: 0 }], maxProjectWorkers: 2, maxRunningProjects: 1, maxSteps: null, workspaceRoot: '/tmp/task-todos' } as EngineConfig, async ({ run, signal }) => {
     assert(f.store.db.prepare('SELECT 1 FROM commander_todos WHERE project_id=? AND graph_id=?').get(run.projectId, run.graphId!))
     launched.push(run.graphId!); await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
   })

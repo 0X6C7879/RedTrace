@@ -60,20 +60,38 @@ test('Operations completion wakes waiting callers and cleans listeners on cancel
  } finally {await ops.close();store.close();rmSync(root,{recursive:true,force:true})}
 })
 test('harness streams text and reasoning deltas without SQLite work',async()=>{
- const { eventProjection }=await import('../../redtrace-dsh/lib/audit.js')
- const source=readFileSync(new URL('../compat/cordis.mjs',import.meta.url),'utf8')
- const start=source.indexOf("    const unlisten = ctx.on('session/event'"),end=source.indexOf('    const cancel =',start)
- assert.ok(start>=0&&end>start)
- let listener:any;const emitted:any[]=[]
+ const { recordRunEvent }=await import(new URL('../compat/run-audit.mjs',import.meta.url).href)
+ const emitted:any[]=[]
  const store={changes:{emit:(...args:any[])=>emitted.push(args)},transaction:()=>{throw new Error('delta reached SQLite')}}
- const ctx={on:(_name:string,callback:any)=>{listener=callback;return()=>{}}}
  const task:any={sessionId:'stream-fixture'},run={id:'stream-fixture',projectId:'fixture'}
- new Function('ctx','run','store','task','eventProjection',source.slice(start,end))(ctx,run,store,task,eventProjection)
- listener({id:run.id},{type:'assistant/chunk',seq:1,data:{chunk:{type:'text-delta',text:'flag{raw}'}}})
- listener({id:run.id},{type:'assistant/chunk',seq:2,data:{chunk:{type:'reasoning-delta',text:'raw token'}}})
+ recordRunEvent(store,run,task,{type:'assistant/chunk',seq:1,data:{chunk:{type:'text-delta',text:'flag{raw}'}}})
+ recordRunEvent(store,run,task,{type:'assistant/chunk',seq:2,data:{chunk:{type:'reasoning-delta',text:'raw token'}}})
  assert.deepEqual(emitted.map(row=>row[2].kind),['assistant.delta','thinking.delta'])
  assert.equal(emitted[0][2].content,'flag{raw}');assert.equal(emitted[1][2].content,'raw token')
 })
+test('Run audit keeps exact usage and pending calls without writing unchanged state for bookkeeping events', async () => {
+ const { recordRunEvent } = await import(new URL('../compat/run-audit.mjs', import.meta.url).href)
+ const store = new Store(':memory:')
+ try {
+  const project = store.createProject({title:'Usage',origin:'local fixture',goal:'retain accounting'}).project
+  const step = store.addStep(project.id,{description:'read fixture',sourceIds:['origin']})
+  const run = store.claim(project.id,'execute',worker,step.id), task: any = {sessionId:run.id}
+  recordRunEvent(store,run,task,{type:'assistant/message',seq:1,data:{usage:{inputTokens:11,outputTokens:7,cacheReadTokens:3,cacheWriteTokens:2},message:{content:[{type:'text',text:'confirmed'}]}}})
+  const changes = store.db.prepare('SELECT total_changes() AS n').get()!.n
+  for(let seq=2;seq<20;seq++)recordRunEvent(store,run,task,{type:'tool/prepare',seq,data:{}})
+  assert.equal(store.db.prepare('SELECT total_changes() AS n').get()!.n,changes)
+  recordRunEvent(store,run,task,{type:'tool/call',seq:20,data:{callId:'read-1',name:'read',arguments:{file_path:'fixture.txt'}}})
+  assert.deepEqual(store.run(run.id).pendingTools,['read-1'])
+  assert.throws(()=>recordRunEvent(store,run,task,{type:'tool/call',seq:21,data:{callId:'read-1',name:'wrong'}}),/Tool already started/)
+  assert.equal(task.toolCalls.get('read-1').name,'read')
+  recordRunEvent(store,run,task,{type:'tool/result',seq:21,data:{message:{source:{callId:'read-1'},content:[{type:'text',text:'fixture output'}]}}})
+  assert.deepEqual(store.run(run.id).pendingTools,[])
+  assert.equal(store.runCosts(run.id).totalTokens,23)
+  assert.deepEqual(store.db.prepare('SELECT kind FROM audit_events WHERE run_id=? ORDER BY id').all(run.id).map(row=>row.kind),['assistant.message','tool.started','tool.completed'])
+  assert.equal(store.db.prepare('SELECT status FROM tool_calls WHERE run_id=?').get(run.id)!.status,'succeeded')
+ } finally {store.close()}
+})
+
 test('Skill entrypoints keep native submissions, unattended continuation and headless defaults',()=>{
  const root=new URL('../../../skills/',import.meta.url)
  for(const name of ['targeted-pentest','recon-crawl','api-testing','exploit-file-upload','exploit-ssrf','exploit-smuggling','exploit-race','exploit-logic','exploit-sqli','exploit-xss','shell','tunnel','service-attack','privesc-linux','privesc-win','ad-attack']){
@@ -85,4 +103,37 @@ test('Skill entrypoints keep native submissions, unattended continuation and hea
  assert.doesNotMatch(benchmark,/活跃实例最多|取提示使用 CLI/);assert.match(benchmark,/Commander 只读平台状态并调度/)
  const playwright=readFileSync(new URL('playwright-skill/SKILL.md',root),'utf8')
  assert.doesNotMatch(playwright,/headless: false|visible browser by default/)
+})
+
+
+test('Run audit reuses persisted JSON without aliasing caller arguments or publishing rolled back events', async () => {
+ const { recordRunEvent } = await import(new URL('../compat/run-audit.mjs', import.meta.url).href)
+ const store = new Store(':memory:')
+ try {
+  const project = store.createProject({title:'Snapshot',origin:'local fixture',goal:'retain committed evidence'}).project
+  const step = store.addStep(project.id,{description:'read fixture',sourceIds:['origin']})
+  const run = store.claim(project.id,'execute',worker,step.id), task = {sessionId:run.id}
+  await new Promise<void>(resolve => queueMicrotask(resolve))
+  const published: any[] = []
+  store.changes.on('audit', (_id, event) => published.push(event))
+  const args = {nested:{path:'before.txt'}}
+  store.transaction(() => {
+   recordRunEvent(store,run,task,{type:'tool/call',seq:1,data:{callId:'snapshot',name:'read',arguments:args}})
+   args.nested.path = 'after.txt'
+   assert.equal(published.length,0)
+  })
+  assert.throws(() => store.transaction(() => {
+   recordRunEvent(store,run,task,{type:'user/message',seq:2,data:{content:[{type:'text',text:'rolled back'}]}})
+   throw new Error('rollback fixture')
+  }), /rollback fixture/)
+  await new Promise<void>(resolve => queueMicrotask(resolve))
+  assert.equal(published.length,1)
+  const row = store.db.prepare('SELECT id,data FROM audit_events WHERE run_id=?').get(run.id)!
+  const persisted = JSON.parse(String(row.data))
+  assert.deepEqual(published[0],{...persisted,id:Number(row.id)})
+  assert.equal(published[0].arguments.nested.path,'before.txt')
+  published[0].arguments.nested.path = 'listener.txt'
+  assert.equal(args.nested.path,'after.txt')
+  assert.equal(JSON.parse(String(store.db.prepare('SELECT data FROM audit_events WHERE id=?').get(row.id as number)!.data)).arguments.nested.path,'before.txt')
+ } finally {store.close()}
 })

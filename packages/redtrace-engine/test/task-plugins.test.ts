@@ -12,7 +12,7 @@ import { validateTaskPlugins } from '../src/task-plugins.ts'
 import type { EngineConfig, Step, Worker } from '../src/types.ts'
 
 const worker: Worker = { name: 'fixture', backend: 'mock', provider: 'mock', model: '', enabled: true, reason: true, explore: true, bootstrap: true, maxRunning: 4, priority: 0 }
-const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 4, maxProjectWorkers: 4, maxRunningProjects: 1, maxSteps: null, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: '/tmp' }
+const config: EngineConfig = { workers: [worker], providers: {}, maxProjectWorkers: 4, maxRunningProjects: 1, maxSteps: null, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: '/tmp' }
 const input = { description: 'Analyze fixture', sourceIds: ['origin'], plugins: ['redtrace-reverse'] }
 
 test('legacy task declarations are validated at compatibility boundaries but not stored in new Steps', t => {

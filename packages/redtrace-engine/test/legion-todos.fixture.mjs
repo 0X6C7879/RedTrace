@@ -63,7 +63,7 @@ try{
  configuration.commit(configuration.read().revision,raw=>{
   raw.providers={fixture:{api:'openai-completions',base_url:'http://127.0.0.1:'+model.address().port+'/v1',api_key:'fixture',models:[{id:'fixture',context_window:100000,max_tokens:1000,reasoning:'off',reasoning_efforts:false}]}}
   raw.workers=[{name:'commander',roles:['general'],provider:'fixture',model:'fixture',max_running:8}]
-  raw.runtime={max_workers:8,max_project_workers:8,max_running_projects:2}
+  raw.runtime={max_project_workers:8,max_running_projects:2}
  })
  const {Context}=await load('vendor/deepseek-harness/vendor/cordis/lib/index.js');ctx=new Context()
  for(const file of ['vendor/deepseek-harness/packages/session/session-projection/lib/index.js','packages/redtrace-dsh/lib/core.js']){const m=await load(file);await ctx.plugin(m.default??m).await()}

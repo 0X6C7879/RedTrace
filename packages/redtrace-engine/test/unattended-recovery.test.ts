@@ -5,7 +5,7 @@ import {LegionStore} from '../src/legion-store.ts'
 import {Scheduler} from '../src/scheduler.ts'
 import type {EngineConfig} from '../src/types.ts'
 const settle=async()=>{for(let i=0;i<12;i++)await new Promise(r=>setImmediate(r))}
-const config={workers:[{name:'fixture',backend:'mock',enabled:true,roles:['soldier','general'],provider:'p',model:'a',maxRunning:1,priority:0}],providers:{p:{api:'openai-completions',baseUrl:'http://127.0.0.1',models:[{id:'a',contextWindow:10000,maxTokens:100},{id:'b',contextWindow:10000,maxTokens:100}]}},maxWorkers:1,maxProjectWorkers:1,maxRunningProjects:1,maxSteps:null,decideTimeout:60,executeTimeout:60,concludeTimeout:10,bootstrapTimeout:60,bootstrapConcludeTimeout:10,workspaceRoot:'/unused'} as EngineConfig
+const config={workers:[{name:'fixture',backend:'mock',enabled:true,roles:['soldier','general'],provider:'p',model:'a',maxRunning:1,priority:0}],providers:{p:{api:'openai-completions',baseUrl:'http://127.0.0.1',models:[{id:'a',contextWindow:10000,maxTokens:100},{id:'b',contextWindow:10000,maxTokens:100}]}},maxProjectWorkers:1,maxRunningProjects:1,maxSteps:null,decideTimeout:60,executeTimeout:60,concludeTimeout:10,bootstrapTimeout:60,bootstrapConcludeTimeout:10,workspaceRoot:'/unused'} as EngineConfig
 
 test('Worker survives more than three failures, rotates configured models, preserves Session and respects tool uncertainty',async()=>{
  const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'outage',origin:'local',goal:'verify'}).project;new LegionStore(store)

@@ -47,6 +47,10 @@ skills/.system/
 skills/*/node_modules/
 skills/*/package-lock.json
 packages/redtrace-dsh/lib/
+packages/redtrace-engine/src/native/target/
+packages/redtrace-engine/src/native/redtrace_native.node
+packages/redtrace-engine/src/native/.build-*.node
+packages/redtrace-engine/src/native/build.sha256
 # Per-skill memory runtime lock (ephemeral, created by learn())
 skills/*/memory/.lock/
 # Playwright 测试产物

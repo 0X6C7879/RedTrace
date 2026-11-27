@@ -17,7 +17,7 @@ const worker:Worker={name:'pool',roles:['soldier'],provider:'mock',model:'mock',
 test('General Frontier gates dependencies at atomic claim; independent Steps still run concurrently',async()=>{
  const store=new Store(':memory:'),root=mkdtempSync(path.join(os.tmpdir(),'general-frontier-'))
  let release!:()=>void;const held=new Promise<void>(r=>release=r)
- const config={workers:[worker],workspaceRoot:root,maxWorkers:3,maxProjectWorkers:3,maxRunningProjects:1,maxSteps:null} as EngineConfig
+ const config={workers:[worker],workspaceRoot:root,maxProjectWorkers:3,maxRunningProjects:1,maxSteps:null} as EngineConfig
  const scheduler=new Scheduler(store,config,async()=>held)
  try{
   const p=store.createProject({title:'serial',origin:'fixture',goal:'verify'}).project
@@ -130,7 +130,7 @@ test('General stops exhausted work without accepting Goal; negative Facts surviv
 
 test('Worker system fault with unresolved tool outcome settles unknown without fabricated Fact',async()=>{
  const store=new Store(':memory:'),root=mkdtempSync(path.join(os.tmpdir(),'worker-fault-'))
- const scheduler=new Scheduler(store,{workers:[worker],workspaceRoot:root,maxWorkers:2,maxProjectWorkers:2,maxRunningProjects:1,maxSteps:null} as EngineConfig,async({run})=>{
+ const scheduler=new Scheduler(store,{workers:[worker],workspaceRoot:root,maxProjectWorkers:2,maxRunningProjects:1,maxSteps:null} as EngineConfig,async({run})=>{
   store.toolStarted(run.id,'uncertain-call',{name:'fixture',arguments:{}})
   throw Error('fixture transport lost')
  })

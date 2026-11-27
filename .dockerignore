@@ -18,6 +18,13 @@ logs
 output
 skills/*/memory/audit.jsonl
 vendor/deepseek-harness/native/system/packages/*/bin
+vendor/deepseek-harness/**/lib
+packages/redtrace-dsh/lib
+packages/redtrace-engine/src/native/target
+packages/redtrace-engine/src/native/redtrace_native.node
+packages/redtrace-engine/src/native/.build-*.node
+packages/redtrace-engine/src/native/build.sha256
+**/*.tsbuildinfo
 
 **/.venv
 **/.venv-*

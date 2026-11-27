@@ -6,7 +6,6 @@ role_version: 3
 #   ./start-redtrace.sh --config redtrace.yaml
 
 runtime:
-  max_workers: 3
   max_running_projects: 2
   max_project_workers: 3
 

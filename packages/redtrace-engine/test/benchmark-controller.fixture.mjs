@@ -11,7 +11,7 @@ import {providerProfiles} from '../src/models.ts'
 import {createCommanderController} from '../compat/legion.mjs'
 import {load} from '../../redtrace-dsh/lib/loader.js'
 const work=mkdtempSync(path.join(os.tmpdir(),'benchmark-patrol-')),config=new Configuration(work);config.initialize()
-const store=new Store(work+'/engine.db'),legion=new LegionStore(store),busy=store.createProject({mode:'benchmark',title:'busy',origin:'local',goal:'verify'}).project,idle=store.createProject({mode:'benchmark',title:'idle',origin:'local',goal:'verify'}).project,general=store.createProject({mode:'general',title:'general',origin:'local',goal:'verify'}).project
+const store=new Store(work+'/engine.db'),legion=new LegionStore(store),busy=store.createProject({mode:'benchmark',title:'busy',origin:'Original authorized scope for busy fixture',goal:'Original objective for busy fixture'}).project,idle=store.createProject({mode:'benchmark',title:'idle',origin:'Original authorized scope for idle fixture',goal:'Original objective for idle fixture'}).project,general=store.createProject({mode:'general',title:'general',origin:'local',goal:'verify'}).project
 const graph=store.createGraph(busy.id,{taskKey:'T',title:'local',origin:'local',goal:'verify'})
 store.forGraph(busy.id,graph.id).addStep(busy.id,{role:'soldier',taskKey:'T',description:'classify',sourceIds:[graph.originId]})
 const calls=new Map(),counts=id=>calls.get(id)??0
@@ -19,6 +19,12 @@ const patrolInputs=[]
 let ctx,controller,watchdogs=0,peak=0,requests=0,failProject
 const server=createServer(async(req,res)=>{
   let text='';for await(const b of req)text+=b;const body=domainFixtureRequest(JSON.parse(text),res),id=store.projects().map(p=>p.id).find(id=>JSON.stringify(body.messages).includes(id));assert.ok(id)
+  if(store.project(id).mode==='benchmark'){
+    const system=JSON.stringify(body.messages.filter(message=>message.role==='system'))
+    assert(system.includes(store.scopeFact(id).description),'Commander must retain the original Scope on every patrol')
+    assert(system.includes(store.project(id).objective),'Commander must retain the original objective on every patrol')
+    for(const other of [busy,idle].filter(project=>project.id!==id))assert(!system.includes(other.objective),'Commander must not receive another Project objective')
+  }
   requests++;peak=Math.max(peak,requests);await new Promise(r=>realTimeout(r,10));requests--
   if(failProject===id&&body.model==='fixture'){res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({error:{message:'invalid fixture request'}}));return}
   const finish=body.messages.at(-1)?.tool_call_id?.startsWith('changes-');if(finish)calls.set(id,counts(id)+1)
@@ -34,7 +40,7 @@ const settle=async(predicate=()=>true)=>{for(let i=0;i<600;i++){await new Promis
 const advance=async(ms)=>{const end=clock+ms;while(true){const due=[...timers].filter(t=>t.at<=end).sort((a,b)=>a.at-b.at)[0];if(!due)break;clock=due.at;if(due.interval)due.at+=due.delay;else timers.delete(due);due.fn();await settle();}clock=end;await settle()}
 try{
   await new Promise(r=>server.listen(0,'127.0.0.1',r))
-  config.commit(config.read().revision,raw=>{raw.runtime={max_workers:4,max_project_workers:3,max_running_projects:4};raw.providers={fixture:{api:'openai-completions',base_url:'http://127.0.0.1:'+server.address().port+'/v1',api_key:'fixture',models:[{id:'fixture',context_window:20000,max_tokens:512,reasoning:'off',reasoning_efforts:false}]}};raw.workers=[{name:'commander',roles:['commander','general'],provider:'fixture',model:'fixture',max_running:4}]})
+  config.commit(config.read().revision,raw=>{raw.runtime={max_project_workers:3,max_running_projects:4};raw.providers={fixture:{api:'openai-completions',base_url:'http://127.0.0.1:'+server.address().port+'/v1',api_key:'fixture',models:[{id:'fixture',context_window:20000,max_tokens:512,reasoning:'off',reasoning_efforts:false}]}};raw.workers=[{name:'commander',roles:['commander','general'],provider:'fixture',model:'fixture',max_running:4}]})
   config.commit(config.read().revision,raw=>{raw.providers.fixture.models.push({...raw.providers.fixture.models[0],id:'alternate'})})
   const{Context}=await load('vendor/deepseek-harness/vendor/cordis/lib/index.js');ctx=new Context()
   for(const file of ['vendor/deepseek-harness/packages/session/session-projection/lib/index.js','packages/redtrace-dsh/lib/core.js']){const m=await load(file);await ctx.plugin(m.default??m).await()}

@@ -35,7 +35,6 @@ export interface RuntimeConfig {
   skillsDir?: string
   workspacesDir?: string
   interval?: number
-  maxWorkers?: number
   maxRunningProjects?: number
   maxProjectWorkers?: number
   tasks?: Partial<Record<TaskType, TaskLimits>>
@@ -61,7 +60,6 @@ export interface RuntimeSnapshot {
   workers: WorkerSpec[]
   tasks: Record<TaskType, TaskLimits>
   limits: {
-    maxWorkers: number
     maxRunningProjects: number
     maxProjectWorkers: number
     interval: number

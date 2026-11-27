@@ -1,6 +1,7 @@
 import { recoverableModelFailure, modelRecoveryDelay } from './model-recovery.ts'
 import { executorRole, isReportStep, LEGACY_GENERAL_ROLES } from '../../redtrace-dsh/src/roles.ts'
 import { TOOL_DOMAINS } from '../../redtrace-dsh/src/tool-domains.ts'
+import { parseExitStatus } from '../../../vendor/deepseek-harness/packages/shell/shell/src/render.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { CommanderTodos, taskTodoPlanner } from './legion-todos.ts'
 import { mkdirSync } from 'node:fs'
@@ -13,6 +14,12 @@ import type { Activity, Evidence, Fact, Finding, Goal, Graph, GraphEvent, GraphN
 
 export const ACTIVE_NODE_SQL = "COALESCE(json_extract(data,'$.deleted'),0)=0"
 const toolAliases=new Map<string,[string,string]>([...Object.entries(TOOL_DOMAINS).flatMap(([name,actions])=>Object.entries(actions).map(([action,original])=>[original,[name,action]] as [string,[string,string]])),['http_batch',['http_session','batch']],['http_replay',['http_session','replay']]])
+// Native calls retain arguments as JSON text; older callers supply an object.
+const auditArguments = (alias: string) => `(CASE WHEN json_valid(json_extract(${alias}.data,'$.arguments')) THEN json_extract(${alias}.data,'$.arguments') END)`
+function commandOutcome(content: unknown, background: unknown) {
+  if(typeof content!=='string'||background||/\[still running after \d+ms; moved to background job [^\]\n]+\]$/.test(content))return undefined
+  return parseExitStatus(content)
+}
 export interface StepUpdate { description?: string; sourceIds?: string[]; goalId?: string; priority?: number; status?: 'cancelled' | 'pending'; executionProfile?: Step['executionProfile']; requires?: string[]; plugins?: string[]; expectedVersion?: number; mode?: 'amend' | 'replace' }
 
 // Graph events carry delivery metadata, never a second copy of graph state.
@@ -168,7 +175,8 @@ export class Store {
     this.db.prepare('DELETE FROM counters WHERE scope NOT IN (SELECT id FROM projects)').run()
     this.migrateProjectGraphs()
     if(!this.db.prepare('PRAGMA table_xinfo(audit_events)').all().some(c=>c.name==='kind'))this.db.exec("ALTER TABLE audit_events ADD COLUMN kind TEXT GENERATED ALWAYS AS (json_extract(data,'$.kind')) VIRTUAL")
-    this.db.exec("DROP INDEX IF EXISTS audit_events_run; CREATE INDEX IF NOT EXISTS audit_events_run ON audit_events(run_id,id,kind); DROP INDEX IF EXISTS audit_events_tool_calls; CREATE INDEX IF NOT EXISTS audit_events_activity ON audit_events(run_id,id) WHERE kind IN ('tool.started','tool.completed','command.completed')")
+    if (this.db.prepare('PRAGMA index_info(audit_events_run)').all().map(column => column.name).join(',') !== 'run_id,id,kind') this.db.exec('DROP INDEX IF EXISTS audit_events_run')
+    this.db.exec("CREATE INDEX IF NOT EXISTS audit_events_run ON audit_events(run_id,id,kind); DROP INDEX IF EXISTS audit_events_tool_calls; CREATE INDEX IF NOT EXISTS audit_events_activity ON audit_events(run_id,id) WHERE kind IN ('tool.started','tool.completed','command.completed')")
     if(!this.db.prepare('PRAGMA table_info(global_chats)').all().some(c=>c.name==='project_id'))this.db.exec('ALTER TABLE global_chats ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE CASCADE')
     const nodeColumns=this.db.prepare('PRAGMA table_xinfo(nodes)').all()
     for(const [column,field] of [['status','status'],['role','role'],['task_key','taskKey'],['goal_id','goalId']])if(!nodeColumns.some(c=>c.name===column))this.db.exec("ALTER TABLE nodes ADD COLUMN "+column+" TEXT GENERATED ALWAYS AS (json_extract(data,'$."+field+"')) VIRTUAL")
@@ -184,7 +192,21 @@ export class Store {
     this.migrateTodoAcceptance()
     this.migrateGraphPlanners()
     this.migrateToolCalls()
+    this.migrateCommandOutcomes()
     this.changes.setMaxListeners(0)
+  }
+  private migrateCommandOutcomes() {
+    if(this.db.prepare("SELECT 1 FROM metadata WHERE key='tool-command-outcomes' AND value='2'").get())return
+    this.transaction(()=>{
+      if(!this.db.prepare("SELECT 1 FROM metadata WHERE key='tool-command-outcomes'").get())this.db.exec('ALTER TABLE tool_calls ADD COLUMN command_exit_code INTEGER; ALTER TABLE tool_calls ADD COLUMN command_signal TEXT;')
+      this.db.exec(`UPDATE tool_calls AS c SET action=COALESCE((SELECT json_extract(${auditArguments('s')},'$.action') FROM audit_events s WHERE s.id=c.start_id),action)`)
+      const update=this.db.prepare('UPDATE tool_calls SET command_exit_code=?,command_signal=? WHERE run_id=? AND call_id=?')
+      for(const row of this.db.prepare(`SELECT c.run_id,c.call_id,json_extract(e.data,'$.content') AS content,COALESCE(json_extract(${auditArguments('s')},'$.run_in_background'),json_extract(${auditArguments('e')},'$.run_in_background')) AS background FROM tool_calls c JOIN audit_events e ON e.id=c.end_id LEFT JOIN audit_events s ON s.id=c.start_id WHERE c.name IN ('bash','pwsh') AND c.status='succeeded'`).iterate()) {
+        const outcome=commandOutcome(row.content,row.background)
+        update.run(outcome&&'exitCode' in outcome?outcome.exitCode:null,outcome&&'signal' in outcome?outcome.signal:null,row.run_id,row.call_id)
+      }
+      this.db.prepare("INSERT INTO metadata VALUES ('tool-command-outcomes','2') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run()
+    })
   }
   private migrateToolCalls() {
     this.db.exec(`CREATE TABLE IF NOT EXISTS tool_calls(run_id TEXT NOT NULL REFERENCES audit_runs(id) ON DELETE CASCADE,call_id TEXT NOT NULL,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,graph_id TEXT,name TEXT,original_name TEXT,action TEXT,role TEXT,mode TEXT,start_id INTEGER,end_id INTEGER,status TEXT,timestamp TEXT,PRIMARY KEY(run_id,call_id));
@@ -202,7 +224,7 @@ export class Store {
       ) INSERT INTO tool_calls(run_id,call_id,project_id,graph_id,name,original_name,action,role,mode,start_id,end_id,status,timestamp)
       SELECT c.run_id,c.call_id,r.project_id,COALESCE(json_extract(r.data,'$.graph_id'),json_extract(s.data,'$.graph_id'),json_extract(e.data,'$.graph_id')),
         COALESCE(a.name,json_extract(s.data,'$.title'),json_extract(e.data,'$.title')),COALESCE(json_extract(s.data,'$.title'),json_extract(e.data,'$.title')),
-        COALESCE(json_extract(s.data,'$.arguments.action'),a.action),COALESCE(l.role,json_extract(r.data,'$.task_type')),json_extract(p.data,'$.mode'),c.start_id,c.end_id,
+        COALESCE(json_extract(${auditArguments('s')},'$.action'),a.action),COALESCE(l.role,json_extract(r.data,'$.task_type')),json_extract(p.data,'$.mode'),c.start_id,c.end_id,
         CASE WHEN c.end_id IS NULL THEN 'unfinished' WHEN json_extract(e.data,'$.error') THEN 'failed' ELSE 'succeeded' END,COALESCE(json_extract(s.data,'$.timestamp'),json_extract(e.data,'$.timestamp'))
       FROM calls c LEFT JOIN audit_events s ON s.id=c.start_id LEFT JOIN audit_events e ON e.id=c.end_id JOIN audit_runs r ON r.id=c.run_id JOIN projects p ON p.id=r.project_id
         LEFT JOIN aliases a ON a.original=COALESCE(json_extract(s.data,'$.title'),json_extract(e.data,'$.title'))
@@ -967,7 +989,8 @@ export class Store {
         for (const key of ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens']) result[key] = Math.max(Number(saved[key]) || 0, Number(metadata[key]) || 0)
         result.session_id ??= saved.session_id
       }
-      this.db.prepare('INSERT INTO audit_runs VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(id, projectId, JSON.stringify(result))
+      const encoded = JSON.stringify(result)
+      if (row?.data !== encoded) this.db.prepare('INSERT INTO audit_runs VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(id, projectId, encoded)
       const role=project.mode==='general'?(LEGACY_GENERAL_ROLES[String(result.task_type)]??result.task_type??null):result.task_type==='reporter'?'soldier':result.task_type??null
       if(saved&&(saved.task_type!==result.task_type||saved.graph_id!==result.graph_id))this.db.prepare("UPDATE tool_calls SET role=?,graph_id=COALESCE(?,(SELECT json_extract(data,'$.graph_id') FROM audit_events WHERE id=tool_calls.start_id),(SELECT json_extract(data,'$.graph_id') FROM audit_events WHERE id=tool_calls.end_id)) WHERE run_id=?").run(role as string|null,result.graph_id as string|null,id)
       // Run rows are the durable state; publish transitions through the existing audit stream.
@@ -976,12 +999,14 @@ export class Store {
       }
       for (const data of events) {
         const event: { [key: string]: Json } = { ...data, graph_id:result.graph_id, project_id: projectId, run_id: id, task_type: data.task_type ?? metadata.task_type, worker: data.worker ?? metadata.worker, provider: data.provider ?? metadata.provider }
+        let serialized: string | undefined
         if (!['assistant.delta', 'thinking.delta', 'thinking.completed'].includes(String(data.kind))) {
-          const inserted = this.db.prepare('INSERT OR IGNORE INTO audit_events(event_uid,project_id,run_id,data) VALUES (?,?,?,?)').run(typeof event.event_uid === 'string' ? event.event_uid : null, projectId, id, JSON.stringify(event))
+          serialized = JSON.stringify(event)
+          const inserted = this.db.prepare('INSERT OR IGNORE INTO audit_events(event_uid,project_id,run_id,data) VALUES (?,?,?,?)').run(typeof event.event_uid === 'string' ? event.event_uid : null, projectId, id, serialized)
           if (inserted.changes) {
             event.id = Number(inserted.lastInsertRowid)
             if((event.kind==='tool.started'||event.kind==='tool.completed')&&event.call_id!=null&&event.call_id!=='') {
-              const pair=this.db.prepare(`SELECT c.start_id,c.end_id,COALESCE(json_extract(s.data,'$.title'),json_extract(e.data,'$.title')) AS original_name,json_extract(s.data,'$.arguments.action') AS action,
+              const pair=this.db.prepare(`SELECT c.start_id,c.end_id,COALESCE(json_extract(s.data,'$.title'),json_extract(e.data,'$.title')) AS original_name,json_extract(${auditArguments('s')},'$.action') AS action,COALESCE(json_extract(${auditArguments('s')},'$.run_in_background'),json_extract(${auditArguments('e')},'$.run_in_background')) AS background,
                 COALESCE(?,json_extract(s.data,'$.graph_id'),json_extract(e.data,'$.graph_id')) AS graph_id,COALESCE(json_extract(s.data,'$.timestamp'),json_extract(e.data,'$.timestamp')) AS timestamp,
                 CASE WHEN c.end_id IS NULL THEN 'unfinished' WHEN json_extract(e.data,'$.error') THEN 'failed' ELSE 'succeeded' END AS status
                 FROM (SELECT COALESCE(c.start_id,CASE WHEN ?='tool.started' THEN ? END) AS start_id,CASE WHEN ?='tool.completed' THEN ? ELSE c.end_id END AS end_id FROM (SELECT 1) LEFT JOIN tool_calls c ON c.run_id=? AND c.call_id=?) c
@@ -989,10 +1014,19 @@ export class Store {
               const alias=toolAliases.get(String(pair.original_name))
               this.db.prepare(`INSERT INTO tool_calls(run_id,call_id,project_id,graph_id,name,original_name,action,role,mode,start_id,end_id,status,timestamp) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(run_id,call_id) DO UPDATE SET graph_id=excluded.graph_id,name=excluded.name,original_name=excluded.original_name,action=excluded.action,role=excluded.role,mode=excluded.mode,start_id=excluded.start_id,end_id=excluded.end_id,status=excluded.status,timestamp=excluded.timestamp`).run(id,String(event.call_id),projectId,pair.graph_id,alias?.[0]??pair.original_name,pair.original_name,pair.action??alias?.[1]??null,role as string|null,project.mode,pair.start_id,pair.end_id,pair.status,pair.timestamp)
+              if(event.kind==='tool.completed'&&['bash','pwsh'].includes(String(pair.original_name))) {
+                const outcome=!event.error?commandOutcome(event.content,pair.background):undefined
+                this.db.prepare('UPDATE tool_calls SET command_exit_code=?,command_signal=? WHERE run_id=? AND call_id=?').run(outcome&&'exitCode' in outcome?outcome.exitCode:null,outcome&&'signal' in outcome?outcome.signal:null,id,String(event.call_id))
+              }
             }
           }
         }
-        if (!data.persist_only) this.pendingAudit.push({ projectId, data: event })
+        if (!data.persist_only) {
+          // Detach notifications from callers using the JSON already written to SQLite.
+          const snapshot = JSON.parse(serialized ?? JSON.stringify(event))
+          if (event.id !== undefined) snapshot.id = event.id
+          this.pendingAudit.push({ projectId, data: snapshot })
+        }
       }
       return { accepted: events.length }
     })
@@ -1177,8 +1211,11 @@ export class Store {
       const event: { [key: string]: Json } = { event_uid: `native-${inserted.lastInsertRowid}`, run_sequence: Number(inserted.lastInsertRowid), timestamp, kind: type, data: safeData }
       if (type === 'tool.started') { event.kind = 'tool.started'; event.title = value.name ?? null; event.call_id = value.id ?? null; event.arguments = value.arguments ?? null }
       if (type === 'tool_execution_end') { event.kind = 'tool.completed'; event.title = value.toolName ?? null; event.call_id = value.toolCallId ?? null; event.error = value.isError ?? false; event.content = JSON.stringify(value.result ?? null) }
-      const metadata = JSON.parse(String(this.db.prepare('SELECT data FROM audit_runs WHERE id=?').get(runId)!.data))
-      if (recordAudit) this.audit(metadata, conversationAuditEvents(event))
+      const projected = recordAudit ? conversationAuditEvents(event) : []
+      if (projected.length) {
+        const metadata = JSON.parse(String(this.db.prepare('SELECT data FROM audit_runs WHERE id=?').get(runId)!.data))
+        this.audit(metadata, projected)
+      }
     })
   }
   metricStart(runId: string, callId: string, kind: string) {

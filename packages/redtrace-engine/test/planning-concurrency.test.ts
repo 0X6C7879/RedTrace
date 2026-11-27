@@ -65,7 +65,7 @@ test('resident planning tools enforce live Max Step in both project modes and qu
 
 test('Scheduler fills question slots first, refills on completion and hot-loads without cancelling running work', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'question-dispatch-')), c = new Configuration(root); c.initialize()
-  let config = { ...c.resolvedSnapshot().config, maxWorkers: 20, maxProjectWorkers: 10, maxRunningProjects: 5, maxBenchmarkTasks: 2, maxSteps: 2,
+  let config = { ...c.resolvedSnapshot().config, maxProjectWorkers: 10, maxRunningProjects: 5, maxBenchmarkTasks: 2, maxSteps: 2,
     workers: [{ name: 'pool', enabled: true, priority: 0, maxRunning: 20, backend: 'mock' as const, provider: 'mock', model: 'mock', roles: ['soldier' as const, 'soldier' as const] }] }
   const store = new Store(':memory:'), legion = new LegionStore(store), done = new Map<string, () => void>()
   const scheduler = new Scheduler(store, config, async ({ run, signal }) => new Promise<void>(resolve => { done.set(run.id, resolve); signal.addEventListener('abort', () => resolve(), { once: true }) }))
@@ -91,7 +91,7 @@ test('Scheduler fills question slots first, refills on completion and hot-loads 
 
 test('General Max Step limits execution of existing queued directions, excludes unmet dependencies and hot-loads upward', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'general-frontier-')), c = new Configuration(root); c.initialize()
-  const config = { ...c.resolvedSnapshot().config, maxWorkers: 20, maxProjectWorkers: 10, maxSteps: 2,
+  const config = { ...c.resolvedSnapshot().config, maxProjectWorkers: 10, maxSteps: 2,
     workers: [{ name: 'pool', enabled: true, priority: 0, maxRunning: 20, backend: 'mock' as const, provider: 'mock', model: 'mock', roles: ['soldier' as const] }] }
   const store = new Store(':memory:'), done = new Map<string, () => void>()
   const scheduler = new Scheduler(store, config, async ({ run, signal }) => new Promise<void>(resolve => { done.set(run.id, resolve); signal.addEventListener('abort', () => resolve(), { once: true }) }))
@@ -162,7 +162,7 @@ test('native planners fill distinct ready slots and read hot-loaded targets in t
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   configuration.commit(configuration.read().revision, raw => {
-    raw.runtime = { max_workers: 20, max_project_workers: 10, max_running_projects: 5 }
+    raw.runtime = { max_project_workers: 10, max_running_projects: 5 }
     raw.tasks!.commander.max_intents = 2; raw.tasks!.commander.max_benchmark_tasks = 2
     raw.providers = { fixture: { api: 'openai-completions', base_url: 'http://127.0.0.1:' + (server.address() as any).port + '/v1', api_key: 'fixture', models: [{ id: 'fixture', context_window: 100000, max_tokens: 1000, reasoning: 'off', reasoning_efforts: false }] } }
     raw.workers = [{ name: 'general', provider: 'fixture', model: 'fixture', roles: ['commander','general'], max_running: 5 }]

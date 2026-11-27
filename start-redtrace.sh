@@ -88,7 +88,7 @@ if [[ "$DSH_CODE_ROOT" != "$ROOT" ]]; then
   rsync -a --delete "$ROOT/packages/redtrace-dsh/lib/" "$DSH_ADAPTER_RUNTIME/lib/"
   cp "$ROOT/packages/redtrace-engine/package.json" "$ROOT/packages/redtrace-engine/package-lock.json" "$ENGINE_RUNTIME/"
   cp "$ROOT/packages/redtrace-dsh/package.json" "$DSH_ADAPTER_RUNTIME/"
-  cp "$ROOT/scripts/run-redtrace-node.mjs" "$DSH_CODE_ROOT/scripts/"
+  cp "$ROOT/scripts/run-redtrace-node.mjs" "$ROOT/scripts/build-native.mjs" "$DSH_CODE_ROOT/scripts/"
 
   ENGINE_LOCK_HASH="$(sha256sum "$ENGINE_RUNTIME/package-lock.json" | cut -d' ' -f1)"
   if [[ ! -f "$ENGINE_RUNTIME/node_modules/yaml/package.json" \

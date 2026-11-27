@@ -1,3 +1,9 @@
+FROM rust:1-bookworm AS native
+WORKDIR /native
+COPY packages/redtrace-engine/src/native/Cargo.toml packages/redtrace-engine/src/native/Cargo.lock packages/redtrace-engine/src/native/build.rs ./
+COPY packages/redtrace-engine/src/native/src ./src
+RUN cargo build --release --locked
+
 FROM node:24-bookworm-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -7,6 +13,8 @@ RUN apt-get update \
 
 WORKDIR /redtrace
 COPY . .
+COPY --from=native /native/target/release/libredtrace_native.so /redtrace/packages/redtrace-engine/src/native/redtrace_native.node
+RUN node scripts/build-native.mjs --prebuilt
 RUN python3 -m venv /opt/redtrace/benchmark-venv \
     && /opt/redtrace/benchmark-venv/bin/python3 -m pip install --no-cache-dir -r skills/tsecbench-api/requirements.txt
 RUN npm ci --prefix packages/redtrace-engine \

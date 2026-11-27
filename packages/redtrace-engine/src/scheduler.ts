@@ -15,8 +15,7 @@ export type RunTask = (context: TaskContext) => Promise<void>
 export type SelectWorker = (worker: Worker, activity: Run['activity'], step?: TaskAssignment) => Worker | undefined
 type Active = { run: Run; abort: AbortController; completion: Promise<void> }
 
-export function capacityFull(config:EngineConfig,worker:Pick<Worker,'name'|'maxRunning'>|undefined,projectId:string|undefined,runs:Pick<Run,'worker'|'projectId'>[],commands:{workerName?:string;projectId:string}[]):'workers'|'worker'|'project'|'projects'|null {
-  if(runs.length+commands.length>=config.maxWorkers)return 'workers'
+export function capacityFull(config:EngineConfig,worker:Pick<Worker,'name'|'maxRunning'>|undefined,projectId:string|undefined,runs:Pick<Run,'worker'|'projectId'>[],commands:{workerName?:string;projectId:string}[]):'worker'|'project'|'projects'|null {
   if(worker&&runs.filter(r=>r.worker===worker.name).length+commands.filter(c=>c.workerName===worker.name).length>=worker.maxRunning)return 'worker'
   if(projectId!==undefined) {
     if(runs.filter(r=>r.projectId===projectId).length+commands.filter(c=>c.projectId===projectId).length>=config.maxProjectWorkers)return 'project'
@@ -64,9 +63,9 @@ export class Scheduler {
     }
     const commands=[...this.legion.campaigns().filter(c=>c.status==='running'),...chatSlots(this.store)], active = this.activeRuns, projects = this.store.projects().filter(p=>['active','completed'].includes(p.status))
     let progress = true, nextWakeAt = Infinity
-    while(progress && !capacityFull(this.config,undefined,undefined,active,commands)) {
+    while(progress) {
       progress = false
-      for(let i=0;i<projects.length && !capacityFull(this.config,undefined,undefined,active,commands);i++) {
+      for(let i=0;i<projects.length;i++) {
         const project=projects[(this.cursor+i)%projects.length]
         if(capacityFull(this.config,undefined,project.id,active,commands))continue
         const openGoals=new Set(this.store.db.prepare(`SELECT id FROM nodes WHERE project_id=? AND kind='goal' AND status='open' AND ${ACTIVE_NODE_SQL}`).all(project.id).map(r=>String(r.id)))

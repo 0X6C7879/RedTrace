@@ -25,7 +25,7 @@ test('Workers group by question title, keep run isolation and retain resumed pat
   const contexts:any[]=[]
   let release!:()=>void
   const held=new Promise<void>(resolve=>release=resolve)
-  const scheduler=new Scheduler(store,{workers:[route],providers:{},maxWorkers:3,maxProjectWorkers:3,maxRunningProjects:1,maxSteps:null,workspaceRoot:'/tmp/redtrace-title-fixture'} as EngineConfig,async context=>{
+  const scheduler=new Scheduler(store,{workers:[route],providers:{},maxProjectWorkers:3,maxRunningProjects:1,maxSteps:null,workspaceRoot:'/tmp/redtrace-title-fixture'} as EngineConfig,async context=>{
     contexts.push(context);await held;context.store.addFact(project.id,'verified',{runId:context.run.id})
   })
   try{

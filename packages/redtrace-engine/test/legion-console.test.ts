@@ -153,6 +153,8 @@ test('worker snapshot exposes effective active-role defaults without inventing a
     mkdirSync(dir+'/.redtrace');writeFileSync(dir+'/.redtrace/redtrace.yaml','workers: []\n')
     const snapshot=new Configuration(dir).snapshot(),app=page()
     app.applyWorkerSnapshot(snapshot)
+    assert.deepEqual(Object.keys(app.runtimeTaskPayload().runtime).sort(),['max_project_workers','max_running_projects'])
+    app.workerForm.max_running=12;assert.equal(app.workerPayload().max_running,12)
     assert.equal(snapshot.tasks.commander.timeout,300)
     assert.equal(Object.keys(snapshot.tasks).sort().join(','),'commander,general,soldier')
     assert.equal(app.runtimeTaskPayload().tasks.commander.max_intents,undefined)

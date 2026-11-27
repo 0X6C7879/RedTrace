@@ -77,7 +77,7 @@ try {
   const configuration = new Configuration(work); configuration.initialize(); configuration.commit(configuration.read().revision, raw => {
     raw.providers = { fixture: { api: 'openai-completions', base_url: 'http://127.0.0.1:'+model.address().port+'/v1', api_key: 'fixture-not-secret', models: [{ id: 'fixture', context_window: 100000, max_tokens: 4000, reasoning: 'off', reasoning_efforts: false }] } }
     raw.workers = [{ name: 'fixture-worker', roles: ['soldier'], provider: 'fixture', model: 'fixture', max_running: 2 }]
-    raw.runtime = { max_workers: 2, max_project_workers: 2, max_running_projects: 1 }
+    raw.runtime = { max_project_workers: 2, max_running_projects: 1 }
     raw.tasks = { soldier: { timeout: 30, conclude_timeout: 3 } }
   })
   const reservation = createServer(); await new Promise(r => reservation.listen(0, '127.0.0.1', r)); const port = reservation.address().port; await new Promise(r => reservation.close(r)); api = 'http://127.0.0.1:'+port

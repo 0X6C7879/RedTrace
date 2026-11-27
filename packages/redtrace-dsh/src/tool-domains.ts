@@ -18,8 +18,10 @@ export const TOOL_DOMAINS: Record<string, Record<string,string>> = {
   remote_files: Object.fromEntries(['read','write','list','mkdir','touch','stat','hash','move','delete','upload','download'].map(action=>[action,'remote_file_'+action])),
   pivot_manage: {socks:'pivot_socks',validate:'pivot_validate',paths:'pivot_paths',close:'pivot_close'},
 }
+const domainActions = new Map(Object.entries(TOOL_DOMAINS).flatMap(([domain, actions]) => Object.entries(actions).map(([action, original]) => [original, {domain, action}] as const)))
 export const domainAction = (name:string) => {
-  for(const [domain,actions] of Object.entries(TOOL_DOMAINS))for(const [action,original] of Object.entries(actions))if(original===name)return{domain,action}
+  const mapped = domainActions.get(name)
+  return mapped ? {...mapped} : undefined
 }
 export const originalTool = (name:string,action:unknown) => typeof action==='string'?TOOL_DOMAINS[name]?.[action]:undefined
 export function rewriteToolNames(text:string):string {
@@ -49,6 +51,13 @@ const descriptions:Record<string,string>={
  pivot_manage:'socks 创建；validate 验路径；paths 列表；close 停止。复用授权会话，能力检查不变。'
 }
 type Tool = {name:string;description:string;parameters:any;execute:(...args:any[])=>any}
+/** Validate only the selected action; unrelated union branches are not repair instructions. */
+export function actionParameters(parameters: any, input: any): any {
+  const branch = parameters.anyOf?.find((schema: any) => schema.properties?.action?.const === input?.action || schema.properties?.action?.enum?.includes(input?.action))
+  if (!branch) return parameters
+  const { anyOf, ...root } = parameters
+  return { ...root, properties: Object.fromEntries(Object.entries(branch.properties).map(([key, value]) => [key, { ...parameters.properties[key], ...value as object }])), required: [...new Set([...(parameters.required ?? []), ...(branch.required ?? [])])] }
+}
 /** Shared fields are serialized once; branches retain action-specific required fields and types. */
 export function domainTools<T extends Tool>(tools:T[], allowed:(name:string)=>boolean=()=>true):T[] {
   const remaining=new Map(tools.map(t=>[t.name,t])),result:T[]=[]
@@ -71,7 +80,11 @@ export function domainTools<T extends Tool>(tools:T[], allowed:(name:string)=>bo
     const anyOf=[...branches.values()].map(branch=>({type:'object',additionalProperties:false,properties:{action:branch.actions.length===1?{const:branch.actions[0]}:{enum:branch.actions},...branch.properties},...(branch.required.length?{required:branch.required}:{})}))
     const parameters={type:'object',properties,required:['action',...common],additionalProperties:false,...(branches.size>1||conflicts.size?{anyOf}:{})}
     result.push({...members[0].tool,name,label:name,parameters,
-      description:descriptions[name]??'',
+      description: (descriptions[name] ?? '') + '\n' + members.map(({action,tool}) => {
+        const required = new Set(tool.parameters.required ?? [])
+        const fields = Object.keys(tool.parameters.properties ?? {}).map(key => key + (required.has(key) ? '' : '?')).join(',')
+        return action + '(' + fields + ')'
+      }).join('; '),
       execute(...args:any[]){
         const input=typeof args[0]==='string'?args[1]:args[0],{action,...values}=input
         const member=members.find(m=>m.action===action)

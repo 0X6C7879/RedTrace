@@ -29,7 +29,7 @@ else:
  const project=store.createProject({mode:'benchmark',title:'ctfy',origin:'CTFy authorized fixture',goal:'Complete selected tasks'}).project
  new LegionStore(store,project.id).claimCommand()
  const commonEnv:Record<string,string>={CTFY_PLAY_TOKEN:'fixture-token'}
- const config={workers:[],providers:{},maxWorkers:4,maxProjectWorkers:4,maxRunningProjects:1,maxSteps:null,decideTimeout:30,executeTimeout:30,concludeTimeout:5,bootstrapTimeout:30,bootstrapConcludeTimeout:5,workspaceRoot:path.join(root,'workspaces'),commonEnv} satisfies EngineConfig
+ const config={workers:[],providers:{},maxProjectWorkers:4,maxRunningProjects:1,maxSteps:null,decideTimeout:30,executeTimeout:30,concludeTimeout:5,bootstrapTimeout:30,bootstrapConcludeTimeout:5,workspaceRoot:path.join(root,'workspaces'),commonEnv} satisfies EngineConfig
  const platform=()=>legionTools(store,'commander',project.id,null,()=>{},config).find(t=>t.name==='legion_platform_list')!
  t.after(()=>{store.close();rmSync(root,{recursive:true,force:true})})
  return {root,db,store,project,config,platform}

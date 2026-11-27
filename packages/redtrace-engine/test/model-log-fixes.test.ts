@@ -36,8 +36,20 @@ test('system log endpoint reads existing native logger buffer, formats errors, r
  const {Context}=await load('vendor/deepseek-harness/vendor/cordis/lib/index.js'),ctx=new Context(),{mountSystemLogs}=await import(new URL('../compat/console.mjs',import.meta.url).href)
  try {
  e.configuration.commit(e.configuration.read().revision,raw=>{raw.providers={fixture:{api:'openai-completions',base_url:'http://fixture.invalid',api_key:'fixture-secret',models:[{id:'fixture',context_window:30000,max_tokens:8192}]}};raw.common_env={TEST_TOKEN:'common-secret'}})
- await mountSystemLogs(ctx,e);ctx.logger('scheduler').info('ready %s','worker');ctx.logger('plugins').warn('failed key=fixture-secret Bearer other-secret https://example.test?token=query-secret common-secret');ctx.logger('engine').error(new Error('fixture error'))
- const response=await fetch(base+'/console/logs'),entries=await response.json() as any[];assert.equal(response.status,200);assert.equal(entries[0].source,'scheduler');assert.equal(entries[0].message,'ready worker');assert.equal(entries[1].level,'warn');assert(!JSON.stringify(entries).includes('fixture-secret'));assert(!JSON.stringify(entries).includes('other-secret'));assert(!JSON.stringify(entries).includes('query-secret'));assert(!JSON.stringify(entries).includes('common-secret'));assert(entries[2].message.includes('Error: fixture error'));assert(entries.every(v=>!('sessionId' in v)));assert.equal(e.store.db.prepare('SELECT count(*) AS n FROM audit_events').get()!.n,0)
+ await mountSystemLogs(ctx,e)
+ ctx.logger('scheduler').info('ready %s','worker')
+ ctx.logger('plugins').warn('failed key=fixture-secret common-secret')
+ ctx.logger('plugins').warn('BeArEr other-secret')
+ ctx.logger('plugins').warn('/status?ToKeN=query-secret&name=visible')
+ ctx.logger('plugins').warn('HTTPS://user:password@example.test')
+ ctx.logger('engine').error(new Error('fixture error'))
+ const response=await fetch(base+'/console/logs'),entries=await response.json() as any[]
+ assert.equal(response.status,200);assert.equal(entries[0].source,'scheduler');assert.equal(entries[1].level,'warn')
+ assert.deepEqual(entries.slice(0,-1).map(entry=>entry.message),[
+   'ready worker','failed key=[REDACTED] [REDACTED]','BeArEr [REDACTED]',
+   '/status?ToKeN=[REDACTED]&name=visible','HTTPS://[REDACTED]@example.test',
+ ])
+ assert(entries.at(-1).message.includes('Error: fixture error'));assert(entries.every(v=>!('sessionId' in v)));assert.equal(e.store.db.prepare('SELECT count(*) AS n FROM audit_events').get()!.n,0)
  }finally{await ctx.fiber.dispose();await e.close();rmSync(dir,{recursive:true,force:true})}
 })
 

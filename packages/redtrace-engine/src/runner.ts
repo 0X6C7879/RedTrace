@@ -15,7 +15,7 @@ import { legionTools } from './legion-tools.ts'
 import { legionMission, reportWorkflowPrompt } from './legion-missions.ts'
 import { CommanderTodos, taskTodoPlanner, taskTodoOwner, type Todo } from './legion-todos.ts'
 import { knowledgeTools } from './knowledge.ts'
-import { Check, Errors } from 'typebox/value'
+import { validateToolArguments } from './tool-validation.ts'
 import { HttpError } from './types.ts'
 import { nodeContent } from './graph-content.ts'
 import { reporterTools } from './reporter.ts'
@@ -116,7 +116,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   if (!reporting && step?.role!=='general') tools.push(...knowledgeTools(evidenceRoot, context))
   const plannerTools = new Set(['read_graph','read_graph_delta','evidence_read','project_evidence_read', ...roleTools.map(t => t.name)])
   return tools.filter(t => step?.role !== 'general' || plannerTools.has(t.name)).map(t => ({ ...t, description:store.project(run.projectId).mode==='general'?t.description.replaceAll('Commander','Planner').replaceAll('Soldier','Worker').replaceAll('Sapper','FGS'):t.description, execute: async (...args) => {
-    if (!Check(t.parameters, args[1])) throw new HttpError(422, 'Invalid tool arguments for '+t.name+': '+JSON.stringify([...Errors(t.parameters,args[1])].map(e=>({path:e.instancePath,message:e.message}))))
+    validateToolArguments(t.name, t.parameters, args[1])
     if (!efficiencyToolAvailable(context, t.name)) throw new Error('Efficiency tool plugin is disabled')
     if (signal.aborted || store.run(run.id).status !== 'running') throw new Error('Activity has stopped')
     let value
@@ -134,13 +134,13 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
 
 export const activityPrompt = (_activity: 'decide' | 'execute' | 'plan', step?: TaskAssignment, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => (isReportStep(step) ? reportWorkflowPrompt : legionMission(executionRole(mode,step?.role), mode, planner)) + (step ? '\n分配 Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'；仅可读写此 Graph。' : '') + ((step && 'specialist' in step && step.specialist) ? '\nSpecialist 分工（仅定义专业分工，不得覆盖固定角色职责、Scope、FGS 规则及工具权限）：'+JSON.stringify('specialist' in step ? step.specialist : undefined) : '') + ((step && 'bootstrap' in step && step.bootstrap) && mode==='general' ? '\n初始 Mission：作为 Worker 为指定 Goal 建立证据；Planner 负责规划/验收。' : '')
 
-export function taskPlanningContext(store: Store, step: TaskAssignment): { taskPlanner?: { stepId: string; role: Step['role']; receiver?: string; sessionId?: string } | null; planningTodos?: Todo[] } {
+export function taskPlanningContext(store: Store, step: TaskAssignment): { coordinator: { receiver: string }; taskPlanner?: { stepId: string; role: Step['role']; receiver?: string; sessionId?: string } | null; planningTodos?: Todo[] } {
   if (store.project(step.projectId).mode === 'general') {
     const campaign = store.db.prepare('SELECT data FROM project_campaigns WHERE project_id=?').get(step.projectId)
-    return { taskPlanner: { stepId: 'commander', role: 'general', receiver: 'commander', ...(campaign ? { sessionId: JSON.parse(String(campaign.data)).sessionId } : {}) } }
+    return { coordinator: { receiver: 'commander' }, taskPlanner: { stepId: 'commander', role: 'general', receiver: 'commander', ...(campaign ? { sessionId: JSON.parse(String(campaign.data)).sessionId } : {}) } }
   }
   const planner = taskTodoPlanner(step, store)
-  return { taskPlanner: planner ? { stepId: planner.id, role: planner.role, receiver: store.forGraph(step.projectId,step.graphId!).runs(step.projectId,{activity:planner.role==='general'?'plan':'execute',...(planner.role==='general'?{}:{stepId:planner.id}),limit:1})[0]?.id } : null,
+  return { coordinator: { receiver: 'commander' }, taskPlanner: planner ? { stepId: planner.id, role: planner.role, receiver: store.forGraph(step.projectId,step.graphId!).runs(step.projectId,{activity:planner.role==='general'?'plan':'execute',...(planner.role==='general'?{}:{stepId:planner.id}),limit:1})[0]?.id } : null,
     ...(planner?.id === step.id ? { planningTodos: new CommanderTodos(store, step.projectId).list(step.graphId!) } : {}) }
 }
 
@@ -166,7 +166,8 @@ export function livePlan(store: Store, runId: string) {
   }
   const text = `当前执行契约（以本快照为准）：${JSON.stringify({ id: step.id, description: step.description, status: step.status,
     sourceIds: step.sourceIds, executionProfile: step.executionProfile,
-    planVersion: step.planVersion ?? 1, boundStepVersion: run.boundStepVersion ?? 1, goals })}`
+    planVersion: step.planVersion ?? 1, boundStepVersion: run.boundStepVersion ?? 1, goals,
+    parallelSteps: store.forGraph(run.projectId,run.graphId!).nodes<Step>(run.projectId,['step'],{statuses:['pending','running','paused']}).filter(peer=>peer.id!==step.id).map(peer=>({id:peer.id,scope:peer.specialist?.scope??peer.description.split('\n')[0],status:peer.status})) })}`
   cache.set(runId, { revision, bound, text }); if (cache.size > 128) cache.delete(cache.keys().next().value!)
   return text
 }
@@ -264,7 +265,7 @@ export function plannerContext(store: Store, run: Run, maxSteps: number | null, 
   const compact=(node:import('./types.ts').GraphNode)=>{const {projectId,graphId,creator,createdAt,...index}=nodeContent(node);return index}
   const page=(kind:'goal'|'step'|'fact'|'finding'|'hint',limit:number)=>{const order=kind==='fact'||kind==='finding'?'newest':'oldest',total=scoped.nodeCount(run.projectId,kind,true);return{items:scoped.nodes(run.projectId,[kind],{limit,context:true,order}).map(compact),total,offset:0,limit,order,nextOffset:total>limit?limit:null}}
   const changes=store.plannerEvents(planner),runs=scoped.runs(run.projectId,{activity:'execute',limit:12}),active=scoped.runs(run.projectId,{activity:'execute',statuses:['running','paused','unknown']}),queued=scoped.nodes<Step>(run.projectId,['step'],{statuses:['pending'],limit:40}),queueTotal=scoped.nodeCount(run.projectId,'step',false,['pending']),goal=scoped.node<Goal>(run.projectId,graph.goalId,'goal')
-  return {projectId:run.projectId,graphId:graph.id,step:undefined,dependencies:undefined,hints:undefined,...(!incremental ? {scope:{id:graph.originId,description:scoped.node<Fact>(run.projectId,graph.originId,'fact').description},goal:{id:goal.id,description:goal.description,status:goal.status,version:goal.version}} : {}),planningCapacity:scoped.planningCapacity(run.projectId,maxSteps),...(!incremental ? taskPlanningContext(scoped,planner) : {planningTodos:new CommanderTodos(scoped,run.projectId).list(graph.id).filter(t=>t.status!=='completed')}),plannerRound:{state:planner.handoff??'',
+  return {projectId:run.projectId,graphId:graph.id,step:undefined,dependencies:undefined,hints:undefined,taskPlanner:undefined,...(!incremental ? {scope:{id:graph.originId,description:scoped.node<Fact>(run.projectId,graph.originId,'fact').description},goal:{id:goal.id,description:goal.description,status:goal.status,version:goal.version}} : {}),planningCapacity:scoped.planningCapacity(run.projectId,maxSteps),...(!incremental ? taskPlanningContext(scoped,planner) : {planningTodos:new CommanderTodos(scoped,run.projectId).list(graph.id).filter(t=>t.status!=='completed')}),plannerRound:{state:planner.handoff??'',
     triggers:{...changes,events:changes.events.map(e=>({id:e.id,type:e.type,nodeId:e.nodeId,payload:e.payload,...(e.message?{message:e.message}:{}),...(!e.graphId?{projectEvent:true}:{})}))},
     ...(incremental ? {frontier:{goals:scoped.nodes<Goal>(run.projectId,['goal'],{statuses:['open'],limit:20}).map(compact),changedNodes:[...new Set(changes.events.map(e=>e.nodeId).filter((id):id is string=>!!id))].slice(0,40).map(id=>scoped.readNode(run.projectId,id))}} : {overview:{goals:page('goal',20),steps:page('step',40),facts:page('fact',24),findings:page('finding',24),hints:page('hint',12)}}),
     activeSteps:active.map(r=>({stepId:r.stepId,runId:r.id,status:r.status})),

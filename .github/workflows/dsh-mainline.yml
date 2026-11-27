@@ -20,6 +20,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         id: python
         with:

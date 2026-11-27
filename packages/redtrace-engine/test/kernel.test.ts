@@ -8,7 +8,7 @@ import { Scheduler } from '../src/scheduler.ts'
 import type { EngineConfig } from '../src/types.ts'
 
 const worker = { name: 'mock', backend: 'mock' as const, provider: 'mock', model: '', enabled: true, roles: ['soldier'] as NonNullable<import('../src/types.ts').Worker['roles']>, reason: true, explore: true, bootstrap: true, maxRunning: 8, priority: 0 }
-const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 8, maxProjectWorkers: 8, maxRunningProjects: 2, maxSteps: null, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: os.tmpdir() }
+const config: EngineConfig = { workers: [worker], providers: {}, maxProjectWorkers: 8, maxRunningProjects: 2, maxSteps: null, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: os.tmpdir() }
 const create = (s: Store) => s.createProject({ title: 'Task', origin: 'Known input', goal: 'Write verified output' }).project.id
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
 async function until(predicate: () => boolean) { for (let i = 0; i < 200; i++) { if (predicate()) return; await turn() } assert.fail('Condition did not settle') }

@@ -80,7 +80,10 @@ test('TSecBench uses the configured Python even when python3 is absent from Work
     process.env.REDTRACE_BENCHMARK_PYTHON = python
     const id = store.createProject({ title: 'Interpreter', origin: 'TSecBench', goal: 'Use configured interpreter' }).project.id
     const run = store.claim(id,'execute',worker,store.addStep(id,{description:'Read SDK fixture',sourceIds:['origin']}).id)
-    const config: EngineConfig = { workers: [worker], providers: {}, maxWorkers: 1, maxProjectWorkers: 1, maxRunningProjects: 1, maxSteps: null, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: path.join(root, 'workspaces'), commonEnv: { PATH: root } }
+    const config: EngineConfig = { workers: [worker], providers: {}, maxProjectWorkers: 1, maxRunningProjects: 1, maxSteps: null, decideTimeout: 30, executeTimeout: 30, concludeTimeout: 5, bootstrapTimeout: 30, bootstrapConcludeTimeout: 5, workspaceRoot: path.join(root, 'workspaces'), commonEnv: { PATH: root } }
+    assert.deepEqual(await tsecbenchQuery(config, ['list']), { args: ['list'] })
+    delete process.env.REDTRACE_BENCHMARK_PYTHON
+    config.commonEnv!.REDTRACE_BENCHMARK_PYTHON = python
     assert.deepEqual(await tsecbenchQuery(config, ['list']), { args: ['list'] })
   } finally {
     if (previous === undefined) delete process.env.REDTRACE_BENCHMARK_PYTHON

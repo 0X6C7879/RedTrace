@@ -20,7 +20,7 @@ function fixture(t:any) {
   const p=store.createProject({mode:'benchmark',title:'Planner',origin:'authorized fixture',goal:'verify'}).project
   const graph=store.createGraph(p.id,{taskKey:'A',title:'A',origin:'local fixture',goal:'verified objective'})
   mkdirSync(root+'/'+p.id,{recursive:true})
-  const scoped=store.forGraph(p.id,graph.id),config={workers:[worker],providers:{},maxWorkers:8,maxProjectWorkers:8,maxRunningProjects:1,maxSteps:null,workspaceRoot:root} as EngineConfig
+  const scoped=store.forGraph(p.id,graph.id),config={workers:[worker],providers:{},maxProjectWorkers:8,maxRunningProjects:1,maxSteps:null,workspaceRoot:root} as EngineConfig
   const add=(role:'general'|'soldier'='general')=>spawnTask(legion,p.id,{role,taskKey:'A',graphId:graph.id,description:role,sourceIds:[graph.originId]})
   const context=(step:TaskAssignment)=>{const run=step.role==='general'?scoped.claim(p.id,'plan',worker):store.claim(p.id,'execute',worker,step.id);return{store:scoped,run,worker,config,signal:new AbortController().signal}}
   const evidence=new ProjectEvidence(scoped,root)

@@ -15,7 +15,7 @@ import {Configuration} from '../src/config.ts'
 import type {EngineConfig,GraphPlanner,Step} from '../src/types.ts'
 const worker={name:'fixture',backend:'mock' as const,provider:'mock',model:'mock',roles:['general','soldier','scout','soldier'] as ('general'|'soldier'|'scout'|'soldier')[],enabled:true,priority:0,maxRunning:100}
 const settle=async()=>{for(let i=0;i<30;i++)await new Promise(r=>setImmediate(r))}
-const config={workers:[worker],providers:{},maxSteps:3,maxWorkers:100,maxProjectWorkers:100,maxRunningProjects:10,maxBenchmarkTasks:10,workspaceRoot:os.tmpdir()} as EngineConfig
+const config={workers:[worker],providers:{},maxSteps:3,maxProjectWorkers:100,maxRunningProjects:10,maxBenchmarkTasks:10,workspaceRoot:os.tmpdir()} as EngineConfig
 
 test('ten Benchmark Graphs each claim three of ten queued Steps; General has identical per-Graph semantics',async()=>{
  for(const mode of ['benchmark','general'] as const){const store=new Store(':memory:'),p=store.createProject({mode,title:mode,origin:'local',goal:'verify'}).project
@@ -140,4 +140,17 @@ test('tool statistics fold immutable legacy names into domain/action without rew
  const {toolStatistics}=await import('../src/tool-stats.ts'),store=new Store(':memory:'),p=store.createProject({title:'stats',origin:'local',goal:'verify'}).project,step=store.addStep(p.id,{description:'execute',sourceIds:['origin']}),run=store.claim(p.id,'execute',worker,step.id)
  try{const metadata=JSON.parse(String(store.db.prepare('SELECT data FROM audit_runs WHERE id=?').get(run.id)!.data));store.audit(metadata,[{kind:'tool.started',title:'http_batch',call_id:'legacy',arguments:{requests:[]}},{kind:'tool.completed',title:'http_batch',call_id:'legacy',content:'old'},{kind:'tool.started',title:'http_session',call_id:'current',arguments:{action:'batch',requests:[]}},{kind:'tool.completed',title:'http_session',call_id:'current',content:'new'}]);const stats=toolStatistics(store,new URL('http://fixture/?tool=http_session'),['http_session']);assert.equal(stats.stats.calls,2);assert.equal(stats.tools[0].name,'http_session');assert.equal(stats.actions[0].action,'batch');assert.equal(stats.actions[0].calls,2);assert(stats.history.some(h=>h.original_name==='http_batch'));assert(store.db.prepare("SELECT 1 FROM audit_events WHERE json_extract(data,'$.title')='http_batch'").get())
  }finally{store.close()}
+})
+
+test('domain validation reports only the chosen action while preserving nested and action contracts',async()=>{
+ const {validateToolArguments}=await import('../src/tool-validation.ts')
+ const tools=domainTools([
+  {name:'legion_accept',description:'Accept proof',parameters:{type:'object',properties:{expectedVersion:{type:'integer',minimum:1},evidenceIds:{type:'array',items:{type:'string'},minItems:1}},required:['expectedVersion','evidenceIds'],additionalProperties:false},execute:()=>{}},
+  {name:'legion_goal',description:'Create stage',parameters:{type:'object',properties:{description:{type:'string',minLength:1}},required:['description'],additionalProperties:false},execute:()=>{}}
+ ])
+ const tool=tools[0],valid={action:'accept',expectedVersion:1,evidenceIds:['f1']}
+ validateToolArguments(tool.name,tool.parameters,valid)
+ assert.throws(()=>validateToolArguments(tool.name,tool.parameters,{...valid,id:'goal'}),error=>{assert.match(String(error),/legion_plan.accept/);assert(!String(error).includes('description'));return true})
+ for(const args of [{...valid,evidenceIds:[42]},{...valid,expectedVersion:0},{...valid,action:'unknown'},{action:'goal',description:''}])assert.throws(()=>validateToolArguments(tool.name,tool.parameters,args),/Invalid tool arguments/)
+ assert.match(tool.description,/accept\(expectedVersion,evidenceIds\)/)
 })

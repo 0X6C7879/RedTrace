@@ -1,9 +1,20 @@
-import {domainAction} from '../lib/tool-domains.js'
+import {domainAction,originalTool,TOOL_DOMAINS} from '../lib/tool-domains.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { apply as webshellApply } from '../lib/webshell.js'
 import { apply as c2Apply } from '../lib/c2.js'
+
+test('every domain action round-trips and returned mappings remain independent', () => {
+  for (const [domain, actions] of Object.entries(TOOL_DOMAINS)) for (const [action, original] of Object.entries(actions)) {
+    assert.deepEqual(domainAction(original), {domain, action})
+    assert.equal(originalTool(domain, action), original)
+    domainAction(original).action = 'changed by caller'
+    assert.deepEqual(domainAction(original), {domain, action})
+  }
+  assert.equal(domainAction('read'), undefined)
+  assert.equal(domainAction('bash'), undefined)
+})
 
 function collector() {
   const tools = []

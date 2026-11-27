@@ -1,5 +1,6 @@
 import type {Store} from './store.ts'
 import {HttpError} from './types.ts'
+import {auditSummaries} from './audit-projection.ts'
 export interface TracePage {after?:number;before?:number;limit?:number;query?:string;eventId?:number;includeThinking?:boolean}
 /** Audit is canonical; Planner reads a locator index unless it requests one exact event. */
 export function readRunTrace(store:Store,projectId:string,runId:string,page:TracePage={},graphId?:string) {
@@ -12,7 +13,7 @@ export function readRunTrace(store:Store,projectId:string,runId:string,page:Trac
  const filter="id>? AND id<?"+(page.query?' AND instr(lower(data),lower(?))>0':'')+(page.includeThinking?'':" AND COALESCE(kind,'') NOT IN ('thinking.message','thinking.delta','system.prompt','user.message')")
  const counts=store.db.prepare('SELECT COUNT(*) AS total, COUNT(CASE WHEN '+filter+' THEN 1 END) AS matching FROM audit_events WHERE '+scope).get(...values,runId)!
  const total=Number(counts.total),matching=Number(counts.matching)
- const rows=store.db.prepare('SELECT id,data FROM audit_events WHERE '+scope+' AND '+filter+' ORDER BY id '+(backward?'DESC':'ASC')+' LIMIT ?').all(runId,...values,limit)
- const events=rows.map(row=>{const event=JSON.parse(String(row.data));return{id:Number(row.id),kind:event.kind,title:event.title,callId:event.call_id,timestamp:event.timestamp,error:event.error,summary:typeof event.content==='string'?event.content.slice(0,180):undefined,detailAvailable:true}}).sort((a,b)=>a.id-b.id)
+ const rows=store.db.prepare('SELECT id,CAST(data AS BLOB) AS data FROM audit_events WHERE '+scope+' AND '+filter+' ORDER BY id '+(backward?'DESC':'ASC')+' LIMIT ?').all(runId,...values,limit)
+ const events=auditSummaries(rows).sort((a,b)=>a.id-b.id)
  return{run:summary,total,matching,events,range:{after:page.after??0,before:page.before??null,limit,first:events[0]?.id??null,last:events.at(-1)?.id??null},hasMore:matching>rows.length,nextAfter:!backward&&matching>rows.length?events.at(-1)?.id:null,nextBefore:backward&&matching>rows.length?events[0]?.id:null}
 }

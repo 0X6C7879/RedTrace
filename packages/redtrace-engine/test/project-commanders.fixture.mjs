@@ -32,7 +32,7 @@ const model=createServer(async(req,res)=>{
 })
 try{
  await new Promise(r=>model.listen(0,'127.0.0.1',r))
- configuration.commit(configuration.read().revision,raw=>{raw.providers={fixture:{api:'openai-completions',base_url:'http://127.0.0.1:'+model.address().port+'/v1',api_key:'fixture',models:[{id:'fixture',context_window:30000,max_tokens:1000,reasoning:'off',reasoning_efforts:false}]}};raw.workers=[{name:'commander',roles:['general'],provider:'fixture',model:'fixture',max_running:2}];raw.runtime={max_workers:2,max_project_workers:2,max_running_projects:2};raw.tasks={commander:{timeout:15,conclude_timeout:2}}})
+ configuration.commit(configuration.read().revision,raw=>{raw.providers={fixture:{api:'openai-completions',base_url:'http://127.0.0.1:'+model.address().port+'/v1',api_key:'fixture',models:[{id:'fixture',context_window:30000,max_tokens:1000,reasoning:'off',reasoning_efforts:false}]}};raw.workers=[{name:'commander',roles:['general'],provider:'fixture',model:'fixture',max_running:2}];raw.runtime={max_workers:1,max_project_workers:2,max_running_projects:2};raw.tasks={commander:{timeout:15,conclude_timeout:2}}})
  const{Context}=await load('vendor/deepseek-harness/vendor/cordis/lib/index.js');ctx=new Context()
  for(const file of ['vendor/deepseek-harness/packages/session/session-projection/lib/index.js','packages/redtrace-dsh/lib/core.js']){const module=await load(file);await ctx.plugin(module.default??module).await()}
  const persist=await load('vendor/deepseek-harness/packages/session/session-persistence-jsonl/lib/index.js');await ctx.plugin(persist,{root:work+'/sessions'}).await()
@@ -52,5 +52,5 @@ try{
  const before=requests.get(projects[1].id);store.addInput(projects[0].id,'hint','A-only event')
  await until(()=>legion.campaign(projects[0].id).cursors[projects[0].id]?.acknowledged===Number(store.db.prepare('SELECT MAX(id) AS n FROM events WHERE project_id=?').get(projects[0].id).n))
  assert.equal(requests.get(projects[1].id),before,'A event must not wake B')
- console.log('PROJECT_COMMANDERS_CONCURRENT=true; distinct_native_sessions=true; own_STATE=true; A_event_does_not_wake_B=true; global_slots=2; commander_cwd=task_root; legacy_session_resumed=true; model=local-protocol-fixture')
+ console.log('PROJECT_COMMANDERS_CONCURRENT=true; distinct_native_sessions=true; own_STATE=true; A_event_does_not_wake_B=true; legacy_global_limit_ignored=true; commander_cwd=task_root; legacy_session_resumed=true; model=local-protocol-fixture')
 }finally{await controller?.close();await ctx?.fiber.dispose();store.close();for(const res of responses)res.destroy();await new Promise(r=>model.close(r));rmSync(work,{recursive:true,force:true})}

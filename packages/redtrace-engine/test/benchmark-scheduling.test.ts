@@ -178,7 +178,7 @@ test('Scheduler Watchdog continues settled model recovery beyond three attempts 
   t.after(()=>store.close());new LegionStore(store)
   const g=store.createGraph(p.id,{taskKey:'T',title:'fixture',origin:'local',goal:'verify'}),step=store.forGraph(p.id,g.id).addStep(p.id,{role:'soldier',taskKey:'T',description:'native work',sourceIds:[g.originId]})
   let attempts=0;const ids:string[]=[]
-  const scheduler=new Scheduler(store,{workers:[{name:'fixture',backend:'mock',enabled:true,roles:['soldier'],maxRunning:1,priority:0}],maxWorkers:1,maxProjectWorkers:1,maxRunningProjects:1,workspaceRoot:'/unused'} as any,async({run})=>{attempts++;ids.push(run.id);const saved=store.run(run.id);saved.failureCode='TRANSPORT';saved.checkpoint={sessionId:run.id};store.saveRun(saved);throw Error('native transport died')})
+  const scheduler=new Scheduler(store,{workers:[{name:'fixture',backend:'mock',enabled:true,roles:['soldier'],maxRunning:1,priority:0}],maxProjectWorkers:1,maxRunningProjects:1,workspaceRoot:'/unused'} as any,async({run})=>{attempts++;ids.push(run.id);const saved=store.run(run.id);saved.failureCode='TRANSPORT';saved.checkpoint={sessionId:run.id};store.saveRun(saved);throw Error('native transport died')})
   const settle=async()=>{for(let i=0;i<10;i++)await new Promise(r=>setImmediate(r))}
   try{scheduler.start();await settle();assert.equal(attempts,1)
     for(let i=0;i<4;i++){scheduler.watchdog();const next=store.node(p.id,step.id,'step') as any;if(next.status==='paused'&&next.retryAfter){assert(next.retryAfter>Date.now());next.retryAfter=Date.now()-1;store.saveNode(next);scheduler.wake()}await settle()}
@@ -207,4 +207,23 @@ test('native pause excludes offline time but retains prior active stagnation for
  assert.equal(tactic.elapsedMs,11*60000,'10 active minutes before pause plus 1 after resume, excluding 19 offline minutes')
  assert.equal(tactic.stalledMinutes,11,'pause is not new evidence and must not erase prior stagnation')
  assert.equal(tactic.recommendation,'second-angle')
+})
+
+test('context pressure follows provider usage with an unchanged request header and separates output reserve',async t=>{
+ const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'pressure',origin:'local',goal:'verify'}).project,legion=new LegionStore(store,p.id)
+ t.after(()=>store.close())
+ const g=store.createGraph(p.id,{taskKey:'T',title:'T',origin:'local',goal:'verify'}),s=store.forGraph(p.id,g.id),step=s.addStep(p.id,{role:'soldier',taskKey:'T',description:'run',sourceIds:[g.originId]}),run=s.claim(p.id,'execute',{name:'fixture',backend:'mock'},step.id)
+ let pressureTokens=10,measurements=0
+ const listeners=new Map<string,any[]>(),scoped={on(name:string,fn:any){listeners.set(name,[...(listeners.get(name)??[]),fn])}}
+ const meter={measure(){measurements++;return{totalTokens:10}},contextPressure(){return{pressureTokens,contextWindow:100}}}
+ const ctx={get(name:string){return name==='tokenMeter'?meter:{resolveModelInfo(){return{context:{contextWindow:100},defaultMaxTokens:20}}}}}
+ const{mountLegionContext}=await import(new URL('../compat/legion-context.mjs',import.meta.url).href)
+ mountLegionContext(scoped,ctx,{store,legion,run,message:(text:string)=>text})
+ const emit=async(event:any)=>{for(const fn of listeners.get('session/event')!)await fn({},event)}
+ await emit({type:'request/header',data:{header:{config:{}}}})
+ assert.equal(store.run(run.id).contextPressure!.tokens,30)
+ pressureTokens=55;await emit({type:'assistant/message',data:{usage:{inputTokens:55}}})
+ const value=store.run(run.id).contextPressure!
+ assert.equal(value.inputTokens,55);assert.equal(value.reservedOutputTokens,20);assert.equal(value.tokens,75);assert.equal(value.sample,'provider-usage');assert.equal(measurements,1)
+ pressureTokens=5;await emit({type:'assistant/message',data:{usage:{inputTokens:5}}});assert.equal(store.run(run.id).contextPressure!.tokens,25)
 })

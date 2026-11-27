@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, readlink, writeFile, rm, symlink } from 'node:fs/promises'
+import { access, mkdtemp, mkdir, readFile, readlink, writeFile, rm, symlink } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import test from 'node:test'
@@ -16,10 +16,16 @@ test('runtime source copying preserves portable relative symlinks', async () => 
     for (const name of ['packages', 'vendor', 'native', 'patches']) await mkdir(path.join(source, name), { recursive: true })
     await writeFile(path.join(source, 'packages/AGENTS.md'), 'fixture')
     await symlink('AGENTS.md', path.join(source, 'packages/CLAUDE.md'), 'file')
+    for (const name of ['lib', 'node_modules']) {
+      await mkdir(path.join(source, 'packages/fixture', name), { recursive: true })
+      await writeFile(path.join(source, 'packages/fixture', name, 'generated.js'), 'generated')
+    }
+    await writeFile(path.join(source, 'packages/fixture/tsconfig.tsbuildinfo'), 'generated')
     // The sparse source stops at scripts/types after the runtime directories have been copied.
     await assert.rejects(prepareRuntime(source, destination), { code: 'ENOENT' })
     assert.equal(await readlink(path.join(destination, 'packages/CLAUDE.md')), 'AGENTS.md')
     assert.equal(await readFile(path.join(destination, 'packages/CLAUDE.md'), 'utf8'), 'fixture')
+    for (const name of ['lib', 'node_modules', 'tsconfig.tsbuildinfo']) await assert.rejects(access(path.join(destination, 'packages/fixture', name)), { code: 'ENOENT' })
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 

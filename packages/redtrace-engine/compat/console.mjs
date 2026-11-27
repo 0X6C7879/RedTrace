@@ -29,8 +29,12 @@ export async function mountSystemLogs(ctx, engine) {
     const secrets = [...Object.values(config.providers).map(p => p.apiKey ?? process.env[p.apiKeyEnv]), ...Object.entries(config.commonEnv ?? {}).filter(([name]) => /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD)$/.test(name)).map(([,value]) => value)].filter(Boolean)
     return ctx.logger.buffer.map(entry => {
       let message = Logger.format({ colors: false }, entry)
-      for (const secret of secrets) message = message.replaceAll(secret, '[REDACTED]')
-      message = message.replace(/(Bearer\s+)\S+/gi, '$1[REDACTED]').replace(/([?&](?:api_key|key|token|access_token|password)=)[^&\s]+/gi, '$1[REDACTED]').replace(/(https?:\/\/)[^/\s@]+@/gi, '$1[REDACTED]@')
+      for (const secret of secrets) {
+        if (message.includes(secret)) message = message.replaceAll(secret, '[REDACTED]')
+      }
+      if (/[?&]|bearer\s|https?:\/\//i.test(message)) {
+        message = message.replace(/(Bearer\s+)\S+/gi, '$1[REDACTED]').replace(/([?&](?:api_key|key|token|access_token|password)=)[^&\s]+/gi, '$1[REDACTED]').replace(/(https?:\/\/)[^/\s@]+@/gi, '$1[REDACTED]@')
+      }
       return { id: entry.sn, timestamp: entry.ts, level: entry.type, source: entry.name, message }
     })
   })

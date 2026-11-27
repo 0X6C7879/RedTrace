@@ -83,7 +83,7 @@ test('stored Scout Steps remain readable, cannot run or get reassigned, and do n
   store.saveNode({...step,role:'scout' as never})
   const scheduler = new Scheduler(store,{
     workers:[{name:'route',roles:['soldier'],enabled:true,backend:'mock',provider:'mock',model:'mock',priority:0,maxRunning:1}],
-    maxWorkers:1,maxProjectWorkers:1,maxRunningProjects:1,maxSteps:null,
+    maxProjectWorkers:1,maxRunningProjects:1,maxSteps:null,
   } as EngineConfig,async()=>{assert.fail('A retired Step must not start on the Soldier route')})
   try {
     assert.throws(()=>legion.spawn(p.id,{...mission,role:'scout' as never}),/Scout is retired/)

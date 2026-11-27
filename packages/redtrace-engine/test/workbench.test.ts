@@ -102,7 +102,7 @@ test('overview bounds recent workers and history keeps stable labels without che
 test('global DSH chats consume existing global and route capacity without serializing Workers',async t=>{
  const store=new Store(':memory:');t.after(()=>store.close());const p=store.createProject({mode:'general',title:'parallel',origin:'local',goal:'verify'}).project,legion=new LegionStore(store),chats=new ChatStore(store),chat=chats.create('occupied');chats.save({...chat,status:'running',workerName:worker.name})
  for(let i=0;i<3;i++)spawnTask(legion,p.id,{role:'soldier',taskKey:'angle-'+i,description:'work '+i,sourceIds:['origin']})
- const config={workers:[{...worker,maxRunning:3}],providers:{},maxWorkers:3,maxProjectWorkers:3,maxRunningProjects:1,maxSteps:null,workspaceRoot:'/tmp',executeTimeout:5,concludeTimeout:1} as EngineConfig
+ const config={workers:[{...worker,maxRunning:3}],providers:{},maxProjectWorkers:3,maxRunningProjects:1,maxSteps:null,workspaceRoot:'/tmp',executeTimeout:5,concludeTimeout:1} as EngineConfig
  let release!:()=>void;const wait=new Promise<void>(r=>release=r),scheduler=new Scheduler(store,config,async()=>wait)
  try{scheduler.start();await new Promise(r=>setImmediate(r));assert.equal(scheduler.activeRuns.length,2);chats.save({...chats.get(chat.id),status:'idle'});scheduler.wake();await new Promise(r=>setImmediate(r));assert.equal(scheduler.activeRuns.length,3)}finally{release();await scheduler.close()}
 })

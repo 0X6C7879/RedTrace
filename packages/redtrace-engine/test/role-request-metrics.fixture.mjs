@@ -37,7 +37,7 @@ const server=createServer(async(req,res)=>{try{
 try{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));const c=new Configuration(root);c.initialize();c.commit(c.read().revision,raw=>{
  raw.providers={fixture:{api:'openai-completions',base_url:'http://127.0.0.1:'+server.address().port+'/v1',api_key:'fixture',models:[{id:'fixture',context_window:100000,max_tokens:512,reasoning:'off',reasoning_efforts:false}]}}
- raw.workers=['commander','general','soldier'].map(role=>({name:role,roles:[role],provider:'fixture',model:'fixture',max_running:20}));raw.runtime={max_workers:30,max_project_workers:10,max_running_projects:10}
+ raw.workers=['commander','general','soldier'].map(role=>({name:role,roles:[role],provider:'fixture',model:'fixture',max_running:20}));raw.runtime={max_project_workers:10,max_running_projects:10}
  })
  const store=new Store(root+'/.redtrace/engine.db')
  for(const [label,mode,role] of [['Benchmark Commander','benchmark',null],['General Planner','general',null],['Benchmark General','benchmark','general'],['Benchmark Soldier','benchmark','soldier'],['Benchmark Specialist','benchmark','soldier'],['General Soldier','general','soldier'],['Custom Executor','general','soldier'],['Reporter','general','soldier']]){

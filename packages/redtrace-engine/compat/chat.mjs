@@ -60,7 +60,6 @@ export function mountGlobalChat(ctx,engine,refresh) {
     chat=chats.get(chat.id)
     if(chat.status==='running')throw new HttpError(409,'This conversation is already responding')
     const config=engine.configuration.resolvedSnapshot().config,runs=store.runsByStatus('running'),commands=legion.campaigns().filter(c=>c.status==='running'),others=chats.all().filter(c=>c.status==='running')
-    if(runs.length+commands.length+others.length>=config.maxWorkers)throw new HttpError(409,'Configured execution capacity is full')
     if(chat.projectId&&runs.filter(r=>r.projectId===chat.projectId).length+commands.filter(c=>c.projectId===chat.projectId).length+others.filter(c=>c.projectId===chat.projectId).length>=config.maxProjectWorkers)throw new HttpError(409,'Configured Project execution capacity is full')
     const selectedWorker=requestedWorker===undefined?chat.selectedWorker:requestedWorker??undefined,reasoning=requestedReasoning===undefined?chat.reasoning:requestedReasoning??undefined
     const selected=selectedWorker?conversationWorker(config,selectedWorker,chat.projectId?store.project(chat.projectId).mode:undefined):undefined
@@ -95,7 +94,7 @@ export function mountGlobalChat(ctx,engine,refresh) {
         finally{signal.removeEventListener('abort',cancel)}
         chats.save({...chats.get(chat.id),status:'idle',updatedAt:new Date().toISOString()})
       }catch(error){chats.save({...chats.get(chat.id),status:'failed',error:String(error),updatedAt:new Date().toISOString()});throw error}
-      finally{try{if(handle){handle.agent.cancel({kind:'hook',reason:'Global conversation turn settled'});await handle.agent.whenIdle();try{await ctx.get('sessions').flush(handle.agent.session)}catch(error){chats.save({...chats.get(chat.id),status:'failed',error:String(error)});throw error}finally{await handle.dispose()}}}finally{active.delete(chat.id);engine.scheduler.wake();engine.commanderController?.wake()}}
+      finally{try{if(handle){handle.agent.cancel({kind:'hook',reason:'Global conversation turn settled'});await handle.agent.whenIdle();try{await handle.dispose()}catch(error){chats.save({...chats.get(chat.id),status:'failed',error:String(error)});throw error}}}finally{active.delete(chat.id);engine.scheduler.wake();engine.commanderController?.wake()}}
     })()
     active.set(chat.id,{abort,promise})
     // HTTP request observes errors; no new background loop or retry system.

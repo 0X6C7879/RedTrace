@@ -61,7 +61,7 @@ flowchart LR
 
 ### 并行而不失控
 
-调度同时约束全局并发、活动项目数、单项目并发和单 Worker 配额。任务派发还会考虑 Worker 能力、健康状态、优先级、当前负载和失败冷却窗口，从而让多个模型与多个项目共享资源时保持可预测性。
+调度不设全局并发上限，仅约束活动项目数、单项目并发和单 Worker 配额。任务派发还会考虑 Worker 能力、健康状态、优先级、当前负载和失败冷却窗口，从而让多个模型与多个项目共享资源时保持可预测性。
 
 ### 长任务中的实时协同
 
@@ -98,6 +98,8 @@ bash install-security-toolchain.sh --dry-run apt
 ```
 
 ### 一键启动（Windows / macOS / Linux）
+
+源码启动需要 Node 24.11+ 或 26+、Rust 1.88+ 与本机 C 链接器。Rust 工具链可通过 [rustup](https://rustup.rs) 安装；首次启动及 Rust 源码变化后自动构建原生 Audit/工具文本模块，后续启动复用产物。Docker 使用独立 Rust 构建阶段，运行镜像不携带 Rust 编译器。
 
 Windows 先在 PowerShell 中复制配置，然后可双击 `start-redtrace.cmd`，也可在终端启动：
 
@@ -183,10 +185,10 @@ cp redtrace.mock.example.yaml redtrace.yaml
 |---|---|
 | `providers` | API 协议（OpenAI/Anthropic 兼容）、endpoint、密钥与模型列表（context window、max tokens、reasoning 策略） |
 | `workers` | 模型路由、启用状态、任务资格、优先级和并发 |
-| `runtime` | 全局/项目并发限制 |
+| `runtime` | 活动项目数和单项目并发限制 |
 | `tasks` | 各角色的主阶段与收尾超时、通用模式 Max Step、Benchmark 最大题目并发 |
 
-`tasks.commander.max_intents` 是通用模式主 FGS 的最大活跃 Step（Max Step）；`tasks.commander.max_benchmark_tasks` 是 Benchmark 同时推进的题目数上限，未配置则不限制。Benchmark 每题仍按原有加人策略增加 Step，不受 Max Step 限制。两项均可在设置页保存后热加载：有足够独立、可执行工作时规划者补足目标，前置条件未满足或方向不足时不重复凑数；降低上限不终止在途任务，后续派发仍受 Worker、项目和全局容量约束。
+`tasks.commander.max_intents` 是通用模式主 FGS 的最大活跃 Step（Max Step）；`tasks.commander.max_benchmark_tasks` 是 Benchmark 同时推进的题目数上限，未配置则不限制。Benchmark 每题仍按原有加人策略增加 Step，不受 Max Step 限制。两项均可在设置页保存后热加载：有足够独立、可执行工作时规划者补足目标，前置条件未满足或方向不足时不重复凑数；降低上限不终止在途任务，后续派发仍受 Worker 与项目容量约束。
 | `common_env` | 传递给 Worker 的环境变量 |
 
 配置支持快照与热加载：新任务使用新配置，已经运行的任务继续使用启动时快照。Web 设置页可创建、复制、启停和测试 Worker；写入使用 revision 做乐观并发控制，API Key 不会在查询响应中回显。
@@ -247,8 +249,15 @@ npm ci --prefix packages/redtrace-engine
 npm run --prefix packages/redtrace-engine check
 npm test --prefix packages/redtrace-engine
 npm run dsh:test
+npm run bench:runtime
+npm run bench:agent
+npm run bench:output
+npm run bench:agent -- --tool-output
+npm run bench:graph
 docker compose config -q
 ```
+
+基准覆盖真实 SQLite/Audit/Trace 链路、完整 DSH Agent Loop（本地确定性模型协议服务、四个并发 Agent、80 次本地文件读取或命令输出）、混合文本压缩，以及 201 个 Goal / 4,000 个 Step 的图投影。输出基准添加 `--original-output` 可对照 Git `42d6b795` 中的原 JS 折叠；完整说明见性能报告。不访问真实目标或付费模型。临时运行数据在系统临时目录创建并清理；Rust 构建产物通过 `npm run native:build` 准备。详细指标和限制见 [Rust 运行时性能报告](docs/rust-runtime-performance.md)。
 
 Node 测试覆盖 FGS 事务、并发领取、事实触发规划、暂停恢复、旧 API 投影、配置密钥、外围能力、Cordis 生命周期、启动脚本和 Mock 端到端流程；DSH 扩展继续用 `node:test` 覆盖插件与旧 Agent 钩子。
 

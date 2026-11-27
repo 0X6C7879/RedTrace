@@ -10,10 +10,12 @@ const ACTIVE_STEP_STATUSES = ['pending', 'running', 'paused', 'blocked']
 export function projectFgs(graph: Graph) {
   const origin=graph.graph?.originId??'origin'
   const folded = foldedFactIds(graph)
+  const activeSteps = new Map<string, number>()
+  for (const step of graph.steps) if (!step.deleted && ACTIVE_STEP_STATUSES.includes(step.status)) activeSteps.set(step.goalId, (activeSteps.get(step.goalId) ?? 0) + 1)
   const nodes: FgsNode[] = [
     ...graph.facts.map(f => ({ id: f.id, nodeType: f.id === origin ? 'scope' as const : 'fact' as const, label: f.title, description: f.title, folded: folded.has(f.id) })),
     ...graph.goals.map(g => ({ id: g.id, nodeType: g.parentId ? 'subgoal' as const : 'goal' as const, label: g.description, description: g.description, status: g.status,
-      activeSteps: graph.steps.filter(s => !s.deleted && s.goalId === g.id && ACTIVE_STEP_STATUSES.includes(s.status)).length })),
+      activeSteps: activeSteps.get(g.id) ?? 0 })),
     ...graph.findings.map(f => ({ id: f.id, nodeType: 'finding' as const, label: f.title, description: f.title, factCount: f.factIds.length })),
   ]
   const ids = new Set(nodes.map(n => n.id)), edges = new Map<string, FgsEdge>(), missing = new Set<string>()
@@ -74,9 +76,13 @@ export function liveSteps(graph: Graph): { nodes: FgsNode[]; edges: FgsEdge[] } 
   const active = graph.steps.filter(s => !s.deleted && ACTIVE_STEP_STATUSES.includes(s.status))
   if (!active.length) return { nodes: [], edges: [] }
   const ids = new Set<string>([...graph.facts.map(f => f.id), ...graph.goals.map(g => g.id), ...graph.findings.map(f => f.id), ...active.map(s => s.id)])
-  const edges: FgsEdge[] = []
+  const edges: FgsEdge[] = [], pairs = new Set<string>()
   const add = (source: string, target: string, relation: FgsEdge['relation'], stepId: string) => {
-    if (ids.has(source) && ids.has(target) && source !== target && !edges.some(e => e.source === source && e.target === target)) edges.push({ id: JSON.stringify([relation, source, target]), source, target, relation, stepIds: [stepId] })
+    if (!ids.has(source) || !ids.has(target) || source === target) return
+    const pair = JSON.stringify([source, target])
+    if (pairs.has(pair)) return
+    pairs.add(pair)
+    edges.push({ id: JSON.stringify([relation, source, target]), source, target, relation, stepIds: [stepId] })
   }
   for (const step of active) {
     for (const source of step.sourceIds) add(source, step.id, 'executes', step.id)

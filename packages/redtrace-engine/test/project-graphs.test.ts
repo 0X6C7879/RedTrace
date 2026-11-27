@@ -61,19 +61,19 @@ test('three task Workers share Scheduler capacity concurrently and initial Hints
  const p=create(s,'Concurrent tasks','benchmark'),l=new LegionStore(s,p.id),graphs=['A','B','C'].map(taskKey=>s.createGraph(p.id,{taskKey,title:taskKey,origin:'local',goal:'verify'}))
  for(const g of graphs){s.forGraph(p.id,g.id).addInput(p.id,'hint','private '+g.taskKey);spawnTask(l,p.id,{role:'soldier',taskKey:g.taskKey!,description:'observe',sourceIds:[g.originId]})}
  const contexts:any[]=[],route:Worker={...worker,provider:'mock',model:'fixture',enabled:true,maxRunning:3,priority:0,roles:['soldier']};let release!:()=>void;const held=new Promise<void>(resolve=>release=resolve)
- const scheduler=new Scheduler(s,{workers:[route],providers:{},maxWorkers:3,maxProjectWorkers:3,maxRunningProjects:1,maxSteps:null,workspaceRoot:'/tmp/redtrace-graph-workspaces'} as any,async context=>{contexts.push(context);await held;context.store.addFact(p.id,'verified',{runId:context.run.id})})
+ const scheduler=new Scheduler(s,{workers:[route],providers:{},maxProjectWorkers:3,maxRunningProjects:1,maxSteps:null,workspaceRoot:'/tmp/redtrace-graph-workspaces'} as any,async context=>{contexts.push(context);await held;context.store.addFact(p.id,'verified',{runId:context.run.id})})
  try{scheduler.start();for(let i=0;i<100&&contexts.length<3;i++)await new Promise<void>(r=>setImmediate(r));assert.equal(contexts.length,3);assert.equal(new Set(contexts.map(c=>c.run.workspaceRoot)).size,3)
  for(const c of contexts){const launch=launchContext(s,c.run.id);assert.equal(launch.graphId,c.run.graphId);assert.equal(launch.hints?.items.length,1);assert(launch.hints?.items[0].content.includes(graphs.find(g=>g.id===c.run.graphId)!.taskKey!))}
  }finally{release();await scheduler.close();s.close()}
 })
 
-test('Commander yields its single Project slot and observes other Projects in global capacity',async()=>{
+test('Planner yields its Project slot while other Projects remain active',async()=>{
  const s=new Store(':memory:');try{const p=create(s,'A'),q=create(s,'B'),l=new LegionStore(s,p.id);l.claimCommand();l.saveCampaign({...l.campaign(),workerName:'commander'})
  const route:Worker={name:'commander',roles:['commander'],provider:'mock',model:'fixture',enabled:true,maxRunning:2,priority:0,backend:'mock'}
- let tools=legionTools(s.forProject(p.id),'commander',p.id,null,()=>{},{workers:[route],maxWorkers:10,maxProjectWorkers:1} as any)
+ let tools=legionTools(s.forProject(p.id),'commander',p.id,null,()=>{},{workers:[route],maxProjectWorkers:1} as any)
  const single=await tools.find(t=>t.name==='legion_wait')!.execute('',{projectId:p.id,after:0});assert.equal((single.details as {mustFinish:boolean}).mustFinish,true)
  const step=s.addStep(q.id,{description:'other Project',sourceIds:['origin']});s.claim(q.id,'execute',worker,step.id)
- tools=legionTools(s.forProject(p.id),'commander',p.id,null,()=>{},{workers:[route],maxWorkers:2,maxProjectWorkers:5} as any)
- const global=await tools.find(t=>t.name==='legion_wait')!.execute('',{projectId:p.id,after:0});assert.equal((global.details as {mustFinish:boolean}).mustFinish,true)
+ tools=legionTools(s.forProject(p.id),'commander',p.id,null,()=>{},{workers:[route],maxProjectWorkers:5} as any)
+ const other=await tools.find(t=>t.name==='legion_wait')!.execute('',{projectId:p.id,after:0});assert.equal((other.details as {mustFinish:boolean}).mustFinish,true)
  }finally{s.close()}
 })

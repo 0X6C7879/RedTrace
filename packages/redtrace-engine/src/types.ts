@@ -78,7 +78,7 @@ export interface Run {
   inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number
   failureCode?: string; heartbeatAt?: string; trigger?: string
   provider?: string; model?: string; workspaceRoot?: string
-  contextPressure?: { source: 'dsh-token-meter'; tokens: number; capacity: number; ratio: number }
+  contextPressure?: { source: 'dsh-token-meter'; tokens: number; capacity: number; ratio: number; inputTokens?: number; reservedOutputTokens?: number; sample?: 'request-header' | 'provider-usage'; sampledAt?: string }
   predecessorRunId?: string; handoff?: string
 }
 export interface Worker {
@@ -99,7 +99,7 @@ export interface EngineConfig {
   commanderInspection?: {active:number;idle:number}
   maxBenchmarkTasks?: number | null
   taskLimits?: Record<string, {timeout:number;concludeTimeout:number}>
-  workers: Worker[]; providers: Record<string, Provider>; maxWorkers: number; maxProjectWorkers: number
+  workers: Worker[]; providers: Record<string, Provider>; maxProjectWorkers: number
   maxRunningProjects: number; maxSteps: number | null; decideTimeout: number; executeTimeout: number
   concludeTimeout: number; bootstrapTimeout: number; bootstrapConcludeTimeout: number
   workspaceRoot: string; commonEnv?: Record<string, string>

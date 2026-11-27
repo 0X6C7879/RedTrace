@@ -1,3 +1,4 @@
+import type {Json} from '../src/types.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
@@ -55,7 +56,7 @@ test('General is sole Planner; Soldier and custom Executor inherit execution ide
 test('one Worker schedules the correct identity concurrently across both Project modes', async()=>{
   const store=new Store(':memory:'),root=mkdtempSync(path.join(os.tmpdir(),'role-schedule-'))
   let release!:()=>void;const pending=new Promise<void>(r=>release=r)
-  const config={workers:[{...worker,roles:['soldier'] as FixedRole[]}],maxWorkers:2,maxProjectWorkers:2,maxRunningProjects:2,workspaceRoot:root,maxSteps:null} as EngineConfig
+  const config={workers:[{...worker,roles:['soldier'] as FixedRole[]}],maxProjectWorkers:2,maxRunningProjects:2,workspaceRoot:root,maxSteps:null} as EngineConfig
   const scheduler=new Scheduler(store,config,async()=>pending)
   try {
     for(const mode of ['general','benchmark'] as const){const p=store.createProject({mode,title:mode,origin:'fixture',goal:'verify'}).project,g=mode==='benchmark'?store.createGraph(p.id,{taskKey:'one',title:'one',origin:'fixture',goal:'verify'}):store.projectGraphs(p.id)[0];store.forGraph(p.id,g.id).addStep(p.id,{role:executorRole(mode),taskKey:'one',description:'work',sourceIds:[g.originId]})}
@@ -82,7 +83,7 @@ test('tool audit pairs Run+Call, counts all filtered data before history paginat
       store.audit({id:'run-'+i,project_id:p.id,graph_id:graph.id,task_type:i?'soldier':'soldier',worker:'shared'},[{kind:'tool.started',title:'bash',call_id:'call-0',timestamp:'2026-11-16T00:00:00.000Z'}])
     }
     const query=(suffix='')=>toolStatistics(store,new URL('http://fixture/stats?'+suffix),['bash','skill'])
-    assert.deepEqual(query().stats,{calls:502,usedTools:1,succeeded:250,failed:250,unfinished:2})
+    assert.deepEqual(query().stats,{calls:502,usedTools:1,succeeded:250,failed:250,unfinished:2,commandFailed:0})
     const first=query('mode=general&role=soldier&tool=bash&limit=100'),last=query('mode=general&role=soldier&tool=bash&limit=100&offset=200')
     assert.equal(first.history.length,100);assert.equal(last.history.length,51);assert.equal(last.total,251)
     assert.equal(first.stats.calls,last.stats.calls);assert.equal(first.tools[0].share,1)
@@ -130,4 +131,33 @@ test('conversation model catalogs honor Project mode without copying Workers or 
   }
   assert.equal((await fetch(base+'/v2/chats/models?mode=leader')).status,422)
  }finally{await engine.close();rmSync(root,{recursive:true,force:true})}
+})
+
+test('command exit failures are indexed separately from tool errors and survive migration and reopen',()=>{
+ const root=mkdtempSync(path.join(os.tmpdir(),'command-outcomes-'));let store=new Store(path.join(root,'db'))
+ try{
+ const p=store.createProject({title:'shell',origin:'local',goal:'verify'}).project
+ const cases=[{content:'ok',error:false},{content:'failed\n[exit code: 2]',error:false},{content:'stopped\n[killed by signal: SIGTERM]',error:false},{content:'spawn failed',error:true},{content:'job started',error:false,background:true},{content:'partial\n[still running after 1000ms; moved to background job abc]',error:false}]
+ store.audit({id:'shell',project_id:p.id,task_type:'soldier'},cases.flatMap((v,i): Record<string,Json>[]=>[{kind:'tool.started',title:'bash',call_id:String(i),arguments:{command:'fixture',run_in_background:v.background??false}},{kind:'tool.completed',title:'bash',call_id:String(i),content:v.content,error:v.error,arguments:{run_in_background:v.background??false}}]))
+ const query=()=>toolStatistics(store,new URL('http://fixture/stats?tool=bash'),['bash'])
+ assert.equal(query().stats.succeeded,5);assert.equal(query().stats.failed,1);assert.equal(query().stats.commandFailed,2)
+ assert.equal(query().history.find(c=>c.call_id==='1')!.command_exit_code,2);assert.equal(query().history.find(c=>c.call_id==='2')!.command_signal,'SIGTERM');assert.equal(query().history.find(c=>c.call_id==='4')!.command_exit_code,null);assert.equal(query().history.find(c=>c.call_id==='5')!.command_exit_code,null)
+ // Exercise the upgrade from the existing compact call index on the same stored events.
+ store.db.exec("DELETE FROM metadata WHERE key='tool-command-outcomes'; ALTER TABLE tool_calls DROP COLUMN command_exit_code; ALTER TABLE tool_calls DROP COLUMN command_signal;")
+ store.close();store=new Store(path.join(root,'db'))
+ assert.equal(query().stats.commandFailed,2);assert.equal(query().history.find(c=>c.call_id==='4')!.command_exit_code,null)
+ }finally{store.close();rmSync(root,{recursive:true,force:true})}
+})
+
+test('native JSON-text arguments retain Action counts and background acknowledgements through migration',()=>{
+ const root=mkdtempSync(path.join(os.tmpdir(),'native-args-'));let store=new Store(path.join(root,'db'))
+ try{
+ const p=store.createProject({title:'args',origin:'local',goal:'verify'}).project
+ store.audit({id:'args',project_id:p.id},[{kind:'tool.started',title:'legion_plan',call_id:'action',arguments:'{"action":"accept","expectedVersion":1,"evidenceIds":["f1"]}'},{kind:'tool.completed',title:'legion_plan',call_id:'action',error:false},{kind:'tool.started',title:'bash',call_id:'job',arguments:'{"command":"fixture","run_in_background":true}'},{kind:'tool.completed',title:'bash',call_id:'job',content:'background job started',error:false}])
+ const query=()=>toolStatistics(store,new URL('http://fixture/stats?tool=bash'),['bash','legion_plan'])
+ assert.deepEqual(query().actions.find(c=>c.name==='legion_plan'),{name:'legion_plan',action:'accept',calls:1});assert.equal(query().history[0].command_exit_code,null)
+ store.db.exec("UPDATE tool_calls SET action=NULL,command_exit_code=0; UPDATE metadata SET value='1' WHERE key='tool-command-outcomes'")
+ store.close();store=new Store(path.join(root,'db'))
+ assert.equal(query().actions.find(c=>c.name==='legion_plan')!.action,'accept');assert.equal(query().history[0].command_exit_code,null)
+ }finally{store.close();rmSync(root,{recursive:true,force:true})}
 })

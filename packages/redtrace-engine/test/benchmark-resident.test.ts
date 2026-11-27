@@ -6,8 +6,9 @@ import {legionTools} from '../src/legion-tools.ts'
 import {graphTools} from '../src/runner.ts'
 import {Scheduler} from '../src/scheduler.ts'
 import {legionMission} from '../src/legion-missions.ts'
+import type {Step,Goal} from '../src/types.ts'
 const worker={name:'fixture',backend:'mock' as const,enabled:true,roles:['scout','soldier','general'] as any,maxRunning:4,priority:0,provider:'mock',model:'mock'}
-const config={workers:[worker],providers:{},maxWorkers:4,maxProjectWorkers:4,maxRunningProjects:1,maxSteps:null,workspaceRoot:'/tmp/benchmark-resident-fixture'} as any
+const config={workers:[worker],providers:{},maxProjectWorkers:4,maxRunningProjects:1,maxSteps:null,workspaceRoot:'/tmp/benchmark-resident-fixture'} as any
 function fixture(t:any){const store=new Store(':memory:'),p=store.createProject({mode:'benchmark',title:'local',origin:'authorized fixture',goal:'verify'}).project,legion=new LegionStore(store,p.id);t.after(()=>store.close());return{store,p,legion}}
 
 test('legacy tactical STATE is retained in storage but excluded from Benchmark Commander reads',async t=>{
@@ -116,3 +117,40 @@ test('native Benchmark multi-flag metadata routes directly to General and Genera
 
 
 test('native Commander and Worker argument errors identify bad fields without disabling validation',{timeout:90000},async()=>{const{execFile}=await import('node:child_process'),{promisify}=await import('node:util');const r=await promisify(execFile)(process.execPath,[new URL('./benchmark-autonomy.fixture.mjs',import.meta.url).pathname],{env:{...process.env,REDTRACE_INVALID_ACTION_PROBE:'1'},maxBuffer:2*1024*1024});assert.match(r.stdout,/NATIVE_ACTION_DIAGNOSTICS=true/);assert.match(r.stdout,/BENCHMARK_AUTONOMY=true/)})
+
+test('root Goal update uses acceptance and ends its owner normally without cancelling the current tool',async t=>{
+ const{store,p}=fixture(t),g=store.createGraph(p.id,{taskKey:'T',title:'fixture',origin:'local',goal:'verify'}),s=store.forGraph(p.id,g.id)
+ const step=s.addStep(p.id,{role:'soldier',taskKey:'T',description:'verify',sourceIds:[g.originId]}),run=s.claim(p.id,'execute',worker,step.id)
+ store.audit({id:run.id,project_id:p.id,graph_id:g.id},[{kind:'tool.completed',call_id:'proof',content:'local evidence'}])
+ const fact=s.addFact(p.id,'confirmed',{runId:run.id,evidence:[{description:'local evidence',runId:run.id,toolCallId:'proof'}]})
+ let finished=false
+ const update=legionTools(s,run.id,p.id,null,()=>{finished=true},config).find(t=>t.name==='legion_update_goal')!
+ await assert.rejects(update.execute('invalid',{id:g.goalId,status:'achieved',description:'changed contract',expectedVersion:1,evidenceIds:[fact.id]}),/immutable/)
+ const result=await update.execute('accept',{id:g.goalId,status:'achieved',expectedVersion:1,evidenceIds:[fact.id]})
+ assert.equal(result.terminate,true);assert.equal(finished,true);assert.equal(s.node<Step>(p.id,step.id,'step').status,'done');assert.equal(s.node<Goal>(p.id,g.goalId,'goal').status,'achieved')
+})
+
+test('root acceptance closes its completed managed instance; General still requires Worker cleanup',async t=>{
+ const{mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync}=await import('node:fs'),{tmpdir}=await import('node:os'),{join}=await import('node:path')
+ const root=mkdtempSync(join(tmpdir(),'root-accept-cleanup-')),script=join(root,'skills/tsecbench-api/scripts/tsecbench.py')
+ t.after(()=>rmSync(root,{recursive:true,force:true}));mkdirSync(join(root,'skills/tsecbench-api/scripts'),{recursive:true})
+ writeFileSync(script,'import json,sys\nfrom pathlib import Path\nif sys.argv[1]=="list": print(json.dumps({"challenges":[{"unique_code":"T","is_completed":True,"container_status":"available","container_addr":["fixture.invalid:9000"]}]}))\nelif sys.argv[1:]==["close","T"]:\n Path("closed").write_text("T")\n print(json.dumps({"closed":True}))\nelse: raise ValueError(sys.argv)\n')
+ for(const role of ['general','soldier'] as const){
+  const store=new Store(':memory:');try{
+   const p=store.createProject({mode:'benchmark',title:'fixture',origin:'TSecBench local test',goal:'verify'}).project,l=new LegionStore(store,p.id),g=store.createGraph(p.id,{taskKey:'T',title:'T',origin:'local',goal:'verify'}),s=store.forGraph(p.id,g.id)
+   const owner=role==='general'?store.addPlanner(p.id,g.id,{description:'verify',sourceIds:[g.originId]}):s.addStep(p.id,{role,taskKey:'T',description:'verify',sourceIds:[g.originId]}),run=s.claim(p.id,role==='general'?'plan':'execute',worker,role==='soldier'?owner.id:undefined)
+   const producer=role==='general'?s.claim(p.id,'execute',worker,s.addStep(p.id,{role:'soldier',taskKey:'T',description:'collect evidence',sourceIds:[g.originId]}).id):run
+   store.audit({id:producer.id,project_id:p.id,graph_id:g.id},[{kind:'tool.completed',call_id:'proof',content:'local evidence'}])
+   const fact=s.addFact(p.id,'confirmed',{runId:producer.id,evidence:[{description:'local evidence',runId:producer.id,toolCallId:'proof'}]})
+   if(role==='general')store.finishRun(producer.id,'succeeded')
+   let finished=false
+   const update=legionTools(s,run.id,p.id,null,()=>{finished=true},{...config,workspaceRoot:join(root,'workspaces')}).find(t=>t.name==='legion_update_goal')!,args={id:g.goalId,status:'achieved',expectedVersion:1,evidenceIds:[fact.id]}
+   if(role==='general'){
+    await assert.rejects(update.execute('accept',args),/General cannot operate/);assert.equal(s.node<Goal>(p.id,g.goalId,'goal').status,'open');assert.equal(finished,false)
+   }else{
+    assert.equal((await update.execute('accept',args)).terminate,true);assert.equal(finished,true);assert.equal(s.node<Step>(p.id,owner.id,'step').status,'done');assert.equal(readFileSync(join(root,'skills/tsecbench-api/scripts/closed'),'utf8'),'T')
+    assert.equal(JSON.parse(String(store.db.prepare('SELECT data FROM legion_tasks WHERE project_id=? AND task_key=?').get(p.id,'T')!.data)).platformInstance.status,'stopped')
+   }
+  }finally{store.close()}
+ }
+})
