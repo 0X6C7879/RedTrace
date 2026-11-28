@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -10,7 +10,8 @@ const directory = fileURLToPath(new URL('../packages/redtrace-engine/src/native/
 const binary = path.join(directory, 'redtrace_native.node')
 const stamp = path.join(directory, 'build.sha256')
 const hash = createHash('sha256').update(`${process.platform}-${process.arch}`)
-for (const file of ['Cargo.toml', 'Cargo.lock', 'build.rs', 'src/lib.rs']) hash.update(readFileSync(path.join(directory, file)))
+const sources = readdirSync(path.join(directory, 'src'), { recursive: true }).map(file => path.join('src', file)).filter(file => statSync(path.join(directory, file)).isFile()).sort()
+for (const file of ['Cargo.toml', 'Cargo.lock', 'build.rs', ...sources]) hash.update(file).update(readFileSync(path.join(directory, file)))
 const fingerprint = hash.digest('hex')
 if (!existsSync(binary) || !existsSync(stamp) || readFileSync(stamp, 'utf8') !== fingerprint) {
   if (!process.argv.includes('--prebuilt')) {
@@ -26,6 +27,7 @@ if (!existsSync(binary) || !existsSync(stamp) || readFileSync(stamp, 'utf8') !==
     } finally { rmSync(staging, { force: true }) }
   }
   const native = createRequire(import.meta.url)(binary)
-  if (native.projectAuditEvents([]) !== '[]' || JSON.stringify(native.compactToolTexts([])) !== '[]') throw new Error('Native runtime self-check failed')
+  const exports = ['projectAuditEvents', 'compactToolTexts', 'rebuildKnowledgeIndex', 'readKnowledgeArtifact', 'rewriteToolNames', 'legionMission', 'activityPrompt', 'NativePlanGuard', 'NativeGraphNotice']
+  if (exports.some(name => typeof native[name] !== 'function') || native.projectAuditEvents([]) !== '[]' || JSON.stringify(native.compactToolTexts([])) !== '[]') throw new Error('Native runtime self-check failed')
   writeFileSync(stamp, fingerprint)
 }

@@ -1,36 +1,19 @@
-/** Domain aggregation changes only model-facing names; original action bodies retain their contracts. */
-export const TOOL_DOMAINS: Record<string, Record<string,string>> = {
-  webshell_manage: {test:'webshell_test',register:'webshell_register'},
-  c2_manage: {listener:'c2_listener_create',session:'c2_session_create',credential:'c2_credential_create',profile:'c2_profile_create',kinds:'c2_listener_kinds'},
-  c2_payload: {oneliner:'c2_payload_oneliner',build:'c2_payload_build',external:'c2_payload_external'},
-  fgs_query: {overview:'read_graph',changes:'read_graph_delta'},
-  fgs_publish: {fact:'submit_fact',finding:'submit_finding'},
-  legion_inspect: {board:'legion_board',roster:'legion_roster',run:'legion_read_run',changes:'legion_read_changes',node:'legion_read_node',triggers:'legion_triggers'},
-  legion_task: {spawn:'legion_spawn',adjust:'legion_adjust',reassign:'legion_reassign',park:'legion_park',reactivate:'legion_reactivate'},
-  legion_plan: {step:'legion_step',steps:'legion_steps',update_step:'legion_update_step',goal:'legion_goal',update_goal:'legion_update_goal',accept:'legion_accept',done:'legion_plan_done',stop:'legion_task_stop',report:'legion_report',hint:'legion_hint'},
-  legion_todo: {read:'legion_todos',write:'TodoWrite'},
-  legion_messages: {read:'legion_inbox',send:'legion_message',wait:'legion_wait'},
-  legion_models_manage: {list:'legion_models',select:'legion_commander_model'},
-  legion_platform: {list:'legion_platform_list',hint:'legion_platform_hint'},
-  legion_experience: {search:'legion_experience_search',capture:'legion_experience_capture',transfer:'legion_transfer',confirm:'legion_confirm_transfer'},
-  knowledge_query: {search:'knowledge_search',match:'knowledge_match',read:'knowledge_read'},
-  resource_manage: {list:'resource_list',get:'resource_get',register:'resource_register'},
-  remote_files: Object.fromEntries(['read','write','list','mkdir','touch','stat','hash','move','delete','upload','download'].map(action=>[action,'remote_file_'+action])),
-  pivot_manage: {socks:'pivot_socks',validate:'pivot_validate',paths:'pivot_paths',close:'pivot_close'},
-}
+import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
+
+const require = createRequire(import.meta.url)
+let loaded: {rewriteToolNames(text: string): string} | undefined
+const native = () => loaded ??= require('../../redtrace-engine/src/native/redtrace_native.node') as {rewriteToolNames(text: string): string}
+
+/** Domain aggregation changes model-facing names; original action bodies retain their contracts. */
+export const TOOL_DOMAINS: Record<string, Record<string,string>> = JSON.parse(readFileSync(new URL('../../redtrace-engine/src/native/src/runtime/domain-catalog.json', import.meta.url), 'utf8'))
 const domainActions = new Map(Object.entries(TOOL_DOMAINS).flatMap(([domain, actions]) => Object.entries(actions).map(([action, original]) => [original, {domain, action}] as const)))
 export const domainAction = (name:string) => {
   const mapped = domainActions.get(name)
   return mapped ? {...mapped} : undefined
 }
 export const originalTool = (name:string,action:unknown) => typeof action==='string'?TOOL_DOMAINS[name]?.[action]:undefined
-export function rewriteToolNames(text:string):string {
-  for(const [domain,actions] of Object.entries(TOOL_DOMAINS))for(const [action,name] of Object.entries(actions)) {
-    text=text.replace(new RegExp('\\b'+name+'\\(\\{','g'),domain+'({action:"'+action+'",')
-    text=text.replace(new RegExp('\\b'+name+'\\b','g'),domain+' (action='+action+')')
-  }
-  return text
-}
+export const rewriteToolNames = (text: string): string => native().rewriteToolNames(text)
 const descriptions:Record<string,string>={
  webshell_manage:'test 探测已知端点；register 共享已验证配置。注册≠连接成功，不猜凭据。',
  c2_manage:'listener 创建；session 注册直连；credential/profile 存储；kinds 列类型。注册≠认证成功，保留来源证据。',

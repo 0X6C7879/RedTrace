@@ -4,6 +4,9 @@ use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 use std::fmt::Write;
 
+mod runtime;
+mod knowledge;
+
 fn raw_field<'de, D: Deserializer<'de>>(value: D) -> Result<Option<&'de RawValue>, D::Error> {
     <&RawValue>::deserialize(value).map(Some)
 }

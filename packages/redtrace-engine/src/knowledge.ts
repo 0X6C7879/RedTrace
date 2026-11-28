@@ -1,7 +1,8 @@
 import { Worker } from 'node:worker_threads'
+import { createRequire } from 'node:module'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Type } from 'typebox'
@@ -12,8 +13,6 @@ import { knowledgeData, knowledgeEnvironment, readVulnerability, vulnerabilitySe
 import type { VulnerabilityQuery } from './knowledge-vuln.ts'
 
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
-const searchable = /\.(?:md|txt|rst|ya?ml|json)$/i
-const excluded = /(?:^|[\\/])(?:\.git|node_modules|\.redtrace|write.?up|solution|answer|flag|secret|credential)(?:[\\/._-]|$)/i
 const tokenize = (query: string) => [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [])].slice(0, 16)
 const nucleiProtocols = new Set(['http', 'dns', 'tcp', 'ssl', 'headless', 'code', 'file', 'websocket', 'network', 'whois', 'javascript'])
 const nucleiPathPrefix = '@nuclei-templates/'
@@ -58,19 +57,10 @@ function metadataFor(file: string, body: string, nucleiRoot: string): KnowledgeM
     }
   } catch { return { kind: 'nuclei-template', protocols: [], tags: [], cves: [], cwes: [], references: [], prerequisites: [], fingerprintIndicators: [], parseError: true } }
 }
-function sourcePath(file: string, repository: string, nucleiRoot: string) {
-  const relativeToNuclei = path.relative(nucleiRoot, file)
-  if (!path.isAbsolute(relativeToNuclei) && relativeToNuclei !== '..' && !relativeToNuclei.startsWith(`..${path.sep}`)) return `${nucleiPathPrefix}${portable(relativeToNuclei)}`
-  const relativeToRepository = path.relative(repository, file)
-  if (!path.isAbsolute(relativeToRepository) && relativeToRepository !== '..' && !relativeToRepository.startsWith(`..${path.sep}`)) return portable(relativeToRepository)
-  return portable(relativeToRepository)
-}
 function sourceFile(repository: string, relative: string, nucleiRoot: string) {
   return relative.startsWith(nucleiPathPrefix) ? path.join(nucleiRoot, relative.slice(nucleiPathPrefix.length)) : path.join(repository, relative)
 }
 const normalized = (value: string) => value.trim().toLowerCase()
-// Index keys and model-visible paths stay slash-separated on every platform.
-const portable = (value: string) => value.split(path.sep).join('/')
 function localDirectory(repository: string, name: string, env: string, candidates: string[], envChild?: string, environment: NodeJS.ProcessEnv = process.env) {
   const explicit = environment[env]
   const explicitPath = explicit ? path.resolve(explicit) : undefined
@@ -82,89 +72,12 @@ function explicitChild(directory: string, child?: string) {
   return child && path.basename(directory).toLowerCase() !== child.toLowerCase() ? path.join(directory, child) : directory
 }
 
-function collect(root: string, output: string[], maximum = 10_000) {
-  const pending = [root]
-  let scanned = 0
-  const start = output.length
-  while (pending.length && output.length - start < maximum && scanned < maximum * 8) {
-    const directory = pending.pop()!
-    let entries
-    try { entries = readdirSync(directory, { withFileTypes: true }) } catch { continue }
-    for (const entry of entries) {
-      if (++scanned >= maximum * 8) break
-      const full = path.join(directory, entry.name)
-      if (excluded.test(path.relative(root, full))) continue
-      if (entry.isDirectory()) pending.push(full)
-      else if (entry.isFile() && searchable.test(entry.name)) {
-        try { if (statSync(full).size <= 256 * 1024) output.push(full) } catch {}
-        if (output.length - start >= maximum) break
-      }
-    }
-  }
-  return pending.length > 0 || output.length - start >= maximum || scanned >= maximum * 8
-}
-
-function collectWordlistCatalog(root: string, repository: string) {
-  const pending = [root], counts = new Map<string, { files: number; bytes: number }>()
-  let visited = 0, scanned = 0
-  while (pending.length && visited < 10_000 && scanned < 80_000) {
-    const directory = pending.pop()!
-    let entries
-    try { entries = readdirSync(directory, { withFileTypes: true }) } catch { continue }
-    for (const entry of entries) {
-      if (++scanned >= 80_000) break
-      const full = path.join(directory, entry.name)
-      if (excluded.test(path.relative(root, full))) continue
-      if (entry.isDirectory()) pending.push(full)
-      else if (entry.isFile()) {
-        const category = path.relative(root, path.dirname(full)) || '.'
-        try {
-          const value = counts.get(category) ?? { files: 0, bytes: 0 }
-          value.files++; value.bytes += statSync(full).size; counts.set(category, value); visited++
-        } catch {}
-        if (visited >= 10_000) break
-      }
-    }
-  }
-  return { items: [...counts].map(([category, value]) => {
-    const sourcePath = portable(path.relative(repository, path.join(root, category)))
-    const relative = `${sourcePath} (catalog)`
-    return { relative, body: `SecLists category: ${sourcePath}; ${value.files} files; ${value.bytes} bytes; filenames and sizes only, wordlist content not indexed.` }
-  }), truncated: pending.length > 0 || visited >= 10_000 || scanned >= 80_000 }
-}
-
+const require = createRequire(import.meta.url)
 export function openIndex(root: string, filename: string, sources: string[], wordlists: string[], nucleiRoot: string) {
   mkdirSync(path.dirname(filename), { recursive: true })
-  const db = new DatabaseSync(filename)
-  db.exec("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS index_state(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(id UNINDEXED,path UNINDEXED,body,tokenize='unicode61')")
-  const state = db.prepare("SELECT value FROM index_state WHERE key='updated' ").get() as { value: string } | undefined
-  if (!state || Date.now() - Number(state.value) > 15 * 60_000) {
-    const files: string[] = []
-    const warnings: string[] = []
-    for (const source of sources) if (collect(source, files)) warnings.push(`Source indexing limit reached; some files were not indexed: ${source}`)
-    const known = new Map((db.prepare('SELECT id,path FROM docs').all() as { id: string; path: string }[]).map(row => [row.path, row.id]))
-    const remove = db.prepare('DELETE FROM docs WHERE path=?'), insert = db.prepare('INSERT INTO docs(id,path,body) VALUES (?,?,?)')
-    db.exec('BEGIN')
-    try {
-      const current = new Map<string, { hash: string; body: string }>()
-      for (const file of files) {
-        const relative=sourcePath(file,root,nucleiRoot),body=readFileSync(file,'utf8'),hash=digest(body)
-        if (/\b(?:flag|tsecbench|htb)\{[^}\r\n]+\}/i.test(body)) continue
-        current.set(relative, { hash, body })
-      }
-      for (const wordlist of wordlists) {
-        const catalog = collectWordlistCatalog(wordlist, root)
-        if (catalog.truncated) warnings.push(`SecLists catalog limit reached; some categories were not indexed: ${wordlist}`)
-        for (const item of catalog.items) current.set(item.relative, { hash: digest(item.body), body: item.body })
-      }
-      for (const [relative, item] of current) if (known.get(relative) !== item.hash) { if (known.has(relative)) remove.run(relative); insert.run(item.hash, relative, item.body) }
-      for (const previous of known.keys()) if (!current.has(previous)) remove.run(previous)
-      db.prepare("INSERT INTO index_state VALUES ('updated',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(Date.now()))
-      db.prepare("INSERT INTO index_state VALUES ('warnings',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(warnings))
-      db.exec('COMMIT')
-    } catch (error) { db.exec('ROLLBACK'); db.close(); throw error }
-  }
-  return db
+  const native = require('./native/redtrace_native.node') as { rebuildKnowledgeIndex(root: string, filename: string, sources: string[], wordlists: string[], nucleiRoot: string): void }
+  native.rebuildKnowledgeIndex(root, filename, sources, wordlists, nucleiRoot)
+  return new DatabaseSync(filename)
 }
 
 const indexing = new Map<string, Promise<void>>()

@@ -667,7 +667,7 @@ function auditPage() {
 
     repairMojibake(value) {
       const text = String(value || '');
-      if (!/[ÃÂâç¬åæèé]/.test(text) || [...text].some(char => char.charCodeAt(0) > 255)) {
+      if (!/[ÃÂâç¬åæèé]/.test(text) || /[^\u0000-\u00ff]/.test(text)) {
         return text;
       }
       try {

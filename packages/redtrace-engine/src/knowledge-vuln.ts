@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
+import { createRequire } from 'node:module'
+import { createReadStream, existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Store } from './store.ts'
@@ -11,6 +12,7 @@ import type { TaskContext } from './scheduler.ts'
 import { toolEnvironment } from './shell.ts'
 
 const installRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
+const require = createRequire(import.meta.url)
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
 const caches = new WeakMap<Store, Map<string, Promise<VulnerabilityPage>>>()
 const verifiedIndexes = new Map<string, Promise<void>>()
@@ -119,22 +121,17 @@ export async function readVulnerability(config: EngineConfig, id: string, offset
   const data = knowledgeData(config)
   if (!data.database || !existsSync(data.database)) return undefined
   await verifyKnowledgeIndex(data.database)
-  const db = new DatabaseSync(data.database, { readOnly: true })
-  try {
-    if (/^CVE-\d{4}-\d{4,}$/i.test(id)) {
+  if (/^CVE-\d{4}-\d{4,}$/i.test(id)) {
+    const db = new DatabaseSync(data.database, { readOnly: true })
+    try {
       const row = db.prepare('SELECT * FROM cves WHERE id=?').get(id.toUpperCase()) as { id: string; description: string; configurations: string; status: string; modified: string } | undefined
       if (!row) return undefined
       const body = Buffer.from(JSON.stringify({ ...row, configurations: JSON.parse(row.configurations), reference: `https://nvd.nist.gov/vuln/detail/${row.id}`, database: data.database }))
       if (offset > body.length) throw new Error('Offset is outside the entry')
       return { id: row.id, path: data.database, offset, totalBytes: body.length, text: body.subarray(offset, offset + length).toString('utf8'), nextOffset: offset + length < body.length ? offset + length : null }
-    }
-    const row = db.prepare('SELECT path,sha256 FROM artifacts WHERE id=?').get(id) as { path: string; sha256: string } | undefined
-    if (!row) return undefined
-    const root = realpathSync(path.dirname(data.database)), file = realpathSync(path.join(root, row.path))
-    if (!file.startsWith(root + path.sep)) throw new Error('Knowledge source is outside the offline generation')
-    const bytes = readFileSync(file)
-    if (hash(bytes) !== row.sha256) throw new Error('Knowledge source changed; explicitly rebuild the offline index')
-    if (offset > bytes.length) throw new Error('Offset is outside the source')
-    return { id, path: file, sha256: row.sha256, offset, totalBytes: bytes.length, text: bytes.subarray(offset, offset + length).toString('utf8'), nextOffset: offset + length < bytes.length ? offset + length : null }
-  } finally { db.close() }
+    } finally { db.close() }
+  }
+  const native = require('./native/redtrace_native.node') as { readKnowledgeArtifact(database: string, id: string, offset: number, length: number): string | null }
+  const result = native.readKnowledgeArtifact(data.database, id, offset, length)
+  return result === null ? undefined : JSON.parse(result) as { id: string; path: string; sha256?: string; offset: number; totalBytes: number; text: string; nextOffset: number | null }
 }

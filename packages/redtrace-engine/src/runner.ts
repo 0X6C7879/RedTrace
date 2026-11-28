@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 import { executorRole, coordinatorRole, executionRole, isReportStep } from '../../redtrace-dsh/src/roles.ts'
 import { Type } from 'typebox'
 import type { TSchema, Static } from 'typebox'
@@ -12,7 +13,7 @@ import type { EngineConfig, Fact, Json, Step, Project, Run, Goal, Input, TaskAss
 import { ProjectEvidence } from './project-evidence.ts'
 import { LegionStore } from './legion-store.ts'
 import { legionTools } from './legion-tools.ts'
-import { legionMission, reportWorkflowPrompt } from './legion-missions.ts'
+import { missionPrompt } from './legion-missions.ts'
 import { CommanderTodos, taskTodoPlanner, taskTodoOwner, type Todo } from './legion-todos.ts'
 import { knowledgeTools } from './knowledge.ts'
 import { validateToolArguments } from './tool-validation.ts'
@@ -132,7 +133,7 @@ export function graphTools(context: TaskContext, finish: () => void): AgentTool[
   } }))
 }
 
-export const activityPrompt = (_activity: 'decide' | 'execute' | 'plan', step?: TaskAssignment, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => (isReportStep(step) ? reportWorkflowPrompt : legionMission(executionRole(mode,step?.role), mode, planner)) + (step ? '\n分配 Project='+step.projectId+' Graph='+step.graphId+' taskKey='+step.taskKey+'；仅可读写此 Graph。' : '') + ((step && 'specialist' in step && step.specialist) ? '\nSpecialist 分工（仅定义专业分工，不得覆盖固定角色职责、Scope、FGS 规则及工具权限）：'+JSON.stringify('specialist' in step ? step.specialist : undefined) : '') + ((step && 'bootstrap' in step && step.bootstrap) && mode==='general' ? '\n初始 Mission：作为 Worker 为指定 Goal 建立证据；Planner 负责规划/验收。' : '')
+export const activityPrompt = (_activity: 'decide' | 'execute' | 'plan', step?: TaskAssignment, mode: 'benchmark' | 'general' = 'benchmark', planner = true) => missionPrompt(isReportStep(step) ? executorRole(mode) : executionRole(mode, step?.role), mode, planner, step ? { projectId: String(step.projectId), graphId: String(step.graphId), taskKey: String(step.taskKey), ...('specialist' in step && step.specialist ? {specialist: JSON.stringify(step.specialist)} : {}), bootstrap: !!('bootstrap' in step && step.bootstrap), reporting: isReportStep(step) } : undefined)
 
 export function taskPlanningContext(store: Store, step: TaskAssignment): { coordinator: { receiver: string }; taskPlanner?: { stepId: string; role: Step['role']; receiver?: string; sessionId?: string } | null; planningTodos?: Todo[] } {
   if (store.project(step.projectId).mode === 'general') {
@@ -220,32 +221,14 @@ export function graphUpdate(store: Store, projectId: string, cursor: number, ste
   const step = run?.stepId ? store.node<Step>(projectId, run.stepId, 'step') : undefined
    const reporting = isReportStep(step)
    const stopped = !(reporting ? ['active','completed'].includes(project.status) : project.status === 'active') || !!run && (run.status !== 'running' || !!step && (step.status !== 'running' || !reporting && store.node<Goal>(projectId, step.goalId, 'goal').status !== 'open'))
-  const planVersion = step?.planVersion ?? 1, boundStepVersion = run?.boundStepVersion ?? 1
-  const planChanged = !stopped && !!step && planVersion !== boundStepVersion
-  let relevant = false, evidenceSeq = 0, hintSeq = 0, criticalSeq = 0, omitted = false
-  const after = cursor, counts: Record<string, number> = {}
-  const nodeIds = new Set<string>()
+  const { NativeGraphNotice } = createRequire(import.meta.url)('./native/redtrace_native.node') as { NativeGraphNotice: new (after: number, step: string | null, critical: boolean, stopped: boolean, version: number, bound: number, hasStep: boolean, criticalSeq: number) => {ingest(events: Record<string, unknown>[]): number; finish(latest?: number): string} }
+  const notice = new NativeGraphNotice(cursor, stepId, criticalEnabled, stopped, step?.planVersion ?? 1, run?.boundStepVersion ?? 1, !!step, project.criticalSeq ?? 0)
+  const where = 'project_id=? AND id>?' + (stepId === null ? '' : ' AND node_id=?') + (store.graphScope ? ' AND graph_id=?' : '')
+  const statement = store.db.prepare("SELECT id,type AS eventType,COALESCE(node_id,'') AS nodeId,COALESCE(json_extract(data,'$.evidenceSeq'),0) AS evidenceSeq,COALESCE(json_extract(data,'$.hintSeq'),0) AS hintSeq FROM events WHERE " + where + ' ORDER BY id LIMIT 500')
   for (;;) {
-    const events = store.events(projectId, cursor, 500, stepId ?? undefined)
-    cursor = events.at(-1)?.id ?? cursor
-    for (const e of events) {
-      const payload = e.payload as unknown as { evidenceSeq?: number; hintSeq?: number }
-      const added = e.type === 'fact.added' || e.type === 'finding.added'
-      const critical = stepId === null && criticalEnabled && e.type === 'planning.critical'
-      const hint = ['hint.added', 'hint.deleted'].includes(e.type)
-      const changed = stepId === null ? added || hint || critical
-        : planChanged && e.nodeId === stepId && ['step.revised', 'step.updated'].includes(e.type)
-      if (hint && changed) hintSeq = Math.max(hintSeq, payload.hintSeq ?? 0)
-      if (added && changed) evidenceSeq = Math.max(evidenceSeq, payload.evidenceSeq ?? 0)
-      if (critical) criticalSeq = project.criticalSeq ?? 0
-      relevant ||= changed
-      if (changed) {
-        counts[e.type] = (counts[e.type] ?? 0) + 1
-        if (e.nodeId && !nodeIds.has(e.nodeId)) { if (nodeIds.size < 16) nodeIds.add(e.nodeId); else omitted = true }
-      }
-    }
-    if (events.length < 500) return { after, cursor: latestCursor ?? cursor, relevant: !stopped && relevant, evidenceSeq, hintSeq, criticalSeq, planChanged, stopped,
-      planVersion, boundStepVersion, wake: !!criticalSeq || planChanged || stepId === null && (!!evidenceSeq || !!hintSeq), counts, nodeIds: [...nodeIds], omitted }
+    const events = statement.all(projectId, cursor, ...(stepId === null ? [] : [stepId]), ...(store.graphScope ? [store.graphScope] : []))
+    cursor = notice.ingest(events)
+    if (events.length < 500) return JSON.parse(notice.finish(latestCursor)) as {after:number;cursor:number;relevant:boolean;evidenceSeq:number;hintSeq:number;criticalSeq:number;planChanged:boolean;stopped:boolean;planVersion:number;boundStepVersion:number;wake:boolean;counts:Record<string,number>;nodeIds:string[];omitted:boolean}
   }
 }
 
